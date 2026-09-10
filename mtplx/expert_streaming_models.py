@@ -644,6 +644,64 @@ GLM52_EXPERT_Q1B1 = replace(
 )
 
 
+# DeepSeek-V4.1-Flash expert-only affine Q2 (gs64) streamed bank.
+# Source FP4 (E2M1) routed experts on layers 0..39 (384 experts each) are
+# dequantized and re-quantized to affine Q2/gs64; residents (attention,
+# shared_experts, indexer, embed/head, mtp dense, vision/aligner) become q8/gs64
+# MLX safetensors, with router/norms/hc_*/attn_sink kept exact. Engram (layers
+# 1,14) and the MTP routed experts (mtp.*.ffn.experts) are NOT carried in this
+# run. See scripts/convert_deepseek_v41_streamed.py + mtplx/deepseek_v41_convert.py.
+#
+# Record math (matches port plan, 2.5 bpw): 3*5120*2304 params
+#   packed  = params*2//8            = 8_847_360
+#   scale/bias = (params//64)*2*2    = 2_211_840  -> record 11_059_200 B
+#   routed_expert_bytes = 40*384*11_059_200 = 169_869_312_000 (158.20 GiB).
+DEEPSEEK_V41_FLASH_EXPERT_Q2 = ExpertStreamingModelSpec(
+    key="deepseek-v41-flash-expert-q2",
+    display_name="DeepSeek-V4.1-Flash expert-only affine Q2 (gs64 experts, q8 residents)",
+    source_model="deepseek-ai/DeepSeek-V4.1-Flash",
+    source_revision="dba1be0a40aa45a94ad051997016db3960a90277",
+    # TODO(publish): swap to the OpensourceWTF HF repo id + its published
+    # revision once the streaming artifact is uploaded; kept local for now.
+    quant_model="local/deepseek-v41-flash-mtplx-streaming-q2",
+    quant_revision="dba1be0a40aa45a94ad051997016db3960a90277",
+    # TODO(measured): provisional. Exact header-inventory sum = routed
+    # (169_869_312_000) + resident-q8 bytes, both emitted by the converter's
+    # conversion-manifest.json. Pin this to the reported value after the run;
+    # strict spec validation is currently run with require_pinned_tensor_bytes
+    # =False so a provisional total does not gate the artifact.
+    total_tensor_bytes=185_869_312_000,
+    total_layers=40,
+    routed_layer_start=0,
+    routed_layer_count=40,
+    expert_count=384,
+    top_k=6,
+    hidden_size=5120,
+    expert_hidden_size=2304,
+    quant_bits=2,
+    quant_group_size=64,
+    quant_parameter_bytes=2,
+    router_storage="source bfloat16 gate with fp32 correction bias (noaux_tc, sqrtsoftplus)",
+    router_matmul_dtype="float32",
+    # 40 * (384*5120 bf16 gate.weight) + 40 * 2 * (384 f32 gate.bias/bias_vl)
+    router_bytes=157_409_280,
+    # TODO(measured): MLA/compressed-KV per-token bytes need the port's cache
+    # accounting (compress_ratios, kv_source_layer_ids, index cache). This
+    # placeholder is not used by the converter or manifest, only by
+    # plan_expert_memory, which this task does not exercise.
+    kv_bytes_per_token=81_920,
+    # DeepSeek stores MTP as ``mtp.N.*`` (not ``layers.40``), so there is no
+    # single backbone MTP layer index; MTP is excluded from this artifact.
+    mtp_layer_index=None,
+    mtp_included=False,
+    # TODO(port): config index_source_layer_ids = [2,8,14,20,24,28,32,36]; left
+    # empty until the port confirms full-indexer layer semantics for this model.
+    full_indexer_layers=(),
+    # Unmeasured: needs a routing census before count-based island selection.
+    island_pin_order=(),
+)
+
+
 MODEL_SPECS: dict[str, ExpertStreamingModelSpec] = {
     spec.key: spec
     for spec in (
@@ -657,6 +715,7 @@ MODEL_SPECS: dict[str, ExpertStreamingModelSpec] = {
         GLM52_EXPERT_Q2,
         GLM52_EXPERT_Q1T,
         GLM52_EXPERT_Q1B1,
+        DEEPSEEK_V41_FLASH_EXPERT_Q2,
     )
 }
 

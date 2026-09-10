@@ -1,0 +1,354 @@
+"""Tests for the DeepSeek-V4.1-Flash Engram affine-8 disk bank.
+
+Covers: fp8 dequant vs an independent numpy transcription of model.py's math; the
+affine record round-trip (bytes <-> mx.quantize); a full synthetic conversion with
+resume/idempotence; and reader gather + dequant correctness against the source.
+
+Run under ``nice -n 19``, without ``-n auto``.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import struct
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import mlx.core as mx
+
+import mtplx.deepseek_v41_convert as dc
+from mtplx.engram_bank import EngramBank
+
+mx.set_default_device(mx.cpu)
+
+_CONV_PATH = Path(__file__).resolve().parents[1] / "scripts" / "convert_deepseek_v41_engram.py"
+_spec = importlib.util.spec_from_file_location("convert_engram", _CONV_PATH)
+conv = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(conv)
+
+HEAD_DIM = dc.ENGRAM_HEAD_DIM
+GROUPS32 = HEAD_DIM // dc.ENGRAM_FP8_BLOCK  # 8
+
+
+# --------------------------------------------------------------------------
+# synthetic source shard
+# --------------------------------------------------------------------------
+def _rand_e4m3_bytes(rng, n) -> np.ndarray:
+    """Random e4m3fn bytes with the two NaN codes (0x7F, 0xFF) scrubbed to 0."""
+    b = rng.integers(0, 256, size=n, dtype=np.uint8)
+    b[(b == 0x7F) | (b == 0xFF)] = 0
+    return b
+
+
+def _rand_e8m0_bytes(rng, n) -> np.ndarray:
+    """Random e8m0 scale bytes in [124,131] (2**(-3..4)); never 0xFF (NaN)."""
+    return rng.integers(124, 132, size=n, dtype=np.uint8)
+
+
+def _write_safetensors(path: Path, tensors: dict) -> None:
+    header, data, offset = {}, bytearray(), 0
+    for name, (dtype, shape, raw) in tensors.items():
+        header[name] = {"dtype": dtype, "shape": list(shape),
+                        "data_offsets": [offset, offset + len(raw)]}
+        data += raw
+        offset += len(raw)
+    hb = json.dumps(header).encode()
+    with open(path, "wb") as f:
+        f.write(struct.pack("<Q", len(hb)))
+        f.write(hb)
+        f.write(bytes(data))
+
+
+def _make_synthetic_shard(tmp_path: Path, layer: int, rows: int, seed: int = 0):
+    """Write a synthetic shard with layer L engram embed weight/scale + an index."""
+    rng = np.random.default_rng(seed)
+    wu8 = _rand_e4m3_bytes(rng, rows * HEAD_DIM).reshape(rows, HEAD_DIM)
+    su8 = _rand_e8m0_bytes(rng, rows * GROUPS32).reshape(rows, GROUPS32)
+    src = tmp_path / "src"
+    src.mkdir(exist_ok=True)
+    shard_file = f"model-000{47 if layer == 1 else 48}-of-00048.safetensors"
+    _write_safetensors(src / shard_file, {
+        f"layers.{layer}.engram.embed.weight": ("F8_E4M3", (rows, HEAD_DIM), wu8.tobytes()),
+        f"layers.{layer}.engram.embed.scale": ("F8_E8M0", (rows, GROUPS32), su8.tobytes()),
+    })
+    index = tmp_path / "index.json"
+    index.write_text(json.dumps({"weight_map": {
+        f"layers.{layer}.engram.embed.weight": shard_file,
+        f"layers.{layer}.engram.embed.scale": shard_file,
+    }}))
+    return src, index, wu8, su8
+
+
+# --------------------------------------------------------------------------
+# constants / layout
+# --------------------------------------------------------------------------
+def test_record_constants_and_prime_layout():
+    assert dc.ENGRAM_RECORD_BYTES == 272
+    lay = dc.engram_record_layout()
+    assert lay["weight"]["length"] == 256 and lay["weight"]["offset"] == 0
+    assert lay["scales"]["offset"] == 256 and lay["scales"]["length"] == 8
+    assert lay["biases"]["offset"] == 264 and lay["biases"]["length"] == 8
+    assert dc.engram_n_hash_cols() == 24
+
+    primes = dc.engram_prime_layout()
+    for li in range(len(dc.ENGRAM_LAYER_IDS)):
+        _, flat, total = dc.engram_flat_offsets(primes[li])
+        assert len(flat) == 24
+        assert total == dc.ENGRAM_NUM_EMBEDDINGS[li]
+
+    m1 = dc.compute_engram_hash_multipliers()
+    m2 = dc.compute_engram_hash_multipliers()
+    assert m1.shape == (2, dc.ENGRAM_MAX_NGRAM_SIZE)
+    assert np.array_equal(m1, m2)            # deterministic
+    assert bool((m1 % 2 == 1).all())         # odd
+
+
+# --------------------------------------------------------------------------
+# fp8 dequant vs independent numpy transcription of model.py
+# --------------------------------------------------------------------------
+def _independent_e4m3_decode(u8: np.ndarray) -> np.ndarray:
+    out = np.empty(u8.shape, dtype=np.float32)
+    flat = u8.ravel()
+    dec = np.empty(flat.shape, dtype=np.float32)
+    for i, b in enumerate(flat):
+        b = int(b)
+        sign = -1.0 if (b >> 7) & 1 else 1.0
+        exp = (b >> 3) & 0xF
+        man = b & 0x7
+        if exp == 0:
+            dec[i] = sign * (man / 8.0) * (2.0 ** (1 - 7))
+        elif exp == 0xF and man == 0x7:
+            dec[i] = np.nan
+        else:
+            dec[i] = sign * (1.0 + man / 8.0) * (2.0 ** (exp - 7))
+    return dec.reshape(u8.shape)
+
+
+def test_dequant_matches_numpy_transcription():
+    rng = np.random.default_rng(7)
+    rows = 40
+    wu8 = _rand_e4m3_bytes(rng, rows * HEAD_DIM).reshape(rows, HEAD_DIM)
+    su8 = _rand_e8m0_bytes(rng, rows * GROUPS32).reshape(rows, GROUPS32)
+
+    # independent transcription of ParallelEngramEmbedding.forward
+    v = _independent_e4m3_decode(wu8)
+    s = (2.0 ** (su8.astype(np.float64) - 127)).astype(np.float32)
+    ref = (v.reshape(rows, GROUPS32, dc.ENGRAM_FP8_BLOCK) * s[:, :, None]).reshape(rows, HEAD_DIM)
+
+    got = dc.dequant_engram_embed(wu8, su8)
+    assert np.array_equal(got, ref)
+
+    # bad scale shape rejected
+    with pytest.raises(ValueError):
+        dc.dequant_engram_embed(wu8, su8[:, :4])
+
+
+# --------------------------------------------------------------------------
+# affine record round-trip (bytes <-> mx.quantize)
+# --------------------------------------------------------------------------
+def test_chunk_record_roundtrip_exact_and_cosine():
+    rng = np.random.default_rng(3)
+    rows = 50
+    v = rng.standard_normal((rows, HEAD_DIM)).astype(np.float32)
+
+    rec = dc.engram_chunk_records(v)
+    assert rec.shape == (rows, 272)
+
+    # parse the record's three fields back out
+    w = np.ascontiguousarray(rec[:, 0:256]).view("<u4")          # [rows,64]
+    s = np.ascontiguousarray(rec[:, 256:264]).view("<u2")        # [rows,4]
+    b = np.ascontiguousarray(rec[:, 264:272]).view("<u2")        # [rows,4]
+
+    # exact byte round-trip vs a direct quantize
+    packed, scales, biases = dc.quantize_engram_rows(v)
+    assert np.array_equal(w, np.array(packed).astype("<u4"))
+    assert np.array_equal(s, np.array(scales.view(mx.uint16)).astype("<u2"))
+    assert np.array_equal(b, np.array(biases.view(mx.uint16)).astype("<u2"))
+
+    # dequant matches mx.dequantize up to bf16 rounding; cosine vs source high
+    dq_mlx = np.array(mx.dequantize(packed, scales, biases, group_size=64, bits=8,
+                                    mode="affine").astype(mx.float32))
+    dq_np = dc.dequant_affine_record(rec[:, 0:256].astype(np.uint8), s, b)
+    assert np.max(np.abs(dq_np - dq_mlx)) < 0.5  # bf16 rounding only
+    cos = float((dq_np.ravel() @ v.ravel()) /
+                (np.linalg.norm(dq_np) * np.linalg.norm(v)))
+    assert cos >= 0.999
+
+
+# --------------------------------------------------------------------------
+# full synthetic conversion + reader
+# --------------------------------------------------------------------------
+def test_full_convert_and_reader(tmp_path):
+    layer, rows = 1, 300
+    src, index, wu8, su8 = _make_synthetic_shard(tmp_path, layer, rows, seed=11)
+    out = tmp_path / "engram"
+    state = tmp_path / "state"
+    weight_map = json.loads(index.read_text())["weight_map"]
+
+    entry = conv.convert_layer(layer, src, out, weight_map, state_dir=state,
+                               chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                               expected_rows=rows)
+    conv.write_manifest(out, [entry])
+
+    binp = out / f"engram-L{layer}.bin"
+    assert binp.stat().st_size == rows * 272
+    # cleanliness: engram/ holds exactly the shippable files (no partial/.tmp)
+    assert sorted(p.name for p in out.iterdir()) == ["engram-L1.bin", "engram-manifest.json"]
+    # in-progress bin was moved out of state_dir; only the journal remains
+    assert not (state / "engram-L1.bin").exists()
+    assert (state / "engram-L1.journal.json").exists()
+
+    ref = dc.dequant_engram_embed(wu8, su8)  # source f32 truth
+
+    bank = EngramBank.open(out, layer)
+    assert len(bank) == rows and bank.record_bytes == 272
+
+    idxs = [0, 1, 5, 63, 64, 65, 299, 128, 200]
+    w, s, b = bank.gather(idxs)
+    assert w.shape == (len(idxs), 64) and s.shape == (len(idxs), 4) and b.shape == (len(idxs), 4)
+
+    dq = bank.dequantize_rows(idxs)
+    for i, r in enumerate(idxs):
+        a, c = dq[i], ref[r]
+        cos = float((a @ c) / (np.linalg.norm(a) * np.linalg.norm(c)))
+        assert cos >= 0.999, (r, cos)
+
+    # gather returns exactly what a re-quantize of those source rows produces
+    packed, scales, biases = dc.quantize_engram_rows(ref[idxs])
+    assert np.array_equal(w, np.array(packed).astype("<u4"))
+    assert np.array_equal(s, np.array(scales.view(mx.uint16)).astype("<u2"))
+
+    # out-of-range guard
+    with pytest.raises(IndexError):
+        bank.gather([rows])
+    bank.close()
+
+
+def test_reader_lru_budget(tmp_path):
+    layer, rows = 1, 200
+    src, index, _, _ = _make_synthetic_shard(tmp_path, layer, rows, seed=5)
+    out = tmp_path / "engram"
+    weight_map = json.loads(index.read_text())["weight_map"]
+    entry = conv.convert_layer(layer, src, out, weight_map, state_dir=tmp_path / "st",
+                               chunk_rows=50, max_rows=0, wait=False, poll=0.0,
+                               expected_rows=rows)
+    conv.write_manifest(out, [entry])
+
+    bank = EngramBank.open(out, layer, cache_rows=4)  # budget = 4 records
+    bank.gather(list(range(20)))
+    assert bank.cache_used_bytes <= 4 * bank.record_bytes
+    # repeated gather is served from cache and still correct
+    w1, _, _ = bank.gather([10, 11, 12])
+    w2, _, _ = bank.gather([10, 11, 12])
+    assert np.array_equal(w1, w2)
+    bank.close()
+
+
+# --------------------------------------------------------------------------
+# resume + idempotence + append-only
+# --------------------------------------------------------------------------
+def test_resume_and_idempotence(tmp_path, monkeypatch):
+    layer, rows = 1, 320
+    src, index, wu8, su8 = _make_synthetic_shard(tmp_path, layer, rows, seed=21)
+    weight_map = json.loads(index.read_text())["weight_map"]
+
+    # reference: a clean full run in a separate tree
+    ref_out = tmp_path / "ref_engram"
+    conv.convert_layer(layer, src, ref_out, weight_map, state_dir=tmp_path / "ref_state",
+                       chunk_rows=64, max_rows=0, wait=False, poll=0.0, expected_rows=rows)
+    ref_bytes = (ref_out / "engram-L1.bin").read_bytes()
+    assert len(ref_bytes) == rows * 272
+
+    out = tmp_path / "engram"
+    state = tmp_path / "state"
+
+    # fault-inject: fail on the 3rd chunk (chunks 0,1 complete, 2 raises)
+    real = dc.engram_chunk_records
+    calls = {"n": 0}
+
+    def flaky(values, **kw):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("injected fault")
+        return real(values, **kw)
+
+    monkeypatch.setattr(dc, "engram_chunk_records", flaky)
+    with pytest.raises(RuntimeError, match="injected fault"):
+        conv.convert_layer(layer, src, out, weight_map, state_dir=state,
+                           chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                           fsync_every=1, expected_rows=rows)
+
+    # partial bin + journal live in state_dir, NOT the artifact
+    assert not (out / "engram-L1.bin").exists()
+    assert (state / "engram-L1.bin").exists()
+    j = json.loads((state / "engram-L1.journal.json").read_text())
+    assert j["done_chunks"] == [0, 1]  # 2 chunks committed before the fault
+    partial = (state / "engram-L1.bin").read_bytes()
+    # completed region already matches the reference (byte-for-byte)
+    assert partial[: 2 * 64 * 272] == ref_bytes[: 2 * 64 * 272]
+
+    # resume with the real quantizer: only the remaining chunks are recomputed
+    monkeypatch.setattr(dc, "engram_chunk_records", real)
+    resume_calls = {"n": 0}
+
+    def counting(values, **kw):
+        resume_calls["n"] += 1
+        return real(values, **kw)
+
+    monkeypatch.setattr(dc, "engram_chunk_records", counting)
+    conv.convert_layer(layer, src, out, weight_map, state_dir=state,
+                       chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                       fsync_every=1, expected_rows=rows)
+    n_chunks = (rows + 63) // 64
+    assert resume_calls["n"] == n_chunks - 2  # chunks 0,1 skipped, not rewritten
+
+    got = (out / "engram-L1.bin").read_bytes()
+    assert got == ref_bytes  # byte-identical to a clean full run
+
+    # idempotent: a third run early-skips (final present, correct size)
+    monkeypatch.setattr(dc, "engram_chunk_records", real)
+    before = (out / "engram-L1.bin").stat().st_mtime_ns
+    conv.convert_layer(layer, src, out, weight_map, state_dir=state,
+                       chunk_rows=64, max_rows=0, wait=False, poll=0.0, expected_rows=rows)
+    assert (out / "engram-L1.bin").read_bytes() == ref_bytes
+    assert (out / "engram-L1.bin").stat().st_mtime_ns == before  # untouched
+
+
+# --------------------------------------------------------------------------
+# manifest
+# --------------------------------------------------------------------------
+def test_manifest_fields_and_hashing(tmp_path):
+    layer, rows = 1, 128
+    src, index, _, _ = _make_synthetic_shard(tmp_path, layer, rows, seed=1)
+    out = tmp_path / "engram"
+    weight_map = json.loads(index.read_text())["weight_map"]
+    entry = conv.convert_layer(layer, src, out, weight_map, state_dir=tmp_path / "st",
+                               chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                               expected_rows=rows)
+    conv.write_manifest(out, [entry])
+
+    m = json.loads((out / "engram-manifest.json").read_text())
+    assert m["format"] == "mtplx-engram-manifest-v1"
+    assert m["model_key"] == dc.MODEL_KEY
+    assert m["source_revision"] == dc.SOURCE_REVISION
+    assert m["quant"] == {"bits": 8, "group_size": 64, "mode": "affine",
+                          "head_dim": 256, "record_bytes": 272}
+    le = m["layers"][0]
+    for k in ("layer_id", "file", "rows", "record_bytes", "total_bytes",
+              "quant", "record_layout", "source"):
+        assert k in le
+    assert le["total_bytes"] == rows * 272
+
+    h = m["hashing"]
+    assert h["layer_ids"] == [1, 14]
+    assert h["n_hash_cols"] == 24
+    assert len(h["hash_multipliers"]) == 2 and len(h["hash_multipliers"][0]) == 4
+    for li, pl in enumerate(h["per_layer"]):
+        assert pl["total_rows"] == dc.ENGRAM_NUM_EMBEDDINGS[li]
+        flat = [p for pn in pl["primes"] for p in pn]
+        assert sum(flat) == dc.ENGRAM_NUM_EMBEDDINGS[li]
+        assert pl["flat_offsets"][0] == 0
