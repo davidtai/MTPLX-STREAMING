@@ -69,8 +69,44 @@ from pathlib import Path
 
 DEFAULT_MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
 DEFAULT_OUT_DIR = Path(".benchmark-artifacts/deepseek-v41")
-DEFAULT_PROMPT = "Write a Python function that returns the nth Fibonacci number."
 GIB = 1024**3
+
+
+def build_prompt(tokenizer, args):
+    """Input token ids + build-metadata for the gate.
+
+    Default: the deterministic ``mtplx.prefill_bench`` coding-agent programming
+    prompt at ``--context-tokens`` (David's standardized benchmark input), with
+    the reference's leading BOS prepended.  A literal ``--prompt`` overrides the
+    builder.  ``--prompt-format`` defaults to ``raw`` because the artifact
+    tokenizer ships no HF chat template."""
+    if args.prompt is not None:
+        build_ids = list(tokenizer.encode(args.prompt))
+        meta = {
+            "prompt_source": "literal",
+            "prompt_context_tokens": len(build_ids),
+            "prompt_actual_tokens": len(build_ids),
+            "prompt_style": "literal",
+            "prompt_format": "raw",
+            "prompt_release_valid": False,
+        }
+    else:
+        from mtplx.prefill_bench import _prompt_build_for_context
+
+        pb = _prompt_build_for_context(
+            tokenizer, int(args.context_tokens), prompt_format=args.prompt_format
+        )
+        build_ids = list(pb.token_ids)
+        meta = dict(pb.metadata)
+        meta["prompt_source"] = "prefill_bench"
+    prompt_ids = list(build_ids)
+    if args.bos:
+        prompt_ids = [int(args.bos_id)] + prompt_ids
+    meta["bos_prepended"] = bool(args.bos)
+    meta["bos_id"] = int(args.bos_id) if args.bos else None
+    meta["input_tokens"] = len(prompt_ids)
+    meta["tokenizer"] = str(args.model)
+    return prompt_ids, meta
 
 
 def _parse_layers(text: str) -> tuple[int, ...]:
@@ -89,7 +125,26 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
-    parser.add_argument("--prompt", default=DEFAULT_PROMPT)
+    parser.add_argument(
+        "--prompt",
+        default=None,
+        help="literal prompt; overrides the prefill_bench builder (default None: "
+        "build the deterministic prefill_bench prompt at --context-tokens).",
+    )
+    parser.add_argument(
+        "--context-tokens",
+        type=int,
+        default=1024,
+        choices=(1024, 16384),
+        help="prefill_bench programming-prompt size (David's standardized input). "
+        "Default 1024; 16384 is the prefill cell.",
+    )
+    parser.add_argument("--prompt-format", default="raw", choices=("raw", "chat"))
+    parser.add_argument(
+        "--bos", action=argparse.BooleanOptionalAction, default=True,
+        help="prepend the reference BOS (id 0); the model degenerates without it.",
+    )
+    parser.add_argument("--bos-id", type=int, default=0)
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument(
         "--pinned-layers",
@@ -298,7 +353,9 @@ def _run_once(args, pinned_layers, digest_index_holder: dict):
         from mlx_lm.utils import load_tokenizer
 
         tokenizer = load_tokenizer(Path(args.model))
-        prompt_ids = list(tokenizer.encode(args.prompt))
+        prompt_ids, prompt_meta = build_prompt(tokenizer, args)
+        if "__prompt_build__" not in digest_index_holder:
+            digest_index_holder["__prompt_build__"] = prompt_meta
 
         argmax, used_cache = _greedy_decode(model, prompt_ids, args.steps, step_ref)
 
@@ -405,6 +462,7 @@ def main(argv=None) -> int:
         "expert_cache_limit_bytes": digest_index_holder.get("__expert_cache_limit__"),
         "slot_layout": args.slot_layout,
         "prompt": args.prompt,
+        "prompt_build": digest_index_holder.get("__prompt_build__"),
         "steps": args.steps,
         "seed": args.seed,
         "pinned_layers_run_b": list(args.pinned_layers),
