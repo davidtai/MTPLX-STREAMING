@@ -117,6 +117,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admission-receipt", type=Path, default=None)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--apply-memory-cap",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="apply the reconciled MLX memory cap before allocation (default: "
+        "on for the GPU window; pass --no-apply-memory-cap for a CPU-only "
+        "reproduction that must not touch the MLX/Metal memory cap).",
+    )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        default=False,
+        help="force the MLX default device to the CPU stream (no Metal). Used "
+        "to run the gate as a CPU reproduction/regression without the GPU lock; "
+        "the real proof runs on the GPU with this off.",
+    )
     return parser
 
 
@@ -258,6 +274,7 @@ def _run_once(args, pinned_layers, digest_index_holder: dict):
         admit=args.admit,
         admission_receipt=receipt,
         expert_cache_limit_bytes=cache_limit,
+        apply_memory_cap=args.apply_memory_cap,
         **overrides,
     )
     model = resident.model
@@ -330,6 +347,10 @@ def main(argv=None) -> int:
     try:
         import mlx.core as mx
 
+        if args.cpu:
+            # Route every MLX op through the CPU stream (no Metal). Set before
+            # any array is built so the whole build+decode stays off the GPU.
+            mx.set_default_device(mx.cpu)
         mx.random.seed(int(args.seed))
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"gate_stream_equals_resident: MLX is required to run: {exc}", file=sys.stderr)
@@ -354,6 +375,13 @@ def main(argv=None) -> int:
         )
         run_resident = _run_once(args, args.pinned_layers, digest_index_holder)
     except Exception as exc:  # loader/admission/model not ready, OOM, etc.
+        # Always surface the full traceback first: the one-line summary below
+        # otherwise swallows the actual failure site (a raw AttributeError deep
+        # in the streamed dispatch is indistinguishable from a missing-W1
+        # ResidentLoadError without it).
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
         print(
             "gate_stream_equals_resident: could not complete a run "
             f"({type(exc).__name__}: {exc}). If this is a ResidentLoadError, "

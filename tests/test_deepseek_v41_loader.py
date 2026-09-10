@@ -46,7 +46,10 @@ from mtplx.expert_streaming_models import (  # noqa: E402
     plan_expert_memory,
 )
 from mtplx.models import deepseek_v41_loader as loader  # noqa: E402
-from mtplx.models.expert_mlx import bind_streamed_switches  # noqa: E402
+from mtplx.models.expert_mlx import (  # noqa: E402
+    MlxComponentSlot,
+    bind_streamed_switches,
+)
 
 ARTIFACT = Path(
     os.environ.get(
@@ -339,6 +342,110 @@ def test_open_runtime_and_bind_end_to_end(spec, manifest):
         part = loader.partition_text_residents(runtime.manifest)
         assert part.kept_count == KEPT_COUNT
         assert part.kept_bytes == KEPT_BYTES
+    finally:
+        runtime.close()
+
+
+# --------------------------------------------------------------------------
+# component-banks slot layout wires the gather-qmm bank allocator (W7)
+#
+# Regression for the P1.7 gate crash: opening the streamed runtime with
+# ``slot_layout="component-banks"`` MUST wire the MlxComponentBank slot
+# allocator.  ``open_deepseek_v41_runtime`` is a second runtime-open entry (the
+# streamed==resident gate + the CPU end-to-end proof) separate from the
+# production serve path, which wires this allocator in ``mtplx/runtime.py``.
+# Without it, ``ExpertStreamingRuntime.open`` falls back to raw ``bytearray``
+# slots and the component-banks dispatch raises ``'bytearray' object has no
+# attribute 'bank'`` at ``binding.buffer.bank`` (the first real GPU run of the
+# gate died exactly here in Run A).
+# --------------------------------------------------------------------------
+def test_component_banks_wires_bank_allocator_not_bytearray(spec, manifest):
+    admit = _admit_spec(spec, manifest)
+    cfg_cb = loader.build_streaming_config(
+        admit,
+        memory_limit_bytes=KNOB,
+        max_live_kv_tokens=4096,
+        runtime_reserve_bytes=RESERVE,
+        slot_layout="component-banks",
+        cache_scope="layer",
+    )
+    alloc = loader._component_bank_allocator_for(
+        cfg_cb, admit, ARTIFACT, MANIFEST, manifest
+    )
+    # a real component-bank allocator (the closure carries .banks/.close),
+    # never None (which would drop the pool back to the bytearray fallback).
+    assert alloc is not None
+    assert callable(alloc)
+    assert hasattr(alloc, "banks") and hasattr(alloc, "close")
+
+    # the default direct-slots layout deliberately keeps the bytearray fallback
+    # (its dispatch reads raw record bytes), so no allocator is wired there.
+    cfg_direct = loader.build_streaming_config(
+        admit,
+        memory_limit_bytes=KNOB,
+        max_live_kv_tokens=4096,
+        runtime_reserve_bytes=RESERVE,
+    )
+    assert cfg_direct.slot_layout == "direct-slots"
+    assert (
+        loader._component_bank_allocator_for(
+            cfg_direct, admit, ARTIFACT, MANIFEST, manifest
+        )
+        is None
+    )
+
+
+@pytest.mark.skipif(not BANK.is_file(), reason="expert bank not present")
+def test_component_banks_prefill_dispatch_reads_bank_slots(spec, manifest):
+    # End-to-end reproduction of the gate crash, minimized to one routed layer:
+    # open component-banks, bind the streamed switches, and drive a single
+    # PREFILL dispatch (T=2 -> RoutingPhase.PREFILL, the phase the gate crashed
+    # in).  Before the allocator wiring this raised AttributeError; after it the
+    # dispatch resolves through MlxComponentSlot banks and returns finite logits.
+    runtime = loader.open_deepseek_v41_runtime(
+        ARTIFACT,
+        memory_limit_bytes=KNOB,
+        max_live_kv_tokens=4096,
+        runtime_reserve_bytes=RESERVE,
+        spec=_admit_spec(spec, manifest),
+        # let the runtime plan the expert cache, exactly as the P1.7 gate does;
+        # only layer 0's bank is materialized by the single-layer dispatch below.
+        expert_cache_limit_bytes=None,
+        admission_receipt=_stat_receipt(manifest),
+        apply_memory_cap=False,  # never touch the MLX/Metal memory cap
+        slot_layout="component-banks",
+        cache_scope="layer",
+    )
+    try:
+        # the pool allocates through the component-bank allocator, not bytearrays
+        pool_alloc = getattr(runtime.slots, "_allocator", None)
+        assert pool_alloc is not None and hasattr(pool_alloc, "banks")
+
+        from mlx_lm.utils import load_config
+
+        config = load_config(ARTIFACT)
+        model_cls, args_cls = double_classes()
+        model = model_cls(args_cls.from_dict(config), engram_bank_path=None)
+        assert bind_streamed_switches(model, runtime) == 40
+
+        layer = runtime.spec.routed_layer_indices[0]
+        switch = model.model.layers[layer].mlp.switch_mlp
+        assert type(switch).__name__ == "HotExpertSwitchGLU"
+
+        hidden = runtime.spec.hidden_size
+        top_k = runtime.spec.top_k
+        # T=2 -> PREFILL; distinct expert ids so the wave actually gathers.
+        x = mx.zeros((1, 2, hidden), dtype=mx.bfloat16)
+        indices = mx.broadcast_to(
+            mx.arange(top_k, dtype=mx.int32).reshape(1, 1, top_k), (1, 2, top_k)
+        )
+        out = switch(x, indices)
+        mx.eval(out)
+        assert out.shape[-1] == hidden
+        assert bool(mx.all(mx.isfinite(out)).item())
+
+        # a component-bank slot really backs the layer's persistent bank
+        assert any(isinstance(slot, MlxComponentSlot) for slot in pool_alloc.slots.values())
     finally:
         runtime.close()
 

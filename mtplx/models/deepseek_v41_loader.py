@@ -238,9 +238,10 @@ def open_deepseek_v41_runtime(
         if manifest_path is not None
         else resolve_artifact_member(artifact_root, "expert-manifest.json")
     )
+    loaded_manifest: ExpertManifest | None = None
     if spec is None:
-        manifest = load_expert_manifest(resolved_manifest)
-        spec = get_model_spec(manifest.model_key)
+        loaded_manifest = load_expert_manifest(resolved_manifest)
+        spec = get_model_spec(loaded_manifest.model_key)
     if config is None:
         config = build_streaming_config(
             spec,
@@ -250,16 +251,82 @@ def open_deepseek_v41_runtime(
             expert_cache_limit_bytes=expert_cache_limit_bytes,
             **config_overrides,
         )
+    buffer_allocator = _component_bank_allocator_for(
+        config, spec, artifact_root, resolved_manifest, loaded_manifest
+    )
     return ExpertStreamingRuntime.open(
         artifact_root,
         resolved_manifest,
         config,
         spec=spec,
+        buffer_allocator=buffer_allocator,
         additional_resident_bytes=SWA_WINDOW_BYTES,
         apply_memory_cap=apply_memory_cap,
         mx_module=mx_module,
         expert_admission_receipt=admission_receipt,
     )
+
+
+def _component_bank_allocator_for(
+    config: ExpertStreamingConfig,
+    spec: ExpertStreamingModelSpec,
+    artifact_root: Path,
+    manifest_path: Path,
+    manifest: ExpertManifest | None = None,
+) -> Callable[[int, str], Any] | None:
+    """The component-major slot allocator for a ``component-banks`` layout.
+
+    ``ExpertStreamingRuntime.open`` allocates a routed slot's storage through
+    the ``buffer_allocator`` it is handed; when none is supplied it falls back
+    to a raw ``bytearray`` (``mtplx/expert_slots.py`` -- ``buffer_allocator or
+    (lambda size, _label: bytearray(size))``).  The *direct-slot* dispatch reads
+    that byte buffer fine (``_component_array``/``_run_q4_expert`` in
+    ``mtplx/models/expert_mlx.py`` treat a non-``mx.array`` buffer as raw
+    record bytes), but the *component-banks* dispatch requires each binding's
+    buffer to be an ``MlxComponentSlot`` backed by a gather-qmm-ready
+    ``MlxComponentBank``: it reaches for ``binding.buffer.bank``
+    (``mtplx/models/expert_mlx.py`` ``evaluate_component_bindings``), which a
+    bytearray does not have -- the exact ``'bytearray' object has no attribute
+    'bank'`` failure this loader's separate open entry hit under the P1.7 gate.
+
+    The production serve path builds this allocator in ``mtplx/runtime.py`` for
+    the same layout; ``open_deepseek_v41_runtime`` is a *second* runtime-open
+    entry (the P1.7 streamed==resident gate and the CPU end-to-end proof), so it
+    must wire the same allocator.  For any other layout (the default
+    ``direct-slots``) ``None`` is returned and the bytearray fallback stands.
+
+    The plan handed to the allocator is built the same way
+    ``ExpertStreamingRuntime.open`` builds its own (island placement resolved,
+    the SWA window priced as ``additional_resident_bytes``, the resident-quant
+    discounts applied, mixed-official per-layer record sizes when applicable),
+    so the allocator's per-bank capacities match the slot pool's plan exactly.
+    """
+
+    if config.slot_layout != "component-banks":
+        return None
+
+    from ..expert_runtime import (
+        proj_quant_plan_discount,
+        proj_requant_plan_discount,
+        resolve_island_placement,
+    )
+    from .expert_mlx import make_mlx_component_bank_allocator
+
+    if manifest is None:
+        manifest = load_expert_manifest(manifest_path)
+    resolved_config = resolve_island_placement(config, artifact_root, spec=spec)
+    plan = resolved_config.memory_plan(
+        spec,
+        additional_resident_bytes=SWA_WINDOW_BYTES,
+        resident_discount_bytes=(
+            proj_quant_plan_discount(manifest, resolved_config.proj_quant)
+            + proj_requant_plan_discount(manifest, resolved_config.proj_requant)
+        ),
+        layer_record_bytes=(
+            manifest.record_bytes_by_layer() if spec.is_mixed_official else None
+        ),
+    )
+    return make_mlx_component_bank_allocator(plan, spec, manifest)
 
 
 def load_text_only_resident_arrays(
