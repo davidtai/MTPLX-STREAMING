@@ -433,23 +433,6 @@ def _select_candidate_blocks(logits, compress_lens, topk_blocks, block_size):
 # ---------------------------------------------------------------------------
 # Attention (MLA + o-LoRA + sliding window + CSA2)
 # ---------------------------------------------------------------------------
-class _GroupedOLoraDown(nn.Module):
-    """The block-diagonal ``wo_a`` down-projection over ``o_groups`` (reference
-    model.py L785-787).  Stored as one ``[n_groups*o_lora_rank, in_per_group]``
-    matrix (checkpoint ``wo_a.weight``) and reshaped to ``[g, o_lora_rank, in]``
-    so each group projects only its own heads."""
-
-    def __init__(self, n_groups: int, o_lora_rank: int, in_per_group: int):
-        super().__init__()
-        self.n_groups = n_groups
-        self.o_lora_rank = o_lora_rank
-        self.weight = mx.zeros((n_groups * o_lora_rank, in_per_group))
-
-    def __call__(self, o: mx.array) -> mx.array:  # o: [b, s, n_groups, in_per_group]
-        w = self.weight.reshape(self.n_groups, self.o_lora_rank, -1)
-        return mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w.astype(mx.float32))
-
-
 class Attention(nn.Module):
     """MLA attention: one shared KV latent (``head_dim`` 512, 1 KV head, 64 query
     heads) over a sliding window plus, on CSA2 layers, an indexer-selected set of
@@ -488,7 +471,9 @@ class Attention(nn.Module):
         self.wkv = nn.Linear(self.dim, self.head_dim, bias=False)
         self.kv_norm_weight = mx.ones((self.head_dim,))
         in_per_group = self.n_heads * self.head_dim // self.n_groups
-        self.wo_a = _GroupedOLoraDown(self.n_groups, self.o_lora_rank, in_per_group)
+        # wo_a is a weight holder (block-diagonal over o_groups, applied as an
+        # einsum, not a plain GEMM); an nn.Linear so nn.quantize can make it q8.
+        self.wo_a = nn.Linear(in_per_group, self.n_groups * self.o_lora_rank, bias=False)
         self.wo_b = nn.Linear(self.n_groups * self.o_lora_rank, self.dim, bias=False)
 
         self.compressor = Compressor(args, self.compress_ratio) if self.is_kv_source else None
@@ -595,8 +580,20 @@ class Attention(nn.Module):
         o = self._sparse_attend(q, KV, attend)
         o = _rope_last(o, qcos, qsin, inverse=True)
         o = o.reshape(b, s, self.n_groups, -1)
-        o = self.wo_a(o)
+        o = self._o_lora_down(o)
         return self.wo_b(o.reshape(b, s, -1))
+
+    def _o_lora_down(self, o):
+        """Grouped ``wo_a`` down-projection: reshape the [out=n_groups*o_lora_rank,
+        in_per_group] weight to [g, o_lora_rank, in] and einsum each group over its
+        own heads (reference model.py L785-787).  Dequantized when q8-resident."""
+        wo = self.wo_a
+        if isinstance(wo, nn.QuantizedLinear):
+            w = mx.dequantize(wo.weight, wo.scales, wo.biases, group_size=wo.group_size, bits=wo.bits)
+        else:
+            w = wo.weight
+        w = w.reshape(self.n_groups, self.o_lora_rank, -1)
+        return mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w.astype(mx.float32))
 
 
 def _grow(rows, new):
@@ -687,9 +684,12 @@ class DecoderLayer(nn.Module):
         self.hc_ffn_fn = mx.zeros((mix_hc, hc_dim))
         self.hc_ffn_base = mx.zeros((mix_hc,))
         self.hc_ffn_scale = mx.zeros((3,))
-        #: Hook attached by the engram worker on layers in ``engram_layer_ids``;
-        #: ``engram(hidden[b,s,hc,dim], token_ids[b,s]) -> hidden``.  None = no-op.
-        self.engram = None
+        #: Engram hook, attached by the engram worker on layers in
+        #: ``engram_layer_ids`` (default None = no-op).  Called at the reference's
+        #: pre-attention insertion point as
+        #: ``engram_hook(hidden[B,L,hc_mult,dim], token_ids[B,L], cache_state) ->
+        #: hidden`` and returns the UPDATED residual stream (h + gate*value).
+        self.engram_hook = None
 
     def _mixes(self, x, fn, base, scale):
         """Reference ``Block.hc_mixes``: rsqrt-normalise the flattened hc stream
@@ -771,12 +771,20 @@ class DeepseekV41Cache:
     def __init__(self, n_layers: int):
         self.layers = [_LayerCache() for _ in range(n_layers)]
         self.offset = 0
+        #: Engram row-id history (an ``NgramHashState``-like object owned by the
+        #: engram worker); trimmed in step with the KV rollback below.  None when
+        #: engram is not wired.
+        self.engram_state = None
 
     def mark(self):
         return (self.offset, [lc.mark() for lc in self.layers])
 
     def rollback(self, mark):
-        self.offset, layer_marks = mark
+        target_offset, layer_marks = mark
+        # trim the engram token history by the same number of decoded tokens
+        if self.engram_state is not None and self.offset > target_offset:
+            self.engram_state.trim(self.offset - target_offset)
+        self.offset = target_offset
         for lc, m in zip(self.layers, layer_marks):
             lc.rollback(m)
 
@@ -809,10 +817,16 @@ class DeepseekV41Backbone(nn.Module):
             [mx.ones((b, s, 1)), mx.zeros((b, s, self.hc_mult - 1))], axis=-1
         ).astype(mx.float32)
 
+        # Engram row-id state (owned by the engram worker) is advanced once per
+        # step before any engram layer reads it; text-only has no image mask.
+        engram_state = getattr(cache, "engram_state", None)
+        if engram_state is not None:
+            engram_state.advance(input_ids)
+
         shared = _SharedRuntime()
         for layer in self.layers:
-            if layer.engram is not None:
-                h = layer.engram(h, input_ids)
+            if layer.engram_hook is not None:
+                h = layer.engram_hook(h, input_ids, engram_state)
             h, pre_mix = layer(h, pre_mix, positions, cache.layers[layer.layer_id], shared)
         cache.offset += s
 
@@ -821,16 +835,71 @@ class DeepseekV41Backbone(nn.Module):
         return _rmsnorm(h, self.norm_weight, self.args.rms_norm_eps)
 
 
-class Model(nn.Module):
-    """DeepSeek-V4.1-Flash text AR model.  ``model.layers[i].mlp.switch_mlp`` is
-    the streamed-expert seam; ``head`` is the (untied) output projection."""
+def _sanitize_name(name: str) -> str:
+    """One checkpoint resident tensor name -> this module's parameter path."""
+    # RMSNorm weights are bare-array attributes: X.norm.weight -> X.norm_weight
+    name = name.replace("norm.weight", "norm_weight")
+    # MoE router correction bias (noaux_tc); ffn -> the hy3 switch-seam name mlp
+    name = name.replace("ffn.gate.bias", "ffn.gate.e_score_correction_bias")
+    name = name.replace(".ffn.", ".mlp.")
+    if name.startswith("layers."):
+        return "model." + name
+    if name.startswith("embed."):
+        return "model.embed_tokens." + name[len("embed."):]
+    if name == "norm_weight":
+        return "model.norm_weight"
+    return name  # head.{weight,scales,biases} stay as-is
 
-    def __init__(self, args: ModelArgs):
+
+#: q8 gs64 affine is the resident format for every projection the checkpoint
+#: stores quantized (attention, shared expert, compressor, indexer, embed, head).
+_RESIDENT_QUANT = {"group_size": 64, "bits": 8, "mode": "affine"}
+
+
+def _is_resident_quant_module(path: str, module: nn.Module) -> bool:
+    """Whether ``nn.quantize`` should quantize this module to the resident q8.
+
+    Quantize the dense projections and the token/output embeddings; keep the MoE
+    router gate (bf16 in the checkpoint) and the streamed routed experts
+    (``switch_mlp``, served from the bank, never resident) unquantized.  Norms,
+    hyper-connection vectors and the attention sink are bare arrays, not modules,
+    so ``nn.quantize`` never sees them.
+    """
+    if not hasattr(module, "to_quantized"):
+        return False
+    if "switch_mlp" in path or path.endswith("mlp.gate"):
+        return False
+    in_features = getattr(module, "weight", None)
+    if in_features is not None and in_features.shape[-1] % _RESIDENT_QUANT["group_size"] != 0:
+        return False  # tiny test configs whose dims are not group-aligned stay dense
+    return True
+
+
+class Model(nn.Module):
+    """DeepSeek-V4.1-Flash text AR model.  ``model.model.layers[i].mlp.switch_mlp``
+    is the streamed-expert seam; ``head`` is the (untied) output projection.
+
+    ``quantize`` (default True) converts the resident projections to q8 gs64
+    affine so the streamed-artifact residents load strictly; tests that compare
+    against the dense oracle pass ``quantize=False``.  ``engram_bank_path`` is
+    stored for the engram worker's wiring (this module does not build engram).
+    """
+
+    def __init__(self, args: ModelArgs, *, engram_bank_path=None, quantize: bool = True):
         super().__init__()
         self.args = args
         self.model_type = args.model_type
+        self.engram_bank_path = engram_bank_path
         self.model = DeepseekV41Backbone(args)
         self.head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        if quantize:
+            nn.quantize(
+                self,
+                group_size=_RESIDENT_QUANT["group_size"],
+                bits=_RESIDENT_QUANT["bits"],
+                mode=_RESIDENT_QUANT["mode"],
+                class_predicate=_is_resident_quant_module,
+            )
 
     def __call__(self, input_ids, cache=None):
         h = self.model(input_ids, cache)
@@ -842,3 +911,22 @@ class Model(nn.Module):
 
     def make_cache(self):
         return DeepseekV41Cache(len(self.model.layers))
+
+    def sanitize(self, weights: dict) -> dict:
+        """Map the DeepSeek checkpoint's resident tensor names onto this module's
+        parameter paths (see W1_REPORT for the full table).
+
+        ``layers.N.ffn.*`` -> ``model.layers.N.mlp.*`` (the hy3 switch-seam name),
+        ``ffn.gate.bias`` -> ``mlp.gate.e_score_correction_bias`` (dropping the
+        text-unused ``ffn.gate.bias_vl``), the bare 1-D residents onto their array
+        attributes, and ``embed``/``head``/``norm`` onto their module paths.  The
+        routed ``ffn.experts.*`` are streamed (never in the resident dict).
+        """
+        out = {}
+        for name, value in weights.items():
+            if name.startswith(("vision.", "aligner.", "image_", "mtp.")):
+                continue
+            if name.endswith(".bias_vl"):
+                continue  # VL routing bias, unused on the text path
+            out[_sanitize_name(name)] = value
+        return out
