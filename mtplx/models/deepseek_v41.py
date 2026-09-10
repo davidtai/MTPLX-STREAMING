@@ -32,19 +32,26 @@ import mlx.nn as nn
 import numpy as np
 
 from mlx_lm.models.base import BaseModelArgs
-from mlx_lm.models.switch_layers import SwitchGLU
 
-# Arithmetic reused verbatim from the V4 backend (imported, not copied).  Each is
-# a pure function of arrays / an activation with no V4-specific state; the line
-# refs to inference/model.py they transcribe are in W1_REPORT.md.
+# Pure arithmetic reused from the V4 backend (imported, not copied), each verified
+# line-by-line against inference/model.py and re-checked by the W6 numpy parity
+# oracle (tests/models/test_deepseek_v41_parity.py):
+#   _yarn_inv_freq         <- precompute_freqs_cis YaRN ramp (model.py L367-395)
+#   _apply_interleaved_rope<- apply_rotary_emb adjacent-pair rotation (L399-414)
+#   hc_split_sinkhorn      <- kernel.py hc_split_sinkhorn (pre/post/comb + Sinkhorn)
+#   _hc_post_impl          <- Block.hc_post (post*x + sum_j comb[j,k]*residual[j])
 from mtplx.models.deepseek_v4 import (
-    ClampedSwiGLU,
-    MoEGate,
     _apply_interleaved_rope,
     _hc_post_impl,
     _yarn_inv_freq,
     hc_split_sinkhorn,
 )
+
+# The MoE (routed switch-streaming seam + shared expert) and the KV cache are
+# ported in sibling modules (workers W11 / W13); see docs/deepseek-v41/PORT_CONTRACT.md.
+# _LayerCache / DeepseekV41Cache are re-exported below for the loader + parity tests.
+from mtplx.models.deepseek_v41_cache import DeepseekV41Cache, _LayerCache, _truncate
+from mtplx.models.deepseek_v41_moe import MoE
 
 # ---------------------------------------------------------------------------
 # Per-layer CSA2 mode (§0 of docs/deepseek-v41/PORT_PLAN.md)
@@ -510,6 +517,7 @@ class Attention(nn.Module):
         index keys, append both to the layer cache and publish to the shared
         runtime."""
         ratio = self.compress_ratio
+        layer_cache.ratio = ratio  # recorded so DeepseekV41Cache.trim can re-derive rows
         if int(positions[0]) == 0:
             latent_pre, layer_cache.comp_state = self.compressor.prefill(x)
         else:
@@ -611,59 +619,6 @@ def _grow(rows, new):
 
 
 # ---------------------------------------------------------------------------
-# MoE (routed switch seam + shared expert)
-# ---------------------------------------------------------------------------
-class _SharedExpert(nn.Module):
-    """The always-on shared SwiGLU expert (reference ``Expert``, model.py L830-851),
-    named ``w1``/``w2``/``w3`` to match the checkpoint.  ``w3`` (up) is clamped
-    two-sided, ``w1`` (gate) only from above; the product runs in fp32."""
-
-    def __init__(self, args: ModelArgs):
-        super().__init__()
-        self.limit = args.swiglu_limit
-        self.w1 = nn.Linear(args.hidden_size, args.moe_intermediate_size, bias=False)
-        self.w3 = nn.Linear(args.hidden_size, args.moe_intermediate_size, bias=False)
-        self.w2 = nn.Linear(args.moe_intermediate_size, args.hidden_size, bias=False)
-
-    def __call__(self, x: mx.array) -> mx.array:
-        dtype = x.dtype
-        gate = self.w1(x).astype(mx.float32)
-        up = self.w3(x).astype(mx.float32)
-        if self.limit and self.limit > 0:
-            gate = mx.minimum(gate, self.limit)
-            up = mx.clip(up, -self.limit, self.limit)
-        return self.w2((nn.silu(gate) * up).astype(dtype))
-
-
-class DeepseekV41MoE(nn.Module):
-    """Top-6 routed experts + one shared expert (reference ``MoE``, model.py
-    L854-904).  ``switch_mlp`` is the seam the streaming runtime rebinds
-    (``bind_streamed_switches``); the resident ``SwitchGLU`` is the test-only
-    fallback.  The gate (``sqrtsoftplus``/``noaux_tc``) is reused from the V4
-    backend."""
-
-    def __init__(self, args: ModelArgs, layer_id: int):
-        super().__init__()
-        self.gate = MoEGate(args, layer_id)
-        self.switch_mlp = SwitchGLU(
-            args.hidden_size,
-            args.moe_intermediate_size,
-            args.n_routed_experts,
-            activation=ClampedSwiGLU(args.swiglu_limit),
-        )
-        self.shared_experts = _SharedExpert(args)
-
-    def __call__(self, x: mx.array) -> mx.array:
-        shape = x.shape
-        xf = x.reshape(-1, shape[-1])
-        indices, weights = self.gate(xf)
-        routed = self.switch_mlp(xf, indices)  # [n, topk, dim]
-        y = (routed * weights[..., None].astype(routed.dtype)).sum(axis=-2)
-        y = y + self.shared_experts(xf)
-        return y.reshape(shape)
-
-
-# ---------------------------------------------------------------------------
 # Decoder block (Hyper-Connections around attention + MoE)
 # ---------------------------------------------------------------------------
 class DecoderLayer(nn.Module):
@@ -680,7 +635,7 @@ class DecoderLayer(nn.Module):
         self.hc_mult = args.hc_mult
         self.hc_iters = args.hc_sinkhorn_iters
         self.attn = Attention(args, layer_id)
-        self.mlp = DeepseekV41MoE(args, layer_id)  # `mlp` = the switch seam name
+        self.mlp = MoE(args, layer_id)  # `mlp` = the switch seam name
         self.attn_norm_weight = mx.ones((args.hidden_size,))
         self.ffn_norm_weight = mx.ones((args.hidden_size,))
         mix_hc = (2 + self.hc_mult) * self.hc_mult
@@ -733,67 +688,6 @@ class DecoderLayer(nn.Module):
         x = self.mlp(x)
         h = _hc_post_impl(x, residual, ffn_post, ffn_comb)
         return h, ffn_pre
-
-
-# ---------------------------------------------------------------------------
-# Cache with the trim/rollback seam
-# ---------------------------------------------------------------------------
-class _LayerCache:
-    """Append-only window / compressed-KV / index-key rows for one layer, plus a
-    mark/rollback seam.  Full history is kept and the sliding window is realised
-    by the attention mask (equivalent to the reference ring buffer for the
-    positions any query can still reach); phase 2 swaps it for a bounded ring."""
-
-    def __init__(self):
-        self.window = None
-        self.compress_kv = None
-        self.index_k = None
-        self.comp_state = None  # (kv_acc, score_acc) partial compressor group, or None
-
-    def mark(self):
-        def n(a):
-            return 0 if a is None else a.shape[1]
-        # comp_state holds immutable arrays, so the tuple itself is the snapshot
-        return (n(self.window), n(self.compress_kv), n(self.index_k), self.comp_state)
-
-    def rollback(self, mark):
-        nw, nc, ni, comp_state = mark
-        self.window = _truncate(self.window, nw)
-        self.compress_kv = _truncate(self.compress_kv, nc)
-        self.index_k = _truncate(self.index_k, ni)
-        self.comp_state = comp_state
-
-
-def _truncate(rows, n):
-    if rows is None or n == 0:
-        return None if n == 0 else rows
-    return rows[:, :n]
-
-
-class DeepseekV41Cache:
-    """Per-model KV cache: one ``_LayerCache`` per layer plus the running token
-    offset.  ``mark``/``rollback`` undo a decoded tail (the trim/rollback seam of
-    the V4 ``DeepseekV4Cache``), restoring identical logits."""
-
-    def __init__(self, n_layers: int):
-        self.layers = [_LayerCache() for _ in range(n_layers)]
-        self.offset = 0
-        #: Engram row-id history (an ``NgramHashState``-like object owned by the
-        #: engram worker); trimmed in step with the KV rollback below.  None when
-        #: engram is not wired.
-        self.engram_state = None
-
-    def mark(self):
-        return (self.offset, [lc.mark() for lc in self.layers])
-
-    def rollback(self, mark):
-        target_offset, layer_marks = mark
-        # trim the engram token history by the same number of decoded tokens
-        if self.engram_state is not None and self.offset > target_offset:
-            self.engram_state.trim(self.offset - target_offset)
-        self.offset = target_offset
-        for lc, m in zip(self.layers, layer_marks):
-            lc.rollback(m)
 
 
 # ---------------------------------------------------------------------------
