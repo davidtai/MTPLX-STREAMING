@@ -122,6 +122,15 @@ class ExpertStreamingModelSpec:
     # until the affine assumptions catalogued in
     # research/streamed-q1-codec-gap-analysis.md are closed.
     expert_codec: str = "affine"
+    # Reference asymmetric SwiGLU clamp applied inside every streamed routed
+    # expert, between the gate/up projections and the SiLU (DeepSeek
+    # inference/model.py Expert.forward L846-847: up clipped two-sided
+    # [-limit,+limit], gate clipped from above at +limit). ``None`` (the default)
+    # means the plain unclamped SwiGLU -- every existing hy3/glm/deepseek_v4 spec
+    # leaves this None, so their streamed path is byte-for-byte unchanged. Set to
+    # a positive float only for models whose reference clamps its experts
+    # (DeepSeek-V4.1-Flash: 10.0).
+    swiglu_limit: float | None = None
 
     def __post_init__(self) -> None:
         integer_fields = {
@@ -186,6 +195,12 @@ class ExpertStreamingModelSpec:
             raise ValueError(
                 f"expert_codec must be 'affine', {MIXED_OFFICIAL_CODEC!r}, {choices}"
             )
+        if self.swiglu_limit is not None and (
+            not isinstance(self.swiglu_limit, (int, float))
+            or isinstance(self.swiglu_limit, bool)
+            or self.swiglu_limit <= 0
+        ):
+            raise ValueError("swiglu_limit must be None or a positive number")
         if self.expert_codec == MIXED_OFFICIAL_CODEC:
             # Mixed-official specs have no uniform record size, so the routed /
             # resident footprint split is manifest-derived at plan time. The
@@ -724,6 +739,11 @@ DEEPSEEK_V41_FLASH_EXPERT_Q2 = ExpertStreamingModelSpec(
     full_indexer_layers=(2, 8, 14, 20, 24, 28, 32, 36),
     # Unmeasured: needs a routing census before count-based island selection.
     island_pin_order=(),
+    # DeepSeek-V4.1-Flash clamps every routed (and shared) expert's SwiGLU at
+    # +/-10 (config text_config.swiglu_limit=10.0). The streamed switch applies
+    # the reference asymmetric clamp between the gate/up qmm and the SiLU so the
+    # streaming path matches the resident ClampedSwiGLU path and the reference.
+    swiglu_limit=10.0,
 )
 
 

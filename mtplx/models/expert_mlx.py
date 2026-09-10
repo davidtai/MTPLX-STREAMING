@@ -656,6 +656,7 @@ class DenseIslandSwitchGLU(nn.Module):
         self.layer_index = int(layer_index)
         self.group_size = runtime.spec.quant_group_size
         self.bits = runtime.spec.quant_bits
+        self.swiglu_limit = getattr(runtime.spec, "swiglu_limit", None)
         self._bank = store.bank_for_layer(self.layer_index)
         # Lazily-built compiled expert gather (issue #51, 70 tps full-residency
         # goal). Full residency rebuilds the 79-layer graph in Python every
@@ -685,6 +686,15 @@ class DenseIslandSwitchGLU(nn.Module):
         Returns None for any shape the fixed-M4 wave does not cover; the
         caller then runs the classic dispatch unchanged.
         """
+
+        # The fused M4 wave computes SwiGLU inside the Metal kernel with no
+        # clamp, so a spec that clamps (spec.swiglu_limit set) must not take it:
+        # return None to fall back to the eager clamped __call__ dispatch. No
+        # streamed model both clamps and runs the hy3 wave today (the wave is
+        # hy3-only, hy3 leaves swiglu_limit None), so this only guards the
+        # contract; adding the clamp to the kernel is a future Metal change.
+        if self.swiglu_limit is not None and self.swiglu_limit > 0:
+            return None
 
         from mtplx.hy3_expert_wave_m4 import (
             HY3_M4_BATCH,
@@ -760,6 +770,7 @@ class DenseIslandSwitchGLU(nn.Module):
                 slot_indices,
                 group_size=self.group_size,
                 bits=self.bits,
+                swiglu_limit=self.swiglu_limit,
             )
         return output.reshape((*indices.shape, hidden_size))
 
@@ -769,6 +780,7 @@ class DenseIslandSwitchGLU(nn.Module):
             bank = self._bank
             group_size = self.group_size
             bits = self.bits
+            swiglu_limit = self.swiglu_limit
 
             def gather(assignment_inputs: mx.array, slot_indices: mx.array) -> mx.array:
                 return _gather_component_bank(
@@ -777,6 +789,7 @@ class DenseIslandSwitchGLU(nn.Module):
                     slot_indices,
                     group_size=group_size,
                     bits=bits,
+                    swiglu_limit=swiglu_limit,
                 )
 
             self._compiled_gather = mx.compile(gather)
@@ -1331,12 +1344,31 @@ def _release_mlx_cache() -> None:
         pass
 
 
+def _clamped_swiglu(
+    gate: mx.array, up: mx.array, swiglu_limit: float | None = None
+) -> mx.array:
+    """SwiGLU with the reference's optional asymmetric clamp.
+
+    ``swiglu_limit is None`` (or <= 0) is the plain ``swiglu(gate, up)`` -- every
+    codec/model that leaves ``spec.swiglu_limit`` unset is byte-for-byte
+    unchanged. When set, the clamp is applied to the pre-activation projections
+    exactly as DeepSeek ``inference/model.py`` ``Expert.forward`` L846-847 (and
+    the resident ``deepseek_v41_moe.ClampedSwiGLU``): the *up* branch is clipped
+    two-sided ``[-limit, +limit]`` and the *gate* branch only from above at
+    ``+limit``, before the SiLU."""
+    if swiglu_limit is not None and swiglu_limit > 0:
+        up = mx.clip(up, -swiglu_limit, swiglu_limit)
+        gate = mx.minimum(gate, swiglu_limit)
+    return swiglu(gate, up)
+
+
 def _run_q4_expert(
     x: mx.array,
     binding: ExpertSlotBinding,
     *,
     group_size: int,
     bits: int = 4,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     gate_weight = _component_array(binding, "gate_proj.weight")
     gate_scales = _component_array(binding, "gate_proj.scales")
@@ -1366,7 +1398,7 @@ def _run_q4_expert(
         bits=bits,
         mode="affine",
     )
-    hidden = swiglu(gate, up)
+    hidden = _clamped_swiglu(gate, up, swiglu_limit)
     return mx.quantized_matmul(
         hidden,
         down_weight,
@@ -1384,6 +1416,7 @@ def _run_component_bank_q4(
     *,
     group_size: int,
     bits: int = 4,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     """Execute assignment-aligned rows from one component-major slot bank."""
 
@@ -1406,6 +1439,7 @@ def _run_component_bank_q4(
         slot_indices,
         group_size=group_size,
         bits=bits,
+        swiglu_limit=swiglu_limit,
     )
 
 
@@ -1416,6 +1450,7 @@ def _gather_component_bank(
     *,
     group_size: int,
     bits: int,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     """Row-gathered three-matrix expert MLP against one component bank."""
 
@@ -1437,7 +1472,7 @@ def _gather_component_bank(
 
     gate = qmm(selected, "gate_proj")
     up = qmm(selected, "up_proj")
-    output = qmm(swiglu(gate, up), "down_proj")
+    output = qmm(_clamped_swiglu(gate, up, swiglu_limit), "down_proj")
     return output.reshape((rows, int(output.shape[-1])))
 
 
@@ -1446,6 +1481,7 @@ def _run_component_bank_shadow(
     bindings: tuple[ExpertSlotBinding, ...],
     *,
     codec: str,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     """Execute assignment-aligned rows of a shadow-codec (q1) slot bank.
 
@@ -1469,7 +1505,9 @@ def _run_component_bank_shadow(
         [int(binding.buffer.bank_index) for binding in bindings],
         dtype=mx.int32,
     )
-    return _shadow_gather_component_bank(x, bank, slot_rows, codec=codec)
+    return _shadow_gather_component_bank(
+        x, bank, slot_rows, codec=codec, swiglu_limit=swiglu_limit
+    )
 
 
 def _shadow_gather_component_bank(
@@ -1478,6 +1516,7 @@ def _shadow_gather_component_bank(
     slot_rows: mx.array,
     *,
     codec: str,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     """Row-gathered three-projection shadow MLP against one component bank."""
 
@@ -1494,7 +1533,7 @@ def _shadow_gather_component_bank(
 
     gate = projection(x, "gate_proj")
     up = projection(x, "up_proj")
-    return projection(swiglu(gate, up), "down_proj")
+    return projection(_clamped_swiglu(gate, up, swiglu_limit), "down_proj")
 
 
 def _run_component_bank_mixed(
@@ -1503,6 +1542,7 @@ def _run_component_bank_mixed(
     *,
     gate_up_tier: str,
     group_size: int,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     """Execute a mixed-official (issue #51, M2) component-bank wave.
 
@@ -1531,6 +1571,7 @@ def _run_component_bank_mixed(
         slot_rows_1d,
         gate_up_tier=gate_up_tier,
         group_size=group_size,
+        swiglu_limit=swiglu_limit,
     )
 
 
@@ -1542,6 +1583,7 @@ def _gather_component_bank_mixed(
     *,
     gate_up_tier: str,
     group_size: int,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     """Row-gathered mixed-tier expert MLP against one shared per-layer bank."""
 
@@ -1583,7 +1625,7 @@ def _gather_component_bank_mixed(
         up = affine(x, "up_proj", bits)
     else:  # pragma: no cover - guarded by the manifest tier contract
         raise ValueError(f"unsupported mixed gate/up tier {gate_up_tier!r}")
-    hidden = swiglu(gate, up)
+    hidden = _clamped_swiglu(gate, up, swiglu_limit)
     return affine(hidden, "down_proj", _MIXED_DOWN_BITS)
 
 
@@ -1591,6 +1633,7 @@ def _run_shadow_bank(
     x: mx.array,
     expert_rows: mx.array,
     bank: Any,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     """Three-projection expert MLP against a low-precision shadow bank.
 
@@ -1613,7 +1656,7 @@ def _run_shadow_bank(
 
     gate = projection(x, "gate_proj")
     up = projection(x, "up_proj")
-    return projection(swiglu(gate, up), "down_proj")
+    return projection(_clamped_swiglu(gate, up, swiglu_limit), "down_proj")
 
 
 def _run_mapped_q4(
@@ -1622,6 +1665,7 @@ def _run_mapped_q4(
     *,
     group_size: int,
     bits: int = 4,
+    swiglu_limit: float | None = None,
 ) -> mx.array:
     arrays = mapped.arrays
 
@@ -1636,7 +1680,10 @@ def _run_mapped_q4(
             mode="affine",
         )
 
-    return qmm(swiglu(qmm(x, "gate_proj"), qmm(x, "up_proj")), "down_proj")
+    return qmm(
+        _clamped_swiglu(qmm(x, "gate_proj"), qmm(x, "up_proj"), swiglu_limit),
+        "down_proj",
+    )
 
 
 class MappedExpertSwitchGLU(nn.Module):
@@ -1654,6 +1701,7 @@ class MappedExpertSwitchGLU(nn.Module):
         self.layer_index = int(layer_index)
         self.group_size = runtime.spec.quant_group_size
         self.bits = runtime.spec.quant_bits
+        self.swiglu_limit = getattr(runtime.spec, "swiglu_limit", None)
 
     def __call__(self, x: mx.array, indices: mx.array) -> mx.array:
         hidden_size = int(x.shape[-1])
@@ -1688,6 +1736,7 @@ class MappedExpertSwitchGLU(nn.Module):
                     self.store.get(self.layer_index, expert),
                     group_size=self.group_size,
                     bits=self.bits,
+                    swiglu_limit=self.swiglu_limit,
                 )
             )
             output_positions.extend(positions)
@@ -1718,6 +1767,9 @@ class HotExpertSwitchGLU(nn.Module):
         # path is identical either way — only the component-bank dispatch
         # differs (gate 4 of the gap analysis).
         self.codec = getattr(runtime.spec, "expert_codec", "affine")
+        # Reference SwiGLU clamp for models that set it (DeepSeek-V4.1: 10.0);
+        # None -> plain SwiGLU, so every other streamed model is unchanged.
+        self.swiglu_limit = getattr(runtime.spec, "swiglu_limit", None)
         # Mixed-official (issue #51, M2): resolve this layer's (gate_up, down)
         # tier from the loaded manifest's layer_tier_map — never the spec (D1).
         # Fail closed if the layer has no tier entry.
@@ -1748,6 +1800,7 @@ class HotExpertSwitchGLU(nn.Module):
                 bindings,
                 group_size=self.group_size,
                 bits=self.bits,
+                swiglu_limit=self.swiglu_limit,
             )
         if self.codec == MIXED_OFFICIAL_CODEC:
             assert self._gate_up_tier is not None
@@ -1756,8 +1809,11 @@ class HotExpertSwitchGLU(nn.Module):
                 bindings,
                 gate_up_tier=self._gate_up_tier,
                 group_size=self.group_size,
+                swiglu_limit=self.swiglu_limit,
             )
-        return _run_component_bank_shadow(selected, bindings, codec=self.codec)
+        return _run_component_bank_shadow(
+            selected, bindings, codec=self.codec, swiglu_limit=self.swiglu_limit
+        )
 
     def __call__(self, x: mx.array, indices: mx.array) -> mx.array:
         output, _overlap_result = self._run(
@@ -2012,6 +2068,7 @@ class HotExpertSwitchGLU(nn.Module):
                         binding_by_expert[expert],
                         group_size=self.group_size,
                         bits=self.bits,
+                        swiglu_limit=self.swiglu_limit,
                     )
                 )
                 wave_positions.extend(expert_positions)
@@ -2162,6 +2219,7 @@ class HotExpertSwitchGLU(nn.Module):
                                 selected,
                                 mx.array(shadow_experts, dtype=mx.int32),
                                 shadow_bank,
+                                swiglu_limit=self.swiglu_limit,
                             )
                         )
                         output_positions.extend(shadow_positions)

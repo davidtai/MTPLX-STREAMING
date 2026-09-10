@@ -62,41 +62,72 @@ Every method carries its reference line range inline.
     `down_proj`, so `ClampedSwiGLU` applies the clamp exactly where the reference
     `Expert` does. (Arg order is `(up, gate)` — opposite of the names — handled in
     `ClampedSwiGLU.__call__`.)
-  - *Streamed:* `bind_streamed_switches` (`mtplx/models/expert_mlx.py` ~L2550)
-    replaces the whole `switch_mlp` module with `HotExpertSwitchGLU` /
-    `MappedExpertSwitchGLU` / `DenseIslandSwitchGLU`, gathering the Q2 records from
-    `experts.bin`.
+  - *Streamed (implemented):* `bind_streamed_switches` (`mtplx/models/expert_mlx.py`)
+    replaces `switch_mlp` with `HotExpertSwitchGLU` / `MappedExpertSwitchGLU` /
+    `DenseIslandSwitchGLU`, gathering the Q2 records from `experts.bin`, and these
+    now apply the same clamp — see "Streaming clamp".
 
-### How the clamp is injected — and the current gap
+## Streaming clamp (implemented + measured)
 
-I read `expert_mlx.py` end to end. **The streamed switches expose no activation
-hook.** Every streamed execution path calls
-`mlx_lm.models.activations.swiglu(gate, up)` directly (L1369, 1440, 1497, 1586,
-1616, 1639), the runtime `spec` carries no `swiglu_limit`/clamp field, and
-`bind_streamed_switches` reads *nothing* off the switch it replaces (it does not
-propagate the resident `ClampedSwiGLU`). This is unlike the resident path used by
-`deepseek_v4`, which does carry the clamp through `SwitchGLU(activation=
-ClampedSwiGLU(...))` — but `deepseek_v4` streams through the *same* clamp-less
-`swiglu`, so no existing model injects a clamp into the streamed path.
+The follow-up: the reference clamps *every* routed expert, so the streamed path
+must clamp too — not just the resident fallback. It now does.
 
-**So on the streamed path the `swiglu_limit` clamp is currently NOT applied.**
+### Implementation
 
-I did **not** edit `expert_mlx.py`. Rationale: it is a large shared surface
-(hy3 / glm / deepseek_v4 all stream through it); a correct fix touches the spec, the
-opener, and six `swiglu(...)` call sites — not the "minimal, tested change" the
-allowlist permits. And it is unnecessary for this artifact:
+`expert_mlx.py` streamed every expert through
+`mlx_lm.models.activations.swiglu(gate, up)` at six sites with **no activation
+hook** — the missing clamp. The fix threads the limit from the spec:
 
-- **The gap is numerically inert here.** At `swiglu_limit=10.0` the gate/up
-  pre-activations on the real layer-0 records never reach ±10, so plain SwiGLU ==
-  clamped SwiGLU bit-for-bit. Proven by
-  `test_streamed_clamp_is_inert_on_real_records` (asserts `max|pre| < 10` and
-  `max|plain − clamped| == 0.0` across the 4×6 selected records).
+- `ExpertStreamingModelSpec.swiglu_limit: float | None = None` (new field), set to
+  `10.0` on `DEEPSEEK_V41_FLASH_EXPERT_Q2`. `None` is the default, so every hy3 /
+  glm / deepseek_v4 spec is byte-for-byte unchanged (drift-guarded: the pinned
+  `asdict` digests in `test_expert_streaming_models.py` were updated for the
+  intentional new field, values still `None`).
+- One helper, `_clamped_swiglu(gate, up, swiglu_limit)`, applies the reference's
+  asymmetric clamp (`inference/model.py` L846-847: up two-sided `[-L,+L]`, gate
+  upper-only `+L`) before `swiglu`; `None`/`≤0` is the plain `swiglu` verbatim.
+- Every streamed execution helper (`_run_q4_expert`, `_gather_component_bank`,
+  `_shadow_gather_component_bank`, `_gather_component_bank_mixed`, `_run_shadow_bank`,
+  `_run_mapped_q4`) takes `swiglu_limit` and calls `_clamped_swiglu`. Each streamed
+  switch (`HotExpertSwitchGLU`, `MappedExpertSwitchGLU`, `DenseIslandSwitchGLU`)
+  reads `self.swiglu_limit = getattr(runtime.spec, "swiglu_limit", None)` and passes
+  it down. `runtime.spec` is the spec, so no opener change is needed.
+- The one path that bypasses the six `swiglu` sites is the fused Metal K3 wave
+  (`DenseIslandSwitchGLU.wave_call` → `hy3_q2_m4_expert_wave`, which computes SwiGLU
+  inside the kernel). It is hy3-only (hy3 leaves `swiglu_limit=None`) and dsv41 never
+  uses islands, but for the contract `wave_call` now returns `None` when a limit is
+  set, falling back to the eager clamped dispatch. Clamping inside that kernel is a
+  future Metal change, flagged in `wave_call`.
 
-Recommended follow-up (owner: streaming runtime, not W11): add an optional
-`swiglu_limit` to the expert streaming spec and clamp between the up/gate qmm and
-`swiglu` in the streamed execution helpers, defaulting to off so hy3/glm/v4 are
-unchanged. Until then the streamed dsv41 path is exact *only because the clamp does
-not bind*; a future artifact whose activations exceed the limit would need it.
+### Is the clamp load-bearing? Yes — my earlier "inert" claim was WRONG.
+
+My first pass sampled only **layer 0 on 4 random tokens** (max pre-activation < 10)
+and wrongly generalised to "inert". The 40-layer component-banks probe on the real
+31-token probe A (the add/sub/mul prompt whose tail the old forward turned to junk)
+shows the opposite. Measured on the **un-clamped (old) trajectory**
+(`tests/models/test_deepseek_v41_clamp_probe.py`, receipt
+`docs/deepseek-v41/receipts/cpu_clamp_probe.json`):
+
+- **Global max |gate| = 72.3, max |up| = 78.0** — 7-8× the ±10 limit. Layers 0-14
+  stay under 10; from **layer 15 on** many layers blow past it (L25 gate 72.3, L21
+  up 78.0), the clamp cutting hundreds of activations per deep layer (L36:
+  gate>10 = 1164, |up|>10 = 614).
+- **7 of the 8 flagged junk positions** (11, 12, 19, 20, 21, 24, 26 — all but 6)
+  have at least one expert pre-activation over ±10. (BOS position 0 and several
+  non-junk positions also exceed, so "> ±10" is broad, not junk-specific.)
+
+Causal test — teacher-forced next-token argmax on the same load, clamp OFF vs ON:
+
+- **OFF 16/30 → ON 17/30.** OFF reproduces the receipt's baseline 16/30 exactly,
+  confirming OFF == the old forward. The clamp changes predictions at positions
+  {5, 7}, **fixes position 5, breaks none** (net +1).
+- **But it fixes none of the 8 flagged junk positions on its own.** So the missing
+  clamp is a real, load-bearing defect (net-positive and faithful to the reference),
+  **but not the sole cause of the tail junk** — another defect remains (consistent
+  with W8's decode-path investigation). The clamp is necessary for faithfulness, not
+  sufficient for the junk.
+
+Cost: 2 forwards + per-expert dequant on the real bank, CPU, ~650 s, peak RSS ~16 GB.
 
 ## Resident tensor names (loader parity)
 
@@ -127,12 +158,31 @@ artifact is absent; the artifact was present, so all ran.
 | `test_clamped_swiglu_activation_parity_including_beyond_limit` | `ClampedSwiGLU` vs numpy reference clamp on inputs beyond ±10; `limit≤0` == plain SwiGLU | PASS (`max|Δ| < 1e-4`) |
 | `test_expert_forward_parity_including_beyond_limit` | `Expert.forward` vs numpy reference `Expert.forward`, clamp firing | PASS (`max|Δ| < 1e-3`) |
 | `test_moe_seam_forward_matches_numpy_reference` | real gate + shared experts + record-backed test-double switch (6 Q2 records from `experts.bin`, clamped SwiGLU) vs from-scratch numpy MoE over the dequantised layer-0 tensors | PASS, **cos 0.999987 ≥ 0.999** |
-| `test_streamed_clamp_is_inert_on_real_records` | documents the streamed clamp gap is inert at limit=10 on real records | PASS (`max|pre|<10`, `Δ==0`) |
+| `test_layer0_activations_stay_under_limit_but_deep_layers_do_not` | layer-0 pre-acts stay < ±10 (a LOCAL fact); points to the clamp probe for the deep-layer verdict | PASS (`max|pre|<10`) |
 | `test_layer0_moe_matches_w9_torch_golden` | optional golden against W9 torch receipts | SKIP (goldens absent) |
 
 `5 passed, 1 skipped` under `nice -n 19`, CPU. Peak RSS well under the 40 GB
 budget (reads only ~6 Q2 records ≈ 66 MB from the 158 GiB bank, plus the layer-0
 residents).
+
+### Streaming-clamp tests — `tests/models/test_deepseek_v41_streaming_clamp.py` (CPU)
+
+| test | proves | result |
+|---|---|---|
+| `test_spec_swiglu_limit_values` | dsv41 spec `swiglu_limit==10.0`; every other spec `None` | PASS |
+| `test_none_limit_keeps_plain_swiglu_byte_identical` | `_clamped_swiglu(·,·,None)` and `(·,·,0)` are byte-identical to plain `swiglu`; a binding limit changes it | PASS |
+| `test_hot_switch_reads_spec_swiglu_limit` | `HotExpertSwitchGLU.swiglu_limit` is 10.0 for dsv41, `None` for hy3 (spec→runtime→switch wiring) | PASS |
+| `test_component_bank_helper_applies_reference_clamp` | `_gather_component_bank` (the dsv41 path) == resident `ClampedSwiGLU` **bit-exact** for limit None/3/10 on a real record; binding limit differs from None | PASS |
+| `test_mapped_helper_applies_reference_clamp` | same for `_run_mapped_q4` (metal-mmap path) | PASS |
+
+`5 passed`. Existing `tests/test_expert_streaming_models.py` (26) still passes
+after the drift-guard digest update.
+
+### Clamp probe — `tests/models/test_deepseek_v41_clamp_probe.py` (CPU, gated)
+
+Gated behind `DSV41_RUN_CLAMP_PROBE=1` (heavy: two full 40-layer streamed forwards
++ per-expert dequant, ~650 s, peak RSS ~16 GB). Ran once; verdict above, receipt at
+`docs/deepseek-v41/receipts/cpu_clamp_probe.json`.
 
 Dequant note: the Q2 routed records are 2-bit affine, so they dequantise via
 `mx.dequantize` (the exact inverse of the converter's `quantize_affine`, which is
@@ -144,6 +194,12 @@ format, used for both the q8 shared experts and the q2 routed records.
 
 - No edit to `mtplx/models/deepseek_v41.py` (W10 owns it) — integration contract in
   `PORT_CONTRACT.md` under "W11".
-- No edit to `expert_mlx.py` — streamed clamp injection documented, not applied
-  (see the gap section).
+- The streamed clamp IS now implemented in `expert_mlx.py` +
+  `expert_streaming_models.py` (coordinator-directed follow-up; the earlier
+  "documented, not applied" stance is superseded). The one remaining unclamped path
+  is the fused Metal K3 wave (`hy3_q2_m4_expert_wave`), which is hy3-only and which
+  `DenseIslandSwitchGLU.wave_call` now refuses when a limit is set — clamping inside
+  that kernel is a future Metal change, out of W11's scope.
+- The missing clamp is not the sole cause of probe A's tail junk (clamp fixes only
+  position 5, 16→17); the residual junk is a separate defect (W8 decode-path line).
 - W9 golden test present but dormant until `torchref_*.json` land.

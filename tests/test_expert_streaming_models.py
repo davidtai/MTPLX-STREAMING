@@ -124,6 +124,8 @@ def test_hy3_q4_is_unchanged_by_hy3_expert_q2_registry_expansion() -> None:
         "full_indexer_layers": (),
         "island_pin_order": (),
         "expert_codec": "affine",
+        # W11: reference SwiGLU clamp; None for every model but DeepSeek-V4.1.
+        "swiglu_limit": None,
     }
     before = asdict(HY3_Q4)
 
@@ -212,14 +214,15 @@ def test_existing_descriptors_are_unchanged_by_glm52_expert_q2_registry_expansio
 ):
     expected_digests = {
         # Digests track the intentional field set: island_pin_order
-        # (auto-census #98) and expert_codec (q1 lane, issue #51) are
-        # spec fields now; a digest change without a matching field-set
+        # (auto-census #98), expert_codec (q1 lane, issue #51) and swiglu_limit
+        # (W11, reference SwiGLU clamp; None for every model but DeepSeek-V4.1)
+        # are spec fields now; a digest change without a matching field-set
         # change is the drift this test exists to catch.
-        "hy3-q4": "bc121154d4d6286e9499995e06632e10007ef5c9b343254018a60bff59ef344c",
+        "hy3-q4": "691247ca49227dd92a96545932069db1d5c1352669bc3405b188f6e30364c816",
         # hy3-expert-only-q4 keeps its ORIGINAL digest: pin order stays empty (census-driven)
-        "hy3-expert-only-q4": "d6ac448f353a988d77c27b5e81d6cb7b9de2eba3c93b67bfd0efa35729473140",
-        "hy3-expert-q2": "286bc48306801005db9b32d96362ac2553bbe4ce5e53112503b1a12c9a6a78ea",
-        "glm52-q4": "6372e17bf28658526de0b2150cda8fad486f077849b5d0c5be23ff19e6b770b1",
+        "hy3-expert-only-q4": "29ea79d9af1c3ba1b3fd5c0ead7b736393c771fb729abca533b63a95b9fb1987",
+        "hy3-expert-q2": "c1f14313f9fe205bdc5125e43d41f4321eee30f375cb3d91d739e4c559553754",
+        "glm52-q4": "ddfb379143548c4fe606eb8a8d744bb01001b96bde9257128e831b1c6440476b",
     }
     existing = (HY3_Q4, HY3_EXPERT_ONLY_Q4, HY3_EXPERT_Q2, GLM52_Q4)
 
