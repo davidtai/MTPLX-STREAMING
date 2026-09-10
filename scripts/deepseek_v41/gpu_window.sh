@@ -52,7 +52,7 @@ QWEN_LABEL="${GPU_WINDOW_QWEN_LABEL:-com.tea.qwen}"
 WIRED_CAP_MB="${GPU_WINDOW_WIRED_CAP_MB:-102400}"     # 100 GiB, never exceeded/raised
 STOP_TIMEOUT="${GPU_WINDOW_STOP_TIMEOUT:-180}"        # seconds to confirm the stop
 RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm restore
-MIN_FREED_GB="${GPU_WINDOW_MIN_FREED_GB:-60}"         # expect ~86 GiB; gate below it
+MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"        # the step needs this much available after the stop
 CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 100 * 1024 * 1024 * 1024 ))}"
 RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
 
@@ -241,7 +241,7 @@ if (( WAS_LOADED == 1 )); then
       exit 5
     fi
   fi
-  MIN_FREED_BYTES=$(( MIN_FREED_GB * 1024 * 1024 * 1024 ))
+  MIN_AVAIL_BYTES=$(( MIN_AVAIL_GB * 1024 * 1024 * 1024 ))
   deadline=$(( $(date +%s) + STOP_TIMEOUT ))
   pid_gone=0
   freed=0
@@ -254,8 +254,8 @@ if (( WAS_LOADED == 1 )); then
     fi
     AVAIL_NOW="$(avail_bytes)"
     freed=$(( AVAIL_NOW - AVAIL_BEFORE ))
-    if (( pid_gone == 1 && freed >= MIN_FREED_BYTES )); then
-      log "phase 3: stop confirmed -- pid gone and $(gib "${freed}") GiB freed (>= ${MIN_FREED_GB} GiB)"
+    if (( pid_gone == 1 && AVAIL_NOW >= MIN_AVAIL_BYTES )); then
+      log "phase 3: stop confirmed -- pid gone, $(gib "${freed}") GiB freed, $(gib "${AVAIL_NOW}") GiB available (>= ${MIN_AVAIL_GB} GiB)"
       break
     fi
     sleep 1
@@ -266,8 +266,8 @@ if (( WAS_LOADED == 1 )); then
   fi
   AVAIL_NOW="$(avail_bytes)"
   freed=$(( AVAIL_NOW - AVAIL_BEFORE ))
-  if (( freed < MIN_FREED_BYTES )); then
-    err "phase 3: only $(gib "${freed}") GiB freed after stop (need >= ${MIN_FREED_GB} GiB); memory did not reflect the resident-agent release; aborting"
+  if (( AVAIL_NOW < MIN_AVAIL_BYTES )); then
+    err "phase 3: only $(gib "${AVAIL_NOW}") GiB available after stop ($(gib "${freed}") GiB freed; need >= ${MIN_AVAIL_GB} GiB available); aborting"
     exit 5
   fi
 fi
