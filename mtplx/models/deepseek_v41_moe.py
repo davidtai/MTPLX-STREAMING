@@ -1,0 +1,248 @@
+"""DeepSeek-V4.1-Flash MoE submodule (worker W11).
+
+A faithful, line-by-line MLX transliteration of the DeepSeek reference
+``inference/model.py`` MoE stack -- :class:`Gate` (L792-828), :class:`Expert`
+(L830-851) and :class:`MoE` (L854-904) -- *modified for the MTPLX expert kernel*:
+the routed experts do not run as a ``nn.ModuleList`` of :class:`Expert`, they run
+through the MTPLX expert-streaming seam ``switch_mlp`` (the hy3 convention that
+:func:`mtplx.models.expert_mlx.bind_streamed_switches` rebinds).  The class names,
+constructor arg order (``layer_id, args``) and ``forward`` signature / return
+shape all match the reference so W10's ``Block`` calls this exactly as the
+reference ``Block`` does (reference ``Block.__init__`` builds ``self.ffn =
+MoE(layer_id, args)`` at L931 and ``Block.forward`` calls ``self.ffn(x,
+image_mask)`` at L992).
+
+``args`` here is *this port's* MLX :class:`~mtplx.models.deepseek_v41.ModelArgs`
+(the ``text_config`` field names), taken in the reference's ``(layer_id, args)``
+order.  The released 40-layer config carries ``scoring_func="sqrtsoftplus"``,
+``topk_method="noaux_tc"``, ``num_experts_per_tok=6``, ``n_routed_experts=384``,
+``routed_scaling_factor=1.5``, ``swiglu_limit=10.0`` and no group routing
+(``n_group``/``topk_group`` are absent, so the reference Gate does a plain top-k
+over all experts -- there is no group-limited selection to transliterate).
+
+Seam contract (also in docs/deepseek-v41/W11_REPORT.md):
+
+* ``self.switch_mlp`` is the routed-expert seam.  It is called ``switch_mlp(xf,
+  indices)`` with ``xf`` = ``[n_tokens, hidden]`` and ``indices`` =
+  ``[n_tokens, top_k]`` int32 (the reference top-6 expert ids, in
+  ``(scores+bias)``-descending order), and must return ``[n_tokens, top_k,
+  hidden]`` -- the *unweighted* routed outputs.  :meth:`MoE.__call__` applies the
+  reference-normalised routing weights and the shared expert outside the seam.
+* Resident / unit-test default: mlx-lm :class:`~mlx_lm.models.switch_layers.
+  SwitchGLU` carrying :class:`ClampedSwiGLU` as its ``activation`` seam, so the
+  routed experts get the reference's clamped SwiGLU.  ``bind_streamed_switches``
+  replaces this whole module with a streamed switch
+  (``HotExpertSwitchGLU`` / ``MappedExpertSwitchGLU`` / ``DenseIslandSwitchGLU``)
+  that gathers the Q2 records from ``experts.bin``.
+* CLAMP INJECTION / KNOWN GAP: the streamed switches call
+  ``mlx_lm.models.activations.swiglu(gate, up)`` directly and expose **no
+  activation hook** (``bind_streamed_switches`` reads nothing off the switch it
+  replaces).  So on the *streamed* path the ``swiglu_limit`` clamp is currently
+  NOT applied.  At ``swiglu_limit=10.0`` this is numerically inert on the real
+  layer-0 records (the pre-activation projections never reach +/-10 -- proven in
+  tests/models/test_deepseek_v41_moe.py::test_streamed_clamp_is_inert_on_real_records),
+  so streamed output is bit-for-bit the clamped output here.  The resident path
+  (this module's ``SwitchGLU`` + :class:`ClampedSwiGLU`) *does* clamp.  Making the
+  streamed switch clamp for the general case is a one-line-per-call-site change in
+  ``mtplx/models/expert_mlx.py`` (add a per-runtime ``swiglu_limit`` on the spec
+  and clamp between the up/gate qmm and ``swiglu``); it is out of W11's allowlist
+  and unnecessary for this artifact, so it is documented, not applied.
+
+Resident parameter names match the loader's sanitize (see
+``mtplx/models/deepseek_v41.py`` ``_sanitize_name``): ``ffn.gate.weight`` ->
+``mlp.gate.weight`` (bf16), ``ffn.gate.bias`` ->
+``mlp.gate.e_score_correction_bias`` (f32; ``bias_vl`` dropped on the text path),
+``ffn.shared_experts.w{1,2,3}.{weight,scales,biases}`` ->
+``mlp.shared_experts.w{1,2,3}...`` (resident q8, gs64 affine).  The routed
+``ffn.experts.*`` are streamed and never resident, so ``switch_mlp`` is skipped by
+the resident quantiser and excluded from the strict 1,616-key text load.
+"""
+
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
+import mlx.core as mx
+import mlx.nn as nn
+
+from mlx_lm.models.switch_layers import SwiGLU, SwitchGLU
+
+
+class ClampedSwiGLU(SwiGLU):
+    """``SwitchGLU`` activation carrying the reference ``Expert``'s ``swiglu_limit``
+    clamp (model.py L845-848).
+
+    mlx-lm's :class:`~mlx_lm.models.switch_layers.SwitchGLU` calls
+    ``self.activation(x_up, x_gate)`` -- so the first argument is the *up* branch
+    (``w3``) and the second is the *gate* branch (``w1``), the opposite of what the
+    names suggest.  The reference clamp is asymmetric (model.py L846-847)::
+
+        up = torch.clamp(up, min=-self.swiglu_limit, max=self.swiglu_limit)  # two-sided
+        gate = torch.clamp(gate, max=self.swiglu_limit)                      # upper tail only
+
+    Both cuts land on the pre-activation projections, before ``silu``.  At
+    ``limit <= 0`` this defers to the stock fused ``swiglu`` kernel unchanged.
+    Holds no parameters, so the weight tree and load path are untouched.
+    """
+
+    def __init__(self, limit: float = 0.0) -> None:
+        super().__init__()
+        self.limit = float(limit or 0.0)
+
+    def __call__(self, x: mx.array, gate: mx.array) -> mx.array:
+        # x == up branch, gate == gate branch (SwitchGLU arg order).
+        if self.limit > 0:
+            x = mx.clip(x, -self.limit, self.limit)      # up: two-sided (L846)
+            gate = mx.minimum(gate, self.limit)          # gate: upper tail (L847)
+        return super().__call__(x, gate)                 # swiglu(gate, x) = silu(gate)*x
+
+
+class Gate(nn.Module):
+    """Reference ``Gate`` (model.py L792-828): sqrtsoftplus scoring, ``noaux_tc``
+    correction bias to *select* experts, unbiased scores to *weight* them, then
+    ``norm_topk_prob`` and ``route_scale``.
+
+    Constructor takes ``(layer_id, args)`` in the reference's order (model.py
+    L796).  The released text config has no group routing, so this is a plain
+    top-k over all ``n_routed_experts`` -- there is no ``n_group``/``topk_group``
+    branch in the reference to transliterate.  The image-span routing bias
+    (``bias_vl``, model.py L807/L819-820) is dropped: this is the text path, so
+    ``image_mask`` is always ``None``.
+
+    Returns ``(weights, indices)`` in the reference's order (model.py L828).
+    ``indices`` is int32 ``[n, top_k]`` in ``(scores+bias)``-descending order (the
+    order ``torch.topk`` produces at L823); ``weights`` is f32 ``[n, top_k]``.
+    """
+
+    def __init__(self, layer_id: int, args) -> None:
+        super().__init__()
+        self.layer_id = layer_id
+        self.dim = args.hidden_size                                  # L799
+        self.topk = args.num_experts_per_tok                        # L800 (n_activated)
+        self.score_func = args.scoring_func                          # L801
+        self.gate_temp = float(getattr(args, "gate_temp", 1.0) or 1.0)  # L802
+        self.norm_topk_prob = args.norm_topk_prob                    # L803
+        self.route_scale = args.routed_scaling_factor                # L804
+        self.n_routed = args.n_routed_experts
+        # gate.weight [n_routed, dim], bf16 in the artifact (L805).
+        self.weight = mx.zeros((self.n_routed, self.dim), dtype=mx.bfloat16)
+        # noaux_tc correction bias, f32 (reference `self.bias`, L806); the
+        # loader renames ffn.gate.bias -> mlp.gate.e_score_correction_bias.
+        self.e_score_correction_bias = mx.zeros((self.n_routed,), dtype=mx.float32)
+
+    def __call__(
+        self, x: mx.array, image_mask: Optional[mx.array] = None
+    ) -> Tuple[mx.array, mx.array]:
+        # L810: scores = linear(x.float(), weight.float()) / gate_temp
+        scores = (x.astype(mx.float32) @ self.weight.astype(mx.float32).T) / self.gate_temp
+        # L811-817: scoring function
+        if self.score_func == "softmax":
+            scores = mx.softmax(scores, axis=-1)
+        elif self.score_func == "sigmoid":
+            scores = mx.sigmoid(scores)
+        else:  # sqrtsoftplus
+            scores = mx.sqrt(nn.softplus(scores))
+        # L818-822: the correction bias steers selection only (bias_vl unused on
+        # the text path).
+        biased = scores + self.e_score_correction_bias
+        # L823: indices = (scores + bias).topk(topk)[1] -- top-k, sorted desc.
+        # mx has no index-returning top-k, so argpartition the top-k set then
+        # argsort it by -biased to reproduce torch.topk's descending order.
+        part = mx.argpartition(-biased, kth=self.topk - 1, axis=-1)[..., : self.topk]
+        order = mx.argsort(-mx.take_along_axis(biased, part, axis=-1), axis=-1)
+        indices = mx.take_along_axis(part, order, axis=-1).astype(mx.int32)
+        # L824: weights = scores.gather(1, indices) -- the *unbiased* scores.
+        weights = mx.take_along_axis(scores, indices, axis=-1)
+        # L825-826: norm_topk_prob (the +1e-20 is the training constant, not norm_eps).
+        if self.norm_topk_prob and self.topk > 1:
+            weights = weights / (mx.sum(weights, axis=-1, keepdims=True) + 1e-20)
+        # L827: route_scale
+        weights = weights * self.route_scale
+        return weights, indices
+
+
+class Expert(nn.Module):
+    """Reference ``Expert`` (model.py L830-851): one clamped-SwiGLU FFN.
+
+    Constructor matches the reference ``Expert(dim, inter_dim, dtype=None,
+    swiglu_limit=0.0)`` (model.py L834).  ``w1`` = gate_proj, ``w3`` = up_proj,
+    ``w2`` = down_proj (DeepSeek's convention, L836-838).  ``dtype`` is accepted
+    for signature parity (the reference passes ``float4`` to routed experts) but
+    is unused here: in this port only the *shared* expert is an :class:`Expert`
+    (routed experts run through the streamed ``switch_mlp`` seam), and the shared
+    expert's ``w{1,2,3}`` are dense ``nn.Linear`` at construction, converted to
+    resident q8 by the model's ``nn.quantize`` (mlx-lm ``QuantizedLinear``, so
+    ``w1(x)`` is an ``mx.quantized_matmul`` at serve time).
+    """
+
+    def __init__(
+        self, dim: int, inter_dim: int, dtype=None, swiglu_limit: float = 0.0
+    ) -> None:
+        super().__init__()
+        self.swiglu_limit = float(swiglu_limit or 0.0)               # L839
+        self.w1 = nn.Linear(dim, inter_dim, bias=False)              # gate_proj (L836)
+        self.w2 = nn.Linear(inter_dim, dim, bias=False)             # down_proj (L837)
+        self.w3 = nn.Linear(dim, inter_dim, bias=False)            # up_proj   (L838)
+
+    def __call__(self, x: mx.array, weights: Optional[mx.array] = None) -> mx.array:
+        dtype = x.dtype                                              # L842
+        gate = self.w1(x).astype(mx.float32)                        # L843
+        up = self.w3(x).astype(mx.float32)                          # L844
+        if self.swiglu_limit > 0:                                    # L845
+            up = mx.clip(up, -self.swiglu_limit, self.swiglu_limit)  # L846 two-sided
+            gate = mx.minimum(gate, self.swiglu_limit)              # L847 upper tail
+        x = nn.silu(gate) * up                                      # L848
+        if weights is not None:                                     # L849-850
+            x = weights * x
+        return self.w2(x.astype(dtype))                            # L851
+
+
+class MoE(nn.Module):
+    """Reference ``MoE`` (model.py L854-904): top-``num_experts_per_tok`` routed
+    experts plus one shared expert, modified for the MTPLX expert kernel.
+
+    Constructor takes ``(layer_id, args)`` in the reference's order (model.py
+    L858).  The reference builds ``self.experts = nn.ModuleList([Expert(...) ...])``
+    (L874-886) and dispatches them token-by-token in ``forward`` (L895-901); this
+    port replaces that whole routed-expert path with the MTPLX streaming seam
+    ``self.switch_mlp`` and applies the per-expert routing weights outside the
+    seam.  The shared expert (L887-888) and the gate (L873) are unchanged.
+    """
+
+    def __init__(self, layer_id: int, args) -> None:
+        super().__init__()
+        self.layer_id = layer_id                                     # L860
+        self.dim = args.hidden_size                                  # L861
+        self.n_routed_experts = args.n_routed_experts               # L868
+        self.n_activated_experts = args.num_experts_per_tok         # L870
+        self.gate = Gate(layer_id, args)                            # L873
+        # L874-886 routed Experts -> the MTPLX streamed-switch seam.  Resident /
+        # test default is SwitchGLU with the reference's clamped activation;
+        # bind_streamed_switches rebinds this to a bank-backed streamed switch.
+        self.switch_mlp = SwitchGLU(
+            args.hidden_size,
+            args.moe_intermediate_size,
+            args.n_routed_experts,
+            activation=ClampedSwiGLU(args.swiglu_limit),
+        )
+        assert args.n_shared_experts == 1                            # L887
+        self.shared_experts = Expert(                               # L888
+            args.hidden_size, args.moe_intermediate_size, swiglu_limit=args.swiglu_limit
+        )
+
+    def __call__(self, x: mx.array, image_mask: Optional[mx.array] = None) -> mx.array:
+        # reference MoE.forward, L889-904.
+        shape = x.shape                                              # L890
+        xf = x.reshape(-1, self.dim)                                # L891
+        # L892: gate (text path -> image_mask None); reference order (weights, indices).
+        weights, indices = self.gate(xf)
+        # L893-901: routed experts.  The streamed switch returns the *unweighted*
+        # per-expert outputs [n, top_k, dim]; the reference multiplies each
+        # expert output by its weight inside the loop (L900) -- done here in one
+        # weighted sum, in f32 to match the reference's f32 accumulator (L893).
+        routed = self.switch_mlp(xf, indices)                       # [n, top_k, dim]
+        y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
+        # L903: shared expert every token passes through, added in f32.
+        y = y + self.shared_experts(xf).astype(mx.float32)
+        # L904: return y.type_as(x).view(shape)
+        return y.astype(x.dtype).reshape(shape)
