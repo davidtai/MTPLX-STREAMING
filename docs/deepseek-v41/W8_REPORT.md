@@ -23,23 +23,28 @@ CPU.
    `tokenizer.encode(prompt)` (what the P1.7 gate, the W6 CPU end-to-end proof and
    the first GPU gate run used) omits it. With BOS the first-token error is fixed:
    `"def add(a, b):"` → `" forward"` (no BOS) becomes → `" return a + b"` (BOS).
-3. **The CPU forward is faithful to the reference.** The engram, the missing
-   SwiGLU clamp, the residual dtype, and the large residual magnitudes were each
-   ruled out as the cause; layer-0 attention on the **real** q8 weights matches a
-   numpy transcription of the reference to q8/bf16 tolerance. No forward or
-   weight-orientation defect was found.
-4. A **secondary** effect remains: even with BOS, pure greedy decoding degenerates
-   in the tail into recurring low-confidence tokens (`Kasipak`/` potentially`/
-   ` problematic`). This is consistent with the aggressive 2-bit expert
-   quantization plus greedy decoding on weak-signal prompts; it is **not**
-   attributable to any forward/orientation bug found here. David's standardized
-   1,024-token in-distribution programming prompt is the intended input for the
-   health check (see §6).
+3. **BUT BOS is not the whole story — there is a second, unidentified forward
+   defect.** A teacher-forced PREFILL of near-deterministic code (probe A, with
+   BOS) matches the ground-truth next token at only **16/30** positions and
+   **locks onto a fixed junk-token set** (`13394 ' potentially'`, `104113
+   'Kasipak'`, `36564 ' problematic'`) at scattered positions — including ones
+   whose continuation is certain (pos 19 after `def sub(a, b):\n   ` predicts
+   `Kasipak` where ` return` is inevitable). This is a **single-forward prefill
+   defect**, not the decode loop (§4). The **cause was NOT identified** — root
+   causing is handed to W9 (torch reference goldens) and W10 (a faithful
+   transliteration of the reference model).
+4. **The earlier "2-bit quality limitation" claim is WITHDRAWN.** A quantization
+   noise floor degrades fluency gradually and does not *select which positions to
+   spoil* or collapse to a fixed two-token set; probe A shows the prefill is wrong
+   at specific positions while nailing others (in-context ` sub`/` mul`). Engram,
+   SwiGLU clamp, residual dtype and layer-0 attention orientation were each ruled
+   out (§3–§4), but the actual defect remains open.
 
-Per David's mid-task directive, every input is now the deterministic
+Per David's mid-task directive, every input is the deterministic
 `mtplx.prefill_bench` coding-agent programming prompt (1,024 tokens; 16,384 as the
 prefill cell). The gate and the dump script build it via
-`_prompt_build_for_context` and prepend BOS.
+`_prompt_build_for_context` and prepend BOS. (The 1,024-token CPU generation was
+stopped before completing — see §4.)
 
 ---
 
@@ -106,27 +111,78 @@ models). Prepending id 0 restores the correct first token.
 | **Engram** (gate/scale/hash) | set every `engram_hook = None`, regenerate | still degenerate → **not the cause** |
 | **SwiGLU clamp** (streamed path omits the reference's ±`swiglu_limit`) | monkeypatch the streamed `swiglu` to clamp gate≤10 / up∈[−10,10] in fp32 | layer-39 max-abs 293,505 → 264,300 (~10%); top-1 still `13394` → **not the cause** |
 | **bf16 residual precision** | probe `h.dtype` per layer | residual is **fp32** from layer 1 on (only the embed is bf16) → no bf16 precision loss |
-| **Massive activations** | per-layer max-abs dump | grows to ~2.9e5 by layer 39, **input-independent** (nearly identical for both prompts), in fp32, within the fp8-native reference's representable range → real model behavior, not inflation |
+| **Massive activations** | per-layer max-abs dump | grows to ~2.9e5 by layer 39, **input-independent** (nearly identical for both prompts), in fp32 (so not a bf16-precision effect). Whether this magnitude is reference-faithful is **unconfirmed** (needs W9 goldens) and is a candidate mechanism for the §4 fixed-token bias |
 | **Attention real-weight orientation** | layer-0 SWA attention on the dequantized q8 residents vs a numpy transcription of the reference | max-abs diff 0.47 on outputs of magnitude ~7.5 (~6%, = the port's bf16 q/kv activation precision) → **no orientation error** |
 | **Routed Q2 experts** | `def add` greedy (with BOS) produces the exact correct code `return a + b` | a w1/w3 swap or transpose would corrupt every token → experts are substantially correct |
 | **Router (sqrtsoftplus/noaux_tc/norm/scale)** | validated in the tiny-config block parity (`_ref_moe`) and consistent with the correct `def add` code | no defect |
 
-The per-layer block math was already validated against a numpy reference in
+The per-layer block math was validated against a numpy reference in
 `tests/models/test_deepseek_v41_parity.py` (W6, to ~1e-6). W8 adds the real-weight
-attention check and the ablations above. **No forward or weight-orientation bug
-was found.**
+attention check and the ablations above. These **rule out the listed suspects**,
+but they do **not** clear the forward: §4 shows a real prefill defect whose exact
+site is still open (candidates that remain untested at real dims/weights: the MoE
+routed-expert Q2 decode across many experts, the full-stack hyper-connection
+threading over 40 real layers, and the final collapse/head under the large
+residual). W9 goldens + the W10 transliteration will localize it.
 
-## 4. Secondary: greedy-tail degeneration under 2-bit experts
+## 4. The prefill forward is wrong at scattered positions (cause NOT identified)
 
-With BOS, the strong-prior start is correct, then greedy decoding collapses into a
-few recurring low-confidence tokens. Diagnostic signature: for a degenerate
-position the top-8 logits are **flat and low** (~15, e.g. `13394`/`104113`),
-whereas for a confident-correct position they are **peaked** (`def add` → ` return`
-at 26.3 vs 25.8 next). The recurring tokens are the quantization noise floor of the
-q8 head + Q2 experts dominating once the true signal is weak. This is a quality
-limitation of the 2-bit expert bank under greedy decoding, not a port defect; it is
-exactly what David's standardized 1,024-token in-distribution prompt (a strong,
-coherent signal) is meant to exercise.
+The tail degeneration is **not** a decode-loop bug and **not** a 2-bit quality
+floor. A discriminating experiment (`scripts`/`.benchmark-artifacts` runner
+`decode_probe.py`, evidence `docs/deepseek-v41/receipts/cpu_decode_probe_ABC.json`)
+on the cheap 30-token probe, all with BOS, component-banks, the gate's loader:
+
+**A — teacher-forced PREFILL** of a 3-function file
+(`def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n\n\ndef
+mul(a, b):`), one forward, argmax at every position vs the ground-truth next
+token: **16/30 matches.** The model **locks onto a fixed junk set**
+(`13394 ' potentially'`, `104113 'Kasipak'`, `36564 ' problematic'`) at positions
+6, 11, 12, 19, 20, 21, 24, 26 — e.g. pos 19 after `def sub(a, b):\n   ` predicts
+`Kasipak` where ` return` is certain; pos 12 after `\n\n\n` predicts `Kasipak`
+instead of `def`. Yet it **nails** the in-context positions (pos 13 ` sub`, pos 25
+` mul`, plus `,`/` b`/`\n\n\n`). The **same** target token ` a` (260) is correct at
+pos 8 but junk at pos 20. A quantization floor cannot select which positions to
+spoil, and would not collapse to a two-token set — so this is a **real forward
+defect exercised by a single prefill**, not decode and not quality.
+
+**B — incremental KV decode** from `def add(a, b):`: `[1354,260,940,291,201,
+104113,13394,36564,13394,36564,…]` = `" return a + b\nKasipak potentially
+problematic potentially problematic…"` — correct start, then the same lock.
+
+**C — re-prefill from scratch each step**: confirms the same behavior (B ≈ C).
+Since A (pure prefill) is already wrong, B/C are only confirmation; the defect is
+in the shared forward, reached by prefill.
+
+**Ablations (probe A, 30 positions, WITH BOS):**
+
+| config | matches/30 | note |
+|---|---:|---|
+| baseline (engram on, full attention) | **16/30** | junk at 6,11,12,19,20,21,24,26 |
+| **engram hooks = None** | **13/30** | *worse* — removing engram loses correct predictions at 8,9,10,13,14; **engram is not the cause** |
+
+The engram-off run is *worse*, so the engram is contributing correctly, not
+injecting the junk. (The manifest `hash_multipliers` were also verified to match
+the reference `compute_hash_multipliers` recipe exactly — seed `10007*layer_id`,
+`*2+1`, bound from the compressed vocab 99092.) The SWA-only ablation and the
+per-layer good-vs-bad-position bisect were **not run**: per David's decision the
+old model file is being replaced by a faithful transliteration of the reference
+(W10), and W9 provides torch reference goldens, so further ablation of the current
+file was stopped.
+
+**Cause: NOT identified in W8.** What is established: the defect is in the prefill
+forward (not the decode loop, not the KV cache, not engram, not the SwiGLU clamp,
+not residual dtype, not layer-0 attention orientation); it manifests as a
+position-dependent collapse to a fixed junk-token set while in-context predictions
+succeed. Root causing is handed to W9 (torch goldens per layer/position) + W10
+(faithful port); the dump/compare harness (§6) and the BOS finding (§2) are the
+tools they use.
+
+The 1,024-token CPU generation was launched (incremental receipt at
+`.benchmark-artifacts/deepseek-v41/w8-refgen/refgen_1024_receipt.json`) but its
+1,025-token CPU prefill did not finish within the window and I stopped the process
+to free CPU for this discriminating experiment; it emitted no tokens (receipt
+stuck at `prefilling`). It should not be re-run until the forward defect is fixed —
+its output would be void.
 
 ## 5. Fix + regression test
 
@@ -178,12 +234,20 @@ uses its own `encoding.py` chat tokens), so `--prompt-format` defaults to `raw`.
   `--context-tokens`/`--prompt-format`/`--bos`; BOS default on; prompt-build
   metadata in the receipt.
 - `tests/test_deepseek_v41_bos.py` — new (BOS + build regression).
-- `docs/deepseek-v41/receipts/*.json` — committed CPU dumps.
+- `docs/deepseek-v41/receipts/*.json` — CPU hidden-state dump + A/B/C probe evidence.
 - `docs/deepseek-v41/W8_REPORT.md` — this report.
 
-No changes to `mtplx/models/deepseek_v41.py`, `deepseek_v41_loader.py`, or
-`mtplx/engram_v41.py`: the investigation found the forward faithful, so no model
-edit was warranted; the defect was the harness prompt encoding.
+Diagnostic runners (kept under `.benchmark-artifacts/deepseek-v41/w8-refgen/`, not
+committed as code): `decode_probe.py` (A/B/C), `ablate_A.py` (ablation matrix),
+`bisect_step.py` (layer bisect, unused after the stop).
+
+No changes were made to `mtplx/models/deepseek_v41.py`,
+`mtplx/models/deepseek_v41_loader.py`, or `mtplx/engram_v41.py`. The confirmed,
+in-allowlist defect (missing BOS) is fixed in the harness (§2/§5). The **second
+forward defect (§4) was left un-fixed by design**: David is replacing the model
+file with a faithful transliteration (W10) rather than patching it, so an edit here
+would be thrown away — the W8 deliverable for that defect is the reproduction, the
+ruled-out suspects, and the dump/compare harness that W9/W10 use to localize it.
 
 Attribution: `python3 scripts/check_ai_attribution.py --range origin/main..HEAD`
 → clean (no Co-Authored-By / Claude trailer).
