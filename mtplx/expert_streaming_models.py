@@ -661,16 +661,29 @@ DEEPSEEK_V41_FLASH_EXPERT_Q2 = ExpertStreamingModelSpec(
     display_name="DeepSeek-V4.1-Flash expert-only affine Q2 (gs64 experts, q8 residents)",
     source_model="deepseek-ai/DeepSeek-V4.1-Flash",
     source_revision="dba1be0a40aa45a94ad051997016db3960a90277",
-    # TODO(publish): swap to the OpensourceWTF HF repo id + its published
-    # revision once the streaming artifact is uploaded; kept local for now.
-    quant_model="local/deepseek-v41-flash-mtplx-streaming-q2",
-    quant_revision="dba1be0a40aa45a94ad051997016db3960a90277",
-    # TODO(measured): provisional. Exact header-inventory sum = routed
-    # (169_869_312_000) + resident-q8 bytes, both emitted by the converter's
-    # conversion-manifest.json. Pin this to the reported value after the run;
-    # strict spec validation is currently run with require_pinned_tensor_bytes
-    # =False so a provisional total does not gate the artifact.
-    total_tensor_bytes=185_869_312_000,
+    # Pinned to the published streaming repo (public) and its current main
+    # commit (HF API model info sha, 2026-09-10).  ``validate_expert_manifest_spec``
+    # compares ``manifest.source_repo``/``source_revision`` against these
+    # ``quant_model``/``quant_revision`` fields.  W3 rebased the LOCAL
+    # ``~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2/expert-manifest.json`` to
+    # this identity (identity-only edit: source_repo/source_revision +
+    # recomputed manifest_sha256; records/resident_tensors/shards untouched, no
+    # bank re-hash), so strict admission of the LOCAL artifact now passes with
+    # this pinned spec directly.  The HF-uploaded copy of expert-manifest.json
+    # STILL carries the pre-publish ``local/...`` identity and must be
+    # re-uploaded (David's call) for a fresh ``--download`` to admit.  See
+    # docs/deepseek-v41/W3_REPORT.md ("Manifest identity fix").
+    quant_model="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
+    quant_revision="b64980a16283647bb213ab475335f38f516e0d9e",
+    # Measured header-inventory sum of the artifact (W3): sum over all 49
+    # ``model-000NN.safetensors`` headers = 25_163_923_352 resident bytes, plus
+    # the routed bank 169_869_312_000 = 195_033_235_352.  Equals the artifact's
+    # ``conversion-manifest.json`` artifact_tensor_bytes and the built
+    # ``expert-manifest.json`` artifact.tensor_bytes exactly (no delta).  This
+    # resident total includes the q8 MTP dense + q8 MTP experts (15.97 GB) and
+    # the vision/aligner/image residents (0.52 GB); text-only AR skips both at
+    # load (8.67 GB actually wired -- see the loader and W3_REPORT.md).
+    total_tensor_bytes=195_033_235_352,
     total_layers=40,
     routed_layer_start=0,
     routed_layer_count=40,
@@ -685,18 +698,30 @@ DEEPSEEK_V41_FLASH_EXPERT_Q2 = ExpertStreamingModelSpec(
     router_matmul_dtype="float32",
     # 40 * (384*5120 bf16 gate.weight) + 40 * 2 * (384 f32 gate.bias/bias_vl)
     router_bytes=157_409_280,
-    # TODO(measured): MLA/compressed-KV per-token bytes need the port's cache
-    # accounting (compress_ratios, kv_source_layer_ids, index cache). This
-    # placeholder is not used by the converter or manifest, only by
-    # plan_expert_memory, which this task does not exercise.
-    kv_bytes_per_token=81_920,
+    # Phase-1 bf16 global CSA2 KV (PORT_PLAN 3b): the compressed KV + index-K
+    # records that GROW per token, priced at bf16 (David's KV preference; the
+    # native FP4 KV kernel is a later size win).  Per position a Full/kv_source
+    # layer stores a compressed-KV latent (512 * 2 B) + an index-K record
+    # (128 * 2 B) = 1280 B, scaled by 1/compress_ratio; summed over the
+    # kv_source layers [L2,L8,L14 @ ratio 2, L20 @ ratio 1]:
+    #   3 * (1280 // 2) + 1280 = 3*640 + 1280 = 3200 B/token.
+    # Reindex/Reuse layers read their source layer's cache and add no per-token
+    # KV.  The SWA sliding window is a FIXED 40 * 128 * (512 * 2) = 5,242,880 B
+    # (5 MiB) buffer, NOT per token -- the loader/plan prices it as a fixed
+    # additional-resident reserve, not in kv_bytes_per_token.
+    kv_bytes_per_token=3_200,
     # DeepSeek stores MTP as ``mtp.N.*`` (not ``layers.40``), so there is no
     # single backbone MTP layer index; MTP is excluded from this artifact.
     mtp_layer_index=None,
     mtp_included=False,
-    # TODO(port): config index_source_layer_ids = [2,8,14,20,24,28,32,36]; left
-    # empty until the port confirms full-indexer layer semantics for this model.
-    full_indexer_layers=(),
+    # CSA2 index-owning layers = config ``index_source_layer_ids`` (verified
+    # from the artifact text_config): layers 2,8,14,20 (Full: own global KV +
+    # index Q) and 24,28,32,36 (Reindex: own index Q, reuse L20 KV).  This is a
+    # pinned geometry descriptor validated for structure (sorted/unique/in
+    # range); the current runtime does not yet consume it for behaviour (grep:
+    # no reader outside this module -- same status as the GLM-5.2 entry, which
+    # also pins its index-owning layers here).
+    full_indexer_layers=(2, 8, 14, 20, 24, 28, 32, 36),
     # Unmeasured: needs a routing census before count-based island selection.
     island_pin_order=(),
 )

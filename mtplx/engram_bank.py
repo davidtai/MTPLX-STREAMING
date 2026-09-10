@@ -4,12 +4,14 @@ The DeepSeek-V4.1-Flash Engram tables are converted by
 ``scripts/convert_deepseek_v41_engram.py`` into ``engram/engram-L{1,14}.bin`` +
 ``engram/engram-manifest.json``.  Each ``.bin`` is a flat array of fixed-size records;
 record index == source table row index, so a lookup is a single positional read
-``pread(fd, record_bytes, row * record_bytes)`` -- the bank-row==id principle the
+``preadv(fd, record_bytes, row * record_bytes)`` -- the bank-row==id principle the
 dense-island store uses.
 
-``EngramBank`` opens one layer's bank and gathers rows on demand with an LRU cache
-bounded by a byte budget (the port plan calls for ~16k-64k resident rows).  Reads use
-``os.preadv`` (the pure-Python fallback path of ``mtplx.expert_io``); no mmap.
+``EngramBank`` opens one layer's bank and gathers rows on demand through the generic
+:class:`mtplx.ngram_row_cache.NGramRowCache` -- a byte-budgeted resident-row LRU whose
+misses read positionally and whose eviction changes residency only, never values (the
+same core that serves the Qwen3.8 resident n-gram table).  This module keeps only the
+engram record *decode*; the LRU + preadv + MLX dequant live in the shared cache.
 
 Pure Python + numpy.  ``gather`` returns the packed affine components exactly as stored
 (U32 weights, BF16 scales, BF16 biases) so the MLX runtime can feed them straight into
@@ -20,10 +22,11 @@ from __future__ import annotations
 
 import json
 import os
-from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
+
+from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
 
 __all__ = ["EngramBank"]
 
@@ -73,19 +76,19 @@ class EngramBank:
         assert self._n_u32 == self.head_dim * self.bits // 32
         assert self._n_groups == self.head_dim // self.group_size
 
-        budget = cache_bytes if cache_bytes is not None else cache_rows * self.record_bytes
-        self._cache_budget = int(max(self.record_bytes, budget))
-        self._cache: "OrderedDict[int, bytes]" = OrderedDict()
-        self._cache_used = 0
-
-        self._fd = os.open(self.path, os.O_RDONLY)
-        st = os.fstat(self._fd)
-        expected = self.rows * self.record_bytes
-        if st.st_size != expected:
-            os.close(self._fd)
+        # generic resident-row cache: positional preadv reader + byte-budgeted LRU
+        self.geometry = RowGeometry(
+            values_per_row=self.head_dim, bits=self.bits, group_size=self.group_size,
+        )
+        if self.geometry.row_bytes != self.record_bytes:
             raise ValueError(
-                f"{self.path}: size {st.st_size} != rows*record_bytes {expected}"
+                f"geometry row_bytes {self.geometry.row_bytes} != record_bytes {self.record_bytes}"
             )
+        reader = FileRowReader(self.path, row_bytes=self.record_bytes, num_rows=self.rows)
+        self.cache = NGramRowCache(
+            reader, self.geometry, num_rows=self.rows,
+            cache_bytes=cache_bytes, cache_rows=cache_rows,
+        )
 
     # ---- construction from the manifest -----------------------------------
     @classmethod
@@ -111,9 +114,10 @@ class EngramBank:
 
     # ---- context management ----------------------------------------------
     def close(self) -> None:
-        if getattr(self, "_fd", None) is not None:
-            os.close(self._fd)
-            self._fd = None
+        cache = getattr(self, "cache", None)
+        if cache is not None:
+            cache.close()
+            self.cache = None
 
     def __enter__(self) -> "EngramBank":
         return self
@@ -127,44 +131,7 @@ class EngramBank:
         except Exception:
             pass
 
-    # ---- positional read + LRU -------------------------------------------
-    def _read_record(self, row: int) -> bytes:
-        """Exact positional read of one record (os.preadv fallback loop), LRU-cached."""
-        cached = self._cache.get(row)
-        if cached is not None:
-            self._cache.move_to_end(row)
-            return cached
-        if row < 0 or row >= self.rows:
-            raise IndexError(f"row {row} out of range [0, {self.rows})")
-        buf = bytearray(self.record_bytes)
-        view = memoryview(buf)
-        base = row * self.record_bytes
-        got = 0
-        while got < self.record_bytes:
-            while True:
-                try:
-                    n = os.preadv(self._fd, [view[got:]], base + got)
-                    break
-                except InterruptedError:
-                    continue
-            if n <= 0:
-                raise EOFError(f"short read at row {row}, offset {base + got}")
-            got += n
-        rec = bytes(buf)
-        self._cache[row] = rec
-        self._cache_used += self.record_bytes
-        while self._cache_used > self._cache_budget and len(self._cache) > 1:
-            _, old = self._cache.popitem(last=False)
-            self._cache_used -= len(old)
-        return rec
-
-    def _split(self, rec: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        w = np.frombuffer(rec, dtype="<u4", count=self._n_u32, offset=self._w_off)
-        s = np.frombuffer(rec, dtype="<u2", count=self._n_groups, offset=self._s_off)
-        b = np.frombuffer(rec, dtype="<u2", count=self._n_groups, offset=self._b_off)
-        return w, s, b
-
-    # ---- public API -------------------------------------------------------
+    # ---- public API (record decode) --------------------------------------
     def gather(self, rows) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Gather rows -> (weights, scales, biases).
 
@@ -172,16 +139,12 @@ class EngramBank:
         ``scales``/``biases``: uint16 ``[R, head_dim/group]`` bf16 bit patterns.
         Feed straight into ``mx.dequantize`` (view uint16 as bfloat16) in the MLX runtime.
         """
-        rows = list(rows)
-        R = len(rows)
-        weights = np.empty((R, self._n_u32), dtype="<u4")
-        scales = np.empty((R, self._n_groups), dtype="<u2")
-        biases = np.empty((R, self._n_groups), dtype="<u2")
-        for i, r in enumerate(rows):
-            w, s, b = self._split(self._read_record(int(r)))
-            weights[i] = w
-            scales[i] = s
-            biases[i] = b
+        rows = [int(r) for r in rows]
+        raw = self.cache.gather_bytes(rows)            # [R, record_bytes] uint8
+        R = raw.shape[0]
+        weights = np.ascontiguousarray(raw[:, self._w_off:self._w_off + self._w_len]).view("<u4").reshape(R, self._n_u32)
+        scales = np.ascontiguousarray(raw[:, self._s_off:self._s_off + self._s_len]).view("<u2").reshape(R, self._n_groups)
+        biases = np.ascontiguousarray(raw[:, self._b_off:self._b_off + self._b_len]).view("<u2").reshape(R, self._n_groups)
         return weights, scales, biases
 
     def dequantize_rows(self, rows) -> np.ndarray:
@@ -201,7 +164,7 @@ class EngramBank:
 
     @property
     def cache_used_bytes(self) -> int:
-        return self._cache_used
+        return self.cache.resident_bytes if self.cache is not None else 0
 
     def __len__(self) -> int:
         return self.rows

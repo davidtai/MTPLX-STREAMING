@@ -352,3 +352,146 @@ def test_manifest_fields_and_hashing(tmp_path):
         flat = [p for pn in pl["primes"] for p in pn]
         assert sum(flat) == dc.ENGRAM_NUM_EMBEDDINGS[li]
         assert pl["flat_offsets"][0] == 0
+
+
+# --------------------------------------------------------------------------
+# resident Engram projections sidecar (`--mode residents`) -- synthetic
+# --------------------------------------------------------------------------
+def _bf16_bytes(rng, shape) -> tuple[np.ndarray, bytes]:
+    """Random BF16 bit patterns + the f32 they losslessly widen to."""
+    f = (rng.standard_normal(shape) * 0.05).astype(np.float32)
+    u16 = (f.view(np.uint32) >> 16).astype(np.uint16)          # truncate to bf16
+    f_bf = (u16.astype(np.uint32) << 16).view(np.float32)      # exact widen back
+    return f_bf, u16.tobytes()
+
+
+def _make_resident_shard(tmp_path, layer, out_w, in_w, hc_mult, dim, seed=3):
+    """Synthetic source shard with layer L's engram wkv (fp8) + q/k (bf16) residents."""
+    rng = np.random.default_rng(seed)
+    wu8 = _rand_e4m3_bytes(rng, out_w * in_w).reshape(out_w, in_w)
+    su8 = _rand_e8m0_bytes(rng, (out_w // 32) * (in_w // 32)).reshape(out_w // 32, in_w // 32)
+    q_bf, q_raw = _bf16_bytes(rng, (hc_mult, dim))
+    k_bf, k_raw = _bf16_bytes(rng, (hc_mult, dim))
+    src = tmp_path / "src"
+    src.mkdir(exist_ok=True)
+    shard_file = f"model-000{47 if layer == 1 else 48}-of-00048.safetensors"
+    _write_safetensors(src / shard_file, {
+        f"layers.{layer}.engram.wkv.weight": ("F8_E4M3", (out_w, in_w), wu8.tobytes()),
+        f"layers.{layer}.engram.wkv.scale": ("F8_E8M0", su8.shape, su8.tobytes()),
+        f"layers.{layer}.engram.q_weight": ("BF16", (hc_mult, dim), q_raw),
+        f"layers.{layer}.engram.k_weight": ("BF16", (hc_mult, dim), k_raw),
+    })
+    weight_map = {
+        f"layers.{layer}.engram.wkv.weight": shard_file,
+        f"layers.{layer}.engram.wkv.scale": shard_file,
+        f"layers.{layer}.engram.q_weight": shard_file,
+        f"layers.{layer}.engram.k_weight": shard_file,
+    }
+    return src, weight_map, wu8, su8, q_bf, k_bf
+
+
+def test_convert_residents_sidecar_and_manifest(tmp_path):
+    from mtplx.engram_v41 import load_engram_residents
+    from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
+
+    layer, hc_mult, dim = 1, 3, 16
+    out_w, in_w = dim * (hc_mult + 1), 128          # 64 x 128, both /32 for the block scale
+    src, weight_map, wu8, su8, q_bf, k_bf = _make_resident_shard(
+        tmp_path, layer, out_w, in_w, hc_mult, dim)
+    out = tmp_path / "engram"
+
+    # a pre-existing manifest (banks-mode output) to be extended in place
+    conv.write_manifest(out, [])
+    pre = json.loads((out / "engram-manifest.json").read_text())
+    assert "residents" not in pre
+
+    entry, parity, sidecar = conv.convert_residents(
+        src, out, weight_map, layers=[layer], wait=False, poll=0.0, verify=True)
+    backup = tmp_path / "manifest.bak.json"
+    conv.update_manifest_with_residents(out, entry, backup_path=backup)
+
+    # -- sidecar file: names, dtypes, shapes -------------------------------
+    assert sidecar.name == "engram-residents.safetensors"
+    header, _ = dc.read_safetensors_header(str(sidecar))
+    names = {k for k in header if k != "__metadata__"}
+    assert names == {
+        f"layers.{layer}.engram.wkv.weight",
+        f"layers.{layer}.engram.wkv.scales",
+        f"layers.{layer}.engram.wkv.biases",
+        f"layers.{layer}.engram.q_weight",
+        f"layers.{layer}.engram.k_weight",
+    }
+    assert header[f"layers.{layer}.engram.wkv.weight"]["dtype"] == "U32"
+    assert header[f"layers.{layer}.engram.wkv.scales"]["dtype"] == "BF16"
+    assert header[f"layers.{layer}.engram.q_weight"]["dtype"] == "F32"
+    assert header[f"layers.{layer}.engram.q_weight"]["shape"] == [hc_mult, dim]
+
+    # -- parity: q8 wkv roundtrip high-cos, q/k exact ----------------------
+    p = parity[layer]
+    assert p["wkv_cos_row_min"] >= 0.999, p
+    assert p["q_exact"] and p["k_exact"]
+    assert p["q_max_abs_err"] == 0.0 and p["k_max_abs_err"] == 0.0
+
+    # -- manifest residents entry + sha recompute --------------------------
+    m = json.loads((out / "engram-manifest.json").read_text())
+    r = m["residents"]
+    assert r["file"] == "engram-residents.safetensors"
+    assert r["total_bytes"] == sidecar.stat().st_size
+    assert len(r["sha256"]) == 64
+    tnames = {t["name"] for t in r["tensors"]}
+    assert tnames == names
+    # sha over the manifest WITHOUT manifest_sha256, indent=2 -- same recipe as write_manifest
+    import hashlib
+    payload = {k: v for k, v in m.items() if k != "manifest_sha256"}
+    assert m["manifest_sha256"] == hashlib.sha256(
+        json.dumps(payload, indent=2).encode()).hexdigest()
+    # `residents` sits right after `layers`
+    keys = list(m.keys())
+    assert keys[keys.index("layers") + 1] == "residents"
+    # backup captured the pre-update manifest verbatim
+    assert backup.read_text() == json.dumps(pre, indent=2)
+
+    # -- loader: shapes/dtypes + wkv == dequant-and-matmul -----------------
+    res = load_engram_residents(out, layer)
+    assert res.q_weight.dtype == mx.float32 and res.k_weight.dtype == mx.float32
+    assert tuple(res.q_weight.shape) == (hc_mult, dim)
+    assert res.dim == dim and res.hc_mult == hc_mult
+    # q/k arrays are the exact widened source
+    assert np.array_equal(np.array(res.q_weight), q_bf)
+    assert np.array_equal(np.array(res.k_weight), k_bf)
+
+    rng = np.random.default_rng(11)
+    x = mx.array(rng.standard_normal((2, in_w)).astype(np.float32))
+    kv = res.wkv(x)
+    assert tuple(kv.shape) == (2, out_w)
+    w = mx.dequantize(res.wkv_packed, res.wkv_scales, res.wkv_biases,
+                      group_size=res.group_size, bits=res.bits, mode="affine")
+    ref = x @ w.T
+    assert bool(mx.all(mx.isfinite(kv)).item())
+    # quantized_matmul == dequantize-then-matmul up to bf16 accumulation; cosine is the
+    # robust wiring check (a transposed/misindexed wkv would collapse it toward 0).
+    a, b = np.array(kv).reshape(-1), np.array(ref).reshape(-1)
+    cos = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+    assert cos >= 0.999, cos
+    rel = float(mx.max(mx.abs(kv - ref)).item()) / (float(mx.max(mx.abs(ref)).item()) + 1e-6)
+    assert rel < 5e-2, rel
+
+    # -- build EngramV41 from the residents + a synthetic row cache ---------
+    head_dim, cols = 64, in_w // 64                 # embed reshape -> cols*head_dim == in_w
+    n_emb = 40
+    f32 = (rng.standard_normal((n_emb, head_dim)) * 0.1).astype(np.float32)
+    rec = dc.engram_chunk_records(f32, group=head_dim)
+    bank_path = tmp_path / "bank.bin"
+    bank_path.write_bytes(np.ascontiguousarray(rec).tobytes())
+    cache = NGramRowCache(
+        FileRowReader(bank_path, row_bytes=rec.shape[1], num_rows=n_emb),
+        RowGeometry(head_dim, 8, head_dim), num_rows=n_emb, cache_rows=16)
+    module = res.build_module(row_cache=cache, layer_hash_index=0,
+                              norm_eps=1e-6, clamp_value=1e-6)
+    from mtplx.engram_v41 import _StepState
+    B, L = 1, 2
+    row_ids = rng.integers(0, n_emb, size=(B, L, 1, cols)).astype(np.int64)
+    xx = mx.array(rng.standard_normal((B, L, hc_mult, dim)).astype(np.float32))
+    outp = module(xx, np.zeros((B, L), np.int64), _StepState(row_ids=row_ids))
+    assert tuple(outp.shape) == (B, L, hc_mult, dim)
+    assert bool(mx.all(mx.isfinite(outp)).item())

@@ -352,6 +352,43 @@ ARCHITECTURE_CATALOG: dict[str, ArchitectureSupport] = {
             "backend is missing."
         ),
     ),
+    "deepseek-v41": ArchitectureSupport(
+        arch_id="deepseek-v41",
+        display_name="DeepSeek-V4.1-Flash (MLX)",
+        family="deepseek",
+        backend="deepseek_v41",
+        # Recognized-pending like the deepseek-v4-mtp row: MTPLX recognizes the
+        # arch and ships the SSD-streamed serve wiring (worker W3 -- spec key
+        # deepseek-v41-flash-expert-q2, resident_loader delegation, and
+        # mtplx.models.deepseek_v41_loader), but the native text model module
+        # mtplx.models.deepseek_v41 is not landed yet (worker W1).  Promote to
+        # support_level "experimental-native-ar-only" / runtime_compatibility
+        # "native-ar-only", add "deepseek_v41" to SUPPORTED_ARCH_IDS and
+        # _INTREE_MODEL_TYPES, and add a family_gate once that module lands.
+        support_level="recognized-backend-pending",
+        runtime_compatibility="recognized-backend-pending",
+        # top-level model_type "deepseek_v41"; text sub-config "deepseek_v41_text".
+        aliases=("deepseek_v41", "deepseek_v41_text"),
+        config_markers=(),
+        references=(
+            "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash",
+            "https://huggingface.co/OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
+            "REFERENCES:TOOLS/DeepSeek-V4.1-Flash/inference/model.py",
+        ),
+        notes=(
+            "DeepSeek-V4.1-Flash is the 552 B backbone successor to V4 (V4.1 "
+            "adds CSA2 cross-layer shared attention, an engram conditional-"
+            "memory table, and a 3-stage DSpark MTP head).  MTPLX serves it "
+            "through the SSD-streamed MoE lane: the 384 routed experts per text "
+            "layer stream from an affine Q2 bank (experts.bin via "
+            "expert-manifest.json, model_key deepseek-v41-flash-expert-q2) while "
+            "the q8 text residents stay wired.  Phase 1 is text-only "
+            "autoregressive (vision/aligner/image and mtp.* residents skipped at "
+            "load; generation_mode 'ar').  A streamed artifact's runnability is "
+            "decided by its admitted manifest, so the streaming serve path does "
+            "not depend on this catalog row's runtime gate."
+        ),
+    ),
     "glm4-moe-mtp": ArchitectureSupport(
         arch_id="glm4-moe-mtp",
         display_name="GLM-4 MoE MTP",
