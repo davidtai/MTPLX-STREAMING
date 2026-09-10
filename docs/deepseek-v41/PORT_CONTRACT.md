@@ -1,111 +1,152 @@
-# DeepSeek-V4.1 MLX port — module split contract (W10 owns backbone)
+# DeepSeek-V4.1 port — cross-worker contract
 
-Reference: `~/models/DeepSeek-V4.1-Flash-src/inference/model.py` (+ `engram.py`,
-`kernel.py`, `config.json`). This file freezes the interfaces between the three
-port modules so W10/W11/W13 build in parallel without guessing. Where a signature
-deviates from the reference it is called out; deviations are the existing MTPLX
-house conventions (args-first construction, `(indices, weights)` gate return,
-external cache object) that the existing tests already encode.
+Contract changes one worker needs another to honour. Each section is owned by the
+worker that wrote it; the consuming worker reads it before integrating.
 
-## Ownership
-- `mtplx/models/deepseek_v41.py` — **W10**: `ModelArgs`, `Model`, `DeepseekV41Backbone`,
-  `DecoderLayer` (Block + hc threading), `Attention` (q/kv proj, o_lora grouped
-  output, rope/yarn, `attn_sink`, SWA window call sites), `Compressor`, `Indexer`,
-  `_select_candidate_blocks`, `_SharedRuntime` (reference `SharedAttentionRuntime`),
-  final norm/head, `sanitize`, `attach_engram`, `make_cache`. Re-exports
-  `DeepseekV41Cache`/`_LayerCache` (from W13's module) and keeps `_SharedRuntime`.
-- `mtplx/models/deepseek_v41_moe.py` — **W11**: `MoE`, `MoEGate`, `Expert`/`ClampedSwiGLU`.
-- `mtplx/models/deepseek_v41_cache.py` — **W13**: `DeepseekV41Cache`, `_LayerCache`.
+## W11 — MoE submodule (`mtplx/models/deepseek_v41_moe.py`), read by W10
 
-W10 imports:
+W11 replaces the inline MoE section of `mtplx/models/deepseek_v41.py`
+(`_SharedExpert` + `DeepseekV41MoE`) with a standalone, reference-faithful module.
+For W10's `DecoderLayer` to use it, the following must hold:
+
+1. **Import + construction (arg order changes).** The classes use the reference's
+   names and the reference's constructor order `(layer_id, args)` — *not* the
+   current `(args, layer_id)`:
+
+   ```python
+   from mtplx.models.deepseek_v41_moe import MoE   # reference class name
+   ...
+   self.mlp = MoE(layer_id, args)                  # was DeepseekV41MoE(args, layer_id)
+   ```
+
+   `args` is this port's `mtplx.models.deepseek_v41.ModelArgs` (unchanged). `MoE`
+   reads only: `hidden_size`, `moe_intermediate_size`, `n_routed_experts`,
+   `n_shared_experts` (asserted `== 1`), `num_experts_per_tok`, `scoring_func`,
+   `norm_topk_prob`, `routed_scaling_factor`, `swiglu_limit`, and optional
+   `gate_temp` (defaults to 1.0). No new config fields.
+
+2. **Forward.** `mlp(x)` — `__call__(self, x, image_mask=None)`, `image_mask`
+   unused on the text path. Input and output are the same shape (`[..., hidden]`),
+   output dtype `== x.dtype`. Same call site as today (`x = self.mlp(x)` inside the
+   FFN sublayer). No change needed in `DecoderLayer.__call__`.
+
+3. **Attribute / parameter names are unchanged**, so the strict 1,616-key text
+   load is preserved:
+   - `mlp.gate.weight` (bf16), `mlp.gate.e_score_correction_bias` (f32)
+   - `mlp.shared_experts.w{1,2,3}.{weight,scales,biases}` (resident q8, gs64 affine —
+     dense `nn.Linear` at construction, converted by the model's `nn.quantize`)
+   - `mlp.switch_mlp.{gate,up,down}_proj.weight` — the routed seam, **not resident**
+     (streamed); `_is_resident_quant_module` already skips `"switch_mlp"`, and the
+     text resident dict never contains it, so the strict load is unaffected.
+
+   `bind_streamed_switches` rebinds `layer.mlp.switch_mlp` exactly as before.
+
+4. **Gate return order.** `Gate.__call__` returns `(weights, indices)` (the
+   reference order, L828), *not* `(indices, weights)` as the imported v4 `MoEGate`
+   did. This only matters if W10 calls the gate directly; `MoE.forward` already
+   consumes it internally. `indices` is int32 `[n, top_k]`; `weights` is f32.
+
+5. **No import cycle.** `deepseek_v41_moe.py` imports only `mlx` and
+   `mlx_lm.models.switch_layers`. It does **not** import `deepseek_v41.py`, so W10
+   can import `MoE` from it without a cycle. W10 may drop the `_SharedExpert` /
+   `DeepseekV41MoE` definitions and the `ClampedSwiGLU`/`MoEGate` imports from
+   `deepseek_v4` once it switches to `MoE`.
+
+If W10 prefers to keep the name `DeepseekV41MoE` at its call site, alias at import
+(`from mtplx.models.deepseek_v41_moe import MoE as DeepseekV41MoE`) **and** flip the
+constructor to `(layer_id, args)` — the arg order is the load-bearing change.
+
+
+
+Signatures one worker must call across a module boundary. Each heading is owned
+by the worker that provides the surface; callers pin to what is written here so
+the parallel ports integrate without reading each other's in-progress code.
+
+---
+
+## W13 — per-sequence attention state (`mtplx/models/deepseek_v41_cache.py`)
+
+W13 owns all per-sequence attention **state** and its update mechanics; W10 owns
+the weight-bearing `Attention` / `Compressor` / `Indexer` / `Model` and calls
+into this module. Every W13 method is weight-free (it takes the already-projected
+arrays W10 produces) and carries the `inference/model.py` line range it
+transliterates.
+
+### Exports
+
+| symbol | replaces W10 inline |
+| --- | --- |
+| `DeepseekV41Cache(n_layers, *, window_size=128, compress_ratios=None, kv_source_layer_ids=(), engram_state=None)` | inline `DeepseekV41Cache` |
+| `LayerAttentionCache(window_size=128, compress_ratio=0, is_kv_source=False)` (alias `_LayerCache`) | inline `_LayerCache` |
+| `SharedAttentionRuntime()` (alias `_SharedRuntime`) | inline `_SharedRuntime` |
+| `CompressorState(ratio)` | inline `comp_state` tuple |
+| `make_cache(model_or_n_layers, *, window_size=None, engram_state=None)` | new factory |
+| `window_topk_idxs(window_size, bsz, seqlen, start_pos)` | reference `get_window_topk_idxs` |
+| `ring_view(window, window_size, length)` | new (reference ring read) |
+
+W10 should delete the inline `_SharedRuntime` / `_LayerCache` / `DeepseekV41Cache`
+and `from .deepseek_v41_cache import (...)`; the field names (`window`,
+`compress_kv`, `index_k`, `comp_state`, `offset`, `engram_state`, and the shared
+runtime's `compress_kv` / `index_k` / `topk_mask` / `candidates`) are kept so the
+existing `Attention` / `Backbone` bodies need no other change.
+
+### Per-forward call sequence (reference → this module)
+
+`shared = cache.new_shared_runtime()` once at the top of `Backbone.__call__`
+(reference module-global `shared_attn`); `cache.advance(seqlen)` after the layers
+(reference `start_pos += seqlen`). Positions map as
+`start_pos = cache.offset`, `length = cache.offset + seqlen`.
+
+Per layer, `layer = cache.layers[layer_id]`:
+
+* **window** — `layer.append_window(kv_win)` with `kv_win` the post-RoPE window
+  KV `[B, S, head_dim]`; read the ring with `layer.ring(cache.offset + S)` and
+  the attend indices with `window_topk_idxs(window_size, B, S, start_pos)`
+  (reference `_window_kv` L700-720, `get_window_topk_idxs` L409-426). The append
+  keeps full history; `ring(length)` reproduces the reference
+  `window_kv_cache[:bsz, :min(length,W)]` slot layout exactly.
+* **compressor** (kv_source, `ratio > 1`) — `pooled = layer.comp_state.push(kv, score)`
+  with `kv = wkv(x)`, `score = wgate(x)` (fp32); `pooled` is `[B, g, head_dim]`
+  pre-norm, pre-RoPE (reference L466-485). W10 applies `Compressor.norm`, RoPE at
+  the group positions and (phase 2) quant, then `layer.append_compress(compress_new)`
+  (reference `compress_kv_cache` write L761) and, for the index keys,
+  `layer.append_index_k(index_new)` (reference `Indexer.k_cache` write L547).
+* **compressor** (kv_source, `ratio == 1`) — `layer.comp_state is None`; W10
+  projects one latent per token (reference L461-462) and calls `append_compress`
+  / `append_index_k` directly, one row per token.
+* **publish** (source layers) — `shared.compress_kv = layer.compress_kv`,
+  `shared.index_k = layer.index_k`, `shared.topk_mask = <selection>` (aliases
+  `shared.topk_idxs`), `shared.candidates = <mask>` (reference
+  `SharedAttentionRuntime` L1166-1180).
+* **reuse / reindex** — read `shared.compress_kv` / `shared.index_k` /
+  `shared.topk_mask` / `shared.candidates`.
+
+**Engram** — `Backbone` calls `cache.engram_state.advance(input_ids)` before the
+engram layers (unchanged); `cache.engram_state` is set by `Model.make_cache`.
+
+### Rollback seam (serve / gate / speculative verify)
+
+* `cache.trim(n) -> int` — restore to `n` tokens earlier (window, compress_kv,
+  index_k, compressor frontier, engram history, and `offset` together); returns
+  the count trimmed (`mlx_lm` convention).
+* `cache.mark()` / `cache.rollback(mark)` — snapshot form.
+* `cache.is_trimmable() -> True`; `cache.offset: int`.
+
+### `make_cache`
+
+Keep `mlx_lm.models.cache.make_prompt_cache(model)` → `model.make_cache()` and
+`model(ids, cache=cache)` working. W10's `Model.make_cache(self)` becomes:
+
 ```python
-from .deepseek_v41_moe import MoE
-from .deepseek_v41_cache import DeepseekV41Cache, _LayerCache
+from .deepseek_v41_cache import make_cache
+
+def make_cache(self):
+    engram_state = self.model.engram_hash.fresh() if self.model.engram_hash is not None else None
+    return make_cache(self.args, engram_state=engram_state)
 ```
-Until W11/W13 land, W10 ships thin stubs of these two modules (faithful enough to
-import + run the attention/hc/parity unit tests). On integration W10 merges
-`feat/deepseek-v41-w11` / `-w13`; their files win over the stubs.
 
-## deepseek_v41_moe.py (W11)
-Mirror reference `Gate`/`Expert`/`MoE` math exactly; MLX house signatures:
-
-- `class MoE(nn.Module)`; **`MoE(layer_id, args)`** (reference order — W11 landed this,
-  superseding the earlier args-first draft). W10 constructs `self.mlp = MoE(layer_id, args)`
-  in `DecoderLayer` and calls `moe(x)` with `x: [b, s, dim]` -> `[b, s, dim]`
-  (`__call__(self, x, image_mask=None)`, image_mask unused on the text path).
-  Required attributes (sanitize + streaming + `tests/models/test_deepseek_v41_parity.py`
-  + `test_deepseek_v41_loader_contract.py` reach into these):
-  - `moe.gate` : has `.weight [n_routed, dim]`, `.e_score_correction_bias [n_routed]`,
-    `.topk` (int).
-  - `moe.switch_mlp` : `SwitchGLU(hidden, moe_inter, n_routed,
-    activation=ClampedSwiGLU(swiglu_limit))`; submodules `gate_proj`/`up_proj`/`down_proj`
-    (SwitchLinear, `.weight [E, inter, dim]`). `bind_streamed_switches` REPLACES this
-    attribute with a streaming switch whose `__call__(x[n,dim], indices[n,topk]) ->
-    [n, topk, dim]`. The MoE forward MUST call `self.switch_mlp(xf, indices)` and get
-    `[n, topk, dim]` back, then apply gate weights and sum.
-  - `moe.shared_experts` : always-on clamped SwiGLU expert with `.w1`,`.w2`,`.w3`
-    (nn.Linear, no bias). Clamp: up (`w3`) two-sided `[-limit,limit]`, gate (`w1`)
-    upper `<= limit`; product `silu(w1)*w3` in fp32, cast back. (ref `Expert.forward`)
-- `class Gate(nn.Module)`: `__call__(x_flat[n,dim]) -> (weights[n,topk], indices[n,topk])`
-  — reference order `(weights, indices)` (W11's landed module; MoE.forward consumes it
-  internally, so W10 never calls the gate directly). Score = `sqrt(softplus(x @ weight.T
-  / gate_temp))`; select top-k of
-  `scores + e_score_correction_bias`; weights gathered from the UNBIASED scores;
-  if `norm_topk_prob and topk>1` divide by `sum(+1e-20)`; `*= routed_scaling_factor`.
-- `class ClampedSwiGLU` : the `SwitchGLU` activation seam. `SwitchGLU` calls
-  `activation(x_up, x_gate)` — first arg is UP (`w3`), second is GATE (`w1`).
-
-### HARD W11 FINDING — the streamed clamp is dropped (leading 16/30 suspect)
-The reference clamps EVERY routed expert (`MoE.__init__` passes `swiglu_limit=10.0`
-to each `Expert`). W10's resident `SwitchGLU` path honours it via `ClampedSwiGLU`,
-but the SERVED path (`bind_streamed_switches` -> `HotExpertSwitchGLU` /
-`_gather_component_bank_mixed` / `_run_shadow_bank` / `_run_mapped_q4` in
-`mtplx/models/expert_mlx.py`) runs a plain `swiglu(gate, up) = silu(gate)*up` with
-NO clamp. So at serve time (the 31-token probe + the 1,024 generation, which use the
-streamed q2 experts) the routed clamp is silently missing. W11 must make the clamp
-reach the streamed path — either applied inside the MoE forward on the routed
-gate/up before `down`, or via a seam in `expert_mlx.py` (shared infra — coordinate
-with the coordinator before touching it). Confirm with the W10 ablation
-(`.benchmark-artifacts/deepseek-v41/w10/ablate2*` arm `clamp_routed`).
-
-## deepseek_v41_cache.py (W13)
-External per-model cache; `Model.make_cache()` returns `DeepseekV41Cache(n_layers)`
-and `mlx_lm.models.cache.make_prompt_cache(model)` returns it (it calls
-`model.make_cache()`).
-
-- `class DeepseekV41Cache`: `DeepseekV41Cache(n_layers)`; attrs `.layers`
-  (list[_LayerCache], len n_layers), `.offset` (int, running token count, W10's
-  backbone does `cache.offset += s`), `.engram_state` (default None; W10's
-  `make_cache`/backbone set/advance it). Methods: `.mark() -> token`,
-  `.rollback(mark)` (also trims `engram_state` by the decoded-token delta),
-  `.trim(n)` (drop the last n decoded tokens: offset and every layer + engram).
-- `class _LayerCache`: per-layer append-only KV the W10 attention reads/writes.
-  Contract (attribute API — `test_deepseek_v41_parity.py` builds `_LayerCache()`
-  directly and passes it to `attn(...)`):
-  - `.window` : `[b, T_w, head_dim]` or None. W10 does `lc.window = _grow(lc.window, kv_new)`.
-  - `.compress_kv` : `[b, n_comp, head_dim]` or None (appended at kv_source layers).
-  - `.index_k` : `[b, n_comp, index_head_dim]` or None (appended at kv_source layers).
-  - `.comp_state` : the compressor's partial-group tuple `(kv_acc, score_acc)` or None.
-  - `.mark() -> token`, `.rollback(token)`.
-  W13 MAY rewrite the internals to a bounded ring mirroring the reference
-  `window_kv_cache`/`compress_kv_cache`/`k_cache` + `kv_state`/`score_state`, but MUST
-  keep these attributes read/writable OR provide `append_window`/`append_compressed`
-  methods AND update W10's call sites in the same merge (coordinate here first).
-
-## Shapes / config (released 40-layer, from reference config.json)
-dim 5120, n_layers 40, n_heads 64, head_dim 512, rope_head_dim 64, q_lora_rank 1280,
-o_lora_rank 1024, o_groups 8, window_size 128, n_routed_experts 384, n_activated 6,
-moe_inter 2304, score_func sqrtsoftplus, route_scale 1.5, swiglu_limit 10.0,
-norm_eps 1e-20, compress_ratios [0,0,2×18,1×20,0,0,0][:40], kv_source [2,8,14,20],
-index_source [2,8,14,20,24,28,32,36], candidate_source 20, candidate_topk_blocks 2048,
-candidate_block_size 8, index_n_heads 32, index_head_dim 128, index_topk 512, hc_mult 4,
-hc_sinkhorn_iters 20, hc_eps 1e-6, engram_layer_ids [1,14], compress_rope_theta 160000,
-original_seq_len 65536, rope_factor 16, beta_fast 32, beta_slow 1.
-
-## Loader contract (unchanged — W10 keeps)
-`ModelArgs.from_dict(config)`; `Model(args, *, engram_bank_path=None, quantize=True)`;
-`Model.sanitize(weights)`; `Model.load_weights(strict=True)` consumes exactly the
-1,616 text residents; `Model.make_cache()`; `Model.attach_engram(engram_dir)`.
-Engram hook contract: `engram_hook(hidden[B,L,hc_mult,dim], token_ids[B,L], cache_state)
--> hidden` (mtplx/engram_v41.py). Decode uses the same forward as prefill (one call
-with a cache + start position).
+`make_cache` accepts a `ModelArgs`-like object (`num_hidden_layers`,
+`window_size`, `compress_ratios`, `kv_source_layer_ids`) or a plain `n_layers`
+int. `runtime.py`'s `configure_owned_recurrent_state_cache` /
+`configure_tail_owned_attention_kv_cache` are pass-throughs unless their env
+flags are set, so the single-object cache flows through unchanged.

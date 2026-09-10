@@ -47,10 +47,20 @@ from mtplx.models.deepseek_v4 import (
     hc_split_sinkhorn,
 )
 
-# The MoE (routed switch-streaming seam + shared expert) and the KV cache are
-# ported in sibling modules (workers W11 / W13); see docs/deepseek-v41/PORT_CONTRACT.md.
-# _LayerCache / DeepseekV41Cache are re-exported below for the loader + parity tests.
-from mtplx.models.deepseek_v41_cache import DeepseekV41Cache, _LayerCache, _truncate
+# The MoE (routed switch-streaming seam + shared expert) and the per-sequence KV
+# cache are ported in sibling modules (workers W11 / W13); see
+# docs/deepseek-v41/PORT_CONTRACT.md.  W13's cache owns the window ring
+# (append-only history + ring_view), the CompressorState pooling frontier, the
+# compress_kv/index_k append stores and the per-cache SharedAttentionRuntime; W10
+# reads/writes it through the methods below.  _LayerCache / _SharedRuntime /
+# DeepseekV41Cache are re-exported here for the loader + parity tests.
+from mtplx.models.deepseek_v41_cache import (
+    DeepseekV41Cache,
+    _LayerCache,
+    _SharedRuntime,
+    _grow,
+    make_cache as _make_cache,
+)
 from mtplx.models.deepseek_v41_moe import MoE
 
 # ---------------------------------------------------------------------------
@@ -249,21 +259,11 @@ def _rope_last(x: mx.array, cos: mx.array, sin: mx.array, inverse: bool = False)
     return mx.concatenate([head, roped], axis=-1)
 
 
-# ---------------------------------------------------------------------------
-# Shared cross-layer attention runtime (reference SharedAttentionRuntime)
-# ---------------------------------------------------------------------------
-class _SharedRuntime:
-    """One slot each for what a source layer hands down the stack this forward:
-    the group's compressed KV and index keys, the selected compressed-row mask,
-    and the layer-20 candidate-block mask.  Layers run in order and every source
-    writes before its consumers read, so one slot is enough (reference
-    ``SharedAttentionRuntime``)."""
-
-    def __init__(self):
-        self.compress_kv = None   # [b, n_comp, head_dim]
-        self.index_k = None       # [b, n_comp, index_head_dim]
-        self.topk_mask = None     # [b, s, n_comp] bool: selected compressed rows
-        self.candidates = None    # [b, s, n_comp] bool: layer-20 candidate blocks
+# The cross-layer attention runtime (reference SharedAttentionRuntime) is W13's
+# ``_SharedRuntime`` (imported above): one slot each for the group's compress_kv /
+# index_k, the index source's ``topk_mask`` (alias of ``topk_idxs``) and the
+# candidate-source's ``candidates``.  W10 creates one per forward via
+# ``cache.new_shared_runtime()``.
 
 
 # ---------------------------------------------------------------------------
@@ -289,48 +289,28 @@ class Compressor(nn.Module):
         if ratio > 1:
             self.wgate = nn.Linear(args.hidden_size, args.head_dim, bias=False)
 
-    def prefill(self, x: mx.array):
-        """Pool a whole ``start_pos == 0`` chunk; returns (latents, remainder_state).
+    def pool(self, x: mx.array, comp_state):
+        """The pre-RoPE, normed compressed latents this call completes.
 
-        ``remainder_state`` is (kv_tail, score_tail) for the trailing partial group,
-        or ``None`` when the chunk length is a multiple of ratio / ratio == 1."""
-        ratio = self.ratio
-        if ratio == 1:
-            return _rmsnorm(self.wkv(x), self.norm_weight, self.eps), None
-        b, s, _ = x.shape
-        xf = x.astype(mx.float32)
-        kv = self.wkv(xf)
-        score = self.wgate(xf)
-        remainder = s % ratio
-        cutoff = s - remainder
-        state = None
-        if remainder:
-            state = (kv[:, cutoff:], score[:, cutoff:])
-            kv = kv[:, :cutoff]
-            score = score[:, :cutoff]
-        kv = kv.reshape(b, -1, ratio, kv.shape[-1])
-        score = score.reshape(b, -1, ratio, score.shape[-1])
-        pooled = mx.sum(kv * mx.softmax(score, axis=2), axis=2)
-        return _rmsnorm(pooled, self.norm_weight, self.eps), state
+        ``ratio == 1`` is a plain per-token projection with no state (reference
+        ``Compressor.forward`` L461-462): every token yields one latent, so a
+        whole-chunk prefill and a one-token decode step are the same code.
 
-    def step(self, x, state):
-        """Advance one decode token; returns (latent_or_None, new_state).
-
-        ``ratio == 1`` yields one latent every step; ``ratio > 1`` accumulates raw
-        (kv, score) rows until the group fills, then pools them (reference decode
-        path, model.py L476-485).  ``state`` is (kv_acc, score_acc) or None."""
+        ``ratio > 1`` (reference L463-485) projects ``wkv``/``wgate`` in fp32 and
+        hands the rows to W13's :class:`~mtplx.models.deepseek_v41_cache.CompressorState`,
+        which retains the running frontier and returns the softmax-gated pooled
+        latents (reference L475 / L482) for whatever groups this call completed --
+        one code path for the prefill ``floor(s/ratio)`` groups + parked remainder
+        and the decode "pool when the group just filled".  Returns ``None`` when
+        this call completed no group (a still-filling decode step).
+        """
         if self.ratio == 1:
-            return _rmsnorm(self.wkv(x), self.norm_weight, self.eps), None
+            return _rmsnorm(self.wkv(x), self.norm_weight, self.eps)
         xf = x.astype(mx.float32)
-        kv = self.wkv(xf)
-        score = self.wgate(xf)
-        if state is not None and state[0] is not None:
-            kv = mx.concatenate([state[0], kv], axis=1)
-            score = mx.concatenate([state[1], score], axis=1)
-        if kv.shape[1] == self.ratio:
-            pooled = mx.sum(kv * mx.softmax(score, axis=1), axis=1, keepdims=True)
-            return _rmsnorm(pooled, self.norm_weight, self.eps), None
-        return None, (kv, score)
+        pooled = comp_state.push(self.wkv(xf), self.wgate(xf))  # [b, g, head_dim] fp32
+        if pooled.shape[1] == 0:
+            return None
+        return _rmsnorm(pooled, self.norm_weight, self.eps)
 
 
 class Indexer(nn.Module):
@@ -512,18 +492,15 @@ class Attention(nn.Module):
         return mx.einsum("bsht,btd->bshd", w, KV.astype(mx.float32))
 
     def _publish_compressed(self, x, positions, layer_cache, shared, qcos, qsin):
-        """Full/kv_source layer: compress this chunk (prefill) or advance the
-        partial group (decode), RoPE new latents at their group positions, derive
-        index keys, append both to the layer cache and publish to the shared
-        runtime."""
+        """Full/kv_source layer: pool this call's compressed latents (prefill chunk
+        or one decode step, both via W13's CompressorState frontier), RoPE the new
+        latents at their group positions, derive index keys, append both to the
+        layer cache (``append_compress`` / ``append_index_k``) and publish to the
+        shared runtime.  ``group j`` stands for the first token of its group, so it
+        takes position ``j * ratio`` (reference ``_compress_kv`` L748-758)."""
         ratio = self.compress_ratio
-        layer_cache.ratio = ratio  # recorded so DeepseekV41Cache.trim can re-derive rows
-        if int(positions[0]) == 0:
-            latent_pre, layer_cache.comp_state = self.compressor.prefill(x)
-        else:
-            latent_pre, layer_cache.comp_state = self.compressor.step(
-                x, layer_cache.comp_state
-            )
+        # W13's CompressorState (comp_state) retains the frontier; ratio==1 has none.
+        latent_pre = self.compressor.pool(x, layer_cache.comp_state)
         if latent_pre is not None and latent_pre.shape[1] > 0:
             n_prev = 0 if layer_cache.compress_kv is None else layer_cache.compress_kv.shape[1]
             n_new = latent_pre.shape[1]
@@ -531,8 +508,8 @@ class Attention(nn.Module):
             gcos, gsin = _cos_sin(self.inv_freq, group_pos)
             compress_new = _rope_last(latent_pre, gcos, gsin)
             index_new = self.indexer.keys(latent_pre, gcos, gsin)
-            layer_cache.compress_kv = _grow(layer_cache.compress_kv, compress_new)
-            layer_cache.index_k = _grow(layer_cache.index_k, index_new)
+            layer_cache.append_compress(compress_new)
+            layer_cache.append_index_k(index_new)
         shared.compress_kv = layer_cache.compress_kv
         shared.index_k = layer_cache.index_k
 
@@ -576,7 +553,13 @@ class Attention(nn.Module):
 
         kv_new = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
         kv_new = _rope_last(kv_new, qcos, qsin)  # window kv roped at its own token positions
-        layer_cache.window = _grow(layer_cache.window, kv_new)
+        # W13's window store keeps the post-RoPE rows append-only (row i == token i).
+        # Phase 1 attends over the full history and realises the reference sliding
+        # window (get_window_topk_idxs L409-426 / _window_kv L700-720) as a causal
+        # window mask over absolute positions -- equivalent to the reference ring
+        # for every query that can still reach a slot; ``ring()`` is the bounded
+        # phase-2 view.
+        layer_cache.append_window(kv_new)
         window_all = layer_cache.window
         wpos = mx.arange(window_all.shape[1])
         qp = positions[:, None]
@@ -609,13 +592,6 @@ class Attention(nn.Module):
             w = wo.weight
         w = w.reshape(self.n_groups, self.o_lora_rank, -1)
         return mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w.astype(mx.float32))
-
-
-def _grow(rows, new):
-    """Append ``new`` rows along the sequence axis of an append-only cache."""
-    if rows is None:
-        return new
-    return mx.concatenate([rows, new], axis=1)
 
 
 # ---------------------------------------------------------------------------
@@ -714,11 +690,11 @@ class DeepseekV41Backbone(nn.Module):
     def __call__(self, input_ids, cache=None):
         b, s = input_ids.shape
         if cache is None:
-            cache = DeepseekV41Cache(len(self.layers))
-            # a bare forward (no persistent cache) still needs its own engram
-            # history when the hooks are attached
-            if self.engram_hash is not None:
-                cache.engram_state = self.engram_hash.fresh()
+            # a bare forward (no persistent cache) still needs a per-layer cache
+            # built from the config (so kv_source layers get their CompressorState)
+            # and its own engram history when the hooks are attached
+            engram_state = self.engram_hash.fresh() if self.engram_hash is not None else None
+            cache = _make_cache(self.args, engram_state=engram_state)
         positions = mx.arange(cache.offset, cache.offset + s)
 
         h = self.embed_tokens(input_ids)  # [b, s, dim]
@@ -734,12 +710,12 @@ class DeepseekV41Backbone(nn.Module):
         if engram_state is not None:
             engram_state.advance(input_ids)
 
-        shared = _SharedRuntime()
+        shared = cache.new_shared_runtime()
         for layer in self.layers:
             if layer.engram_hook is not None and engram_state is not None:
                 h = layer.engram_hook(h, input_ids, engram_state)
             h, pre_mix = layer(h, pre_mix, positions, cache.layers[layer.layer_id], shared)
-        cache.offset += s
+        cache.advance(s)
 
         # final collapse of the hc copies with the last pre_mix, then RMSNorm
         h = mx.sum(pre_mix[..., None] * h.astype(mx.float32), axis=2).astype(h.dtype)
@@ -821,11 +797,14 @@ class Model(nn.Module):
         return self.model.layers
 
     def make_cache(self):
-        cache = DeepseekV41Cache(len(self.model.layers))
-        # each sequence gets its own streaming engram history (config shared)
-        if self.model.engram_hash is not None:
-            cache.engram_state = self.model.engram_hash.fresh()
-        return cache
+        # W13's factory builds one LayerAttentionCache per layer from the config
+        # (window ring, CompressorState frontier on ratio>1 kv_source layers) and a
+        # per-sequence SharedAttentionRuntime; each sequence gets its own streaming
+        # engram history (the config template is shared).
+        engram_state = (
+            self.model.engram_hash.fresh() if self.model.engram_hash is not None else None
+        )
+        return _make_cache(self.args, engram_state=engram_state)
 
     def attach_engram(self, engram_dir, *, tokenizer=None, cache_bytes=None):
         """Build the real Engram hooks (layers 1 and 14) from the on-disk artifact.
