@@ -152,6 +152,13 @@ def get_streaming_model_classes(config: dict[str, Any]) -> tuple[type, type]:
         from .models.glm52_mlx import Model, ModelArgs
 
         return Model, ModelArgs
+    if model_type == "deepseek_v41":
+        # One-line import (worker W3): guarded until worker W1 lands
+        # mtplx/models/deepseek_v41.py, at which point this resolves the text
+        # model overlay unchanged.
+        from .models.deepseek_v41_loader import deepseek_v41_model_classes
+
+        return deepseek_v41_model_classes()
     raise ResidentLoadError(f"no streamed model overlay for model_type={model_type!r}")
 
 
@@ -358,6 +365,25 @@ def construct_resident_model(
         except Exception as exc:
             raise ResidentLoadError(f"could not load model config: {exc}") from exc
     config = dict(config)
+    if str(config.get("model_type") or "") == "deepseek_v41":
+        # DeepSeek-V4.1 (worker W3) needs a text-only resident filter (skip
+        # vision/aligner/image + mtp.* residents) and an engram bank-path
+        # constructor argument that the generic hy3/glm path does not carry, so
+        # delegate the whole construct to the dedicated loader.  This is the
+        # only serve-path dispatch edit; runtime.py -> construct_resident_model
+        # reaches it with no runtime.py change, exactly like the hy3 lane.
+        from .models.deepseek_v41_loader import (
+            construct_deepseek_v41_resident_model,
+        )
+
+        return construct_deepseek_v41_resident_model(
+            artifact_root,
+            runtime,
+            config=config,
+            mx_module=mx_module,
+            switch_binder=switch_binder,
+            strict=strict,
+        )
     if str(config.get("model_type") or "") not in {"hy_v3", "glm_moe_dsa"}:
         raise ResidentLoadError(
             "resident streaming supports only hy_v3 and glm_moe_dsa"
