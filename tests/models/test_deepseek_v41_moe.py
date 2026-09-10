@@ -382,22 +382,22 @@ def test_moe_seam_forward_matches_numpy_reference():
 
 @_artifact
 @_bank
-def test_streamed_clamp_is_inert_on_real_records():
-    """Document that the shipped streamed switch's missing swiglu clamp is
-    numerically inert on the real layer-0 records at limit=10: the gate/up
-    pre-activations never reach +/-10, so plain and clamped SwiGLU coincide."""
+def test_layer0_activations_stay_under_limit_but_deep_layers_do_not():
+    """Layer 0's gate/up pre-activations stay under +/-10 on random input -- a
+    LOCAL fact only. Do NOT read it as "the clamp is inert": the 40-layer
+    component-banks probe (tests/models/test_deepseek_v41_clamp_probe.py, receipt
+    docs/deepseek-v41/receipts/cpu_clamp_probe.json) shows layers 15..39 drive
+    gate/up to ~70/84, so the streamed clamp is load-bearing on a real prompt."""
     records = _layer0_records()
     fd = os.open(BANK, os.O_RDONLY)
     try:
         moe = _load_real_moe(fd, records)
         rng = np.random.default_rng(4)
         x = mx.array((rng.standard_normal((4, HIDDEN)) * 0.5).astype(np.float32))
-        weights, indices = moe.gate(x)
+        _, indices = moe.gate(x)
         mx.eval(indices)
         idx = np.array(indices)
-
         max_pre = 0.0
-        clamp_max = 0.0
         for t in range(4):
             xt = x[t : t + 1].astype(mx.float32)
             for k in range(TOP_K):
@@ -405,13 +405,7 @@ def test_streamed_clamp_is_inert_on_real_records():
                 gate = np.array(xt @ mx.dequantize(*comps["gate_proj"], **Q2).astype(mx.float32).T)
                 up = np.array(xt @ mx.dequantize(*comps["up_proj"], **Q2).astype(mx.float32).T)
                 max_pre = max(max_pre, float(np.abs(gate).max()), float(np.abs(up).max()))
-                h_plain = (gate / (1 + np.exp(-gate))) * up
-                gc = np.minimum(gate, SWIGLU_LIMIT)
-                uc = np.clip(up, -SWIGLU_LIMIT, SWIGLU_LIMIT)
-                h_clamp = (gc / (1 + np.exp(-gc))) * uc
-                clamp_max = max(clamp_max, float(np.abs(h_plain - h_clamp).max()))
         assert max_pre < SWIGLU_LIMIT, max_pre
-        assert clamp_max == 0.0, clamp_max
     finally:
         os.close(fd)
 
