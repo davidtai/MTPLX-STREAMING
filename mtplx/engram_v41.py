@@ -42,6 +42,8 @@ __all__ = [
     "load_engram_tokenizer",
     "NgramHashState",
     "EngramV41",
+    "EngramResidents",
+    "load_engram_residents",
     "n_hash_cols",
 ]
 
@@ -371,3 +373,99 @@ class EngramV41(nn.Module):
 
         contribution = gate[..., None] * value[:, :, None, :]          # [B, L, hc_mult, dim]
         return (h + contribution).astype(hidden_states.dtype)
+
+
+# --------------------------------------------------------------------------
+# resident Engram projections (W4 sidecar loader)
+# --------------------------------------------------------------------------
+@dataclass
+class EngramResidents:
+    """One engram layer's resident projection tensors, loaded from the W4 sidecar.
+
+    ``wkv`` is the ``[.., n_hash_cols*head_dim] -> [.., dim*(hc_mult+1)]`` callable that
+    :class:`EngramV41` expects, backed by ``mx.quantized_matmul`` over the affine-q8 wkv
+    weight.  ``q_weight``/``k_weight`` are the exact ``[hc_mult, dim]`` F32 gates.  Build
+    the module with :meth:`build_module` (adds the streamed row cache + hook geometry).
+    """
+
+    layer_id: int
+    wkv: Callable[[mx.array], mx.array]
+    q_weight: mx.array
+    k_weight: mx.array
+    wkv_packed: mx.array
+    wkv_scales: mx.array
+    wkv_biases: mx.array
+    dim: int
+    hc_mult: int
+    group_size: int
+    bits: int
+
+    def build_module(self, *, row_cache: NGramRowCache, layer_hash_index: int,
+                     norm_eps: float, clamp_value: float = 1e-6) -> "EngramV41":
+        """Construct the :class:`EngramV41` hook from these residents + a row cache."""
+        return EngramV41(
+            layer_id=self.layer_id, layer_hash_index=layer_hash_index,
+            row_cache=row_cache, wkv=self.wkv,
+            q_weight=self.q_weight, k_weight=self.k_weight,
+            dim=self.dim, hc_mult=self.hc_mult,
+            norm_eps=norm_eps, clamp_value=clamp_value,
+        )
+
+
+def load_engram_residents(
+    artifact_dir: str | Path,
+    layer_id: int,
+    *,
+    sidecar_name: str = "engram-residents.safetensors",
+) -> EngramResidents:
+    """Load one engram layer's resident projections from ``engram-residents.safetensors``.
+
+    ``artifact_dir`` is the artifact's ``engram/`` directory (holding the sidecar and
+    ``engram-manifest.json``).  The affine-q8 ``wkv`` is wrapped as an ``mx.quantized_matmul``
+    callable; ``q_weight``/``k_weight`` are returned as the exact F32 arrays.  ``dim`` and
+    ``hc_mult`` are read off ``q_weight``'s ``[hc_mult, dim]`` shape and cross-checked against
+    the wkv output width (``dim*(hc_mult+1)``).
+    """
+    directory = Path(artifact_dir)
+    manifest_path = directory / "engram-manifest.json"
+    res_meta = None
+    if manifest_path.is_file():
+        res_meta = json.loads(manifest_path.read_text()).get("residents")
+    sidecar = directory / (res_meta["file"] if res_meta and "file" in res_meta else sidecar_name)
+    if not sidecar.is_file():
+        raise FileNotFoundError(f"engram residents sidecar not found: {sidecar}")
+
+    tensors = mx.load(str(sidecar))
+    base = f"layers.{layer_id}.engram"
+    try:
+        packed = tensors[f"{base}.wkv.weight"]
+        scales = tensors[f"{base}.wkv.scales"]
+        biases = tensors[f"{base}.wkv.biases"]
+        q_weight = tensors[f"{base}.q_weight"]
+        k_weight = tensors[f"{base}.k_weight"]
+    except KeyError as exc:
+        raise KeyError(f"layer {layer_id} residents missing from {sidecar}: {exc}") from exc
+
+    bits, group = 8, 64
+    if res_meta and isinstance(res_meta.get("quant"), dict):
+        wkv_q = res_meta["quant"].get("wkv", {})
+        bits = int(wkv_q.get("bits", bits))
+        group = int(wkv_q.get("group_size", group))
+
+    hc_mult = int(q_weight.shape[0])
+    dim = int(q_weight.shape[1])
+    out_width = int(packed.shape[0])
+    if out_width != dim * (hc_mult + 1):
+        raise ValueError(
+            f"wkv out width {out_width} != dim*(hc_mult+1) {dim * (hc_mult + 1)} "
+            f"(q_weight shape {tuple(q_weight.shape)})"
+        )
+
+    def wkv(x: mx.array, _p=packed, _s=scales, _b=biases, _g=group, _bits=bits) -> mx.array:
+        return mx.quantized_matmul(x, _p, _s, _b, transpose=True, group_size=_g, bits=_bits)
+
+    return EngramResidents(
+        layer_id=int(layer_id), wkv=wkv, q_weight=q_weight, k_weight=k_weight,
+        wkv_packed=packed, wkv_scales=scales, wkv_biases=biases,
+        dim=dim, hc_mult=hc_mult, group_size=group, bits=bits,
+    )
