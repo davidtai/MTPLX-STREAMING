@@ -38,7 +38,8 @@ mx.set_default_device(mx.cpu)
 
 # editable-install CWD-shadowing guard
 import mtplx.engram_v41 as _ev
-assert "/.worktrees/dsv41-w2/" in _ev.__file__, _ev.__file__
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+assert Path(_ev.__file__).resolve().is_relative_to(_REPO_ROOT), (_ev.__file__, _REPO_ROOT)
 
 ARTIFACT = Path("/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2")
 ENGRAM_DIR = ARTIFACT / "engram"

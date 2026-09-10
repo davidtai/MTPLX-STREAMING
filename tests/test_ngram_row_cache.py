@@ -30,7 +30,8 @@ mx.set_default_device(mx.cpu)
 
 # guard the editable-install CWD-shadowing trap: this must be the worktree's module
 import mtplx.ngram_row_cache as _nrc
-assert "/.worktrees/dsv41-w2/" in _nrc.__file__, _nrc.__file__
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+assert Path(_nrc.__file__).resolve().is_relative_to(_REPO_ROOT), (_nrc.__file__, _REPO_ROOT)
 
 ROW_BYTES = 272
 
