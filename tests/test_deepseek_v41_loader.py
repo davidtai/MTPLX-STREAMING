@@ -33,6 +33,7 @@ from deepseek_v41_test_double import (  # noqa: E402
 from mtplx.expert_admission import (  # noqa: E402
     TrustedFileDigest,
     admit_expert_artifact,
+    ensure_expert_admitted,
 )
 from mtplx.expert_manifest import load_expert_manifest  # noqa: E402
 from mtplx.expert_streaming_models import (  # noqa: E402
@@ -78,15 +79,21 @@ def manifest():
     return load_expert_manifest(MANIFEST)
 
 
-def _rebased_spec(spec, manifest):
-    """Spec with source identity rebased to the shipped manifest.
+def _admit_spec(spec, manifest):
+    """The spec whose source identity matches the current manifest.
 
-    The shipped manifest carries pre-publish ``local/...`` identity; a
-    republished manifest will carry the HF identity the spec pins.  Tests that
-    must run admission against the artifact as-shipped rebase the spec to the
-    manifest identity, which is exactly the post-republish state.
+    After the W3 manifest identity fix the local artifact carries the HF
+    identity, so the pinned spec matches directly and this returns it unchanged.
+    Against a pre-fix / fresh-download manifest (pre-publish ``local/...``
+    identity) it rebases the spec's identity to the manifest so the rest of the
+    pipeline runs -- exactly the post-republish state. Robust to both.
     """
 
+    if (
+        manifest.source_repo == spec.quant_model
+        and manifest.source_revision == spec.quant_revision
+    ):
+        return spec
     return replace(
         spec,
         quant_model=manifest.source_repo,
@@ -177,13 +184,14 @@ def test_admission_sample_record_digests(manifest):
 @pytest.mark.skipif(not BANK.is_file(), reason="expert bank not present")
 def test_real_admission_writes_receipt(spec, manifest, tmp_path, monkeypatch):
     # Drive the REAL admission code (admit_expert_artifact) against the artifact
-    # with a trusted bank digest so the 169 GiB bank is never hashed.  It writes
+    # with a trusted bank digest so the 158 GiB bank is never hashed.  It writes
     # a revision/digest-bound receipt into a scratch receipt_root outside the
-    # artifact.  Uses the source-rebased spec (emulating the republished
-    # manifest identity) because the shipped manifest's identity is pre-publish.
+    # artifact.  The spec whose identity matches the current manifest is used
+    # (after the W3 identity fix that is the pinned HF spec unchanged; against a
+    # pre-fix/fresh-download manifest it is the source-rebased spec).
     import mtplx.expert_streaming_models as esm
 
-    monkeypatch.setitem(esm.MODEL_SPECS, KEY, _rebased_spec(spec, manifest))
+    monkeypatch.setitem(esm.MODEL_SPECS, KEY, _admit_spec(spec, manifest))
     st = os.stat(BANK)
     trusted = {
         manifest.sidecar.parts[0].file: TrustedFileDigest(
@@ -204,6 +212,42 @@ def test_real_admission_writes_receipt(spec, manifest, tmp_path, monkeypatch):
     receipt_file = Path(receipt["receipt_path"])
     assert receipt_file.is_file()
     assert receipt_file.parent == tmp_path.resolve()
+
+
+@pytest.mark.skipif(not BANK.is_file(), reason="expert bank not present")
+def test_serve_path_admission_with_pinned_spec(spec, manifest, tmp_path):
+    # Proof that after the W3 manifest identity fix the serve-path admission
+    # (ensure_expert_admitted(root)) passes against the REAL local artifact with
+    # the PINNED HF spec and NO source-rebase shim.  Skips on a pre-fix /
+    # fresh-download manifest (which still carries local identity).  Reuses the
+    # manifest-recorded experts.bin sha256 via a trusted digest so the 158 GiB
+    # bank is never re-hashed.
+    if manifest.source_repo != spec.quant_model:
+        pytest.skip("local manifest still carries pre-publish identity (not rebased)")
+    st = os.stat(BANK)
+    trusted = {
+        manifest.sidecar.parts[0].file: TrustedFileDigest(
+            sha256=manifest.sidecar.parts[0].sha256,
+            st_dev=st.st_dev,
+            st_ino=st.st_ino,
+            st_size=st.st_size,
+            st_mtime_ns=st.st_mtime_ns,
+            st_ctime_ns=st.st_ctime_ns,
+        )
+    }
+    # seed a receipt using the pinned (registered) HF spec -- no monkeypatch
+    admit_expert_artifact(
+        ARTIFACT,
+        repo_id=spec.quant_model,
+        revision=spec.quant_revision,
+        receipt_root=tmp_path,
+        trusted_bank_digests=trusted,
+    )
+    # serve-path call reuses it (validates the HF spec via _authoritative_manifest)
+    reused = ensure_expert_admitted(ARTIFACT, receipt_root=tmp_path)
+    assert reused is not None
+    assert reused["manifest_sha256"] == manifest.manifest_sha256
+    assert reused["banks"][0]["sha256"] == manifest.sidecar.parts[0].sha256
 
 
 # --------------------------------------------------------------------------
@@ -254,7 +298,7 @@ def test_open_runtime_and_bind_end_to_end(spec, manifest):
         memory_limit_bytes=KNOB,
         max_live_kv_tokens=4096,
         runtime_reserve_bytes=RESERVE,
-        spec=_rebased_spec(spec, manifest),
+        spec=_admit_spec(spec, manifest),
         expert_cache_limit_bytes=0,  # tiny host allocation for the CPU test
         admission_receipt=_stat_receipt(manifest),
         apply_memory_cap=False,  # never touch the MLX/Metal memory cap
@@ -303,7 +347,7 @@ def test_construct_is_wired_and_guarded_until_w1(spec, manifest):
         memory_limit_bytes=KNOB,
         max_live_kv_tokens=4096,
         runtime_reserve_bytes=RESERVE,
-        spec=_rebased_spec(spec, manifest),
+        spec=_admit_spec(spec, manifest),
         expert_cache_limit_bytes=0,
         admission_receipt=_stat_receipt(manifest),
         apply_memory_cap=False,

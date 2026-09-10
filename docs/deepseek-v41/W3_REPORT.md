@@ -57,12 +57,56 @@ and the serve-path admission (`ensure_expert_admitted(root)` → `get_model_spec
 `test_hf_pinned_spec_fails_only_on_source_identity`, whose error is exactly
 `"manifest source identity does not match the pinned descriptor"`).
 
-Root-cause fix (owned by the converter/publisher, not W3 — it must not touch `~/models`): rebuild the
-manifest with `build_expert_manifest(..., source_repo="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
-source_revision="b64980a…")` and re-upload. Until then, W3 tests and the loader operate against a
-source-rebased spec (`dataclasses.replace(spec, quant_model=manifest.source_repo,
-quant_revision=manifest.source_revision)`), which is exactly the identity a republished manifest will
-carry — no trust gate is silently bypassed.
+Root-cause fix: rebuild the manifest with the HF identity and re-upload. The **local** rebuild is done
+(next subsection). The **re-upload** is David's call.
+
+### Manifest identity fix (applied to the local artifact)
+
+The local `~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2/expert-manifest.json` was rebased to the HF
+identity so it matches the pinned spec.
+
+- **Path taken — digest reuse, no bank re-hash.** `build_expert_manifest(...)` was **not** the mechanism:
+  it re-inventories the safetensors shards and (with `hash_records=True`) re-reads all 15,360 records
+  (158 GiB), and moreover the routed experts live in the `experts.bin` **sidecar**, not the safetensors,
+  so a from-scratch build cannot reconstruct them. Instead the existing manifest was loaded,
+  `dataclasses.replace(manifest, source_repo="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
+  source_revision="b64980a16283647bb213ab475335f38f516e0d9e").with_digest()` recomputed only the
+  content digest (a ~49 MB canonical-JSON hash, sub-second), and the file was edited surgically
+  (three field values: `source_repo`, `source_revision`, `manifest_sha256`) with an atomic write. Every
+  recorded record digest, resident tensor, and shard entry is reused byte-for-byte. **No 158 GiB
+  re-hash ran** (the GPU flock was held by another process — a bank re-hash would have corrupted its
+  host-encode window; digest reuse is also the coordinator's stated preference).
+- **Backup**: the pre-fix manifest is at
+  `…/scratchpad/expert-manifest.json.pre-hf-identity` (49,228,771 B).
+- **`manifest_sha256`**: `608f05f4…e32eb` → `607e1721…005b`. `experts.bin`, the 49 resident shards, and
+  `engram/` were untouched.
+- **Diff (old vs new)** shows only the three identity fields changed — records/resident_tensors/shards
+  byte-identical:
+  ```
+  4,5c4,5
+  <   "source_repo": "local/deepseek-v41-flash-mtplx-streaming-q2",
+  <   "source_revision": "dba1be0a40aa45a94ad051997016db3960a90277",
+  ---
+  >   "source_repo": "OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
+  >   "source_revision": "b64980a16283647bb213ab475335f38f516e0d9e",
+  1875228c1875228
+  <   "manifest_sha256": "608f05f4…e32eb"
+  ---
+  >   "manifest_sha256": "607e1721…005b"
+  ```
+- **Proof against the REAL local artifact with the PINNED (HF) spec — no source-rebase shim:**
+  - `validate_expert_manifest_spec(manifest, get_model_spec("deepseek-v41-flash-expert-q2"),
+    require_pinned_tensor_bytes=True)` → **PASS** (`manifest.source_repo == spec.quant_model`).
+  - serve-path `ensure_expert_admitted(root)` → **PASS in 1.99 s** via receipt reuse (the receipt was
+    seeded from the manifest's recorded `experts.bin` sha256 as a trusted digest, so no bank hash;
+    `load_valid_admission_receipt` re-validates the HF spec and the bank stat identity, never hashing).
+  - Committed as state-aware tests: `test_pinned_spec_strict_validation` and
+    `test_serve_path_admission_with_pinned_spec` (both take the fixed-identity branch here).
+
+> **The HF-uploaded copy of `expert-manifest.json` still carries the old `local/…` identity.** Only the
+> local artifact was fixed. A fresh `mtplx serve --model OpensourceWTF/… --download` will still fail
+> admission on source identity until the corrected manifest is re-uploaded to the HF repo — **David's
+> call** (W3 does not push anything, HF included).
 
 ---
 
@@ -180,13 +224,13 @@ tests/test_deepseek_v41_spec.py::test_spec_bytes_are_pinned_to_measured_inventor
 tests/test_deepseek_v41_spec.py::test_spec_kv_and_indexer_pins PASSED
 tests/test_deepseek_v41_spec.py::test_quant_model_pinned_to_public_hf_repo PASSED
 tests/test_deepseek_v41_spec.py::test_manifest_bytes_match_pinned_spec PASSED
-tests/test_deepseek_v41_spec.py::test_strict_validation_passes_on_source_rebased_spec PASSED
-tests/test_deepseek_v41_spec.py::test_hf_pinned_spec_fails_only_on_source_identity PASSED
+tests/test_deepseek_v41_spec.py::test_pinned_spec_strict_validation PASSED
 tests/test_deepseek_v41_loader.py::test_text_only_filter_counts_and_bytes PASSED
 tests/test_deepseek_v41_loader.py::test_text_only_filter_predicate_never_keeps_vision_or_mtp PASSED
 tests/test_deepseek_v41_loader.py::test_admission_model_key_and_record_bytes PASSED
 tests/test_deepseek_v41_loader.py::test_admission_sample_record_digests PASSED
 tests/test_deepseek_v41_loader.py::test_real_admission_writes_receipt PASSED
+tests/test_deepseek_v41_loader.py::test_serve_path_admission_with_pinned_spec PASSED
 tests/test_deepseek_v41_loader.py::test_memory_plan_text_only_slots[4096] PASSED
 tests/test_deepseek_v41_loader.py::test_memory_plan_text_only_slots[16384] PASSED
 tests/test_deepseek_v41_loader.py::test_memory_plan_text_only_slots[65536] PASSED
@@ -194,8 +238,12 @@ tests/test_deepseek_v41_loader.py::test_memory_plan_full_resident_is_conservativ
 tests/test_deepseek_v41_loader.py::test_open_runtime_and_bind_end_to_end PASSED
 tests/test_deepseek_v41_loader.py::test_construct_is_wired_and_guarded_until_w1 PASSED
 tests/test_deepseek_v41_loader.py::test_health_relevant_facts PASSED
-======================== 18 passed, 2 warnings in 9.31s ========================
+======================= 18 passed, 2 warnings in 13.48s ========================
 ```
+
+State-aware: `test_pinned_spec_strict_validation` and `test_serve_path_admission_with_pinned_spec` take
+the fixed-identity branch here (local manifest rebased); against a fresh HF `--download` (still `local/…`
+identity) the first falls back to the rebased-spec assertions and the second skips.
 
 Regression check: `tests/test_streamed_models.py tests/test_expert_streaming_models.py
 tests/test_expert_manifest.py` → 139 passed, 1 skipped (no regression to the hy3/glm lanes from the spec /
