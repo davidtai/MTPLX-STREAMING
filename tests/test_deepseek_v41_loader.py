@@ -21,7 +21,12 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+import mlx.core as mx
 import pytest
+
+# All DeepSeek-V4.1 tests force the CPU stream at import so the suite is
+# device-independent (and the end-to-end construct/forward runs on CPU).
+mx.set_default_device(mx.cpu)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from deepseek_v41_test_double import (  # noqa: E402
@@ -338,10 +343,12 @@ def test_open_runtime_and_bind_end_to_end(spec, manifest):
         runtime.close()
 
 
-def test_construct_is_wired_and_guarded_until_w1(spec, manifest):
-    # The production construct entry resolves the real W1 model classes by
-    # default; until mtplx.models.deepseek_v41 lands it raises a clear,
-    # actionable error rather than an opaque ImportError.
+def test_construct_wires_real_model_and_engram(spec, manifest, monkeypatch):
+    # W1 has landed, so the production construct entry resolves the real
+    # ``mtplx.models.deepseek_v41`` model, strict-loads the 1,616 text residents,
+    # binds all 40 streamed sparse layers, and attaches the real Engram hooks
+    # (layers 1 and 14).  (This replaces the pre-W1 "raises until W1 lands" guard.)
+    monkeypatch.setenv("MTPLX_ENGRAM_CACHE_LIMIT", "16MiB")  # small resident-row arena
     runtime = loader.open_deepseek_v41_runtime(
         ARTIFACT,
         memory_limit_bytes=KNOB,
@@ -353,11 +360,85 @@ def test_construct_is_wired_and_guarded_until_w1(spec, manifest):
         apply_memory_cap=False,
     )
     try:
-        with pytest.raises(loader.ResidentLoadError) as excinfo:
-            loader.construct_deepseek_v41_resident_model(ARTIFACT, runtime)
-        assert "mtplx.models.deepseek_v41" in str(excinfo.value)
+        resident = loader.construct_deepseek_v41_resident_model(ARTIFACT, runtime)
+        model = resident.model
+
+        # strict text-only resident load + full streamed-expert bind
+        assert resident.report.tensor_count == KEPT_COUNT == 1616
+        assert resident.report.raw_tensor_bytes == KEPT_BYTES
+        assert resident.report.bound_sparse_layers == runtime.spec.routed_layer_count == 40
+        assert resident.report.strict is True
+        for i in runtime.spec.routed_layer_indices:
+            assert type(model.model.layers[i].mlp.switch_mlp).__name__ == "HotExpertSwitchGLU"
+
+        # engram attached on EXACTLY layers 1 and 14 (real EngramV41 hooks)
+        hooked = [j for j, layer in enumerate(model.model.layers) if layer.engram_hook is not None]
+        assert hooked == [1, 14]
+        for i in (1, 14):
+            assert type(model.model.layers[i].engram_hook).__name__ == "EngramV41"
+        assert model._mtplx_engram_layer_ids == (1, 14)
+        assert model.model.engram_hash is not None  # per-cache hash-state prototype
+        assert model.engram_bank_path == (ARTIFACT.resolve() / "engram")
+        # each cache gets its own streaming engram history
+        assert model.make_cache().engram_state is not None
     finally:
         runtime.close()
+
+
+# --------------------------------------------------------------------------
+# CPU end-to-end forward proof (opt-in: reads ~15 GiB of experts from the bank
+# and runs a full 40-layer CPU forward, so it is gated behind DSV41_RUN_E2E to
+# keep the default suite fast).  Proves the whole serve path: real admission ->
+# runtime open -> resident q8 load -> bind_streamed_switches -> engram attach ->
+# greedy prefill + 2 decode with routed experts gathered from experts.bin and
+# engram rows gathered from the row banks, all on the CPU stream.
+# --------------------------------------------------------------------------
+@pytest.mark.skipif(
+    not os.environ.get("DSV41_RUN_E2E"),
+    reason="set DSV41_RUN_E2E=1 to run the heavy CPU end-to-end forward",
+)
+def test_cpu_end_to_end_forward(tmp_path, monkeypatch):
+    monkeypatch.setenv("MTPLX_ENGRAM_CACHE_LIMIT", "64MiB")
+    resident = loader.load_deepseek_v41_streaming(
+        ARTIFACT,
+        memory_limit_bytes=KNOB,
+        max_live_kv_tokens=256,
+        runtime_reserve_bytes=RESERVE,
+        receipt_root=tmp_path / "receipts",
+        admit=True,
+        expert_cache_limit_bytes=0,
+        apply_memory_cap=False,
+    )
+    model = resident.model
+    runtime = model._mtplx_expert_runtime
+    assert runtime.reader.backend in {"native", "preadv"}
+    assert [j for j, l in enumerate(model.model.layers) if l.engram_hook is not None] == [1, 14]
+
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(str(ARTIFACT))
+    ids_list = tokenizer("def add(a, b):", add_special_tokens=False)["input_ids"][:8]
+    ids = mx.array([ids_list])
+
+    cache = model.make_cache()
+    logits = model(ids, cache)
+    mx.eval(logits)
+    produced = [int(mx.argmax(logits[0, -1]))]
+    for _ in range(2):
+        lg = model(mx.array([[produced[-1]]]), cache)
+        mx.eval(lg)
+        produced.append(int(mx.argmax(lg[0, -1])))
+
+    # routed experts really came from experts.bin (6 experts/token/layer * 40)
+    assert runtime.counters.expert_requests == (len(ids_list) + 2) * 40 * 6
+    assert runtime.counters.bytes_read > 0
+    # both engram layers gathered rows from their banks
+    eng = {b.layer_id: b.cache.stats for b in model._engram_banks}
+    assert eng[1]["rows_read"] > 0 and eng[14]["rows_read"] > 0
+    # produced tokens detokenize to text (in-range ids -> real subwords)
+    text = tokenizer.decode(produced, skip_special_tokens=False)
+    assert isinstance(text, str) and len(text) > 0
+    assert all(0 <= t < model.args.vocab_size for t in produced)
 
 
 # --------------------------------------------------------------------------
