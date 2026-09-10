@@ -1,0 +1,274 @@
+{
+  "probe_ids": [
+    0,
+    3465,
+    1258,
+    6036,
+    14,
+    291,
+    3395,
+    361,
+    1354,
+    260,
+    940,
+    291,
+    6328,
+    3465,
+    1241,
+    6036,
+    14,
+    291,
+    3395,
+    361,
+    1354,
+    260,
+    565,
+    291,
+    6328,
+    3465,
+    21740,
+    6036,
+    14,
+    291,
+    2605
+  ],
+  "keys": [
+    "attn_L0_output",
+    "moe_L0_output",
+    "layer0_output",
+    "layer1_output",
+    "layer2_output"
+  ],
+  "vs_R0": {
+    "R0": {
+      "attn_L0_output": {
+        "min_cos": 0.9999999999999998,
+        "global_cos": 1.000000000000001,
+        "max_abs": 0.0
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9999999999999998,
+        "global_cos": 0.999999999999999,
+        "max_abs": 0.0
+      },
+      "layer0_output": {
+        "min_cos": 0.9999999999999998,
+        "global_cos": 0.9999999999999962,
+        "max_abs": 0.0
+      },
+      "layer1_output": {
+        "min_cos": 0.9999999999999998,
+        "global_cos": 0.9999999999999988,
+        "max_abs": 0.0
+      },
+      "layer2_output": {
+        "min_cos": 0.9999999999999998,
+        "global_cos": 0.999999999999999,
+        "max_abs": 0.0
+      }
+    },
+    "R1": {
+      "attn_L0_output": {
+        "min_cos": 0.9999616439711949,
+        "global_cos": 0.9999683613686743,
+        "max_abs": 0.02426237054169178
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9999797030976708,
+        "global_cos": 0.9999978083461174,
+        "max_abs": 0.010188102722167969
+      },
+      "layer0_output": {
+        "min_cos": 0.9999864907098146,
+        "global_cos": 0.9999987082559059,
+        "max_abs": 0.013973236083984375
+      },
+      "layer1_output": {
+        "min_cos": 0.9995531900794826,
+        "global_cos": 0.9999987008822316,
+        "max_abs": 0.20695877075195312
+      },
+      "layer2_output": {
+        "min_cos": 0.999347501612339,
+        "global_cos": 0.9999978208379626,
+        "max_abs": 0.20827484130859375
+      }
+    },
+    "R2": {
+      "attn_L0_output": {
+        "min_cos": 0.9999616439711949,
+        "global_cos": 0.9999683613686743,
+        "max_abs": 0.02426237054169178
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9270693843565705,
+        "global_cos": 0.9347156257653093,
+        "max_abs": 3.809353530406952
+      },
+      "layer0_output": {
+        "min_cos": 0.9290634712427959,
+        "global_cos": 0.9342123330134445,
+        "max_abs": 3.452408492565155
+      },
+      "layer1_output": {
+        "min_cos": 0.9332894387606551,
+        "global_cos": 0.9367707406939478,
+        "max_abs": 25.509967803955078
+      },
+      "layer2_output": {
+        "min_cos": 0.9330792183036534,
+        "global_cos": 0.9376844428997895,
+        "max_abs": 24.71500015258789
+      }
+    },
+    "R3": {
+      "attn_L0_output": {
+        "min_cos": 0.9999616439711949,
+        "global_cos": 0.9999683613686743,
+        "max_abs": 0.02426237054169178
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9270748343737394,
+        "global_cos": 0.9346190395338507,
+        "max_abs": 3.8133350014686584
+      },
+      "layer0_output": {
+        "min_cos": 0.9290766817681829,
+        "global_cos": 0.9342556716770046,
+        "max_abs": 3.4560144543647766
+      },
+      "layer1_output": {
+        "min_cos": 0.9332542687101631,
+        "global_cos": 0.9365994628038369,
+        "max_abs": 25.65502166748047
+      },
+      "layer2_output": {
+        "min_cos": 0.9330440709017406,
+        "global_cos": 0.9374642837695,
+        "max_abs": 24.878633499145508
+      }
+    }
+  },
+  "vs_MLX": {
+    "R0": {
+      "attn_L0_output": {
+        "min_cos": 0.9908996140170472,
+        "global_cos": 0.9945134331909916,
+        "max_abs": 0.7861580848693848
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9270533294783249,
+        "global_cos": 0.934419256051551,
+        "max_abs": 3.8217130601406097
+      },
+      "layer0_output": {
+        "min_cos": 0.9289305467584922,
+        "global_cos": 0.9339888773015438,
+        "max_abs": 3.4611021876335144
+      },
+      "layer1_output": {
+        "min_cos": 0.9328562529363137,
+        "global_cos": 0.9375670162658454,
+        "max_abs": 25.211360931396484
+      },
+      "layer2_output": {
+        "min_cos": 0.9326374900776114,
+        "global_cos": 0.9383470487664336,
+        "max_abs": 24.420852661132812
+      }
+    },
+    "R1": {
+      "attn_L0_output": {
+        "min_cos": 0.9909037936671828,
+        "global_cos": 0.9945422736343771,
+        "max_abs": 0.7883539199829102
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9270526883356682,
+        "global_cos": 0.9343924266785183,
+        "max_abs": 3.8202634751796722
+      },
+      "layer0_output": {
+        "min_cos": 0.9289332420152203,
+        "global_cos": 0.9339886241298345,
+        "max_abs": 3.457472026348114
+      },
+      "layer1_output": {
+        "min_cos": 0.9328589466563223,
+        "global_cos": 0.9374780083568022,
+        "max_abs": 25.416141510009766
+      },
+      "layer2_output": {
+        "min_cos": 0.9326397991577766,
+        "global_cos": 0.9382066828426645,
+        "max_abs": 24.627033233642578
+      }
+    },
+    "R2": {
+      "attn_L0_output": {
+        "min_cos": 0.9909037936671828,
+        "global_cos": 0.9945422736343771,
+        "max_abs": 0.7883539199829102
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9890116311920492,
+        "global_cos": 0.9992898835493542,
+        "max_abs": 0.163893461227417
+      },
+      "layer0_output": {
+        "min_cos": 0.9950017909542076,
+        "global_cos": 0.9995847904151796,
+        "max_abs": 0.1327974796295166
+      },
+      "layer1_output": {
+        "min_cos": 0.9963763441001189,
+        "global_cos": 0.9998398569809227,
+        "max_abs": 1.1242561340332031
+      },
+      "layer2_output": {
+        "min_cos": 0.9972186059619554,
+        "global_cos": 0.9998968002646831,
+        "max_abs": 0.9977149963378906
+      }
+    },
+    "R3": {
+      "attn_L0_output": {
+        "min_cos": 0.9909037936671828,
+        "global_cos": 0.9945422736343771,
+        "max_abs": 0.7883539199829102
+      },
+      "moe_L0_output": {
+        "min_cos": 0.9946317520535178,
+        "global_cos": 0.9994878011442881,
+        "max_abs": 0.1675739288330078
+      },
+      "layer0_output": {
+        "min_cos": 0.9967314176515639,
+        "global_cos": 0.9996288863673282,
+        "max_abs": 0.1298656463623047
+      },
+      "layer1_output": {
+        "min_cos": 0.9973189453539335,
+        "global_cos": 0.9998003183326698,
+        "max_abs": 1.1884918212890625
+      },
+      "layer2_output": {
+        "min_cos": 0.9978463516983793,
+        "global_cos": 0.999863419338247,
+        "max_abs": 1.061614990234375
+      }
+    }
+  },
+  "router_isolation_L0_identical_input": {
+    "exact_set_match": 31,
+    "n_tokens": 31,
+    "mean_overlap": 6.0,
+    "gate_weight_max_abs_diff_ref_vs_mlx": 0.0,
+    "note": "feeds the SAME fp32 moe input into the reference gate (source bf16 weight) and the MLX gate (q8-artifact bf16 weight); disagreement here is the gate-weight quant, not upstream drift."
+  },
+  "verdict": {
+    "R2_layer2_global_cos_vs_mlx": 0.9998968002646831,
+    "R3_layer2_global_cos_vs_mlx": 0.999863419338247,
+    "note": "R2/R3 residual gap to MLX is the fp32(ladder) vs bf16(MLX) activation storage (proven ~0.995/op in isolate_wkv). Interpret min_cos deltas R1->R2 as the Q2-expert share and R2->R3 as the router-flip share."
+  }
+}
