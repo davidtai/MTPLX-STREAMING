@@ -88,29 +88,30 @@ def test_manifest_bytes_match_pinned_spec(spec, manifest):
     assert manifest.model_key == spec.key
 
 
-def test_strict_validation_passes_on_source_rebased_spec(spec, manifest):
-    # The shipped manifest carries the pre-publish source identity; rebase the
-    # spec's quant_model/quant_revision to it (this is exactly the identity a
-    # republished manifest will carry) and run STRICT validation with
-    # require_pinned_tensor_bytes=True.  Everything -- bytes, geometry, record
-    # keys, component shapes -- must pass.
-    spec_rebased = replace(
-        spec,
-        quant_model=manifest.source_repo,
-        quant_revision=manifest.source_revision,
-    )
-    validate_expert_manifest_spec(
-        manifest, spec_rebased, require_pinned_tensor_bytes=True
-    )
-
-
-def test_hf_pinned_spec_fails_only_on_source_identity(spec, manifest):
-    # Proves the byte/geometry pins are correct: the HF-pinned spec fails strict
-    # validation ONLY because the shipped manifest still carries pre-publish
-    # ``local/...`` source identity.  This is the documented publish blocker.
-    assert manifest.source_repo != spec.quant_model
-    with pytest.raises(ExpertManifestError) as excinfo:
+def test_pinned_spec_strict_validation(spec, manifest):
+    # State-aware strict validation with require_pinned_tensor_bytes=True.
+    if manifest.source_repo == spec.quant_model:
+        # W3 manifest identity fix applied (local artifact rebased to the HF
+        # identity): the HF-pinned spec validates DIRECTLY, no rebase shim.
+        assert manifest.source_revision == spec.quant_revision
         validate_expert_manifest_spec(
             manifest, spec, require_pinned_tensor_bytes=True
         )
-    assert "source identity" in str(excinfo.value)
+    else:
+        # Pre-fix / fresh-download state: the shipped manifest still carries
+        # pre-publish ``local/...`` identity, so the HF-pinned spec fails strict
+        # validation ONLY on source identity (proving the byte/geometry pins are
+        # correct); rebasing the spec's identity to the manifest makes it pass.
+        with pytest.raises(ExpertManifestError) as excinfo:
+            validate_expert_manifest_spec(
+                manifest, spec, require_pinned_tensor_bytes=True
+            )
+        assert "source identity" in str(excinfo.value)
+        spec_rebased = replace(
+            spec,
+            quant_model=manifest.source_repo,
+            quant_revision=manifest.source_revision,
+        )
+        validate_expert_manifest_spec(
+            manifest, spec_rebased, require_pinned_tensor_bytes=True
+        )

@@ -662,17 +662,17 @@ DEEPSEEK_V41_FLASH_EXPERT_Q2 = ExpertStreamingModelSpec(
     source_model="deepseek-ai/DeepSeek-V4.1-Flash",
     source_revision="dba1be0a40aa45a94ad051997016db3960a90277",
     # Pinned to the published streaming repo (public) and its current main
-    # commit (HF API model info sha, 2026-09-10).  NOTE (W3): the shipped
-    # ``expert-manifest.json`` -- both the local ~/models copy and the HF-
-    # uploaded copy -- still carries the PRE-PUBLISH identity
-    # ``source_repo="local/deepseek-v41-flash-mtplx-streaming-q2"`` /
-    # ``source_revision="dba1be0a..."``.  ``validate_expert_manifest_spec``
+    # commit (HF API model info sha, 2026-09-10).  ``validate_expert_manifest_spec``
     # compares ``manifest.source_repo``/``source_revision`` against these
-    # ``quant_model``/``quant_revision`` fields, so strict admission of the
-    # artifact AS SHIPPED fails on source identity until the publisher rebuilds
-    # the manifest with ``build_expert_manifest(..., source_repo=<hf repo>,
-    # source_revision=<hf commit>)`` and re-uploads.  See
-    # docs/deepseek-v41/W3_REPORT.md ("Source-identity divergence").
+    # ``quant_model``/``quant_revision`` fields.  W3 rebased the LOCAL
+    # ``~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2/expert-manifest.json`` to
+    # this identity (identity-only edit: source_repo/source_revision +
+    # recomputed manifest_sha256; records/resident_tensors/shards untouched, no
+    # bank re-hash), so strict admission of the LOCAL artifact now passes with
+    # this pinned spec directly.  The HF-uploaded copy of expert-manifest.json
+    # STILL carries the pre-publish ``local/...`` identity and must be
+    # re-uploaded (David's call) for a fresh ``--download`` to admit.  See
+    # docs/deepseek-v41/W3_REPORT.md ("Manifest identity fix").
     quant_model="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
     quant_revision="b64980a16283647bb213ab475335f38f516e0d9e",
     # Measured header-inventory sum of the artifact (W3): sum over all 49
