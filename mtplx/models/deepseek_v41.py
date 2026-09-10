@@ -29,6 +29,7 @@ from typing import List, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
 from mlx_lm.models.base import BaseModelArgs
 from mlx_lm.models.switch_layers import SwitchGLU
@@ -209,9 +210,13 @@ def _compress_inv_freq(args: ModelArgs) -> mx.array:
     )
 
 
-def _cos_sin(inv_freq: mx.array, positions: mx.array):
-    """``cos``/``sin`` tables ``[len(positions), rope_head_dim//2]`` in fp32."""
-    ang = positions.astype(mx.float32)[:, None] * inv_freq[None, :]
+def _cos_sin(inv_freq, positions: mx.array):
+    """``cos``/``sin`` tables ``[len(positions), rope_head_dim//2]`` in fp32.
+
+    ``inv_freq`` is a numpy constant (kept off the parameter tree); it is lifted
+    to MLX here."""
+    freq = mx.array(np.asarray(inv_freq, dtype=np.float32))
+    ang = positions.astype(mx.float32)[:, None] * freq[None, :]
     return mx.cos(ang), mx.sin(ang)
 
 
@@ -479,10 +484,12 @@ class Attention(nn.Module):
         self.compressor = Compressor(args, self.compress_ratio) if self.is_kv_source else None
         self.indexer = Indexer(args, owns_k=self.is_kv_source) if self.is_index_source else None
 
+        # RoPE inverse frequencies are a derived constant, not a checkpoint
+        # tensor: store as numpy so MLX does not register it as a parameter.
         if self.compress_ratio:
-            self.inv_freq = _compress_inv_freq(args)
+            self.inv_freq = np.asarray(_compress_inv_freq(args), dtype=np.float32)
         else:
-            self.inv_freq = _swa_inv_freq(args)
+            self.inv_freq = np.asarray(_swa_inv_freq(args), dtype=np.float32)
 
     def _sparse_attend(self, q, KV, attend):
         """One softmax over the concatenated KV with a per-head sink (value 0),

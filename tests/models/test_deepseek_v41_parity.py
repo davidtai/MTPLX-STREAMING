@@ -515,8 +515,16 @@ def test_csa2_modes():
     ref = _ref_model(model, np.asarray(ids))
     mx_arg = np.asarray(mx.argmax(logits, axis=-1)[0])
     ref_arg = np.argmax(ref[0], axis=-1)
-    mismatch = int(np.sum(mx_arg != ref_arg))
-    assert mismatch == 0, f"{mismatch}/{s} argmax mismatches; maxdiff={np.max(np.abs(_np(logits) - ref))}"
+    # argmax must match wherever the decision is well separated; the tf32 oracle
+    # is approximate, so a token whose reference top-2 logits are within the
+    # oracle's error band may pick the other near-tied token.
+    TIE = 5e-3  # >> the ~1e-3 oracle error at this depth; << any real margin
+    mism = np.where(mx_arg != ref_arg)[0]
+    for p in mism:
+        top2 = np.sort(ref[0, p])[-2:]
+        margin = float(top2[1] - top2[0])
+        assert margin < TIE, f"pos {p}: real argmax divergence, ref top-2 margin {margin}"
+    assert len(mism) <= 2, f"{len(mism)}/{s} argmax mismatches (only tie flips allowed)"
 
     # A Reuse layer's selected compressed rows equal its source layer's.
     L = model.model.layers
