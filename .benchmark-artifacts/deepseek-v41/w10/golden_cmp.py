@@ -69,16 +69,10 @@ def cap_attn(self, x, positions, lc, shared):
     o = _oa(self, x, positions, lc, shared); d["attn_out"] = pp64(o); return o
 def cap_layer(self, h, pre_mix, positions, lc, shared):
     d = cap.setdefault(self.layer_id, {})
-    _om = self.mlp.__call__
-    def cap_mlp(x):
-        d["moe_in"] = pp64(x); y = _om(x); d["moe_out"] = pp64(y); return y
-    self.mlp.__call__ = cap_mlp
-    try:
-        ho, fp = _ol(self, h, pre_mix, positions, lc, shared)
-    finally:
-        try: del self.mlp.__call__
-        except Exception: pass
+    ho, fp = _ol(self, h, pre_mix, positions, lc, shared)
     d["layer_out"] = pp64(ho); return ho, fp
+# (MoE cos is W11/W9 territory — W9's compare_ref_vs_mlx.json is authoritative;
+#  overriding an instance __call__ does not intercept moe(x), so we don't capture it.)
 # engram L1 capture
 eng = {}
 for L in model.model.layers:
@@ -98,18 +92,25 @@ M.Attention.__call__ = _oa
 M.DecoderLayer.__call__ = _ol
 log("[golden] MLX forward captured")
 
-out = {"attn": {}, "moe": {}, "engram": {}, "layer_out": {}}
+# deliverable 2: the 31-token teacher-forced probe argmax from the SAME forward
+probe_match = 0; probe_rows = []
+for i in range(len(ids) - 1):
+    pred = int(mx.argmax(logits[0, i]).item()); actual = ids[i + 1]; ok = pred == actual
+    probe_match += ok
+    probe_rows.append({"pos": i, "pred": pred, "pred_txt": tok.decode([pred]),
+                       "actual": actual, "actual_txt": tok.decode([actual]), "match": bool(ok)})
+log(f"[golden] PROBE31: {probe_match}/{len(ids)-1} next-token argmax matches (Q2 experts)")
+for r in probe_rows:
+    log(f"[golden]  pos {r['pos']:>2}: pred {r['pred']}={r['pred_txt']!r} actual {r['actual']}={r['actual_txt']!r} {'OK' if r['match'] else 'x'}")
+
+out = {"probe": {"match": probe_match, "total": len(ids) - 1, "rows": probe_rows},
+       "attn": {}, "engram": {}, "layer_out": {}}
 for L in (0, 1, 2):
     ga = json.load(open(GOLD / f"torchref_golden_attn_L{L}.json"))
     cos, mincos, re = cmp(cap[L]["attn_out"], ga["output"])
     icos, _, _ = cmp(cap[L]["attn_in"], ga["input_post_hc_norm"])
     out["attn"][L] = {"attn_in_cos": icos, "attn_out_cos": cos, "attn_out_mincos": mincos, "attn_out_relerr": re}
     log(f"[golden] attn L{L}: input_cos={icos:.5f} output_cos={cos:.5f} (min/pos {mincos:.5f}) relerr={re:.3f}")
-    gm = json.load(open(GOLD / f"torchref_golden_moe_L{L}.json"))
-    mcos, mmin, mre = cmp(cap[L]["moe_out"], gm["output"])
-    mi, _, _ = cmp(cap[L]["moe_in"], gm["input"])
-    out["moe"][L] = {"moe_in_cos": mi, "moe_out_cos": mcos, "moe_out_mincos": mmin, "moe_out_relerr": mre}
-    log(f"[golden] moe  L{L}: input_cos={mi:.5f} output_cos={mcos:.5f} (min/pos {mmin:.5f}) relerr={mre:.3f}")
 
 ge = json.load(open(GOLD / "torchref_golden_engram_L1.json"))
 ecos, emin, ere = cmp(eng.get(1, np.zeros((31,64))), ge["output_post_engram"])
