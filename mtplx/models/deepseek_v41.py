@@ -635,7 +635,7 @@ class DecoderLayer(nn.Module):
         self.hc_mult = args.hc_mult
         self.hc_iters = args.hc_sinkhorn_iters
         self.attn = Attention(args, layer_id)
-        self.mlp = MoE(args, layer_id)  # `mlp` = the switch seam name
+        self.mlp = MoE(layer_id, args)  # `mlp` = switch seam; W11 uses reference (layer_id, args) order
         self.attn_norm_weight = mx.ones((args.hidden_size,))
         self.ffn_norm_weight = mx.ones((args.hidden_size,))
         mix_hc = (2 + self.hc_mult) * self.hc_mult

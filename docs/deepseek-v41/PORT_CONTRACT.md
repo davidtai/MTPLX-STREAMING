@@ -29,10 +29,10 @@ import + run the attention/hc/parity unit tests). On integration W10 merges
 ## deepseek_v41_moe.py (W11)
 Mirror reference `Gate`/`Expert`/`MoE` math exactly; MLX house signatures:
 
-- `class MoE(nn.Module)`; `MoE(args, layer_id)` (reference is `MoE(layer_id, args)` —
-  args-first is the house order used by every other MTPLX model + the parity test).
-  W10 constructs `self.mlp = MoE(args, layer_id)` in `DecoderLayer` and calls
-  `moe(x)` with `x: [b, s, dim]` -> `[b, s, dim]` (text-only; no image_mask).
+- `class MoE(nn.Module)`; **`MoE(layer_id, args)`** (reference order — W11 landed this,
+  superseding the earlier args-first draft). W10 constructs `self.mlp = MoE(layer_id, args)`
+  in `DecoderLayer` and calls `moe(x)` with `x: [b, s, dim]` -> `[b, s, dim]`
+  (`__call__(self, x, image_mask=None)`, image_mask unused on the text path).
   Required attributes (sanitize + streaming + `tests/models/test_deepseek_v41_parity.py`
   + `test_deepseek_v41_loader_contract.py` reach into these):
   - `moe.gate` : has `.weight [n_routed, dim]`, `.e_score_correction_bias [n_routed]`,
@@ -46,9 +46,10 @@ Mirror reference `Gate`/`Expert`/`MoE` math exactly; MLX house signatures:
   - `moe.shared_experts` : always-on clamped SwiGLU expert with `.w1`,`.w2`,`.w3`
     (nn.Linear, no bias). Clamp: up (`w3`) two-sided `[-limit,limit]`, gate (`w1`)
     upper `<= limit`; product `silu(w1)*w3` in fp32, cast back. (ref `Expert.forward`)
-- `class MoEGate(nn.Module)` (alias `Gate`): `__call__(x_flat[n,dim]) -> (indices[n,topk],
-  weights[n,topk])` — house order `(indices, weights)` (reference returns `(weights,
-  indices)`). Score = `sqrt(softplus(x @ weight.T / gate_temp))`; select top-k of
+- `class Gate(nn.Module)`: `__call__(x_flat[n,dim]) -> (weights[n,topk], indices[n,topk])`
+  — reference order `(weights, indices)` (W11's landed module; MoE.forward consumes it
+  internally, so W10 never calls the gate directly). Score = `sqrt(softplus(x @ weight.T
+  / gate_temp))`; select top-k of
   `scores + e_score_correction_bias`; weights gathered from the UNBIASED scores;
   if `norm_topk_prob and topk>1` divide by `sum(+1e-20)`; `*= routed_scaling_factor`.
 - `class ClampedSwiGLU` : the `SwitchGLU` activation seam. `SwitchGLU` calls
