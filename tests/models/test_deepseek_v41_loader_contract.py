@@ -10,6 +10,11 @@ three-argument engram hook with advance/rollback threading.
 from __future__ import annotations
 
 import mlx.core as mx
+
+# All DeepSeek-V4.1 tests force the CPU stream at import so the suite is
+# device-independent whether run alone or alongside the engram tests.
+mx.set_default_device(mx.cpu)
+
 import mlx.nn as nn
 from mlx.utils import tree_flatten
 

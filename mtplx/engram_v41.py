@@ -193,6 +193,27 @@ class NgramHashState:
         return cls.from_manifest(manifest, tokenizer)
 
     # -- streaming ----------------------------------------------------------
+    def fresh(self) -> "NgramHashState":
+        """A new streaming state that shares this one's (immutable) hash config.
+
+        Building the config (the compressed token map + primes/offsets) is the
+        expensive part; :meth:`advance` never mutates it (it only indexes the
+        token map and concatenates into a *new* history buffer), so many
+        per-sequence states can safely share one config.  Used by the model to
+        hand each KV cache its own engram history without rebuilding the map.
+        """
+        return NgramHashState(
+            token_map=self.token_map,
+            multipliers=self.multipliers,
+            primes=self.primes,
+            flat_offsets=self.flat_offsets,
+            pad_compressed=self.pad_compressed,
+            max_ngram_size=self.max_ngram_size,
+            n_heads=self.n_heads,
+            layer_ids=self.layer_ids,
+            num_embeddings=self.num_embeddings,
+        )
+
     def reset(self) -> None:
         self._buf = None
         self._len = 0

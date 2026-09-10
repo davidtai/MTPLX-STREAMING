@@ -11,6 +11,13 @@ from __future__ import annotations
 
 import numpy as np
 import mlx.core as mx
+
+# DeepSeek-V4.1 parity is device-dependent: MLX's CPU and GPU matmul use different
+# accumulation precision (see _mm), so the oracle must match the device the tests
+# run on. Force the CPU stream at import (like the engram tests) so the suite is
+# device-independent whether these tests run alone or alongside the engram tests.
+mx.set_default_device(mx.cpu)
+
 from mlx.utils import tree_flatten, tree_unflatten
 
 from mtplx.models.deepseek_v41 import (
@@ -28,28 +35,29 @@ def _np(a) -> np.ndarray:
     return np.array(a, dtype=np.float64)
 
 
-def _tf32(x: np.ndarray) -> np.ndarray:
-    """Round a matmul operand to a 10-bit mantissa (tf32).
-
-    MLX's CPU GEMM rounds its inputs to ~tf32 before accumulating (verified: its
-    ``matmul`` matches numpy only when both operands are pre-rounded to 10 mantissa
-    bits, giving ~8e-4 relative error, while every elementwise op stays full f32).
-    The oracle emulates that so the comparison tests the port's *algorithm*, not
-    MLX's reduced-precision matmul, and argmax parity is exact.
-    """
-    xi = x.astype(np.float32).view(np.int32)
-    xi = xi & ~((1 << 13) - 1)  # keep the top 10 of 23 mantissa bits
-    return xi.view(np.float32).astype(np.float64)
-
-
 def _mm(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """tf32 matmul: round both operands, accumulate in float64 (matches MLX @)."""
-    return _tf32(a) @ _tf32(b)
+    """fp32-accumulate matmul, matching MLX's CPU GEMM.
+
+    Direct micro-test (2026-09-10, mlx 0.32.2, this box): ``mx.matmul`` on the CPU
+    stream is *bit-identical* to numpy float32-accumulate (max abs diff 0.0 over
+    shapes up to K=6144), and its error vs a float64 reference is pure fp32 rounding
+    (~7e-5 rel at K=32, ~9e-4 at K=5120). The CPU backend rounds operands to fp32 and
+    accumulates in fp32 — it does **not** round to tf32. (The tf32/10-bit-mantissa
+    rounding W1 described is MLX's *GPU/Metal* matmul; that is why the parity tests
+    passed only when the default device was the GPU. On CPU the tf32 oracle injected
+    ~1e-2 of spurious error, failing swa/block/csa2 by a device artifact, not a port
+    bug.) These tests force ``mx.set_default_device(mx.cpu)``, so the oracle
+    accumulates matmuls in fp32 too; the result is widened to float64 so the
+    surrounding elementwise math stays a high-precision reference.
+    """
+    return (a.astype(np.float32) @ b.astype(np.float32)).astype(np.float64)
 
 
 def _einsum(subscripts: str, *ops) -> np.ndarray:
-    """tf32 einsum contraction (MLX lowers einsum contractions to the GEMM path)."""
-    return np.einsum(subscripts, *[_tf32(o) for o in ops])
+    """fp32-accumulate einsum contraction (MLX lowers these to the CPU GEMM path)."""
+    return np.einsum(
+        subscripts, *[o.astype(np.float32) for o in ops]
+    ).astype(np.float64)
 
 
 def _rmsnorm(x, w, eps):
@@ -515,10 +523,10 @@ def test_csa2_modes():
     ref = _ref_model(model, np.asarray(ids))
     mx_arg = np.asarray(mx.argmax(logits, axis=-1)[0])
     ref_arg = np.argmax(ref[0], axis=-1)
-    # argmax must match wherever the decision is well separated; the tf32 oracle
-    # is approximate, so a token whose reference top-2 logits are within the
-    # oracle's error band may pick the other near-tied token.
-    TIE = 5e-3  # >> the ~1e-3 oracle error at this depth; << any real margin
+    # argmax must match wherever the decision is well separated; the fp32-accumulate
+    # oracle carries only ~1e-5 residual (elementwise fp32-vs-fp64) at this depth, so
+    # a token whose reference top-2 logits are within that band may pick the near-tie.
+    TIE = 5e-3  # >> the residual oracle error at this depth; << any real margin
     mism = np.where(mx_arg != ref_arg)[0]
     for p in mism:
         top2 = np.sort(ref[0, p])[-2:]

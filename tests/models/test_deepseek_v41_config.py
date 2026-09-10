@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 import os
 
+import mlx.core as mx
 import pytest
+
+# All DeepSeek-V4.1 tests force the CPU stream at import so the suite is
+# device-independent whether run alone or alongside the engram tests.
+mx.set_default_device(mx.cpu)
 
 from mtplx.models.deepseek_v41 import (
     MODE_FULL,

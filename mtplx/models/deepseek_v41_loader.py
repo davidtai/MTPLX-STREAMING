@@ -421,9 +421,30 @@ def construct_deepseek_v41_resident_model(
         bound_sparse_layers=bound,
         strict=strict,
     )
+
+    # Attach the real Engram hooks (layers 1 and 14) end to end when the artifact
+    # ships both the engram bank/manifest and the resident projection sidecar (W4).
+    # The model's ``attach_engram`` owns which layers are engram layers and how
+    # ``make_cache`` hands each sequence its own history; the loader only supplies
+    # the on-disk path.  Done AFTER the resident report so its parameter count
+    # stays the 1,616 text residents.
+    engram_layer_ids: tuple[int, ...] = ()
+    if engram_bank_path is not None:
+        engram_dir = Path(engram_bank_path)
+        has_manifest = (engram_dir / "engram-manifest.json").is_file()
+        has_sidecar = (engram_dir / "engram-residents.safetensors").is_file()
+        if has_manifest and has_sidecar:
+            try:
+                engram_layer_ids = tuple(model.attach_engram(engram_dir))
+            except Exception as exc:
+                raise ResidentLoadError(
+                    f"could not attach engram from {engram_dir}: {exc}"
+                ) from exc
+
     setattr(model, "_mtplx_expert_runtime", runtime)
     setattr(model, "_mtplx_resident_load_report", report.as_dict())
     setattr(model, "_mtplx_engram_bank_path", str(engram_bank_path) if engram_bank_path else None)
+    setattr(model, "_mtplx_engram_layer_ids", engram_layer_ids)
     return ResidentModel(model=model, config=config, report=report)
 
 

@@ -810,11 +810,21 @@ class DeepseekV41Backbone(nn.Module):
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
         self.layers = [DecoderLayer(args, i) for i in range(args.num_hidden_layers)]
         self.norm_weight = mx.ones((args.hidden_size,))
+        #: Engram row-id prototype (an :class:`~mtplx.engram_v41.NgramHashState`),
+        #: attached by :meth:`Model.attach_engram`; ``None`` when engram is not
+        #: wired.  It is a *config-only* template -- each KV cache gets its own
+        #: streaming clone (:meth:`NgramHashState.fresh`), so decode history is
+        #: per-sequence.  Mirrors the reference ``Transformer.engram_hash``.
+        self.engram_hash = None
 
     def __call__(self, input_ids, cache=None):
         b, s = input_ids.shape
         if cache is None:
             cache = DeepseekV41Cache(len(self.layers))
+            # a bare forward (no persistent cache) still needs its own engram
+            # history when the hooks are attached
+            if self.engram_hash is not None:
+                cache.engram_state = self.engram_hash.fresh()
         positions = mx.arange(cache.offset, cache.offset + s)
 
         h = self.embed_tokens(input_ids)  # [b, s, dim]
@@ -832,7 +842,7 @@ class DeepseekV41Backbone(nn.Module):
 
         shared = _SharedRuntime()
         for layer in self.layers:
-            if layer.engram_hook is not None:
+            if layer.engram_hook is not None and engram_state is not None:
                 h = layer.engram_hook(h, input_ids, engram_state)
             h, pre_mix = layer(h, pre_mix, positions, cache.layers[layer.layer_id], shared)
         cache.offset += s
@@ -917,7 +927,72 @@ class Model(nn.Module):
         return self.model.layers
 
     def make_cache(self):
-        return DeepseekV41Cache(len(self.model.layers))
+        cache = DeepseekV41Cache(len(self.model.layers))
+        # each sequence gets its own streaming engram history (config shared)
+        if self.model.engram_hash is not None:
+            cache.engram_state = self.model.engram_hash.fresh()
+        return cache
+
+    def attach_engram(self, engram_dir, *, tokenizer=None, cache_bytes=None):
+        """Build the real Engram hooks (layers 1 and 14) from the on-disk artifact.
+
+        The serve-path loader calls this once, after the residents are loaded, so
+        the cheap unit-test constructor stays free of the heavy engram I/O (the
+        tokenizer walk + the 104 GiB row banks + the 319 MiB resident sidecar).
+        Concretely, for every engram layer in ``engram-manifest.json``'s
+        ``hashing.layer_ids`` it opens that layer's affine-q8 row bank
+        (:class:`~mtplx.engram_bank.EngramBank`, byte budget from
+        ``MTPLX_ENGRAM_CACHE_LIMIT``), loads the resident ``wkv``/``q_weight``/
+        ``k_weight`` sidecar (:func:`~mtplx.engram_v41.load_engram_residents`) and
+        builds the :class:`~mtplx.engram_v41.EngramV41` hook
+        (:meth:`EngramResidents.build_module`), attaching it to
+        ``self.model.layers[layer_id].engram_hook``.  It also builds one
+        :class:`~mtplx.engram_v41.NgramHashState` prototype (its compressed token
+        map comes from the artifact tokenizer) and stashes it on the backbone; each
+        :meth:`make_cache` clones a fresh per-sequence copy.
+
+        ``engram_dir`` is ``<artifact>/engram``; ``tokenizer`` defaults to the
+        artifact's HuggingFace tokenizer (``engram_dir``'s parent), and
+        ``cache_bytes`` to the ``MTPLX_ENGRAM_CACHE_LIMIT`` byte budget.
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        from ..engram_bank import EngramBank
+        from ..engram_v41 import (
+            NgramHashState,
+            load_engram_residents,
+            load_engram_tokenizer,
+        )
+        from ..ngram_row_cache import cache_bytes_from_env
+
+        engram_dir = _Path(engram_dir)
+        manifest = _json.loads((engram_dir / "engram-manifest.json").read_text())
+        layer_ids = tuple(int(x) for x in manifest["hashing"]["layer_ids"])
+        if cache_bytes is None:
+            cache_bytes = cache_bytes_from_env()
+        if tokenizer is None:
+            # the HF tokenizer lives at the artifact root (engram_dir's parent);
+            # its compressed token map drives every engram hash multiplier
+            tokenizer = load_engram_tokenizer(engram_dir.parent)
+
+        # one hash-state prototype (config only); make_cache clones per sequence
+        self.model.engram_hash = NgramHashState.from_manifest(manifest, tokenizer)
+
+        # keep the banks alive on the model: EngramBank.__del__ would close the
+        # NGramRowCache the hooks hold, so we must not let them be collected
+        self._engram_banks = []
+        for layer_id in layer_ids:
+            bank = EngramBank.open(engram_dir, layer_id, cache_bytes=cache_bytes)
+            residents = load_engram_residents(engram_dir, layer_id)
+            hook = residents.build_module(
+                row_cache=bank.cache,
+                layer_hash_index=layer_ids.index(layer_id),
+                norm_eps=self.args.rms_norm_eps,
+            )
+            self.model.layers[layer_id].engram_hook = hook
+            self._engram_banks.append(bank)
+        return layer_ids
 
     def sanitize(self, weights: dict) -> dict:
         """Map the DeepSeek checkpoint's resident tensor names onto this module's
