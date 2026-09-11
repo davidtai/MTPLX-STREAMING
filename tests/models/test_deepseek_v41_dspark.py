@@ -215,6 +215,20 @@ def test_dspark_lossless_under_chunked_prefill(monkeypatch):
     assert out.tokens == baseline.tokens, "chunked prefill broke DSpark spec==AR"
 
 
+def test_dspark_lossless_under_layer_major_prefill(monkeypatch):
+    """W30/K16 layer-major chunked prefill (iterate every layer over all chunks,
+    bank read once) must keep the DSpark spec == AR contract: the per-chunk
+    ``main_hidden`` capture still spans the whole prompt so the draft-history seed
+    is intact, and the target verify stays authoritative.  Forces a small chunk
+    AND the layer-major schedule, and requires spec == AR."""
+    monkeypatch.setenv("MTPLX_DSV41_PREFILL_CHUNK", "4")
+    monkeypatch.setenv("MTPLX_DSV41_PREFILL_LAYER_MAJOR", "1")
+    prompt = _prompt(17)
+    baseline = _ar(_runtime(), prompt, 48)
+    out = _spec(_runtime(), prompt, 48, 3)
+    assert out.tokens == baseline.tokens, "layer-major prefill broke DSpark spec==AR"
+
+
 def test_dspark_exercises_both_accept_and_reject():
     prompt = _prompt(17, vocab=8)
     baseline = _ar(_runtime(seed=_MIXED_SEED, vocab=8), prompt, 48)

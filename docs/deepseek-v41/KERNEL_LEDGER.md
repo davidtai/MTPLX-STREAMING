@@ -290,6 +290,19 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (MoE restructure + peak-activation accounting: 16384×4×5120×2 ≈ 0.67 GB/layer hc stream, under
   budget). **Precedent:** [[deepseek-v4-longcontext-prefill]] block-shared top-512 gather = +11 %,
   byte-exact >1024; OPT_LEDGER R5 (this is R5's GPU-structural realization).
+- **STATUS (W30, `feat/deepseek-v41-w30`):** IMPLEMENTED on CPU as **option (a)** —
+  layer-major driver (`_forward_layer_major` in `deepseek_v41.py`) iterates every
+  layer over all chunks and issues **one** row-capped `switch_mlp` call over the
+  concatenated chunk rows per layer, so `partition_route_waves` gathers each of the
+  layer's experts once. Option (b) is impossible (transient slot pool defaults to
+  `top_k`=6 ≪ 384/layer; the 269 GiB bank is streamed, never resident). Proven
+  CPU-exact vs one-shot (logits + full cache state ≤ 1e-5, engram history + KV lanes
+  identical), and a counting fake switch shows **max fetches/(layer,expert) = 1**
+  (layer-major) vs **C** (chunk-major) — the read-once claim. Resident hc state
+  0.671 GB @ 16 K (< 1 GB); one-call routed transient 2.01 GB; MoE row cap 65,104
+  rows @ 8 GB. Opt-in `MTPLX_DSV41_PREFILL_LAYER_MAJOR` (default OFF — chunk-major
+  stays the default so W20 tests are unchanged). The ~13× 16 K-TTFT win is
+  unmeasured on GPU — that is **KG-b**. See `W30_K16_LAYER_MAJOR_PREFILL.md`.
 
 ### K4 — HC-compile + fused CSA attention (V4 dispatch stack) — **Rank 5**
 - **Mechanism:** V4's HC-tape collapse + fused CSA attention: **AR +31.3 % (17.37→22.80), K3 +17.4 %,

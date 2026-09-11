@@ -684,7 +684,18 @@ class DecoderLayer(nn.Module):
         y = mx.sum(pre_mix[..., None] * x.astype(mx.float32), axis=2)
         return y.astype(x.dtype)
 
-    def __call__(self, h, pre_mix, positions, layer_cache, shared):
+    def attn_and_moe_input(self, h, pre_mix, positions, layer_cache, shared):
+        """The layer up to and including the MoE input projection: the attention
+        Hyper-Connection (which *writes this layer's KV*), then the ffn HC mix and
+        the ``_hc_pre`` + RMSNorm that produce the routed-expert input.
+
+        Returns ``(moe_input, carry, ffn_pre)`` where ``carry`` is everything
+        :meth:`moe_combine` needs to fold the MoE output back in (the post-attn
+        residual and the ffn post/comb mixes) and ``ffn_pre`` is the next layer's
+        ``pre_mix``.  W30's layer-major prefill runs this half for every chunk of a
+        layer (in order, so the KV writes stay causal) before issuing one shared
+        MoE call; the one-shot / chunk-major path composes it back in
+        :meth:`__call__` byte-for-byte."""
         residual = h
         attn_pre, attn_post, attn_comb = self._mixes(
             h, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale
@@ -699,9 +710,23 @@ class DecoderLayer(nn.Module):
             h, self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale
         )
         x = self._hc_pre(h, attn_pre)
-        x = _rmsnorm(x, self.ffn_norm_weight, self.norm_eps)
-        x = self.mlp(x)
-        h = _hc_post_impl(x, residual, ffn_post, ffn_comb)
+        moe_input = _rmsnorm(x, self.ffn_norm_weight, self.norm_eps)
+        return moe_input, (residual, ffn_post, ffn_comb), ffn_pre
+
+    @staticmethod
+    def moe_combine(moe_output, carry):
+        """Fold the routed-expert output back into the residual stream (the ffn
+        Hyper-Connection ``post``), given the ``carry`` from
+        :meth:`attn_and_moe_input`."""
+        residual, ffn_post, ffn_comb = carry
+        return _hc_post_impl(moe_output, residual, ffn_post, ffn_comb)
+
+    def __call__(self, h, pre_mix, positions, layer_cache, shared):
+        moe_input, carry, ffn_pre = self.attn_and_moe_input(
+            h, pre_mix, positions, layer_cache, shared
+        )
+        x = self.mlp(moe_input)
+        h = self.moe_combine(x, carry)
         return h, ffn_pre
 
 
@@ -729,6 +754,20 @@ _PREFILL_CHUNK_ENV = "MTPLX_DSV41_PREFILL_CHUNK"
 #: targets; the default keeps the dominant transient under ~8 GB.
 _PREFILL_CHUNK_TARGET_ENV = "MTPLX_DSV41_PREFILL_CHUNK_TARGET_GB"
 _PREFILL_CHUNK_TARGET_DEFAULT_GB = 8.0
+#: Env toggle (W30 / kernel-ledger K16) for **layer-major** chunked prefill.
+#: Default OFF -> W20's chunk-major driver (each chunk through all layers), which
+#: re-streams ~the whole routed bank per chunk (~13x at 16K).  Set truthy to run
+#: layer-major (iterate every layer over all chunks before the next layer), so a
+#: layer's routed experts stream ONCE across the whole prompt instead of once per
+#: chunk.  Only engages when chunking is active (chunk < s); one-shot and decode
+#: are byte-identical either way.  Left off by default because the ~13x TTFT win
+#: is a GPU-window measurement (KERNEL_LEDGER KG-b), not yet flipped in serving.
+_PREFILL_LAYER_MAJOR_ENV = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
+#: Env override (in GB) for the routed-expert transient budget the layer-major
+#: MoE row-cap targets; the concatenated MoE call over all chunks is split so its
+#: ``rows * top_k * hidden * 4`` fp32 routed-output transient stays under this.
+#: Shares the ~8 GB default with the attention-chunk budget above.
+_PREFILL_MOE_ROWS_TARGET_ENV = "MTPLX_DSV41_PREFILL_MOE_TARGET_GB"
 
 
 def _prefill_chunk_target_bytes() -> float:
@@ -791,6 +830,49 @@ def _resolve_prefill_chunk(args: "ModelArgs", s: int, override) -> int:
     return _derive_prefill_chunk(args, s, _prefill_chunk_target_bytes())
 
 
+def _env_truthy(name: str) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return False
+    return raw.strip().lower() not in ("", "0", "false", "no", "off", "auto")
+
+
+def _resolve_prefill_layer_major(override) -> bool:
+    """Whether to run W30/K16 layer-major chunked prefill.
+
+    Precedence: explicit ``prefill_layer_major`` argument > the
+    ``MTPLX_DSV41_PREFILL_LAYER_MAJOR`` env > default OFF (chunk-major)."""
+    if override is not None:
+        return bool(override)
+    return _env_truthy(_PREFILL_LAYER_MAJOR_ENV)
+
+
+def _derive_moe_row_cap(args: "ModelArgs", target_bytes: float) -> int:
+    """Largest number of rows a single layer-major MoE (``switch_mlp``) call may
+    carry so its ``rows * top_k * hidden * 4`` fp32 routed-output transient stays
+    under ``target_bytes``.  At 16,384 tokens the whole prompt (~16 K rows) is far
+    under the ~65 K-row cap, so a layer streams its bank exactly once; only beyond
+    the cap is the concatenated call split (re-reading the split's expert union),
+    keeping the transient bounded at any context."""
+    top_k = int(args.num_experts_per_tok)
+    hidden = int(args.hidden_size)
+    per_row = top_k * hidden * 4
+    if per_row <= 0:
+        return 1 << 62
+    return max(1, int(target_bytes // per_row))
+
+
+def _prefill_moe_row_target_bytes() -> float:
+    raw = os.environ.get(_PREFILL_MOE_ROWS_TARGET_ENV)
+    gb = _PREFILL_CHUNK_TARGET_DEFAULT_GB
+    if raw:
+        try:
+            gb = float(raw)
+        except ValueError:
+            gb = _PREFILL_CHUNK_TARGET_DEFAULT_GB
+    return max(1.0, gb) * 1e9
+
+
 # ---------------------------------------------------------------------------
 # Backbone + top-level model
 # ---------------------------------------------------------------------------
@@ -819,7 +901,7 @@ class DeepseekV41Backbone(nn.Module):
         self.engram_hash = None
 
     def __call__(self, input_ids, cache=None, *, prefill_chunk=None,
-                 return_main_hidden: bool = False):
+                 prefill_layer_major=None, return_main_hidden: bool = False):
         b, s = input_ids.shape
         if cache is None:
             # a bare forward (no persistent cache) still needs a per-layer cache
@@ -834,6 +916,14 @@ class DeepseekV41Backbone(nn.Module):
             # the original single-pass forward.  Decode (s == 1) captures the DSpark
             # main_hidden per step through this path.
             return self._forward_span(input_ids, cache, return_main_hidden=return_main_hidden)
+
+        if _resolve_prefill_layer_major(prefill_layer_major):
+            # W30 / kernel-ledger K16: iterate every layer over all chunks before
+            # the next layer, so a layer's routed experts stream ONCE across the
+            # whole prompt instead of once per chunk (~13x -> 1x bank read at 16K).
+            return self._forward_layer_major(
+                input_ids, cache, chunk, return_main_hidden=return_main_hidden
+            )
 
         # Token-chunked prefill: each span of at most ``chunk`` query tokens flows
         # through all layers, appending to the SAME accumulating cache (window /
@@ -950,6 +1040,215 @@ class DeepseekV41Backbone(nn.Module):
                         arrays.append(a)
         if arrays:
             mx.eval(arrays)
+
+    # -----------------------------------------------------------------------
+    # W30 / kernel-ledger K16 -- layer-major chunked prefill
+    # -----------------------------------------------------------------------
+    def _forward_layer_major(self, input_ids, cache, chunk, *,
+                             return_main_hidden: bool = False):
+        """Layer-major chunked prefill (K16): iterate every layer over all chunks
+        before the next layer, so each layer's routed-expert bank is streamed
+        ONCE across the whole prompt instead of once per chunk.
+
+        Correctness vs the chunk-major driver (:meth:`_forward_span` per span):
+
+        * **Attention stays causal + per chunk.** Within a layer the chunks run in
+          order 0..C-1; chunk ``c`` appends its post-RoPE KV to the same
+          append-only layer store and reads the accumulated window, so it attends
+          over chunks ``< c`` exactly as one-shot -- and the ``[chunk, H, T]`` score
+          transient that motivated W20 stays bounded to one chunk (never
+          concatenated).  Each chunk's attention half is evaluated before the next
+          chunk builds its graph, so only one score is live at a time.
+        * **The MoE reads the bank once.** After a layer's C attention halves, the
+          chunks' routed-expert inputs are concatenated and fed to ``mlp`` in one
+          ``switch_mlp`` call (row-capped, below), so ``partition_route_waves``
+          gathers each of the layer's experts exactly once for the whole prompt.
+        * **Hyper-Connection state is resident per chunk.** Every chunk keeps its
+          own ``[b, chunk, hc_mult, hidden]`` stream and ``pre_mix`` across the
+          whole layer loop (all C together are ``hidden * hc_mult * s * bf16`` --
+          0.67 GB at 16 K, well under 1 GB); the ffn ``carry`` is transient within
+          a layer.  A per-chunk :class:`SharedAttentionRuntime` threads each
+          chunk's compressed-KV / index selection down the stack exactly as its
+          span would.
+        * **Engram + DSpark unchanged in order.** The engram history is advanced
+          once per chunk in position order up front (identical ``_buf``/``_len`` to
+          chunk-major) and each chunk's row ids are replayed to the engram hook via
+          a per-chunk view, so layers 1/14 write the same residual for the same
+          rows.  ``main_hidden`` captures the target-layer input per chunk and
+          concatenates in position order, so the DSpark draft seed spans the whole
+          prompt (its ``[:, -1:, :]`` slice is still the final prompt token)."""
+        b, s = input_ids.shape
+        offset0 = int(cache.offset)
+        spans = [(start, min(start + chunk, s)) for start in range(0, s, chunk)]
+        n_chunks = len(spans)
+
+        engram_state = getattr(cache, "engram_state", None)
+        want_main = return_main_hidden and bool(self._mtp_target_layer_ids)
+
+        # Per-chunk resident state, built once.  The engram history is advanced in
+        # position order here (so `_buf`/`_len` end identical to chunk-major) and
+        # each chunk's returned row ids are captured for the hook replay below --
+        # the shared `_current` only holds the last advance, so we never read it.
+        hs: List[mx.array] = []
+        pre_mixes: List[mx.array] = []
+        positions_all: List[mx.array] = []
+        engram_currents: List[Optional[np.ndarray]] = []
+        shareds = [cache.new_shared_runtime() for _ in range(n_chunks)]
+        main_hiddens: List[List[mx.array]] = [[] for _ in range(n_chunks)]
+        for start, end in spans:
+            ids_c = input_ids[:, start:end]
+            n_c = end - start
+            positions_all.append(mx.arange(offset0 + start, offset0 + end))
+            h_c = self.embed_tokens(ids_c)
+            h_c = mx.broadcast_to(
+                h_c[:, :, None, :], (b, n_c, self.hc_mult, h_c.shape[-1])
+            )
+            hs.append(h_c)
+            pre_mixes.append(
+                mx.concatenate(
+                    [mx.ones((b, n_c, 1)), mx.zeros((b, n_c, self.hc_mult - 1))],
+                    axis=-1,
+                ).astype(mx.float32)
+            )
+            engram_currents.append(
+                engram_state.advance(ids_c) if engram_state is not None else None
+            )
+
+        row_cap = _derive_moe_row_cap(self.args, _prefill_moe_row_target_bytes())
+
+        for layer in self.layers:
+            lc = cache.layers[layer.layer_id]
+            is_target = want_main and layer.layer_id in self._mtp_target_layer_ids
+            moe_inputs: List[mx.array] = []
+            carries: List[tuple] = []
+            for c, (start, end) in enumerate(spans):
+                h_c = hs[c]
+                if layer.engram_hook is not None and engram_state is not None:
+                    h_c = layer.engram_hook(
+                        h_c, input_ids[:, start:end],
+                        _ChunkEngramView(engram_currents[c]),
+                    )
+                if is_target:
+                    main_hiddens[c].append(
+                        mx.mean(h_c.astype(mx.float32), axis=2).astype(h_c.dtype)
+                    )
+                moe_in_c, carry_c, ffn_pre_c = layer.attn_and_moe_input(
+                    h_c, pre_mixes[c], positions_all[c], lc, shareds[c]
+                )
+                moe_inputs.append(moe_in_c)
+                carries.append(carry_c)
+                pre_mixes[c] = ffn_pre_c
+                # Free this chunk's attention score before the next chunk's graph
+                # is built (only one [chunk, H, T] transient live at a time).
+                self._eval_layer_transients(lc, moe_in_c, ffn_pre_c)
+
+            # One routed-expert call per layer over every chunk's rows -> the bank
+            # is streamed once.  Split only if the row cap (routed-output transient
+            # budget) would be exceeded; at 16 K the whole prompt is one call.
+            moe_outputs = self._layer_major_moe(layer, moe_inputs, spans, row_cap)
+            for c in range(n_chunks):
+                hs[c] = layer.moe_combine(moe_outputs[c], carries[c])
+            mx.eval(hs)
+
+        cache.advance(s)
+
+        outputs: List[mx.array] = []
+        main_parts: List[Optional[mx.array]] = []
+        for c in range(n_chunks):
+            h = mx.sum(
+                pre_mixes[c][..., None] * hs[c].astype(mx.float32), axis=2
+            ).astype(hs[c].dtype)
+            outputs.append(_rmsnorm(h, self.norm_weight, self.args.rms_norm_eps))
+            main_parts.append(
+                mx.concatenate(main_hiddens[c], axis=-1) if main_hiddens[c] else None
+            )
+        out = mx.concatenate(outputs, axis=1)
+        if not return_main_hidden:
+            return out
+        main_hidden = (
+            None
+            if any(p is None for p in main_parts)
+            else mx.concatenate(main_parts, axis=1)
+        )
+        return out, main_hidden
+
+    def _layer_major_moe(self, layer, moe_inputs, spans, row_cap):
+        """Run this layer's MoE over all chunks with the bank read once: one
+        ``switch_mlp`` call over the concatenated rows (split only when the row cap
+        would overflow the routed-output transient), returned split back per
+        chunk."""
+        n_chunks = len(moe_inputs)
+        lengths = [end - start for start, end in spans]
+        # Group consecutive chunks into MoE calls of at most `row_cap` rows.
+        groups: List[List[int]] = []
+        cur: List[int] = []
+        cur_rows = 0
+        for c in range(n_chunks):
+            rows_c = lengths[c] * int(moe_inputs[c].shape[0])  # b * chunk rows
+            if cur and cur_rows + rows_c > row_cap:
+                groups.append(cur)
+                cur, cur_rows = [], 0
+            cur.append(c)
+            cur_rows += rows_c
+        if cur:
+            groups.append(cur)
+
+        outputs: List[Optional[mx.array]] = [None] * n_chunks
+        for grp in groups:
+            if len(grp) == 1:
+                cat = moe_inputs[grp[0]]
+            else:
+                cat = mx.concatenate([moe_inputs[c] for c in grp], axis=1)
+            routed = layer.mlp(cat)  # one switch_mlp call over the group's rows
+            pos = 0
+            for c in grp:
+                n_c = lengths[c]
+                outputs[c] = routed[:, pos:pos + n_c]
+                pos += n_c
+        return outputs
+
+    @staticmethod
+    def _eval_layer_transients(lc, *extra):
+        """Force one chunk's MoE input (and the just-written layer stores) so its
+        ``[chunk, H, T]`` attention score frees before the next chunk builds its
+        graph.  Scoped to the current layer's store -- earlier layers are already
+        evaluated under the layer-major loop."""
+        arrays = [a for a in extra if a is not None]
+        for name in ("window", "compress_kv", "index_k"):
+            a = getattr(lc, name, None)
+            if a is not None:
+                arrays.append(a)
+        cs = getattr(lc, "comp_state", None)
+        if cs is not None:
+            for name in ("raw_kv", "raw_score"):
+                a = getattr(cs, name, None)
+                if a is not None:
+                    arrays.append(a)
+        if arrays:
+            mx.eval(arrays)
+
+
+class _ChunkEngramView:
+    """A per-chunk stand-in for the shared :class:`~mtplx.engram_v41.NgramHashState`
+    that the layer-major loop hands the engram hook.
+
+    The hook reads only ``current_row_ids(layer_hash_index)`` and (optionally)
+    ``token_mask``.  The shared state's ``_current`` cache holds just the *last*
+    advance, so under layer-major (where all chunks are advanced up front) it can
+    no longer identify a given chunk's rows; this view carries that chunk's
+    captured ``advance`` return (``[B, L, n_layers, n_hash_cols]``) so layers 1/14
+    write the same residual for the same rows as chunk-major."""
+
+    __slots__ = ("_current", "token_mask")
+
+    def __init__(self, current, token_mask=None):
+        self._current = current
+        self.token_mask = token_mask
+
+    def current_row_ids(self, layer_hash_index: int):
+        if self._current is None:
+            raise RuntimeError("no engram positions captured for this chunk")
+        return self._current[:, :, layer_hash_index, :]
 
 
 def _sanitize_name(name: str) -> str:
@@ -1168,7 +1467,8 @@ class Model(nn.Module):
 
     def __call__(self, input_ids, cache=None, *, return_hidden: bool = False,
                  emit_logits: bool = True, logits_keep=None, input_embeddings=None,
-                 hidden_variant=None, prefill_chunk=None, **kwargs):
+                 hidden_variant=None, prefill_chunk=None, prefill_layer_major=None,
+                 **kwargs):
         """Target forward and the MTPLX runtime's ``forward_ar`` surface.
 
         Plain ``model(ids)`` / ``model(ids, cache=cache)`` is unchanged (returns
@@ -1179,8 +1479,9 @@ class Model(nn.Module):
         / ``logits_keep`` skip or restrict the ``lm_head`` matmul; ``hidden_variant``
         is accepted and ignored (V4.1's draft input is one defined tensor);
         ``prefill_chunk`` is W20's token-chunked-prefill knob threaded to the
-        backbone.  ``input_embeddings`` (a vision splice) is rejected -- the text
-        path has none.
+        backbone; ``prefill_layer_major`` opts a chunked prefill into W30/K16's
+        layer-major schedule (bank read once across chunks).  ``input_embeddings``
+        (a vision splice) is rejected -- the text path has none.
         """
         if input_embeddings is not None:
             raise ValueError(
@@ -1188,7 +1489,8 @@ class Model(nn.Module):
                 "(no vision splice path)"
             )
         h, main_hidden = self.model(
-            input_ids, cache, prefill_chunk=prefill_chunk, return_main_hidden=True
+            input_ids, cache, prefill_chunk=prefill_chunk,
+            prefill_layer_major=prefill_layer_major, return_main_hidden=True
         )
         logits = None
         if emit_logits:
