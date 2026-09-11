@@ -54,9 +54,16 @@ def main() -> int:
     tok = load_tokenizer(MODEL)
     t0 = time.time()
     print(f"[probe] loading mxfp4 streaming model from {MODEL} ...", flush=True)
+    # Memory-bounded load (W15 finding, integration 7570133f): a 100 GiB limit +
+    # apply_memory_cap=False makes the expert-cache planner size a persistent bank
+    # toward the full 100 GiB (that blew W15's pilot to ~100 GB). A small limit +
+    # apply_memory_cap=True sizes the cache to ~2-3 GiB; with the 8.67 GB text-only
+    # residents peak is ~11-13 GB. Budget for this step is 18 GB RSS (box guard
+    # auto-kills a non-writer python above 20 GB); run wrapped in an external RSS
+    # watchdog that kills the probe if it crosses 18 GB.
     resident = load_deepseek_v41_streaming(
-        MODEL, memory_limit_bytes=int(100 * GIB), max_live_kv_tokens=4096, admit=True,
-        admission_receipt=None, expert_cache_limit_bytes=int(15 * GIB), apply_memory_cap=False,
+        MODEL, memory_limit_bytes=int(12 * GIB), max_live_kv_tokens=4096, admit=True,
+        admission_receipt=None, expert_cache_limit_bytes=int(2 * GIB), apply_memory_cap=True,
         slot_layout="component-banks", cache_scope="layer", island_layers=(), verify_record_hashes=False)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime")

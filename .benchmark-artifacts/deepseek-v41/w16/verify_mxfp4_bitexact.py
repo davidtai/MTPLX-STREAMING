@@ -63,6 +63,8 @@ def main() -> int:
     ap.add_argument("--index", type=Path, required=True, help="source safetensors index.json")
     ap.add_argument("--per-layer", type=int, default=2, help="experts sampled per layer")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--layers", default="0-39",
+                    help="layer range/list to sample (e.g. '0-4' for already-written shards)")
     args = ap.parse_args()
 
     src = args.src.expanduser().resolve()
@@ -70,8 +72,17 @@ def main() -> int:
     exp_path = args.out.expanduser().resolve() / "experts.bin"
     exp_fd = os.open(str(exp_path), os.O_RDONLY)
 
+    def _parse(spec):
+        out = []
+        for part in spec.split(","):
+            if "-" in part:
+                a, b = part.split("-"); out.extend(range(int(a), int(b) + 1))
+            else:
+                out.append(int(part))
+        return sorted(set(out))
+
     rng = np.random.default_rng(args.seed)
-    layers = list(range(40))
+    layers = _parse(args.layers)
     samples = []
     for L in layers:
         for e in sorted(rng.choice(384, size=args.per_layer, replace=False).tolist()):
