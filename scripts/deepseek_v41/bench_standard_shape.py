@@ -297,6 +297,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--slot-layout", default="component-banks")
     parser.add_argument(
+        "--transient-slots",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "transient (streaming) slots per layer. DEFAULT: resolve from the "
+            "served profile deepseek-v41-mxfp4-75 so the standard-shape bench runs "
+            "the SAME slot plan as production instead of the loader's unset default "
+            "(spec.top_k). Pass N to override."
+        ),
+    )
+    parser.add_argument(
+        "--expert-profile",
+        default="deepseek-v41-mxfp4-75",
+        help=(
+            "profile whose plan fields (transient_slots, split_route_release, "
+            "prefetch_slots) seed the runtime when the flag is unset; 'none' "
+            "disables profile resolution (loader defaults)."
+        ),
+    )
+    parser.add_argument(
         "--max-kv",
         type=int,
         default=None,
@@ -1040,6 +1061,63 @@ def run_dry(args) -> int:
     return 0
 
 
+_PROFILE_PLAN_FIELDS = ("transient_slots", "split_route_release", "prefetch_slots")
+
+
+def _resolve_plan_overrides(args) -> dict:
+    """ExpertStreamingConfig plan overrides from the profile / explicit flags (W81).
+
+    The standard-shape bench must run the SAME slot plan as the served profile;
+    the loader otherwise leaves transient_slots unset -> spec.top_k, which starved
+    the verify fast path in window 31.  Precedence: explicit --transient-slots >
+    profile value > loader default (unset).
+    """
+
+    overrides: dict = {}
+    explicit_transient = getattr(args, "transient_slots", None)
+    if explicit_transient is not None:
+        overrides["transient_slots"] = int(explicit_transient)
+    profile_name = str(getattr(args, "expert_profile", "none") or "none")
+    if profile_name != "none":
+        try:
+            from mtplx.expert_profiles import load_expert_profiles
+
+            profile = load_expert_profiles().get(profile_name)
+        except Exception:
+            profile = None
+        if profile is not None:
+            cfg = dict(getattr(profile, "config", {}) or {})
+            for field in _PROFILE_PLAN_FIELDS:
+                if field not in overrides and field in cfg:
+                    overrides[field] = cfg[field]
+    return overrides
+
+
+def _resolved_plan(runtime, args) -> dict | None:
+    """The runtime's ACTUAL slot plan for the receipt (W81)."""
+
+    plan = getattr(runtime, "plan", None)
+    if plan is None:
+        return None
+    spec = getattr(runtime, "spec", None)
+    record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
+    transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
+    routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
+    return {
+        "transient_slots": transient_slots,
+        "persistent_slots": int(getattr(plan, "persistent_slots", 0) or 0),
+        "expert_record_bytes": record_bytes,
+        "transient_bytes_total": transient_slots * record_bytes,
+        "split_route_release": getattr(
+            getattr(runtime, "config", None), "split_route_release", None
+        ),
+        "source": (
+            "explicit" if getattr(args, "transient_slots", None) is not None
+            else f"profile:{getattr(args, 'expert_profile', 'none')}"
+        ),
+    }
+
+
 def run_real(args) -> int:
     import mlx.core as mx
 
@@ -1088,6 +1166,14 @@ def run_real(args) -> int:
         reprice=bool(getattr(args, "reprice", True)),
     )
 
+    plan_overrides = _resolve_plan_overrides(args)
+    if plan_overrides:
+        print(
+            "[bench] plan overrides from profile "
+            f"{getattr(args, 'expert_profile', 'none')!r}: "
+            + json.dumps(plan_overrides),
+            flush=True,
+        )
     resident = load_deepseek_v41_streaming(
         args.model,
         memory_limit_bytes=memory_limit_bytes,
@@ -1102,6 +1188,7 @@ def run_real(args) -> int:
         island_layers=(),
         verify_record_hashes=args.verify_record_hashes,
         with_mtp=with_mtp,
+        **plan_overrides,
     )
     # W62 (2): bound the MLX allocator's freed-buffer cache from the plan so
     # freed prefill/decode transients do not accumulate past the reserve.
@@ -1131,6 +1218,7 @@ def run_real(args) -> int:
     receipt["manifest_sha256"] = getattr(runtime.manifest, "manifest_sha256", None)
     receipt["memory_limit_bytes"] = runtime.config.memory_limit_bytes
     receipt["expert_cache_limit_bytes"] = runtime.config.expert_cache_limit_bytes
+    receipt["resolved_plan"] = _resolved_plan(runtime, args)
     receipt["memory_derivation"] = derivation.as_dict()
     receipt["allocator_cache_limit"] = cache_limit_report
     receipt["engram_layer_ids"] = list(

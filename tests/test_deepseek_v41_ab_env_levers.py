@@ -974,3 +974,32 @@ def test_prefill_stage_timing_pass_small_real_forward(env_levers, monkeypatch):
     # the session is closed after the pass (no leaked global probe).
     import mtplx.models.deepseek_v41_stage_timing as stime
     assert stime.active() is None
+
+
+# --------------------------------------------------------------------------
+# W81: two composite stacking arms for window 34. Each must be EXACTLY the merged
+# cell16k_ring key set plus one intended lever group, so a later edit to
+# cell16k_ring propagates and no stray key drifts into the stack.
+# --------------------------------------------------------------------------
+def test_cell16k_ring_composite_arms(env_levers):
+    presets = env_levers.ARM_PRESETS
+    for name in ("cell16k_ring_draft", "cell16k_ring_pinned"):
+        assert name in presets, f"{name} arm missing from ARM_PRESETS"
+    ring = presets["cell16k_ring"]
+
+    # cell16k_ring_draft = cell16k_ring + K33 DSpark draft-block compile only.
+    expected_draft = dict(ring)
+    expected_draft[_DC] = "1"
+    assert presets["cell16k_ring_draft"] == expected_draft, (
+        "cell16k_ring_draft must equal cell16k_ring + MTPLX_DSV41_DRAFT_COMPILE=1"
+    )
+
+    # cell16k_ring_pinned = cell16k_ring + W64 pin + W71 pinned device route only.
+    expected_pinned = dict(ring)
+    expected_pinned[_PWS] = "all"
+    expected_pinned[_DR] = "1"
+    expected_pinned[_DRP] = "1"
+    assert presets["cell16k_ring_pinned"] == expected_pinned, (
+        "cell16k_ring_pinned must equal cell16k_ring + pin_working_set=all + "
+        "device_route=1 + device_route_pinned=1"
+    )

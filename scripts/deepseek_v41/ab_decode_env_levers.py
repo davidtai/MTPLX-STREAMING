@@ -571,6 +571,31 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
+    # W81 (window 34 stacking): cell16k_ring + K33 DSpark draft-block tape collapse
+    # (--decode-mode dspark).  Exact key set of cell16k_ring plus draft="1"; the
+    # draft compile is a scheduling collapse on the DSpark draft head only, so it
+    # composes with the ring and does not change the verify math.  Runs at the
+    # profile's transient_slots by default (W81 slot-plan resolution), so the
+    # verify switch is single-admission (<=24 unique/layer <= 48 transient), letting
+    # this arm measure the draft-compile delta on top of a single-barrier verify.
+    "cell16k_ring_draft": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        draft="1",
+    ),
+    # W81 (window 34 stacking): cell16k_ring + W64 working-set pin + W71 barrier-free
+    # pinned device route (pin_working_set="all" + device_route + device_route_pinned).
+    # Exact key set of cell16k_ring plus the three pin/route flags.  The pinned device
+    # route is exact only on an all-pinned route and recovers any non-pinned expert
+    # fenced, so it is byte-identical to the fenced path; stacking it on the ring +
+    # the profile transient_slots measures the barrier-free decode route at 16K.
+    "cell16k_ring_pinned": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        pin_working_set="all", device_route="1", device_route_pinned="1",
+    ),
 }
 
 
@@ -822,6 +847,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply-memory-cap", action=argparse.BooleanOptionalAction, default=True
     )
     p.add_argument("--slot-layout", default="component-banks")
+    p.add_argument(
+        "--transient-slots",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "transient (streaming) slots per layer. DEFAULT: resolve from the "
+            "served profile deepseek-v41-mxfp4-75 so the in-process bench runs "
+            "the SAME slot plan as production, instead of the loader's unset "
+            "default (spec.top_k=6) that starved the W66/W81 verify fast path in "
+            "window 31. Pass an explicit N to override (e.g. --transient-slots 24 "
+            "fits a 4-row verify's <=24 unique in one admission at 60 GiB)."
+        ),
+    )
+    p.add_argument(
+        "--expert-profile",
+        default="deepseek-v41-mxfp4-75",
+        help=(
+            "profile whose plan fields (transient_slots, split_route_release, "
+            "prefetch_slots) seed the in-process runtime when the matching flag "
+            "is unset; 'none' disables profile resolution (loader defaults)."
+        ),
+    )
     p.add_argument("--max-kv", type=int, default=4096)
     p.add_argument("--admit", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--admission-receipt", type=Path, default=None)
@@ -917,6 +965,81 @@ def _resolve_derivation(args):
     )
 
 
+# Plan fields the served profile sets that the loader would otherwise default
+# (the W81 finding: transient_slots defaulted to spec.top_k=6, not the profile's
+# 48).  Seeded into the in-process runtime so a bench A/B is on the production
+# plan.  ``transient_slots`` also takes the explicit ``--transient-slots`` flag.
+_PROFILE_PLAN_FIELDS = ("transient_slots", "split_route_release", "prefetch_slots")
+
+
+def _resolve_plan_overrides(args) -> dict:
+    """ExpertStreamingConfig plan overrides from the profile / explicit flags.
+
+    Precedence per field: explicit flag > profile config value > loader default
+    (leave unset).  Returns only the fields we actually pin, so an empty dict
+    means "loader defaults" (matches the pre-W81 behaviour when profile='none').
+    """
+
+    overrides: dict = {}
+    explicit_transient = getattr(args, "transient_slots", None)
+    if explicit_transient is not None:
+        overrides["transient_slots"] = int(explicit_transient)
+
+    profile_name = str(getattr(args, "expert_profile", "none") or "none")
+    if profile_name != "none":
+        try:
+            from mtplx.expert_profiles import load_expert_profiles
+
+            profiles = load_expert_profiles()
+            profile = profiles.get(profile_name)
+        except Exception:
+            profile = None
+        if profile is not None:
+            cfg = dict(getattr(profile, "config", {}) or {})
+            for field in _PROFILE_PLAN_FIELDS:
+                if field in overrides:
+                    continue  # explicit flag already won
+                if field in cfg:
+                    overrides[field] = cfg[field]
+    return overrides
+
+
+def _resolved_plan(runtime, args) -> dict | None:
+    """The runtime's ACTUAL slot plan, for the receipt/census header.
+
+    Records the plan the bench really ran (not the requested override), so an
+    A/B is attributable to a slot plan and window 32 can compare bench vs served.
+    """
+
+    plan = getattr(runtime, "plan", None)
+    if plan is None:
+        return None
+    spec = getattr(runtime, "spec", None)
+    record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
+    transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
+    persistent_slots = int(getattr(plan, "persistent_slots", 0) or 0)
+    routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
+    return {
+        "transient_slots": transient_slots,
+        "persistent_slots": persistent_slots,
+        "expert_record_bytes": record_bytes,
+        "transient_bytes_per_layer": transient_slots * record_bytes,
+        "transient_bytes_total": transient_slots * record_bytes * routed_layers,
+        "split_route_release": getattr(
+            getattr(runtime, "config", None), "split_route_release", None
+        ),
+        "prefetch_slots": getattr(
+            getattr(runtime, "config", None), "prefetch_slots", None
+        ),
+        "source": (
+            "explicit" if getattr(args, "transient_slots", None) is not None
+            else f"profile:{getattr(args, 'expert_profile', 'none')}"
+            if getattr(args, "_dsv41_plan_overrides", None)
+            else "loader-default(top_k)"
+        ),
+    }
+
+
 def _load_model(args, bench, mx):
     from mtplx.deepseek_v41_memory_profile import apply_allocator_cache_limit
     from mtplx.models.deepseek_v41_dspark_decode import dspark_bench_loader_overrides
@@ -945,6 +1068,21 @@ def _load_model(args, bench, mx):
         expert_cache_limit_bytes=cache_limit,
         reprice=bool(getattr(args, "reprice", True)),
     )
+    # W81: run the in-process bench on the SAME slot plan the served daemon uses.
+    # The served path builds its config from the profile deepseek-v41-mxfp4-75
+    # (transient_slots=48, split_route_release=deferred), but this CLI loader left
+    # transient_slots unset -> plan default spec.top_k (=6), which starved the
+    # W66/W81 verify fast path in window 31.  Seed the profile's plan fields when
+    # the matching flag is unset (--transient-slots / profile 'none' disable it).
+    plan_overrides = _resolve_plan_overrides(args)
+    args._dsv41_plan_overrides = plan_overrides
+    if plan_overrides:
+        print(
+            "[ab] plan overrides from profile "
+            f"{getattr(args, 'expert_profile', 'none')!r}: "
+            + json.dumps(plan_overrides),
+            flush=True,
+        )
     resident = load_deepseek_v41_streaming(
         args.model,
         memory_limit_bytes=memory_limit_bytes,
@@ -959,6 +1097,7 @@ def _load_model(args, bench, mx):
         island_layers=(),
         verify_record_hashes=args.verify_record_hashes,
         with_mtp=with_mtp,
+        **plan_overrides,
     )
     # W62 (2): bound the MLX allocator's freed-buffer cache from the plan so
     # decode/prefill transients that are freed do not accumulate past the reserve
@@ -1015,6 +1154,52 @@ def _memory_profile_collector(args, mx, runtime, resident):
     return _cb, snaps
 
 
+def _stream_counters_snapshot(model):
+    """Best-effort snapshot of the expert-streaming counters, or None.
+
+    W81: lets the in-process bench report the SAME serve_stream_counters block the
+    served daemon does (expert hits/misses/bytes/loads per token), so David's hit
+    rate + bandwidth-per-token show up on every A/B receipt.  Guarded: a stub
+    runtime (or a build without the snapshot) just omits the block.
+    """
+    try:
+        from mtplx.serve_stream_counters import snapshot_stream_counters
+
+        rt = getattr(model, "_mtplx_expert_runtime", None)
+        if rt is None:
+            return None
+        return snapshot_stream_counters(rt)
+    except Exception:
+        return None
+
+
+def _stream_counters_block(run, decode_tokens, resolved_plan):
+    """DECODE-scoped serve_stream_counters delta for the receipt (or None).
+
+    ``run`` carries ``stream_after_prefill`` / ``stream_end`` snapshots bracketing
+    the decode loop (prefill excluded, so the hit rate is the DECODE hit rate, not
+    the cold prefill first-touch rate).  Attaches the resolved slot plan so the
+    hit rate is attributable to a capacity.
+    """
+    try:
+        from mtplx.serve_stream_counters import stream_counters_delta
+
+        before = run.get("stream_after_prefill")
+        after = run.get("stream_end")
+        if not before or not after:
+            return None
+        block = stream_counters_delta(
+            before, after, tokens=int(decode_tokens), phase="decode"
+        )
+        if not block:
+            return None
+        if resolved_plan is not None:
+            block["slot_plan"] = resolved_plan
+        return block
+    except Exception:
+        return None
+
+
 def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
               mem_profile_every=64, device_sample=False):
     """Greedy prefill + ``steps`` decode; captures the decoded token ids.
@@ -1040,6 +1225,9 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     generated = [token]
     if mem_profile is not None:
         mem_profile("after_prefill")
+    # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
+    # excluded so the hit rate is the decode hit rate).
+    _sc_after_prefill = _stream_counters_snapshot(model)
     extra_forward_steps = 0
 
     decode_start = time.perf_counter()
@@ -1069,12 +1257,15 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             if mem_profile is not None and (step + 1) % every == 0:
                 mem_profile("decode", token=step + 1)
     decode_wall_s = time.perf_counter() - decode_start
+    _sc_end = _stream_counters_snapshot(model)
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
         "decode_wall_s": decode_wall_s,
         "peak_gb": mem_probe.peak_bytes() / GIB,
         "extra_forward_steps": int(extra_forward_steps),
+        "stream_after_prefill": _sc_after_prefill,
+        "stream_end": _sc_end,
     }
 
 
@@ -1171,6 +1362,15 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             route_probe = None
         stime.begin()
     t0 = time.perf_counter()
+    # W81: snapshot the expert-streaming counters at the prefill->decode boundary
+    # (prefill_callback fires after prefill, before the decode cycles) and again
+    # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
+    # block (hit rate + streamed bytes/token) matching the served daemon's.
+    _sc: dict = {}
+
+    def _stream_prefill_cb(_info):
+        _sc["after_prefill"] = _stream_counters_snapshot(model)
+
     toks = dspark_generate(
         model,
         [int(t) for t in prompt_ids],
@@ -1180,7 +1380,9 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         speculative_depth=int(depth),
         stats=stats,
         divergence_capture=capture,
+        prefill_callback=_stream_prefill_cb,
     )
+    _sc["end"] = _stream_counters_snapshot(model)
     wall = time.perf_counter() - t0
     report = None
     w61 = None
@@ -1194,23 +1396,63 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         def _count(name):
             return int(stg.get(name, {}).get("count", 0))
 
-        # W61 engages (one routing barrier/layer) only on an ALL-HIT verify;
-        # a cold/missing verify falls back to the multi-barrier route_waves loop.
+        # W61 engages (one routing barrier/layer) on an ALL-HIT verify; W66/W81
+        # engage the split single-barrier / batched path on a MISS verify.  W81
+        # adds a per-verify engagement census: every small-M (2..8 row) DECODE
+        # component-bank route is a candidate (hot.verify_candidate); it either
+        # engages (all-hit W61 or split W66/W81) or declines with a reason.
+        _candidate = _count("hot.verify_candidate")
+        _eng_all_hit = _count("hot.verify_single_barrier")
+        _eng_split = _count("hot.verify_single_barrier_split")
+        _eng_batched = _count("hot.verify_single_barrier_batched")
+        _engaged = _eng_all_hit + _eng_split
+        _decline_reasons = {
+            "flag_off": _count("hot.verify_decline.flag_off"),
+            "codec": _count("hot.verify_decline.codec"),
+            "shadow_bank": _count("hot.verify_decline.shadow_bank"),
+            "assignment_shape": _count("hot.verify_decline.assignment_shape"),
+            "no_defer_seam": _count("hot.verify_decline.no_defer_seam"),
+            "other": _count("hot.verify_decline.other"),
+        }
+        _declined = sum(_decline_reasons.values())
         w61 = {
-            "verify_single_barrier": _count("hot.verify_single_barrier"),
+            "verify_single_barrier": _eng_all_hit,
+            "verify_single_barrier_split": _eng_split,
+            "verify_single_barrier_batched": _eng_batched,
             "all_hit": _count("hot.all_hit"),
             "try_all_hit": _count("hot.try_all_hit"),
             "eval_indices": _count("hot.eval_indices"),
             "begin_split_route": _count("hot.begin_split_route"),
+            # W81 per-verify engagement census (the next window reads this line):
+            "verify_candidates": _candidate,
+            "verify_engaged": _engaged,
+            "verify_declined": _declined,
+            "verify_engaged_pct": (
+                round(100.0 * _engaged / _candidate, 2) if _candidate else None
+            ),
+            "verify_decline_reasons": _decline_reasons,
             "note": "cumulative over this dspark pass (prefill + drafts + verifies); "
-                    "verify_single_barrier is verify-only",
+                    "verify_* counters are verify-shape-only (2..8 rows, DECODE, "
+                    "component-banks). engaged = all_hit(W61) + split(W66/W81); "
+                    "split includes batched (unique > transient capacity).",
         }
+        # Human-readable census line so the receipt scrape and console both show it.
+        print(
+            "[ab] verify engagement: "
+            f"{_engaged}/{_candidate} engaged "
+            f"({w61['verify_engaged_pct']}%) "
+            f"[all_hit={_eng_all_hit} split={_eng_split} batched={_eng_batched}] "
+            f"declined={_declined} reasons={_decline_reasons}",
+            flush=True,
+        )
         route_probe.ENABLED = bool(route_prev_enabled)
     out = {
         "generated": [int(t) for t in toks],
         "decode_wall_s": wall,
         "peak_gb": mem_probe.peak_bytes() / GIB,
         "stats": stats.to_dict(),
+        "stream_after_prefill": _sc.get("after_prefill"),
+        "stream_end": _sc.get("end"),
     }
     if report is not None:
         out["verify_stage_timing"] = report
@@ -1416,6 +1658,16 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "decode_attn_kernel_engagement": (
                 _k29.engagement() if _k29 is not None else None
             ),
+            # W81: the ACTUAL slot plan this arm ran (transient/persistent slot
+            # counts + bytes + source), so an A/B is attributable to a capacity and
+            # the in-process bench is comparable to the served profile plan.
+            "resolved_plan": _resolved_plan(runtime, args),
+            # W81: DECODE-scoped expert-streaming counters for the AR reference
+            # decode (hit rate + streamed bytes/token), matching the served
+            # daemon's serve_stream_counters. David: hit rate + bandwidth/token.
+            "serve_stream_counters": _stream_counters_block(
+                run, args.decode_tokens, _resolved_plan(runtime, args)
+            ),
         }
         if mem_profile_snaps is not None:
             from mtplx.deepseek_v41_memory_profile import (
@@ -1483,6 +1735,14 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 # W61 single-barrier fast-path engagement (+ eval_indices barrier
                 # count) from the route-stage probe.
                 receipt["dspark"]["w61_engagement"] = dsp["w61_engagement"]
+            # W81: DECODE-scoped expert-streaming counters for the DSpark decode
+            # (hit rate + streamed bytes/token + slot plan), matching the served
+            # daemon's DSpark serve_stream_counters so bench vs served is readable.
+            _dspark_ssc = _stream_counters_block(
+                dsp, args.decode_tokens, _resolved_plan(runtime, args)
+            )
+            if _dspark_ssc is not None:
+                receipt["dspark"]["serve_stream_counters"] = _dspark_ssc
             # W77: byte-identity is the ship bar only for exact-by-construction
             # arms. A greedy argmax flip at a near-tie caused by rounding-class
             # deltas (bf16 head, M=1 vs M=K+1 matmul kernels, compiled attention)
