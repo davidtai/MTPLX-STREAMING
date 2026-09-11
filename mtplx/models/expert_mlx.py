@@ -2608,6 +2608,16 @@ class HotExpertSwitchGLU(nn.Module):
             # hot set for this layer's routed experts.  A host-side stage.
             with _stime.stage_nested("switch.admission"):
                 self.runtime.prepare_prefill_seed(self.layer_index, expert_ids)
+        # W64 (R3-pin): pin this layer's post-prefill working set (on the first
+        # DECODE route after prefill, refreshed per MTPLX_DSV41_PIN_REFRESH_TOKENS)
+        # and record the all-pinned-hit telemetry. No-op -- one env read -- unless
+        # MTPLX_DSV41_PIN_WORKING_SET is armed, so the fenced decode path stays
+        # byte-identical when the lever is off. It runs before the route below
+        # executes, so this token's route already respects the fresh pins.
+        # Guarded so a runtime double without the hook is unaffected.
+        _pin_hook = getattr(self.runtime, "pin_working_set_hook", None)
+        if callable(_pin_hook):
+            _pin_hook(self.layer_index, expert_ids, phase)
 
         # W51 / K26 -- the prefill-only "dequantize once, matmul dense" expert path.
         # Gated to PREFILL (so the decode M=1 path is structurally excluded and stays

@@ -224,6 +224,22 @@ decode). Do not confuse the two — that is the mistake the Qwen3.8 dispatch sto
 - **Effort:** medium (census pass → per-(layer,expert) counts → held-out train/eval split → frequency
   admission policy in the cache). **Exactness:** none (cache policy). **Deps:** CPU held-out census.
 - **Rank: 3** (measure first; may be dead).
+- **R3-pin update (W64, `feat/deepseek-v41-w64`, CPU-verified):** the within-prompt hit-rate arm stays
+  dead (W24: static top-N pin ≈ LRU within one prompt). But the *within-layer pinned working set* is now
+  landed for a **different** payoff — it is the **slot-stability fix W44 needs**. Behind
+  `MTPLX_DSV41_PIN_WORKING_SET` (default off, **byte-identical when off**), after prefill it ranks each
+  layer's resident experts by prefill routing frequency and pins the top-K (or all, the `pin_ws` arm),
+  marking those slots **never-recyclable on normal decode admission** (a memory-forced capacity eviction
+  may still evict, then unpins). Pinning is pure cache policy → **byte-identical on/off** (served expert ==
+  requested expert regardless of slot; CPU test models the physical bank and proves it). Telemetry
+  (`pin_working_set` in snapshot / A/B receipt / served event): pinned count per layer + **all-pinned-hit
+  rate** = the fraction of decode layer-routes a barrier-free device route could take race-free. **This
+  does not raise the all-hit rate; it makes the existing all-hit layers SAFE for W44's barrier-free gather**
+  — 0 % today (W44 window-19 garbage on any churning layer) → up to the census all-hit fraction (~0.61
+  all-hit layer-calls cold, → 0.835 warm) with `pin_ws`. Device route NOT re-enabled here; §6 of
+  `W64_PINNED_WORKING_SET.md` specifies how it must consume `route_all_pinned`/`pinned_static`
+  (out-of-band pin at the prefill→decode boundary + device-side pinned-mask gate). Whether removing the
+  barrier on that fraction nets tok/s is the GPU A/B (`pin_ws` + pinning-guarded `device_route`).
 
 ### R4 — Realized-BW / queue-depth saturation (`io_read_fanout`, concurrent issue) — Factor D
 
