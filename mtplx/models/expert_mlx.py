@@ -55,6 +55,14 @@ _MIXED_DOWN_BITS = 3
 _PREFILL_DENSE_ENV = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"
 _PREFILL_DENSE_MIN_ROWS_ENV = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"
 _PREFILL_DENSE_BATCH_ENV = "MTPLX_DSV41_PREFILL_DENSE_BATCH"
+# W51 window-20 follow-up: the bf16 dense matmul won only −20 s (not the modelled
+# −70-80 s). W50 found bf16 score matmuls 34% slower than f32 at 16K on this box, so
+# the dense matmul may be paying the same slow bf16 kernel.  This knob runs the dense
+# gate/up/down (and the dequant that feeds them) in f32 as an A/B variant; the mxfp4
+# dequant is lossless in either dtype (FP4 x 2^E8M0 is exact in bf16 and f32), and
+# dequantizing straight to the compute dtype means NO f32->bf16 (or bf16->f32) cast
+# and no doubled write.  Default "bf16".
+_PREFILL_DENSE_MATMUL_DTYPE_ENV = "MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE"
 _PREFILL_DENSE_MIN_ROWS_DEFAULT = 128
 _PREFILL_DENSE_BATCH_DEFAULT = 8
 
@@ -63,6 +71,13 @@ def _prefill_dense_experts_enabled() -> bool:
     """Read at use (not import): the server stamps optimization keys after importing
     modules ([[env-flags-read-at-use-not-import]])."""
     return os.environ.get(_PREFILL_DENSE_ENV) == "1"
+
+
+def _prefill_dense_matmul_dtype() -> "mx.Dtype":
+    """The compute dtype for the dense path's dequant + matmuls (W51 window-20 A/B):
+    ``f32`` runs the whole expert MLP in float32 (dequant included), else bf16."""
+    raw = os.environ.get(_PREFILL_DENSE_MATMUL_DTYPE_ENV, "").strip().lower()
+    return mx.float32 if raw in ("f32", "float32", "fp32") else mx.bfloat16
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -1549,17 +1564,19 @@ def _dequantize_mxfp4_slot(
     *,
     group_size: int,
     bits: int,
+    dtype: "mx.Dtype",
 ) -> mx.array:
-    """Dense ``[out, in]`` bf16 for one expert's mxfp4 gs32 projection.
+    """Dense ``[out, in]`` matrix for one expert's mxfp4 gs32 projection, at ``dtype``.
 
     The native-mxfp4 component bank stores ``{projection}.weight`` (packed FP4
     codes, uint32) and ``{projection}.scales`` (one E8M0 exponent byte per
     ``group_size`` columns, no bias leaf) row-major by slot, exactly the leaves
     :func:`_gather_component_bank`'s ``mode="mxfp4"`` gather feeds ``gather_qmm``.
-    ``mx.dequantize(weight, scales, mode="mxfp4")`` reverses the same codec once,
-    at bank precision -- FP4 code x 2^E8M0 lands exactly in bf16, so the dequant
-    itself is lossless; only the later dense matmul reassociates vs the fused
-    gather (see :func:`_run_component_bank_dense_prefill`)."""
+    ``mx.dequantize`` reverses the same codec once, straight into ``dtype`` -- so
+    there is no intermediate-precision materialization or cast, and the dequant is
+    lossless in bf16 *or* f32 (FP4 code x 2^E8M0 is exactly representable in both);
+    only the later dense matmul reassociates vs the fused gather (see
+    :func:`_run_component_bank_dense_prefill`)."""
     weight = bank.arrays[f"{projection}.weight"][slot]
     scales = bank.arrays[f"{projection}.scales"][slot]
     return mx.dequantize(
@@ -1568,6 +1585,7 @@ def _dequantize_mxfp4_slot(
         group_size=group_size,
         bits=bits,
         mode="mxfp4",
+        dtype=dtype,
     )
 
 
@@ -1580,27 +1598,36 @@ def _run_component_bank_dense_prefill(
     swiglu_limit: float | None = None,
     min_rows: int,
     batch: int,
+    matmul_dtype: "mx.Dtype | None" = None,
 ) -> mx.array:
     """Prefill "dequantize once, matmul dense" expert wave (W51, K26).
 
     Groups this wave's assignment-aligned rows by expert (bank slot; the host-side
     ``binding.buffer.bank_index`` needs no device sync).  For every expert with at
-    least ``min_rows`` rows it dequantizes gate/up/down from mxfp4 gs32 to bf16
-    ONCE and runs three dense bf16 matmuls over that expert's rows (ClampedSwiGLU
-    unchanged), instead of the per-row ALU/dequant-bound mxfp4 ``gather_qmm``.
-    Experts below the threshold keep ``gather_qmm`` (one grouped gather).  Results
-    are scattered back into the input row order, so the return matches
-    :func:`_gather_component_bank`'s ``[rows, out]`` contract exactly.
+    least ``min_rows`` rows it dequantizes gate/up/down from mxfp4 gs32 to
+    ``matmul_dtype`` ONCE and runs three dense matmuls over that expert's rows
+    (ClampedSwiGLU unchanged), instead of the per-row ALU/dequant-bound mxfp4
+    ``gather_qmm``.  Experts below the threshold keep ``gather_qmm`` (one grouped
+    gather).  Results are scattered back into the input row order, so the return
+    matches :func:`_gather_component_bank`'s ``[rows, out]`` contract exactly.
 
-    Bounded transient: each dequantized expert is ~3 x 2 x hidden x inter bytes of
-    bf16 (~71 MB at 5120x2304); experts are processed in batches of ``batch`` with
-    an ``mx.eval`` between batches, so at most ``batch`` experts' dequantized copies
-    are live at once (~0.57 GB at the default 8) and none survives the call.
+    ``matmul_dtype`` (default bf16; ``mx.float32`` for the W51 window-20 A/B) is the
+    dense-compute precision -- the dequant lands straight in it (no cast, no doubled
+    write).  Bounded transient: each dequantized expert is ~3 x 2 x hidden x inter
+    bytes at bf16 (~71 MB at 5120x2304; ~142 MB at f32); experts are processed in
+    batches of ``batch`` with an ``mx.eval`` between batches, so at most ``batch``
+    experts' dequantized copies are live at once (~0.57 GB bf16 at the default 8) and
+    none survives the call.
 
     NOT bit-identical to the pure ``gather_qmm`` wave: the dequant is exact, but the
-    dense fp32 matmul accumulation order differs from the fused gather's, so outputs
+    dense matmul accumulation order differs from the fused gather's, so outputs
     match only within the tolerance the W51 CPU test measures.  When no expert clears
-    the threshold this is a pure ``gather_qmm`` fall-through (byte-identical)."""
+    the threshold this is a pure ``gather_qmm`` fall-through (byte-identical).
+
+    W47 prefill stage timing (no-op off-session) breaks the wave into nested brackets
+    ``switch.dense.{group_rows,dequant,matmul,scatter}`` and
+    ``switch.gather_qmm_fallback`` and tallies rows/experts routed dense vs gather, so
+    the next 16K window attributes the residual switch cost."""
 
     if not bindings or int(x.shape[0]) != len(bindings):
         raise ValueError(
@@ -1612,88 +1639,111 @@ def _run_component_bank_dense_prefill(
     ):
         raise ValueError("component-bank execution requires one shared bank")
 
-    slot_of_row = [int(binding.buffer.bank_index) for binding in bindings]
-    groups: dict[int, list[int]] = {}
-    for row, slot in enumerate(slot_of_row):
-        groups.setdefault(slot, []).append(row)
+    cdt = matmul_dtype if matmul_dtype is not None else mx.bfloat16
 
-    dense_slots = [slot for slot, rows in groups.items() if len(rows) >= min_rows]
+    with _stime.stage_nested("switch.dense.group_rows"):
+        slot_of_row = [int(binding.buffer.bank_index) for binding in bindings]
+        groups: dict[int, list[int]] = {}
+        for row, slot in enumerate(slot_of_row):
+            groups.setdefault(slot, []).append(row)
+        dense_slots = [slot for slot, rows in groups.items() if len(rows) >= min_rows]
+        dense_set = set(dense_slots)
+        small_rows = [
+            row
+            for slot, slot_rows in groups.items()
+            if slot not in dense_set
+            for row in slot_rows
+        ]
+
+    # Per-layer census (no-op off a prefill-timing session): rows/experts routed
+    # dense vs the sub-threshold gather fall-through, and one call per invocation.
+    _stime.tally("dense.calls", 1)
+    _stime.tally("dense.experts_total", len(groups))
+    _stime.tally("dense.experts_dense", len(dense_slots))
+    _stime.tally("dense.experts_under_threshold", len(groups) - len(dense_slots))
+    _stime.tally("dense.rows_dense", len(slot_of_row) - len(small_rows))
+    _stime.tally("dense.rows_gather", len(small_rows))
+
     if not dense_slots:
         # No expert clears the threshold (small-M waves, decode-shaped inputs):
         # a pure gather_qmm wave, byte-identical to the flag-off path.
-        slot_indices = mx.array(slot_of_row, dtype=mx.int32).reshape((-1, 1))
-        return _gather_component_bank(
-            x,
-            bank,
-            slot_indices,
-            group_size=group_size,
-            bits=bits,
-            swiglu_limit=swiglu_limit,
-            codec="mxfp4",
-        )
+        with _stime.stage_nested("switch.gather_qmm_fallback"):
+            slot_indices = mx.array(slot_of_row, dtype=mx.int32).reshape((-1, 1))
+            return _gather_component_bank(
+                x,
+                bank,
+                slot_indices,
+                group_size=group_size,
+                bits=bits,
+                swiglu_limit=swiglu_limit,
+                codec="mxfp4",
+            )
 
     parts: list[mx.array] = []
     part_positions: list[int] = []
     pending: list[mx.array] = []
-    for index, slot in enumerate(dense_slots):
+    for slot in dense_slots:
         rows = groups[slot]
         x_slot = mx.take(x, mx.array(rows, dtype=mx.int32), axis=0)
-        dq_gate = _dequantize_mxfp4_slot(
-            bank, slot, "gate_proj", group_size=group_size, bits=bits
-        ).astype(x_slot.dtype)
-        dq_up = _dequantize_mxfp4_slot(
-            bank, slot, "up_proj", group_size=group_size, bits=bits
-        ).astype(x_slot.dtype)
-        gate = mx.matmul(x_slot, dq_gate.T)
-        up = mx.matmul(x_slot, dq_up.T)
-        hidden = _clamped_swiglu(gate, up, swiglu_limit)
-        dq_down = _dequantize_mxfp4_slot(
-            bank, slot, "down_proj", group_size=group_size, bits=bits
-        ).astype(hidden.dtype)
-        y_slot = mx.matmul(hidden, dq_down.T)
+        if x_slot.dtype != cdt:
+            x_slot = x_slot.astype(cdt)
+        with _stime.stage_nested("switch.dense.dequant") as _dq_fence:
+            dq_gate = _dequantize_mxfp4_slot(
+                bank, slot, "gate_proj", group_size=group_size, bits=bits, dtype=cdt
+            )
+            dq_up = _dequantize_mxfp4_slot(
+                bank, slot, "up_proj", group_size=group_size, bits=bits, dtype=cdt
+            )
+            dq_down = _dequantize_mxfp4_slot(
+                bank, slot, "down_proj", group_size=group_size, bits=bits, dtype=cdt
+            )
+            _dq_fence.add(dq_gate, dq_up, dq_down)
+        with _stime.stage_nested("switch.dense.matmul") as _mm_fence:
+            gate = mx.matmul(x_slot, dq_gate.T)
+            up = mx.matmul(x_slot, dq_up.T)
+            hidden = _clamped_swiglu(gate, up, swiglu_limit)
+            y_slot = mx.matmul(hidden, dq_down.T)
+            if y_slot.dtype != x.dtype:
+                y_slot = y_slot.astype(x.dtype)
+            _mm_fence.add(y_slot)
         parts.append(y_slot)
         part_positions.extend(rows)
         pending.append(y_slot)
         # Bound the peak: materialize each batch of experts so their dequantized
-        # bf16 transients (unreferenced past this iteration) are freed before the
-        # next batch dequantizes.  The small [rows, out] outputs stay in ``parts``.
+        # transients (unreferenced past this iteration) are freed before the next
+        # batch dequantizes.  The small [rows, out] outputs stay in ``parts``.
         if len(pending) >= batch:
             mx.eval(pending)
             pending = []
     if pending:
         mx.eval(pending)
 
-    dense_set = set(dense_slots)
-    small_rows = [
-        row
-        for slot, slot_rows in groups.items()
-        if slot not in dense_set
-        for row in slot_rows
-    ]
     if small_rows:
-        small_idx = mx.array(small_rows, dtype=mx.int32)
-        sub_x = mx.take(x, small_idx, axis=0)
-        sub_slots = mx.array(
-            [slot_of_row[row] for row in small_rows], dtype=mx.int32
-        ).reshape((-1, 1))
-        parts.append(
-            _gather_component_bank(
-                sub_x,
-                bank,
-                sub_slots,
-                group_size=group_size,
-                bits=bits,
-                swiglu_limit=swiglu_limit,
-                codec="mxfp4",
+        with _stime.stage_nested("switch.gather_qmm_fallback"):
+            small_idx = mx.array(small_rows, dtype=mx.int32)
+            sub_x = mx.take(x, small_idx, axis=0)
+            sub_slots = mx.array(
+                [slot_of_row[row] for row in small_rows], dtype=mx.int32
+            ).reshape((-1, 1))
+            parts.append(
+                _gather_component_bank(
+                    sub_x,
+                    bank,
+                    sub_slots,
+                    group_size=group_size,
+                    bits=bits,
+                    swiglu_limit=swiglu_limit,
+                    codec="mxfp4",
+                )
             )
-        )
-        part_positions.extend(small_rows)
+            part_positions.extend(small_rows)
 
-    if len(parts) == 1 and part_positions == list(range(len(slot_of_row))):
-        return parts[0]
-    joined = mx.concatenate(parts, axis=0)
-    order = mx.argsort(mx.array(part_positions, dtype=mx.int32))
-    return mx.take(joined, order, axis=0)
+    with _stime.stage_nested("switch.dense.scatter"):
+        if len(parts) == 1 and part_positions == list(range(len(slot_of_row))):
+            return parts[0]
+        joined = mx.concatenate(parts, axis=0)
+        order = mx.argsort(mx.array(part_positions, dtype=mx.int32))
+        return mx.take(joined, order, axis=0)
 
 
 def _gather_component_bank(
@@ -2109,6 +2159,7 @@ class HotExpertSwitchGLU(nn.Module):
                     batch=_positive_env_int(
                         _PREFILL_DENSE_BATCH_ENV, _PREFILL_DENSE_BATCH_DEFAULT
                     ),
+                    matmul_dtype=_prefill_dense_matmul_dtype(),
                 )
             return _run_component_bank_q4(
                 selected,

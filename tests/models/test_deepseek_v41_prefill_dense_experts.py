@@ -32,6 +32,7 @@ import numpy as np
 import pytest
 
 import mtplx.models.expert_mlx as em
+import mtplx.models.deepseek_v41_stage_timing as stime
 
 _HIDDEN = 256
 _INTER = 128
@@ -310,6 +311,136 @@ def test_flag_off_reads_env_at_use():
             os.environ.pop(em._PREFILL_DENSE_ENV, None)
         else:
             os.environ[em._PREFILL_DENSE_ENV] = saved
+
+
+def test_f32_matmul_variant_vs_fp64_and_gather(bank_and_src, capsys):
+    """W51 window-20 A/B: the f32 dense variant (dequant + matmuls in float32) is
+    at least as accurate as the bf16 variant vs the float64 reference, and stays
+    within the bf16 bound of the gather it replaces."""
+    bank, dense_src = bank_and_src
+    counts = [200, 150, 80, 5, 1, 0]
+    expert_of_row, x_np = _make_rows(counts)
+    x = mx.array(x_np).astype(mx.bfloat16)
+    ref = _fp64_reference(x_np, expert_of_row, dense_src)
+    bindings = _bind_bank(bank, _bindings(expert_of_row))
+
+    gather = em._gather_component_bank(
+        x, bank, _slot_indices(expert_of_row),
+        group_size=_GROUP, bits=_BITS, swiglu_limit=_LIMIT, codec="mxfp4",
+    )
+    dense_bf16 = em._run_component_bank_dense_prefill(
+        x, bindings, group_size=_GROUP, bits=_BITS, swiglu_limit=_LIMIT,
+        min_rows=1, batch=8, matmul_dtype=mx.bfloat16,
+    )
+    dense_f32 = em._run_component_bank_dense_prefill(
+        x, bindings, group_size=_GROUP, bits=_BITS, swiglu_limit=_LIMIT,
+        min_rows=1, batch=8, matmul_dtype=mx.float32,
+    )
+    mx.eval(gather, dense_bf16, dense_f32)
+
+    bf16_abs, bf16_rel = _max_abs_and_rel(dense_bf16, ref)
+    f32_abs, f32_rel = _max_abs_and_rel(dense_f32, ref)
+    g = np.asarray(gather.astype(mx.float32)).astype(np.float64)
+    f = np.asarray(dense_f32.astype(mx.float32)).astype(np.float64)
+    f32_vs_gather = float(np.abs(f - g).max()) / (float(np.abs(g).max()) or 1.0)
+
+    with capsys.disabled():
+        print(
+            "\n[W51 K26 f32 variant] dense bf16 vs fp64: max|Δ|=%.3e rel=%.3e | "
+            "dense f32 vs fp64: max|Δ|=%.3e rel=%.3e | f32 vs gather rel=%.3e"
+            % (bf16_abs, bf16_rel, f32_abs, f32_rel, f32_vs_gather)
+        )
+
+    # The output is cast back to the input (bf16) dtype in both variants, so f32 is
+    # not exact vs fp64 -- but it must be no worse than bf16 against the truth, and
+    # still within the bf16 bound of the gather it replaces.
+    assert dense_f32.dtype == x.dtype
+    assert f32_abs <= bf16_abs + 1e-4
+    assert f32_vs_gather < 5e-2
+
+
+def test_stage_timing_brackets_and_tallies_export(bank_and_src):
+    """Under a prefill stage-timing session the dense path books its nested
+    brackets into switch_breakdown and its row/expert counters into switch_tallies;
+    off-session it is a no-op (byte-identical, covered by the other tests)."""
+    bank, _ = bank_and_src
+    counts = [200, 150, 80, 5, 1]  # 2 dense (>=128), 3 gather (<128)
+    expert_of_row, x_np = _make_rows(counts, seed=13)
+    x = mx.array(x_np).astype(mx.bfloat16)
+    bindings = _bind_bank(bank, _bindings(expert_of_row))
+
+    stime.begin(kind="prefill")
+    try:
+        stime.active().enter_forward(len(expert_of_row))
+        out = em._run_component_bank_dense_prefill(
+            x, bindings, group_size=_GROUP, bits=_BITS, swiglu_limit=_LIMIT,
+            min_rows=em._PREFILL_DENSE_MIN_ROWS_DEFAULT, batch=8,
+        )
+        mx.eval(out)
+        rep = stime.report()
+    finally:
+        stime.end()
+
+    bd = rep["switch_breakdown"]
+    for name in (
+        "switch.dense.group_rows",
+        "switch.dense.dequant",
+        "switch.dense.matmul",
+        "switch.dense.scatter",
+        "switch.gather_qmm_fallback",
+    ):
+        assert name in bd, name
+    # two experts dequantized -> the per-expert dequant/matmul brackets fired twice.
+    assert bd["switch.dense.dequant"]["count"] == 2
+    assert bd["switch.dense.matmul"]["count"] == 2
+
+    tal = rep["switch_tallies"]
+    dense_rows = 200 + 150
+    gather_rows = 80 + 5 + 1
+    assert tal["dense.calls"] == 1
+    assert tal["dense.experts_total"] == 5
+    assert tal["dense.experts_dense"] == 2
+    assert tal["dense.experts_under_threshold"] == 3
+    assert tal["dense.rows_dense"] == dense_rows
+    assert tal["dense.rows_gather"] == gather_rows
+
+
+def test_stage_timing_is_noop_off_session(bank_and_src):
+    """No armed session -> tally() / stage_nested() are no-ops and report() is None,
+    so a production forward pays nothing for the instrumentation."""
+    bank, _ = bank_and_src
+    counts = [130, 3]
+    expert_of_row, x_np = _make_rows(counts, seed=17)
+    x = mx.array(x_np).astype(mx.bfloat16)
+    bindings = _bind_bank(bank, _bindings(expert_of_row))
+    assert stime.report() is None
+    out = em._run_component_bank_dense_prefill(
+        x, bindings, group_size=_GROUP, bits=_BITS, swiglu_limit=_LIMIT,
+        min_rows=em._PREFILL_DENSE_MIN_ROWS_DEFAULT, batch=8,
+    )
+    mx.eval(out)
+    assert stime.report() is None
+
+
+def test_matmul_dtype_env_resolution():
+    import os
+
+    saved = os.environ.get(em._PREFILL_DENSE_MATMUL_DTYPE_ENV)
+    try:
+        os.environ.pop(em._PREFILL_DENSE_MATMUL_DTYPE_ENV, None)
+        assert em._prefill_dense_matmul_dtype() == mx.bfloat16
+        for token in ("f32", "float32", "FP32"):
+            os.environ[em._PREFILL_DENSE_MATMUL_DTYPE_ENV] = token
+            assert em._prefill_dense_matmul_dtype() == mx.float32, token
+        os.environ[em._PREFILL_DENSE_MATMUL_DTYPE_ENV] = "bf16"
+        assert em._prefill_dense_matmul_dtype() == mx.bfloat16
+        os.environ[em._PREFILL_DENSE_MATMUL_DTYPE_ENV] = "junk"
+        assert em._prefill_dense_matmul_dtype() == mx.bfloat16
+    finally:
+        if saved is None:
+            os.environ.pop(em._PREFILL_DENSE_MATMUL_DTYPE_ENV, None)
+        else:
+            os.environ[em._PREFILL_DENSE_MATMUL_DTYPE_ENV] = saved
 
 
 def test_env_int_defaults_and_overrides():

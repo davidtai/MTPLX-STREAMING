@@ -795,11 +795,43 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
     tiny double flips intermediate-row argmax under bf16 while chunked-f32 does not — so exactness is
     **not** the ship bar; a task eval (HumanEval, [[deepseek-v4-quality-verdict]]) gates bf16, and the
     real deployment runs bf16 anyway (the f32 oracle is stricter than the reference's own precision).
-- **STATUS (W50, `feat/deepseek-v41-w50`):** IMPLEMENTED + CPU-proven, both levers default OFF (f32 /
+- **STATUS (W50, `feat/deepseek-v41-w50`):** IMPLEMENTED + CPU-proven, all levers default OFF (f32 /
   one-shot). Peak RSS of the real-shape exactness test 1.62 GB (<3 GB). Arms `score_bf16`,
-  `score_chunked` (`n=2048`), `score_bf16_chunked` added to `ab_decode_env_levers.py`. **Realized GPU
-  TTFT / peak delta is unmeasured — the GPU gate is KG-g** (K6 two-pass + tiling on the K16 base:
-  *TTFT −≥15 % beyond K16 AND peak −≥8 GB, parity on the long-prompt A/B*). See `W50_PREFILL_SCORE_PRECISION.md`.
+  `score_chunked` (`n=2048`), `score_bf16_chunked` in `ab_decode_env_levers.py`.
+- **⚠ WINDOW-20 MEASURED — the K25 roofline was WRONG (the score stage is pass/bandwidth-bound, NOT
+  matmul-FLOP-bound).** Integration `7a789731d`, 16,384-token prompt, layer-major, 60 GiB,
+  `PREFILL_CHUNK=1024`, all tokens byte-identical (receipt `receipts/gpu-windows/window-20/
+  prefill-16384-ladder.json`): `layer_major` baseline **TTFT 352.8 s** (46.4 tok/s, peak 76.6 GB);
+  **`score_chunked` 418.8 s (−16 %), peak 65.1 GB (−11.5 GB)**; **`score_bf16` 535.1 s (−34 %)**, peak
+  71.9 GB; `prefill_fast` (bf16+chunk+dense) 346.5 s (~baseline). The FLOP model predicted bf16 ≈ −2×
+  on the matmul; instead it **regressed**. Root cause, from the code:
+  - **bf16 (−34 %):** `_sparse_attend_oneshot` casts the `[rows,64,T]` QK^T output **bf16→f32** for the
+    f32 softmax (one full T-wide pass, ~6.4 GB traffic at rows=1024/T=16K) **and** casts `w` **f32→bf16**
+    before the PV matmul (a second T-wide pass) — two passes the f32 path never runs. The matmul I/O is
+    halved to 2 B but the stage is bandwidth-bound (softmax stays f32), and MLX 0.32.2's bf16 GEMM at
+    K=512 / large-N with the transpose flag does not beat f32 here — so the two cast passes are pure loss.
+  - **split-K (−16 %, −11 GB):** the online-softmax **rescale of the running output** `acc = acc*corr + pv`
+    is **O(rows·64·hd) = 2 passes over the 134 MB `acc` (rows=1024) EVERY chunk** (`⌈T/n⌉≈8` at n=2048),
+    vs one-shot's single accumulation — plus `corr=exp(m−m_new)`/`denom` rescales and **≈8× the kernel
+    dispatches** for qk/mask/softmax/pv. The −11 GB peak is real (transient `[rows,64,n]` not
+    `[rows,64,T]`), so split-K is a **PEAK-GB lever, not a throughput lever**.
+- **`lean` (W50, post-window-20): cut PASSES over the `[rows,64,T]` transient, not FLOPs** — the f32
+  pass-cut one-shot (`MTPLX_DSV41_PREFILL_SCORE_PATH=lean`): (1) **scale `q` once** (`[rows,64,512]`)
+  instead of the scores (`[rows,64,T]`) — one fewer T-wide pass; (2) **fold the value-0 sink into the
+  denominator** (reference `_k_sparse_attn`) — no sink concatenate (`[rows,64,T+1]` alloc) and no
+  post-softmax slice (`[rows,64,T]` copy), and the normalize divides the `[rows,64,512]` output not the
+  T-wide `w`. Nets **three fewer passes / two fewer T-wide allocations** per score call.
+  **Reassociation-level vs control** (real-shape max |Δ| ≈ 1.2e-6, **greedy-identical**), NOT
+  bit-identical. Arms `score_lean` and `prefill_lean` (= `layer_major` + dense-experts + lean, the f32
+  successor to `prefill_fast`). **SDPA is a dead end here:** `mx.fast.scaled_dot_product_attention`
+  accepts head_dim 512 on CPU but has **no per-head value-0 sink** — plain SDPA differs from our
+  semantics by 2.1e-3 (would change tokens); the 2×256 head-split is only a reassociated QK^T that still
+  can't fold the sink into SDPA's fused softmax, so it buys nothing over `lean`.
+- **Probe (W50):** `_sparse_attend*` now emit `stage_attn` sub-brackets (`attn.<mode>.score.{qk_matmul,
+  cast,scale_mask_sink,softmax,online_softmax,pv_matmul,combine,out_proj}`) reported under a new
+  `attn_breakdown` (kept OUT of the flat sum, never double-counting `attn.<mode>.score`; no-op / byte-
+  identical off the prefill probe) so the next 16K window attributes the 153 s reuse-score term.
+  **GPU gate remains KG-g.** See `W50_PREFILL_SCORE_PRECISION.md`.
 
 ---
 
@@ -849,8 +881,29 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   `expert_mlx.py`: `_run_component_bank_dense_prefill` + `_dequantize_mxfp4_slot`, threaded through
   `HotExpertSwitchGLU._dispatch_component_bank(dense_prefill=...)` from the PREFILL split wave only.
   Arm `prefill_dense_experts` (layer-major + dense on) in `scripts/deepseek_v41/ab_decode_env_levers.py`
-  (dry-run extended). **Realized GPU delta is the open GPU-window question** (KG-k, unmeasured — the
-  crossover M and realized dense TFLOPS on the real 5120x2304 experts). See `W51_PREFILL_DENSE_EXPERTS.md`.
+  (dry-run extended).
+- **MEASURED (GPU window 20, integration 7a789731d, 16K, layer-major, 60 GiB plan, chunk 1024):**
+  `prefill_dense_experts` TTFT **332.2 s vs layer_major 352.8 s (−20 s, +6% prefill tok/s)**,
+  token-sha identical, **same 76.6 GB peak** — far short of the modelled −70-80 s. The model assumed
+  dense bf16 runs at 15-25 TFLOPS; the shortfall says it does not. Two suspects, and W20 rules out the
+  first: **(a) threshold coverage** — from W24's routing census (`routing_census_1024.json`:
+  `prefill_distinct_experts` mean 261/384 per layer at 1024 tok, so ~256 rows/expert avg at 16K) an
+  occupancy estimate puts **~90-97% of rows already in ≥128-row experts** (equal-prob core ~0% below
+  128; a skew-aware bracket with distinct@16K→280-384 gives 2.5-10% below 128, <32 captures >96%, <16
+  >98%). So the threshold is NOT why the win is small — lowering it recovers a few % of rows at most.
+  **(b) the bf16 dense matmul kernel** — W50 measured bf16 score matmuls **34% slower than f32** at 16K
+  on this box; the dense gate/up/down likely pay the same slow bf16 path, eating the ALU win. The
+  dequant is *not* the leak: `mx.dequantize(mode="mxfp4")` returns bf16 directly (no f32 intermediate),
+  and K26 now dequantizes straight to the compute dtype (no cast, no doubled write).
+- **W51 FOLLOW-UP (this branch):** (1) nested prefill brackets `switch.dense.{group_rows,dequant,
+  matmul,scatter}` + `switch.gather_qmm_fallback` and per-layer tallies (`dense.rows_dense/rows_gather/
+  experts_dense/experts_under_threshold`) exported into the W47 stage-timing receipt
+  (`switch_breakdown` + new `switch_tallies`), so the next 16K window attributes the residual and
+  confirms the coverage estimate directly. (2) tunable arms `dense_min32` (threshold 32), `dense_batch16`
+  (batch 16), `dense_f32` (`MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE=f32` — f32 dequant + matmuls, the
+  W50 hypothesis test). **Open GPU-window question (KG-k):** does `dense_f32` recover the modelled
+  win, and do the counters confirm >90% dense coverage at threshold 128/32. See
+  `W51_PREFILL_DENSE_EXPERTS.md`.
 
 ---
 
