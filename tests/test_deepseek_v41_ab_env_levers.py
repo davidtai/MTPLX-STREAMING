@@ -91,9 +91,9 @@ EXPECTED_ON = {
     "device_route": set(),   # its only key is _DR, tracked in EXPECTED_DEVICE
     "both": {_OV, _LM},
     "all_levers": {_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM},
-    # W42 window-14: pure fast path measured -13.4%, so the fast path is LEFT OUT
-    # of stack_a until variant B (switch_fastpath_b) beats control.  W45/W44: the
-    # window-mask memo and the device route (both byte-identical) join the stack.
+    # W42 window-14: pure fast path LEFT OUT (−13.4%).  W45: the window-mask memo
+    # (byte-identical) joins the stack.  W44/window-19: device_route LEFT OUT (not
+    # exact on the real model -- tracked in EXPECTED_DEVICE, off for stack_a).
     "stack_a": {_SK, _AC, _WM},
     "head_bf16": set(),
     "head_mxfp8": set(),
@@ -101,8 +101,10 @@ EXPECTED_ON = {
 }
 
 # The device-route boolean each arm pins (W44 K24; separate from _ALL_KEYS because
-# it is not part of all_levers). In device_route and stack_a; off elsewhere.
-EXPECTED_DEVICE = {arm: (arm in ("device_route", "stack_a")) for arm in ALL_ARMS}
+# it is not part of all_levers). Only the standalone device_route arm sets it --
+# W44/window-19 showed it is NOT exact on the real model (unpinned deferred gather
+# vs mid-decode slot recycling), so it is OUT of stack_a until parity is clean.
+EXPECTED_DEVICE = {arm: (arm == "device_route") for arm in ALL_ARMS}
 
 # The head-codec value each arm pins on MTPLX_DSV41_HEAD_MODE (None = force-unset).
 EXPECTED_HEAD = {

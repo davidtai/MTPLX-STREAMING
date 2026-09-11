@@ -1,10 +1,16 @@
 # W44 — Barrier-free all-hit device route (KERNEL_LEDGER K24)
 
-Status: **implemented end to end** (switch + runtime + decode-forward cold recovery),
-behind env `MTPLX_DSV41_DEVICE_ROUTE` (default off), byte-identity — output, cache,
-and engram — proven vs the fenced path on the tiny backbone with a controllable fake
-bank. Author: Opus 4.8 worker (`feat/deepseek-v41-w44`, off `feat/deepseek-v41-
-streaming` @ 5b6b8e7d2). CPU-only; MLX pinned to CPU; no `experts.bin` load; ≤3 GB.
+Status: **SHELVED after GPU window 19 — NOT exact on the real model.** Implemented
+end to end (switch + runtime + decode-forward cold recovery) behind env
+`MTPLX_DSV41_DEVICE_ROUTE` (default off), and byte-identical on the tiny backbone
+with a *fake* bank — but window 19 decoded garbage (all-zero tokens, −21%) on the
+real artifact. Root cause proven on CPU (§8): the barrier-free gather reads a bank
+slot **without pinning** and **defers** execution, so a mid-decode admission
+recycles the slot in place before the deferred gather runs. No barrier-free-and-exact
+fix exists for this LRU bank (safety needs the host slot ids the lever removes).
+device_route stays a **standalone arm, default off, removed from `stack_a`** until a
+pinning redesign clears the `MTPLX_GPU_PARITY` window. Author: Opus 4.8 worker
+(`feat/deepseek-v41-w44`). CPU-only; MLX pinned to CPU; no `experts.bin` load; ≤3 GB.
 mlx 0.32.2.
 
 ## 0. The cost this removes
@@ -219,3 +225,56 @@ Partial `m1`-restart to cut the cold-token 2× compute toward 1× + tail: re-run
 feeds any layer `≥ m1`, reconstructing exactly that prefix of the `shared` runtime.
 Barriers are already `m` without it, so this is a compute optimisation for the cold
 regime, priced only if the window-16 A/B shows cold device-route compute-bound.
+
+## 8. GPU window 19 — NOT exact on the real model; root cause (the slot-recycle race)
+
+**Measured** (integration 0b35a8bc2, 1,024-token prompt, 256 greedy; receipt
+`docs/deepseek-v41/receipts/gpu-windows/window-19/ab-1024-device-route.json`):
+
+| arm | decode tok/s | byte-identical | tokens |
+|---|---:|:---:|---|
+| control | 4.05 | — | coherent |
+| device_route | **3.19 (−21%)** | **NO** (sha c0a892a0…) | **all 0 from token 1** |
+| stack_a + device_route | 3.77 (−7%) | NO | all 0 |
+
+The census showed the barrier-free path engaged (routing barriers 640 → 8 over the
+16-step census) — recovery barely fired — yet **every** decoded token is 0. So the
+failure is not a subtle routing diff and not (mostly) the recovery: the gather itself
+returns garbage.
+
+**What I ruled out on CPU (real component-bank hy3 runtime):**
+- The slot mapping is correct: `_expert_to_slot[e] == binding.buffer.bank_index` for
+  every resident expert; the LUT is right.
+- The **all-hit** device gather is **byte-identical** to the fenced gather (real
+  `_gather_component_bank`, real bank) — the gather math/shape/order are correct.
+
+**Root cause (proven on CPU, `test_deferred_device_gather_races_with_slot_recycle`):**
+the fenced path **pins** the route's slots and **fences** the gather immediately (the
+wave fence), so the gather completes before the slot can be reused. The barrier-free
+device path reads slots via the LUT **without a pin** and **defers** the gather
+(async; forced only at the token-end flush). `gather_qmm` reads the bank at **eval
+time**, so any admission that recycles a read slot **in place** — the cold-recovery
+pass's fenced admissions, or the next token's LRU eviction/admission across the
+256-token decode — overwrites the slot's bytes before the deferred gather runs → it
+reads the wrong expert's weights → catastrophic garbage → all-zero logits. The
+snapshot-based miss check can't catch it: it verifies expert *membership* at
+LUT-build, not slot *stability* through eval; the recycle happens after the probe.
+CPU proof: a deferred gather over a real bank reflects an in-place mutation applied
+after issue (max|Δ| ≈ 3e4) — it is not isolated from recycling.
+
+**Why there is no barrier-free-and-exact fix for this bank.** Safety requires the
+read slots to be either fenced (executed before recycle) or pinned (not recycled).
+Both need the host-side slot ids — which is exactly the `mx.eval(indices)` /
+`.tolist()` the lever removed. Pinning the *whole* resident set of a layer for the
+decode avoids reading indices, but then a mid-decode miss cannot evict-to-admit
+(the recovery pass deadlocks against its own pins), and holding the full working set
+resident is the memory cost W24 already priced against LRU. So device_route is exact
+**only** when the resident set is static for the entire decode (no miss, no
+eviction) — not the window-12 rate (0.267 miss/slot, ~16 miss layers/token).
+
+**Disposition.** device_route stays a standalone arm, **default off, removed from
+`stack_a`**. The GPU-parity harness (`test_gpu_parity_device_route_vs_fenced`,
+`MTPLX_GPU_PARITY=1`) decodes N tokens device vs fenced on the real artifact and
+reports the first mismatch with per-layer routing diffs; re-enable only once it is
+clean under a pinning redesign (or the lever is retired as unviable on the churning
+LRU bank — the honest reading of window 19).
