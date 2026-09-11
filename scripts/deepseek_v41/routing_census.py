@@ -408,6 +408,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--record-bytes", type=int, default=None)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--slot-layout", default="component-banks")
+    # Routing is computed by the gate independent of cache scope/size, so the
+    # census uses whatever fits CPU memory.  "global" shares ONE slot pool across
+    # all 40 layers (vs per-layer banks) -> far fewer 18.8 MB buffers; this does
+    # NOT change the captured routing.
+    p.add_argument("--cache-scope", default="global", choices=("layer", "global"))
+    p.add_argument("--transient-slots", type=int, default=None,
+                   help="cap the transient slot count (memory); None = plan-derived")
     # memory_limit is the runtime memory-PLAN ceiling, NOT process RSS: the plan's
     # fixed-footprint check (expert_runtime.py:2050, unconditional) counts the full
     # resident manifest (~23 GiB incl. the 15.3 GiB MTP experts the AR path never
@@ -488,13 +495,31 @@ def run_census(args, log) -> dict:
     import mlx.core as mx
     mx.set_default_device(mx.cpu)
     mx.random.seed(int(args.seed))
+    # MLX keeps freed working buffers in a reuse cache; on the streamed forward
+    # the transient expert gathers + activations accumulate there and RSS never
+    # drops.  Cap the cache to 0 so freed buffers return to the OS immediately,
+    # and clear it after every chunk/step (keeps peak RSS ~= residents + one
+    # forward's live working set).
+    try:
+        mx.set_cache_limit(0)
+    except Exception:
+        pass
+
+    def _mem():
+        try:
+            return (mx.get_active_memory() / GIB, mx.get_cache_memory() / GIB)
+        except Exception:
+            return (0.0, 0.0)
 
     from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming
     from mtplx.models.deepseek_v41_moe import Gate
     from mlx_lm.utils import load_tokenizer
 
     t0 = time.time()
-    log("[census] loading model (CPU, capped) ...")
+    log(f"[census] loading model (CPU, capped, cache_scope={args.cache_scope}) ...")
+    extra = {}
+    if args.transient_slots is not None:
+        extra["transient_slots"] = int(args.transient_slots)
     resident = load_deepseek_v41_streaming(
         args.model,
         memory_limit_bytes=int(args.memory_limit_gib * GIB),
@@ -502,11 +527,12 @@ def run_census(args, log) -> dict:
         admit=True,
         admission_receipt=None,
         expert_cache_limit_bytes=int(args.expert_cache_limit_gib * GIB),
-        apply_memory_cap=True,
+        apply_memory_cap=args.apply_memory_cap,
         slot_layout=args.slot_layout,
-        cache_scope="layer",
+        cache_scope=args.cache_scope,
         island_layers=(),
         verify_record_hashes=False,
+        **extra,
     )
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime")
@@ -583,8 +609,14 @@ def run_census(args, log) -> dict:
             seg = prompt_ids[i:i + chunk]
             logits = model(mx.array([seg]), cache=cache)
             mx.eval(logits)
-            if len(prompt_ids) > chunk:
-                log(f"[census] prefill chunk {i}..{i+len(seg)}  RSS={_rss_gib():.2f} GiB")
+            try:
+                mx.clear_cache()
+            except Exception:
+                pass
+            if len(prompt_ids) > chunk and (i % (chunk * 16) == 0 or i + chunk >= len(prompt_ids)):
+                act, cch = _mem()
+                log(f"[census] prefill chunk {i}..{i+len(seg)}  RSS={_rss_gib():.2f} "
+                    f"active={act:.2f} cache={cch:.2f} GiB")
         prefill_s = time.time() - tp
         ttft_s = prefill_s
         token = int(mx.argmax(logits[0, -1]).item())
@@ -601,6 +633,10 @@ def run_census(args, log) -> dict:
             logits = model(mx.array([[token]]), cache=cache)
             token = int(mx.argmax(logits[0, -1]).item())
             decoded_ids.append(token)
+            try:
+                mx.clear_cache()
+            except Exception:
+                pass
             if s % 8 == 0 or s == int(args.decode_tokens) - 1:
                 el = time.time() - td
                 log(f"[census] decode step {s+1}/{args.decode_tokens} "
