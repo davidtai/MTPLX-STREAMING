@@ -299,6 +299,24 @@ def is_active() -> bool:
     return _ACTIVE is not None
 
 
+def _prefill_recording(p) -> bool:
+    """Is ``p`` an armed probe recording a *prefill* forward?
+
+    ``_kind`` is an OPT-IN prefill marker: a probe declares ``_kind = "prefill"``
+    to select the finer prefill sub-brackets; anything else -- including a minimal
+    probe DOUBLE that predates ``_kind`` and never sets it (e.g. the W41 dispatch
+    census in ``scripts/deepseek_v41/dispatch_census.py``, which installs itself as
+    the active probe and reuses the ``stage()`` brackets with decode semantics) --
+    defaults to decode.  So this reads ``_kind`` through ``getattr`` with a decode
+    default, and every prefill-only accessor goes through here; a double only needs
+    ``_recording_now`` (and ``_stage``) to work."""
+    return (
+        p is not None
+        and p._recording_now
+        and getattr(p, "_kind", _KIND_DECODE) == _KIND_PREFILL
+    )
+
+
 def recording() -> bool:
     """True while a forward of an armed session is being timed (either kind).  Read
     by ``deepseek_v41._hc_use_compile`` / ``_attn_use_compile`` to force the eager
@@ -311,9 +329,9 @@ def recording() -> bool:
 
 def is_prefill() -> bool:
     """True while a *prefill* session is recording -- selects the finer prefill
-    attention/switch sub-brackets over the single decode ``attn.<mode>`` stage."""
-    p = _ACTIVE
-    return p is not None and p._recording_now and p._kind == _KIND_PREFILL
+    attention/switch sub-brackets over the single decode ``attn.<mode>`` stage.
+    A probe without ``_kind`` (a lightweight double) reads as decode."""
+    return _prefill_recording(_ACTIVE)
 
 
 def stage(name: str):
@@ -334,7 +352,7 @@ def stage_prefill(name: str):
     decode session or off, is byte-identical and never double-counts the single
     decode ``attn.<mode>`` bracket."""
     p = _ACTIVE
-    if p is None or not p._recording_now or p._kind != _KIND_PREFILL:
+    if not _prefill_recording(p):
         return _NOOP_CM
     return p._stage(name)
 
@@ -344,7 +362,7 @@ def stage_nested(name: str):
     (admission / route-plan / miss-submit).  Recorded into ``switch_breakdown`` and
     kept OUT of the flat partition sum, since it decomposes moe.routed_switch."""
     p = _ACTIVE
-    if p is None or not p._recording_now or p._kind != _KIND_PREFILL:
+    if not _prefill_recording(p):
         return _NOOP_CM
     return p._stage(name, nested=True)
 
@@ -364,7 +382,7 @@ def chunk(idx: int):
     and times the block as that chunk's wall.  A no-op unless a prefill session is
     recording, so decode / one-shot paths are untouched."""
     p = _ACTIVE
-    if p is None or not p._recording_now or p._kind != _KIND_PREFILL:
+    if not _prefill_recording(p):
         return _NOOP_CM
     return p._chunk(idx)
 
@@ -373,7 +391,7 @@ def set_schedule(name: str) -> None:
     """Record which prefill schedule ran (``chunk_major`` / ``layer_major`` /
     ``one_shot``).  A no-op unless a prefill session is recording."""
     p = _ACTIVE
-    if p is not None and p._recording_now and p._kind == _KIND_PREFILL:
+    if _prefill_recording(p):
         p._schedule = name
 
 
