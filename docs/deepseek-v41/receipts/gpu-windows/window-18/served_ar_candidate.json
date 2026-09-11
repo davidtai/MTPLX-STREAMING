@@ -1,0 +1,69 @@
+{
+  "kind": "dsv41-served-1k-bench",
+  "created": 1789121747,
+  "base_url": "http://127.0.0.1:18080",
+  "request": {
+    "model": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+    "max_tokens": 256,
+    "temperature": 0.0,
+    "prompt_kind": "list[int] (raw /v1/completions; verbatim, no BOS re-add)",
+    "prompt_tokens_sent": 1025
+  },
+  "prompt_build": {
+    "prompt_policy": "coding_agent_tail_v2",
+    "prompt_style": "coding-agent",
+    "prompt_format": "raw",
+    "prompt_enable_thinking": false,
+    "prompt_release_valid": true,
+    "prompt_tail_sha256": "887573dd262ed624eccb39f8b833f5711dd36889d2ea16e68837e2985a1f71b1",
+    "prompt_tail_tokens": 282,
+    "prompt_tail_preserved": true,
+    "prompt_tail_truncated": false,
+    "prompt_filler_tokens": 742,
+    "prompt_head_trimmed_tokens": 0,
+    "prompt_context_tokens": 1024,
+    "prompt_actual_tokens": 1024,
+    "prompt_filler_sha256": "69b2be3dbd45365504b6dd0f0caff283b04905e96e0b905fa670260e359f8dcc",
+    "prompt_source": "prefill_bench",
+    "bos_prepended": true,
+    "bos_id": 0,
+    "input_tokens": 1025,
+    "tokenizer": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
+  },
+  "server_side": {
+    "prefill_tok_s": 53.937,
+    "decode_tok_s": 1578.843,
+    "ttft_s": 19.003711,
+    "prefill_ms": 19003.711,
+    "decode_ms": 0.633,
+    "prompt_tokens": 1025,
+    "completion_tokens": 1,
+    "finish_reason": "stop"
+  },
+  "client_wall": {
+    "wall_s": 83.29677216699929,
+    "end_to_end_tok_s": 0.012005267118816188
+  },
+  "completion_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "completion_len_chars": 0,
+  "completion_head": "",
+  "completion_tail": "",
+  "usage": {
+    "prompt_tokens": 1025,
+    "completion_tokens": 1,
+    "total_tokens": 1026,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    }
+  },
+  "timings": {
+    "prompt_n": 1025,
+    "predicted_n": 1,
+    "prompt_ms": 19003.711,
+    "predicted_ms": 0.633,
+    "prompt_per_second": 53.937,
+    "predicted_per_second": 1578.843,
+    "draft_n": 0,
+    "draft_n_accepted": 0
+  }
+}
