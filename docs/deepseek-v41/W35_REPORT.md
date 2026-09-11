@@ -258,3 +258,65 @@ resolved callable equals the model's AR head-path output on a random hidden; no
 ### Next GPU smoke should confirm
 `--generation-mode mtp` reaches a completion (drafter installed, head resolved),
 with the MTP acceptance counters populating.
+
+---
+
+## Window-18 follow-up (served 16K refused before prefill by the memory guard)
+
+Served 16K cells were refused at every cap: 60 GiB "projects 57.2 GiB against
+53.0 GiB (4.2 GiB over)", 70 GiB "67.0 vs 63.0". The projection moved with the
+cap because the guard counted the whole planned expert cache as committed and
+added the prompt's KV on top, at the Qwen 65,536 B/token dense default — always
+~one prompt-KV over.
+
+### Root cause
+`_prefill_admission_shed` projects `active + cache + miss_tokens*per_token +
+transients`. `active` (wired MLX) includes the expert cache **pool**, and
+`per_token` came from the outer plan's `MTPLX_DENSE_KV_BYTES_PER_TOKEN` default
+(65,536). So the reclaimable expert cache (~42 GiB at a 60 GiB cap) was treated as
+committed and the prompt KV stacked on top.
+
+### Fix
+`_prefill_admission_shed` now dispatches the expert-streaming lane
+(`state.runtime.expert_streaming`) to `_expert_streaming_prefill_admission`, which
+accounts the plan correctly. The expert cache is a **bounded, reclaimable pool**
+that yields to KV (the planner reserved `runtime_reserve` + KV for
+`max_live_kv_tokens`), so it projects only:
+
+- the **non-cache committed footprint** = `plan.resident_bytes` (text-only
+  weights) + `plan.transient_bytes` (the reused service slots) — **not** the
+  persistent expert cache;
+- the prompt's live KV at the spec's **real per-token cost**
+  (`spec.kv_bytes_per_token` = 3,200 B/token for DSV4.1: the MLA latent + index-K
+  over the compress-ratio kv_source layers — not 65,536);
+- the **bounded per-chunk prefill transient**
+  (`MTPLX_DSV41_PREFILL_CHUNK[_TARGET_GB]`, ~8 GB) — chunked prefill never
+  materializes the whole 16K prompt at once.
+
+A prompt whose live KV fits `max_live_kv_tokens` is admitted; one beyond it is
+refused (`prompt_live_kv_exceeds_max_live_kv_tokens`). Gated on the lane, so every
+other model's admission is byte-identical.
+
+### Corrected projection numbers (16,384-token prompt)
+| Term | Bytes | GiB |
+|---|---:|---:|
+| committed (resident + transient) | 10,646,… | 9.91 |
+| live KV (16,384 × 3,200) | 52,428,800 | 0.05 |
+| prefill transient (chunk target) | 8,000,000,000 | 7.45 |
+| **projected** | | **17.41** |
+
+Admitted at both the 60 GiB (engine 53.0) and 70 GiB (engine 63.0) caps — versus
+the buggy 57.2 / 67.0 GiB. A 20,000-token prompt (> `max_live_kv_tokens`) is
+refused with `prompt_live_kv_exceeds_max_live_kv_tokens`.
+
+### Tests (CPU, no artifact experts.bin; real spec + measured discount)
+`test_expert_streaming_16k_prompt_admitted` (60 & 70 GiB), 
+`test_expert_streaming_prompt_beyond_max_kv_refused` (reason + per_token 3,200),
+`test_prefill_shed_dispatches_to_the_expert_streaming_lane`,
+`test_dsv41_prefill_transient_is_the_bounded_chunk_budget`. w35 suite: 21 passed.
+Generic admission regression (`test_prefill_admission_shed`,
+`test_session_bank_chain_shed`): 64 passed.
+
+### Next GPU smoke should confirm
+A served 16,384-token cell prefills and completes (no pre-prefill 507); a prompt
+beyond `max_live_kv_tokens` is refused with the plan-based reason.
