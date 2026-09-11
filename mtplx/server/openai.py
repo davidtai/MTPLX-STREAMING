@@ -1155,6 +1155,48 @@ def _served_model_type_is_qwen4_exp(args: argparse.Namespace) -> bool:
     return "qwen4_exp" in (mt, tmt) or "qwen4_exp_text" in (mt, tmt)
 
 
+def _served_model_type_is_deepseek_v41(args: argparse.Namespace) -> bool:
+    """True when the served artifact is DeepSeek-V4.1 (text or multimodal).
+
+    Gates the DSpark-DIRECT decode lane (W57): the drafter and the
+    all-trimmable V4.1 cache the lane needs are family-specific.
+    """
+    try:
+        with open(Path(str(args.model)) / "config.json", "rb") as fh:
+            cfg = json.load(fh)
+    except Exception:
+        return False
+    mt = str(cfg.get("model_type") or "").lower()
+    tmt = str((cfg.get("text_config") or {}).get("model_type") or "").lower()
+    return bool({"deepseek_v41", "deepseek_v41_text"} & {mt, tmt})
+
+
+def _dspark_direct_env_enabled() -> bool:
+    """``MTPLX_DSV41_DSPARK_DIRECT`` truthy: route this model family's ``mtp``
+    requests through the DSpark-DIRECT lane instead of the generic native-MTP
+    machinery (W57).  ``--generation-mode dspark`` selects the lane explicitly and
+    needs no env flag."""
+    return str(os.environ.get("MTPLX_DSV41_DSPARK_DIRECT", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _dspark_direct_selected(state: "ServerState", effective_mode: str) -> bool:
+    """Whether a request should run the DSpark-DIRECT lane: an explicit
+    ``dspark`` mode, or ``mtp`` with ``MTPLX_DSV41_DSPARK_DIRECT=1`` -- in either
+    case only for a deepseek_v41 model on an MTP-enabled runtime."""
+    if not bool(getattr(state.runtime, "mtp_enabled", False)):
+        return False
+    if not _served_model_type_is_deepseek_v41(state.args):
+        return False
+    if effective_mode == "dspark":
+        return True
+    return effective_mode == "mtp" and _dspark_direct_env_enabled()
+
+
 _QWEN4_PORT_TRUTHY = frozenset({"1", "true", "yes", "on"})
 # Gates of the PR #391 Flash-Next ports, one per ported step.
 _QWEN4_PORT_KEYS = (
@@ -15246,10 +15288,14 @@ def _normalize_generation_mode(value: Any, *, default: str = "mtp") -> str:
     if value is None:
         return default
     text = str(value).strip().lower()
-    if text not in {"mtp", "ar"}:
+    # 'dspark' is the DeepSeek-V4.1 DSpark-DIRECT lane (W57); it is a
+    # speculative (non-AR) mode, so downstream depth/verify logic that keys on
+    # ``== "ar"`` treats it like ``mtp``.  The dispatch in _run_generation routes
+    # it to generate_dspark instead of the generic generate_mtpk.
+    if text not in {"mtp", "ar", "dspark"}:
         raise HTTPException(
             status_code=400,
-            detail="generation_mode must be 'mtp' or 'ar'",
+            detail="generation_mode must be 'mtp', 'ar', or 'dspark'",
         )
     return text
 
@@ -15272,10 +15318,12 @@ def _request_generation_mode_for_generation(
         _request_generation_mode_value(request) if allow_client_controls else None,
         default=default,
     )
-    if mode == "mtp" and not bool(getattr(state.runtime, "mtp_enabled", False)):
+    if mode in {"mtp", "dspark"} and not bool(
+        getattr(state.runtime, "mtp_enabled", False)
+    ):
         raise HTTPException(
             status_code=400,
-            detail="generation_mode 'mtp' requires a runtime loaded with MTP",
+            detail=f"generation_mode '{mode}' requires a runtime loaded with MTP",
         )
     return mode
 
@@ -17254,8 +17302,8 @@ def _coerce_setting(name: str, value: Any) -> Any:
         return text
     if name == "generation_mode":
         text = str(value).strip().lower()
-        if text not in {"mtp", "ar"}:
-            raise ValueError("generation_mode must be 'mtp' or 'ar'")
+        if text not in {"mtp", "ar", "dspark"}:
+            raise ValueError("generation_mode must be 'mtp', 'ar', or 'dspark'")
         return text
     if name in {"temperature", "top_p", "draft_temperature", "draft_top_p"}:
         try:
@@ -24882,7 +24930,45 @@ def _run_generation(
                     if constraint_spec is not None
                     else None
                 )
-                if effective_mode == "ar":
+                if _dspark_direct_selected(state, effective_mode):
+                    # DSpark-DIRECT lane (W57): bypass the generic native-MTP
+                    # machinery for deepseek_v41 and drive W23's DSpark drafter
+                    # through the lean speculative loop.  Constraints/vision are
+                    # not supported on this lean lane -- they stay on the generic
+                    # mtp/ar lanes (a dspark request never carries them).
+                    from mtplx.models.deepseek_v41_dspark_decode import (
+                        generate_dspark,
+                    )
+
+                    if constraint is not None:
+                        raise ValueError(
+                            "constrained decoding is not supported on the "
+                            "DSpark-DIRECT lane; use generation_mode mtp/ar"
+                        )
+                    out = generate_dspark(
+                        state.runtime,
+                        prompt_ids,
+                        max_tokens=response_max,
+                        sampler=sampler,
+                        seed=generation_seed,
+                        stop_token_ids=None,
+                        token_callback=record_tokens,
+                        speculative_depth=effective_depth,
+                        trace_label=trace_label,
+                        trace_metadata=trace_metadata,
+                        prefill_callback=prefill_callback,
+                        abort_check=(
+                            (
+                                lambda: bool(
+                                    cancel_event.is_set()
+                                    or _pressure_abort_requested(state)
+                                )
+                            )
+                            if cancel_event is not None
+                            else (lambda: _pressure_abort_requested(state))
+                        ),
+                    )
+                elif effective_mode == "ar":
                     out = generate_ar(
                         state.runtime,
                         prompt_ids,
@@ -36847,9 +36933,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--generation-mode",
-        choices=["mtp", "ar"],
+        choices=["mtp", "ar", "dspark"],
         default="mtp",
-        help="Generation mode. 'ar' uses target-only AR generation while keeping the same loaded runtime.",
+        help=(
+            "Generation mode. 'ar' uses target-only AR generation while keeping "
+            "the same loaded runtime; 'dspark' is the DeepSeek-V4.1 DSpark-DIRECT "
+            "speculative lane (W57)."
+        ),
     )
     parser.add_argument(
         "--stock-ar",

@@ -3552,7 +3552,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_expert_streaming_args(serve_p)
     serve_p.add_argument(
         "--generation-mode",
-        choices=["mtp", "ar", "auto"],
+        choices=["mtp", "ar", "auto", "dspark"],
         default=None,
         help=(
             "Daemon decode mode. AR is target-only generation; MTP is native "
@@ -3906,9 +3906,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bench_p.add_argument(
         "--generation-mode",
-        choices=["mtp", "ar"],
+        choices=["mtp", "ar", "dspark"],
         default=None,
-        help="Benchmark decode mode. AR here is target-only unless --stock-ar is also set.",
+        help="Benchmark decode mode. AR here is target-only unless --stock-ar is also set; 'dspark' is the DeepSeek-V4.1 DSpark-DIRECT lane (W57).",
     )
     bench_p.add_argument(
         "--stock-ar",

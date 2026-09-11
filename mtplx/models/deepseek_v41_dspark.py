@@ -54,6 +54,7 @@ import mlx.nn as nn
 from mtplx.models.deepseek_v41 import (
     Attention,
     DecoderLayer,
+    MODE_SWA_ONLY,
     ModelArgs,
     MoE,
     _cos_sin,
@@ -242,6 +243,14 @@ class DSparkAttention(Attention):
         self.eps = args.rms_norm_eps
         self.softmax_scale = args.head_dim ** -0.5
         self.compress_ratio = 0
+        #: DSpark attention is always a pure sliding window (``compress_ratio ==
+        #: 0``); the base :class:`Attention` reads ``self.mode`` for its
+        #: stage-timing labels (``_sparse_attend_oneshot`` L715), and the MTP
+        #: stages have no ``layer_modes`` entry, so it is set here directly (a
+        #: label only -- no numeric effect).  Without it a draft-block forward
+        #: (T > 1 rows -> the score path) raised ``'DSparkAttention' object has
+        #: no attribute 'mode'`` and broke the whole draft (W57).
+        self.mode = MODE_SWA_ONLY
         self.compressor = None
         self.indexer = None
         self.capture_selection = False
