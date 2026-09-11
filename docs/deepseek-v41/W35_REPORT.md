@@ -175,3 +175,41 @@ artifact is absent). W23's synthetic-manifest partition/mapping tests still gree
 ### Next GPU smoke should confirm
 `--generation-mode mtp` reaches `/health` with `generation_mode='mtp'` and the
 DSpark head active (no strict-load failure); AR still text-only.
+
+---
+
+## Window-16 follow-up (residents load; "unresolved streamed MTP backend None")
+
+Re-smoke on `5b6b8e7d2`: `--generation-mode mtp` loaded the residents (the
+mtp.*_vl fix worked) but died with `RuntimeError: unresolved streamed MTP backend
+None` at `runtime.py:1131`.
+
+### Root cause
+The streaming block installs MTP in its own `if mtp:` block right after
+`construct_resident_model`, and it only knew the external adapters:
+`streamed_mtp_backend == "hy3"` / `"glm52"`, else `raise unresolved streamed MTP
+backend`. For the native DSpark path `streamed_mtp_backend` is `None` (the native
+path deliberately skips `_streamed_mtp_backend`), so it hit the else-raise. The
+general `is_deepseek_v41_mtp_config` dispatch that publishes the head sits PAST
+the streaming block's `return runtime`, so the streamed lane never reached it —
+the streamed lane has to publish the head itself.
+
+### Fix
+The streaming block's MTP injection gained a native branch (taken when
+`native_streamed_mtp`): `inject_deepseek_v41_mtp_support(model, path, config,
+contract)`, which publishes the in-model DSpark head that the `mtp=True` resident
+construct already built (the head binds from the checkpoint's `mtp.*` tensors;
+inject just signals `validate_mtp_support`). hy3/glm branches are unchanged.
+
+### Verification (CPU, real config, `mtp=True` construct, no experts.bin, 471 MB RSS)
+`test_served_native_mtp_constructs_and_publishes_the_drafter`: constructs the
+drafter, then `inject_deepseek_v41_mtp_support` returns True and
+`validate_mtp_support` passes. `test_native_mtp_install_degrades_without_a_head`:
+a head-less model / no-stage config returns False (degrade-to-AR), so the runtime
+raises the clear "injection failed", never "unresolved backend". Full
+`test_deepseek_v41_mtp_gate_w35.py`: 15 passed. Regression (serve_profile,
+mtp_serve_glue, expert_cli_runtime, gate_w35): 90 passed.
+
+### Next GPU smoke should confirm
+`--generation-mode mtp` reaches `/health` with the DSpark drafter active (no
+"unresolved backend" raise); the MTP acceptance counters populate on a completion.
