@@ -373,3 +373,63 @@ def test_engram_history_rides_entry0_trim_through_the_served_path():
     rollback_after_verify(fresh, snapshot, 3)
     assert _cache_offset(fresh) == length_before
     assert int(fresh.engram_state.length) == length_before
+
+
+# ---------------------------------------------------------------------------
+# 5. session/SSD prompt-cache save-restore: what round-trips, and the exact
+#    reason near-prefix session restore stays gated off for the engram artifact
+#    (see docs/deepseek-v41/W22_REPORT.md "session/SSD save-restore").
+# ---------------------------------------------------------------------------
+def test_session_snapshot_roundtrips_kv_but_not_engram_documents_the_gate():
+    from mtplx.cache_state import restore_cache, snapshot_cache
+
+    args = _swa_args(compress_ratios=[0, 0, 2, 2], num_hidden_layers=4,
+                     kv_source_layer_ids=[2], index_source_layer_ids=[2])
+    rt = _runtime(args, seed=8, engram=True)
+    ids = mx.array([_prompt(14)])
+
+    cache = rt.make_cache()
+    rt.forward_ar(ids, cache=cache)
+    kv_before = _cache_state_fields(cache)
+    off_before = _cache_offset(cache)
+    eng_before = int(cache.engram_state.length)
+    assert off_before == eng_before == 14
+
+    # the in-memory session-bank store path: snapshot_cache reads entry.state +
+    # entry.meta_state for every entry.
+    snapshot = snapshot_cache(cache)
+
+    # advance the live cache (as a warm turn's suffix would), then restore.
+    rt.forward_ar(mx.array([[5, 6, 7]]), cache=cache)
+    restore_cache(cache, snapshot)
+
+    # the KV lanes (window ring, compressed KV, index keys, compressor frontier)
+    # and per-entry offsets round-trip bit-exactly -> session KV restore works.
+    assert _cache_offset(cache) == off_before
+    assert _states_bit_equal(kv_before, _cache_state_fields(cache))
+
+    # but the engram history is NOT part of state (it is streaming numpy state
+    # advanced from token ids, rewound only by trim); restore_cache leaves it at
+    # the live length. This is the precise reason near-prefix session restore is
+    # unsafe -- and must stay disabled -- while engram is wired: a KV-only
+    # restore desyncs the engram from the KV on layers 1/14.
+    assert int(cache.engram_state.length) == eng_before + 3
+
+
+def test_ssd_on_disk_prompt_cache_is_inoperative_for_this_cache_shape():
+    # The SSD (on-disk) session cache serializes via mlx_lm.save_prompt_cache,
+    # which cannot serialize this cache's nested/None-holed state tuples; it
+    # fails closed (raises) rather than corrupting, so the SSD path is
+    # effectively unavailable for the V4.1 backend (report: SSD save-restore).
+    import os
+    import tempfile
+
+    from mlx_lm.models.cache import save_prompt_cache
+
+    args = _swa_args()
+    rt = _runtime(args, seed=9)
+    cache = rt.make_cache()
+    rt.forward_ar(mx.array([_prompt(10)]), cache=cache)
+    path = os.path.join(tempfile.mkdtemp(), "sc.safetensors")
+    with pytest.raises(Exception):
+        save_prompt_cache(path, cache)
