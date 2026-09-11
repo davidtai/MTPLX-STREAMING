@@ -96,6 +96,42 @@ Lever runs (attribute a cost; each to its own `--out`, append-only —
     --no-win-memo --out .../W78_metal_attn_bisect_w<WINDOW>_nowinmemo.json
 ```
 
+## Allocator/residency pressure (window-31 follow-up)
+
+Window 31 ran the baseline on Metal and found **every op flat in T** (whole
+2.0–2.9 ms/step at T=1K/4K/16K, all four modes), yet the same ops inside the
+loaded model at 16K run 3–7× slower (census `cache_append` 1.18 ms/layer vs ~0.17
+here; `attn.reuse` 6.6 vs ~2.0). Hypothesis: the per-token fresh T-sized buffers
+(the `[1,T,512]` concat outputs, ~16 MB × 40 layers) are allocated inside a
+process already holding 60–88 GB of resident Metal buffers, so they hit an
+allocator/residency slow path the empty microbench never sees. `--ballast-gib N`
+holds N GiB of resident Metal buffers (~256 MB f32 chunks, forced with `mx.eval`,
+kept referenced for the whole run — the pool is **not** cleared between modes
+while ballast is held); `--ballast-churn` additionally allocs+frees a ~16 MB
+transient **between** the timed ops each step (mimicking the concat churn), so the
+op's own fresh allocation pays whatever the churned + pressured allocator charges.
+The receipt records `ballast_gib`, `ballast_churn`, and
+`memory.{active_after_ballast_gib, active_end_gib, peak_gib}` (from
+`mx.get_active_memory`/`get_peak_memory`).
+
+Exact window command for **60 GiB** ballast + churn (stays under the 96 GiB child
+cap with Qwen unloaded — 60 GiB ballast + ~0.4 GiB/layer built sequentially ≈
+61 GiB resident; confirm the receipt's `active_end_gib` before trusting a run):
+
+```
+PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w78 \
+nice -n 19 /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python3 \
+  scripts/deepseek_v41/metal_decode_attn_bisect.py \
+  --gpu --T 1024 4096 16384 --iters 30 --warmup 5 \
+  --ballast-gib 60 --ballast-churn \
+  --out docs/deepseek-v41/receipts/W78_metal_attn_bisect_w<WINDOW>_ballast60.json
+```
+
+Sweep the ballast (e.g. 0, 30, 60, 88 GiB, and add/drop `--ballast-churn`) to see
+whether `cache_append` / `attend` climb toward the census 3–7× as the resident set
+grows — that would confirm the allocator/residency mechanism (and, per
+`[[never-exceed-the-memory-knob]]`, keep every run's `active_end_gib` under 96).
+
 ## How to read it
 
 - The **16K/1K ratio** column per op is the O(T) tell. An op flat in T (ratio ≈ 1)

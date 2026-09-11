@@ -30,6 +30,12 @@ Levers (so the GPU window can attribute a cost):
     ``KV.astype(f32)`` over the whole cache) instead of the K30 selected-key gather.
   * ``--no-win-memo``       -- turn off MTPLX_DSV41_ATTN_WIN_MEMO.
   * ``--compare-no-compile``-- turn off MTPLX_DSV41_ATTN_COMPILE (eager qkv/out).
+  * ``--ballast-gib N``      -- hold N GiB of resident Metal buffers for the whole
+    run (reproduce the loaded model's 60-88 GB allocator/residency pressure that
+    the empty microbench lacks -- window 31 measured every op flat in T here but
+    3-7x slower inside the loaded process).
+  * ``--ballast-churn``      -- also alloc+free a ~16 MB transient per step between
+    ops (mimic the per-token [1,T,512] concat-output churn).
 
 Default device is **CPU** (so an accidental worker run never touches the Metal
 GPU during a benchmark window); pass ``--gpu`` in the exclusive GPU window.  The
@@ -295,14 +301,72 @@ def _fence(*arrays) -> None:
         mx.eval(arrs)
 
 
+# --- W78 window-31 follow-up: allocator/residency-pressure ballast ------------
+# The empty-process microbench measures every op flat in T, but inside the loaded
+# model at 16K the same ops run 3-7x slower (census cache_append 1.18 ms/layer vs
+# ~0.17 here; attn.reuse 6.6 vs ~2.0).  Hypothesis: per-token fresh T-sized buffers
+# (the [1,T,512] concat outputs, ~16 MB x 40 layers) allocated inside a process
+# already holding 60-88 GB of resident Metal buffers hit an allocator/residency
+# slow path.  ``--ballast-gib N`` reproduces the resident set (N GiB held for the
+# whole run); ``--ballast-churn`` reproduces the per-token alloc/free of a ~16 MB
+# transient BETWEEN the timed ops, so the op's own fresh allocation pays whatever
+# the churned + pressured allocator charges.  Both default OFF -> the default path
+# is byte-for-byte the pre-follow-up microbench.
+_BALLAST_CHUNK_BYTES = 256 * 1024 * 1024          # ~256 MB resident chunks
+_BALLAST_CHUNK_ELEMS = _BALLAST_CHUNK_BYTES // 4  # f32
+_CHURN_BYTES = 16 * 1024 * 1024                   # ~16 MB, the [1,T,512]@16K size
+_CHURN_ELEMS = _CHURN_BYTES // 4                  # f32
+
+
+def alloc_ballast(gib: float) -> list:
+    """Allocate ``gib`` GiB of resident Metal buffers as ~256 MB f32 arrays, force
+    them (``mx.eval``), and return the list so the caller holds the references for
+    the whole run.  ``gib <= 0`` -> no allocation (default path unchanged)."""
+    if gib <= 0:
+        return []
+    n_chunks = max(1, round(gib * 1024 / (_BALLAST_CHUNK_BYTES / (1024 * 1024))))
+    chunks = []
+    for _ in range(n_chunks):
+        # a real materialised buffer (fill, not a lazy zeros special-case)
+        chunks.append(mx.ones((_BALLAST_CHUNK_ELEMS,), dtype=mx.float32))
+        mx.eval(chunks[-1])
+    return chunks
+
+
+def _churn(on: bool) -> None:
+    """Allocate + force + free a ~16 MB transient -- the per-token concat-output
+    churn.  Called BETWEEN the timed ops so its own time is never attributed to an
+    op; it only changes the allocator state the next op's allocation sees."""
+    if not on:
+        return
+    tmp = mx.ones((_CHURN_ELEMS,), dtype=mx.float32)
+    mx.eval(tmp)
+    del tmp
+
+
+def _mem_gib(name: str):
+    """Best-effort MLX memory counter in GiB (``mx.get_active_memory`` etc., with
+    the older ``mx.metal.*`` fallback); ``None`` when unavailable (e.g. CPU)."""
+    for mod in (mx, getattr(mx, "metal", None)):
+        fn = getattr(mod, name, None) if mod is not None else None
+        if fn is not None:
+            try:
+                return fn() / (1024 ** 3)
+            except Exception:
+                pass
+    return None
+
+
 def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
                        shared: SharedAttentionRuntime, x: mx.array,
                        positions: mx.array, use_selected: bool,
-                       t: Dict[str, int], measure_gather: bool = True):
+                       t: Dict[str, int], measure_gather: bool = True,
+                       churn: bool = False):
     """One decode step, fencing after each production sub-op; accumulates ns into
     ``t``.  A faithful mirror of ``Attention._attend`` (selected + masked-full
     paths), calling the production methods -- so ``sum(peeled) ~= whole`` and each
-    op's cost is the served cost."""
+    op's cost is the served cost.  With ``churn`` on, a ~16 MB transient is
+    allocated + freed BETWEEN the timed ops (never inside a timed block)."""
     b, s, _ = x.shape
     H, hd = attn.n_heads, attn.head_dim
     mode = attn.mode
@@ -323,6 +387,7 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
         kv_new = _rope_last(kv_new, qcos, qsin)
     _fence(q, qr, kv_new)
     t["qkv_proj"] += time.perf_counter_ns() - t0
+    _churn(churn)
 
     # -- cache_append (window) --
     t0 = time.perf_counter_ns()
@@ -330,6 +395,7 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
     window_all = cache.window
     _fence(window_all)
     t["cache_append"] += time.perf_counter_ns() - t0
+    _churn(churn)
 
     attend = None
     if not use_selected:
@@ -338,6 +404,7 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
         attend = attn._window_attend(positions, window_all.shape[1], b, s, shared)
         _fence(attend)
         t["mask_build"] += time.perf_counter_ns() - t0
+        _churn(churn)
 
     KV = window_all
     sel_compress_kv = None
@@ -354,6 +421,7 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
         frontier = cache.comp_state.raw_kv if cache.comp_state is not None else None
         _fence(compress_kv, index_k, frontier)
         t["compress_append"] += time.perf_counter_ns() - t0
+        _churn(churn)
 
         if compress_kv is not None:
             n_comp = compress_kv.shape[1]
@@ -383,6 +451,7 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
                 sel_arrs.append(shared.selected_idx)
             _fence(*sel_arrs)
             t["select"] += time.perf_counter_ns() - t0
+            _churn(churn)
 
             if use_selected:
                 sel_compress_kv = compress_kv
@@ -415,6 +484,7 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
         o = attn._sparse_attend(q, KV, attend)
     _fence(o)
     t["attend"] += time.perf_counter_ns() - t0
+    _churn(churn)
 
     # -- out_proj (o-LoRA down + wo_b up; compiled tape or eager) --
     t0 = time.perf_counter_ns()
@@ -429,14 +499,19 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
         out = attn.wo_b(o.reshape(b, s, -1))
     _fence(out)
     t["out_proj"] += time.perf_counter_ns() - t0
+    _churn(churn)
     return out
 
 
 def decode_step_whole(attn: Attention, cache: LayerAttentionCache,
                       shared: SharedAttentionRuntime, x: mx.array,
-                      positions: mx.array) -> int:
+                      positions: mx.array, churn: bool = False) -> int:
     """One decode step through the production ``Attention._attend`` (the served
-    entry the decode loop calls), fenced once.  Returns elapsed ns."""
+    entry the decode loop calls), fenced once.  Returns elapsed ns.  Under
+    ``churn`` a ~16 MB transient is allocated + freed once per step BEFORE the
+    timed call (so the allocator is in the churned state ``_attend`` would meet
+    inside the real per-layer loop)."""
+    _churn(churn)
     t0 = time.perf_counter_ns()
     out = attn._attend(x, positions, cache, shared)
     mx.eval(out)
@@ -455,17 +530,18 @@ _ALL_KEYS = ["qkv_proj", "cache_append", "mask_build", "compress_append", "selec
 
 
 def measure_mode_T(args: ModelArgs, attn: Attention, mode: str, T: int,
-                   use_selected: bool, iters: int, warmup: int) -> Dict[str, float]:
+                   use_selected: bool, iters: int, warmup: int,
+                   churn: bool = False) -> Dict[str, float]:
     """Time whole + peeled for one (mode, T).  whole and peeled use freshly
     pre-filled caches so each runs a genuine decode step (the step mutates the
     cache); returns ms/step per op + the whole."""
     # whole
     cache, shared, x, pos = build_case(args, attn, mode, T)
     for _ in range(warmup):
-        decode_step_whole(attn, cache, shared, x, pos)
+        decode_step_whole(attn, cache, shared, x, pos, churn=churn)
     whole_ns = 0
     for _ in range(iters):
-        whole_ns += decode_step_whole(attn, cache, shared, x, pos)
+        whole_ns += decode_step_whole(attn, cache, shared, x, pos, churn=churn)
     whole_ms = whole_ns / 1e6 / iters
     del cache, shared, x, pos
 
@@ -473,10 +549,10 @@ def measure_mode_T(args: ModelArgs, attn: Attention, mode: str, T: int,
     cache, shared, x, pos = build_case(args, attn, mode, T)
     twarm: Dict[str, int] = {k: 0 for k in _ALL_KEYS}
     for _ in range(warmup):
-        decode_step_peeled(attn, cache, shared, x, pos, use_selected, twarm)
+        decode_step_peeled(attn, cache, shared, x, pos, use_selected, twarm, churn=churn)
     t: Dict[str, int] = {k: 0 for k in _ALL_KEYS}
     for _ in range(iters):
-        decode_step_peeled(attn, cache, shared, x, pos, use_selected, t)
+        decode_step_peeled(attn, cache, shared, x, pos, use_selected, t, churn=churn)
     del cache, shared, x, pos
 
     out: Dict[str, float] = {"whole": whole_ms}
@@ -503,11 +579,22 @@ def run(args_cfg: dict) -> dict:
     os.environ["MTPLX_DSV41_SELECTED_KEYS"] = "1" if use_selected else "0"
     dsv41._ATTN_WIN_MEMO = bool(args_cfg.get("win_memo", True))
     dsv41._ATTN_COMPILE = bool(args_cfg.get("compile", True))
+    ballast_gib = float(args_cfg.get("ballast_gib", 0.0))
+    ballast_churn = bool(args_cfg.get("ballast_churn", False))
 
     args = tiny_args() if tiny else real_args()
     Ts: List[int] = list(args_cfg.get("Ts", [256, 1024] if tiny else [1024, 4096, 16384]))
     iters = int(args_cfg.get("iters", 5 if tiny else 20))
     warmup = int(args_cfg.get("warmup", 2 if tiny else 3))
+
+    # Hold the ballast for the whole run (resident-set pressure), then record what
+    # is actually resident so the window can see how close it is to the child cap.
+    try:
+        mx.reset_peak_memory()
+    except Exception:
+        pass
+    _ballast = alloc_ballast(ballast_gib)
+    mem_after_ballast_gib = _mem_gib("get_active_memory")
 
     results: Dict[str, Dict[str, Dict[str, float]]] = {}
     for mode in _MODES:
@@ -515,14 +602,28 @@ def run(args_cfg: dict) -> dict:
         results[mode] = {}
         for T in Ts:
             results[mode][str(T)] = measure_mode_T(
-                args, attn, mode, T, use_selected, iters, warmup
+                args, attn, mode, T, use_selected, iters, warmup, churn=ballast_churn
             )
         del attn
         gc.collect()
-        try:
-            mx.clear_cache()
-        except Exception:
-            pass
+        # Default path: free the pool between modes as before.  With ballast held,
+        # skip it -- clearing the pool would evict the resident pressure we are
+        # deliberately holding (the whole point of --ballast-gib).
+        if ballast_gib <= 0:
+            try:
+                mx.clear_cache()
+            except Exception:
+                pass
+
+    mem = {
+        "ballast_gib": ballast_gib,
+        "n_ballast_chunks": len(_ballast),
+        "active_after_ballast_gib": mem_after_ballast_gib,
+        "active_end_gib": _mem_gib("get_active_memory"),
+        "peak_gib": _mem_gib("get_peak_memory"),
+    }
+    del _ballast
+    gc.collect()
 
     receipt = {
         "worker": "W78",
@@ -544,6 +645,9 @@ def run(args_cfg: dict) -> dict:
             "MTPLX_DSV41_SELECT_FENCE": os.environ.get("MTPLX_DSV41_SELECT_FENCE"),
         },
         "path": "selected_keys" if use_selected else "masked_full",
+        "ballast_gib": ballast_gib,
+        "ballast_churn": ballast_churn,
+        "memory": mem,
         "Ts": Ts,
         "iters": iters,
         "warmup": warmup,
@@ -568,7 +672,11 @@ def print_tables(receipt: dict) -> None:
           f"[{receipt['device']}, path={receipt['path']}, "
           f"compile={receipt['env']['MTPLX_DSV41_ATTN_COMPILE']}, "
           f"win_memo={receipt['env']['MTPLX_DSV41_ATTN_WIN_MEMO']}] ===")
+    mem = receipt.get("memory", {})
     print(f"dims: {receipt['dims']}   iters={receipt['iters']} warmup={receipt['warmup']}")
+    print(f"ballast_gib={receipt.get('ballast_gib', 0.0)} churn={receipt.get('ballast_churn', False)}  "
+          f"active_after_ballast={mem.get('active_after_ballast_gib')} "
+          f"active_end={mem.get('active_end_gib')} peak={mem.get('peak_gib')} GiB")
     hdr = "op".ljust(16) + "".join(f"{('T=' + str(T)):>11}" for T in Ts) + f"{'ratio(hi/lo)':>14}"
     rows = ["qkv_proj", "cache_append", "mask_build", "compress_append", "select",
             "gather_iso", "score", "attend", "out_proj", "peeled_sum", "whole"]
@@ -602,6 +710,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="turn off MTPLX_DSV41_ATTN_WIN_MEMO")
     p.add_argument("--compare-no-compile", action="store_true",
                    help="turn off MTPLX_DSV41_ATTN_COMPILE (eager qkv/out projections)")
+    p.add_argument("--ballast-gib", type=float, default=0.0,
+                   help="hold N GiB of resident Metal buffers for the whole run "
+                        "(reproduce the loaded model's allocator/residency pressure)")
+    p.add_argument("--ballast-churn", action="store_true",
+                   help="also alloc+free a ~16 MB transient per step between ops "
+                        "(mimic the per-token [1,T,512] concat churn)")
     p.add_argument("--T", type=int, nargs="+", default=None,
                    help="override the T sweep (default 1024 4096 16384; tiny 256 1024)")
     p.add_argument("--iters", type=int, default=None)
@@ -615,6 +729,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "use_selected": not a.no_selected_keys,
         "win_memo": not a.no_win_memo,
         "compile": not a.compare_no_compile,
+        "ballast_gib": a.ballast_gib,
+        "ballast_churn": a.ballast_churn,
     }
     if a.T is not None:
         cfg["Ts"] = a.T
