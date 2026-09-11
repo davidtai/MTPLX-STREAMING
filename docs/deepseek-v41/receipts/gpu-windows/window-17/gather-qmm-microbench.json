@@ -1,0 +1,471 @@
+{
+  "bench": "W43_gather_qmm_microbench",
+  "created_utc": "20260911T094918Z",
+  "device": "Device(gpu, 0)",
+  "geometry": {
+    "hidden": 5120,
+    "inter": 2304,
+    "top_k": 6,
+    "n_routed_experts": 384,
+    "mxfp4_group": 32,
+    "mxfp4_bits": 4,
+    "mxfp4_expert_record_bytes": 18800640,
+    "swiglu_limit": 10.0
+  },
+  "config": {
+    "arms": [
+      "mxfp4_switch",
+      "mxfp4_convention",
+      "affine_q4_gs64",
+      "affine_q8_gs64",
+      "bf16_dense"
+    ],
+    "m_values": [
+      1,
+      4
+    ],
+    "top_k": 6,
+    "hidden": 5120,
+    "inter": 2304,
+    "bank_slots": 92,
+    "group_size_mxfp4": 32,
+    "iters": 50,
+    "warmup": 10,
+    "memory_limit_gib": 8.0,
+    "seed": 0,
+    "out": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-17/gather-qmm-microbench.json",
+    "dry_run": false
+  },
+  "results": [
+    {
+      "arm": "mxfp4_switch",
+      "codec": "mxfp4",
+      "bits": 4,
+      "group": 32,
+      "layout": "switch_flat",
+      "m": 1,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 6,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        6,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        6,
+        1
+      ],
+      "lhs_indices_shape": null,
+      "per_slot_bytes": 18800640,
+      "bank_bytes": 1729658880,
+      "gathered_bytes": 112803840,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 6266880,
+        "up_proj": 6266880,
+        "down_proj": 6266880
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 417.0829997747205,
+      "min_us": 380.0830018008128,
+      "max_us": 1071.874998160638,
+      "mean_us": 498.5583797679283,
+      "effective_gbps": 270.4589735398682,
+      "peak_gb_at_arm": 1.9898987151682377
+    },
+    {
+      "arm": "mxfp4_switch",
+      "codec": "mxfp4",
+      "bits": 4,
+      "group": 32,
+      "layout": "switch_flat",
+      "m": 4,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 24,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        24,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        24,
+        1
+      ],
+      "lhs_indices_shape": null,
+      "per_slot_bytes": 18800640,
+      "bank_bytes": 1729658880,
+      "gathered_bytes": 451215360,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 6266880,
+        "up_proj": 6266880,
+        "down_proj": 6266880
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 982.6659952523187,
+      "min_us": 950.082998315338,
+      "max_us": 1056.6659984760918,
+      "mean_us": 983.3524604619015,
+      "effective_gbps": 459.1746963668379,
+      "peak_gb_at_arm": 1.9898987486958504
+    },
+    {
+      "arm": "mxfp4_convention",
+      "codec": "mxfp4",
+      "bits": 4,
+      "group": 32,
+      "layout": "convention",
+      "m": 1,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 6,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        1,
+        6
+      ],
+      "lhs_indices_shape": [
+        1,
+        6
+      ],
+      "per_slot_bytes": 18800640,
+      "bank_bytes": 1729658880,
+      "gathered_bytes": 112803840,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 6266880,
+        "up_proj": 6266880,
+        "down_proj": 6266880
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 395.16700053354725,
+      "min_us": 366.917003702838,
+      "max_us": 445.5419984878972,
+      "mean_us": 397.5450601137709,
+      "effective_gbps": 285.4586538038204,
+      "peak_gb_at_arm": 1.9898987486958504
+    },
+    {
+      "arm": "mxfp4_convention",
+      "codec": "mxfp4",
+      "bits": 4,
+      "group": 32,
+      "layout": "convention",
+      "m": 4,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 24,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        4,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        4,
+        6
+      ],
+      "lhs_indices_shape": [
+        4,
+        6
+      ],
+      "per_slot_bytes": 18800640,
+      "bank_bytes": 1729658880,
+      "gathered_bytes": 451215360,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 6266880,
+        "up_proj": 6266880,
+        "down_proj": 6266880
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 975.208000454586,
+      "min_us": 949.0000011282973,
+      "max_us": 1027.7089968440123,
+      "mean_us": 978.4324401698541,
+      "effective_gbps": 462.68627799368886,
+      "peak_gb_at_arm": 1.9898987486958504
+    },
+    {
+      "arm": "affine_q4_gs64",
+      "codec": "affine",
+      "bits": 4,
+      "group": 64,
+      "layout": "switch_flat",
+      "m": 1,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 6,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        6,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        6,
+        1
+      ],
+      "lhs_indices_shape": null,
+      "per_slot_bytes": 19906560,
+      "bank_bytes": 1831403520,
+      "gathered_bytes": 119439360,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 6635520,
+        "up_proj": 6635520,
+        "down_proj": 6635520
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 406.1660001752898,
+      "min_us": 377.99999699927866,
+      "max_us": 439.6660006023012,
+      "mean_us": 408.44000002834946,
+      "effective_gbps": 294.0653820074879,
+      "peak_gb_at_arm": 2.0846558585762978
+    },
+    {
+      "arm": "affine_q4_gs64",
+      "codec": "affine",
+      "bits": 4,
+      "group": 64,
+      "layout": "switch_flat",
+      "m": 4,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 24,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        24,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        24,
+        1
+      ],
+      "lhs_indices_shape": null,
+      "per_slot_bytes": 19906560,
+      "bank_bytes": 1831403520,
+      "gathered_bytes": 477757440,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 6635520,
+        "up_proj": 6635520,
+        "down_proj": 6635520
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 1030.5420000804588,
+      "min_us": 993.8750008586794,
+      "max_us": 1110.6249949079938,
+      "mean_us": 1031.1892202298623,
+      "effective_gbps": 463.5982230347714,
+      "peak_gb_at_arm": 2.0846558585762978
+    },
+    {
+      "arm": "affine_q8_gs64",
+      "codec": "affine",
+      "bits": 8,
+      "group": 64,
+      "layout": "switch_flat",
+      "m": 1,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 6,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        6,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        6,
+        1
+      ],
+      "lhs_indices_shape": null,
+      "per_slot_bytes": 37601280,
+      "bank_bytes": 3459317760,
+      "gathered_bytes": 225607680,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 12533760,
+        "up_proj": 12533760,
+        "down_proj": 12533760
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 585.9170050825924,
+      "min_us": 558.3329984801821,
+      "max_us": 677.9579998692498,
+      "mean_us": 590.944200521335,
+      "effective_gbps": 385.0505754960939,
+      "peak_gb_at_arm": 3.6007691398262978
+    },
+    {
+      "arm": "affine_q8_gs64",
+      "codec": "affine",
+      "bits": 8,
+      "group": 64,
+      "layout": "switch_flat",
+      "m": 4,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 24,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        24,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        24,
+        1
+      ],
+      "lhs_indices_shape": null,
+      "per_slot_bytes": 37601280,
+      "bank_bytes": 3459317760,
+      "gathered_bytes": 902430720,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 12533760,
+        "up_proj": 12533760,
+        "down_proj": 12533760
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 1843.2090000715107,
+      "min_us": 1723.6670028069057,
+      "max_us": 2063.832995190751,
+      "mean_us": 1852.9333795595448,
+      "effective_gbps": 489.5976093676781,
+      "peak_gb_at_arm": 3.6007691398262978
+    },
+    {
+      "arm": "bf16_dense",
+      "codec": "bf16",
+      "bits": 16,
+      "group": 0,
+      "layout": "bf16_gather_mm",
+      "m": 1,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 6,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        6,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        6,
+        1
+      ],
+      "lhs_indices_shape": [
+        6,
+        1
+      ],
+      "per_slot_bytes": 70778880,
+      "bank_bytes": 6511656960,
+      "gathered_bytes": 424673280,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 23592960,
+        "up_proj": 23592960,
+        "down_proj": 23592960
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 1035.1250020903535,
+      "min_us": 998.8749952754006,
+      "max_us": 1059.7920045256615,
+      "mean_us": 1031.8033197836485,
+      "effective_gbps": 410.26279835034967,
+      "peak_gb_at_arm": 18.193359427154064
+    },
+    {
+      "arm": "bf16_dense",
+      "codec": "bf16",
+      "bits": 16,
+      "group": 0,
+      "layout": "bf16_gather_mm",
+      "m": 4,
+      "top_k": 6,
+      "hidden": 5120,
+      "inter": 2304,
+      "rows": 24,
+      "requested_slots": 92,
+      "slots": 92,
+      "indices_wrapped": false,
+      "x_shape": [
+        24,
+        1,
+        1,
+        5120
+      ],
+      "rhs_indices_shape": [
+        24,
+        1
+      ],
+      "lhs_indices_shape": [
+        24,
+        1
+      ],
+      "per_slot_bytes": 70778880,
+      "bank_bytes": 6511656960,
+      "gathered_bytes": 1698693120,
+      "per_slot_bytes_by_proj": {
+        "gate_proj": 23592960,
+        "up_proj": 23592960,
+        "down_proj": 23592960
+      },
+      "iters": 50,
+      "warmup": 10,
+      "median_us": 3197.459001967218,
+      "min_us": 3139.2080054502003,
+      "max_us": 3252.0000022486784,
+      "mean_us": 3197.2349404531997,
+      "effective_gbps": 531.2634560614816,
+      "peak_gb_at_arm": 18.193359427154064
+    }
+  ]
+}
