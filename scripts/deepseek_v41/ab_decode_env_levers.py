@@ -730,8 +730,8 @@ def _resolve_derivation(args):
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
     return derive_plan_from_budget(
-        box_budget_gib=args.box_budget_gib,
-        override_memory_limit_gib=args.memory_limit_gib,
+        box_budget_gib=getattr(args, "box_budget_gib", None),
+        override_memory_limit_gib=getattr(args, "memory_limit_gib", None),
     )
 
 
