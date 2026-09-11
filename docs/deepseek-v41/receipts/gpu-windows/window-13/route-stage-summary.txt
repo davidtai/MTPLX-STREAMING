@@ -1,0 +1,29 @@
+tokens 64 frame_wall_ms_per_token 348.52233528125 stage_sum_ms_per_token 347.35598278125
+stage moe.routed_switch        total_ms=    6503.4 count=2560 ms/tok=  101.62
+stage head                     total_ms=    4535.8 count=64 ms/tok=   70.87
+stage attn.reuse               total_ms=    3209.7 count=1920 ms/tok=   50.15
+stage hc.premix_sinkhorn       total_ms=    3177.6 count=5120 ms/tok=   49.65
+stage hc.combine               total_ms=     952.2 count=5120 ms/tok=   14.88
+stage moe.gate_topk            total_ms=     715.5 count=2560 ms/tok=   11.18
+stage moe.shared_expert        total_ms=     708.7 count=2560 ms/tok=   11.07
+stage attn.swa_only            total_ms=     629.8 count=128 ms/tok=    9.84
+stage attn.full                total_ms=     568.6 count=256 ms/tok=    8.88
+stage attn.reindex             total_ms=     509.2 count=256 ms/tok=    7.96
+stage moe.combine              total_ms=     454.7 count=2560 ms/tok=    7.11
+stage engram.apply             total_ms=     116.4 count=128 ms/tok=    1.82
+stage embed                    total_ms=      79.3 count=64 ms/tok=    1.24
+stage engram.row_fetch         total_ms=      29.1 count=128 ms/tok=    0.45
+stage sample                   total_ms=      19.6 count=64 ms/tok=    0.31
+stage final_norm               total_ms=      13.8 count=64 ms/tok=    0.22
+stage engram.advance           total_ms=       7.0 count=64 ms/tok=    0.11
+stage engram.hash              total_ms=       0.5 count=128 ms/tok=    0.01
+route_stage keys: ['enabled', 'stages']
+route hot.allhit_fence_eval                    total_ms=    1016.9 count=1558
+route hot.begin_split_route                    total_ms=      95.0 count=1002
+route hot.try_all_hit                          total_ms=      88.9 count=2560
+route hot.route_host                           total_ms=      59.9 count=2560
+route hot.allhit_dispatch_build                total_ms=      14.3 count=1558
+route hot.eval_indices                         total_ms=       1.9 count=2560
+route hc.sinkhorn_recurrence                   total_ms=       0.0 count=5120
+route hot.all_hit                              total_ms=       0.0 count=1558
+route hot.split_route                          total_ms=       0.0 count=1002
