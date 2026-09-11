@@ -33,6 +33,9 @@ STOP_TIMEOUT="${DSV41_STOP_TIMEOUT:-60}"
 MAX_TOKENS="${DSV41_MAX_TOKENS:-16}"
 # Optional extra `mtplx serve` flags, e.g. DSV41_SERVE_EXTRA_ARGS="--generation-mode mtp".
 LOG_DIR="${DSV41_LOG_DIR:-${TMPDIR:-/tmp}/dsv41-serve-health}"
+# Stdlib-only response parsers. Bodies are piped into this AS A FILE so the piped
+# JSON reaches sys.stdin (a `python3 - <<'HEREDOC'` here-doc would shadow fd 0).
+PARSE="${HERE}/serve_health_parse.py"
 
 ts()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { printf '%s [serve_health] %s\n' "$(ts)" "$*"; }
@@ -40,6 +43,10 @@ err() { printf '%s [serve_health] ERROR: %s\n' "$(ts)" "$*" >&2; }
 
 if [[ ! -x "${VENV_PY}" ]]; then
   err "venv python not found/executable at ${VENV_PY}"
+  exit 1
+fi
+if [[ ! -f "${PARSE}" ]]; then
+  err "response parser not found at ${PARSE}"
   exit 1
 fi
 if [[ ! -d "${MODEL}" ]]; then
@@ -148,45 +155,12 @@ if (( healthy == 0 )); then
 fi
 log "/health is up at ${BASE}/health"
 
-# generation_mode + model key from /health, model id from /v1/models.
+# model id from /v1/models; generation_mode + profile + model_key from /health.
+# Each body is piped into the parser AS A FILE, so it reaches the parser's stdin.
 HEALTH_JSON="$(curl -sf -m 10 "${BASE}/health" 2>/dev/null || true)"
 MODELS_JSON="$(curl -sf -m 10 "${BASE}/v1/models" 2>/dev/null || true)"
-MODEL_ID="$(
-  printf '%s' "${MODELS_JSON}" | "${VENV_PY}" - <<'PYMID' 2>/dev/null || true
-import json, sys
-try:
-    data = json.load(sys.stdin).get("data") or []
-    print(data[0]["id"] if data else "")
-except Exception:
-    print("")
-PYMID
-)"
-printf '%s' "${HEALTH_JSON}" | "${VENV_PY}" - <<'PYHEALTH' 2>/dev/null || true
-import json, sys, time
-
-def find_first(obj, key):
-    stack = [obj]
-    while stack:
-        cur = stack.pop()
-        if isinstance(cur, dict):
-            if key in cur and cur[key] is not None:
-                return cur[key]
-            stack.extend(cur.values())
-        elif isinstance(cur, list):
-            stack.extend(cur)
-    return None
-
-stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-try:
-    health = json.load(sys.stdin)
-except Exception:
-    print(f"{stamp} [serve_health] /health was not valid JSON")
-    sys.exit(0)
-gen = find_first(health, "generation_mode")
-key = find_first(health, "model_key")
-print(f"{stamp} [serve_health] generation_mode = {gen!r}")
-print(f"{stamp} [serve_health] model_key       = {key!r}")
-PYHEALTH
+MODEL_ID="$(printf '%s' "${MODELS_JSON}" | "${VENV_PY}" "${PARSE}" models 2>/dev/null || true)"
+printf '%s' "${HEALTH_JSON}" | "${VENV_PY}" "${PARSE}" health || true
 [[ -z "${MODEL_ID}" ]] && MODEL_ID="$(basename "${MODEL}")"
 log "served model id (/v1/models) = ${MODEL_ID}"
 
@@ -212,49 +186,7 @@ if [[ -z "${RESP}" ]]; then
   tail -n 20 "${SERVER_LOG}" >&2 || true
   exit 1
 fi
-printf '%s' "${RESP}" | WALL_NS=$(( END_NS - START_NS )) "${VENV_PY}" - <<'PYRESP' || true
-import json, os, sys, time
-
-stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-wall_s = max(1e-9, int(os.environ.get("WALL_NS", "0")) / 1e9)
-
-def find_first(obj, key):
-    stack = [obj]
-    while stack:
-        cur = stack.pop()
-        if isinstance(cur, dict):
-            if key in cur and isinstance(cur[key], (int, float)):
-                return cur[key]
-            stack.extend(cur.values())
-        elif isinstance(cur, list):
-            stack.extend(cur)
-    return None
-
-try:
-    resp = json.load(sys.stdin)
-except Exception:
-    print(f"{stamp} [serve_health] chat response was not valid JSON")
-    sys.exit(0)
-
-usage = resp.get("usage") or {}
-comp = usage.get("completion_tokens")
-prompt = usage.get("prompt_tokens")
-# Prefer a server-reported decode tok/s if the response carries one.
-server_tok_s = find_first(resp, "decode_tok_s") or find_first(resp, "tok_s")
-text = ""
-try:
-    text = (resp["choices"][0]["message"]["content"] or "").strip()
-except Exception:
-    pass
-print(f"{stamp} [serve_health] usage: prompt_tokens={prompt} completion_tokens={comp}")
-if isinstance(server_tok_s, (int, float)) and server_tok_s > 0:
-    print(f"{stamp} [serve_health] tok/s (server-reported) = {server_tok_s:.2f}")
-if isinstance(comp, int) and comp > 0:
-    print(f"{stamp} [serve_health] tok/s (wall {wall_s:.2f}s) = {comp / wall_s:.2f}")
-else:
-    print(f"{stamp} [serve_health] no completion_tokens in usage; wall {wall_s:.2f}s")
-print(f"{stamp} [serve_health] completion: {text[:200]!r}")
-PYRESP
+printf '%s' "${RESP}" | WALL_NS=$(( END_NS - START_NS )) "${VENV_PY}" "${PARSE}" chat || true
 
 log "health check complete; stopping server"
 exit 0
