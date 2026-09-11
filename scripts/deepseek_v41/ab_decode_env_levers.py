@@ -293,6 +293,18 @@ def _run_arm(args, arm, bench, mx) -> dict:
     resident = _load_model(args, bench, mx)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime", None)
+    # W38/K3 Sinkhorn engagement: zero the module counters after model load so the
+    # receipt reports THIS arm's kernel-vs-recurrence Sinkhorn split. A truthy
+    # ``MTPLX_DSV41_SINKHORN_METAL`` arm whose ``kernel_calls`` is 0 means the
+    # Metal kernel silently fell back to the recurrence (which would still be
+    # byte-identical and ~as fast) -- exactly the "did it actually run?" question.
+    # Read cumulatively over the whole arm because under ``MTPLX_DSV41_HC_COMPILE``
+    # the Python wrapper runs only during the (cold) trace, not per warm token.
+    try:
+        from mtplx.models import deepseek_v41 as _dsv41
+        _dsv41._reset_sinkhorn_kernel_calls()
+    except Exception:  # pragma: no cover - defensive
+        _dsv41 = None
     try:
         ops = bench._MLXOps(mx)
         mem_probe = bench._MLXMemProbe(mx)
@@ -333,6 +345,18 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 model=model, ops=ops, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.syncs,
             )
+        if _dsv41 is not None:
+            eng = _dsv41._sinkhorn_kernel_calls()
+            receipt["sinkhorn_engagement"] = {
+                "kernel_calls": eng["kernel"],
+                "recurrence_calls": eng["recurrence"],
+                # >0 kernel with 0 recurrence == the Metal Sinkhorn actually ran;
+                # 0 kernel with >0 recurrence == it fell back to the recurrence.
+                "engaged": eng["kernel"] > 0 and eng["recurrence"] == 0,
+                "sinkhorn_metal_env": os.environ.get(SINKHORN_METAL_ENV),
+                "hc_compile_env": os.environ.get(HC_COMPILE_ENV),
+                "note": "cumulative over this arm (prefill + decode + census)",
+            }
         return receipt
     finally:
         if runtime is not None:
@@ -360,17 +384,27 @@ def _sync_census(*, model, ops, mem_probe, prompt_ids, steps) -> dict:
     ops.sync(logits)
     token = ops.argmax_last(logits)
     before = int(probe._COUNTS.get(BARRIER_STAGE, 0))
+    # W38/K3: also delta the Sinkhorn route stages so the census shows whether the
+    # Metal kernel or the recurrence carried this decode (eager path only -- under
+    # a warm HC-compile tape the Python wrapper does not re-run, so this delta is 0
+    # and the arm-level ``sinkhorn_engagement`` counter is the authoritative read).
+    sk_before = int(probe._COUNTS.get("hc.sinkhorn_kernel", 0))
+    rec_before = int(probe._COUNTS.get("hc.sinkhorn_recurrence", 0))
     for _ in range(int(steps)):
         logits = model(ops.input([[token]]), cache=cache)
         ops.sync(logits)
         token = ops.argmax_last(logits)
     after = int(probe._COUNTS.get(BARRIER_STAGE, 0))
     barriers = after - before
+    sk = int(probe._COUNTS.get("hc.sinkhorn_kernel", 0)) - sk_before
+    rec = int(probe._COUNTS.get("hc.sinkhorn_recurrence", 0)) - rec_before
     return {
         "enabled": True,
         "decode_steps": int(steps),
         "routing_barriers_total": barriers,
         "routing_barriers_per_token": (barriers / steps) if steps else None,
+        "sinkhorn_kernel_calls_decode": sk,
+        "sinkhorn_recurrence_calls_decode": rec,
         "stages": probe.snapshot().get("stages", {}),
     }
 

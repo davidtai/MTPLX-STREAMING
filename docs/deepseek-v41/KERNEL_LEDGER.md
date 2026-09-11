@@ -280,6 +280,21 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (`tests/models/test_deepseek_v41_sinkhorn_metal.py::test_sinkhorn_kernel_parity_gpu`, fp32 1e-6 +
   argmax, bf16 argmax) present, **skipped unless `MTPLX_GPU_PARITY=1`** — awaiting a GPU window. See
   [W32_K3_SINKHORN_METAL.md](W32_K3_SINKHORN_METAL.md).
+- **Status (W38, `feat/deepseek-v41-w38` off `bfd361424`):** window-12 parity failure **root-caused** —
+  the V4 kernel source **fails to build for a bf16 buffer** (`out[off+i]=c[i]`: `float`→`bfloat16_t`, no
+  store cast), so the W32 test's raw `_sinkhorn_kernel_apply(comb_bf16)` raised a Metal build error;
+  **fp32 is bit-identical (`max|d| 8.9e-8`)** and was never the issue. **Fix:** `_sinkhorn_normalise`
+  upcasts a non-fp32 comb to fp32 for the kernel and casts back (production comb is fp32 → no-op).
+  **Also fixed a live merge regression:** W32's `_hc_split_sinkhorn` rename orphaned the name W33's
+  compiled path (`_hc_mixes_split`) + its test call, so on `bfd361424` the K4 HC-compile suite was **6
+  RED** (`NameError`/`AttributeError`) and the compiled decode path bypassed the K3 kernel; renamed back
+  to canonical `hc_split_sinkhorn` so **both eager and compiled paths route through the kernel**
+  (K3×K4 compose; K4 suite 8/8 green). Added **engagement counters** (`_SINKHORN_KERNEL_CALLS` /
+  `_SINKHORN_RECURRENCE_CALLS` + probe stages `hc.sinkhorn_kernel`/`hc.sinkhorn_recurrence`) surfaced
+  per arm as `sinkhorn_engagement` in `ab_decode_env_levers.py`, and a **self-diagnosing** parity test
+  (JSON receipt via `MTPLX_PARITY_RECEIPT`; bf16 gated vs fp32-recurrence-rounded, raw-bf16 build
+  failure recorded). CPU tests 14/1; broad V4.1 sweep 131 pass / 0 fail. See
+  [W38_K3_SINKHORN_DIAGNOSTICS.md](W38_K3_SINKHORN_DIAGNOSTICS.md).
 
 ### K10 — Verify K+1 rows in one batched dispatch per layer — **Rank 3**
 - **Mechanism:** run the 4 verify rows through each layer's MoE as one M=4 `gather_qmm` over the

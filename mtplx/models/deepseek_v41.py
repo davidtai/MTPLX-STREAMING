@@ -47,7 +47,7 @@ from mlx_lm.models.base import BaseModelArgs
 #                             the GPU flag-on route.  Shapes are identical between
 #                             V4 and V4.1 ([..., hc, hc]), so the kernel source is
 #                             REUSED here rather than copied; the pre/post/comb
-#                             split is carried in ``_hc_split_sinkhorn`` below with
+#                             split is carried in ``hc_split_sinkhorn`` below with
 #                             this origin note.
 #   _hc_post_impl          <- Block.hc_post (post*x + sum_j comb[j,k]*residual[j])
 from mtplx.models.deepseek_v4 import (
@@ -74,6 +74,12 @@ from mtplx.models.deepseek_v41_cache import (
 )
 from mtplx.models.deepseek_v41_moe import MoE
 
+# Opt-in per-stage attribution (MTPLX_ROUTE_STAGE_PROBE=1). When disabled the only
+# cost is one module-level boolean check, so it is safe on the hot path; the A/B
+# env-lever census (scripts/deepseek_v41/ab_decode_env_levers.py) reads its
+# snapshot to confirm the Sinkhorn kernel actually engaged per arm (W38/K3).
+from mtplx import expert_route_probe as _route_probe
+
 # ---------------------------------------------------------------------------
 # Hyper-Connection Sinkhorn normalisation (kernel-ledger K3, W32)
 # ---------------------------------------------------------------------------
@@ -81,7 +87,7 @@ from mtplx.models.deepseek_v41_moe import MoE
 #:
 #: Every backbone layer runs the Sinkhorn alternating-normalisation loop twice
 #: per token (the attention HC mix and the ffn HC mix, :meth:`DecoderLayer._mixes`
-#: -> :func:`_hc_split_sinkhorn`), so at 40 layers that is 80 Sinkhorn calls per
+#: -> :func:`hc_split_sinkhorn`), so at 40 layers that is 80 Sinkhorn calls per
 #: token.  As stock MLX ops (:func:`_sinkhorn_ops`) each call is ~119 tiny graph
 #: primitives -- one row-softmax, then 39 alternating row/column normalisations of
 #: ``reduce_sum`` + ``add eps`` + ``divide`` -- on a ``[..., 4, 4]`` tensor that is
@@ -101,6 +107,33 @@ from mtplx.models.deepseek_v41_moe import MoE
 #: use, never frozen at import, because the serving harness stamps optimization
 #: keys after this module is imported.
 _SINKHORN_METAL_ENV = "MTPLX_DSV41_SINKHORN_METAL"
+
+#: Process-cumulative engagement counters (W38/K3): how many Sinkhorn calls took
+#: the Metal kernel branch vs the stock recurrence.  Always-on and near-free (one
+#: int add), so the A/B env-lever census can tell whether the kernel *actually*
+#: engaged during a decode arm or silently fell back to the recurrence -- a
+#: byte-identical, barely-faster arm is equally consistent with "kernel ran and is
+#: bit-exact" and "kernel never ran".  Under ``mx.compile`` the wrapper runs only
+#: during the (cold) trace, so read these cumulatively over a whole arm (which
+#: always traces at least once, and prefill runs eager), not as a warm-window
+#: delta.  Reset with :func:`_reset_sinkhorn_kernel_calls`.
+_SINKHORN_KERNEL_CALLS = 0
+_SINKHORN_RECURRENCE_CALLS = 0
+
+
+def _reset_sinkhorn_kernel_calls() -> None:
+    """Zero the Sinkhorn engagement counters (per-arm reset for the A/B census)."""
+    global _SINKHORN_KERNEL_CALLS, _SINKHORN_RECURRENCE_CALLS
+    _SINKHORN_KERNEL_CALLS = 0
+    _SINKHORN_RECURRENCE_CALLS = 0
+
+
+def _sinkhorn_kernel_calls() -> dict:
+    """Snapshot of the engagement counters (kernel vs recurrence Sinkhorn calls)."""
+    return {
+        "kernel": int(_SINKHORN_KERNEL_CALLS),
+        "recurrence": int(_SINKHORN_RECURRENCE_CALLS),
+    }
 
 
 def _sinkhorn_metal_enabled() -> bool:
@@ -134,13 +167,29 @@ def _sinkhorn_normalise(comb: mx.array, hc: int, iters: int, eps: float) -> mx.a
     Both accept any leading dims (``rows = b*s`` = any n): the kernel flattens the
     leading axes to one matrix index and reshapes back, so decode, one-shot
     prefill, chunked prefill and the layer-major path all compose unchanged.
+
+    The kernel is validated only for fp32 (V4's proven lane; production ``comb`` is
+    fp32 because :meth:`DecoderLayer._mixes` casts it), and it already computes the
+    whole schedule in fp32 registers regardless of I/O dtype.  A non-fp32 ``comb``
+    (only ever a test/edge case) is therefore upcast to fp32 for the kernel and the
+    result cast back, so the Metal path never processes a bf16 buffer and stays at
+    its measured precision; the recurrence stays dtype-native.  Engagement is
+    counted either way (see :data:`_SINKHORN_KERNEL_CALLS`).
     """
+    global _SINKHORN_KERNEL_CALLS, _SINKHORN_RECURRENCE_CALLS
     if _sinkhorn_use_kernel():
+        _SINKHORN_KERNEL_CALLS += 1
+        _route_probe.count("hc.sinkhorn_kernel")
+        if comb.dtype != mx.float32:
+            out = _sinkhorn_kernel_apply(comb.astype(mx.float32), hc, iters, eps)
+            return out.astype(comb.dtype)
         return _sinkhorn_kernel_apply(comb, hc, iters, eps)
+    _SINKHORN_RECURRENCE_CALLS += 1
+    _route_probe.count("hc.sinkhorn_recurrence")
     return _sinkhorn_ops(comb, iters, eps)
 
 
-def _hc_split_sinkhorn(
+def hc_split_sinkhorn(
     mixes: mx.array,
     scale: mx.array,
     base: mx.array,
@@ -149,6 +198,12 @@ def _hc_split_sinkhorn(
     eps: float,
 ):
     """V4.1 pre/post/comb split with the Sinkhorn route selected per device.
+
+    This is the module's canonical Sinkhorn-split boundary: **both** the eager
+    :meth:`DecoderLayer._mixes` and the compiled :func:`_hc_mixes_split` (K4 HC
+    tape) call it by this module-global name, so the K3 Metal kernel drops into
+    the compiled tape as well as the eager path, and a test can monkeypatch it to
+    census graph construction (tests/models/test_deepseek_v41_hc_compile.py).
 
     Byte-for-byte the split of ``deepseek_v4.hc_split_sinkhorn`` (origin:
     ``inference/kernel.py`` ``hc_split_sinkhorn_kernel`` L371-427, transcribed in
@@ -945,7 +1000,7 @@ class DecoderLayer(nn.Module):
         flat = xf.reshape(*xf.shape[:-2], self.hc_mult * xf.shape[-1])
         rsqrt = mx.rsqrt(mx.mean(mx.square(flat), axis=-1, keepdims=True) + self.norm_eps)
         mixes = (flat @ fn.astype(mx.float32).T) * rsqrt
-        return _hc_split_sinkhorn(mixes, scale, base, self.hc_mult, self.hc_iters, self.hc_eps)
+        return hc_split_sinkhorn(mixes, scale, base, self.hc_mult, self.hc_iters, self.hc_eps)
 
     def _hc_pre(self, x, pre_mix):
         """Collapse the hc copies into one sublayer input with the threaded
