@@ -97,6 +97,7 @@ from .qsa_mtp_precompute import (
 )
 from .runtime import MTPLXRuntime
 from .serve_stage_timing import StageTimer, stage_timing_enabled
+from .serve_stream_counters import snapshot_stream_counters, stream_counters_delta
 from .sampling import (
     SamplerConfig,
     SparseDistribution,
@@ -2971,6 +2972,9 @@ class GenerationStats:
     # W53 served-decode stage timer (MTPLX_SERVE_STAGE_TIMING=1); {} when off.
     # Schema: mtplx/serve_stage_timing.py StageTimer.summary().
     serve_stage_timing: dict[str, object] = field(default_factory=dict)
+    # W53 per-request expert-streaming counter deltas (decode phase); {} when
+    # no streaming runtime is attached. Schema: mtplx/serve_stream_counters.py.
+    serve_stream_counters: dict[str, object] = field(default_factory=dict)
     events: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -7103,6 +7107,10 @@ def generate_ar(
         os.environ.get("MTPLX_AR_LAZY_TRACE_TOTALS", "1")
     ).strip().lower() not in ("0", "false", "no", "off")
     _stage_timer = StageTimer(enabled=stage_timing_enabled())
+    # W53: bracket the decode phase with a streaming-counter snapshot so the
+    # per-token miss/bytes deltas isolate the seed-dependent expert routing
+    # (prefill is seed-independent, so it is excluded from this bracket).
+    _stream_before = snapshot_stream_counters(rt)
 
     # Double-buffered decode (mlx-lm pattern, PR #413-family contribution by
     # maceip in PR #396): dispatch step t+1's forward without blocking and let
@@ -7383,6 +7391,15 @@ def generate_ar(
         verify_calls += 1
         logits = logits_next[:, -1, :]
 
+    # W53: decode-phase streaming-counter delta (before the session-bank tail
+    # forward, so it counts only the completion tokens).
+    _serve_stream_counters = stream_counters_delta(
+        _stream_before,
+        snapshot_stream_counters(rt),
+        tokens=len(tokens),
+        phase="decode",
+    )
+
     if token_callback is not None and _stream_gate.window > 0:
         # Armed-stream reconcile (F35): the trim decision is known here —
         # flush the held tail in full (no trim) or the post-trim remainder.
@@ -7540,6 +7557,7 @@ def generate_ar(
             constraint.mask_time_s if constraint is not None else 0.0
         ),
         serve_stage_timing=_stage_timer.summary(),
+        serve_stream_counters=_serve_stream_counters,
         events=events,
     )
     _attach_runtime_diagnostics(
@@ -10304,6 +10322,9 @@ def generate_mtpk(
         )
         if _draft_k20_prescatter_plan is not None:
             _draft_k20_prescatter_receipt = _draft_k20_prescatter_plan.to_dict()
+    # W53: bracket the MTP decode loop with a streaming-counter snapshot (same
+    # decode-phase attribution as the AR lane; prefill excluded).
+    _stream_before = snapshot_stream_counters(rt)
     while len(tokens) < max_tokens:
         if first_round_snapshot is None and step >= 1:
             # Top of iteration 2: the cumulative timers now hold exactly
@@ -13732,6 +13753,15 @@ def generate_mtpk(
         emit_new_tokens()
         emit_trace()
 
+    # W53: decode-phase streaming-counter delta (before the final-pending
+    # session-bank commit forward, so it counts only the completion tokens).
+    _serve_stream_counters = stream_counters_delta(
+        _stream_before,
+        snapshot_stream_counters(rt),
+        tokens=len(tokens),
+        phase="decode",
+    )
+
     if token_callback is not None and _stream_gate.window > 0:
         # Armed-stream reconcile (F35): the trim decision is known here —
         # flush the held tail in full (no trim) or the post-trim remainder.
@@ -14205,6 +14235,7 @@ def generate_mtpk(
         thinking_guard=(
             _thinking_guard.summary() if _thinking_guard is not None else {}
         ),
+        serve_stream_counters=_serve_stream_counters,
         events=events,
     )
     _attach_runtime_diagnostics(stats, rt, counter_start)

@@ -128,16 +128,18 @@ def write_stage_timing_receipt(
     *,
     request_id: str | None,
     mode: str,
+    stream_counters: dict[str, Any] | None = None,
 ) -> str | None:
-    """Write ``summary`` to MTPLX_SERVE_STAGE_TIMING_RECEIPT if set.
+    """Write ``summary`` (+ optional ``stream_counters``) to
+    MTPLX_SERVE_STAGE_TIMING_RECEIPT if set.
 
     The env value may be a directory (a timestamped, request-suffixed file is
     created inside it — append-only, never an overwrite) or a full file path
     (one JSON object written to it). Returns the path written, or None when the
-    env is unset or the summary is empty. Failures are swallowed: a broken
+    env is unset or both blocks are empty. Failures are swallowed: a broken
     receipt sink must never fail a served response.
     """
-    if not summary:
+    if not summary and not stream_counters:
         return None
     target = str(os.environ.get("MTPLX_SERVE_STAGE_TIMING_RECEIPT", "")).strip()
     if not target:
@@ -146,8 +148,10 @@ def write_stage_timing_receipt(
         "event": "mtplx_serve_stage_timing",
         "request_id": request_id,
         "generation_mode": mode,
-        **summary,
+        **(summary or {}),
     }
+    if stream_counters:
+        payload["stream_counters"] = stream_counters
     try:
         if target.endswith(".json") or (
             os.path.exists(target) and not os.path.isdir(target)

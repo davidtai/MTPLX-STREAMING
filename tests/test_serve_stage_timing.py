@@ -174,6 +174,52 @@ def test_generate_ar_stage_timing_off_by_default(monkeypatch):
     assert out.stats.serve_stage_timing == {}
 
 
+def test_generate_ar_stream_counters_absent_without_streaming_runtime():
+    # The cyclic stub has no expert_streaming and no engram banks, so the
+    # per-request streaming-counter delta is empty (never raises).
+    out = _run_ar()
+    assert out.stats.serve_stream_counters == {}
+
+
+def test_generate_ar_stream_counters_delta_when_snapshot_present():
+    # Inject a streaming snapshot that advances every call: generate_ar's
+    # decode-phase bracket must surface a non-empty expert_cache delta.
+    rt = _cyclic_runtime()
+    state = {"hits": 0, "misses": 0, "loads": 0, "bytes": 0}
+
+    def _snapshot():
+        # ~1 miss + 4 hits + 12 bytes per call; call count tracks decode steps.
+        state["hits"] += 4
+        state["misses"] += 1
+        state["loads"] += 1
+        state["bytes"] += 12
+        return {
+            "cache": {
+                "expert_hits": state["hits"],
+                "expert_misses": state["misses"],
+                "transient_loads": state["loads"],
+                "persistent_loads": 0,
+                "bytes_read": state["bytes"],
+                "route_calls": state["hits"] + state["misses"],
+            }
+        }
+
+    rt.expert_streaming_snapshot = _snapshot
+    out = generate_ar(
+        rt,
+        [0],
+        max_tokens=32,
+        sampler=SamplerConfig(temperature=0.6, top_p=0.95, top_k=4),
+        seed=7,
+        stop_token_ids=set(),
+    )
+    ec = out.stats.serve_stream_counters["expert_cache"]
+    assert ec["expert_misses"] > 0
+    assert ec["records_streamed"] > 0
+    assert ec["bytes_read_per_token"] > 0
+    assert out.stats.serve_stream_counters["phase"] == "decode"
+
+
 def test_generate_ar_stage_timing_populates_table(monkeypatch):
     monkeypatch.setenv("MTPLX_SERVE_STAGE_TIMING", "1")
     out = _run_ar()

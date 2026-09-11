@@ -25338,9 +25338,12 @@ def _run_generation(
         if seed_is_explicit or out.text.strip():
             break
     assert last is not None
-    # W53 served-decode stage timer (MTPLX_SERVE_STAGE_TIMING=1): a per-token
-    # stage table on the completion event, and an optional standalone receipt.
+    # W53 served-decode stage timer (MTPLX_SERVE_STAGE_TIMING=1) + per-request
+    # expert-streaming counter deltas: attached to the completion event and,
+    # when a receipt path is set, written to a standalone receipt so a served
+    # window can attribute its per-token cost to expert/engram misses directly.
     _stage_timing = last["stats"].get("serve_stage_timing") or {}
+    _stream_counters = last["stats"].get("serve_stream_counters") or {}
     if not bool(
         (request_observability or {}).get("warmup")
     ) and not _server_console_enabled(state):
@@ -25361,12 +25364,15 @@ def _run_generation(
         }
         if _stage_timing:
             _generation_event["serve_stage_timing"] = _stage_timing
+        if _stream_counters:
+            _generation_event["serve_stream_counters"] = _stream_counters
         _safe_stdout_print(json.dumps(_generation_event, ensure_ascii=False))
-    if _stage_timing:
+    if _stage_timing or _stream_counters:
         _stage_receipt_path = _write_serve_stage_timing_receipt(
             _stage_timing,
             request_id=str((request_observability or {}).get("request_id") or ""),
             mode=effective_mode,
+            stream_counters=_stream_counters,
         )
         if _stage_receipt_path and request_observability is not None:
             request_observability["serve_stage_timing_receipt"] = _stage_receipt_path

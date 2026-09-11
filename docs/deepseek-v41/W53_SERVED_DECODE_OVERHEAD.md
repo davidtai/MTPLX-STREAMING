@@ -250,3 +250,54 @@ receipt dir — the exact per-stage attribution of the served decode window.
 PYTHONPATH=$PWD nice -n 19 .venv/bin/python3 \
   scripts/deepseek_v41/sampler_cpu_cost.py --iters 200 --vocab 129280
 ```
+
+---
+
+## 6. Per-request expert-streaming counters (attribute the seed spread directly)
+
+§2 shows the seed spread is expert routing. To let a served window **prove**
+that from its own log instead of inferring it, each `mtplx_openai_generation`
+event now carries a `serve_stream_counters` block: the **decode-phase** delta
+(loop start → loop end, so prefill — which is seed-independent — is excluded) of
+three counter sources, plus per-completion-token averages. Same block on the AR
+and MTP events. Implemented in `mtplx/serve_stream_counters.py`; wired in
+`generate_ar` and `generate_mtpk` (snapshot bracketing the decode loop) and
+surfaced by `_run_generation` (`openai.py`).
+
+Sources (all best-effort; a source that is not present is simply omitted, and a
+runtime with no streaming attached yields `{}` — no crash, CPU-stub tested):
+
+| block | source | key fields (delta over decode) |
+|---|---|---|
+| `expert_cache` | `rt.expert_streaming_snapshot()["cache"]` (`CacheCounters`, `expert_streaming.py:116`) | `expert_hits`, `expert_misses`, `hit_rate`, `miss_rate`, `records_streamed` (persistent+transient loads), `bytes_read`, `route_calls`, `misses_per_token`, `records_streamed_per_token`, `bytes_read_per_token` |
+| `incremental_misses` | `…snapshot()["incremental_misses"]` | `routes`, `parts`, `routes_per_token`, `parts_per_token` |
+| `engram_row_cache` | Σ `rt.model._engram_banks[*].cache.stats` (`NGramRowCache`, `ngram_row_cache.py:284`) | `hits`, `misses`, `hit_rate`, `miss_rate`, `rows_read`, `gathers`, `evictions`, `misses_per_token`, `rows_read_per_token` |
+| `route_probe_counts` / `route_probe_sums_ns` | `mtplx.expert_route_probe` module counters, **only when `MTPLX_ROUTE_STAGE_PROBE=1`** | per-(phase,stage) call-count and ns-sum deltas (e.g. split-route vs all-hit layer calls) |
+
+The snapshots are plain counter reads — no `mx.eval`, no GPU sync, no I/O — so
+the probe adds a few dict copies per request. Because the block is emitted
+whenever a streaming runtime is attached (the DeepSeek loader builds an
+`ExpertStreamingRuntime`), a window comparison across the three seeds reads the
+miss rate / bytes-per-token straight off each event; the expectation from §2 is
+that the slow seeds show a higher `expert_cache.miss_rate` and
+`bytes_read_per_token`.
+
+**Served command that produces the counters (window, holding the GPU flock;
+never `:8080`):**
+
+```bash
+export MTPLX_SERVE_STAGE_TIMING=1                                   # per-token stage table
+export MTPLX_SERVE_STAGE_TIMING_RECEIPT=docs/deepseek-v41/receipts/w53-served-cells/stage-timing
+export MTPLX_ROUTE_STAGE_PROBE=1                                    # adds the route_probe_* sub-blocks
+# expert_cache + engram_row_cache need no env — they emit whenever a streaming
+# runtime is attached (always, on this artifact).
+DSV41_CONTEXTS=1024 \
+DSV41_RECEIPT_DIR=docs/deepseek-v41/receipts/w53-served-cells \
+  nice -n 19 bash scripts/deepseek_v41/served_cell_bench.sh
+# MTP: add DSV41_SERVE_EXTRA_ARGS="--generation-mode mtp" and a *-mtp receipt dir.
+```
+
+Each `mtplx_openai_generation` event in the server log then carries
+`serve_stream_counters` (and `serve_stage_timing`); with the receipt env set, a
+`mtplx_serve_stage_timing` JSON receipt per request carries both blocks under
+`stream_counters` / `stages`.
