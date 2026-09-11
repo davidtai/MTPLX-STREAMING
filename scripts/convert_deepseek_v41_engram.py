@@ -508,7 +508,23 @@ def build_hashing_block() -> dict:
     }
 
 
-def write_manifest(out: Path, layer_entries: list[dict], *, row_codec: str = "affine") -> Path:
+def read_existing_residents(out: Path) -> dict | None:
+    """Return the ``residents`` block of an existing manifest, if any (else ``None``).
+
+    The residents sidecar (``engram-residents.safetensors``) is a separate W4 artifact that
+    lives beside the banks; rewriting the manifest for a bank-codec change must not drop it.
+    """
+    p = out / "engram-manifest.json"
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text()).get("residents")
+    except Exception:
+        return None
+
+
+def write_manifest(out: Path, layer_entries: list[dict], *, row_codec: str = "affine",
+                   residents: dict | None = None) -> Path:
     dequant = {
         "source_weight_dtype": "F8_E4M3",
         "source_scale_dtype": "F8_E8M0",
@@ -535,8 +551,10 @@ def write_manifest(out: Path, layer_entries: list[dict], *, row_codec: str = "af
         "dequant": dequant,
         "quant": quant,
         "layers": sorted(layer_entries, key=lambda e: e["layer_id"]),
-        "hashing": build_hashing_block(),
     }
+    if residents is not None:               # preserve the W4 residents sidecar entry (after layers)
+        manifest["residents"] = residents
+    manifest["hashing"] = build_hashing_block()
     payload = json.dumps(manifest, indent=2).encode()
     manifest["manifest_sha256"] = hashlib.sha256(payload).hexdigest()
     out.mkdir(parents=True, exist_ok=True)
@@ -819,6 +837,8 @@ def main() -> int:
 
     # mxfp8: stage every layer to .bin.new, then flip all banks + manifest together (one step).
     finalize_each = codec != "mxfp8"
+    # preserve the W4 residents sidecar entry across a manifest rewrite (captured pre-flip)
+    residents = read_existing_residents(args.out) if codec == "mxfp8" else None
     entries = []
     for L in layers:
         entry = convert_layer(
@@ -833,7 +853,9 @@ def main() -> int:
         finalize_mxfp8(args.out, layers)   # atomic rename each .bin.new over the affine bank
 
     if not args.no_manifest:
-        mpath = write_manifest(args.out, entries, row_codec=codec)
+        mpath = write_manifest(args.out, entries, row_codec=codec, residents=residents)
+        if residents is not None:
+            log(f"manifest: preserved residents entry ({residents.get('file')})")
         log(f"manifest -> {mpath}")
 
     log("done")
