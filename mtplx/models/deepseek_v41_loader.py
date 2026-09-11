@@ -595,6 +595,20 @@ def construct_deepseek_v41_resident_model(
     except Exception as exc:
         raise ResidentLoadError(f"resident parameter evaluation failed: {exc}") from exc
 
+    # W40 / K21: repack the output head per ``MTPLX_DSV41_HEAD_MODE`` now that the
+    # real bf16 head weight is loaded (the model deferred the load-time codec to
+    # this point).  ``apply_head_mode`` is a no-op / returns None for the default
+    # codec; otherwise it returns the resident-pricing note merged below.
+    head_mode_pricing = None
+    apply_head_mode = getattr(model, "apply_head_mode", None)
+    if callable(apply_head_mode):
+        try:
+            head_mode_pricing = apply_head_mode()
+            if head_mode_pricing is not None:
+                mx.eval(model.parameters())
+        except Exception as exc:
+            raise ResidentLoadError(f"could not apply head codec: {exc}") from exc
+
     report = ResidentLoadReport(
         shard_count=len({tensor.shard for tensor in partition.kept}),
         tensor_count=partition.kept_count,
@@ -627,8 +641,15 @@ def construct_deepseek_v41_resident_model(
                     f"could not attach engram from {engram_dir}: {exc}"
                 ) from exc
 
+    resident_report = report.as_dict()
+    if head_mode_pricing is not None:
+        # Note the head codec's reduced resident footprint in the load report so
+        # the resident planner/telemetry sees ~0.66/0.70 GB where the on-disk
+        # ``raw_tensor_bytes`` (unchanged, it prices the bf16 head read from disk)
+        # says 1.32 GB.
+        resident_report = {**resident_report, **head_mode_pricing}
     setattr(model, "_mtplx_expert_runtime", runtime)
-    setattr(model, "_mtplx_resident_load_report", report.as_dict())
+    setattr(model, "_mtplx_resident_load_report", resident_report)
     setattr(model, "_mtplx_engram_bank_path", str(engram_bank_path) if engram_bank_path else None)
     setattr(model, "_mtplx_engram_layer_ids", engram_layer_ids)
     return ResidentModel(model=model, config=config, report=report)

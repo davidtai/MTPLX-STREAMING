@@ -1784,6 +1784,65 @@ def _make_mtp_expert_quant_predicate(group_size: int):
     return predicate
 
 
+# --- W40 / K21: output-head codec lever (MTPLX_DSV41_HEAD_MODE) --------------
+_HEAD_MODE_ENV = "MTPLX_DSV41_HEAD_MODE"
+
+#: Recognised output-head codecs. ``bf16`` casts the final hidden to the (bf16)
+#: head weight dtype BEFORE the matmul -- a bf16 GEMV, f32 logits after -- which
+#: removes the default path's fp32-cast trap: the hidden reaches ``self.head`` as
+#: float32 (``source.astype(mx.float32)``), so MLX promotes the 1.32 GB bf16 head
+#: weight to a 2.64 GB float32 temporary EVERY token before the GEMV.  ``mxfp8``
+#: repacks the head at load to native mxfp8 gs32 (E8M0 scales, ~0.66 GB) and
+#: ``q8`` to affine 8-bit gs64 (~0.70 GB), both projected through
+#: ``quantized_matmul`` with the weight quantised ONCE (not per call).  Unset /
+#: empty / ``default`` keeps the current (byte-identical) behaviour.
+_HEAD_MODES = ("bf16", "mxfp8", "q8")
+_HEAD_MODE_DEFAULT_ALIASES = ("", "default", "off", "none", "control", "0")
+
+
+def _resolve_head_mode(raw=None) -> Optional[str]:
+    """Resolve ``MTPLX_DSV41_HEAD_MODE`` to a codec name or ``None`` (default).
+
+    Read at model construction (a load-time lever -- the weight repack happens
+    once at load, not per call), never frozen at import
+    (memory/env-flags-read-at-use-not-import).  An unrecognised non-empty value
+    raises so a mistyped accuracy lever fails fast rather than silently running
+    the default path through a whole benchmark window."""
+    val = os.environ.get(_HEAD_MODE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in _HEAD_MODE_DEFAULT_ALIASES:
+        return None
+    if val in _HEAD_MODES:
+        return val
+    raise ValueError(
+        f"{_HEAD_MODE_ENV}={val!r} is not one of {_HEAD_MODES} "
+        "(or empty/'default' for the current behaviour)"
+    )
+
+
+class _MXFP8Head(nn.Module):
+    """Load-time native-mxfp8 (gs32, E8M0 scales, no bias) repack of a dense
+    ``[vocab, hidden]`` output head: one ``mx.quantized_matmul`` per call, the
+    weight quantised ONCE in ``__init__`` (never per token).  Registered as a
+    module so the packed weight + scales flow through ``parameters()`` /
+    ``mx.eval`` like any resident.  ``group_size`` (32, mlx 0.32.2's only mxfp8
+    group size) must divide ``hidden``."""
+
+    def __init__(self, weight: mx.array, *, group_size: int = 32, bits: int = 8):
+        super().__init__()
+        packed, scales = mx.quantize(weight, group_size=group_size, bits=bits, mode="mxfp8")
+        self.weight = packed
+        self.scales = scales
+        self.group_size = int(group_size)
+        self.bits = int(bits)
+
+    def __call__(self, x: mx.array) -> mx.array:
+        return mx.quantized_matmul(
+            x, self.weight, scales=self.scales, transpose=True,
+            group_size=self.group_size, bits=self.bits, mode="mxfp8",
+        )
+
+
 def _logits_rows_to_keep(logits_rows) -> Optional[int]:
     """Map a K19 ``logits_rows`` selector to a ``keep the last N rows`` count.
 
@@ -1871,6 +1930,13 @@ class Model(nn.Module):
                 mode=qcfg["mode"],
                 class_predicate=_make_resident_quant_predicate(qcfg["mode"], qcfg["group_size"]),
             )
+        #: W40 / K21 output-head codec lever, resolved at construction from
+        #: ``MTPLX_DSV41_HEAD_MODE``.  The weight repack itself is deferred to
+        #: :meth:`apply_head_mode` (the real bf16 head weight is only present
+        #: AFTER the resident loader loads it); the loader calls that post-load.
+        self._head_mode = _resolve_head_mode()
+        self._head_mode_applied = False
+        self._head_mode_pricing: Optional[dict] = None
         if mtp and int(getattr(args, "n_mtp_layers", 0) or 0) > 0:
             self._build_mtp_head(quantize=quantize, quantization=quantization)
 
@@ -1913,6 +1979,84 @@ class Model(nn.Module):
                     mode="mxfp4",
                     class_predicate=_make_mtp_expert_quant_predicate(32),
                 )
+
+    def apply_head_mode(self) -> Optional[dict]:
+        """Repack the output head per ``MTPLX_DSV41_HEAD_MODE`` (W40 / K21), ONCE,
+        after the resident weights are loaded -- the loader calls this post-load,
+        when ``self.head.weight`` is the real bf16 head rather than the freshly
+        constructed placeholder.  Returns a resident-pricing note (or ``None`` for
+        the default codec / a head that cannot be recodec'd) that the loader
+        merges into the resident load report so the planner sees the reduced
+        footprint (1.32 GB -> ~0.66/0.70 GB for mxfp8/q8).  Idempotent.
+
+        ``bf16`` changes no weight (the resident head stays bf16 1.32 GB); it is a
+        forward-only fix and its saving is per-token traffic, not footprint.
+        ``mxfp8`` / ``q8`` shrink the resident head and are applied here so the
+        quantisation runs once, never per token."""
+        if self._head_mode_applied:
+            return self._head_mode_pricing
+        self._head_mode_applied = True
+        mode = self._head_mode
+        if mode is None:
+            return None
+        head = self.head
+        weight = getattr(head, "weight", None)
+        # Only a dense float head (the native artifact keeps the head bf16) can be
+        # recodec'd; an already-quantised head (the affine artifact quantises the
+        # head to q8 at load, so it carries ``.scales``) or a non-float weight is
+        # a no-op, and the forward falls back to the default path.
+        dense = (
+            weight is not None
+            and getattr(head, "scales", None) is None
+            and weight.dtype in (mx.bfloat16, mx.float16, mx.float32)
+        )
+        if not dense:
+            self._head_mode = None
+            return None
+        before_bytes = int(weight.nbytes)
+        if mode == "bf16":
+            after_bytes = before_bytes  # resident unchanged; per-token traffic cut
+        elif mode == "mxfp8":
+            self.head = _MXFP8Head(weight, group_size=32, bits=8)
+            mx.eval(self.head.parameters())
+            after_bytes = int(self.head.weight.nbytes) + int(self.head.scales.nbytes)
+        elif mode == "q8":
+            self.head = nn.QuantizedLinear.from_linear(head, group_size=64, bits=8)
+            mx.eval(self.head.parameters())
+            after_bytes = (
+                int(self.head.weight.nbytes)
+                + int(self.head.scales.nbytes)
+                + int(self.head.biases.nbytes)
+            )
+        else:  # pragma: no cover - _resolve_head_mode already validated the value
+            return None
+        self._head_mode_pricing = {
+            "head_mode": mode,
+            "head_resident_bytes_default": before_bytes,
+            "head_resident_bytes_actual": after_bytes,
+            "head_resident_saved_bytes": before_bytes - after_bytes,
+        }
+        return self._head_mode_pricing
+
+    def _apply_head(self, source: mx.array) -> mx.array:
+        """Project the (final-normed, hyper-connection-merged) hidden through the
+        output head under the active codec (W40 / K21).
+
+        Default (``self._head_mode is None``) is byte-identical to the historical
+        ``self.head(source.astype(mx.float32))``: it casts the hidden to float32,
+        so the matmul promotes the bf16 head weight to a float32 temporary every
+        token (the fp32-cast trap this lever removes)."""
+        mode = self._head_mode
+        if mode == "bf16":
+            # bf16 GEMV over the resident bf16 weight, f32 logits after: the only
+            # numeric change is bf16-rounding the hidden (no weight promotion).
+            return self.head(source.astype(self.head.weight.dtype)).astype(mx.float32)
+        if mode in ("mxfp8", "q8"):
+            # weight repacked once at load; f32 hidden -> f32 logits, the weight
+            # is dequantised per group inside quantized_matmul, never promoted to
+            # a full f32 temporary.
+            return self.head(source.astype(mx.float32)).astype(mx.float32)
+        return self.head(source.astype(mx.float32))
 
     def __call__(self, input_ids, cache=None, *, return_hidden: bool = False,
                  emit_logits: bool = True, logits_keep=None, logits_rows=None,
@@ -1970,7 +2114,7 @@ class Model(nn.Module):
             # narrowing the head input never changes the surviving rows' logits.
             with _stime.stage("head") as _st:
                 source = h if keep_last is None else h[:, -keep_last:, :]
-                logits = self.head(source.astype(mx.float32))
+                logits = self._apply_head(source)
                 _st.add(logits)
         if not return_hidden:
             return logits

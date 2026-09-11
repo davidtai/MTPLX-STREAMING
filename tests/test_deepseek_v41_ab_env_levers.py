@@ -10,8 +10,10 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
   * the ``--dry-run`` CPU double (no model, no MLX/Metal op, no server);
   * per-arm env application for every preset
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
-    switch_fastpath / both / all_levers), including arm independence (each arm
-    force-unsets the keys it does not set);
+    switch_fastpath / both / all_levers / head_bf16 / head_mxfp8 / head_q8),
+    including arm independence (each arm force-unsets the keys it does not set,
+    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the five boolean
+    per-forward levers never leak across each other);
   * prompt-build metadata parity with ``bench_standard_shape`` at 1024.
 
 No GPU, no Metal, no model, no server, no network. The scripts are not a package
@@ -40,8 +42,10 @@ _OV = "MTPLX_DSV41_SHARED_OVERLAP"
 _LM = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
 _SK = "MTPLX_DSV41_SINKHORN_METAL"
 _HC = "MTPLX_DSV41_HC_COMPILE"
-_FP = "MTPLX_DSV41_SWITCH_FASTPATH"
-_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP)
+_FP = "MTPLX_DSV41_SWITCH_FASTPATH"    # W42 / K23: switch all-hit fast-path
+_HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
+_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP)  # the five boolean per-forward levers
+_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all six keys
 
 ALL_ARMS = [
     "control",
@@ -52,9 +56,12 @@ ALL_ARMS = [
     "switch_fastpath",
     "both",
     "all_levers",
+    "head_bf16",
+    "head_mxfp8",
+    "head_q8",
 ]
 
-# The lever env keys each arm must leave set to "1" (every other key unset).
+# The boolean lever env keys each arm must leave set to "1" (every other unset).
 EXPECTED_ON = {
     "control": set(),
     "shared_overlap": {_OV},
@@ -64,6 +71,24 @@ EXPECTED_ON = {
     "switch_fastpath": {_FP},
     "both": {_OV, _LM},
     "all_levers": {_OV, _LM, _SK, _HC, _FP},
+    "head_bf16": set(),
+    "head_mxfp8": set(),
+    "head_q8": set(),
+}
+
+# The head-codec value each arm pins on MTPLX_DSV41_HEAD_MODE (None = force-unset).
+EXPECTED_HEAD = {
+    "control": None,
+    "shared_overlap": None,
+    "layer_major": None,
+    "sinkhorn_metal": None,
+    "hc_compile": None,
+    "switch_fastpath": None,
+    "both": None,
+    "all_levers": None,
+    "head_bf16": "bf16",
+    "head_mxfp8": "mxfp8",
+    "head_q8": "q8",
 }
 
 
@@ -90,7 +115,7 @@ def bench():
 def _restore_lever_env():
     """Snapshot and restore the lever + probe env keys around every test so an
     arm applied in one test never leaks into the next."""
-    watched = _ALL_KEYS + ("MTPLX_ROUTE_STAGE_PROBE",)
+    watched = _BOOL_AND_HEAD + ("MTPLX_ROUTE_STAGE_PROBE",)
     saved = {k: os.environ.get(k) for k in watched}
     try:
         yield
@@ -140,9 +165,10 @@ def test_prompt_args_no_longer_raises_attributeerror(env_levers, bench):
 
 @pytest.mark.parametrize("arm", ALL_ARMS)
 def test_apply_arm_env_sets_and_clears(env_levers, arm):
-    # Pre-pollute every lever key so we prove the arm force-unsets the ones it
-    # does not set (arms are independent), not merely sets the ones it wants.
-    for k in _ALL_KEYS:
+    # Pre-pollute every lever key (booleans + head) so we prove the arm force-
+    # unsets the ones it does not set (arms are independent), not merely sets the
+    # ones it wants.
+    for k in _BOOL_AND_HEAD:
         os.environ[k] = "bogus"
     env_levers._apply_arm_env(arm)
     for k in _ALL_KEYS:
@@ -150,6 +176,23 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
             assert os.environ.get(k) == "1", f"{arm}: {k} should be '1'"
         else:
             assert k not in os.environ, f"{arm}: {k} should be force-unset"
+    # the head codec pins its value (a string), or is force-unset when None.
+    if EXPECTED_HEAD[arm] is None:
+        assert _HM not in os.environ, f"{arm}: {_HM} should be force-unset"
+    else:
+        assert os.environ.get(_HM) == EXPECTED_HEAD[arm], f"{arm}: {_HM}"
+
+
+def test_head_arms_do_not_touch_boolean_levers(env_levers):
+    # a head arm after all_levers clears the four booleans and sets only head.
+    env_levers._apply_arm_env("all_levers")
+    env_levers._apply_arm_env("head_mxfp8")
+    assert os.environ.get(_HM) == "mxfp8"
+    assert all(k not in os.environ for k in _ALL_KEYS)
+    # a boolean arm after a head arm clears head.
+    env_levers._apply_arm_env("both")
+    assert _HM not in os.environ
+    assert os.environ.get(_OV) == "1" and os.environ.get(_LM) == "1"
 
 
 def test_apply_arm_env_independent_across_arms(env_levers):
@@ -197,6 +240,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     # Pre-pollute so control's receipt proves the keys were cleared, not stale.
     os.environ[_OV] = "bogus"
     os.environ[_HC] = "bogus"
+    os.environ[_HM] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -206,6 +250,8 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         for k in _ALL_KEYS:
             if k not in EXPECTED_ON[r["arm"]]:
                 assert r["arm_env"][k] is None, (r["arm"], k)
+        # the head codec value is recorded verbatim (or None when unset).
+        assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]
 
 
 def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path):

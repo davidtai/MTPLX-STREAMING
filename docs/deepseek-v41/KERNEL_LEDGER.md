@@ -448,6 +448,50 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   compute-cut, is in play. **Where:** decode + verify + prefill. **After:** ~+2–4 % decode; **now:**
   ~0. **Exactness:** **risk** — q8 head can tip near-tie argmax; gate the streamed==resident argmax
   (PORT_PLAN P1.7) and a HumanEval cell before shipping. **Effort:** low. **Precedent:** [[report-fastest-of-seeds]]-class byte cuts; q8 head is standard but exactness-gated here.
+- **⚠ premise superseded by K21 (measured W40):** the head is **not** a clean 1.32 GB
+  bf16 read — the call-site `astype(float32)` makes it the **fp32-cast trap (6.6 GB /
+  70.9 ms/token, the #2 decode stage)**. The byte cut here is real but the bigger,
+  free win is removing the trap (`MTPLX_DSV41_HEAD_MODE=bf16`). See K21.
+
+### K21 — Output-head fp32-cast trap fix + head codec lever (`MTPLX_DSV41_HEAD_MODE`) — **measured root cause of K9; promoted, landed W40 (CPU)**
+- **Supersedes K9's premise.** K9 priced the head as a clean **1.32 GB bf16 read
+  (~2 ms, +2–4 %)**. GPU window 13 stage timing measures the `head` stage at
+  **70.9 ms/token** (64 calls, 1,024 ctx) — the **#2 decode stage (20.3 % of the
+  fenced frame)**, ~35× a clean bf16 M=1 GEMV. **Root cause (read from the code, not
+  guessed):** the residual stream `h` reaches the head as **bf16** (the HC merge at
+  `_forward_span` sums in f32 but casts back to `h.dtype`; `_rmsnorm` returns the
+  input dtype), but the head call site did `self.head(source.astype(mx.float32))` —
+  an **explicit upcast of the hidden to float32**. `f32 @ bf16.T` has no
+  mixed-precision matmul in MLX, so it **materialises a 2.648 GB float32 copy of the
+  1.324 GB bf16 head weight every token** and GEMVs over it. This is exactly Hy3's
+  [[hy3-resident-path-breakthrough]] "lm_head fp32-cast trap". (The trap is the
+  call-site `astype`, **not** the HC merge — which already casts back to bf16.)
+- **Byte traffic / token (M=1):** control (trap) = read bf16 1.324 + write f32 temp
+  2.648 + read f32 GEMV 2.648 = **6.619 GB**; `bf16` (cast hidden to weight dtype) =
+  **1.324 GB (5.0× less)**; `mxfp8` (native gs32, E8M0) = **0.683 GB (9.7×)**; `q8`
+  (affine gs64) = **0.703 GB (9.4×)**. If the stage is BW-bound (its 6.6 GB and the
+  35× gap say it is), scaling the 70.9 ms head: `bf16`→~14.2 ms (**−80 %**),
+  `mxfp8`/`q8`→~7.3/7.5 ms (**−90 %**) — a first-order ~−16–18 % of the fenced decode
+  frame, most of it from the **free lossless `bf16` fix alone**.
+- **Lever:** `MTPLX_DSV41_HEAD_MODE ∈ {bf16, mxfp8, q8}` (default = current
+  behaviour, byte-identical). Resolved at construction; the weight repack applied
+  **once post-load** (`Model.apply_head_mode`, called by the loader after the real
+  head weight loads — it does not exist at `__init__`). `mxfp8`/`q8` also free
+  **~0.64 GB resident**, priced into `_mtplx_resident_load_report`
+  (`head_resident_saved_bytes`). **Where:** decode + verify + prefill.
+- **Exactness (CPU, `tests/models/test_deepseek_v41_head_lever.py`):** every codec
+  flips the greedy argmax **only** within ~3× its own `max|Δ|` (genuine near-ties):
+  over 256 random hidden vectors on a real-hidden (5120) head, `bf16` matches
+  249/256 (max|Δ| 0.028, misses ≤ 1.63× max|Δ|), `q8` 254/256 (max|Δ| 0.054),
+  `mxfp8` 239/256 (max|Δ| 0.188 — coarsest, E8M0 gs32). DSpark MTP verify (K+1 rows)
+  yields `[1,K+1,vocab]` f32 logits in every mode; `bf16` keeps the verify argmax
+  identical to default. Random head + random hidden is a worst case (near-uniform
+  logits); a trained head with a dominant top-1 flips none. **Gate `mxfp8`/`q8` on a
+  full HumanEval/MBPP eval** ([[task-evals-decide-bank-verdicts]]) before serving;
+  **`bf16` is a free lossless bug fix** (ship as default). **Effort:** low.
+- **W40 — LANDED (CPU-only; ms/token is a KG-class GPU window, arms `head_bf16` /
+  `head_mxfp8` / `head_q8` in `ab_decode_env_levers.py`, not measured here).**
+  Report: [`W40_HEAD_LEVER.md`](W40_HEAD_LEVER.md).
 
 ### K14 — `MLX_MAX_MB_PER_BUFFER` / `MAX_OPS_PER_BUFFER` sweep — **Rank 10 (cheap falsifier, low expectation)**
 - **Mechanism:** command-buffer throttling knob — caps ops/bytes per command buffer, changing commit
