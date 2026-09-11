@@ -996,6 +996,45 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   19 keys). **STATUS:** contained core IMPLEMENTED + CPU-proven, default OFF; real-path
   admission awaiting the shared-infra decision above.
 
+### K28 — Fused mask + attention-sink softmax Metal kernel (`MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL`) — **W58 (prefill, sibling of K25/K6)**
+- **Mechanism:** the 16K score path materialises the `[rows=1024,64,T]` f32 transient (up to
+  ~6 GiB, T≈24576) and the eager softmax walks it repeatedly (window-22 reuse: `score.softmax`
+  **84.5 s** one-shot / **~53 s** lean, `scale_mask_sink` 14.7 s). K28 fuses **mask + per-head
+  value-0 sink + f32 softmax** into ONE `mx.fast.metal_kernel`: one threadgroup per `(row,head)`,
+  `TG=256` lanes scan T strided, an **online (max,denom)** per-lane accumulation combines up a
+  threadgroup **tree** (`M=max; D=d1·exp(m1-M)+d2·exp(m2-M)`; finite `NEG=-3e38f` sentinel so an
+  all-masked lane is a true identity, never `-inf−(−inf)`), the per-head sink folds in once
+  (`m=max(max(scores),sink)`), then a second pass writes `p=exp(s-m)/denom` (masked → 0). Reads the
+  transient twice, writes once, **zero T-wide intermediates** (no `masked_scores`/`ex`/concat/slice).
+  Prefill + one-shot only (composes with the lean path — scale folded into q, kernel `scale=1.0` —
+  and plain one-shot; the split-K/chunked path is NOT routed through it, though a `normalize=False,
+  return_stats=True` mode exposes per-`(row,head)` `(m,denom)` for a future split-K merge).
+- **Byte / pass arithmetic (per chunk-layer, `S` = the transient, up to ~6 GiB):** eager one-shot
+  mask+softmax ≈ **10 S** (scale·, where, concat, softmax, slice), eager lean ≈ **6 S** (where; max,
+  exp, sum); **K28 = 3 S** (2R+1W). vs lean **6 S→3 S (−50 %)**; vs one-shot **10 S→3 S (−70 %)**;
+  and the `masked_scores`/`ex` (up to ~2 S) allocations vanish (peak-GB relief for the 100 GiB knob).
+  **Cost:** ~**3 `exp`/element** (online rescale ×2 + write ×1) vs eager's 1 — a memory-vs-ALU
+  trade; net win requires the stage to be memory/pass-bound (**window-20's score-path finding**).
+  Fallback if `exp`-ALU-binds: the **3-pass variant** (max, sum, write: 2 `exp`/element, 4 S) — a
+  one-flag change to `_build_source`.
+- **Est. seconds saved at 16K (GPU-window-gated, NOT measured):** `prefill_lean_k28` vs
+  `prefill_lean` **−25…−31 s** (TTFT 265 → ~235–240 s, −10…−11 %) if memory-bound; `softmax_kernel`
+  vs `control` up to ~−50…−65 s (capped by the 3× `exp`). Same roofline-class caveat as K25 (whose
+  FLOP roofline window-20 overturned) — this is an estimate, the paired A/B is the gate.
+- **Exactness: reassociation-level, NOT byte-identical** (tree reorders the sums; K28 writes the
+  normalised `p` so PV is `p·V` vs lean's `(ex·V)/denom`). Same class as `score_chunked`/`score_lean`.
+  **CPU-proven:** an f32 numpy simulation of the exact kernel algorithm vs the eager `mx` reference
+  gives **max|Δ| = 1.86e-9, argmax exact**; fully-masked rows finite + all-zero (reference
+  "all-invalid → zero output"). GPU parity (`test_fused_softmax_parity_gpu`, gated `MTPLX_GPU_PARITY=1`,
+  receipt to `MTPLX_PARITY_RECEIPT`) confirms the Metal execution on `[64,64,4096]` + `[8,64,16384]`:
+  **pass if max|Δ| ≤ 1e-6 and argmax mismatch 0**.
+- **STATUS (W58, `feat/deepseek-v41-w58`):** IMPLEMENTED + CPU-proven (algorithm + wrapper plumbing
+  + model dispatch + byte-identical CPU fallback), default OFF, GPU-only. Kernel
+  `mtplx/kernels/dsv41_fused_softmax.py`; integration `_sparse_attend_oneshot`; tests
+  `tests/models/test_deepseek_v41_fused_softmax.py` (19 CPU + 1 GPU-gated), peak RSS < 0.2 GB. Arms
+  `softmax_kernel`, `prefill_lean_k28` in `ab_decode_env_levers.py` (pin all 20 keys). Report
+  `W58_FUSED_SOFTMAX.md`. Numeric-throughput A/B pending a GPU window.
+
 ---
 
 ## 6. Dead-here (GPU-side; do not re-propose)
