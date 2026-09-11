@@ -2893,6 +2893,31 @@ class HotExpertSwitchGLU(nn.Module):
             and 2 <= int(tokens.shape[0]) <= 8
             and int(len(expert_ids)) == int(tokens.shape[0]) * top_k
         )
+        # W81 engagement census: a "verify shape" is any small-M (2..8 rows) DECODE
+        # component-bank route -- the DSpark K+1 verify.  Count every such route as
+        # a fast-path candidate so the ab census (and the next GPU window) can prove
+        # engaged / declined with the decline reason, instead of inferring it from
+        # cumulative hot.* counters.  Engagements are counted below
+        # (hot.verify_single_barrier for W61 all-hit, hot.verify_single_barrier_split
+        # for the W66/W81 batched split); here we tick the candidate + any decline.
+        _verify_shape = (
+            phase is RoutingPhase.DECODE
+            and self.runtime.config.slot_layout == "component-banks"
+            and 2 <= int(tokens.shape[0]) <= 8
+        )
+        if _verify_shape:
+            _route_probe.count("hot.verify_candidate")
+            if not _verify_single_barrier:
+                if os.environ.get("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "1") != "1":
+                    _route_probe.count("hot.verify_decline.flag_off")
+                elif self.codec not in ("affine", "mxfp4"):
+                    _route_probe.count("hot.verify_decline.codec")
+                elif self._shadow_bank is not None:
+                    _route_probe.count("hot.verify_decline.shadow_bank")
+                elif int(len(expert_ids)) != int(tokens.shape[0]) * top_k:
+                    _route_probe.count("hot.verify_decline.assignment_shape")
+                else:
+                    _route_probe.count("hot.verify_decline.other")
         if _verify_single_barrier:
             with _route_probe.bracket("hot.try_all_hit"):
                 ready = self.runtime.try_all_hit_route(
@@ -2963,30 +2988,39 @@ class HotExpertSwitchGLU(nn.Module):
                 if shared_work is not None and shared is None:
                     shared = shared_work()
                 return output, shared
-            # W66 split single-barrier: this small-M DECODE verify has misses, so
-            # W61's all-hit probe declined.  When the WHOLE route (hits + misses)
-            # fits transient capacity in one transaction, admit it in ONE
-            # ``begin_split_route`` submission -- hits pinned in persistent slots,
-            # the missing experts streamed into transient together (one preadv /
-            # admission call) -- then gather every rows*top_k assignment through the
-            # shared component-bank helper (deferred / async-submitted) and defer
-            # the single route's release to the next routing barrier.  That is the
-            # W42/W61 deferred-pin proof: the pins stay held until a covering eval,
-            # so unlike the W44 device route there is no unpinned recycle.  Net:
-            # exactly ONE routing barrier (the ``mx.eval(indices)`` above) per
-            # layer, no per-wave synchronous fence.  This is the bounded loop's
-            # single-wave split branch, run once over the full route and always
-            # deferred, so it is byte-identical to that loop (same tokens x same
-            # per-assignment expert weights, recombined by output position; the
-            # gather is row-independent) -- verified flag on vs off at M=2/4/8 for
-            # 1-miss, multi-miss and all-miss layers.  Hits and misses share ONE
-            # pinned set here, so a decode miss can never be promoted into (and
-            # recycle) a slot whose gather is still pending.  A route whose UNIQUE
-            # experts exceed transient capacity cannot be one transaction
-            # (``begin_split_route`` validates unique <= transient_slots) and its
-            # waves cannot all hold their pins at once (the layer lock is not
-            # reentrant, issue #120), so it falls through to the bounded route_waves
-            # loop unchanged.  M=1 never reaches here.
+            # W66/W81 split single-barrier (batched): this small-M DECODE verify
+            # has misses, so W61's all-hit probe declined.  W66 covered the case
+            # where the WHOLE route (hits + misses) fit transient capacity in ONE
+            # ``begin_split_route`` -- one admission, one deferred gather, exactly
+            # ONE routing barrier.  W81 keeps that and adds the wider case measured
+            # on the real model (window 31): the DSpark 4-row verify routes
+            # rows*top_k=24 assignments with ~20 unique experts, but the bench
+            # runtime's transient capacity was ``spec.top_k`` (=6, the loader's
+            # unset-``transient_slots`` default), so ~20 > 6 declined W66 and the
+            # route fell to the bounded ``route_waves`` loop, which fences EVERY
+            # transient-bounded split wave part (hit fence + a fence per miss part
+            # + the shared fence) -- ~3.6 begin_split_route/layer-verify at 733 ms
+            # in moe.routed_switch.  W81 instead partitions the route into the
+            # SAME capacity-bounded waves ``route_waves`` would produce (identical
+            # partition for DECODE: ``sort_unique`` off), and admits each wave as
+            # ONE ``begin_split_route`` whose hits + all miss parts are gathered
+            # deferred (async-submitted) and fenced by a SINGLE ``synchronous_fence``
+            # -- ONE fence per batch, never one per wave part.  Pin-safety (W44 /
+            # issue #120): the layer lock is not reentrant and non-final waves must
+            # recycle their transient slots, so each NON-final wave materializes its
+            # own gather (one fence) and releases (release_hits + release_miss +
+            # close, freeing the lock) BEFORE the next wave re-enters; only the
+            # FINAL wave defers its whole release to the next routing barrier's
+            # covering eval (the W42/W61 deferred-pin proof -- pins held until the
+            # eval, no unpinned recycle).  Net: (num_waves - 1) blocking fences + the
+            # ONE routing barrier, versus the legacy loop's ~2x-that per-part fences;
+            # unique <= capacity collapses to a single wave = the original W66
+            # single-barrier promise.  Byte-identical to the bounded loop: the waves,
+            # the per-assignment (token x expert-weight) gathers and the output-
+            # position recombination are the same; only fence/release TIMING moves,
+            # and the gather is row-independent.  A runtime without the defer/flush
+            # seam (a fake double) leaves ``_verify_can_defer`` False and falls
+            # through to the bounded loop unchanged.  M=1 never reaches here.
             _verify_can_defer = callable(
                 getattr(self.runtime, "defer_slot_release", None)
             ) and callable(
@@ -2995,66 +3029,94 @@ class HotExpertSwitchGLU(nn.Module):
             _capacity = int(
                 getattr(getattr(self.runtime, "plan", None), "transient_slots", 0) or 0
             )
-            _unique_experts = tuple(dict.fromkeys(expert_ids))
-            if (
-                _verify_can_defer
-                and _capacity >= 1
-                and len(_unique_experts) <= _capacity
-            ):
-                with _stime.stage_nested("switch.miss_submit"), \
-                        _route_probe.bracket("hot.begin_split_route"):
-                    _pending = self.runtime.begin_split_route(
-                        self.layer_index,
-                        tuple(expert_ids),
-                        phase=phase,
-                    )
+            if _verify_can_defer and _capacity >= 1:
+                # Identical partition to the bounded loop (DECODE: sort_unique off);
+                # unique <= capacity yields a single wave (the W66 fast path).
+                _waves = tuple(self.runtime.route_waves(expert_ids))
+                _final_wave = len(_waves) - 1
                 _route_probe.count("hot.verify_single_barrier_split")
-                _wave_start = len(outputs)
-                _deferred_parts: list[ReadyRoute] = []
-                _completed = False
-                try:
-                    _hit_set = set(_pending.plan.hits)
-                    if _pending.hit_ready is not None:
-                        _hit_positions = tuple(
-                            i for i, e in enumerate(expert_ids) if e in _hit_set
+                if len(_waves) > 1:
+                    _route_probe.count("hot.verify_single_barrier_batched")
+                for _wave_index, _wave in enumerate(_waves):
+                    _is_final = _wave_index == _final_wave
+                    with _stime.stage_nested("switch.miss_submit"), \
+                            _route_probe.bracket("hot.begin_split_route"):
+                        _pending = self.runtime.begin_split_route(
+                            self.layer_index,
+                            _wave.experts,
+                            phase=phase,
                         )
-                        evaluate_component_bindings(
-                            _hit_positions,
-                            _pending.hit_ready.bindings,
-                            _pending.hit_ready,
-                            force_sync=True,
-                            defer=True,
-                        )
-                    for _miss_ready in _pending.iter_ready_misses():
-                        _ready_experts = set(_miss_ready.plan.experts)
-                        _miss_positions = tuple(
-                            i
-                            for i, e in enumerate(expert_ids)
-                            if e not in _hit_set and e in _ready_experts
-                        )
-                        evaluate_component_bindings(
-                            _miss_positions,
-                            _miss_ready.bindings,
-                            _miss_ready,
-                            force_sync=True,
-                            defer=True,
-                        )
-                        _deferred_parts.append(_miss_ready)
-                    _completed = True
-                except BaseException as exc:
-                    _pending.abort(exc)
-                    raise
-                finally:
-                    if _completed:
-                        # One deferred release covers the whole route: the
-                        # adapter replays release_miss + close (hit pins, miss
-                        # leases, and the layer lock) one covering eval later.
-                        self.runtime.defer_slot_release(
-                            _DeferredSplitClose(_pending, tuple(_deferred_parts)),
-                            tuple(outputs[_wave_start:]),
-                        )
-                    else:
-                        _pending.close()
+                    _wave_start = len(outputs)
+                    _deferred_parts: list[ReadyRoute] = []
+                    _fence_ready: ReadyRoute | None = None
+                    _completed = False
+                    try:
+                        _hit_set = set(_pending.plan.hits)
+                        if _pending.hit_ready is not None:
+                            _hit_positions = tuple(
+                                position
+                                for position, expert in zip(
+                                    _wave.positions, _wave.experts, strict=True
+                                )
+                                if expert in _hit_set
+                            )
+                            evaluate_component_bindings(
+                                _hit_positions,
+                                _pending.hit_ready.bindings,
+                                _pending.hit_ready,
+                                force_sync=True,
+                                defer=True,
+                            )
+                            _fence_ready = _pending.hit_ready
+                        for _miss_ready in _pending.iter_ready_misses():
+                            _ready_experts = set(_miss_ready.plan.experts)
+                            _miss_positions = tuple(
+                                position
+                                for position, expert in zip(
+                                    _wave.positions, _wave.experts, strict=True
+                                )
+                                if expert not in _hit_set and expert in _ready_experts
+                            )
+                            evaluate_component_bindings(
+                                _miss_positions,
+                                _miss_ready.bindings,
+                                _miss_ready,
+                                force_sync=True,
+                                defer=True,
+                            )
+                            _deferred_parts.append(_miss_ready)
+                            if _fence_ready is None:
+                                _fence_ready = _miss_ready
+                        _completed = True
+                    except BaseException as exc:
+                        _pending.abort(exc)
+                        raise
+                    finally:
+                        if not _completed:
+                            _pending.close()
+                        elif _is_final:
+                            # One deferred release covers the final wave: the
+                            # adapter replays release_miss + close (hit pins, miss
+                            # leases, and the layer lock) one covering eval later.
+                            self.runtime.defer_slot_release(
+                                _DeferredSplitClose(
+                                    _pending, tuple(_deferred_parts)
+                                ),
+                                tuple(outputs[_wave_start:]),
+                            )
+                        else:
+                            # Non-final wave: ONE fence materializes this wave's
+                            # gathers, then release recycles its transient slots and
+                            # frees the (non-reentrant) layer lock for the next wave.
+                            if _fence_ready is not None:
+                                synchronous_fence(
+                                    _fence_ready, tuple(outputs[_wave_start:])
+                                )
+                            if _pending.hit_ready is not None:
+                                _pending.release_hits()
+                            for _mr in _deferred_parts:
+                                _pending.release_miss(_mr)
+                            _pending.close()
                 joined = mx.concatenate(outputs, axis=0)
                 order = mx.argsort(mx.array(output_positions, dtype=mx.int32))
                 joined = mx.take(joined, order, axis=0)
@@ -3062,8 +3124,9 @@ class HotExpertSwitchGLU(nn.Module):
                 if shared_work is not None and shared is None:
                     shared = shared_work()
                 return output, shared
-            # Route too wide for one transient transaction (unique experts exceed
-            # capacity): fall through to the bounded route_waves loop below.
+            # No defer/flush seam (fake double): fall through to the bounded
+            # route_waves loop below (byte-identical, fenced per wave part).
+            _route_probe.count("hot.verify_decline.no_defer_seam")
 
         try:
             # W47 switch breakdown (prefill only; no-op otherwise): the host-side
