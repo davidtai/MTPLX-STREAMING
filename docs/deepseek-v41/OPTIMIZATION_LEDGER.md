@@ -154,6 +154,16 @@ decode). Do not confuse the two — that is the mistake the Qwen3.8 dispatch sto
   model in `W57_DSPARK_DIRECT.md`: this lane removes the generic machinery's *overhead* but NOT the
   §1.4/R2 bytes wall — the dispatch-bound `T_{K+1} ≈ T1` win still needs a resident bank or R2 dedup, and
   the tok/s number is gated by α (still unmeasured on the box, §8 lever L).
+- **W57 window-24 (integration eff795f75, 1K/256):** byte-identical, α superb (3.78 tokens/cycle, 189/195
+  accepted, 94/98/98% by depth), but **1.53 tok/s** — root-caused to TWO issues (W57_DSPARK_DIRECT.md §6b):
+  (1) the K+1-row verify defaulted to `RoutingPhase.PREFILL` (`current_expert_routing_phase`: token_count>1)
+  on the bench's direct `model(...)` call, paying the prefill wave every cycle (~2.47 s/cycle) — FIXED by
+  wrapping the verify in `attention_phase("decode_verify")` + `expert_routing_phase(DECODE)` (byte-identical;
+  default on; `MTPLX_DSV41_DSPARK_VERIFY_DECODE_PHASE=0` to A/B); (2) the AR reference itself was 1.7 tok/s
+  (vs 6.24 baseline) because `with_mtp=True` + the harness reprice shrink the resident expert cache ~14 GiB
+  → far more per-miss SERVICE — this is the head's intrinsic cache cost (R2/R3 territory), quantified by the
+  new `--with-mtp` AR A/B. Per-cycle cost table (draft/verify/accept/commit ms) + the W37 verify-internal
+  switch census now land in the receipt (`--decode-mode dspark [--stage-timing]`).
 
 ### R2 — Expert-record dedup across MTP verify rows — Factor B
 

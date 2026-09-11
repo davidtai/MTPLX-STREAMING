@@ -335,6 +335,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
     )
     p.add_argument(
+        "--with-mtp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Force the model to load with the DSpark MTP head (with_mtp=True) and "
+            "reprice its residents. Implied by --decode-mode dspark. On "
+            "--decode-mode ar this measures 'AR + head loaded' so window 25 can "
+            "A/B it against plain 'AR' (--no-with-mtp) and isolate the head's "
+            "expert-cache cost from the verify routing phase."
+        ),
+    )
+    p.add_argument(
         "--arms",
         nargs="+",
         default=["control", "shared_overlap"],
@@ -523,10 +535,14 @@ def _load_model(args, bench, mx):
         if args.expert_cache_limit_gib is None
         else int(args.expert_cache_limit_gib * GIB)
     )
-    # --decode-mode dspark loads with the DSpark head (with_mtp=True) and reprices
-    # the MTP residents against the expert cache so the plan still fits.
+    # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
+    # (with_mtp=True) and reprices the MTP residents against the expert cache so
+    # the plan still fits.
+    want_head = (getattr(args, "decode_mode", "ar") == "dspark") or bool(
+        getattr(args, "with_mtp", None)
+    )
     with_mtp, memory_limit_bytes, cache_limit = dspark_bench_loader_overrides(
-        want_dspark=(getattr(args, "decode_mode", "ar") == "dspark"),
+        want_dspark=want_head,
         memory_limit_bytes=int(args.memory_limit_gib * GIB),
         expert_cache_limit_bytes=cache_limit,
     )
@@ -580,10 +596,13 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps):
     }
 
 
-def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth):
+def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_timing=False):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
-    per-cycle accept statistics.  Total tokens == steps + 1 to match ``_generate``
-    (prefill token + ``steps`` decode tokens)."""
+    per-cycle accept + phase-timing statistics.  Total tokens == steps + 1 to match
+    ``_generate`` (prefill token + ``steps`` decode tokens).  When ``stage_timing``
+    the W37 probe is armed around the decode cycles so the receipt also carries the
+    VERIFY forward's internal model stages (attention, moe.routed_switch breakdown,
+    which reveals whether rows>1 took the prefill routing phase)."""
     from mtplx.models.deepseek_v41_dspark_decode import (
         DSparkDecodeStats,
         dspark_generate,
@@ -592,6 +611,11 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth):
 
     mem_probe.reset_peak()
     stats = DSparkDecodeStats()
+    stime = None
+    if stage_timing:
+        from mtplx.models import deepseek_v41_stage_timing as stime
+
+        stime.begin()
     t0 = time.perf_counter()
     toks = dspark_generate(
         model,
@@ -603,12 +627,19 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth):
         stats=stats,
     )
     wall = time.perf_counter() - t0
-    return {
+    report = None
+    if stime is not None:
+        report = model.stage_timing_report()
+        stime.end()
+    out = {
         "generated": [int(t) for t in toks],
         "decode_wall_s": wall,
         "peak_gb": mem_probe.peak_bytes() / GIB,
         "stats": stats.to_dict(),
     }
+    if report is not None:
+        out["verify_stage_timing"] = report
+    return out
 
 
 def _overlap_telemetry(runtime) -> dict | None:
@@ -703,6 +734,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 model=model, mx=mx, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
                 depth=args.dspark_depth,
+                stage_timing=bool(getattr(args, "stage_timing", False)),
             )
             dsp_ids = dsp["generated"]
             byte_identical = dsp_ids == ids
@@ -727,10 +759,19 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "drafted_tokens": st["drafted_tokens"],
                 "accepted_drafts": st["accepted_drafts"],
                 "rejected_drafts": st["rejected_drafts"],
+                # the per-cycle cost table (draft/verify/accept/commit ms) + the
+                # verify routing phase actually used.
+                "verify_decode_phase": st["verify_decode_phase"],
+                "per_cycle_ms": st["per_cycle"],
+                "phase_time_s": st["phase_time_s"],
                 "token_ids_sha256": hashlib.sha256(
                     json.dumps(dsp_ids).encode()
                 ).hexdigest(),
             }
+            if dsp.get("verify_stage_timing") is not None:
+                # W37 internal breakdown of the verify forward (attention +
+                # moe.routed_switch): the census that shows the routing phase.
+                receipt["dspark"]["verify_stage_timing"] = dsp["verify_stage_timing"]
             # Byte-identity is a hard correctness gate, not a soft metric: a
             # differing greedy sequence means the speculative lane is broken.
             if not byte_identical:

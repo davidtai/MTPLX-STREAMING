@@ -61,6 +61,7 @@ markov/confidence heads -- all owned by W23's drafter, which this loop calls.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence
@@ -72,6 +73,63 @@ from mtplx.cache_state import (
     snapshot_untrimmable_cache,
     trim_verified_window_to_prefix,
 )
+
+# Optional W37 stage-timing probe: stage()/frame() are no-ops unless a session is
+# armed (ab_decode --decode-mode dspark --stage-timing), so wrapping the loop is
+# free otherwise.
+try:  # pragma: no cover - import guard
+    from mtplx.models import deepseek_v41_stage_timing as _stime
+except Exception:  # pragma: no cover
+    _stime = None
+
+
+def _stage(name: str):
+    return _stime.stage(name) if _stime is not None else contextlib.nullcontext()
+
+
+def _frame():
+    return _stime.frame() if _stime is not None else contextlib.nullcontext()
+
+
+def _verify_decode_phase_enabled() -> bool:
+    """Route the K+1-row verify forward through the DECODE expert-routing phase.
+
+    Default ON. The streamed switch keys its phase off token_count
+    (``current_expert_routing_phase``): >1 row -> PREFILL (the wave/admission
+    machinery + dense-expert re-reads, seconds per call), ==1 -> DECODE
+    (persistent-slot small-M gather). An MTP verify batch is decode traffic
+    regardless of width (mtplx.runtime._expert_routing_context routes
+    ``decode_verify`` as DECODE), so the K+1-row verify must run under DECODE or it
+    pays the prefill cost every cycle. Only the routing MACHINERY changes, never
+    the gathered experts or the matmul, so this is byte-identical to PREFILL and
+    the greedy verify stays authoritative. ``MTPLX_DSV41_DSPARK_VERIFY_DECODE_PHASE=0``
+    forces PREFILL for the window-25 A/B."""
+    raw = os.environ.get("MTPLX_DSV41_DSPARK_VERIFY_DECODE_PHASE", "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _verify_routing_context(enabled: bool):
+    """Context that marks the target verify forward as decode traffic so the
+    streamed expert switch uses the DECODE phase (persistent-slot small-M gather)
+    instead of PREFILL. No-op on a non-streamed model (unit-test double) and when
+    disabled. Both markers are set: ``attention_phase("decode_verify")`` steers
+    the served ``rt.forward_ar`` routing context, and ``expert_routing_phase(DECODE)``
+    forces the phase on the bench path's direct ``model(...)`` call."""
+    if not enabled:
+        return contextlib.nullcontext()
+    try:
+        from mtplx.attention_context import attention_phase
+        from mtplx.expert_streaming import RoutingPhase
+        from mtplx.models.expert_mlx import expert_routing_phase
+    except Exception:  # pragma: no cover - streamed runtime not importable
+        return contextlib.nullcontext()
+
+    @contextlib.contextmanager
+    def _combined():
+        with attention_phase("decode_verify"), expert_routing_phase(RoutingPhase.DECODE):
+            yield
+
+    return _combined()
 
 
 #: DSpark MTP residents actually materialized on the ``with_mtp=True`` load path
@@ -137,6 +195,14 @@ class DSparkDecodeStats:
     generated_tokens: int = 0
     drafted_by_depth: List[int] = field(default_factory=list)
     accepted_by_depth: List[int] = field(default_factory=list)
+    # Coarse per-phase decode wall (seconds, summed over cycles) -- the per-cycle
+    # cost table (draft = 3 resident MTP stage forwards; verify = the K+1-row
+    # target forward; accept = the greedy/spec decision; commit = trim + seed).
+    draft_time_s: float = 0.0
+    verify_time_s: float = 0.0
+    accept_time_s: float = 0.0
+    commit_time_s: float = 0.0
+    verify_decode_phase: bool = True
 
     def _ensure_depth(self, k: int) -> None:
         if len(self.drafted_by_depth) < k:
@@ -157,6 +223,9 @@ class DSparkDecodeStats:
             for i in range(len(self.drafted_by_depth))
         ]
 
+    def _per_cycle_ms(self, total_s: float) -> Optional[float]:
+        return (1000.0 * total_s / self.cycles) if self.cycles else None
+
     def to_dict(self) -> dict:
         return {
             "speculative_depth": self.speculative_depth,
@@ -173,6 +242,19 @@ class DSparkDecodeStats:
             "accept_rate": self.accept_rate(),
             "tokens_per_cycle": self.tokens_per_cycle(),
             "accept_rate_by_depth": self.accept_rate_by_depth(),
+            "verify_decode_phase": self.verify_decode_phase,
+            "per_cycle": {
+                "draft_ms": self._per_cycle_ms(self.draft_time_s),
+                "verify_ms": self._per_cycle_ms(self.verify_time_s),
+                "accept_ms": self._per_cycle_ms(self.accept_time_s),
+                "commit_ms": self._per_cycle_ms(self.commit_time_s),
+            },
+            "phase_time_s": {
+                "draft": self.draft_time_s,
+                "verify": self.verify_time_s,
+                "accept": self.accept_time_s,
+                "commit": self.commit_time_s,
+            },
         }
 
 
@@ -244,10 +326,13 @@ def _decode_cycles(
     stats: DSparkDecodeStats,
     token_callback: Optional[Callable[[List[int]], None]],
     abort_check: Optional[Callable[[], bool]],
+    verify_decode_phase: bool = True,
 ) -> tuple[List[int], str]:
     """Run DSpark-direct cycles from ``primary`` (already emitted) + its predictor
     hidden ``main_h``.  Returns ``(new_tokens, finish_reason)`` where ``new_tokens``
     excludes ``primary``."""
+    import time as _time
+
     from mtplx.generation import _sample_from_logits
     from mtplx.sampling import (
         acceptance_probability as _accept_prob,
@@ -270,6 +355,7 @@ def _decode_cycles(
 
         return _distribution_from_mlx_logits(row, sampler)
 
+    stats.verify_decode_phase = bool(verify_decode_phase)
     new_tokens: List[int] = []
     finish_reason = "length"
     if _is_stop(primary, stop_ids):
@@ -281,27 +367,41 @@ def _decode_cycles(
             break
 
         # ---- draft a block, apply the confidence early stop --------------
+        # The 3 DSpark stages run RESIDENT mxfp4 experts (SwitchGLU), never the
+        # streamed switch, so drafting stays on resident weights (no phase issue).
         k_eff = 0
         drafts: List[int] = []
+        _t = _time.perf_counter()
         if k_cap > 0:
             primary_arr = mx.array([int(primary)])
-            out_ids, _dlogits, conf = dspark.draft_block(
-                main_h, primary_arr, list(mtp_caches), embed, head
-            )
-            mx.eval(out_ids, conf)
+            with _stage("dspark.draft"):
+                out_ids, _dlogits, conf = dspark.draft_block(
+                    main_h, primary_arr, list(mtp_caches), embed, head
+                )
+                mx.eval(out_ids, conf)
             out_np = np.asarray(out_ids).reshape(-1)
             k_eff = _effective_draft_len(conf, k_cap, confidence_threshold)
             drafts = [int(out_np[1 + i]) for i in range(k_eff)]
+        stats.draft_time_s += _time.perf_counter() - _t
 
         # ---- verify: one forward over [primary, d1..d_keff] --------------
+        # Route the K+1-row verify through the DECODE expert-routing phase (an MTP
+        # verify batch is decode traffic regardless of width) so the streamed
+        # switch does a persistent-slot small-M gather instead of the PREFILL
+        # wave/admission/dense re-read that costs seconds per cycle. The W37 frame
+        # records the verify's internal model stages when a probe is armed.
         block_ids = [int(primary)] + drafts
         before = snapshot_untrimmable_cache(cache)
-        verify_logits, verify_hidden = forward(mx.array([block_ids]), cache)
-        mx.eval(verify_logits, verify_hidden)
+        _t = _time.perf_counter()
+        with _verify_routing_context(verify_decode_phase), _frame(), _stage("dspark.verify"):
+            verify_logits, verify_hidden = forward(mx.array([block_ids]), cache)
+            mx.eval(verify_logits, verify_hidden)
+        stats.verify_time_s += _time.perf_counter() - _t
         stats.cycles += 1
         stats.verify_calls += 1
 
         # ---- acceptance --------------------------------------------------
+        _t = _time.perf_counter()
         accepted = 0
         emitted: List[int] = []
         if greedy:
@@ -357,20 +457,25 @@ def _decode_cycles(
             stats.correction_tokens += 1
         else:
             stats.bonus_tokens += 1
+        stats.accept_time_s += _time.perf_counter() - _t
 
         # ---- commit: keep [primary, d1..da] in the target cache ----------
-        kept = trim_verified_window_to_prefix(
-            cache, before, verified_tokens=len(block_ids), keep_tokens=accepted + 1
-        )
-        if not kept:
-            # V4.1 caches are all-trimmable, so this should not happen; a
-            # non-trimmable entry would need the snapshot+re-forward repair.
-            raise RuntimeError(
-                "dspark-direct: verify tail could not be trimmed (non-trimmable "
-                "cache entry); this lane requires an all-trimmable V4.1 cache"
+        _t = _time.perf_counter()
+        with _stage("dspark.commit"):
+            kept = trim_verified_window_to_prefix(
+                cache, before, verified_tokens=len(block_ids), keep_tokens=accepted + 1
             )
-        # seed the DSpark stage windows with the committed tokens' main hiddens
-        dspark.seed_main(verify_hidden[:, : accepted + 1, :], list(mtp_caches))
+            if not kept:
+                # V4.1 caches are all-trimmable, so this should not happen; a
+                # non-trimmable entry would need the snapshot+re-forward repair.
+                raise RuntimeError(
+                    "dspark-direct: verify tail could not be trimmed (non-trimmable "
+                    "cache entry); this lane requires an all-trimmable V4.1 cache"
+                )
+            # seed the DSpark stage windows with the committed tokens' main hiddens
+            dspark.seed_main(verify_hidden[:, : accepted + 1, :], list(mtp_caches))
+            mx.eval([c.window for c in mtp_caches if getattr(c, "window", None) is not None])
+        stats.commit_time_s += _time.perf_counter() - _t
 
         # ---- emit + stop handling ---------------------------------------
         # Emitted tokens are appended in order up to max_tokens; the stop token
@@ -416,6 +521,7 @@ def dspark_generate(
     stop_ids: Optional[set] = None,
     speculative_depth: Optional[int] = None,
     confidence_threshold: Optional[float] = None,
+    verify_decode_phase: Optional[bool] = None,
     stats: Optional[DSparkDecodeStats] = None,
     forward: Optional[Callable[[mx.array, Any], tuple]] = None,
     token_callback: Optional[Callable[[List[int]], None]] = None,
@@ -480,6 +586,11 @@ def dspark_generate(
         stats=stats,
         token_callback=token_callback,
         abort_check=abort_check,
+        verify_decode_phase=(
+            _verify_decode_phase_enabled()
+            if verify_decode_phase is None
+            else bool(verify_decode_phase)
+        ),
     )
     tokens.extend(rest)
     stats.generated_tokens = len(tokens)
@@ -500,6 +611,7 @@ def generate_dspark(
     token_callback: Optional[Callable[[List[int]], None]] = None,
     speculative_depth: Optional[int] = None,
     confidence_threshold: Optional[float] = None,
+    verify_decode_phase: Optional[bool] = None,
     trace_label: Optional[str] = None,
     trace_metadata: Optional[dict] = None,
     prefill_callback: Optional[Callable[[dict], None]] = None,
@@ -591,6 +703,11 @@ def generate_dspark(
             stats=stats,
             token_callback=token_callback,
             abort_check=abort_check,
+            verify_decode_phase=(
+                _verify_decode_phase_enabled()
+                if verify_decode_phase is None
+                else bool(verify_decode_phase)
+            ),
         )
         tokens.extend(rest)
     else:
