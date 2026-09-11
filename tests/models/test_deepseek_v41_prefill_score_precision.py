@@ -38,12 +38,14 @@ _KC = dsv41._PREFILL_SCORE_KEY_CHUNK_ENV
 
 class _AttnShim:
     """Binds the real ``_sparse_attend*`` methods to the minimal state they read
-    (``softmax_scale`` + per-head ``attn_sink``) -- a unit harness over the actual
-    module code, no full ``Attention.__init__`` / projections needed."""
+    (``softmax_scale``, per-head ``attn_sink``, ``mode`` for the W50 stage_attn
+    sub-brackets) -- a unit harness over the actual module code, no full
+    ``Attention.__init__`` / projections needed."""
 
-    def __init__(self, head_dim, attn_sink):
+    def __init__(self, head_dim, attn_sink, mode="reuse"):
         self.softmax_scale = head_dim ** -0.5
         self.attn_sink = attn_sink
+        self.mode = mode
 
 
 # bind the real (unbound) methods so calls exercise the shipped code paths
@@ -223,6 +225,145 @@ def test_resolvers_parse_and_reject():
         c("-4")
     with pytest.raises(ValueError):
         c("wide")
+    p = dsv41._resolve_prefill_score_path
+    assert p("") == "oneshot" and p("default") == "oneshot" and p("oneshot") == "oneshot"
+    assert p("lean") == "lean" and p("LEAN") == "lean" and p("fused") == "lean"
+    with pytest.raises(ValueError):
+        p("turbo")
+
+
+# --------------------------------------------------------------------------
+# W50 lean f32 pass-cut path: reassociation-level vs control, greedy-identical
+# --------------------------------------------------------------------------
+
+
+def test_lean_toggles_are_reassociation_level_and_greedy_safe():
+    q, KV, attend, sink = _rand_inputs(1, 12, 8, 64, 300)
+    shim = _AttnShim(64, sink)
+    base = shim._sparse_attend_oneshot(q, KV, attend, mx.float32)  # control
+    mag = float(mx.max(mx.abs(base))) + 1e-9
+    # fuse_scale (scale q once) and fold_sink (manual softmax, no concat/slice) are
+    # each reassociation-level vs control; both compose in the lean path.
+    for kw in ({"fuse_scale": True}, {"fold_sink": True}, {"fuse_scale": True, "fold_sink": True}):
+        out = shim._sparse_attend_oneshot(q, KV, attend, mx.float32, **kw)
+        d = float(mx.max(mx.abs(out - base)))
+        assert d < 1e-3, (kw, d)
+        assert (d / mag) < 1e-4, (kw, d / mag)
+    # the dispatcher's lean path == oneshot(fuse_scale=True, fold_sink=True)
+    lean = shim._sparse_attend_oneshot(q, KV, attend, mx.float32, fuse_scale=True, fold_sink=True)
+    os.environ[dsv41._PREFILL_SCORE_PATH_ENV] = "lean"
+    try:
+        assert mx.array_equal(shim._sparse_attend(q, KV, attend), lean)
+    finally:
+        os.environ.pop(dsv41._PREFILL_SCORE_PATH_ENV, None)
+
+
+def test_lean_fold_sink_all_masked_no_nan():
+    q, KV, _, sink = _rand_inputs(1, 6, 8, 64, 200)
+    shim = _AttnShim(64, sink)
+    attend = mx.zeros((1, 6, 200)).astype(mx.bool_)  # only the sink is reachable
+    out = shim._sparse_attend_oneshot(q, KV, attend, mx.float32, fuse_scale=True, fold_sink=True)
+    assert bool(mx.all(mx.isfinite(out)))
+    assert float(mx.max(mx.abs(out))) == 0.0  # value-0 sink -> zero output
+
+
+def test_lean_decode_m1_ignored():
+    q, KV, attend, sink = _rand_inputs(1, 1, 8, 64, 40)  # s == 1
+    shim = _AttnShim(64, sink)
+    base = shim._sparse_attend_oneshot(q, KV, attend, mx.float32)
+    os.environ[dsv41._PREFILL_SCORE_PATH_ENV] = "lean"
+    try:
+        assert mx.array_equal(base, shim._sparse_attend(q, KV, attend))
+    finally:
+        os.environ.pop(dsv41._PREFILL_SCORE_PATH_ENV, None)
+
+
+# --------------------------------------------------------------------------
+# W50 prefill probe: attn_breakdown decomposes attn.<mode>.score, no double-count
+# --------------------------------------------------------------------------
+
+
+def test_prefill_probe_attn_breakdown_decomposes_score():
+    import mtplx.models.deepseek_v41_stage_timing as st
+
+    model = _tiny_model()
+    ids = mx.array([list(range(24))])
+    st.begin(kind="prefill")
+    try:
+        lg = model(ids)
+        mx.eval(lg)
+        rep = model.stage_timing_report()
+    finally:
+        st.end()
+    ab = rep["attn_breakdown"]
+    assert ab, "attn_breakdown should be populated under a prefill session"
+    subs = {name.split(".score.")[-1] for name in ab if ".score." in name}
+    assert {"qk_matmul", "scale_mask_sink", "softmax", "pv_matmul", "out_proj"} <= subs, sorted(ab)
+    # kept OUT of the flat partition sum: the score sub-names never appear as flat
+    # stages, the flat ``attn.<mode>.score`` stages still exist, and the attn
+    # channel never leaks into switch_breakdown (which a resident test asserts {}).
+    assert all(".score." not in n for n in rep["stages"])
+    assert any(n.endswith(".score") for n in rep["stages"])
+    assert all(".score." not in n for n in rep.get("switch_breakdown", {}))
+
+
+def test_prefill_probe_chunked_and_lean_sub_stages():
+    import mtplx.models.deepseek_v41_stage_timing as st
+
+    model = _tiny_model()
+    ids = mx.array([list(range(24))])
+    for env, want in (
+        ({dsv41._PREFILL_SCORE_KEY_CHUNK_ENV: "8"}, {"online_softmax", "combine"}),
+        ({dsv41._PREFILL_SCORE_PATH_ENV: "lean"}, {"qk_matmul", "softmax", "pv_matmul"}),
+        ({dsv41._PREFILL_SCORE_DTYPE_ENV: "bf16"}, {"cast"}),
+    ):
+        for k in (dsv41._PREFILL_SCORE_KEY_CHUNK_ENV, dsv41._PREFILL_SCORE_PATH_ENV,
+                  dsv41._PREFILL_SCORE_DTYPE_ENV):
+            os.environ.pop(k, None)
+        for k, v in env.items():
+            os.environ[k] = v
+        st.begin(kind="prefill")
+        try:
+            mx.eval(model(ids))
+            rep = model.stage_timing_report()
+        finally:
+            st.end()
+            for k in env:
+                os.environ.pop(k, None)
+        subs = {name.split(".score.")[-1] for name in rep["attn_breakdown"] if ".score." in name}
+        assert want <= subs, (env, want - subs, sorted(subs))
+
+
+# --------------------------------------------------------------------------
+# SDPA is not usable here: mx.fast.scaled_dot_product_attention cannot express
+# the per-head value-0 sink, so it would change the attention output (tokens).
+# --------------------------------------------------------------------------
+
+
+def test_sdpa_cannot_represent_the_sink():
+    mx.random.seed(5)
+    b, H, s, d, T = 1, 8, 12, 512, 200
+    q = mx.random.normal((b, H, s, d)); k = mx.random.normal((b, H, T, d)); v = mx.random.normal((b, H, T, d))
+    sink = 0.7 * mx.random.normal((H,))
+    scale = d ** -0.5
+    sc = mx.einsum("bhsd,bhtd->bhst", q, k) * scale
+    m = mx.maximum(mx.max(sc, axis=-1, keepdims=True), sink.reshape(1, H, 1, 1))
+    ex = mx.exp(sc - m)
+    den_sink = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink.reshape(1, H, 1, 1) - m)
+    ref_sink = mx.einsum("bhst,bhtd->bhsd", ex, v) / den_sink
+    ref_nosink = mx.einsum("bhst,bhtd->bhsd", ex, v) / mx.sum(ex, axis=-1, keepdims=True)
+    o_sdpa = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale)
+    mx.eval(o_sdpa, ref_sink, ref_nosink)
+    # SDPA matches the NO-sink softmax (it is a correct softmax) ...
+    assert float(mx.max(mx.abs(o_sdpa - ref_nosink))) < 1e-4
+    # ... but differs from OUR sink semantics -> it cannot be used exactly here.
+    assert float(mx.max(mx.abs(o_sdpa - ref_sink))) > 1e-4
+    # the 2x256 head-dim split is only a reassociated QK^T reduction (exact-ish),
+    # buying nothing over lean since SDPA's fused softmax still omits the sink.
+    full = mx.einsum("bhsd,bhtd->bhst", q, k)
+    split = (mx.einsum("bhsd,bhtd->bhst", q[..., :256], k[..., :256])
+             + mx.einsum("bhsd,bhtd->bhst", q[..., 256:], k[..., 256:]))
+    assert float(mx.max(mx.abs(full - split))) < 1e-3
 
 
 # --------------------------------------------------------------------------
@@ -241,12 +382,16 @@ def test_real_shaped_layer_exactness_and_footprint():
     mx.eval(bf16)
     ch = shim._sparse_attend_chunked(q, KV, attend, mx.float32, 512)
     mx.eval(ch)
+    lean = shim._sparse_attend_oneshot(q, KV, attend, mx.float32, fuse_scale=True, fold_sink=True)
+    mx.eval(lean)
     d_bf16 = float(mx.max(mx.abs(bf16 - f32)))
     d_ch = float(mx.max(mx.abs(ch - f32)))
+    d_lean = float(mx.max(mx.abs(lean - f32)))
     denom = float(mx.max(mx.abs(f32))) + 1e-9
-    # chunked f32: reassociation floor, orders of magnitude below the bf16 delta.
+    # chunked f32 and lean f32: reassociation floor, orders below the bf16 delta.
     assert d_ch < 1e-3, d_ch
-    assert d_ch < d_bf16, (d_ch, d_bf16)
+    assert d_lean < 1e-3, d_lean
+    assert d_ch < d_bf16 and d_lean < d_bf16, (d_ch, d_lean, d_bf16)
     assert (d_bf16 / denom) < 5e-2, d_bf16 / denom
     rss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 ** 3)
     # macOS ru_maxrss is bytes; the transient must stay well under the 3 GB budget.

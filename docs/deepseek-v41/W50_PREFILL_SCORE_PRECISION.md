@@ -1,9 +1,98 @@
 # W50 — Prefill score-path precision + split-K online softmax (K25)
 
 Branch `feat/deepseek-v41-w50`. Scope: the attention score/softmax/value path in
-`mtplx/models/deepseek_v41.py` for **prefill (rows > 1)**. Two new env levers, both
-default OFF, both prefill-only. No GPU/Metal executed; all evidence is CPU (MLX
+`mtplx/models/deepseek_v41.py` for **prefill (rows > 1)**. Env levers, all default
+OFF, all prefill-only. No GPU/Metal executed here; all local evidence is CPU (MLX
 0.32.2, `mx.set_default_device(mx.cpu)`), no artifact load, peak RSS 1.62 GB.
+
+> **The sections below (Verdict … "What is NOT measured") are the pre-GPU W50
+> write-up. Window-20 measured the arms and overturned the K25 roofline — read the
+> "Window-20 follow-up" section next for the correction, the two regressions
+> explained from the code, the `lean` pass-cut path, the SDPA finding, and the
+> probe. The bf16/split-K roofline claims in the Verdict are superseded there.**
+
+## Window-20 follow-up (the K25 roofline was WRONG — score stage is pass/bandwidth-bound)
+
+Integration `7a789731d`, 16,384-token prompt, layer-major, 60 GiB plan,
+`MTPLX_DSV41_PREFILL_CHUNK=1024`, **all tokens byte-identical**. Receipt:
+`docs/deepseek-v41/receipts/gpu-windows/window-20/prefill-16384-ladder.json`.
+
+| arm | TTFT | Δ vs baseline | peak GB |
+|---|---|---|---|
+| `layer_major` (baseline) | 352.8 s (46.4 tok/s) | — | 76.6 |
+| `score_chunked` (KEY_CHUNK=2048) | 418.8 s | **−16 %** | 65.1 (**−11.5**) |
+| `score_bf16` | 535.1 s | **−34 %** | 71.9 |
+| `prefill_fast` (bf16 + chunk + dense) | 346.5 s | +1.8 % | — |
+
+**The K25 FLOP roofline was wrong.** It predicted bf16 ≈ 2× on the QK^T/PV matmuls
+(≈ −60 to −90 s). Instead bf16 **regressed −34 %** and split-K **regressed −16 %**
+(while saving 11.5 GB). The score stage is **pass/bandwidth- and dispatch-bound, not
+matmul-FLOP-bound** — so the lever is to cut *passes over the `[rows,64,T]`
+transient*, not FLOPs.
+
+### The two regressions, from the code
+
+**bf16 (−34 %).** `_sparse_attend_oneshot` in the bf16 arm runs two full passes over
+the `[rows,64,T]` transient that the f32 path never runs:
+1. the QK^T output is bf16; the f32 softmax needs f32, so `scores.astype(float32)`
+   is a **T-wide bf16→f32 cast** (read 2 B, write 4 B ≈ 6.4 GB at rows=1024, T=16 384,
+   *per score call, per layer*);
+2. before PV, `w.astype(bfloat16)` is a **T-wide f32→bf16 cast** (a second such pass),
+   plus `KV.astype(bfloat16)`.
+The matmul I/O halves to 2 B, but (a) the softmax/mask/scale stay f32 (the bandwidth
+floor is unchanged) and (b) MLX 0.32.2's bf16 GEMM at **K=512, large N=T, transpose**
+does not beat the f32 kernel on this shape. So the two cast passes are pure added
+bandwidth → −34 %. *(bf16 stays as a measured-loser arm; not removed.)*
+
+**split-K (−16 %, −11.5 GB).** The online-softmax **rescale of the running output**
+is the cost. Per key chunk (`⌈T/n⌉ ≈ 8` at n=2048, T=16 384) `_sparse_attend_chunked`
+does `acc = acc*corr + pv` where `acc` is `[rows,64,hd]` = **134 MB at rows=1024** —
+that is **2 passes (multiply + add) over 134 MB every chunk**, ≈ 8× vs one-shot's
+single accumulation, plus `corr = exp(m−m_new)` and the `denom` rescale, plus **≈8×
+the kernel dispatches** for qk/mask/softmax/pv. The transient is `[rows,64,n]` not
+`[rows,64,T]`, so the **−11.5 GB peak is real** → split-K is a **peak-GB lever, not a
+throughput lever** (use it to admit a larger prefill chunk / longer context, not to
+cut TTFT).
+
+### `lean` — cut passes, keep f32 (`MTPLX_DSV41_PREFILL_SCORE_PATH=lean`)
+
+The f32 pass-cut one-shot, the throughput play now that the stage is bandwidth-bound:
+- **scale `q` once** (`[rows,64,512]`) instead of the scores (`[rows,64,T]`) → one
+  fewer T-wide pass;
+- **fold the value-0 sink into the denominator** (reference `_k_sparse_attn`, manual
+  max/exp/sum) → no sink `concatenate` (`[rows,64,T+1]` alloc) and no post-softmax
+  slice (`[rows,64,T]` copy); the normalize divides the `[rows,64,512]` output, not
+  the T-wide `w`.
+
+Net: **three fewer passes / two fewer T-wide allocations** per score call, all f32.
+**Reassociation-level vs control** — real DSV4.1-shape (H=64, d=512, rows 128, T 4096)
+max |Δ| = **1.2e-6** (rel 1.6e-6), **greedy-identical**; NOT bit-identical (scale-into-q
+and normalize-after-PV reorder the float ops). Isolated CPU deltas: `fuse_scale` only
+1.2e-6, `fold_sink` only 5.4e-7. Arms: **`score_lean`**, and **`prefill_lean`** =
+`layer_major` + `prefill_dense_experts` (K26) + `lean` (the f32 successor to the
+bf16-carrying `prefill_fast`).
+
+### SDPA is not usable here (the per-head sink blocks it)
+
+`mx.fast.scaled_dot_product_attention` **accepts head_dim 512 on CPU in MLX 0.32.2**
+(it does not raise), but it has **no per-head value-0 sink**: plain SDPA matches a
+no-sink softmax (Δ 1.8e-6) but differs from our sink semantics by **2.1e-3** — it
+would change the attention output (and greedy tokens on near-ties). Splitting
+head_dim into **2×256** is only a reassociated QK^T (max |Δ| 7.6e-5 vs full) that
+still can't fold the sink into SDPA's fused softmax, so it buys nothing over `lean`.
+**No SDPA arm is shipped** — it cannot be exact here.
+
+### Probe: `attn_breakdown` decomposes `attn.<mode>.score`
+
+`_sparse_attend*` now emit `stage_attn` sub-brackets — `attn.<mode>.score.{qk_matmul,
+cast, scale_mask_sink, softmax, online_softmax, pv_matmul, combine, out_proj}` — into
+a new `attn_breakdown` report section (parallel to `switch_breakdown`; kept OUT of the
+flat partition sum so it never double-counts `attn.<mode>.score`). No-op and
+byte-identical off the prefill stage-timing probe. This is what attributes the 153 s
+reuse-score term in the next 16K window. (`deepseek_v41_stage_timing.py`: new
+`stage_attn` channel + `_attn_sums`/`_attn_counts`.)
+
+---
 
 ## Verdict
 

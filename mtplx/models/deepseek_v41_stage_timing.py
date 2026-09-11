@@ -57,6 +57,7 @@ __all__ = [
     "stage",
     "stage_prefill",
     "stage_nested",
+    "stage_attn",
     "frame",
     "chunk",
     "set_schedule",
@@ -125,7 +126,7 @@ class _Probe:
     __slots__ = (
         "_kind", "_sums", "_counts", "_tokens", "_frame_ns", "_recording_now",
         "_chunk_idx", "_chunk_sums", "_chunk_counts", "_chunk_wall",
-        "_nested_sums", "_nested_counts", "_schedule",
+        "_nested_sums", "_nested_counts", "_attn_sums", "_attn_counts", "_schedule",
     )
 
     def __init__(self, kind: str = _KIND_DECODE) -> None:
@@ -145,6 +146,12 @@ class _Probe:
         #: kept OUT of the flat partition sum -- it decomposes moe.routed_switch.
         self._nested_sums: dict[str, int] = defaultdict(int)
         self._nested_counts: dict[str, int] = defaultdict(int)
+        #: W50 nested attention-score breakdown (qk_matmul / scale_mask_sink /
+        #: softmax / pv_matmul / cast / out_proj, per CSA mode); kept OUT of the
+        #: flat partition sum -- it decomposes ``attn.<mode>.score`` (like the
+        #: switch breakdown decomposes moe.routed_switch), so it never double-counts.
+        self._attn_sums: dict[str, int] = defaultdict(int)
+        self._attn_counts: dict[str, int] = defaultdict(int)
         self._schedule: "Optional[str]" = None
 
     def enter_forward(self, seq_len: int) -> None:
@@ -161,7 +168,7 @@ class _Probe:
             self._recording_now = seq_len == 1
 
     @contextmanager
-    def _stage(self, name: str, nested: bool = False):
+    def _stage(self, name: str, nested: bool = False, attn: bool = False):
         fence = _Fence()
         t0 = time.perf_counter_ns()
         try:
@@ -170,7 +177,10 @@ class _Probe:
             if fence._arrays:
                 mx.eval(fence._arrays)
             dt = time.perf_counter_ns() - t0
-            if nested:
+            if attn:
+                self._attn_sums[name] += dt
+                self._attn_counts[name] += 1
+            elif nested:
                 self._nested_sums[name] += dt
                 self._nested_counts[name] += 1
             else:
@@ -262,12 +272,25 @@ class _Probe:
             }
             for name in sorted(self._nested_sums)
         }
+        attn_breakdown = {
+            name: {
+                "total_ms": self._attn_sums[name] / 1e6,
+                "count": self._attn_counts[name],
+                "mean_ms": (
+                    self._attn_sums[name] / self._attn_counts[name] / 1e6
+                    if self._attn_counts.get(name)
+                    else None
+                ),
+            }
+            for name in sorted(self._attn_sums)
+        }
         return {
             "schedule": self._schedule,
             "chunks": len(chunk_ids),
             "chunk_wall_sum_ms": sum(self._chunk_wall.values()) / 1e6,
             "by_chunk": by_chunk,
             "switch_breakdown": switch_breakdown,
+            "attn_breakdown": attn_breakdown,
         }
 
 
@@ -365,6 +388,18 @@ def stage_nested(name: str):
     if not _prefill_recording(p):
         return _NOOP_CM
     return p._stage(name, nested=True)
+
+
+def stage_attn(name: str):
+    """A prefill-only nested bracket for the attention-score breakdown (W50):
+    qk_matmul / scale_mask_sink / softmax / pv_matmul / cast / out_proj, per CSA
+    mode.  Recorded into ``attn_breakdown`` and kept OUT of the flat partition sum,
+    since it decomposes ``attn.<mode>.score`` -- so it never double-counts the flat
+    stage and is a no-op unless a prefill session is recording."""
+    p = _ACTIVE
+    if not _prefill_recording(p):
+        return _NOOP_CM
+    return p._stage(name, attn=True)
 
 
 def frame():

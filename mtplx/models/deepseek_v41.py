@@ -663,45 +663,97 @@ class Attention(nn.Module):
         attend: [b,s,T] bool.
 
         Prefill (query rows ``q.shape[1] > 1``) reads the W50/K25 score-path
-        levers -- ``MTPLX_DSV41_PREFILL_SCORE_DTYPE`` (f32|bf16, the QK^T/PV matmul
-        input dtype) and ``MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK`` (the split-K online
-        softmax chunk width, off by default).  Decode / M=1 (``s == 1``) always
-        runs the shipped f32 one-shot path, byte-identical to control regardless of
-        the env."""
+        levers -- ``MTPLX_DSV41_PREFILL_SCORE_PATH`` (oneshot|lean),
+        ``MTPLX_DSV41_PREFILL_SCORE_DTYPE`` (f32|bf16, the QK^T/PV matmul input
+        dtype) and ``MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK`` (the split-K online
+        softmax chunk width, off by default).  ``lean`` is the W50 pass-cut f32
+        one-shot path (window-20 showed the score stage is pass/bandwidth-bound, not
+        matmul-FLOP-bound: bf16 was -34%, split-K -16%); it forces f32 and ignores
+        the dtype/chunk knobs.  Decode / M=1 (``s == 1``) always runs the shipped
+        f32 one-shot path, byte-identical to control regardless of the env."""
         if q.shape[1] <= 1:
             return self._sparse_attend_oneshot(q, KV, attend, mx.float32)
+        path = _resolve_prefill_score_path()
+        if path == "lean":
+            # f32-only pass-cut one-shot (scale-into-q + folded sink, no concat/slice)
+            return self._sparse_attend_oneshot(
+                q, KV, attend, mx.float32, fuse_scale=True, fold_sink=True
+            )
         score_dtype = _resolve_prefill_score_dtype()
         key_chunk = _resolve_prefill_score_key_chunk()
         if key_chunk is not None:
             return self._sparse_attend_chunked(q, KV, attend, score_dtype, key_chunk)
         return self._sparse_attend_oneshot(q, KV, attend, score_dtype)
 
-    def _sparse_attend_oneshot(self, q, KV, attend, score_dtype):
+    def _sparse_attend_oneshot(self, q, KV, attend, score_dtype,
+                               *, fuse_scale=False, fold_sink=False):
         """One-shot softmax over the full concatenated KV (the shipped path).
 
         ``score_dtype`` casts the QK^T / PV matmul *inputs*; MLX matmul accumulates
         in f32 internally and rounds the result back to ``score_dtype``, so the
         scale, mask, per-head sink and softmax stay in f32 exactly as the reference
         oracle -- the only numerical change under ``bf16`` is the two matmuls'
-        input+output bf16 rounding.  ``score_dtype == float32`` inserts no casts and
-        is byte-identical to control."""
+        input+output bf16 rounding.  ``score_dtype == float32`` with both toggles
+        off inserts no extra ops and is byte-identical to control.
+
+        W50 pass-cut toggles (the f32 ``lean`` path; window-20 found the score stage
+        pass/bandwidth-bound, not FLOP-bound, so cut passes over the ``[rows,H,T]``
+        transient, not FLOPs).  Both are reassociation-level vs control (greedy-
+        identical), never bit-identical:
+          * ``fuse_scale`` -- scale ``q`` once (``[rows,H,512]``) instead of the
+            scores (``[rows,H,T]``): drops one pass over the T-wide transient.
+          * ``fold_sink`` -- softmax done manually with the per-head value-0 sink in
+            the denominator (reference ``_k_sparse_attn``): no sink concatenate
+            (``[rows,H,T+1]`` alloc) and no post-softmax slice (``[rows,H,T]`` copy),
+            and the normalize divides the ``[rows,H,512]`` output, not the T-wide w.
+
+        The sub-brackets (``stage_attn``) decompose ``attn.<mode>.score`` into
+        qk_matmul / cast / scale_mask_sink / softmax / pv_matmul for the next
+        prefill window (no-op / byte-identical when not timing)."""
         b, s, H, _ = q.shape
-        if score_dtype == mx.float32:
-            scores = mx.einsum("bshd,btd->bsht", q.astype(mx.float32), KV.astype(mx.float32))
-        else:
+        Tk = KV.shape[1]
+        mode = self.mode
+        scale = self.softmax_scale
+        with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
+            qd = (q * scale) if fuse_scale else q
             scores = mx.einsum(
-                "bshd,btd->bsht", q.astype(score_dtype), KV.astype(score_dtype)
-            ).astype(mx.float32)
-        scores = scores * self.softmax_scale
-        scores = mx.where(attend[:, :, None, :], scores, float("-inf"))
-        sink = mx.broadcast_to(self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1), (b, s, H, 1))
-        full = mx.concatenate([scores, sink], axis=-1)
-        w = mx.softmax(full, axis=-1)[..., : KV.shape[1]]  # drop the sink column (value 0)
-        if score_dtype == mx.float32:
-            return mx.einsum("bsht,btd->bshd", w, KV.astype(mx.float32))
-        return mx.einsum(
-            "bsht,btd->bshd", w.astype(score_dtype), KV.astype(score_dtype)
-        ).astype(mx.float32)
+                "bshd,btd->bsht", qd.astype(score_dtype), KV.astype(score_dtype)
+            )
+            _st.add(scores)
+        if score_dtype != mx.float32:
+            with _stime.stage_attn("attn." + mode + ".score.cast") as _st:
+                scores = scores.astype(mx.float32)
+                _st.add(scores)
+        with _stime.stage_attn("attn." + mode + ".score.scale_mask_sink") as _st:
+            if not fuse_scale:
+                scores = scores * scale
+            scores = mx.where(attend[:, :, None, :], scores, float("-inf"))
+            _st.add(scores)
+        sink = self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1)
+        with _stime.stage_attn("attn." + mode + ".score.softmax") as _st:
+            if fold_sink:
+                # manual softmax with the value-0 sink in the denom (reference
+                # _k_sparse_attn L149-153): normalize AFTER PV (divide [rows,H,512]).
+                m = mx.maximum(mx.max(scores, axis=-1, keepdims=True), sink)
+                ex = mx.exp(scores - m)                    # masked -> exp(-inf) = 0
+                denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
+                _st.add(ex, denom)
+            else:
+                sink_b = mx.broadcast_to(sink, (b, s, H, 1))
+                full = mx.concatenate([scores, sink_b], axis=-1)
+                w = mx.softmax(full, axis=-1)[..., :Tk]  # drop the sink column
+                _st.add(w)
+        with _stime.stage_attn("attn." + mode + ".score.pv_matmul") as _st:
+            if fold_sink:
+                o = mx.einsum("bsht,btd->bshd", ex, KV.astype(mx.float32)) / denom
+            elif score_dtype == mx.float32:
+                o = mx.einsum("bsht,btd->bshd", w, KV.astype(mx.float32))
+            else:
+                o = mx.einsum(
+                    "bsht,btd->bshd", w.astype(score_dtype), KV.astype(score_dtype)
+                ).astype(mx.float32)
+            _st.add(o)
+        return o
 
     def _sparse_attend_chunked(self, q, KV, attend, score_dtype, key_chunk):
         """Two-pass split-K online softmax (gemma4 D512 two-pass / K6) over
@@ -718,6 +770,7 @@ class Attention(nn.Module):
         exp(m-m) = 1`` and ``p = 0`` -- never a ``-inf − (−inf)`` NaN."""
         b, s, H, hd = q.shape
         T = KV.shape[1]
+        mode = self.mode
         qd = q.astype(score_dtype)
         KVd = KV.astype(score_dtype)
         m = mx.broadcast_to(
@@ -725,26 +778,40 @@ class Attention(nn.Module):
         )
         denom = mx.ones((b, s, H, 1), dtype=mx.float32)   # sink: exp(attn_sink - m) = 1
         acc = mx.zeros((b, s, H, hd), dtype=mx.float32)   # sink value is 0
+        # Sub-brackets accumulate by name across all chunks (stage_attn is a no-op
+        # off the prefill probe; the per-chunk online-softmax rescale of ``acc`` is
+        # an extra O(rows*H*hd) pass EVERY chunk -- the cost W47/window-20 exposes).
         for c0 in range(0, T, key_chunk):
             c1 = min(c0 + key_chunk, T)
             KVc = KVd[:, c0:c1, :]
             att_c = attend[:, :, c0:c1]
-            sc = mx.einsum("bshd,btd->bsht", qd, KVc).astype(mx.float32) * self.softmax_scale
-            sc = mx.where(att_c[:, :, None, :], sc, float("-inf"))
-            m_c = mx.max(sc, axis=-1, keepdims=True)
-            m_new = mx.maximum(m, m_c)
-            corr = mx.exp(m - m_new)
-            p = mx.exp(sc - m_new)
-            denom = denom * corr + mx.sum(p, axis=-1, keepdims=True)
-            if score_dtype == mx.float32:
-                pv = mx.einsum("bsht,btd->bshd", p, KVc)
-            else:
-                pv = mx.einsum(
-                    "bsht,btd->bshd", p.astype(score_dtype), KVc
-                ).astype(mx.float32)
-            acc = acc * corr + pv
+            with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
+                sc = mx.einsum("bshd,btd->bsht", qd, KVc).astype(mx.float32) * self.softmax_scale
+                _st.add(sc)
+            with _stime.stage_attn("attn." + mode + ".score.scale_mask_sink") as _st:
+                sc = mx.where(att_c[:, :, None, :], sc, float("-inf"))
+                _st.add(sc)
+            with _stime.stage_attn("attn." + mode + ".score.online_softmax") as _st:
+                m_c = mx.max(sc, axis=-1, keepdims=True)
+                m_new = mx.maximum(m, m_c)
+                corr = mx.exp(m - m_new)
+                p = mx.exp(sc - m_new)
+                denom = denom * corr + mx.sum(p, axis=-1, keepdims=True)
+                _st.add(p, denom, corr)
+            with _stime.stage_attn("attn." + mode + ".score.pv_matmul") as _st:
+                if score_dtype == mx.float32:
+                    pv = mx.einsum("bsht,btd->bshd", p, KVc)
+                else:
+                    pv = mx.einsum(
+                        "bsht,btd->bshd", p.astype(score_dtype), KVc
+                    ).astype(mx.float32)
+                acc = acc * corr + pv   # O(rows*H*hd) rescale of the running output
+                _st.add(acc)
             m = m_new
-        return acc / denom
+        with _stime.stage_attn("attn." + mode + ".score.combine") as _st:
+            out = acc / denom
+            _st.add(out)
+        return out
 
     def _window_attend(self, positions, T, b, s, shared):
         """The causal sliding-window attend mask ``[b, s, T]``.
@@ -915,15 +982,19 @@ class Attention(nn.Module):
             # decode/verify.  ``w_ol`` (the dequantized grouped ``wo_a`` weight) is a
             # per-forward constant, derived by the same path as eager and fed as an
             # input, so the einsum inside the tape is bit-exact to :meth:`_o_lora_down`.
-            if _attn_use_compile(b * s):
-                out = _attn_out_prep(self)(
-                    o, qcos, qsin, self._o_lora_dense_weight(), *_lin_arrays(self.wo_b)
-                )
-            else:
-                o = _rope_last(o, qcos, qsin, inverse=True)
-                o = o.reshape(b, s, self.n_groups, -1)
-                o = self._o_lora_down(o)
-                out = self.wo_b(o.reshape(b, s, -1))
+            # W50: the output-projection tail is bracketed separately (attn_breakdown)
+            # so the score sub-stages sum to the SDPA proper, not SDPA + projection.
+            with _stime.stage_attn("attn." + mode + ".score.out_proj") as _sp:
+                if _attn_use_compile(b * s):
+                    out = _attn_out_prep(self)(
+                        o, qcos, qsin, self._o_lora_dense_weight(), *_lin_arrays(self.wo_b)
+                    )
+                else:
+                    o = _rope_last(o, qcos, qsin, inverse=True)
+                    o = o.reshape(b, s, self.n_groups, -1)
+                    o = self._o_lora_down(o)
+                    out = self.wo_b(o.reshape(b, s, -1))
+                _sp.add(out)
             _st.add(out)
         return out
 
@@ -1026,6 +1097,36 @@ _ATTN_WIN_MEMO = (os.environ.get(_ATTN_WIN_MEMO_ENV) or "").strip().lower() not 
 
 
 # --- W50 / K25: prefill score-path precision + split-K online softmax --------
+#: Selects the prefill (rows > 1) score-path implementation.  ``oneshot``
+#: (unset/default) is the shipped full-T one-shot softmax.  ``lean`` is the W50
+#: pass-cut f32 one-shot (window-20 found the score stage pass/bandwidth-bound, not
+#: matmul-FLOP-bound -- bf16 was -34%, split-K -16%): it scales ``q`` once instead
+#: of the T-wide scores and folds the value-0 sink into the denominator (no sink
+#: concat / post-softmax slice), cutting three passes over the ``[rows,H,T]``
+#: transient.  ``lean`` forces f32 and ignores the DTYPE / KEY_CHUNK knobs; it is
+#: reassociation-level vs control (greedy-identical), never bit-identical.  Read at
+#: call time ([[env-flags-read-at-use-not-import]]).
+_PREFILL_SCORE_PATH_ENV = "MTPLX_DSV41_PREFILL_SCORE_PATH"
+_PREFILL_SCORE_PATH_ONESHOT_ALIASES = ("", "default", "off", "none", "control", "oneshot", "one_shot")
+_PREFILL_SCORE_PATH_LEAN_ALIASES = ("lean", "fused", "passcut", "pass_cut")
+
+
+def _resolve_prefill_score_path(raw=None):
+    """Resolve ``MTPLX_DSV41_PREFILL_SCORE_PATH`` to ``"oneshot"`` (unset/default,
+    the shipped path) or ``"lean"`` (the W50 f32 pass-cut one-shot).  Read at use;
+    an unrecognised non-empty value raises (fail fast)."""
+    val = os.environ.get(_PREFILL_SCORE_PATH_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in _PREFILL_SCORE_PATH_ONESHOT_ALIASES:
+        return "oneshot"
+    if val in _PREFILL_SCORE_PATH_LEAN_ALIASES:
+        return "lean"
+    raise ValueError(
+        f"{_PREFILL_SCORE_PATH_ENV}={val!r} is not one of ('oneshot', 'lean') "
+        "(or empty/'default' for the current one-shot path)"
+    )
+
+
 #: Casts the prefill (rows > 1) QK^T / PV matmul *inputs* to a cheaper dtype.  MLX
 #: matmul accumulates in f32 internally and rounds the result back to the input
 #: dtype (verified: a bf16 matmul equals ``round_bf16(f32-accumulated result)``),
