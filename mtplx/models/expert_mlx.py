@@ -2826,6 +2826,104 @@ class HotExpertSwitchGLU(nn.Module):
                 phase=phase,
             )
 
+        # W61 -- verify single-barrier fast path (env MTPLX_DSV41_VERIFY_SINGLE_
+        # BARRIER, default ON; byte-identical -- see below).  A small-M DECODE
+        # forward (the DSpark K+1 verify: 2..8 rows) otherwise splits its
+        # rows*top_k assignments across several transient-bounded ``route_waves``,
+        # each paying its own device->host fence -- window 25 measured a 4-row
+        # verify at ~630 ms in moe.routed_switch (M=1: ~74 ms), several barriers
+        # per layer.  But an ALL-HIT route lives entirely in PERSISTENT slots (no
+        # transient bound), so the whole route can be pinned by ONE
+        # ``try_all_hit_route`` and gathered in ONE wave over rows*top_k via the
+        # K27 sorted ``gather_qmm``, released once (deferred / variant-B) -- exactly
+        # ONE routing barrier (the ``mx.eval(indices)`` above) per layer.
+        # ``gather_qmm`` is row-independent, so the single gather is bit-for-bit the
+        # split+concat the loop below would produce (same token, same expert
+        # weights per assignment); this is the existing all-hit branch applied to
+        # one full wave.  A miss falls through to the bounded ``route_waves`` loop
+        # (unchanged): a wide verify's misses can exceed transient capacity and must
+        # still be admitted in batches.  M=1 is excluded (kept byte-for-byte).
+        _verify_single_barrier = (
+            os.environ.get("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "1") == "1"
+            and phase is RoutingPhase.DECODE
+            and self.runtime.config.slot_layout == "component-banks"
+            and self.codec in ("affine", "mxfp4")
+            and self._shadow_bank is None
+            and 2 <= int(tokens.shape[0]) <= 8
+            and int(len(expert_ids)) == int(tokens.shape[0]) * top_k
+        )
+        if _verify_single_barrier:
+            with _route_probe.bracket("hot.try_all_hit"):
+                ready = self.runtime.try_all_hit_route(
+                    self.layer_index, tuple(expert_ids), phase=phase
+                )
+            if ready is not None:
+                _route_probe.count("hot.all_hit")
+                _route_probe.count("hot.verify_single_barrier")
+                hit_pipeline_work = None
+                if pipeline_ledger is not None:
+                    hit_pipeline_work = _begin_pipeline_work(
+                        pipeline_ledger,
+                        "begin_hit_work",
+                        ready.plan.hits,
+                        phase=phase,
+                    )
+                deferred_release = False
+                try:
+                    # positions == range(len(expert_ids)) for the full route, so
+                    # the assignment inputs are the tokens broadcast over top_k --
+                    # identical to the all-hit branch's broadcast case.
+                    assignment_inputs = mx.broadcast_to(
+                        tokens[:, None, :],
+                        (int(tokens.shape[0]), top_k, hidden_size),
+                    ).reshape((-1, hidden_size))
+                    if pipeline_ledger is not None and hit_pipeline_work is not None:
+                        _pipeline_work_call(
+                            pipeline_ledger, hit_pipeline_work, "claim", phase=phase
+                        )
+                    with _route_probe.bracket("hot.allhit_dispatch_build"):
+                        wave_output = self._dispatch_component_bank(
+                            assignment_inputs, ready.bindings
+                        )
+                    # Variant-B release: submit the one gather (non-blocking) so the
+                    # GPU is fed, and DEFER the slot release to the next layer's
+                    # routing barrier (its covering eval materializes this gather
+                    # before the pinned slots are released -- the W42-proven, race-
+                    # free deferred-pin mechanism; the slots stay pinned meanwhile,
+                    # so unlike the W44 device route there is no unpinned recycle).
+                    # This leaves exactly ONE blocking sync per layer (the barrier).
+                    # Falls back to a single blocking fence only if the runtime
+                    # cannot defer (fakes without the seam); either way it is ONE
+                    # fence for the whole route, never one per split wave.
+                    _verify_can_defer = callable(
+                        getattr(self.runtime, "defer_slot_release", None)
+                    ) and callable(
+                        getattr(self.runtime, "flush_deferred_slot_releases", None)
+                    )
+                    if _deferred_pin_active or _verify_can_defer:
+                        _async_eval = getattr(mx, "async_eval", None)
+                        if callable(_async_eval):
+                            _async_eval(wave_output)
+                            _route_probe.count("hot.allhit_defer_submit")
+                        self.runtime.defer_slot_release(ready, wave_output)
+                        deferred_release = True
+                        _route_probe.count("hot.allhit_defer")
+                    else:
+                        with _route_probe.bracket("hot.allhit_fence_eval"):
+                            synchronous_fence(ready, wave_output)
+                finally:
+                    if pipeline_ledger is not None and hit_pipeline_work is not None:
+                        _pipeline_work_call(
+                            pipeline_ledger, hit_pipeline_work, "close", phase=phase
+                        )
+                    if not deferred_release:
+                        ready.release(synchronize=False)
+                output = wave_output.reshape((*indices.shape, hidden_size))
+                if shared_work is not None and shared is None:
+                    shared = shared_work()
+                return output, shared
+            # Not all-hit: fall through to the bounded route_waves loop below.
+
         try:
             # W47 switch breakdown (prefill only; no-op otherwise): the host-side
             # route planning that groups this layer's expert ids into gather waves.
