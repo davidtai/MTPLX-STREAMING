@@ -1081,8 +1081,18 @@ class Attention(nn.Module):
                     )
             else:  # Reuse: read the source's selection
                 mask = shared.topk_mask
-            _sp.add(mask)
-            _sd.add(mask)
+            # W76: fence ``mask`` always; additionally fence the K30
+            # ``selected_idx`` argsort under MTPLX_DSV41_SELECT_FENCE so its O(T)
+            # cost is charged to ``select`` rather than leaking into the ``score``
+            # stage that first forces it (byte-identical -- same array, no-op in
+            # production; a stage-timing attribution fix only).
+            if (_resolve_select_fence() and self.is_index_source
+                    and shared.selected_idx is not None):
+                _sp.add(mask, shared.selected_idx)
+                _sd.add(mask, shared.selected_idx)
+            else:
+                _sp.add(mask)
+                _sd.add(mask)
         if self.capture_selection:
             self.last_selection = mask
             self.last_candidates = shared.candidates
@@ -1427,6 +1437,32 @@ def _resolve_selected_keys(raw=None) -> bool:
     prefill attention (default OFF).  Read at call time so the serving harness can
     stamp the key after importing this module."""
     val = os.environ.get(_SELECTED_KEYS_ENV) if raw is None else raw
+    return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
+
+
+#: W76: fence the K30 ``selected_idx`` publication (``_mask_to_topk_idx``, an
+#: ``argsort`` over ``n_comp``) INTO the ``attn.<mode>.select`` decode sub-stage.
+#: The shipped code fences only ``mask`` (``_sd.add(mask)``); the separate
+#: ``shared.selected_idx = _mask_to_topk_idx(mask, ...)`` array it publishes is
+#: left lazy, so its ``argsort`` (O(n_comp log n_comp), an index-source-layer O(T)
+#: cost) is not forced until a downstream gather in the ``score`` stage reads it --
+#: mis-attributing that O(T) select cost into decode attention-*proper* (the W76
+#: audit's stage-timing artifact).  Fencing ``selected_idx`` in the select bracket
+#: charges the argsort where it belongs.  This is a **stage-timing attribution
+#: fix**: the extra ``add`` is a no-op outside a recording decode session (the
+#: ``_sd`` fence is ``_NullFence`` in production and under prefill), and the array
+#: fenced is the *same* object the gather would force -- so the token, cache and
+#: logits are BYTE-IDENTICAL on or off.  Read at use, never frozen at import
+#: ([[env-flags-read-at-use-not-import]]).
+_SELECT_FENCE_ENV = "MTPLX_DSV41_SELECT_FENCE"
+
+
+def _resolve_select_fence(raw=None) -> bool:
+    """Whether ``MTPLX_DSV41_SELECT_FENCE`` charges the K30 ``selected_idx``
+    argsort to ``attn.<mode>.select`` instead of leaking it into ``score`` (default
+    OFF -- the shipped attribution).  Read at call time (serving stamps the key
+    after import)."""
+    val = os.environ.get(_SELECT_FENCE_ENV) if raw is None else raw
     return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
 
 

@@ -176,6 +176,16 @@ KV_CHUNK_GROW_ENV = "MTPLX_DSV41_KV_CHUNK_GROW"  # W73 / K32: chunk-grown KV app
 # (the copy-everything resize fires only on the O(log T) doublings).  BYTE-IDENTICAL
 # (the buf[:, :length] view equals the concatenated store).  A decode-shape lever
 # (fixes the 16K decode append; prefill grows in bulk anyway).
+SELECT_FENCE_ENV = "MTPLX_DSV41_SELECT_FENCE"  # W76: fence K30 selected_idx argsort.
+# The K30 selected-key publication `shared.selected_idx = _mask_to_topk_idx(mask, ...)`
+# is an argsort over n_comp (an index-source-layer O(T) cost). The shipped select
+# bracket fences only `mask`, so the argsort stays lazy and is forced later by the
+# first downstream compress-gather in the `score` stage -- mis-charging that O(T)
+# select cost into decode attention-*proper* (W76 stage-timing artifact). This arms
+# fencing selected_idx into `attn.<mode>.select`, so the argsort is timed where it
+# belongs. A stage-timing ATTRIBUTION lever: byte-identical token/cache/logits (the
+# fenced array is the same object the gather forces; the extra fence is a no-op in
+# production / prefill), so it changes only the decode census, never the output.
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -217,6 +227,7 @@ ALL_LEVER_ENVS = (
     MLX_MAX_MB_PER_BUFFER_ENV,
     DEVICE_ROUTE_PINNED_ENV,
     KV_CHUNK_GROW_ENV,
+    SELECT_FENCE_ENV,
 )
 
 
@@ -229,7 +240,7 @@ def _preset(
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
     layout_fix=None, down_k_pad=None, selected_keys=None,
     softmax_kernel=None, decode_attn_kernel=None, mlx_max_mb_per_buffer=None,
-    kv_chunk_grow=None,
+    kv_chunk_grow=None, select_fence=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
@@ -243,7 +254,9 @@ def _preset(
     decode/verify MLA attention Metal kernel), ``mlx_max_mb_per_buffer`` a
     positive-int string (K14/W63, the MLX command-buffer MB cap passthrough),
     ``kv_chunk_grow`` a "1"/None boolean (W73/K32, the chunk-grown KV append
-    backing); the rest a "1"/None boolean."""
+    backing), ``select_fence`` a "1"/None boolean (W76, fence the K30 selected_idx
+    argsort into the select decode sub-stage -- a stage-timing attribution lever);
+    the rest a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -274,6 +287,7 @@ def _preset(
         MLX_MAX_MB_PER_BUFFER_ENV: mlx_max_mb_per_buffer,
         DEVICE_ROUTE_PINNED_ENV: device_route_pinned,
         KV_CHUNK_GROW_ENV: kv_chunk_grow,
+        SELECT_FENCE_ENV: select_fence,
     }
 
 
@@ -464,6 +478,22 @@ ARM_PRESETS = {
     "prefill_lean_sel_chunk": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         kv_chunk_grow="1",
+    ),
+    # W76: the K30 selected_idx argsort-fence -- standalone, to isolate its decode
+    # census effect against control (with selected keys on so the index source
+    # actually publishes selected_idx).  A stage-timing ATTRIBUTION lever only:
+    # byte-identical token/cache/logits, it moves the ~O(n_comp log n_comp) argsort
+    # cost from the `attn.<mode>.score` sub-stage into `attn.<mode>.select` where it
+    # belongs, so the decode census's attention-*proper* is no longer inflated by an
+    # index-source O(T) cost.  Not a production speedup -- it changes only what the
+    # census measures, not what runs -- so it is NOT in cell16k.
+    "select_fence": _preset(selected_keys="1", select_fence="1"),
+    # W76: prefill_lean_sel + the argsort-fence -- the direct census A/B against
+    # prefill_lean_sel (the measured 16K arm), isolating how much of that arm's
+    # per-mode decode attention-proper was the mis-attributed selected_idx argsort.
+    "prefill_lean_sel_fence": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        select_fence="1",
     ),
     # the standard cell: 16,384-token Qwen-PR sweep prompt (1K task + filler), real
     # prefill, then decode; prefill stack + decode stack together.  Prefill lane =
