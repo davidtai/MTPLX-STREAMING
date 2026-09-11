@@ -41,7 +41,8 @@ import mtplx.engram_v41 as _ev
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 assert Path(_ev.__file__).resolve().is_relative_to(_REPO_ROOT), (_ev.__file__, _REPO_ROOT)
 
-ARTIFACT = Path("/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2")
+_DEFAULT_ART = "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
+ARTIFACT = Path(os.environ.get("DSV41_ARTIFACT_DIR", _DEFAULT_ART))
 ENGRAM_DIR = ARTIFACT / "engram"
 SRC = Path("/Users/davidtai/models/DeepSeek-V4.1-Flash-src")
 MANIFEST = ENGRAM_DIR / "engram-manifest.json"

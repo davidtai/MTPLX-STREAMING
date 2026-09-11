@@ -1,7 +1,7 @@
 """Real-artifact checks for the DeepSeek-V4.1-Flash Engram resident sidecar (W4).
 
 Runs only when ``engram/engram-residents.safetensors`` is present in the artifact
-(``$DSV41_ARTIFACT_DIR`` or the default streaming-q2 path); skips otherwise, so the
+(``$DSV41_ARTIFACT_DIR`` or the default streaming-mxfp4 path); skips otherwise, so the
 suite is green on a box without the 376 GiB artifact.
 
 Covers: the manifest ``residents`` entry (file / tensor names / dtypes / shapes /
@@ -30,7 +30,7 @@ mx.set_default_device(mx.cpu)
 from mtplx.engram_v41 import EngramResidents, load_engram_residents, _StepState
 from mtplx.engram_bank import EngramBank
 
-_DEFAULT_ART = "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2"
+_DEFAULT_ART = "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
 ART = Path(os.environ.get("DSV41_ARTIFACT_DIR", _DEFAULT_ART))
 ENGRAM_DIR = ART / "engram"
 SIDECAR = ENGRAM_DIR / "engram-residents.safetensors"

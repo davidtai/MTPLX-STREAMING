@@ -49,27 +49,47 @@ __all__ = [
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
 class RowGeometry:
-    """Packed layout of one affine-quantized row (weights ``U32`` | scales | biases).
+    """Packed layout of one quantized row, for the affine and mxfp8 modes.
 
-    ``values_per_row`` quantized values at ``bits`` bits, grouped by ``group_size`` with one
-    ``param_bytes``-wide scale and bias per group.  Matches ``mx.quantize(mode="affine")`` /
-    ``mx.dequantize`` packing: engram is ``(256, 8, 64)`` -> 272 bytes; the Qwen table is
-    ``(row_width, 4, 32)``.
+    ``values_per_row`` quantized values at ``bits`` bits, grouped by ``group_size``.
+
+    ``mode="affine"`` (default): weights ``U32`` | scales | biases, one ``param_bytes``-wide
+    (bf16) scale and bias per group.  Matches ``mx.quantize(mode="affine")`` / ``mx.dequantize``
+    packing: engram is ``(256, 8, 64)`` -> 272 bytes; the Qwen table is ``(row_width, 4, 32)``.
+
+    ``mode="mxfp8"``: weights ``U32`` (the source F8_E4M3 code bytes, 4 per word) | scales, one
+    ``e8m0`` (single uint8) scale per ``group_size==32`` group and **no bias**.  This is the OCP
+    micro-scaling layout ``mx.dequantize(..., mode="mxfp8")`` consumes, and is an exact byte
+    repack of the DeepSeek-V4.1 engram source (``embed.weight`` E4M3 + ``embed.scale`` E8M0):
+    engram is ``(256, 8, 32)`` -> 256 code bytes + 8 scale bytes == 264 bytes.
     """
 
     values_per_row: int
     bits: int
     group_size: int
     mode: str = "affine"
-    param_bytes: int = 2  # bf16 scale/bias
+    param_bytes: int = 2  # bf16 scale/bias (affine)
 
     def __post_init__(self) -> None:
+        if self.mode not in ("affine", "mxfp8"):
+            raise ValueError(f"unsupported mode {self.mode!r}")
         if self.values_per_row <= 0 or self.values_per_row % self.group_size:
             raise ValueError("values_per_row must be a positive multiple of group_size")
         if self.bits not in (2, 3, 4, 6, 8):
             raise ValueError(f"unsupported bits {self.bits}")
         if (self.values_per_row * self.bits) % 32:
             raise ValueError("packed weights must be a whole number of uint32 words")
+        if self.mode == "mxfp8" and (self.bits != 8 or self.group_size != 32):
+            raise ValueError("mxfp8 requires bits=8 and group_size=32")
+
+    @property
+    def has_bias(self) -> bool:
+        return self.mode == "affine"
+
+    @property
+    def scale_param_bytes(self) -> int:
+        """Bytes of one group scale: bf16 (2) for affine, e8m0 (1) for mxfp8."""
+        return 1 if self.mode == "mxfp8" else self.param_bytes
 
     @property
     def weight_bytes(self) -> int:
@@ -80,22 +100,37 @@ class RowGeometry:
         return self.values_per_row // self.group_size
 
     @property
+    def scale_block_bytes(self) -> int:
+        return self.n_groups * self.scale_param_bytes
+
+    @property
+    def bias_block_bytes(self) -> int:
+        return self.n_groups * self.param_bytes if self.has_bias else 0
+
+    @property
     def param_block_bytes(self) -> int:
+        """Deprecated alias for the affine scale/bias block width (== bias_block_bytes)."""
         return self.n_groups * self.param_bytes
 
     @property
     def row_bytes(self) -> int:
-        return self.weight_bytes + 2 * self.param_block_bytes
+        return self.weight_bytes + self.scale_block_bytes + self.bias_block_bytes
 
     def dequantize(self, packed_u8: mx.array) -> mx.array:
-        """Dequantize ``[N, row_bytes]`` uint8 rows to ``[N, values_per_row]`` (bf16 params).
+        """Dequantize ``[N, row_bytes]`` uint8 rows to ``[N, values_per_row]``.
 
         The byte-range view + ``mx.dequantize`` path lifted from
-        ``AffineQ4NGramRows.__call__`` (qwen4_ngram_mlx.py:46-90).
+        ``AffineQ4NGramRows.__call__`` (qwen4_ngram_mlx.py:46-90); the mxfp8 branch feeds the
+        E4M3 code words + E8M0 (uint8) scales straight into ``mx.dequantize(mode="mxfp8")``.
         """
         weight_end = self.weight_bytes
-        scale_end = weight_end + self.param_block_bytes
+        scale_end = weight_end + self.scale_block_bytes
         weights = packed_u8[:, :weight_end].view(mx.uint32)
+        if self.mode == "mxfp8":
+            scales = packed_u8[:, weight_end:scale_end]        # e8m0 bytes, uint8
+            return mx.dequantize(
+                weights, scales, group_size=self.group_size, bits=self.bits, mode="mxfp8",
+            )
         scales = packed_u8[:, weight_end:scale_end].view(mx.bfloat16)
         biases = packed_u8[:, scale_end:].view(mx.bfloat16)
         return mx.dequantize(

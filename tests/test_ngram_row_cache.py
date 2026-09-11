@@ -178,6 +178,59 @@ def test_geometry_validation():
         RowGeometry(256, 5, 64)                      # unsupported bits
 
 
+# --------------------------------------------------------------------------
+# mxfp8 codec: geometry + EXACT dequant of source E4M3/E8M0 bytes
+# --------------------------------------------------------------------------
+def _rand_e4m3(rng, n):
+    b = rng.integers(0, 256, n, np.uint8)
+    b[(b == 0x7F) | (b == 0xFF)] = 0                 # scrub the two NaN codes
+    return b
+
+
+def _rand_e8m0(rng, n):
+    return rng.integers(118, 126, n, np.uint8)       # 2**(-9..-2); never 0xFF (NaN)
+
+
+def test_mxfp8_geometry():
+    g = RowGeometry(256, 8, 32, mode="mxfp8")
+    assert g.mode == "mxfp8"
+    assert g.weight_bytes == 256
+    assert g.n_groups == 8
+    assert g.scale_param_bytes == 1 and not g.has_bias
+    assert g.scale_block_bytes == 8 and g.bias_block_bytes == 0
+    assert g.row_bytes == 264
+    # mxfp8 requires bits=8 and group_size=32
+    with pytest.raises(ValueError):
+        RowGeometry(256, 8, 64, mode="mxfp8")
+    with pytest.raises(ValueError):
+        RowGeometry(256, 4, 32, mode="mxfp8")
+    with pytest.raises(ValueError):
+        RowGeometry(256, 8, 32, mode="nvfp4")        # unsupported mode
+
+
+def test_mxfp8_dequantize_bit_exact(tmp_path):
+    rng = np.random.default_rng(17)
+    n = 96
+    W = _rand_e4m3(rng, n * 256).reshape(n, 256)
+    S = _rand_e8m0(rng, n * 8).reshape(n, 8)
+    rec = np.concatenate([W, S], axis=1)             # [n, 264] exact source repack
+    assert rec.shape == (n, 264)
+    p = tmp_path / "mxfp8.bin"
+    p.write_bytes(np.ascontiguousarray(rec).tobytes())
+
+    reader = FileRowReader(p, row_bytes=264, num_rows=n)
+    cache = NGramRowCache(reader, RowGeometry(256, 8, 32, mode="mxfp8"),
+                          num_rows=n, cache_rows=16)
+
+    ids = np.array([[0, 1, 2], [3, 63, 95]])
+    dq = np.array(cache.dequantize(ids).astype(mx.float32))
+    assert dq.shape == (2, 3, 256)
+
+    # reference: the model's FP8 dequant of the same source rows -- must be BIT-EXACT
+    ref = dc.dequant_engram_embed(W, S)[ids.reshape(-1)].reshape(2, 3, 256)
+    assert np.array_equal(dq, ref)
+
+
 def test_cache_bytes_from_env(monkeypatch):
     assert cache_bytes_from_env("1GiB") == 1073741824
     monkeypatch.setenv("MTPLX_ENGRAM_CACHE_LIMIT", "1.5 GB")

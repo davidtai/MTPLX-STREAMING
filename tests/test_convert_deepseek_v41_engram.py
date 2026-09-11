@@ -354,6 +354,189 @@ def test_manifest_fields_and_hashing(tmp_path):
         assert pl["flat_offsets"][0] == 0
 
 
+# ==========================================================================
+# mxfp8 row codec (`--row-codec mxfp8`): EXACT byte repack of the source
+# ==========================================================================
+def test_mxfp8_record_layout_constants():
+    assert conv.MXFP8_RECORD_BYTES == 264
+    lay = conv.mxfp8_record_layout()
+    assert lay["weight"]["offset"] == 0 and lay["weight"]["length"] == 256
+    assert lay["weight"]["dtype"] == "U32" and lay["weight"]["shape"] == [64]
+    assert lay["scales"]["offset"] == 256 and lay["scales"]["length"] == 8
+    assert lay["scales"]["dtype"] == "U8" and lay["scales"]["shape"] == [8]
+    assert "biases" not in lay
+    assert lay["record_bytes"] == 264
+
+
+def _convert_mxfp8_one_layer(tmp_path, layer, rows, seed):
+    """Run the mxfp8 pipeline exactly like main(): stage (finalize=False) -> flip -> manifest."""
+    src, index, wu8, su8 = _make_synthetic_shard(tmp_path, layer, rows, seed=seed)
+    out = tmp_path / "engram"
+    state = tmp_path / "state"
+    weight_map = json.loads(index.read_text())["weight_map"]
+    entry = conv.convert_layer(layer, src, out, weight_map, state_dir=state,
+                               chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                               expected_rows=rows, row_codec="mxfp8", finalize=False)
+    staged = out / f"engram-L{layer}.bin.new"
+    assert staged.is_file()                       # staging lives in the artifact, unfinalized
+    conv.finalize_mxfp8(out, [layer])
+    conv.write_manifest(out, [entry], row_codec="mxfp8")
+    return out, state, wu8, su8, entry
+
+
+def test_mxfp8_full_convert_and_reader(tmp_path):
+    layer, rows = 1, 300
+    out, state, wu8, su8, _ = _convert_mxfp8_one_layer(tmp_path, layer, rows, seed=13)
+
+    binp = out / f"engram-L{layer}.bin"
+    assert binp.stat().st_size == rows * 264
+    # clean artifact: only shippable files, no leftover .bin.new
+    assert sorted(p.name for p in out.iterdir()) == ["engram-L1.bin", "engram-manifest.json"]
+    assert not (out / "engram-L1.bin.new").exists()
+    # journal lives outside the artifact
+    assert (state / "engram-L1.journal.json").exists()
+
+    # the bank IS the source bytes, verbatim (exact repack: codes | e8m0 scales)
+    raw = np.frombuffer(binp.read_bytes(), np.uint8).reshape(rows, 264)
+    assert np.array_equal(raw[:, :256], wu8)
+    assert np.array_equal(raw[:, 256:264], su8)
+
+    ref = dc.dequant_engram_embed(wu8, su8)       # model's FP8 dequant (f32 truth)
+    bank = EngramBank.open(out, layer, cache_rows=32)
+    assert bank.mode == "mxfp8" and bank.record_bytes == 264 and len(bank) == rows
+
+    idxs = [0, 1, 5, 63, 64, 65, 299, 128, 200]
+    w, s, b = bank.gather(idxs)
+    assert w.shape == (len(idxs), 64) and s.shape == (len(idxs), 8) and b is None
+    assert np.array_equal(w.view(np.uint8).reshape(len(idxs), -1)[:, :256], wu8[idxs])
+    assert np.array_equal(s, su8[idxs])
+
+    # BIT-EXACT: numpy reference dequant AND the real MLX cache dequant path == source fp32
+    assert np.array_equal(bank.dequantize_rows(idxs), ref[idxs])
+    dq_mlx = np.array(bank.cache.dequantize(np.array(idxs)).astype(mx.float32))
+    assert np.array_equal(dq_mlx, ref[idxs])
+
+    with pytest.raises(IndexError):
+        bank.gather([rows])
+    bank.close()
+
+
+def test_mxfp8_manifest_fields(tmp_path):
+    layer, rows = 1, 128
+    out, _, _, _, _ = _convert_mxfp8_one_layer(tmp_path, layer, rows, seed=2)
+    m = json.loads((out / "engram-manifest.json").read_text())
+    assert m["format"] == "mtplx-engram-manifest-v1"
+    assert m["quant"] == {"bits": 8, "group_size": 32, "mode": "mxfp8",
+                          "head_dim": 256, "record_bytes": 264}
+    assert "note" in m["dequant"] and "mxfp8" in m["dequant"]["note"]
+    le = m["layers"][0]
+    assert le["record_bytes"] == 264 and le["total_bytes"] == rows * 264
+    assert le["quant"]["mode"] == "mxfp8" and le["quant"]["group_size"] == 32
+    assert le["record_layout"] == conv.mxfp8_record_layout()
+    assert le["source"]["exact_repack"] is True
+    # sha256 present and matches the bank file bytes
+    assert len(le["sha256"]) == 64
+    import hashlib
+    assert le["sha256"] == hashlib.sha256((out / "engram-L1.bin").read_bytes()).hexdigest()
+    # hashing block still emitted (codec-independent)
+    assert m["hashing"]["n_hash_cols"] == 24
+
+
+def test_mxfp8_resume_idempotence_and_staging(tmp_path, monkeypatch):
+    layer, rows = 1, 320
+    src, index, wu8, su8 = _make_synthetic_shard(tmp_path, layer, rows, seed=23)
+    weight_map = json.loads(index.read_text())["weight_map"]
+    out = tmp_path / "engram"
+    state = tmp_path / "state"
+
+    # fault-inject on the 3rd chunk (chunks 0,1 commit, 2 raises)
+    real = conv._mxfp8_chunk_records
+    calls = {"n": 0}
+
+    def flaky(w, s):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("injected fault")
+        return real(w, s)
+
+    monkeypatch.setattr(conv, "_mxfp8_chunk_records", flaky)
+    with pytest.raises(RuntimeError, match="injected fault"):
+        conv.convert_layer(layer, src, out, weight_map, state_dir=state, chunk_rows=64,
+                           max_rows=0, wait=False, poll=0.0, fsync_every=1,
+                           expected_rows=rows, row_codec="mxfp8", finalize=False)
+    # partial staging .bin.new in the artifact; NO finalized bank; journal outside, [0,1]
+    assert (out / "engram-L1.bin.new").exists()
+    assert not (out / "engram-L1.bin").exists()
+    j = json.loads((state / "engram-L1.journal.json").read_text())
+    assert j["done_chunks"] == [0, 1] and j["row_codec"] == "mxfp8"
+    # committed region already byte-exact
+    partial = (out / "engram-L1.bin.new").read_bytes()
+    ref_full = conv._mxfp8_chunk_records(wu8, su8).tobytes()
+    assert partial[: 2 * 64 * 264] == ref_full[: 2 * 64 * 264]
+
+    # resume with the real repacker: only the remaining chunks recompute
+    monkeypatch.setattr(conv, "_mxfp8_chunk_records", real)
+    resume = {"n": 0}
+
+    def counting(w, s):
+        resume["n"] += 1
+        return real(w, s)
+
+    monkeypatch.setattr(conv, "_mxfp8_chunk_records", counting)
+    entry = conv.convert_layer(layer, src, out, weight_map, state_dir=state, chunk_rows=64,
+                               max_rows=0, wait=False, poll=0.0, fsync_every=1,
+                               expected_rows=rows, row_codec="mxfp8", finalize=False)
+    n_chunks = (rows + 63) // 64
+    assert resume["n"] == n_chunks - 2            # chunks 0,1 not rewritten
+    conv.finalize_mxfp8(out, [layer])
+    assert (out / "engram-L1.bin").read_bytes() == ref_full  # byte-identical to a clean run
+
+    # idempotent: a finalize=True re-run early-skips (final present, correct size)
+    before = (out / "engram-L1.bin").stat().st_mtime_ns
+    conv.convert_layer(layer, src, out, weight_map, state_dir=state, chunk_rows=64,
+                       max_rows=0, wait=False, poll=0.0, expected_rows=rows,
+                       row_codec="mxfp8", finalize=True)
+    assert (out / "engram-L1.bin").stat().st_mtime_ns == before
+
+
+def test_both_manifests_load_side_by_side(tmp_path):
+    """Affine and mxfp8 banks/manifests both open through EngramBank (codec from the manifest)."""
+    rows = 200
+    src, index, wu8, su8 = _make_synthetic_shard(tmp_path, 1, rows, seed=31)
+    weight_map = json.loads(index.read_text())["weight_map"]
+    ref = dc.dequant_engram_embed(wu8, su8)
+    idxs = [0, 1, 64, 199, 100]
+
+    aff = tmp_path / "affine"
+    e_aff = conv.convert_layer(1, src, aff, weight_map, state_dir=tmp_path / "sa",
+                               chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                               expected_rows=rows, row_codec="affine")
+    conv.write_manifest(aff, [e_aff], row_codec="affine")
+
+    mx8 = tmp_path / "mxfp8"
+    e_mx = conv.convert_layer(1, src, mx8, weight_map, state_dir=tmp_path / "sm",
+                              chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                              expected_rows=rows, row_codec="mxfp8", finalize=False)
+    conv.finalize_mxfp8(mx8, [1])
+    conv.write_manifest(mx8, [e_mx], row_codec="mxfp8")
+
+    ba = EngramBank.open(aff, 1)
+    bm = EngramBank.open(mx8, 1)
+    try:
+        assert ba.mode == "affine" and ba.record_bytes == 272
+        assert bm.mode == "mxfp8" and bm.record_bytes == 264
+        # mxfp8 is exact; affine is close (bf16 requantize) -- both usable, same source
+        assert np.array_equal(bm.dequantize_rows(idxs), ref[idxs])
+        aff_dq = ba.dequantize_rows(idxs)
+        cos = np.array([float((aff_dq[i] @ ref[idxs][i]) /
+                              (np.linalg.norm(aff_dq[i]) * np.linalg.norm(ref[idxs][i])))
+                        for i in range(len(idxs))])
+        assert cos.min() >= 0.999
+    finally:
+        ba.close()
+        bm.close()
+
+
 # --------------------------------------------------------------------------
 # resident Engram projections sidecar (`--mode residents`) -- synthetic
 # --------------------------------------------------------------------------
