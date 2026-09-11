@@ -324,23 +324,27 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   an enqueued probe read back at the next flush / token end (covered by the sampler's eval). **0
   host syncs on an all-hit layer.**
 - **Where:** decode (all-hit). **Now:** exposed today (the barrier is the top decode-stage cost,
-  W44 §0). **After:** **40 → m** routing barriers/token, `m` = miss layers (target: barriers only on
-  miss layers). All-hit token → **0**; window-12 cold (≈16 miss layers/tok) → ≈16; warm → →0.
+  W44 §0). **After:** per-layer routing barriers **40 → m** (`m` = miss layers, fenced on the recovery
+  pass) **+ 1** batched span-end verify sync. Warm (all-hit token) → **1**; window-12 cold (≈16 miss
+  layers/tok) → ≈17; the barrier-free path itself is 0-sync per all-hit layer.
 - **Exactness:** all-hit layer is byte-identical (LUT slot == fenced `bank_index`, same kernel, same
   rows). A miss reads a void row (clamped) and is caught by the deferred probe; recovery admits the
   miss experts and re-runs the fenced path → **final token byte-identical** (W44_DEVICE_ROUTE.md §2–3).
   Proven on the fake bank: all-hit/mixed/all-miss reconcile to fenced at M=1 & M=4; 0-sync-on-all-hit
   census; LUT-refresh-only-on-change (`tests/test_deepseek_v41_device_route.py`).
-- **⚠ Effort/risk:** medium. **W44 lands the switch/runtime primitives** (LUT, barrier-free issue,
-  async probe queue, fenced-re-gather recovery) proven at the switch level; **end-to-end byte-identity
-  needs the token-end verify/recompute wired into `mtplx/generation.py` — the follow-up, outside the
-  W44 allowlist.** So the `device_route` arm is byte-identical only on **warm/all-hit** windows until
-  that lands; cold-token misses without the recompute void the token (flagged by the receipt sha).
-  Real-artifact slot-numbering (`_expert_to_slot` row == `bank_index`) is validated by the GPU A/B sha.
-- **Cost when misses frequent (honest):** token-level naive recovery recomputes the whole token on
-  ANY miss; `P(all-hit token) = 0.61^40 ≈ 4e-9` at cold window-12 rates → near-100% recompute → pure
-  overhead. The **per-layer** recovery (pay `m`, monotonic) is the form to wire in. Warm/cross-prompt
-  is the win. **Default off; GPU A/B prices it.**
+- **⚠ Effort/risk:** medium. **W44 lands it end to end** (switch + runtime + the decode-forward
+  cold recovery in `DeepseekV41Backbone._forward_span` / `_device_route_recover`): on a cold token it
+  rolls back every layer's cache to pre-token, re-runs the span on a fresh `shared` with only the miss
+  layers forced fenced, and leaves output + cache + engram **byte-identical to fenced** while paying
+  exactly `m` barriers. Byte-identity + barrier count are asserted on the tiny backbone with a
+  controllable fake bank (all-hit/single/multi/all-miss × M=1,4). Real-artifact slot-numbering
+  (`_expert_to_slot` row == `bank_index`) is validated by the GPU A/B sha.
+- **Cost when misses frequent (honest):** warm (all-hit token) = **0 barriers, 1× compute** — the
+  win. Cold (`m` miss layers) = **`m` barriers + 2× compute** (pass-1 + one recovery span; re-run
+  from layer 0 because DSV4.1's CSA source layers sit near the top of the stack, so a partial
+  `m1`-restart saves little and is fragile). At window-12 (≈16 miss layers/token) cold trades 40
+  barriers for 16 + one extra span — net sign is the GPU A/B's call; if compute-bound, the partial
+  `m1`-restart (W44 §7) is the follow-up. **Default off; GPU A/B prices it.**
 - **Composes with / subsumes K23:** K23 deferred the second per-layer sync (the wave fence); K24
   removes the first (the barrier) on all-hit layers — no barrier means no fence to defer.
 

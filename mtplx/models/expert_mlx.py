@@ -2096,6 +2096,11 @@ class HotExpertSwitchGLU(nn.Module):
             is RoutingPhase.DECODE
             and callable(getattr(self.runtime, "device_route_lut", None))
             and callable(getattr(self.runtime, "component_bank_for_layer", None))
+            # W44 cold recovery: the backbone forces specific layers back onto the
+            # fenced path (barrier + admit + gather) on a recovery pass, so a miss
+            # is repaired byte-identically. Those layers skip the device path here.
+            and self.layer_index
+            not in getattr(self.runtime, "_device_route_force_fenced", frozenset())
         ):
             device_result = self._run_device_route(
                 x, indices, tokens, top_k, hidden_size, shared_work

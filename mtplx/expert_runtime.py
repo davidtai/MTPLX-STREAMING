@@ -1879,6 +1879,10 @@ class ExpertStreamingRuntime:
         self._device_route_lut_dirty: dict[int, bool] = {}
         self._device_route_bank: dict[int, Any] = {}
         self._device_route_probes: list[tuple[int, Any, frozenset[int]]] = []
+        # Layers the backbone has forced back onto the fenced path for a W44 cold
+        # recovery pass (the switch skips the device path for these). Empty in the
+        # steady state; set/cleared around a recovery re-run by the decode forward.
+        self._device_route_force_fenced: frozenset[int] = frozenset()
         self._shadow_serve_routes = 0
         self._shadow_serve_assignments = 0
         self._shadow_serve_experts = 0
@@ -3327,6 +3331,14 @@ class ExpertStreamingRuntime:
 
         return self._device_route_lut_snapshot.get(int(layer), frozenset())
 
+    def set_device_route_force_fenced(self, layers: Iterable[int]) -> None:
+        """Force ``layers`` onto the fenced path (barrier + admit + gather) for a
+        W44 cold-recovery re-run; pass ``()`` to clear. The switch reads this and
+        skips its device path for those layers, so a flagged miss is repaired
+        byte-identically while every other layer keeps the barrier-free route."""
+
+        self._device_route_force_fenced = frozenset(int(x) for x in layers)
+
     def enqueue_device_route_probe(
         self, layer: int, indices: Any, snapshot: frozenset[int]
     ) -> None:
@@ -3346,6 +3358,15 @@ class ExpertStreamingRuntime:
         if not probes:
             return []
         self._device_route_probes = []
+        # ONE batched host sync for the whole span's verification: the ids were
+        # async_eval'd per layer during the barrier-free pass (so they are usually
+        # already resident by now), and evaluating them together here forces a
+        # single device->host round-trip -- not one per layer, which would
+        # reintroduce the ~40 syncs the device route exists to remove. (The
+        # warm/all-hit token therefore costs this ONE verify sync, not 40.)
+        import mlx.core as mx  # local: keep this module MLX-free at import
+
+        mx.eval(*[indices for _layer, indices, _snapshot in probes])
         misses: list[tuple[int, tuple[int, ...]]] = []
         for layer, indices, snapshot in probes:
             ids = [int(v) for v in indices.reshape(-1).tolist()]

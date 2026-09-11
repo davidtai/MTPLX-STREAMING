@@ -1,9 +1,11 @@
 # W44 — Barrier-free all-hit device route (KERNEL_LEDGER K24)
 
-Status: design note + switch/runtime primitives, behind env `MTPLX_DSV41_DEVICE_ROUTE`
-(default off), byte-identity proven on the fake bank. Author: Opus 4.8 worker
-(`feat/deepseek-v41-w44`, off `feat/deepseek-v41-streaming` @ 5b6b8e7d2). CPU-only;
-MLX pinned to CPU; no `experts.bin` load; ≤3 GB. mlx 0.32.2.
+Status: **implemented end to end** (switch + runtime + decode-forward cold recovery),
+behind env `MTPLX_DSV41_DEVICE_ROUTE` (default off), byte-identity — output, cache,
+and engram — proven vs the fenced path on the tiny backbone with a controllable fake
+bank. Author: Opus 4.8 worker (`feat/deepseek-v41-w44`, off `feat/deepseek-v41-
+streaming` @ 5b6b8e7d2). CPU-only; MLX pinned to CPU; no `experts.bin` load; ≤3 GB.
+mlx 0.32.2.
 
 ## 0. The cost this removes
 
@@ -103,35 +105,53 @@ identical layer for layer, hence the token is identical. The CPU tests hold each
 layer's `x` fixed and prove `reconcile(device_route) == fenced` for all-hit / mixed
 / all-miss sequences at M=1 and M=4.
 
-**(b) Token-level (the production forward).** The decode loop runs the optimistic
-device-route forward with **0 routing barriers**, then at token end reads the probes.
-If no layer missed, the logits are byte-identical (§2.1 composed over 40 layers) and
-the sampled token stands. If any layer missed, the optimistic logits are void and
-the token is **recomputed on the fenced path** (missing experts now admitted). The
-recompute is authoritative → byte-identical.
+**(b) Span-level, LANDED in the decode forward.** `DeepseekV41Backbone._forward_span`
+(the decode M=1 and verify M=K+1 path) runs the optimistic device-route span with
+**0 routing barriers**, snapshotting each layer's pre-token cache length (`mark`) and
+the span's initial `(h, pre_mix)`. At span end it calls `flush_device_route_probes()`.
+If no layer missed, the span output/cache/engram are byte-identical (§2.1 composed)
+and stand. If layers missed, `_device_route_recover` **rewinds every layer's cache to
+pre-token** (the existing length-based `LayerAttentionCache.rollback` — window /
+compressed / index / compressor frontier; the engram is untouched because its offset
+delta is zero while `offset` is still pre-advance) and **re-runs the whole span from
+the saved initial state on a fresh `shared` runtime**, forcing ONLY the miss layers
+onto the fenced path (barrier + admit + gather → correct + admitted) while every other
+layer stays on the device path (0 barriers). It loops until a pass has no misses
+(bounded; the final fallback forces the fenced path for every layer), then `cache.
+advance(s)` runs once. Result: **span output, per-layer KV/compress/index cache, and
+engram state all byte-identical to the fenced path, paying exactly `m` = (miss layers)
+routing barriers** (asserted for all-hit / single-miss / multi-miss / all-miss at M=1
+and M=4 in `tests/test_deepseek_v41_device_route_recovery.py`).
 
-Framing (b) needs a token-boundary hook in the decode loop (`mtplx/generation.py`) —
-**outside the W44 allowlist** (`expert_mlx.py` / `expert_runtime.py`). W44 therefore
-lands the **switch + runtime primitives** — the device LUT, the barrier-free issue,
-the async probe queue, the `flush_device_route_probes()` verify, and the fenced
-re-gather recovery — and proves them byte-identical at the switch level. Wiring the
-token-end verify/recompute into the generation loop (framing (b), and the
-resume-from-first-miss optimisation that gives "barriers only on miss layers" in the
-backbone) is the follow-up (a `generation.py` change), specified here, not landed.
+**Why re-run from layer 0, not from the first miss `m1`.** The preferred per-layer
+scheme re-runs only `m1..n-1`, but DSV4.1's CSA layer menu threads state across layers
+through the `shared` runtime — the compressor/index **source** layers
+(`kv_source_layer_ids`, `index_source_layer_ids`) and the **candidate source**
+(`candidate_source_layer_id`) feed later reindex/reuse layers. A correct partial
+restart from `m1` on a fresh `shared` would have to back up to the earliest such
+source that feeds any layer `≥ m1` — which for this model's menu sits near the top of
+the stack — so it saves little compute over a full re-run while adding real fragility.
+Re-running the whole span from layer 0 on a fresh `shared` is trivially correct and
+pays the **same `m` barriers** (only miss layers are fenced; the re-run of the
+already-correct prefix is all device → 0 extra barriers). Its cost is **one extra
+span of compute on a cold (miss) token** — priced in §5.
 
 ## 4. Barrier count per token (before → after)
 
 | regime | fenced (today) | device-route (this lever) |
 |---|---:|---:|
-| all-hit token (warm / cross-prompt primed) | 40 | **0** routing barriers¹ |
 | per layer, all-hit | 1 | **0** |
-| per layer, miss | 1 | 1 (deferred; only miss layers) |
-| token with *m* miss layers (per-layer recovery) | 40 | **m** (+ the token-end verify read, covered by the sampler eval) |
+| per layer, miss (fenced on the recovery pass) | 1 | 1 (only miss layers) |
+| span-end verify (one batched `mx.eval` of all probed indices) | 0 | **1** / token |
+| **all-hit token (warm / cross-prompt primed)** | **40** | **1** (verify only) |
+| **token with *m* miss layers** | **40** | **m + 1** |
 
-¹ the token-end sampler `mx.eval` exists in the fenced path too and is not a routing
-barrier. **Target: barriers only on miss layers**, achieved by the per-layer
-primitive (framing a). Before→after headline: **40 → m** barriers/token, `m` = miss
-layers that token.
+The per-layer routing barriers drop **40 → m** (only the miss layers are fenced, on
+the recovery pass); the single span-end verify read is the "+1" (`flush_device_route_
+probes` batches all probed indices into **one** device→host sync — never one per
+layer, which would reintroduce the ~40). **Warm token: 40 → 1.** The counting test
+asserts the `m` recovery-fenced routing barriers (`hot.eval_indices`); the batched
+verify sync is the constant "+1".
 
 ## 5. Cost when misses are frequent (honest)
 
@@ -141,43 +161,61 @@ are all-hit and ≈**16 miss** — device-route saves the 24 barriers and still 
 **40 → ~16 barriers/token** at cold window-12 rates: a real cut, but not the ~0 the
 warm case gives.
 
-The trap to document: under **token-level** recovery (framing b, naive), *any* miss
-in the token voids the optimistic pass and forces a **full 40-barrier fenced
-recompute** — and `P(all-hit token) = 0.61^40 ≈ 4e-9` at cold rates, so **almost
-every token recomputes** and device-route is **pure overhead** (the optimistic pass
-is wasted). Token-level recovery is therefore only a win when the working set is
-**warm** (P(all-hit token) → 1: cross-prompt residency, or deep into a long decode
-where the per-layer working set has settled — W24's within-prompt hit rate rises to
-0.835 warm). The **per-layer** recovery (framing a / resume-from-first-miss) avoids
-the all-or-nothing cliff — it pays exactly `m` barriers, monotonic in the miss count
-— and is the form to wire into the backbone. **Default off; the GPU A/B (`device_route`
-arm, window 16+) prices it against control at the standard shape.**
+The landed recovery pays **`m` barriers, monotonic in the miss count** — never the
+all-or-nothing 40 of a naive whole-token-fenced recompute. But it does re-run the
+span once on a cold token, so the honest cost model is:
+
+| | host syncs / token | decode-forward compute / token |
+|---|---:|---:|
+| fenced (control) | 40 | 1× |
+| device route, **warm** (all-hit token) | **1** (verify only) | 1× |
+| device route, **cold** (`m` miss layers) | **`m` + 1** | **2×** (pass-1 + one recovery span) |
+
+So the lever is an unambiguous win **warm** (0 barriers, 1× compute) — the target
+regime: cross-prompt residency, or deep into a long decode where the per-layer working
+set has settled (W24's within-prompt hit rate rises to 0.835 warm → few miss layers).
+**Cold**, it trades 40 barriers for `m` barriers **plus** one extra span of compute;
+whether that nets faster depends on the barrier-stall vs decode-compute ratio at the
+window-12 rate (≈16 miss layers/token) — **the GPU A/B (`device_route` / `stack_a`
+arms, window 16+) is authoritative.** If cold nets negative, the follow-up is the
+partial `m1`-restart (§7) to cut the 2× compute toward 1× + tail. **Default off.**
 
 Interaction with K23 (switch fast-path): K23 removed the *second* per-layer sync (the
 all-hit wave fence) by deferring the slot release; K24 removes the *first* (the
 routing barrier itself) on all-hit layers. They compose — K24 subsumes K23's win on
 all-hit layers (no barrier means no fence to defer) and is the larger lever.
 
-## 6. What W44 lands
+## 6. What W44 lands (end to end)
 
 - `expert_runtime.py`: `device_route_lut(layer) -> mx.array` (cached int32 LUT,
   rebuilt only when `_lut_dirty[layer]` is set by an admission/eviction/reset);
-  `enqueue_device_route_probe(...)` / `flush_device_route_probes() -> misses`;
-  LUT-dirty marks at the cache-change sites.
-- `expert_mlx.py`: `HotExpertSwitchGLU._run` device-route branch (env
+  `device_route_snapshot`; `enqueue_device_route_probe` / `flush_device_route_probes()
+  -> misses`; `set_device_route_force_fenced(layers)` (recovery override); the
+  per-layer component-bank capture; LUT-dirty marks at the cache-change sites.
+- `expert_mlx.py`: `HotExpertSwitchGLU._run_device_route` + the `_run` branch (env
   `MTPLX_DSV41_DEVICE_ROUTE=1`, decode + component-banks): barrier-free LUT gather +
-  `async_eval(indices)` + probe enqueue, 0 host syncs; fenced re-gather recovery on a
-  flagged miss.
-- `scripts/deepseek_v41/ab_decode_env_levers.py`: `device_route` arm (nine keys now;
-  every preset pins all nine).
-- `tests/test_deepseek_v41_device_route.py`: byte-identity (all-hit / mixed /
-  all-miss, M=1 and M=4), 0-host-sync-on-all-hit census, LUT-refresh-on-change,
-  probe/verify correctness.
+  `async_eval(indices)` + probe enqueue, 0 host syncs; skipped for layers the backbone
+  has forced onto the fenced path this recovery pass.
+- `deepseek_v41.py` (`DeepseekV41Backbone`): `_forward_span` marks + saves + the
+  span-end `_device_route_recover` (rollback-all + fresh-`shared` re-run with the miss
+  layers forced fenced); `cache.advance` moved after recovery. `_device_route_active`
+  gates it to a DECODE span with a streamed runtime present.
+- `deepseek_v41_cache.py`: **no change** — the existing length-based
+  `LayerAttentionCache.rollback` / `mark` already rewind window/compress/index/frontier
+  and leave the engram untouched (offset delta zero pre-advance).
+- `scripts/deepseek_v41/ab_decode_env_levers.py`: `device_route` arm (nine keys now,
+  every preset pins all nine) + `device_route` folded into `stack_a`.
+- Tests: `tests/test_deepseek_v41_device_route.py` (switch-level: all-hit byte-identity
+  + 0-sync + probe/verify + LUT refresh) and `tests/test_deepseek_v41_device_route_
+  recovery.py` (backbone end to end: output + cache + engram byte-identical to fenced
+  and barriers = miss layers, across all-hit / single-miss / multi-miss / all-miss at
+  M=1 and M=4).
 
-## 7. Follow-up (out of W44 allowlist)
+## 7. Follow-up (optional optimisation)
 
-Framing (b) in `mtplx/generation.py`: run the optimistic device-route forward, call
-`flush_device_route_probes()` at token end, and on any miss admit + recompute the
-token (ideally resume from the first miss layer, holding the residual stream at that
-layer, to pay only `m` barriers rather than 40). This is where the token-level 40→0
-(warm) / 40→m (cold) headline is actually realised end to end.
+Partial `m1`-restart to cut the cold-token 2× compute toward 1× + tail: re-run only
+`min(m1, source_floor)..n-1`, where `source_floor` is the earliest CSA source
+(`kv_source_layer_ids` / `index_source_layer_ids` / `candidate_source_layer_id`) that
+feeds any layer `≥ m1`, reconstructing exactly that prefix of the `shared` runtime.
+Barriers are already `m` without it, so this is a compute optimisation for the cold
+regime, priced only if the window-16 A/B shows cold device-route compute-bound.
