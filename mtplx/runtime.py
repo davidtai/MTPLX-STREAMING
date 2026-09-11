@@ -1095,7 +1095,22 @@ def _load_impl(
                 resident_load_report = resident.report.as_dict()
                 tokenizer = _load_tokenizer_resilient(path, config)
                 if mtp:
-                    if streamed_mtp_backend == "hy3":
+                    if native_streamed_mtp:
+                        # DeepSeek-V4.1 DSpark native draft head (worker W23): the
+                        # head is already built into the model by the mtp=True
+                        # resident construct above; there is no external MTP
+                        # artifact, so publish the in-model head here (the general
+                        # is_deepseek_v41_mtp_config dispatch lives past the
+                        # streaming block's `return runtime`, so the streamed lane
+                        # must publish it itself).
+                        from .models.deepseek_v41 import (
+                            inject_deepseek_v41_mtp_support,
+                        )
+
+                        mtp_enabled = inject_deepseek_v41_mtp_support(
+                            model, path, config, contract
+                        )
+                    elif streamed_mtp_backend == "hy3":
                         from .hy3_mtp_patch import inject_hy3_streamed_mtp_support
 
                         mtp_enabled = inject_hy3_streamed_mtp_support(
