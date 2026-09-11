@@ -244,21 +244,24 @@ def test_discount_zero_for_hy3_like_manifest() -> None:
     assert text_only_resident_discount(manifest, _Spec(mtp_included=False)) == 0
 
 
-def test_session_bank_near_prefix_and_store_on_prefill_off_for_mxfp4() -> None:
-    # W22: a KV-only near-prefix restore desyncs the engram hashing at layers
-    # 1/14 (silent wrong output on warm turns) and the SSD prompt-cache path
-    # fails closed, so both must be off for this model until W26 serialises the
-    # engram hash history into the cache state.
+def test_session_bank_knobs_no_longer_forced_off_for_mxfp4() -> None:
+    # W26 (engram history rides the entry-0 cache state): restore_cache now
+    # rewinds the engram with the KV, so in-memory near-prefix restore no longer
+    # desyncs the layer-1/14 engram hash. The profile therefore stops forcing
+    # MTPLX_SESSION_NEAR_PREFIX_RESTORE / MTPLX_SESSION_STORE_ON_PREFILL to 0
+    # (they fall back to the engine default = on). The SSD prompt-cache cold
+    # tier stays off separately (serve --ssd-session-cache off; None-KV lanes +
+    # LayerAttentionCache registration are still unsupported).
     profiles = load_expert_profiles()
     child_env = dict(profiles[PROFILE_NAME].child_env)
-    assert child_env.get("MTPLX_SESSION_NEAR_PREFIX_RESTORE") == "0"
-    assert child_env.get("MTPLX_SESSION_STORE_ON_PREFILL") == "0"
+    assert "MTPLX_SESSION_NEAR_PREFIX_RESTORE" not in child_env
+    assert "MTPLX_SESSION_STORE_ON_PREFILL" not in child_env
     assert child_env.get("MTPLX_ENGRAM_CACHE_LIMIT") == "2GiB"
 
 
-def test_session_bank_gate_disables_the_generation_features(monkeypatch) -> None:
-    # The child_env, applied to the serve daemon, actually turns the features
-    # off at their generation-path env gates.
+def test_session_bank_features_default_on_under_the_profile_env(monkeypatch) -> None:
+    # With the kill switches removed from child_env, applying the profile env
+    # leaves both features at the engine default (on).
     from mtplx.expert_cli import apply_expert_profile_child_env
     from mtplx.generation import (
         _near_prefix_restore_enabled,
@@ -270,12 +273,16 @@ def test_session_bank_gate_disables_the_generation_features(monkeypatch) -> None
     class _Args:
         _resolved_expert_profile = profiles[PROFILE_NAME]
 
+    monkeypatch.delenv("MTPLX_SESSION_NEAR_PREFIX_RESTORE", raising=False)
+    monkeypatch.delenv("MTPLX_SESSION_STORE_ON_PREFILL", raising=False)
     environ: dict[str, str] = {}
     apply_expert_profile_child_env(_Args(), environ)
+    assert "MTPLX_SESSION_NEAR_PREFIX_RESTORE" not in environ
+    assert "MTPLX_SESSION_STORE_ON_PREFILL" not in environ
     for key, value in environ.items():
         monkeypatch.setenv(key, value)
-    assert _near_prefix_restore_enabled() is False
-    assert _store_on_prefill_env_enabled() is False
+    assert _near_prefix_restore_enabled() is True
+    assert _store_on_prefill_env_enabled() is True
 
 
 def test_hy3_profiles_do_not_gate_the_session_bank() -> None:
