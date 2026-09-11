@@ -74,6 +74,43 @@ from mtplx.cache_state import (
 )
 
 
+#: DSpark MTP residents actually materialized on the ``with_mtp=True`` load path
+#: (dense mxfp8 + 3x128 mxfp4 experts + heads ~= 6.7-7.4 GiB, W18 /
+#: OPTIMIZATION_LEDGER §1.1). The streaming loader's planner applies
+#: ``text_only_resident_discount`` unconditionally (it frees the MTP+vision
+#: residents for expert slots), so a ``with_mtp`` load over-reserves slots by
+#: exactly the MTP residents it then loads. The bench harness reserves this out of
+#: the memory budget so the slot pool (expert cache) shrinks and the plan fits.
+DSPARK_MTP_RESIDENT_BYTES = int(7.4 * (1024 ** 3))
+
+
+def dspark_bench_loader_overrides(
+    *,
+    want_dspark: bool,
+    memory_limit_bytes: int,
+    expert_cache_limit_bytes: Optional[int],
+    mtp_resident_bytes: int = DSPARK_MTP_RESIDENT_BYTES,
+) -> tuple[Optional[bool], int, Optional[int]]:
+    """Loader kwargs for a DSpark-DIRECT bench load (W57).
+
+    Returns ``(with_mtp, memory_limit_bytes, expert_cache_limit_bytes)``. For a
+    DSpark run: ``with_mtp=True`` and both budgets reduced by the MTP residents so
+    the planner's default text-only discount does not over-commit expert slots.
+    For a non-DSpark run: ``with_mtp=None`` (loader auto-detect, text-only) and the
+    budgets unchanged.  Pure function, unit-tested on CPU with no model.
+    """
+    if not want_dspark:
+        return None, int(memory_limit_bytes), expert_cache_limit_bytes
+    gib = 1024 ** 3
+    reserved_memory = max(gib, int(memory_limit_bytes) - int(mtp_resident_bytes))
+    reserved_cache = (
+        None
+        if expert_cache_limit_bytes is None
+        else max(0, int(expert_cache_limit_bytes) - int(mtp_resident_bytes))
+    )
+    return True, reserved_memory, reserved_cache
+
+
 # ---------------------------------------------------------------------------
 # stats
 # ---------------------------------------------------------------------------

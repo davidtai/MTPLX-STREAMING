@@ -259,7 +259,11 @@ TUNE_RECORD_CLEARING_VERDICTS = frozenset(
 TUNE_TELEMETRY_ENV = "MTPLX_BENCH_TUNE_TELEMETRY"
 GENERATION_MODE_MTP = "mtp"
 GENERATION_MODE_AR = "ar"
-GENERATION_MODES = {GENERATION_MODE_MTP, GENERATION_MODE_AR}
+#: DeepSeek-V4.1 DSpark-DIRECT lane (W57): a speculative (non-AR) mode that keeps
+#: MTP loaded but runs the lean DSpark loop instead of the generic native-MTP
+#: machinery. Treated like ``mtp`` everywhere that keys on "not AR".
+GENERATION_MODE_DSPARK = "dspark"
+GENERATION_MODES = {GENERATION_MODE_MTP, GENERATION_MODE_AR, GENERATION_MODE_DSPARK}
 OPENCODE_CHAT_TEMPLATE_PROFILE_DEFAULT = "local_qwen36"
 OPENCODE_FAIR_BATCHING_DEFAULTS: dict[str, Any] = {
     # 2026-07-16 agent-lane TPS alignment: `mtplx start opencode` now matches
@@ -739,7 +743,7 @@ def _normalize_generation_mode(value: Any) -> str:
         # Older app builds persisted "auto"; it means the engine default.
         return GENERATION_MODE_MTP
     if text not in GENERATION_MODES:
-        raise ValueError("generation mode must be 'mtp' or 'ar'")
+        raise ValueError("generation mode must be 'mtp', 'ar', or 'dspark'")
     return text
 
 
@@ -829,7 +833,10 @@ def _streamed_mtp_flag_requested(args: Any) -> bool:
         getattr(args, "generation_mode", "") or ""
     ).strip().lower()
     return (
-        ("generation-mode" in cli_flags and explicit_generation_mode == "mtp")
+        (
+            "generation-mode" in cli_flags
+            and explicit_generation_mode in {"mtp", "dspark"}
+        )
         or "mtp" in cli_flags
         or (
             "load-mtp" in cli_flags

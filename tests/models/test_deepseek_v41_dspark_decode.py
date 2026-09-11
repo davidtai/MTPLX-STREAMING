@@ -392,3 +392,125 @@ def test_server_dspark_direct_selected_gate(tmp_path, monkeypatch):
     # never for a non-dsv41 model, and never without an MTP runtime
     assert _dspark_direct_selected(_state(other, True), "dspark") is False
     assert _dspark_direct_selected(_state(tmp_path, False), "dspark") is False
+
+
+# --------------------------------------------------------------------------- #
+# 8. bench loader kwargs: dspark loads with_mtp=True + reprices MTP residents
+# --------------------------------------------------------------------------- #
+def test_dspark_bench_loader_overrides():
+    from mtplx.models.deepseek_v41_dspark_decode import (
+        DSPARK_MTP_RESIDENT_BYTES,
+        dspark_bench_loader_overrides,
+    )
+
+    base_mem = 82 * (1024 ** 3)
+    # AR (default): loader auto-detects (with_mtp=None), budgets unchanged.
+    with_mtp, mem, cache = dspark_bench_loader_overrides(
+        want_dspark=False, memory_limit_bytes=base_mem, expert_cache_limit_bytes=None
+    )
+    assert with_mtp is None and mem == base_mem and cache is None
+
+    # DSpark: with_mtp=True and the MTP residents repriced out of the budget so
+    # the plan still fits (the loader planner discounts MTP residents by default).
+    with_mtp, mem, cache = dspark_bench_loader_overrides(
+        want_dspark=True, memory_limit_bytes=base_mem, expert_cache_limit_bytes=None
+    )
+    assert with_mtp is True
+    assert mem == base_mem - DSPARK_MTP_RESIDENT_BYTES
+    assert cache is None  # a derived (None) expert cache stays derived
+
+    # an explicit expert cache limit is also reduced by the reservation
+    cap = 60 * (1024 ** 3)
+    with_mtp, mem, cache = dspark_bench_loader_overrides(
+        want_dspark=True, memory_limit_bytes=base_mem, expert_cache_limit_bytes=cap
+    )
+    assert with_mtp is True and cache == cap - DSPARK_MTP_RESIDENT_BYTES
+
+
+def test_ab_decode_load_model_passes_with_mtp_for_dspark(monkeypatch, tmp_path):
+    """The ab_decode harness's _load_model must pass with_mtp=True + a reduced
+    budget to the streaming loader when --decode-mode dspark, and assert the head."""
+    import argparse
+    import importlib.util
+    import types
+
+    import mtplx.models.deepseek_v41_loader as loader_mod
+    from mtplx.models.deepseek_v41_dspark_decode import DSPARK_MTP_RESIDENT_BYTES
+
+    GIB = 1024 ** 3
+    captured: dict = {}
+
+    def _fake_loader(root, **kwargs):
+        captured.update(kwargs)
+        captured["root"] = root
+        model = types.SimpleNamespace(mtp=object() if kwargs.get("with_mtp") else None)
+        return types.SimpleNamespace(model=model)
+
+    monkeypatch.setattr(loader_mod, "load_deepseek_v41_streaming", _fake_loader)
+
+    # import the ab_decode script as a module
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "scripts" / "deepseek_v41" / "ab_decode_env_levers.py"
+    )
+    spec = importlib.util.spec_from_file_location("_ab_decode_w57", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    bench = types.SimpleNamespace(resolve_max_kv=lambda ctxs, dec, mk: 4096)
+    args = argparse.Namespace(
+        model=str(tmp_path), context_tokens=1024, decode_tokens=256, max_kv=None,
+        admission_receipt=None, admit=False, apply_memory_cap=True,
+        slot_layout="component-banks", verify_record_hashes=False,
+        memory_limit_gib=82.0, expert_cache_limit_gib=None,
+    )
+
+    # AR (default): with_mtp None, full budget
+    args.decode_mode = "ar"
+    mod._load_model(args, bench, mx=None)
+    assert captured["with_mtp"] is None
+    assert captured["memory_limit_bytes"] == int(82.0 * GIB)
+
+    # dspark: with_mtp True, budget reduced by the MTP residents, head asserted
+    args.decode_mode = "dspark"
+    resident = mod._load_model(args, bench, mx=None)
+    assert captured["with_mtp"] is True
+    assert captured["memory_limit_bytes"] == int(82.0 * GIB) - DSPARK_MTP_RESIDENT_BYTES
+    assert resident.model.mtp is not None
+
+
+def test_serve_argv_parses_dspark_and_resolves_lane(tmp_path, monkeypatch):
+    """The full serve argv parses to generation_mode=dspark, the daemon-side
+    normalizer accepts it (not forced to AR), and it resolves to the DSpark lane
+    for a deepseek_v41 MTP runtime."""
+    import argparse
+    import json as _json
+    import types
+
+    from mtplx.cli import build_parser
+    from mtplx.commands import public
+    from mtplx.server.openai import _dspark_direct_selected
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "serve", "--model", str(tmp_path),
+        "--load-mtp", "--generation-mode", "dspark", "--depth", "3",
+    ])
+    assert args.generation_mode == "dspark"
+
+    # daemon-side normalizer/resolver accepts dspark and does not force AR
+    assert public._normalize_generation_mode("dspark") == "dspark"
+    assert public._generation_mode_from_args(args) == "dspark"
+    with pytest.raises(ValueError):
+        public._normalize_generation_mode("bogus")
+
+    # resolves to the DSpark-direct lane for this model on an MTP runtime
+    (tmp_path / "config.json").write_text(_json.dumps({"model_type": "deepseek_v41"}))
+    state = types.SimpleNamespace(
+        args=argparse.Namespace(model=str(tmp_path)),
+        runtime=types.SimpleNamespace(mtp_enabled=True),
+    )
+    assert _dspark_direct_selected(state, "dspark") is True
+    # the MTPLX_DSV41_DSPARK_DIRECT + generation_mode=mtp fallback still works
+    monkeypatch.setenv("MTPLX_DSV41_DSPARK_DIRECT", "1")
+    assert _dspark_direct_selected(state, "mtp") is True
