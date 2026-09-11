@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "utc": "2026-09-11T05:26:45Z",
+    "worker": "W24",
+    "device": "gpu",
+    "model": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "context_tokens": 1024,
+    "decode_tokens": 256,
+    "reference_sha256": null
+  },
+  "arms": [
+    {
+      "arm": "control",
+      "error": "ValueError('persistent slot is outside planned capacity')"
+    },
+    {
+      "arm": "fanout4",
+      "error": "ValueError('persistent slot is outside planned capacity')"
+    },
+    {
+      "arm": "overlap",
+      "error": "ValueError('persistent slot is outside planned capacity')"
+    },
+    {
+      "arm": "overlap_fanout4",
+      "error": "ValueError('persistent slot is outside planned capacity')"
+    }
+  ]
+}

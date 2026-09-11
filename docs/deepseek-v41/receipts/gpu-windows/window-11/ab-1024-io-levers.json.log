@@ -1,0 +1,9 @@
+=== arm control overrides={} ===
+[control] ERROR ValueError('persistent slot is outside planned capacity')
+=== arm fanout4 overrides={'io_read_fanout': 4} ===
+[fanout4] ERROR ValueError('persistent slot is outside planned capacity')
+=== arm overlap overrides={'overlap_miss_reads': True} ===
+[overlap] ERROR ValueError('persistent slot is outside planned capacity')
+=== arm overlap_fanout4 overrides={'overlap_miss_reads': True, 'io_read_fanout': 4} ===
+[overlap_fanout4] ERROR ValueError('persistent slot is outside planned capacity')
+[ab] wrote /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-11/ab-1024-io-levers.json  (4 arms)
