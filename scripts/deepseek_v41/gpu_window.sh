@@ -20,8 +20,13 @@
 #      races the port yield and leaves it down; memory/guarded-window-launch-
 #      protocol.md).  Poll until its pid is gone AND free memory rises by the
 #      expected resident-agent release, or fail loudly (no hidden retries).
-#   4. Run the step (argv).  Memory guard: if the step child's RSS exceeds the
-#      cap (default 100 GiB), kill it and restore.
+#   4. Run the step (argv) under a SYSTEM-WIDE memory guard.  Before starting it
+#      refuses to open if other mtplx/python workers above the foreign cap
+#      (default 2 GiB RSS) are resident (prints them).  While it runs, aborts +
+#      restores if EITHER the step child's RSS exceeds its cap (default 90 GiB)
+#      OR total system used memory (wired+active+compressed) exceeds the ceiling
+#      (default 105 GiB) -- the box panicked on 2026-09-10 when the aggregate
+#      crossed the box limit while no single child had.
 #   5. EXIT/INT/TERM trap: `launchctl bootstrap gui/<uid> <plist>` to restore the
 #      resident agent, then the lock is released by the fcntl holder (phase 0).
 #      Qwen is restored BEFORE the lock is released, so a queued window never
@@ -53,8 +58,20 @@ WIRED_CAP_MB="${GPU_WINDOW_WIRED_CAP_MB:-102400}"     # 100 GiB, never exceeded/
 STOP_TIMEOUT="${GPU_WINDOW_STOP_TIMEOUT:-180}"        # seconds to confirm the stop
 RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm restore
 MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"        # the step needs this much available after the stop
-CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 100 * 1024 * 1024 * 1024 ))}"
+CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 90 * 1024 * 1024 * 1024 ))}"  # 90 GiB (lowered from 100 after the 2026-09-10 over-110 panic)
 RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
+
+# System-wide phase-4 guard (2026-09-10 panic hardening): the box kernel-panicked
+# and rebooted when TOTAL used memory crossed the box limit, even though no single
+# child breached its own RSS cap.  So phase 4 also polls SYSTEM used memory (wired
+# + active + compressed, from vm_stat) and aborts+restores over this ceiling, and
+# it REFUSES to open the window while other mtplx/python workers above the foreign
+# cap are resident (their footprint co-resides with the step's).
+TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-105}"   # abort the step over this system-wide used-memory ceiling
+TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
+FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # refuse to start if another mtplx/python worker exceeds this RSS
+VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
+PS_CMD="${GPU_WINDOW_PS_CMD:-/bin/ps}"                           # overridable for the foreign-worker scan unit test
 
 UID_NUM="$(id -u)"
 DOMAIN="gui/${UID_NUM}"
@@ -64,7 +81,70 @@ log() { printf '%s [gpu_window] %s\n' "$(ts)" "$*"; }
 err() { printf '%s [gpu_window] ERROR: %s\n' "$(ts)" "$*" >&2; }
 gib() { awk -v b="${1:-0}" 'BEGIN{printf "%.1f", b/1073741824}'; }
 
+# Total *used* physical memory in bytes = (wired down + active + occupied-by-
+# compressor) pages * page size, parsed from vm_stat.  This is the system-wide
+# pressure signal the phase-4 guard aborts on: a runaway allocation ANYWHERE on
+# the box (not only the step child) is what panicked the machine on 2026-09-10.
+# "occupied by compressor" is the physical compressed footprint (NOT "stored in
+# compressor", which is the larger pre-compression logical count).
+used_mem_bytes() {
+  "${VM_STAT_CMD}" 2>/dev/null | awk '
+    /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
+    /^Pages wired down/             { gsub(/\./, "", $NF); wired = $NF }
+    /^Pages active/                 { gsub(/\./, "", $NF); active = $NF }
+    /^Pages occupied by compressor/ { gsub(/\./, "", $NF); comp = $NF }
+    END {
+      if (ps == "") ps = 16384
+      printf "%.0f", (wired + active + comp) * ps
+    }
+  '
+}
+
+# Print "<pid> <rssGiB> <command>" for every python/mtplx/mlx process whose RSS
+# exceeds the foreign-worker cap, EXCLUDING this script's own pids (the bash
+# wrapper and its parent python lock holder).  Used to refuse to open a window
+# while another worker session holds gigabytes that would co-reside with the
+# step and push the box over the ceiling.
+list_heavy_foreign_workers() {
+  local self_pids
+  self_pids=" $$ ${PPID:-} ${_GPU_WINDOW_HOLDER_PID:-} "
+  "${PS_CMD}" -axo pid=,rss=,comm= 2>/dev/null | awk \
+    -v cap_kb="$(( FOREIGN_WORKER_RSS_GB * 1024 * 1024 ))" \
+    -v self="${self_pids}" '
+    {
+      pid = $1; rss = $2 + 0;
+      cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i;
+      if (rss <= cap_kb) next;
+      if (index(self, " " pid " ") > 0) next;
+      lc = tolower(cmd);
+      if (lc ~ /python|mtplx|mlx/) printf "%s %.1fGiB %s\n", pid, rss / 1048576, cmd;
+    }
+  '
+}
+
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+# ---- test/introspection hooks (no GPU, no lock, no launchctl) ----------------
+# Let a shell unit test exercise the pure guard math against fake vm_stat / ps
+# output without opening a window.  Runs BEFORE the lock phase and exits.
+if [[ "${1:-}" == "--selftest" ]]; then
+  shift
+  case "${1:-}" in
+    used-mem-bytes) used_mem_bytes; echo ;;
+    used-mem-gib)   gib "$(used_mem_bytes)"; echo ;;
+    over-ceiling)
+      _u="$(used_mem_bytes)"
+      if [[ "${_u}" =~ ^[0-9]+$ ]] && (( _u > TOTAL_MEM_CEILING_BYTES )); then
+        echo yes
+      else
+        echo no
+      fi
+      ;;
+    heavy-workers)  list_heavy_foreign_workers ;;
+    *) err "unknown --selftest target: ${1:-} (used-mem-bytes|used-mem-gib|over-ceiling|heavy-workers)"; exit 2 ;;
+  esac
+  exit 0
+fi
 
 if [[ $# -lt 1 ]]; then
   err "usage: gpu_window.sh <step> [args...]   (the step is run inside the guarded GPU window)"
@@ -147,6 +227,20 @@ avail_bytes() {
     /^Pages purgeable/    { gsub(/\./, "", $3); purg = $3 }
     END { if (ps == "") ps = 16384; printf "%.0f", (free + inact + spec + purg) * ps }
   '
+}
+
+_kill_step_child() {
+  # TERM then (after a grace) KILL the running step child, reap it, clear the pid
+  # so the teardown trap does not try again.  Restore of the resident agent then
+  # runs from the EXIT trap.
+  [[ -n "${STEP_PID}" ]] || return 0
+  kill -TERM "${STEP_PID}" 2>/dev/null || true
+  sleep 2
+  if kill -0 "${STEP_PID}" 2>/dev/null; then
+    kill -KILL "${STEP_PID}" 2>/dev/null || true
+  fi
+  wait "${STEP_PID}" 2>/dev/null || true
+  STEP_PID=""
 }
 
 WAS_LOADED=0
@@ -272,8 +366,23 @@ if (( WAS_LOADED == 1 )); then
   fi
 fi
 
-# ---------------- phase 4: run the step under the RSS memory guard ------------
-log "phase 4: starting GPU step under RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB: $*"
+# ---------------- phase 4: run the step under the SYSTEM-WIDE memory guard -----
+# Pre-flight: refuse to open the window while another mtplx/python worker is
+# holding more than the foreign cap.  Its footprint co-resides with the step, so
+# starting here risks pushing the box over the ceiling (2026-09-10 panic).
+log "phase 4: scanning for other heavy mtplx/python workers (> ${FOREIGN_WORKER_RSS_GB} GiB RSS) before opening the window"
+HEAVY_WORKERS="$(list_heavy_foreign_workers)"
+if [[ -n "${HEAVY_WORKERS}" ]]; then
+  err "phase 4: REFUSING to start -- other mtplx/python workers above ${FOREIGN_WORKER_RSS_GB} GiB RSS are resident (they co-reside with the step and could panic the box):"
+  printf '%s\n' "${HEAVY_WORKERS}" | while IFS= read -r _hw_line; do
+    err "    ${_hw_line}"
+  done
+  exit 7
+fi
+USED_START="$(used_mem_bytes)"
+log "phase 4: system used memory at start: $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB)"
+
+log "phase 4: starting GPU step under child RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
 "$@" &
 STEP_PID=$!
 while :; do
@@ -288,22 +397,24 @@ while :; do
     fi
     if (( rss_bytes > CHILD_RSS_CAP_BYTES )); then
       err "phase 4: step child RSS $(gib "${rss_bytes}") GiB exceeded cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB; killing child and restoring"
-      kill -TERM "${STEP_PID}" 2>/dev/null || true
-      sleep 2
-      if kill -0 "${STEP_PID}" 2>/dev/null; then
-        kill -KILL "${STEP_PID}" 2>/dev/null || true
-      fi
-      wait "${STEP_PID}" 2>/dev/null || true
-      STEP_PID=""
+      _kill_step_child
       exit 6
     fi
+  fi
+  # System-wide guard: a runaway allocation anywhere on the box (not only this
+  # child) that crosses the ceiling aborts the step and restores the agent.
+  used_now="$(used_mem_bytes)"
+  if [[ "${used_now:-}" =~ ^[0-9]+$ ]] && (( used_now > TOTAL_MEM_CEILING_BYTES )); then
+    err "phase 4: SYSTEM used memory $(gib "${used_now}") GiB exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB (child RSS $(gib "${PEAK_RSS_BYTES}") GiB); killing child and restoring"
+    _kill_step_child
+    exit 8
   fi
   sleep "${RSS_POLL_SECONDS}"
 done
 wait "${STEP_PID}"
 step_rc=$?
 STEP_PID=""
-log "phase 4: GPU step exited with code ${step_rc}; peak step RSS $(gib "${PEAK_RSS_BYTES}") GiB"
+log "phase 4: GPU step exited with code ${step_rc}; peak step RSS $(gib "${PEAK_RSS_BYTES}") GiB, peak system used $(gib "$(used_mem_bytes)") GiB"
 
 # phase 5 (restore + lock release) runs in the teardown trap on this exit.
 exit "${step_rc}"
