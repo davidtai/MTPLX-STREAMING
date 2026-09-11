@@ -587,7 +587,13 @@ class Attention(nn.Module):
         own heads (reference model.py L785-787).  Dequantized when q8-resident."""
         wo = self.wo_a
         if isinstance(wo, nn.QuantizedLinear):
-            w = mx.dequantize(wo.weight, wo.scales, wo.biases, group_size=wo.group_size, bits=wo.bits)
+            # Mode-aware: affine q8 carries biases; the native float codecs
+            # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
+            # the mode and a ``None`` bias directly.
+            w = mx.dequantize(
+                wo.weight, wo.scales, wo.biases,
+                group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
+            )
         else:
             w = wo.weight
         w = w.reshape(self.n_groups, self.o_lora_rank, -1)
@@ -738,54 +744,117 @@ def _sanitize_name(name: str) -> str:
     return name  # head.{weight,scales,biases} stay as-is
 
 
-#: q8 gs64 affine is the resident format for every projection the checkpoint
-#: stores quantized (attention, shared expert, compressor, indexer, embed, head).
+#: The default resident format when the artifact carries no ``quantization``
+#: block: q8 gs64 affine (the original streamed-artifact codec: every dense
+#: projection plus the token/output embeddings).
 _RESIDENT_QUANT = {"group_size": 64, "bits": 8, "mode": "affine"}
+
+#: MLX-native float codecs (mx.quantize modes).  For these the artifact repacks
+#: each source tensor at its *native* precision, so only the tensors the source
+#: actually stores as FP8 are quantised; the projections the source keeps in
+#: BF16 (below) and the BF16 token/output embeddings stay dense.
+_NATIVE_QUANT_MODES = ("mxfp8", "mxfp4", "nvfp4")
+
+#: Dense projection modules the DeepSeek-V4.1-Flash source keeps in **BF16**
+#: (never FP8): the indexer key/weight projections and the compressor kv/gate
+#: projections.  Under a native codec these stay dense bf16 (an exact repack of
+#: FP8 to mxfp8 is impossible for a bf16 source), so the class predicate must
+#: exclude them -- otherwise ``nn.quantize`` would lossily requantise a bf16
+#: tensor and the strict resident load would demand nonexistent ``.scales``.
+_NATIVE_KEEP_BF16_SUFFIXES = (
+    ".attn.indexer.wk", ".attn.indexer.weights_proj",
+    ".attn.compressor.wkv", ".attn.compressor.wgate",
+)
+
+
+def _resolve_resident_quant(quantization) -> dict:
+    """The resident quant params (group_size/bits/mode) from a config
+    ``quantization`` block, defaulting to the original q8 gs64 affine codec.
+
+    Only the block's top-level default is read; per-module overrides in the
+    block are for the streamed / MTP experts (``mtp.*`` is not in the text
+    parameter tree), never the resident projections handled here.
+    """
+    if not quantization:
+        return dict(_RESIDENT_QUANT)
+    return {
+        "group_size": int(quantization.get("group_size", _RESIDENT_QUANT["group_size"])),
+        "bits": int(quantization.get("bits", _RESIDENT_QUANT["bits"])),
+        "mode": str(quantization.get("mode", _RESIDENT_QUANT["mode"])),
+    }
+
+
+def _make_resident_quant_predicate(mode: str, group_size: int):
+    """Build the ``nn.quantize`` class predicate for the resident codec.
+
+    Common to every codec: never quantise the streamed routed experts
+    (``switch_mlp``), the MoE router gate (bf16 in the checkpoint), or a module
+    whose input dim is not ``group_size``-aligned (tiny test configs).  Under a
+    native float codec, additionally keep the BF16-source projections
+    (:data:`_NATIVE_KEEP_BF16_SUFFIXES`) and the BF16 token/output embeddings
+    dense; under affine they are quantised too (the original q8 artifact).
+    """
+    native = mode in _NATIVE_QUANT_MODES
+
+    def predicate(path: str, module: nn.Module):
+        if not hasattr(module, "to_quantized"):
+            return False
+        if "switch_mlp" in path or path.endswith("mlp.gate"):
+            return False
+        weight = getattr(module, "weight", None)
+        if weight is not None and weight.shape[-1] % group_size != 0:
+            return False  # tiny test configs whose dims are not group-aligned stay dense
+        if native:
+            if path.endswith("embed_tokens") or path == "head" or path.endswith(".head"):
+                return False  # embed/head are BF16 at source -> stay dense
+            if any(path.endswith(suffix) for suffix in _NATIVE_KEEP_BF16_SUFFIXES):
+                return False
+        return True
+
+    return predicate
 
 
 def _is_resident_quant_module(path: str, module: nn.Module) -> bool:
-    """Whether ``nn.quantize`` should quantize this module to the resident q8.
-
-    Quantize the dense projections and the token/output embeddings; keep the MoE
-    router gate (bf16 in the checkpoint) and the streamed routed experts
-    (``switch_mlp``, served from the bank, never resident) unquantized.  Norms,
-    hyper-connection vectors and the attention sink are bare arrays, not modules,
-    so ``nn.quantize`` never sees them.
-    """
-    if not hasattr(module, "to_quantized"):
-        return False
-    if "switch_mlp" in path or path.endswith("mlp.gate"):
-        return False
-    in_features = getattr(module, "weight", None)
-    if in_features is not None and in_features.shape[-1] % _RESIDENT_QUANT["group_size"] != 0:
-        return False  # tiny test configs whose dims are not group-aligned stay dense
-    return True
+    """Back-compat shim: the affine q8 gs64 predicate (dense projections plus the
+    token/output embeddings)."""
+    return _make_resident_quant_predicate(_RESIDENT_QUANT["mode"], _RESIDENT_QUANT["group_size"])(
+        path, module
+    )
 
 
 class Model(nn.Module):
     """DeepSeek-V4.1-Flash text AR model.  ``model.model.layers[i].mlp.switch_mlp``
     is the streamed-expert seam; ``head`` is the (untied) output projection.
 
-    ``quantize`` (default True) converts the resident projections to q8 gs64
-    affine so the streamed-artifact residents load strictly; tests that compare
-    against the dense oracle pass ``quantize=False``.  ``engram_bank_path`` is
-    stored for the engram worker's wiring (this module does not build engram).
+    ``quantize`` (default True) converts the resident projections to the codec
+    named by ``quantization`` so the streamed-artifact residents load strictly;
+    tests that compare against the dense oracle pass ``quantize=False``.
+    ``quantization`` is the artifact's config ``quantization`` block (its
+    top-level ``group_size``/``bits``/``mode``): ``None`` or ``mode="affine"``
+    selects the original q8 gs64 codec (dense projections + embed/head); a native
+    float mode (``mxfp8``/``mxfp4``/``nvfp4``) selects the exact-repack codec
+    (FP8-source projections quantised, BF16-source projections + embed/head kept
+    dense).  ``engram_bank_path`` is stored for the engram worker's wiring (this
+    module does not build engram).
     """
 
-    def __init__(self, args: ModelArgs, *, engram_bank_path=None, quantize: bool = True):
+    def __init__(self, args: ModelArgs, *, engram_bank_path=None, quantize: bool = True,
+                 quantization=None):
         super().__init__()
         self.args = args
         self.model_type = args.model_type
         self.engram_bank_path = engram_bank_path
         self.model = DeepseekV41Backbone(args)
         self.head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        self.resident_quant = _resolve_resident_quant(quantization) if quantize else None
         if quantize:
+            qcfg = self.resident_quant
             nn.quantize(
                 self,
-                group_size=_RESIDENT_QUANT["group_size"],
-                bits=_RESIDENT_QUANT["bits"],
-                mode=_RESIDENT_QUANT["mode"],
-                class_predicate=_is_resident_quant_module,
+                group_size=qcfg["group_size"],
+                bits=qcfg["bits"],
+                mode=qcfg["mode"],
+                class_predicate=_make_resident_quant_predicate(qcfg["mode"], qcfg["group_size"]),
             )
 
     def __call__(self, input_ids, cache=None):
