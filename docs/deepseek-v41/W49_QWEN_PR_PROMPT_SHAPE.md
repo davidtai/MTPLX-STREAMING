@@ -147,11 +147,19 @@ Env knobs (all overridable): `DSV41_CONTEXTS="1024 16384"`,
 `DSV41_MAX_TOKENS=1024`, `DSV41_CELLS=sweep`, sampler
 `DSV41_TEMPERATURE=1.0 / DSV41_TOP_P=0.95 / DSV41_TOP_K=20`.
 
-**16K memory plan:** the served plan (W35/W46) is an ~82 GiB cap / ~75 GiB
-engine, applied by the model's profile `child_env`, which keeps the box under
-the 100 GiB knob. If the served 16K prefill needs a smaller cap, set
-`DSV41_MEMORY_LIMIT_GIB=<N>` and it is passed through as
-`mtplx serve --memory-budget <N>GiB`.
+**16K memory plan (W55):** the default `--expert-profile
+deepseek-v41-mxfp4-75` planner sets an **82 GiB** process ceiling / **75 GiB**
+weight envelope with `max_live_kv_tokens=16,384` (i.e. the KV plan is already
+sized for the 16K cell). To cap it explicitly for the 16K prefill, set
+`DSV41_MEMORY_LIMIT_GIB=<N>`, passed through as
+`mtplx serve --expert-memory-limit <N>GiB` — the accepted flag (NOT
+`--memory-budget`, which the `mtplx serve` parser rejects as unrecognized; that
+was the Window-21 16K start failure, fixed in W55). The bench harness's 60 GiB
+plan peaked at **76.6 GB** with a 16,384-token prefill, so
+`DSV41_MEMORY_LIMIT_GIB=60` reproduces that and keeps the box comfortably under
+the 100 GiB knob for the 16K cell; the default 82 GiB ceiling is tighter.
+Companion knobs `--expert-max-live-kv-tokens` / `--expert-runtime-reserve` are
+available via `DSV41_SERVE_EXTRA_ARGS` if finer control is needed.
 
 The harness prints per cell: prefill s + prefill tok/s, TTFT, decode tok/s,
 wall, completion tokens, reasoning/answer split (0 for DSV4.1 — no thinking),

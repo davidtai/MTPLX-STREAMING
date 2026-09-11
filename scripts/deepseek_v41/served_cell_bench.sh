@@ -31,10 +31,16 @@
 #   bash scripts/deepseek_v41/gpu_window.sh \
 #        bash scripts/deepseek_v41/served_cell_bench.sh
 #
-# The 16K cell must keep the box under 100 GB. The served plan (W35/W46) is an
-# 82 GiB cap / ~75 GiB engine, applied by the model's profile child_env. If the
-# served 16K prefill needs a smaller cap, set DSV41_MEMORY_LIMIT_GIB=<N> and it
-# is passed through as `mtplx serve --memory-budget <N>GiB`.
+# The 16K cell must keep the box under the 100 GiB knob. The served plan is set
+# by the expert profile's planner (--expert-profile deepseek-v41-mxfp4-75). To
+# cap it explicitly, set DSV41_MEMORY_LIMIT_GIB=<N> and it is passed through as
+# `mtplx serve --expert-memory-limit <N>GiB` (the process memory ceiling the
+# planner sizes weights + KV + caches under; NOT --memory-budget, which the
+# serve parser does not accept). The bench harness's 60 GiB plan peaked at
+# 76.6 GB with a 16,384-token prefill, so DSV41_MEMORY_LIMIT_GIB=60 keeps the
+# box well under 100 GiB for the 16K cell; the companion knobs
+# --expert-max-live-kv-tokens / --expert-runtime-reserve are available via
+# DSV41_SERVE_EXTRA_ARGS if finer control is needed.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -176,12 +182,14 @@ trap cleanup EXIT INT TERM
 # --- Phase 2: start the server ------------------------------------------------
 # The streamed artifact forces AR itself (or honours --generation-mode mtp via
 # DSV41_SERVE_EXTRA_ARGS). --no-auth keeps the localhost health check key-free.
-# The profile child_env carries the 82 GiB / 75 GiB served plan; pass
-# DSV41_MEMORY_LIMIT_GIB to override the cap for a smaller-cap 16K run.
+# The expert profile's planner carries the served memory plan; pass
+# DSV41_MEMORY_LIMIT_GIB to cap it explicitly (e.g. 60 for the 16K cell). The
+# accepted flag is --expert-memory-limit (a size string like "60GiB"), NOT
+# --memory-budget (which the serve parser rejects as unrecognized).
 MEM_ARGS=()
 if [[ -n "${DSV41_MEMORY_LIMIT_GIB:-}" ]]; then
-  MEM_ARGS=(--memory-budget "${DSV41_MEMORY_LIMIT_GIB}GiB")
-  log "memory cap override: --memory-budget ${DSV41_MEMORY_LIMIT_GIB}GiB"
+  MEM_ARGS=(--expert-memory-limit "${DSV41_MEMORY_LIMIT_GIB}GiB")
+  log "expert memory ceiling override: --expert-memory-limit ${DSV41_MEMORY_LIMIT_GIB}GiB"
 fi
 log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} --no-auth ${MEM_ARGS[*]:-} ${DSV41_SERVE_EXTRA_ARGS:-}"
 (
