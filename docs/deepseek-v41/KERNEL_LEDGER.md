@@ -321,6 +321,24 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   same post-streaming dispatch-bound regime → material; **now:** ~0. **Exactness:** parity-gated (V4
   bit-identical). **Effort:** low (V4 reuse). **⚠** keep the *default fused* SDPA — do **not** chase a
   hand MLA kernel (K-dead below). **Precedent:** measured on V4.
+- **STATUS (W33, `feat/deepseek-v41-w33` @ `3b89fb61f`):** HC-tape half IMPLEMENTED
+  on CPU. `mx.compile` tapes (`_hc_attn_prep_impl` / `_hc_ffn_prep_impl` /
+  `_hc_post_impl` in `deepseek_v41.py`) replay the per-sublayer Hyper-Connection
+  pre/post chains — layer HC weights as tape INPUTS (one tape shared across all
+  `2*n_layers` HCs), the **Sinkhorn kept as an opaque `hc_split_sinkhorn` boundary
+  so K3's (W32) Metal kernel drops in at the tape tail**, attention + MoE switch
+  OUTSIDE the tapes (pure, no cache mutation). Opt-in `MTPLX_DSV41_HC_COMPILE`
+  (default OFF). Fixed-shape + row-cap `_HC_COMPILE_MAX_ROWS` **exactly as V4**
+  (shapeless REJECTED, measured: W32's `hc_split_sinkhorn` reshape can't trace
+  shapeless, and shapeless adds ~1e-6 at batch>1). CPU-exact vs eager: flag on vs
+  off is `mx.array_equal` over decode / K+1 verify / chunked + layer-major prefill;
+  the dispatch collapse is asserted (eager rebuilds the HC graph 2×/layer/token,
+  warm compiled replay rebuilds ZERO; Sinkhorn ~119→~79 dispatches/mix from
+  elementwise fusion, `312→~180` HC dispatches/layer). **NOT carried:** the head
+  HC (DSV4.1 has none — threaded `pre_mix` collapse + RMSNorm, no `fn`/sigmoid),
+  the fused-CSA/MLA attention (mutates KV / D512 ∉ fused-SDPA → K6, hand MLA
+  Dead-here). Realized GPU decode/dispatch delta unmeasured — that is **KG-f**;
+  V4 measured AR +31.3 %, −26.1 % dispatches. See `W33_K4_HC_COMPILE.md`.
 
 ### K6 — D512 two-pass SDPA split-K port (gemma4) — **Rank 6 (prefill)**
 - **Mechanism:** head_dim 512 is not an MLX fused-SDPA dim (64/96/128/192/256), so attention falls

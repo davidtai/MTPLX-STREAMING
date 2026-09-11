@@ -736,6 +736,173 @@ class Attention(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Hyper-Connection tape collapse (kernel-ledger K4) -- carry of V4's HC-compile
+# ---------------------------------------------------------------------------
+# V4 measured this stack (HC-tape collapse + fused CSA) at AR +31.3% /
+# -26.1% dispatches (docs/deepseek-v41/KERNEL_LEDGER.md K4; deepseek_v4.py
+# ``_HC_COMPILE``/``_hc_compiled``).  The Hyper-Connection pre/post chain around
+# each sublayer is ~two dozen tiny elementwise/small-reduction primitives per
+# call -- the Sinkhorn normaliser alone is ~39 ``reduce_sum`` + ~39 divide +
+# a row-softmax over a ``[..., hc, hc]`` matrix that is 16 floats at decode --
+# run 2x per layer x40 layers.  Uncompiled that is the top per-token *dispatch*
+# source (KERNEL_LEDGER 2.1 / 4: the ~6.4k HC-mix dispatches, cf. V4's 6,794).
+# ``mx.compile`` replays a prebuilt tape instead of rebuilding the graph from
+# Python each call and fuses the elementwise triples into single kernels.
+#
+# What DSV4.1 carries vs V4:
+#  * The Sinkhorn stays an OPAQUE function boundary -- these tapes call
+#    ``hc_split_sinkhorn`` (owned by the K3 worker), so K3's Metal kernel drops
+#    in at the tail of the tape without touching this file (V4 note: the kernel
+#    is opaque to ``mx.compile`` but sits inside the traced tape).
+#  * Layer weights arrive as tape INPUTS (not captured), so one compiled tape is
+#    shared across all ``2 * n_layers`` Hyper-Connections -- they share every
+#    shape and differ only in weight values.
+#  * ``mx.flatten(x, -2, -1)`` replaces ``_mixes``'s ``reshape(*x.shape[:-2],
+#    hc*dim)``: identical memory layout / values, but it reads no dynamic
+#    ``.shape`` (reshape-from-shape bakes the first trace's dims).
+#
+# Why NOT ``shapeless=True`` (measured, W33): (1) ``hc_split_sinkhorn`` contains
+# ``comb.reshape(*comb.shape[:-1], hc, hc)``; under a shapeless trace MLX raises
+# ``[Primitive::output_shapes] Slice cannot infer output shapes`` -- and that
+# function is the K3 worker's, not to be edited here.  (2) Even where a tape
+# traces shapeless, the batched matmul reassociates ~1e-6 at batch>1, and
+# ``mx.compile`` matches eager BIT-EXACTLY (``mx.array_equal``) only in the small
+# row regime (decode n=1 / verify n=K+1); at prefill-chunk row counts the
+# ``flat @ fn.T`` matmul and the RMS/HC-mix mean reductions reassociate.  So this
+# carries V4's fixed-shape + row-cap design (V4 uses no shapeless either): the
+# compiled path fires only for ``rows <= _HC_COMPILE_MAX_ROWS`` -- decode/verify,
+# where it is bit-exact and where the per-primitive host encode dominates -- and
+# prefill chunks fall through to the eager body (byte-identical either way).
+#: Env toggle for the K4 Hyper-Connection tape collapse.  Default OFF -- the
+#: decode/dispatch win is a GPU-window measurement (KERNEL_LEDGER KG-f), so the
+#: eager per-call graph stays the serving default until measured.  Read through
+#: the module global (``deepseek_v41._HC_COMPILE``) so tests/operators can flip
+#: it after import.
+_HC_COMPILE_ENV = "MTPLX_DSV41_HC_COMPILE"
+# ``_env_truthy`` is defined further down; inline its semantics for this
+# import-time read (unset/0/false/no/off/auto -> OFF).
+_HC_COMPILE = (os.environ.get(_HC_COMPILE_ENV) or "").strip().lower() not in (
+    "", "0", "false", "no", "off", "auto",
+)
+#: Row count (``prod(x.shape[:-2])`` = ``b*s``) at or below which the compiled HC
+#: tape is used; above it the eager body runs.  Confines compile to the tiny,
+#: repeating decode/verify shapes -- where it is ``mx.array_equal`` with eager and
+#: where dispatch host-encode dominates -- and keeps prefill (large chunks, where
+#: the matmul/mean reductions reassociate ~1e-6 and per-primitive overhead is
+#: already amortised over real work) on the eager path.  Module global so tests
+#: can retarget it.
+_HC_COMPILE_MAX_ROWS = 32
+
+
+def _hc_mixes_split(x, fn, base, scale, hc, iters, norm_eps, hc_eps):
+    """``DecoderLayer._mixes`` as a pure function of arrays.
+
+    Byte-identical to :meth:`DecoderLayer._mixes` (``mx.flatten(x, -2, -1)`` is
+    the same contiguous merge as its ``reshape(*x.shape[:-2], hc*dim)``, just
+    without the dynamic-shape read).  ``hc_split_sinkhorn`` is the opaque Sinkhorn
+    boundary -- the K3 worker's Metal kernel replaces its body without any change
+    here.  ``fn``/``base``/``scale`` are the layer's raw HC weights (tape inputs)."""
+    xf = x.astype(mx.float32)
+    flat = mx.flatten(xf, -2, -1)
+    rsqrt = mx.rsqrt(mx.mean(mx.square(flat), axis=-1, keepdims=True) + norm_eps)
+    mixes = (flat @ fn.astype(mx.float32).T) * rsqrt
+    return hc_split_sinkhorn(mixes, scale, base, hc, iters, hc_eps)
+
+
+def _hc_pre_collapse(x, pre_mix):
+    """``DecoderLayer._hc_pre`` as a pure function of arrays."""
+    y = mx.sum(pre_mix[..., None] * x.astype(mx.float32), axis=2)
+    return y.astype(x.dtype)
+
+
+def _hc_attn_prep_impl(h, pre_mix, attn_fn, attn_base, attn_scale, attn_norm_w,
+                       hc, iters, norm_eps, hc_eps):
+    """Pre-attention Hyper-Connection prep: the attn HC mix + the ``pre_mix``
+    collapse + attn RMSNorm that produce the attention input.  Pure; the
+    attention call (which writes this layer's KV) stays OUTSIDE the tape."""
+    attn_pre, attn_post, attn_comb = _hc_mixes_split(
+        h, attn_fn, attn_base, attn_scale, hc, iters, norm_eps, hc_eps
+    )
+    x = _hc_pre_collapse(h, pre_mix)
+    attn_input = _rmsnorm(x, attn_norm_w, norm_eps)
+    return attn_input, attn_pre, attn_post, attn_comb
+
+
+def _hc_ffn_prep_impl(attn_out, residual, attn_pre, attn_post, attn_comb,
+                      ffn_fn, ffn_base, ffn_scale, ffn_norm_w,
+                      hc, iters, norm_eps, hc_eps):
+    """Post-attention Hyper-Connection ``post`` + the ffn HC mix + ``attn_pre``
+    collapse + ffn RMSNorm that produce the routed-expert input.  Pure; the MoE
+    (streamed switch) call stays OUTSIDE the tape.  Returns ``(moe_input,
+    moe_residual, ffn_post, ffn_comb, ffn_pre)`` -- ``moe_residual`` is the
+    post-attention stream :meth:`DecoderLayer.moe_combine` folds the MoE output
+    back into."""
+    h = _hc_post_impl(attn_out, residual, attn_post, attn_comb)
+    ffn_pre, ffn_post, ffn_comb = _hc_mixes_split(
+        h, ffn_fn, ffn_base, ffn_scale, hc, iters, norm_eps, hc_eps
+    )
+    x = _hc_pre_collapse(h, attn_pre)
+    moe_input = _rmsnorm(x, ffn_norm_w, norm_eps)
+    return moe_input, h, ffn_post, ffn_comb, ffn_pre
+
+
+#: One compiled tape per ``(kind, consts)`` pair.  ``mx.compile`` keys its own
+#: cache on the *identity* of the wrapped function, so the wrapper is built once
+#: and reused; the structural constants (``hc``, ``iters``, ``norm_eps``,
+#: ``hc_eps``) are closed over, not passed, because they are not arrays and would
+#: be invisible to that cache key.  Fixed-shape (not shapeless) -- MLX keeps one
+#: tape per distinct activation shape, which for decode/verify is a handful of
+#: tiny repeating shapes.
+_HC_COMPILED: dict = {}
+
+
+def _hc_compiled(kind: str, *consts):
+    key = (kind, consts)
+    fn = _HC_COMPILED.get(key)
+    if fn is None:
+        if kind == "attn_prep":
+            hc, iters, norm_eps, hc_eps = consts
+
+            def impl(h, pre_mix, attn_fn, attn_base, attn_scale, attn_norm_w):
+                return _hc_attn_prep_impl(
+                    h, pre_mix, attn_fn, attn_base, attn_scale, attn_norm_w,
+                    hc, iters, norm_eps, hc_eps,
+                )
+        elif kind == "ffn_prep":
+            hc, iters, norm_eps, hc_eps = consts
+
+            def impl(attn_out, residual, attn_pre, attn_post, attn_comb,
+                     ffn_fn, ffn_base, ffn_scale, ffn_norm_w):
+                return _hc_ffn_prep_impl(
+                    attn_out, residual, attn_pre, attn_post, attn_comb,
+                    ffn_fn, ffn_base, ffn_scale, ffn_norm_w,
+                    hc, iters, norm_eps, hc_eps,
+                )
+        elif kind == "moe_combine":
+            impl = _hc_post_impl  # already a pure array function; no consts
+        else:  # pragma: no cover - programming error
+            raise ValueError(f"unknown Hyper-Connection tape {kind!r}")
+        fn = mx.compile(impl)
+        _HC_COMPILED[key] = fn
+    return fn
+
+
+def _hc_use_compile(x: mx.array) -> bool:
+    """Is ``x`` in the row regime the compiled HC tape is kept for?
+
+    Reads the module globals ``_HC_COMPILE`` / ``_HC_COMPILE_MAX_ROWS`` at call
+    time (not captured) so a test or operator can flip either knob after import.
+    ``x`` is a ``[..., hc, dim]`` HC stream, so ``prod(x.shape[:-2])`` is ``b*s``.
+    """
+    if not _HC_COMPILE:
+        return False
+    rows = 1
+    for d in x.shape[:-2]:
+        rows *= int(d)
+    return rows <= _HC_COMPILE_MAX_ROWS
+
+
+# ---------------------------------------------------------------------------
 # Decoder block (Hyper-Connections around attention + MoE)
 # ---------------------------------------------------------------------------
 class DecoderLayer(nn.Module):
@@ -797,7 +964,30 @@ class DecoderLayer(nn.Module):
         ``pre_mix``.  W30's layer-major prefill runs this half for every chunk of a
         layer (in order, so the KV writes stay causal) before issuing one shared
         MoE call; the one-shot / chunk-major path composes it back in
-        :meth:`__call__` byte-for-byte."""
+        :meth:`__call__` byte-for-byte.
+
+        When ``MTPLX_DSV41_HC_COMPILE`` is on and the row count is in the small
+        decode/verify regime (:func:`_hc_use_compile`), the two Hyper-Connection
+        prep chains around the attention call run as compiled tapes (K4); the
+        attention call itself -- which mutates the KV cache -- stays outside them.
+        The eager branch below is byte-for-byte the original body."""
+        if _hc_use_compile(h):
+            consts = (self.hc_mult, self.hc_iters, self.norm_eps, self.hc_eps)
+            x, attn_pre, attn_post, attn_comb = _hc_compiled("attn_prep", *consts)(
+                h, pre_mix,
+                self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale,
+                self.attn_norm_weight,
+            )
+            x = self.attn(x, positions, layer_cache, shared)
+            moe_input, residual, ffn_post, ffn_comb, ffn_pre = _hc_compiled(
+                "ffn_prep", *consts
+            )(
+                x, h, attn_pre, attn_post, attn_comb,
+                self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale,
+                self.ffn_norm_weight,
+            )
+            return moe_input, (residual, ffn_post, ffn_comb), ffn_pre
+
         residual = h
         attn_pre, attn_post, attn_comb = self._mixes(
             h, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale
@@ -821,6 +1011,10 @@ class DecoderLayer(nn.Module):
         Hyper-Connection ``post``), given the ``carry`` from
         :meth:`attn_and_moe_input`."""
         residual, ffn_post, ffn_comb = carry
+        if _hc_use_compile(residual):
+            return _hc_compiled("moe_combine")(
+                moe_output, residual, ffn_post, ffn_comb
+            )
         return _hc_post_impl(moe_output, residual, ffn_post, ffn_comb)
 
     def __call__(self, h, pre_mix, positions, layer_cache, shared):
