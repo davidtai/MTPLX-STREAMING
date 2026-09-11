@@ -131,6 +131,14 @@ DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fuse the
 # verify only (prefill untouched), GPU-only (CPU falls back to the eager one-shot).
 # Reassociation-level vs control (greedy-identical, <=1e-6), NOT byte-identical.
 # LEFT OUT of stack_a until the MTPLX_GPU_PARITY window is clean (W60 report).
+MLX_MAX_MB_PER_BUFFER_ENV = "MLX_MAX_MB_PER_BUFFER"  # K14 (W63): MLX command-buffer
+# byte cap -- caps MB per Metal command buffer, changing commit granularity and
+# host-encode/GPU overlap (and prefill peak). An MLX passthrough (NOT an MTPLX
+# lever): MLX reads it once at Metal init, so a genuine A/B runs ONE arm per
+# process with the value exported before launch (the a3b K14 verdict was ~dead:
+# 200 -> -0.9%, but the Qwen lane measured +1.6% at 500 MB). The arm pins the
+# value and the receipt records it so a re-falsifier in the DSV4.1 streaming
+# regime is reproducible.
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -166,6 +174,7 @@ ALL_LEVER_ENVS = (
     LAYOUT_FIX_ENV,
     DOWN_K_PAD_ENV,
     SELECTED_KEYS_ENV,
+    MLX_MAX_MB_PER_BUFFER_ENV,
 )
 
 
@@ -177,7 +186,7 @@ def _preset(
     prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
     layout_fix=None, down_k_pad=None, selected_keys=None,
-    softmax_kernel=None, decode_attn_kernel=None,
+    softmax_kernel=None, decode_attn_kernel=None, mlx_max_mb_per_buffer=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -187,7 +196,9 @@ def _preset(
     width), ``score_path`` a "lean" value (W50 f32 pass-cut one-shot),
     ``softmax_kernel`` a "1"/None boolean (W58/K28, the fused mask+sink+softmax
     Metal kernel), ``decode_attn_kernel`` a "1"/None boolean (W60/K29, the fused
-    decode/verify MLA attention Metal kernel); the rest a "1"/None boolean."""
+    decode/verify MLA attention Metal kernel), ``mlx_max_mb_per_buffer`` a
+    positive-int string (K14/W63, the MLX command-buffer MB cap passthrough); the
+    rest a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -212,6 +223,7 @@ def _preset(
         LAYOUT_FIX_ENV: layout_fix,
         DOWN_K_PAD_ENV: down_k_pad,
         SELECTED_KEYS_ENV: selected_keys,
+        MLX_MAX_MB_PER_BUFFER_ENV: mlx_max_mb_per_buffer,
     }
 
 
@@ -342,6 +354,22 @@ ARM_PRESETS = {
     "prefill_best_nok28": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
     ),
+    # W63: prefill_best_nok28 + the K30 selected-key gather -- the current best
+    # f32 prefill stack (layer-major dense experts + lean pass-cut score path +
+    # K27 sorted routed gather) with the score-WIDTH lever added, no K28 kernel.
+    # LOSSY vs control (dense fp32 accumulation order + score reassociation),
+    # task-eval gated like prefill_best_nok28. Pins every key.
+    "prefill_best_sel": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
+        selected_keys="1",
+    ),
+    # K14 (W63): the MLX command-buffer MB cap passthrough (500 MB -- the value the
+    # Qwen lane measured +1.6% at). NOT an MTPLX lever: MLX reads MLX_MAX_MB_PER_BUFFER
+    # once at Metal init, so a genuine A/B runs this arm in its OWN process with the
+    # value exported before launch (the harness pins + records it; an in-process arm
+    # switch after MLX init does not rebind the buffer). Re-falsifies the a3b K14
+    # verdict (~dead there) in the DSV4.1 streaming regime. Byte-identical.
+    "mlx_buffer_500": _preset(mlx_max_mb_per_buffer="500"),
     # W60 K29: the fused decode / verify MLA attention Metal kernel -- QK^T score +
     # CSA/causal mask + per-head value-0 sink + f32 softmax + PV in ONE dispatch per
     # layer (online-softmax over key tiles, no [64,T] score row).  Standalone, to
@@ -392,6 +420,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
+    )
+    p.add_argument(
+        "--device-sample",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "W63 / K32: run the AR (--decode-mode ar) reference decode with the "
+            "device-side sampling one-step-lag pipeline (the sampled token stays "
+            "on device and feeds the next embedding directly; the host reads ids "
+            "one step behind an already-submitted forward). Greedy is "
+            "byte-identical to the classic argmax loop. Default follows "
+            "MTPLX_DSV41_DEVICE_SAMPLE (off)."
+        ),
     )
     p.add_argument(
         "--with-mtp",
@@ -560,6 +601,23 @@ def _arm_env_snapshot() -> dict:
     return {key: os.environ.get(key) for key in ALL_LEVER_ENVS}
 
 
+def _device_sample_resolved(args) -> bool:
+    """W63 / K32: True when the AR reference decode runs the device-sample
+    one-step-lag pipeline. ``--device-sample`` overrides; the ``None`` default
+    follows ``MTPLX_DSV41_DEVICE_SAMPLE``. The env truthiness is inlined here
+    (mirrors ``deepseek_v41_dspark_decode.device_sample_enabled``) so --dry-run
+    resolves it WITHOUT importing the model module (which imports mlx.core)."""
+    flag = getattr(args, "device_sample", None)
+    if flag is not None:
+        return bool(flag)
+    return os.environ.get("MTPLX_DSV41_DEVICE_SAMPLE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _dry_run_arm(args, arm, bench) -> dict:
     """CPU-only arm double (no model, no MLX/Metal): apply the arm's env, then
     build the standard-shape prompt with bench's fake tokenizer so the prompt-
@@ -575,6 +633,12 @@ def _dry_run_arm(args, arm, bench) -> dict:
         "dry_run": True,
         "overlap_env": os.environ.get(OVERLAP_ENV),
         "arm_env": _arm_env_snapshot(),
+        # K14 (W63): the MLX command-buffer MB cap this arm pins (None = MLX
+        # default). MLX binds it at init, so a real A/B exports it per process;
+        # the receipt records the arm's pinned value for reproducibility.
+        "mlx_max_mb_per_buffer": os.environ.get(MLX_MAX_MB_PER_BUFFER_ENV),
+        # W63 / K32: whether the AR decode would run the device-sample pipeline.
+        "device_sample": _device_sample_resolved(args),
         "context_tokens": int(args.context_tokens),
         "decode_tokens": int(args.decode_tokens),
         "prompt_tokens": len(prompt_ids),
@@ -643,8 +707,16 @@ def _load_model(args, bench, mx):
     return resident
 
 
-def _generate(*, model, ops, mem_probe, prompt_ids, steps):
-    """Greedy prefill + ``steps`` decode; captures the decoded token ids."""
+def _generate(*, model, ops, mem_probe, prompt_ids, steps, device_sample=False):
+    """Greedy prefill + ``steps`` decode; captures the decoded token ids.
+
+    ``device_sample`` (W63 / K32) swaps the per-token host round-trip decode loop
+    for the device-sample one-step-lag pipeline
+    (:func:`run_device_sample_decode`): the greedy token stays a lazy device
+    array fed straight into the next forward, and the host reads ids one step
+    behind an already-submitted forward. Greedy output is byte-identical to the
+    classic argmax loop; the AR-reference byte-identity gate (this arm's
+    ``token_ids_sha256`` vs the dspark ids) therefore still holds."""
     mem_probe.reset_peak()
     t0 = time.perf_counter()
     cache = model.make_cache()
@@ -653,19 +725,38 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps):
     ttft_s = time.perf_counter() - t0
     token = ops.argmax_last(logits)
     generated = [token]
+    extra_forward_steps = 0
 
     decode_start = time.perf_counter()
-    for _ in range(int(steps)):
-        logits = model(ops.input([[token]]), cache=cache)
-        ops.sync(logits)
-        token = ops.argmax_last(logits)
-        generated.append(token)
+    if device_sample:
+        from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+
+        def _forward_row(ids):
+            # ids is a device-side [1, 1] token-id array; the model's embedding
+            # lookup consumes it directly (mx.take) -- no host round trip.
+            return model(ids, cache=cache)[0, -1]
+
+        more, _finish, extra_forward_steps = run_device_sample_decode(
+            forward_row=_forward_row,
+            first_token=int(token),
+            n_more=int(steps),
+            sampler=None,  # greedy (byte-identical to the classic argmax loop)
+            stop_ids=set(),
+        )
+        generated.extend(int(t) for t in more)
+    else:
+        for _ in range(int(steps)):
+            logits = model(ops.input([[token]]), cache=cache)
+            ops.sync(logits)
+            token = ops.argmax_last(logits)
+            generated.append(token)
     decode_wall_s = time.perf_counter() - decode_start
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
         "decode_wall_s": decode_wall_s,
         "peak_gb": mem_probe.peak_bytes() / GIB,
+        "extra_forward_steps": int(extra_forward_steps),
     }
 
 
@@ -790,18 +881,28 @@ def _run_arm(args, arm, bench, mx) -> dict:
     try:
         ops = bench._MLXOps(mx)
         mem_probe = bench._MLXMemProbe(mx)
+        device_sample = _device_sample_resolved(args)
         run = _generate(
             model=model,
             ops=ops,
             mem_probe=mem_probe,
             prompt_ids=prompt_ids,
             steps=args.decode_tokens,
+            device_sample=device_sample,
         )
         ids = run["generated"]
         receipt = {
             "arm": arm,
             "overlap_env": os.environ.get(OVERLAP_ENV),
             "arm_env": _arm_env_snapshot(),
+            # K14 (W63): the MLX command-buffer MB cap in effect for this arm
+            # (None = MLX default). MLX binds it at Metal init, so run one arm per
+            # process with it exported for a real A/B; recorded for reproducibility.
+            "mlx_max_mb_per_buffer": os.environ.get(MLX_MAX_MB_PER_BUFFER_ENV),
+            # W63 / K32: whether the AR reference decode used the device-sample
+            # one-step-lag pipeline (greedy byte-identical to the classic loop).
+            "device_sample": bool(device_sample),
+            "device_sample_extra_forwards": int(run.get("extra_forward_steps", 0)),
             "context_tokens": int(args.context_tokens),
             "decode_tokens": int(args.decode_tokens),
             "prompt_tokens": len(prompt_ids),

@@ -72,6 +72,7 @@ _SEL = "MTPLX_DSV41_SELECTED_KEYS"           # W59 / K30: prefill selected-key g
 _SFK = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"  # W58 / K28: fused mask+sink+softmax Metal kernel
 _LFX = "MTPLX_DSV41_LAYOUT_FIX"              # W56 / K27 F1: sorted routed gather (set by prefill_best*)
 _DAK = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fused decode/verify MLA attention Metal kernel
+_MLXBUF = "MLX_MAX_MB_PER_BUFFER"        # K14 / W63: MLX command-buffer MB cap passthrough
 # The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
 # PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
 # NOT part of all_levers, so they never join the "all-on" independence invariant.
@@ -85,7 +86,7 @@ _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50
 # + the three W50 score-path keys + the W59 K30 selected-key gather boolean + the
 # W58 K28 fused-softmax-kernel boolean + the K27 layout_fix boolean (the W58
 # prefill_best* full-stack arms set it) + the W60 K29 decode-attention-kernel boolean.
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB)
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF)
 
 ALL_ARMS = [
     "control",
@@ -122,6 +123,8 @@ ALL_ARMS = [
     "prefill_lean_k28",
     "prefill_best",
     "prefill_best_nok28",
+    "prefill_best_sel",
+    "mlx_buffer_500",
     "decode_attn_kernel",
 ]
 
@@ -177,6 +180,13 @@ EXPECTED_ON = {
     # separately.
     "prefill_best": {_LM},
     "prefill_best_nok28": {_LM},
+    # W63: prefill_best_nok28 + selected_keys -- rides layer-major (dense in
+    # EXPECTED_DENSE, lean in EXPECTED_SCORE_PATH, layout_fix in EXPECTED_LAYOUT,
+    # K30 in EXPECTED_SELECTED).
+    "prefill_best_sel": {_LM},
+    # K14 (W63): the MLX buffer-cap passthrough arm sets no MTPLX lever (its only
+    # key is _MLXBUF, tracked in EXPECTED_MLX_BUFFER).
+    "mlx_buffer_500": set(),
     # W60 K29: standalone decode-attention kernel arm sets no _ALL_KEYS boolean
     # (its only key is _DAK, tracked in EXPECTED_DECODE_ATTN_KERNEL).
     "decode_attn_kernel": set(),
@@ -196,7 +206,7 @@ EXPECTED_VERIFY = {arm: (arm == "verify_single_barrier") for arm in ALL_ARMS}
 _DENSE_ARMS = (
     "prefill_dense_experts", "dense_min32", "dense_batch16", "dense_f32",
     "prefill_fast", "prefill_lean", "prefill_lean_sel", "prefill_lean_k28",
-    "prefill_best", "prefill_best_nok28",
+    "prefill_best", "prefill_best_nok28", "prefill_best_sel",
 )
 EXPECTED_DENSE = {arm: (arm in _DENSE_ARMS) for arm in ALL_ARMS}
 # The dense value knobs each arm pins (None = force-unset / code default). Only the
@@ -245,6 +255,8 @@ EXPECTED_HEAD = {
     "prefill_lean_k28": None,
     "prefill_best": None,
     "prefill_best_nok28": None,
+    "prefill_best_sel": None,
+    "mlx_buffer_500": None,
     "decode_attn_kernel": None,
 }
 
@@ -267,12 +279,18 @@ EXPECTED_SCORE_PATH["prefill_lean"] = "lean"
 EXPECTED_SCORE_PATH["prefill_lean_sel"] = "lean"
 
 # The W59 K30 selected-key gather boolean each arm pins (separate from _ALL_KEYS,
-# not part of all_levers -- like the device-route / dense booleans).
-EXPECTED_SELECTED = {arm: "1" if arm in ("selected_keys", "prefill_lean_sel", "stack_b") else None
-                     for arm in ALL_ARMS}
+# not part of all_levers -- like the device-route / dense booleans). W63 adds
+# prefill_best_sel (prefill_best_nok28 + selected_keys).
+EXPECTED_SELECTED = {
+    arm: "1"
+    if arm in ("selected_keys", "prefill_lean_sel", "stack_b", "prefill_best_sel")
+    else None
+    for arm in ALL_ARMS
+}
 EXPECTED_SCORE_PATH["prefill_lean_k28"] = "lean"
 EXPECTED_SCORE_PATH["prefill_best"] = "lean"
 EXPECTED_SCORE_PATH["prefill_best_nok28"] = "lean"
+EXPECTED_SCORE_PATH["prefill_best_sel"] = "lean"
 
 # The W58 K28 fused-softmax-kernel boolean each arm pins ("1" or None = force-unset).
 # Set by the standalone kernel arm, the prefill_lean_k28 stack, and prefill_best
@@ -287,12 +305,20 @@ EXPECTED_SOFTMAX_KERNEL["prefill_best"] = "1"
 EXPECTED_LAYOUT = {arm: None for arm in ALL_ARMS}
 EXPECTED_LAYOUT["prefill_best"] = "1"
 EXPECTED_LAYOUT["prefill_best_nok28"] = "1"
+EXPECTED_LAYOUT["prefill_best_sel"] = "1"
 
 # The W60 K29 decode-attention-kernel boolean each arm pins ("1" or None =
 # force-unset).  Only the standalone decode_attn_kernel arm sets it (LEFT OUT of
 # stack_a until the MTPLX_GPU_PARITY window is clean).
 EXPECTED_DECODE_ATTN_KERNEL = {arm: None for arm in ALL_ARMS}
 EXPECTED_DECODE_ATTN_KERNEL["decode_attn_kernel"] = "1"
+
+# K14 (W63): the MLX command-buffer MB cap each arm pins (a positive-int string,
+# None = MLX default). Only the standalone mlx_buffer_500 arm sets it (500 MB, the
+# value the Qwen lane measured +1.6% at). It is an MLX passthrough, not an MTPLX
+# lever, so no stacked arm carries it.
+EXPECTED_MLX_BUFFER = {arm: None for arm in ALL_ARMS}
+EXPECTED_MLX_BUFFER["mlx_buffer_500"] = "500"
 
 
 def _load(name: str):
@@ -422,6 +448,11 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert _SEL not in os.environ, f"{arm}: {_SEL} should be force-unset"
     else:
         assert os.environ.get(_SEL) == EXPECTED_SELECTED[arm], f"{arm}: {_SEL}"
+    # K14 (W63): the MLX buffer-cap passthrough pins its value or force-unsets it.
+    if EXPECTED_MLX_BUFFER[arm] is None:
+        assert _MLXBUF not in os.environ, f"{arm}: {_MLXBUF} should be force-unset"
+    else:
+        assert os.environ.get(_MLXBUF) == EXPECTED_MLX_BUFFER[arm], f"{arm}: {_MLXBUF}"
 
 
 def test_head_arms_do_not_touch_boolean_levers(env_levers):
@@ -523,6 +554,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_SFK] = "bogus"
     os.environ[_LFX] = "bogus"
     os.environ[_DAK] = "bogus"
+    os.environ[_MLXBUF] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -551,6 +583,69 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         assert r["arm_env"].get(_SFK) == EXPECTED_SOFTMAX_KERNEL[r["arm"]], r["arm"]
         assert r["arm_env"].get(_LFX) == EXPECTED_LAYOUT[r["arm"]], r["arm"]
         assert r["arm_env"].get(_DAK) == EXPECTED_DECODE_ATTN_KERNEL[r["arm"]], r["arm"]
+        # K14 (W63): the MLX buffer-cap passthrough, in arm_env and as a
+        # dedicated top-level receipt field.
+        assert r["arm_env"].get(_MLXBUF) == EXPECTED_MLX_BUFFER[r["arm"]], r["arm"]
+        assert r["mlx_max_mb_per_buffer"] == EXPECTED_MLX_BUFFER[r["arm"]], r["arm"]
+        # W63 / K32: the device-sample flag is recorded (default off, no env set).
+        assert r["device_sample"] is False, r["arm"]
+
+
+def test_dry_run_mlx_buffer_arm_and_device_sample_flag(env_levers, tmp_path):
+    # K14 (W63): the mlx_buffer_500 arm records the pinned MB cap; control clears
+    # it. W63 / K32: --device-sample overrides the env default and is recorded on
+    # every arm's receipt.
+    out = tmp_path / "receipts.jsonl"
+    rc = env_levers.main(
+        [
+            "--dry-run",
+            "--context-tokens",
+            "1024",
+            "--arms",
+            "control",
+            "mlx_buffer_500",
+            "--device-sample",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    receipts = {
+        json.loads(line)["arm"]: json.loads(line)
+        for line in out.read_text().splitlines()
+        if line
+    }
+    assert receipts["control"]["mlx_max_mb_per_buffer"] is None
+    assert receipts["control"]["arm_env"][_MLXBUF] is None
+    assert receipts["mlx_buffer_500"]["mlx_max_mb_per_buffer"] == "500"
+    assert receipts["mlx_buffer_500"]["arm_env"][_MLXBUF] == "500"
+    # every non-buffer lever key stays unset on the buffer arm (arm independence).
+    for k in _ALL_KEYS + (_DR, _PD, _HM, _SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK):
+        assert receipts["mlx_buffer_500"]["arm_env"][k] is None, k
+    assert receipts["control"]["device_sample"] is True
+    assert receipts["mlx_buffer_500"]["device_sample"] is True
+
+
+def test_dry_run_device_sample_follows_env(env_levers, tmp_path, monkeypatch):
+    # W63 / K32: with the --device-sample flag left at its None default, the
+    # receipt follows MTPLX_DSV41_DEVICE_SAMPLE.
+    monkeypatch.setenv("MTPLX_DSV41_DEVICE_SAMPLE", "1")
+    out = tmp_path / "receipts.jsonl"
+    rc = env_levers.main(["--dry-run", "--arms", "control", "--out", str(out)])
+    assert rc == 0
+    r = json.loads(out.read_text().splitlines()[0])
+    assert r["device_sample"] is True
+
+
+def test_parser_has_device_sample_default_none(env_levers):
+    args = env_levers.build_parser().parse_args(["--out", "/dev/null"])
+    assert args.device_sample is None
+    on = env_levers.build_parser().parse_args(["--out", "/dev/null", "--device-sample"])
+    assert on.device_sample is True
+    off = env_levers.build_parser().parse_args(
+        ["--out", "/dev/null", "--no-device-sample"]
+    )
+    assert off.device_sample is False
 
 
 def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path):

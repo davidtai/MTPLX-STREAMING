@@ -224,6 +224,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
     )
     parser.add_argument(
+        "--device-sample",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "W63 / K32: run the AR (--decode-mode ar) decode with the device-side "
+            "sampling one-step-lag pipeline (the sampled token stays on device and "
+            "feeds the next embedding directly; the host reads ids one step behind "
+            "an already-submitted forward). Greedy is byte-identical to the classic "
+            "argmax loop. Default follows MTPLX_DSV41_DEVICE_SAMPLE (off)."
+        ),
+    )
+    parser.add_argument(
         "--with-mtp",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -341,6 +353,19 @@ def resolve_max_kv(context_cells, steps: int, max_kv) -> int:
             f"largest cell ({max(context_cells)}) + {steps} decode + margin"
         )
     return max_kv
+
+
+def _resolve_device_sample(args) -> bool:
+    """W63 / K32: the AR decode uses the device-sample pipeline when the
+    ``--device-sample`` flag is set, or (flag left at its ``None`` default) when
+    ``MTPLX_DSV41_DEVICE_SAMPLE`` is truthy. The env import is lazy so ``--help``
+    / ``--dry-run`` stay stdlib-only."""
+    flag = getattr(args, "device_sample", None)
+    if flag is not None:
+        return bool(flag)
+    from mtplx.models.deepseek_v41_dspark_decode import device_sample_enabled
+
+    return device_sample_enabled()
 
 
 # --------------------------------------------------------------------------
@@ -553,12 +578,22 @@ def bench_one_cell(
     steps: int,
     decode_mode: str = "ar",
     dspark_depth: int = 3,
+    device_sample: bool = False,
 ) -> dict:
     """Greedy prefill + decode of one cell; returns the measured metrics.
 
     ``decode_mode == "dspark"`` additionally runs the DSpark-DIRECT speculative
     loop (W57) after the AR decode, asserts the greedy ids are byte-identical, and
-    attaches its tokens/cycle + accept-by-depth under the ``dspark`` key."""
+    attaches its tokens/cycle + accept-by-depth under the ``dspark`` key.
+
+    ``device_sample`` (W63 / K32) swaps the AR decode loop for the device-side
+    sampling one-step-lag pipeline (:func:`run_device_sample_decode`): the greedy
+    token stays a lazy device array fed straight into the next forward, and the
+    host reads ids one step behind an already-submitted forward, so the GPU never
+    idles on the per-token host read. Greedy output is byte-identical to the
+    classic argmax loop; it costs exactly one extra (discarded) forward at the end
+    of the run. Only the real-MLX AR path uses it (the dry-run ``_FakeOps`` double
+    keeps the classic loop)."""
 
     prompt_len = len(prompt_ids)
     mem_probe.reset_peak()
@@ -575,13 +610,37 @@ def bench_one_cell(
     token = ops.argmax_last(logits)
     generated = [token]
 
+    # W63 / K32: the real-MLX AR path may run the device-sample one-step-lag
+    # pipeline instead of the per-token host round trip. The dry-run _FakeOps
+    # double (no _mx) always keeps the classic loop.
+    _mx = getattr(ops, "_mx", None)
+    use_device_sample = bool(device_sample) and _mx is not None and decode_mode == "ar"
+    extra_forward_steps = 0
+
     # -- decode (steps autoregressive forwards) --------------------------------
     decode_start = time.perf_counter()
-    for _ in range(int(steps)):
-        logits = model(ops.input([[token]]), cache=cache)
-        ops.sync(logits)
-        token = ops.argmax_last(logits)
-        generated.append(token)
+    if use_device_sample:
+        from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+
+        def _forward_row(ids):
+            # ids is a device-side [1, 1] token-id array; the model's embedding
+            # lookup consumes it directly (mx.take) -- no host round trip.
+            return model(ids, cache=cache)[0, -1]
+
+        more, _finish, extra_forward_steps = run_device_sample_decode(
+            forward_row=_forward_row,
+            first_token=int(token),
+            n_more=int(steps),
+            sampler=None,  # greedy (matches the classic argmax loop byte-for-byte)
+            stop_ids=set(),
+        )
+        generated.extend(int(t) for t in more)
+    else:
+        for _ in range(int(steps)):
+            logits = model(ops.input([[token]]), cache=cache)
+            ops.sync(logits)
+            token = ops.argmax_last(logits)
+            generated.append(token)
     decode_wall_s = time.perf_counter() - decode_start
 
     wall_s = time.perf_counter() - cell_start
@@ -663,6 +722,11 @@ def bench_one_cell(
         "expert_records_gathered": gathered.get("expert_records_gathered"),
         "engram_rows_gathered": gathered.get("engram_rows_gathered"),
         "generated_token_count": len(generated),
+        "device_sample": bool(use_device_sample),
+        # W63 / K32: forwards computed but discarded (the classic loop breaks
+        # before forwarding its final token; the lag pipeline computes exactly
+        # one extra step it never emits). 0 on the classic path.
+        "device_sample_extra_forwards": int(extra_forward_steps),
         "text_preview": text[:_TEXT_PREVIEW_CHARS],
     }
 
@@ -1008,6 +1072,7 @@ def run_real(args) -> int:
                     steps=args.steps,
                     decode_mode=getattr(args, "decode_mode", "ar"),
                     dspark_depth=getattr(args, "dspark_depth", 3),
+                    device_sample=_resolve_device_sample(args),
                 )
                 repeats.append(metrics)
                 print(

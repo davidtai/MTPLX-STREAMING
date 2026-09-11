@@ -7140,8 +7140,86 @@ def generate_ar(
     _lane_cache_has_final = False
     _lane_final_row: mx.array | None = None
     _lane_mode_off = None
+
+    # ---- DSV4.1 device-sample AR lane (MTPLX_DSV41_DEVICE_SAMPLE, W63/K32) ----
+    # Keeps the sampled token on device across the whole decode (one-step-lag
+    # pipeline; mtplx.models.deepseek_v41_dspark_decode.run_device_sample_decode):
+    # the id feeds the next forward's embedding directly (mx.take) and the host
+    # reads it a step behind an already-submitted forward (mx.async_eval), so the
+    # GPU never idles on the per-token device->host read that makes this lane
+    # dispatch-bound. Greedy is byte-identical to the classic argmax loop; sampled
+    # uses the device shaped sampler (temp -> top-k -> top-p, _mx_lazy_sample) --
+    # NOT token-for-token equal to the host path (device mx.random stream + a
+    # narrower top-p nucleus over the renormalized top-k), a documented deviation
+    # in W63_DEVICE_SAMPLE.md, so it stays default-off. Engages
+    # ONLY for the deepseek_v41 lane on the simple decode shape (no constraint /
+    # guards / repetition-stop / session final-state capture / AR-hidden), so no
+    # other model's path is touched, and drains into the shared stats/finish tail
+    # exactly like the pipelined lane.
     if (
-        _env_truthy("MTPLX_AR_PIPELINE")
+        _env_truthy("MTPLX_DSV41_DEVICE_SAMPLE")
+        and getattr(getattr(rt, "model", None), "model_type", "") == "deepseek_v41"
+        and constraint is None
+        and not repetition_stop
+        and _loop_guard is None
+        and _thinking_guard is None
+        and not ar_return_hidden
+        and not capture_final_state
+        and max_tokens > 1
+    ):
+        from mtplx.models.deepseek_v41_dspark_decode import (
+            device_sample_eligible as _ds_eligible,
+            run_device_sample_decode as _run_device_sample,
+        )
+
+        _ds_ok, _ds_reason = _ds_eligible(sampler)
+        if _ds_ok:
+            events.append({"device_sample": True, "device_sample_mode": _ds_reason})
+            token, _ = _sample_from_logits(logits[0], sampler, rng)
+            tokens.append(token)
+            emit_token(token)
+            events.append({"step": 0, "token": token})
+            _lane_committed = 1
+            if _is_stop(token, stop_token_ids):
+                _lane_finished = True
+            else:
+
+                def _ds_forward_row(ids: mx.array) -> mx.array:
+                    with attention_phase("ar_decode"):
+                        out = rt.forward_ar(ids, cache=cache)
+                    return out[0, -1]
+
+                _ds_timing = {"build_s": 0.0, "wait_s": 0.0}
+                _ds_step = [1]
+
+                def _ds_on_token(v: int) -> None:
+                    step = _ds_step[0]
+                    tokens.append(int(v))
+                    emit_token(int(v))
+                    events.append({"step": step, "token": int(v)})
+                    _ds_step[0] = step + 1
+
+                _ds_more, _ds_finish, _ds_extra = _run_device_sample(
+                    forward_row=_ds_forward_row,
+                    first_token=int(token),
+                    n_more=max_tokens - 1,
+                    sampler=sampler,
+                    seed=seed,
+                    stop_ids=stop_token_ids,
+                    on_token=_ds_on_token,
+                    abort_check=abort_check,
+                    timing=_ds_timing,
+                )
+                _lane_committed = len(tokens)
+                verify_calls += len(_ds_more) + (_ds_extra if _ds_more else 0)
+                target_forward_graph_time += _ds_timing["build_s"]
+                target_eval_time += _ds_timing["wait_s"]
+                target_decode_time += _ds_timing["build_s"] + _ds_timing["wait_s"]
+            _lane_finished = True
+
+    if (
+        _lane_committed == 0
+        and _env_truthy("MTPLX_AR_PIPELINE")
         and constraint is None
         and float(sampler.temperature) > 0
         and 1 < int(sampler.top_k or 0) < 4096
