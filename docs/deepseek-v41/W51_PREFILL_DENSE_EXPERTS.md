@@ -120,6 +120,70 @@ assert:
 - below-threshold and M=1 (decode-shaped, one row per expert) waves are `mx.array_equal`
   to the pure gather — **the flag cannot perturb decode**.
 
+## GPU window 20 result and follow-up
+
+**Measured** (integration `7a789731d`, 16,384-token prompt, layer-major, 60 GiB plan, chunk
+1024; `receipts/gpu-windows/window-20/prefill-16384-ladder.json`):
+
+| arm | TTFT | vs layer_major | tokens identical? | peak |
+|---|---|---|---|---|
+| `layer_major` (control) | 352.8 s | — | — | 76.6 GB |
+| `prefill_dense_experts` | **332.2 s** | **−20 s (+6% prefill tok/s)** | yes (token-sha) | 76.6 GB |
+
+−20 s, not the modelled −70–80 s. The model assumed dense bf16 runs at 15–25 TFLOPS; the
+shortfall says it does not. Two suspects — the window rules the first out.
+
+### (a) Threshold coverage — NOT the bottleneck
+
+From W24's routing census (`routing_census_1024.json`, `prefill_distinct_experts` per layer:
+mean **261/384**, median 259.5, min 224, max 313 at 1024 tokens), the per-layer load at 16 K is
+98,304 assignments (uniform 256 rows/expert). An occupancy estimate of the fraction of rows in
+experts **below** a threshold at 16 K:
+
+| model | rows <128 | rows <32 | rows <16 |
+|---|---|---|---|
+| equal-prob core (Neff≈261, ~376 rows each) | ~0% | ~0% | ~0% |
+| skew-aware, distinct@16K→320 | ~7.7% | ~1.9% | ~1.0% |
+| skew-aware, distinct@16K→384 | ~10.0% | ~4.0% | ~2.0% |
+
+So **threshold 128 already routes ~90–97% of rows dense**; 32 captures >96%, 16 >98%. Lowering
+the threshold recovers a few % of rows at most — coverage is not why the win is small. (The new
+per-layer counters below measure the true split directly, superseding this estimate.) A row
+threshold near **32** is nonetheless a safe default: it captures essentially all routable rows
+while staying above the small-M region where the W17 microbench shows dense losing to gather.
+
+### (b) The bf16 dense matmul kernel — the likely leak
+
+W50 measured bf16 score matmuls **34% slower than f32** at 16 K on this box. The dense
+gate/up/down probably pay the same slow bf16 path, eating the ALU advantage. Ruled out as the
+leak: **the dequant is not double-writing** — `mx.dequantize(mode="mxfp4")` returns **bf16
+directly** (verified; default output dtype is bf16, no f32 intermediate), and K26 now dequantizes
+**straight to the compute dtype** (`dtype=` on `mx.dequantize`), so there is no bf16→f32 or
+f32→bf16 cast and no doubled write in either variant. The `dense_f32` arm
+(`MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE=f32`) runs dequant + all three matmuls in f32 to test
+whether the f32 kernel recovers the modelled win (CPU exactness: f32 variant max|Δ| vs fp64
+**1.39e-4**, even closer to truth than bf16's 2.81e-4; within 2.05e-2 of gather).
+
+### Instrumentation added (into the W47 prefill stage-timing receipt)
+
+Nested brackets inside the dense path decompose the residual switch cost, and per-layer counters
+record the dense/gather split — both no-ops off a `--prefill-stage-timing` session:
+
+- `switch_breakdown`: `switch.dense.group_rows`, `switch.dense.dequant`, `switch.dense.matmul`,
+  `switch.dense.scatter`, `switch.gather_qmm_fallback` (dequant/matmul fire once per densified
+  expert, so `mean_ms` is per-expert).
+- `switch_tallies`: `dense.calls`, `dense.experts_total`, `dense.experts_dense`,
+  `dense.experts_under_threshold`, `dense.rows_dense`, `dense.rows_gather` (summed across the 40
+  layer-major calls; divide by `dense.calls` for per-layer means).
+
+So the next 16 K window shows exactly where the ~95 s went (dequant vs matmul vs scatter) and how
+many rows/experts actually took the dense path at threshold 128/32.
+
+### New A/B arms
+
+`dense_min32` (threshold 32), `dense_batch16` (dequant batch 16), `dense_f32` (f32 matmul) — all
+ride the layer-major schedule; keys pinned in every preset.
+
 ## How to run
 
 CPU tests (no GPU, no `experts.bin`; ≤3 GB RSS):
@@ -130,32 +194,40 @@ PYTHONPATH=$PWD nice -n 19 .venv/bin/python3 -m pytest \
   tests/test_deepseek_v41_ab_env_levers.py -p no:cacheprovider -q
 ```
 
-GPU-window A/B (arm pins layer-major + dense on; not byte-identical to control, expected):
+GPU-window A/B (arms pin layer-major + dense on; token-identical to control at W20; add
+`--prefill-stage-timing` for the switch breakdown + tallies):
 
 ```
 ... scripts/deepseek_v41/ab_decode_env_levers.py --context-tokens 16384 \
-    --arms control layer_major prefill_dense_experts --out <receipt.jsonl>
+    --arms control layer_major prefill_dense_experts dense_min32 dense_f32 \
+    --out <receipt.jsonl>
 ```
 
-Tuning envs: `MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS` (per-expert row threshold, default 128),
-`MTPLX_DSV41_PREFILL_DENSE_BATCH` (experts dequantized per bounded batch, default 8).
+Tuning envs: `MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS` (row threshold, default 128),
+`MTPLX_DSV41_PREFILL_DENSE_BATCH` (experts per bounded dequant batch, default 8),
+`MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE` (`bf16` default / `f32`).
 
 ## Files touched
 
 - `mtplx/models/expert_mlx.py` — env constants + `_prefill_dense_experts_enabled` /
-  `_positive_env_int`; `_dequantize_mxfp4_slot`; `_run_component_bank_dense_prefill`;
+  `_positive_env_int` / `_prefill_dense_matmul_dtype`; `_dequantize_mxfp4_slot` (dtype-direct);
+  `_run_component_bank_dense_prefill` (nested brackets + tallies + f32 variant);
   `_dispatch_component_bank(dense_prefill=...)`; `HotExpertSwitchGLU._run` gate + wiring.
-- `scripts/deepseek_v41/ab_decode_env_levers.py` — three env keys pinned in every preset;
-  arm `prefill_dense_experts`.
-- `tests/models/test_deepseek_v41_prefill_dense_experts.py` — new CPU exactness + no-op tests.
-- `tests/test_deepseek_v41_ab_env_levers.py` — arm + env-key dry-run coverage extended.
-- `docs/deepseek-v41/KERNEL_LEDGER.md` — K26 entry.
+- `mtplx/models/deepseek_v41_stage_timing.py` — `tally()` + `switch_tallies` export (additive).
+- `scripts/deepseek_v41/ab_decode_env_levers.py` — four env keys pinned in every preset; arms
+  `prefill_dense_experts`, `dense_min32`, `dense_batch16`, `dense_f32`.
+- `tests/models/test_deepseek_v41_prefill_dense_experts.py` — CPU exactness + f32 variant +
+  bracket/tally export + no-op tests.
+- `tests/test_deepseek_v41_ab_env_levers.py` — arms + env-key dry-run coverage extended.
+- `docs/deepseek-v41/KERNEL_LEDGER.md` — K26 entry (+ W20 result / follow-up).
 
 ## Open GPU-window question (KG-k)
 
-Realized 16 K prefill delta is unmeasured: the analytical model assumes ~all experts clear
-128 rows and dense runs at 15–25 TFLOPS on the real 5120×2304 experts. The window measures
-(a) the actual per-expert row distribution at 16 K (how many clear the threshold), (b) the
-realized dense TFLOPS and thus the crossover M, (c) `moe.routed_switch` and TTFT vs the
-`layer_major` control at David's standard shape, and (d) whether the bf16 divergence flips
-any prompt-token argmax (it should not — prefill feeds the same greedy head).
+Window 20 gave −20 s (not −70–80 s), token-identical, same 76.6 GB peak. The coverage estimate
+says the threshold is not the cause (~90–97% of rows already route dense at 128). Remaining
+questions for the next window: (a) do the new `switch_tallies` confirm >90% dense coverage at
+threshold 128 (and does `dense_min32` change it materially); (b) does `dense_f32` recover the
+modelled win — i.e. is the bf16 matmul the W50 slow-kernel path; (c) the
+`switch.dense.{dequant,matmul,scatter}` split — how much of the residual is dequant DRAM vs
+matmul; (d) `dense_batch16` peak/throughput trade. All CPU-provable pieces (numerics, counters,
+no-op-off-session) are locked; only the realized GPU timing is open.

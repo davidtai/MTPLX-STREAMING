@@ -82,6 +82,10 @@ PREFILL_DENSE_MIN_ROWS_ENV = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"  # per-expert 
 # a wave must carry before it densifies (default ~128); below it keeps gather_qmm.
 PREFILL_DENSE_BATCH_ENV = "MTPLX_DSV41_PREFILL_DENSE_BATCH"  # experts dequantized
 # per bounded batch (default 8; ~71 MB bf16/expert -> ~0.57 GB transient peak).
+PREFILL_DENSE_MATMUL_DTYPE_ENV = "MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE"  # W51
+# window-20 A/B: "f32" runs the dense dequant + gate/up/down matmuls in float32
+# (W50 saw bf16 score matmuls 34% slower than f32 at 16K -- the dense matmul may pay
+# the same slow bf16 kernel); default bf16.
 SCORE_DTYPE_ENV = "MTPLX_DSV41_PREFILL_SCORE_DTYPE"        # W50 / K25: prefill
 # QK^T/PV matmul input dtype ("bf16" -> the bf16 matmul, f32 softmax; unset = f32,
 # byte-identical).  LOSSY-by-design; window-20 measured it -34% on the GPU (the
@@ -122,6 +126,7 @@ ALL_LEVER_ENVS = (
     PREFILL_DENSE_ENV,
     PREFILL_DENSE_MIN_ROWS_ENV,
     PREFILL_DENSE_BATCH_ENV,
+    PREFILL_DENSE_MATMUL_DTYPE_ENV,
     HEAD_MODE_ENV,
     SCORE_DTYPE_ENV,
     SCORE_KEY_CHUNK_ENV,
@@ -133,14 +138,16 @@ def _preset(
     *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None,
     submit=None, attn=None, win_memo=None, device_route=None,
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
+    prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
-    codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_min_rows`` / ``_batch`` take
-    an integer string (None = use the code default), ``score_dtype`` a "bf16" value
-    (W50/K25, prefill score matmul dtype), ``score_key_chunk`` a positive-int string
-    (W50/K25 split-K chunk width), ``score_path`` a "lean" value (W50 f32 pass-cut
-    one-shot); the rest a "1"/None boolean."""
+    codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
+    "f32"/"bf16", ``prefill_dense_min_rows`` / ``_batch`` an integer string (None =
+    use the code default), ``score_dtype`` a "bf16" value (W50/K25, prefill score
+    matmul dtype), ``score_key_chunk`` a positive-int string (W50/K25 split-K chunk
+    width), ``score_path`` a "lean" value (W50 f32 pass-cut one-shot); the rest a
+    "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -154,6 +161,7 @@ def _preset(
         PREFILL_DENSE_ENV: prefill_dense,
         PREFILL_DENSE_MIN_ROWS_ENV: prefill_dense_min_rows,
         PREFILL_DENSE_BATCH_ENV: prefill_dense_batch,
+        PREFILL_DENSE_MATMUL_DTYPE_ENV: prefill_dense_matmul_dtype,
         HEAD_MODE_ENV: head,
         SCORE_DTYPE_ENV: score_dtype,
         SCORE_KEY_CHUNK_ENV: score_key_chunk,
@@ -177,6 +185,17 @@ ARM_PRESETS = {
     # Not byte-identical to control (fp32 matmul accumulation order), so the
     # byte-identity summary flags it -- like the head-* arms, expected.
     "prefill_dense_experts": _preset(layer_major="1", prefill_dense="1"),
+    # W51 window-20 follow-ups: sweep the row threshold and dequant batch, and the
+    # f32-matmul variant (W50's slow-bf16-kernel hypothesis).  All ride layer-major.
+    "dense_min32": _preset(
+        layer_major="1", prefill_dense="1", prefill_dense_min_rows="32"
+    ),
+    "dense_batch16": _preset(
+        layer_major="1", prefill_dense="1", prefill_dense_batch="16"
+    ),
+    "dense_f32": _preset(
+        layer_major="1", prefill_dense="1", prefill_dense_matmul_dtype="f32"
+    ),
     "both": _preset(overlap="1", layer_major="1"),          # shared_overlap + layer_major
     "all_levers": _preset(
         overlap="1", layer_major="1", sinkhorn="1", hc="1",
@@ -245,9 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=["control", "shared_overlap"],
         help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, "
         "sinkhorn_metal, hc_compile, switch_fastpath, switch_fastpath_b, "
-        "attn_compile, attn_win_memo, device_route, prefill_dense_experts, both, "
-        "all_levers, stack_a, head_bf16, head_mxfp8, head_q8, score_bf16, "
-        "score_chunked, score_bf16_chunked, score_lean, prefill_fast, prefill_lean)",
+        "attn_compile, attn_win_memo, device_route, prefill_dense_experts, "
+        "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
+        "head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
+        "score_bf16_chunked, score_lean, prefill_fast, prefill_lean)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that

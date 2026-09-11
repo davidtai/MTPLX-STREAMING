@@ -881,8 +881,29 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   `expert_mlx.py`: `_run_component_bank_dense_prefill` + `_dequantize_mxfp4_slot`, threaded through
   `HotExpertSwitchGLU._dispatch_component_bank(dense_prefill=...)` from the PREFILL split wave only.
   Arm `prefill_dense_experts` (layer-major + dense on) in `scripts/deepseek_v41/ab_decode_env_levers.py`
-  (dry-run extended). **Realized GPU delta is the open GPU-window question** (KG-k, unmeasured — the
-  crossover M and realized dense TFLOPS on the real 5120x2304 experts). See `W51_PREFILL_DENSE_EXPERTS.md`.
+  (dry-run extended).
+- **MEASURED (GPU window 20, integration 7a789731d, 16K, layer-major, 60 GiB plan, chunk 1024):**
+  `prefill_dense_experts` TTFT **332.2 s vs layer_major 352.8 s (−20 s, +6% prefill tok/s)**,
+  token-sha identical, **same 76.6 GB peak** — far short of the modelled −70-80 s. The model assumed
+  dense bf16 runs at 15-25 TFLOPS; the shortfall says it does not. Two suspects, and W20 rules out the
+  first: **(a) threshold coverage** — from W24's routing census (`routing_census_1024.json`:
+  `prefill_distinct_experts` mean 261/384 per layer at 1024 tok, so ~256 rows/expert avg at 16K) an
+  occupancy estimate puts **~90-97% of rows already in ≥128-row experts** (equal-prob core ~0% below
+  128; a skew-aware bracket with distinct@16K→280-384 gives 2.5-10% below 128, <32 captures >96%, <16
+  >98%). So the threshold is NOT why the win is small — lowering it recovers a few % of rows at most.
+  **(b) the bf16 dense matmul kernel** — W50 measured bf16 score matmuls **34% slower than f32** at 16K
+  on this box; the dense gate/up/down likely pay the same slow bf16 path, eating the ALU win. The
+  dequant is *not* the leak: `mx.dequantize(mode="mxfp4")` returns bf16 directly (no f32 intermediate),
+  and K26 now dequantizes straight to the compute dtype (no cast, no doubled write).
+- **W51 FOLLOW-UP (this branch):** (1) nested prefill brackets `switch.dense.{group_rows,dequant,
+  matmul,scatter}` + `switch.gather_qmm_fallback` and per-layer tallies (`dense.rows_dense/rows_gather/
+  experts_dense/experts_under_threshold`) exported into the W47 stage-timing receipt
+  (`switch_breakdown` + new `switch_tallies`), so the next 16K window attributes the residual and
+  confirms the coverage estimate directly. (2) tunable arms `dense_min32` (threshold 32), `dense_batch16`
+  (batch 16), `dense_f32` (`MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE=f32` — f32 dequant + matmuls, the
+  W50 hypothesis test). **Open GPU-window question (KG-k):** does `dense_f32` recover the modelled
+  win, and do the counters confirm >90% dense coverage at threshold 128/32. See
+  `W51_PREFILL_DENSE_EXPERTS.md`.
 
 ---
 

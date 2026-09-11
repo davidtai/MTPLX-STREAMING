@@ -61,6 +61,7 @@ __all__ = [
     "frame",
     "chunk",
     "set_schedule",
+    "tally",
     "report",
 ]
 
@@ -126,7 +127,8 @@ class _Probe:
     __slots__ = (
         "_kind", "_sums", "_counts", "_tokens", "_frame_ns", "_recording_now",
         "_chunk_idx", "_chunk_sums", "_chunk_counts", "_chunk_wall",
-        "_nested_sums", "_nested_counts", "_attn_sums", "_attn_counts", "_schedule",
+        "_nested_sums", "_nested_counts", "_nested_tallies",
+        "_attn_sums", "_attn_counts", "_schedule",
     )
 
     def __init__(self, kind: str = _KIND_DECODE) -> None:
@@ -146,6 +148,10 @@ class _Probe:
         #: kept OUT of the flat partition sum -- it decomposes moe.routed_switch.
         self._nested_sums: dict[str, int] = defaultdict(int)
         self._nested_counts: dict[str, int] = defaultdict(int)
+        #: Integer magnitudes recorded by :meth:`_tally` (e.g. rows routed dense vs
+        #: gather, experts under the dense threshold), summed across the forward and
+        #: exported as ``switch_tallies`` -- counts of *things*, not wall time.
+        self._nested_tallies: dict[str, int] = defaultdict(int)
         #: W50 nested attention-score breakdown (qk_matmul / scale_mask_sink /
         #: softmax / pv_matmul / cast / out_proj, per CSA mode); kept OUT of the
         #: flat partition sum -- it decomposes ``attn.<mode>.score`` (like the
@@ -153,6 +159,9 @@ class _Probe:
         self._attn_sums: dict[str, int] = defaultdict(int)
         self._attn_counts: dict[str, int] = defaultdict(int)
         self._schedule: "Optional[str]" = None
+
+    def _tally(self, name: str, value: int) -> None:
+        self._nested_tallies[name] += int(value)
 
     def enter_forward(self, seq_len: int) -> None:
         """Arm recording for this forward.
@@ -290,6 +299,7 @@ class _Probe:
             "chunk_wall_sum_ms": sum(self._chunk_wall.values()) / 1e6,
             "by_chunk": by_chunk,
             "switch_breakdown": switch_breakdown,
+            "switch_tallies": dict(sorted(self._nested_tallies.items())),
             "attn_breakdown": attn_breakdown,
         }
 
@@ -428,6 +438,15 @@ def set_schedule(name: str) -> None:
     p = _ACTIVE
     if _prefill_recording(p):
         p._schedule = name
+
+
+def tally(name: str, value: int) -> None:
+    """Accumulate an integer magnitude under ``name`` into ``switch_tallies`` (e.g.
+    the W51 dense-path row/expert counters).  Prefill-only and guarded exactly like
+    :func:`set_schedule`, so decode / off / a lightweight probe double are no-ops."""
+    p = _ACTIVE
+    if _prefill_recording(p):
+        p._tally(name, value)
 
 
 def report() -> "Optional[dict]":
