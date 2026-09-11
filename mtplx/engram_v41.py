@@ -449,9 +449,10 @@ class EngramResidents:
     """One engram layer's resident projection tensors, loaded from the W4 sidecar.
 
     ``wkv`` is the ``[.., n_hash_cols*head_dim] -> [.., dim*(hc_mult+1)]`` callable that
-    :class:`EngramV41` expects, backed by ``mx.quantized_matmul`` over the affine-q8 wkv
-    weight.  ``q_weight``/``k_weight`` are the exact ``[hc_mult, dim]`` F32 gates.  Build
-    the module with :meth:`build_module` (adds the streamed row cache + hook geometry).
+    :class:`EngramV41` expects, backed by ``mx.quantized_matmul`` over the wkv weight -- affine
+    q8/gs64 (``mode="affine"``, with ``wkv_biases``) or native mxfp8/gs32 (``mode="mxfp8"``,
+    ``wkv_biases`` is ``None``).  ``q_weight``/``k_weight`` are the exact ``[hc_mult, dim]`` F32
+    gates.  Build the module with :meth:`build_module` (adds the streamed row cache + geometry).
     """
 
     layer_id: int
@@ -460,11 +461,12 @@ class EngramResidents:
     k_weight: mx.array
     wkv_packed: mx.array
     wkv_scales: mx.array
-    wkv_biases: mx.array
     dim: int
     hc_mult: int
     group_size: int
     bits: int
+    wkv_biases: mx.array | None = None
+    mode: str = "affine"
 
     def build_module(self, *, row_cache: NGramRowCache, layer_hash_index: int,
                      norm_eps: float, clamp_value: float = 1e-6) -> "EngramV41":
@@ -487,10 +489,12 @@ def load_engram_residents(
     """Load one engram layer's resident projections from ``engram-residents.safetensors``.
 
     ``artifact_dir`` is the artifact's ``engram/`` directory (holding the sidecar and
-    ``engram-manifest.json``).  The affine-q8 ``wkv`` is wrapped as an ``mx.quantized_matmul``
-    callable; ``q_weight``/``k_weight`` are returned as the exact F32 arrays.  ``dim`` and
-    ``hc_mult`` are read off ``q_weight``'s ``[hc_mult, dim]`` shape and cross-checked against
-    the wkv output width (``dim*(hc_mult+1)``).
+    ``engram-manifest.json``).  The wkv codec is read from the manifest ``residents.quant.wkv``
+    (``mode`` ``affine`` or ``mxfp8``, default affine for old sidecars) and wrapped as the matching
+    ``mx.quantized_matmul(..., mode=...)`` callable -- affine uses ``wkv.{weight,scales,biases}``,
+    mxfp8 uses ``wkv.{weight,scales}`` (no bias).  ``q_weight``/``k_weight`` are returned as the
+    exact F32 arrays.  ``dim`` and ``hc_mult`` are read off ``q_weight``'s ``[hc_mult, dim]`` shape
+    and cross-checked against the wkv output width (``dim*(hc_mult+1)``).
     """
     directory = Path(artifact_dir)
     manifest_path = directory / "engram-manifest.json"
@@ -501,22 +505,30 @@ def load_engram_residents(
     if not sidecar.is_file():
         raise FileNotFoundError(f"engram residents sidecar not found: {sidecar}")
 
+    # wkv codec from the manifest residents entry (default affine for old sidecars)
+    bits, group, mode = 8, 64, "affine"
+    if res_meta and isinstance(res_meta.get("quant"), dict):
+        wkv_q = res_meta["quant"].get("wkv", {})
+        if isinstance(wkv_q, dict):
+            bits = int(wkv_q.get("bits", bits))
+            group = int(wkv_q.get("group_size", group))
+            mode = str(wkv_q.get("mode", mode))
+
     tensors = mx.load(str(sidecar))
     base = f"layers.{layer_id}.engram"
     try:
         packed = tensors[f"{base}.wkv.weight"]
         scales = tensors[f"{base}.wkv.scales"]
-        biases = tensors[f"{base}.wkv.biases"]
+        # mxfp8 wkv has no bias; affine does.  Fall back to sidecar contents if the manifest
+        # codec is absent (old artifact) but a bias tensor is present.
+        has_bias = f"{base}.wkv.biases" in tensors
+        biases = tensors[f"{base}.wkv.biases"] if (mode == "affine" and has_bias) else None
+        if mode == "affine" and biases is None:
+            raise KeyError(f"{base}.wkv.biases")
         q_weight = tensors[f"{base}.q_weight"]
         k_weight = tensors[f"{base}.k_weight"]
     except KeyError as exc:
         raise KeyError(f"layer {layer_id} residents missing from {sidecar}: {exc}") from exc
-
-    bits, group = 8, 64
-    if res_meta and isinstance(res_meta.get("quant"), dict):
-        wkv_q = res_meta["quant"].get("wkv", {})
-        bits = int(wkv_q.get("bits", bits))
-        group = int(wkv_q.get("group_size", group))
 
     hc_mult = int(q_weight.shape[0])
     dim = int(q_weight.shape[1])
@@ -527,11 +539,17 @@ def load_engram_residents(
             f"(q_weight shape {tuple(q_weight.shape)})"
         )
 
-    def wkv(x: mx.array, _p=packed, _s=scales, _b=biases, _g=group, _bits=bits) -> mx.array:
-        return mx.quantized_matmul(x, _p, _s, _b, transpose=True, group_size=_g, bits=_bits)
+    if mode == "mxfp8":
+        def wkv(x: mx.array, _p=packed, _s=scales, _g=group, _bits=bits) -> mx.array:
+            return mx.quantized_matmul(x, _p, _s, transpose=True,
+                                       group_size=_g, bits=_bits, mode="mxfp8")
+    else:
+        def wkv(x: mx.array, _p=packed, _s=scales, _b=biases, _g=group, _bits=bits) -> mx.array:
+            return mx.quantized_matmul(x, _p, _s, _b, transpose=True,
+                                       group_size=_g, bits=_bits, mode="affine")
 
     return EngramResidents(
         layer_id=int(layer_id), wkv=wkv, q_weight=q_weight, k_weight=k_weight,
         wkv_packed=packed, wkv_scales=scales, wkv_biases=biases,
-        dim=dim, hc_mult=hc_mult, group_size=group, bits=bits,
+        dim=dim, hc_mult=hc_mult, group_size=group, bits=bits, mode=mode,
     )
