@@ -408,12 +408,11 @@ def test_session_snapshot_roundtrips_kv_but_not_engram_documents_the_gate():
     assert _cache_offset(cache) == off_before
     assert _states_bit_equal(kv_before, _cache_state_fields(cache))
 
-    # but the engram history is NOT part of state (it is streaming numpy state
-    # advanced from token ids, rewound only by trim); restore_cache leaves it at
-    # the live length. This is the precise reason near-prefix session restore is
-    # unsafe -- and must stay disabled -- while engram is wired: a KV-only
-    # restore desyncs the engram from the KV on layers 1/14.
-    assert int(cache.engram_state.length) == eng_before + 3
+    # and, since W26, the engram history rides entry 0's state as a 6th leaf,
+    # so restore_cache rewinds it together with the KV: near-prefix session
+    # restore is safe again on layers 1/14 (the KV-only desync is the control in
+    # tests/test_deepseek_v41_engram_state.py).
+    assert int(cache.engram_state.length) == eng_before
 
 
 def test_ssd_on_disk_prompt_cache_is_inoperative_for_this_cache_shape():
