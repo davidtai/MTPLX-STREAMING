@@ -106,20 +106,20 @@ def test_append_rows_copied_amortized_not_O_T():
     N, d = 1500, 32
     r = mx.array(np.zeros((1, 1, d), np.float32))
 
-    C._APPEND_ROWS_COPIED = 0
+    C.reset_kv_chunk_grow_stats()
     gb = C._GrowBuffer(init_cap=256)
     for _ in range(N):
         gb.append(r)
         mx.eval(gb._buf)
-    chunk_rows = C._APPEND_ROWS_COPIED
+    chunk_rows = C.kv_chunk_grow_stats()["rows_copied"]
 
-    C._APPEND_ROWS_COPIED = 0
+    C.reset_kv_chunk_grow_stats()
     plain = None
     for _ in range(N):
         plain = C._grow(plain, r)
         C._note_rows_copied(C._rows(plain))
         mx.eval(plain)
-    plain_rows = C._APPEND_ROWS_COPIED
+    plain_rows = C.kv_chunk_grow_stats()["rows_copied"]
 
     # amortized: geometric growth copies each row O(1) times (< ~4 N total),
     # never the O(N^2/2) the concatenate-everything plain path pays.
@@ -329,3 +329,54 @@ def test_model_prefill_decode_byte_identical_with_chunk_grow(monkeypatch):
     assert len(base) == len(chunk)
     for i, (a, b) in enumerate(zip(base, chunk)):
         assert bool(mx.all(a == b).item()), f"logits differ at decode step {i}"
+
+
+# ---------------------------------------------------------------------------
+# W73 engagement: the flag set AFTER import (as the ab harness stamps it per arm)
+# is honoured at cache construction, and the telemetry proves it -- so a "did not
+# engage" symptom is NOT an env-timing bug (it is the Metal slice_update non-donation
+# / the append being ~3% of decode; see W73_DECODE_16K_AUDIT.md).
+# ---------------------------------------------------------------------------
+def test_chunk_grow_engages_when_env_set_after_model_build(monkeypatch):
+    # Model built while the env is UNSET (mirrors: module imported, model loaded,
+    # THEN the arm stamps the env in-process before make_cache per request).
+    monkeypatch.delenv("MTPLX_DSV41_KV_CHUNK_GROW", raising=False)
+    model, args = _tiny_model()
+    prompt = list(range(10))
+
+    # (a) env unset at make_cache time -> plain backing, telemetry says not enabled.
+    C.reset_kv_chunk_grow_stats()
+    _prefill_decode_logits(model, prompt, steps=3)
+    off_stats = C.kv_chunk_grow_stats()
+    assert off_stats["enabled"] is False
+    assert off_stats["layers_chunk_grown"] == 0
+    assert off_stats["buffers"] == 0
+    assert off_stats["layers_plain"] == args.num_hidden_layers
+
+    # (b) NOW stamp the env (after the model already exists) and rebuild the cache
+    # per request -> the flag is honoured at LayerAttentionCache construction.
+    monkeypatch.setenv("MTPLX_DSV41_KV_CHUNK_GROW", "1")
+    C.reset_kv_chunk_grow_stats()
+    cache = model.make_cache()
+    assert all(lc._chunk_grow for lc in cache.layers), "flag not read at construction"
+    _outs, cache2 = _prefill_decode_logits(model, prompt, steps=5)
+    on_stats = C.kv_chunk_grow_stats()
+    assert on_stats["enabled"] is True
+    assert on_stats["layers_chunk_grown"] >= args.num_hidden_layers  # >= (make_cache above + the run)
+    assert on_stats["buffers"] > 0, "no geometric buffer was ever allocated"
+    assert on_stats["appends"] > 0
+    assert on_stats["rows_copied"] > 0
+
+
+def test_kv_chunk_grow_stats_reset_and_snapshot(monkeypatch):
+    monkeypatch.setenv("MTPLX_DSV41_KV_CHUNK_GROW", "1")
+    C.reset_kv_chunk_grow_stats()
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=0, is_kv_source=False)
+    for _ in range(6):
+        lc.append_window(_row(1, 16))
+    s = C.kv_chunk_grow_stats()
+    assert s["enabled"] and s["layers_chunk_grown"] == 1 and s["buffers"] >= 1
+    assert s["appends"] == 6 and s["rows_copied"] >= 6
+    C.reset_kv_chunk_grow_stats()
+    z = C.kv_chunk_grow_stats()
+    assert z["appends"] == 0 and z["rows_copied"] == 0 and z["buffers"] == 0

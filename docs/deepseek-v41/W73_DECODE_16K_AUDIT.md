@@ -13,6 +13,90 @@ and with CPU microtests scaled to T=16384.
 > **Program note (window 29):** the 16,384-token cell is the *only* benchmark for
 > this model; the 1K decode numbers are void. The 11× gap below is the headline.
 
+---
+
+## Window-29b UPDATE — measured on the real model; the ranking was wrong
+
+Window 29b ran the fenced decode census at 16K on the real model
+(`receipts/gpu-windows/window-29b/ar-16k-{control,chunk}.json`). Two conclusions
+**supersede the KV-append hypothesis that was ranked #1 below**:
+
+**A. The KV-append is real O(T) but it is NOT the decode headline.** The fenced
+census (ratios are the signal, not the inflated totals) per token at 16K:
+
+| stage | ms/tok @16K | 1K (window-16) | ×  | O(T)? |
+|---|---|---|---|---|
+| `moe.routed_switch` | 263.8 | 82 | 3.2 | no (context-indep experts) |
+| `attn.reuse` (30 layers) | 251.9 | 50 | 5.0 | mostly no (K30 bounds the score) |
+| `hc.premix_sinkhorn` | 117.7 | 23 | 5.1 | no (fixed 20 iters) |
+| `head` | 72.3 | 2.5 | 28.9 | no (1 row) |
+| `attn.full` | 49.5 | — | — | partly (compress-append) |
+| `attn.reindex` | 39.8 | — | — | partly (select) |
+| `hc.combine` | 30.1 | 15 | 2.0 | no |
+| **KV-append (all modes)** | **~58** | ~few | — | **YES** |
+| indexer `select` (index srcs) | ~10 | — | — | YES (O(n_comp)) |
+
+The genuinely T-scaling work — every `cache_append` (35.5 reuse + 10.7 full-compress
++ 5.1 reindex + 4.7 full + 2.5 swa ≈ **58 ms/tok**) plus the indexer `select`
+(≈ 10 ms/tok) — is **~68 ms/tok, ~3–4 % of the ~1820 ms/tok decode**. A perfect
+O(1) append cannot move decode more than ~3 %: window-29b measured
+`prefill_lean_sel` 1.579 tok/s vs `prefill_lean_sel_chunk` 1.585 — a wash, as
+predicted. **Cause 1 below (window append) is real but was mis-ranked as the
+headline; it is a ~3 % item.**
+
+**B. Why the append did not even drop: `mx.slice_update` does not donate in-place on
+Metal here.** The flag *did* engage (`ar-16k-chunk.json` `arm_env` shows
+`MTPLX_DSV41_KV_CHUNK_GROW=1`; `make_cache` reads it at `LayerAttentionCache`
+construction — see the engagement test), but the census `cache_append` was unchanged
+(reuse 35.5→36.8). CPU probes show donation holds **only when the store view is not
+consumed by a graph**; the real decode feeds the view into the attention, so
+`slice_update` copies O(cap)=O(T), same class as `concatenate`. So chunk-grow is
+byte-identical but ~0 on Metal. **Do not add `MTPLX_DSV41_KV_CHUNK_GROW` to
+`cell16k` as a perf lever** — it only takes the append off the O(T) list for the
+record; the real append fix is a bounded window ring (cap = `window_size` +
+verify_depth), which needs a drop-offset threaded through
+`_window_selected_idx`/`_window_attend` and a drop-aware `mark`/`rollback` on the
+speculative-verify seam — deferred (exactness-critical, needs Metal parity).
+
+### The real 16K→decode inflation: a hypothesis table for window 31
+
+The 1K→16K multipliers above are large for stages that are *context-independent by
+construction* (`routed_switch`, `head`, `sinkhorn`, `hc.combine` all process one
+token's worth of work per step). The unifying mechanism is almost certainly **wired-
+memory pressure**, not per-token O(T) compute: at 16K the full-history KV stores are
+~0.7 GB (window: 40×16384×512×2) + the compressed/index stores, pushing the resident
+set toward the 85 GB / 100 GiB ceiling and **evicting expert slots and resident
+weights that were resident at 1K**, so context-independent stages balloon from
+re-streaming/re-reading off SSD.
+
+| stage | 1K→16K | best-guess mechanism | window-31 check |
+|---|---|---|---|
+| `moe.routed_switch` 82→264 (3.2×) | **memory pressure**: KV growth evicts expert slots → more miss-I/O per token (experts themselves are context-indep) | does routed_switch track peak_gb / expert-cache eviction count, not context? |
+| `attn.reuse` 50→252 (5.0×) | **mixed**: O(T) cache_append (35 ms) + the gather reshaping the full `[1,T,512]` store each token + memory pressure on the resident store | with `KV_CHUNK_GROW` on, does the *non-append* part of attn.reuse still grow? if yes → gather/residency, not append |
+| `head` 2.5→72 (28.9×) | **memory pressure**: the ~1.3 GB head weight evicted at 16K → re-read/token (bf16 head off in this arm; the fp32-cast trap also promotes it — [[dsv41-head-fp32-cast-trap]]) | does `HEAD_MODE=bf16` (smaller, resident) collapse this row? |
+| `hc.premix_sinkhorn` 23→118 (5.1×) | **memory pressure / bandwidth contention**: fixed 20-iter recurrence, 1 row; kernel off in this arm | does `SINKHORN_METAL=1` (kernel) or freeing KV memory collapse it? |
+| `hc.combine` 15→30 (2.0×) | **bandwidth contention** under pressure (fixed hc_mult, 1 row) | tracks total-resident, not context |
+
+If the mechanism is memory pressure, the highest-value lever is **shrinking the 16K
+resident KV footprint** (a bounded window ring frees ~0.67 GB), which could recover
+the ballooned context-independent stages far beyond the ~58 ms append. Window 31
+should run the **same-arm 1K-vs-16K decode census** (`--context-tokens 1024
+--stage-timing` and `16384 --stage-timing`, identical arm) and diff the stage ratios
+against this table; and check whether `peak_gb` / expert-eviction counters correlate
+with the ballooned stages.
+
+### Engagement telemetry (added this window)
+
+The receipt now carries a `kv_chunk_grow` block and the `--stage-timing` census
+prints it: `enabled` (a layer cache chose the chunk-grown backing), `layers_chunk_grown`
+/ `layers_plain`, `buffers` (geometric allocations), `appends`, `rows_copied`
+(logical). Reading it: `enabled=false` ⇒ the flag never reached construction (env
+timing / wrong class); `enabled=true` with flat `rows_copied` while the `cache_append`
+census stage stays O(T) ⇒ `slice_update` did not donate on Metal. Window-29b is the
+latter.
+
+---
+
 ## The receipt reframes the problem
 
 The measured arm has **`MTPLX_DSV41_SELECTED_KEYS=1`** and
@@ -122,24 +206,24 @@ constant across the append lanes vs the indexer floor. The chunk-grow fix remove
 one clearly-attributable, T-scaling *port artifact* (the append reallocations,
 Causes 1+2), exact-by-construction.
 
-## Fixes & env keys (for the `cell16k` composite preset)
+## Fixes & env keys — SUPERSEDED by the Window-29b update above
 
-| Key | Class | Fixes | Status |
+> The pre-measurement plan below stands as the append analysis, but window-29b
+> measured it: the append is ~3 % of decode and `slice_update` does not donate on
+> Metal, so **`MTPLX_DSV41_KV_CHUNK_GROW` is byte-identical but ~0 on Metal — do
+> NOT add it to `cell16k` as a perf lever.** Keep `MTPLX_DSV41_SELECTED_KEYS=1`
+> (it bounds the attention score). The real 16K lever is the memory-pressure
+> hypothesis table above, to be confirmed by window 31's same-arm 1K-vs-16K census.
+
+| Key | Class | Fixes | Measured on Metal |
 |---|---|---|---|
-| `MTPLX_DSV41_KV_CHUNK_GROW=1` | **byte-identical** | Causes 1 + 2 (append O(T)→amortized O(1)) | implemented, tested |
+| `MTPLX_DSV41_KV_CHUNK_GROW=1` | **byte-identical** | Causes 1 + 2 (append O(T)) *in principle* | ~0 (slice_update no-donate); append is ~3 % of decode anyway |
 | `MTPLX_DSV41_SELECTED_KEYS=1` | reassoc (already in target arms) | keeps Cause 4 ruled out | pre-existing (K30) |
 
-`cell16k` (prefill_best_sel + stack_a) should **add `MTPLX_DSV41_KV_CHUNK_GROW=1`**
-alongside its existing `MTPLX_DSV41_SELECTED_KEYS=1`. New A/B arms in
-`scripts/deepseek_v41/ab_decode_env_levers.py`: **`kv_chunk_grow`** (isolation vs
-control) and **`prefill_lean_sel_chunk`** (= the measured `prefill_lean_sel` arm +
-the fix — the direct 16K decode-append A/B).
-
-Expected per-token saving at 16K: the window and compressed/index **append lanes
-drop from O(T)/O(n_comp) to amortized O(1)** (CPU double: ~84 ms→~0.6 ms on the
-window lane; the compress lanes similarly). The indexer-select floor (Cause 3) and
-the expert stream are unchanged. The real-model magnitude is what window-29's
-`--stage-timing` confirms.
+New A/B arms in `scripts/deepseek_v41/ab_decode_env_levers.py`: **`kv_chunk_grow`**
+(isolation vs control) and **`prefill_lean_sel_chunk`** (= the measured
+`prefill_lean_sel` arm + the flag). These stay in the table as the byte-identical
+A/B of record and to carry the engagement telemetry; they are not throughput levers.
 
 ## How to reproduce the attribution on the real model
 

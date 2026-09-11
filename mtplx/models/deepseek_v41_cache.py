@@ -121,17 +121,49 @@ def _rows(rows: Optional[mx.array]) -> int:
     return 0 if rows is None else rows.shape[1]
 
 
-#: Byte counter for the W73 O(T) unit test: the logical rows an append copies.  A
-#: normal donated ``slice_update`` write touches only the ``new`` rows; a geometric
-#: resize copies the whole live prefix once.  ``_grow`` (the plain path) copies the
-#: whole live prefix every time.  Reset by the test; incremented per append so the
-#: test can assert bytes-copied-per-step does not scale with T.
-_APPEND_ROWS_COPIED = 0
+#: W73 engagement + O(T) telemetry.  ``rows_copied`` is the LOGICAL rows an append
+#: copies under the chosen strategy: a chunk-grown donated ``slice_update`` write
+#: touches only ``new`` rows (a geometric resize copies the live prefix once);
+#: ``_grow`` (the plain path) copies the whole live prefix every time.  ``layers_*``
+#: prove engagement (how many layer caches picked each backing); ``buffers`` counts
+#: the geometric buffers allocated (>0 iff chunk-grow actually built one).  Process-
+#: global and cumulative (like the Sinkhorn counters); the ab harness resets after
+#: model load and snapshots after the run.  NOTE: ``rows_copied`` is the STRATEGY's
+#: logical cost, not what MLX's Metal backend physically moves -- compare it against
+#: the measured ``cache_append`` census stage to detect a slice_update that did not
+#: donate in-place (logical ~O(1) but the stage still O(T) == no donation on Metal).
+_KV_STATS = {
+    "layers_chunk_grown": 0,
+    "layers_plain": 0,
+    "buffers": 0,
+    "appends": 0,
+    "rows_copied": 0,
+}
+
+
+def reset_kv_chunk_grow_stats() -> None:
+    """Zero the W73 telemetry (call after model load to scope it to one run)."""
+    for k in _KV_STATS:
+        _KV_STATS[k] = 0
+
+
+def kv_chunk_grow_stats() -> dict:
+    """Snapshot the W73 telemetry: ``enabled`` (any layer cache chose the chunk-grown
+    backing), per-backing layer counts, geometric buffers allocated, total appends
+    and the logical rows copied across them."""
+    s = dict(_KV_STATS)
+    s["enabled"] = bool(_KV_STATS["layers_chunk_grown"] > 0)
+    return s
 
 
 def _note_rows_copied(n: int) -> None:
-    global _APPEND_ROWS_COPIED
-    _APPEND_ROWS_COPIED += int(n)
+    _KV_STATS["appends"] += 1
+    _KV_STATS["rows_copied"] += int(n)
+
+
+# Back-compat alias for the W73 unit test's direct read of the cumulative counter.
+def _rows_copied_total() -> int:
+    return _KV_STATS["rows_copied"]
 
 
 class _GrowBuffer:
@@ -176,6 +208,7 @@ class _GrowBuffer:
             buf = mx.zeros((new.shape[0], cap) + tail, dtype=new.dtype)
             self._buf = self._write(buf, new, 0)
             self._len = n
+            _KV_STATS["buffers"] += 1
             _note_rows_copied(n)
             return
         cap = int(self._buf.shape[1])
@@ -193,6 +226,7 @@ class _GrowBuffer:
         buf = self._write(buf, head, 0)
         buf = self._write(buf, new, self._len)
         self._buf = buf
+        _KV_STATS["buffers"] += 1  # geometric resize allocation
         _note_rows_copied(self._len + n)
         self._len += n
 
@@ -439,6 +473,7 @@ class LayerAttentionCache:
         #: plain ``mx.array`` attributes grown by :func:`_grow` (byte-for-byte the
         #: shipped cache); ON -> :class:`_GrowBuffer` lanes (chunk-grown append).
         self._chunk_grow = _kv_chunk_grow_enabled()
+        _KV_STATS["layers_chunk_grown" if self._chunk_grow else "layers_plain"] += 1
         #: post-RoPE window KV rows, one per token (reference window_kv_cache seed);
         #: pooled+RoPE'd compressed KV / index keys, one per completed group.  Held
         #: in ``_window`` / ``_compress_kv`` / ``_index_k`` (plain array or

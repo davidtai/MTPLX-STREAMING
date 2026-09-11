@@ -818,6 +818,16 @@ def _run_arm(args, arm, bench, mx) -> dict:
         _k29.reset_engagement()
     except Exception:  # pragma: no cover - defensive
         _k29 = None
+    # W73/K32 chunk-grow engagement: zero the cache telemetry after model load so
+    # the receipt reports THIS arm's layer-backing choice + append counts.  enabled
+    # == 0 means the flag did not reach cache construction (env timing / wrong
+    # class); enabled > 0 with logical rows_copied ~flat while the cache_append
+    # census stage is still O(T) means the slice_update did not donate on Metal.
+    try:
+        from mtplx.models import deepseek_v41_cache as _dsv41_cache
+        _dsv41_cache.reset_kv_chunk_grow_stats()
+    except Exception:  # pragma: no cover - defensive
+        _dsv41_cache = None
     try:
         ops = bench._MLXOps(mx)
         mem_probe = bench._MLXMemProbe(mx)
@@ -955,6 +965,20 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "hc_compile_env": os.environ.get(HC_COMPILE_ENV),
                 "note": "cumulative over this arm (prefill + decode + census)",
             }
+        if _dsv41_cache is not None:
+            # W73/K32 chunk-grow engagement (cumulative over the arm). ``enabled``
+            # false => the flag never reached cache construction (env timing / wrong
+            # class). ``enabled`` true with a flat ``rows_copied`` while the
+            # ``cache_append`` census stage stays O(T) => slice_update did not donate
+            # in-place on Metal (append still O(cap)); the append is ~3% of decode
+            # regardless (see W73_DECODE_16K_AUDIT.md).
+            stats = _dsv41_cache.kv_chunk_grow_stats()
+            stats["env"] = os.environ.get(KV_CHUNK_GROW_ENV)
+            stats["note"] = (
+                "cumulative over this arm; rows_copied is the STRATEGY's logical "
+                "cost, compare vs the measured cache_append census stage"
+            )
+            receipt["kv_chunk_grow"] = stats
         return receipt
     finally:
         if runtime is not None:
@@ -1065,8 +1089,21 @@ def _print_decode_stage_summary(arm: str, context_tokens: int, report: dict) -> 
     print(
         f"[ab]   TOTAL/tok  KV-append={tot_cache:7.3f}  "
         f"compress-append={tot_comp:7.3f}  indexer-select={tot_sel:7.3f}  ms/tok "
-        f"(KV_CHUNK_GROW cuts the two append rows to ~O(1))"
+        f"(append+select ~= {tot_cache + tot_comp + tot_sel:.1f} ms/tok; the O(T) "
+        f"port artifact -- NOT the decode headline, cf. routed_switch/attn.reuse)"
     )
+    # W73/K32 chunk-grow engagement (proves the flag reached cache construction).
+    try:
+        from mtplx.models import deepseek_v41_cache as _c
+        s = _c.kv_chunk_grow_stats()
+        print(
+            f"[ab]   kv_chunk_grow: enabled={s['enabled']} "
+            f"layers_chunk_grown={s['layers_chunk_grown']} layers_plain={s['layers_plain']} "
+            f"buffers={s['buffers']} appends={s['appends']} logical_rows_copied={s['rows_copied']} "
+            f"(flat rows_copied but O(T) cache_append above == slice_update not donating on Metal)"
+        )
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 def _stage_timing_pass(*, model, ops, prompt_ids, steps) -> dict:
