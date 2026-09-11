@@ -140,3 +140,37 @@ def test_masked_full_path_executes(receipt):
             whole_total += cell["whole"]
     ratio = peeled_total / whole_total
     assert 0.80 <= ratio <= 1.25, f"masked-full aggregate peeled/whole={ratio:.3f}"
+
+
+def test_ballast_and_churn_flags_execute():
+    """The --ballast-gib / --ballast-churn levers (window-31 follow-up) run without
+    error at a tiny ballast, still produce results for all modes, and record the
+    ballast + memory fields in the receipt.  (The magnitudes are meaningless on
+    CPU; this is a plumbing check -- the pressure signal is a GPU-window result.)"""
+    r = _MOD.run({
+        "tiny": True, "gpu": False, "Ts": _TS,
+        "iters": 6, "warmup": 2, "use_selected": True,
+        "ballast_gib": 0.01, "ballast_churn": True,
+    })
+    assert r["ballast_gib"] == 0.01
+    assert r["ballast_churn"] is True
+    mem = r["memory"]
+    assert mem["ballast_gib"] == 0.01
+    assert mem["n_ballast_chunks"] >= 1  # at least one resident chunk was held
+    # memory counters are present (may be None on a backend without them)
+    for key in ("active_after_ballast_gib", "active_end_gib", "peak_gib"):
+        assert key in mem
+    # the measurement still ran end to end for every mode / T
+    assert set(r["results"]) == set(_MODES)
+    for mode in _MODES:
+        for T in _TS:
+            assert r["results"][mode][str(T)]["whole"] > 0.0, (mode, T)
+
+    # ballast off -> no resident chunks (default path unchanged)
+    r0 = _MOD.run({
+        "tiny": True, "gpu": False, "Ts": _TS,
+        "iters": 4, "warmup": 1, "use_selected": True,
+    })
+    assert r0["ballast_gib"] == 0.0
+    assert r0["ballast_churn"] is False
+    assert r0["memory"]["n_ballast_chunks"] == 0
