@@ -883,24 +883,34 @@ class Attention(nn.Module):
             _st.add(out)
         return out
 
-    def _window_selected_idx(self, positions, T):
+    def _window_selected_idx(self, positions, T, drop_offset=0):
         """This layer's sliding-window keys as gather indices ``[s, W]`` into the
-        full-history window store (row j == absolute token j), with a ``[s, W]``
-        valid mask.  Reproduces the reference ``get_window_topk_idxs`` (model.py
-        L409-426) in the port's absolute-position frame: query at position ``p``
-        attends ``{max(0, p-W+1) .. p}`` (``idxs = clamp(p-W+1, 0) + arange(W)``,
-        future slots ``idx > p`` marked invalid) -- exactly the set the
-        :meth:`_window_attend` causal band mask keeps, so the selected-gather path
-        attends the identical window keys as the masked-full path."""
+        window store, with a ``[s, W]`` valid mask.  Reproduces the reference
+        ``get_window_topk_idxs`` (model.py L409-426) in the port's absolute-position
+        frame: query at position ``p`` attends ``{max(0, p-W+1) .. p}``
+        (``idxs = clamp(p-W+1, 0) + arange(W)``, future slots ``idx > p`` marked
+        invalid) -- exactly the set the :meth:`_window_attend` causal band mask
+        keeps, so the selected-gather path attends the identical window keys as the
+        masked-full path.
+
+        ``T`` is the store's PHYSICAL row count (``window_all.shape[1]``) and
+        ``drop_offset`` (W80) the number of logically-dropped front rows: physical
+        row j holds absolute position ``drop_offset + j``.  The returned indices are
+        PHYSICAL (``idx_abs - drop_offset``); a slot is valid only if its absolute
+        position is not future, is < the logical length, AND is still resident
+        (``>= drop_offset``).  With ``drop_offset == 0`` (full-history backing) this
+        is byte-for-byte the original: ``T`` is the logical length and physical ==
+        absolute."""
         W = self.window_size
         qp = positions.reshape(-1, 1)                     # [s, 1] absolute positions
         base = mx.maximum(qp - (W - 1), 0)
-        idx = base + mx.arange(W).reshape(1, W)           # [s, W]
-        valid = (idx <= qp) & (idx < T)                    # not future / in store
-        return idx.astype(mx.int32), valid
+        idx = base + mx.arange(W).reshape(1, W)           # [s, W] absolute
+        logical_len = drop_offset + T                     # absolute rows that exist
+        valid = (idx <= qp) & (idx < logical_len) & (idx >= drop_offset)
+        return (idx - drop_offset).astype(mx.int32), valid
 
     def _sparse_attend_selected(self, q, window_all, compress_kv, comp_idx,
-                                positions):
+                                positions, drop_offset=0):
         """K30 (W59) selected-key gather attention -- the faithful,
         non-transliterated form of :meth:`_sparse_attend`, for prefill (rows > 1),
         decode (rows == 1) and the ``K+1`` verify batch alike.
@@ -934,7 +944,8 @@ class Attention(nn.Module):
         b, s, H, hd = q.shape
         mode = getattr(self, "mode", "dspark")
         with _stime.stage_attn("attn." + mode + ".score.gather") as _st:
-            win_idx, win_valid = self._window_selected_idx(positions, window_all.shape[1])
+            win_idx, win_valid = self._window_selected_idx(
+                positions, window_all.shape[1], drop_offset)
             win_idx = mx.broadcast_to(win_idx[None], (b, s, win_idx.shape[-1]))
             win_valid = mx.broadcast_to(win_valid[None], (b, s, win_valid.shape[-1]))
             kvg_win = _gather_rows(window_all, win_idx, win_valid)   # [b,s,W,hd]
@@ -986,29 +997,39 @@ class Attention(nn.Module):
             _st.add(o)
         return o
 
-    def _window_attend(self, positions, T, b, s, shared):
+    def _window_attend(self, positions, T, b, s, shared, drop_offset=0):
         """The causal sliding-window attend mask ``[b, s, T]``.
 
         Identical across every backbone layer of one forward (same ``positions``
-        object, same lockstep window length ``T``, same ``window_size``).  Under
-        ``MTPLX_DSV41_ATTN_WIN_MEMO`` (K24) it is computed once per forward and
-        memoized on the per-forward ``shared`` runtime, reused for the other
-        layers -- byte-identical (the reused array is the same object; reuse fires
-        only when ``positions`` is the same object and ``(T, window_size, b, s)``
-        match, else it recomputes, so a forward whose layers differ is never
-        wrong).  With the flag off it is exactly the original per-layer build."""
+        object, same lockstep window length ``T``, same ``window_size``, same
+        ``drop_offset``).  Under ``MTPLX_DSV41_ATTN_WIN_MEMO`` (K24) it is computed
+        once per forward and memoized on the per-forward ``shared`` runtime, reused
+        for the other layers -- byte-identical (the reused array is the same object;
+        reuse fires only when ``positions`` is the same object and
+        ``(T, window_size, drop_offset, b, s)`` match, else it recomputes, so a
+        forward whose layers differ is never wrong).  With the flag off it is
+        exactly the original per-layer build.
+
+        ``T`` is the PHYSICAL row count and ``drop_offset`` (W80) the dropped-front-
+        row count: physical row j is absolute position ``drop_offset + j``, so the
+        band mask compares absolute window positions to the (absolute) query
+        positions.  ``drop_offset == 0`` (full-history backing) is byte-for-byte the
+        original."""
         if _ATTN_WIN_MEMO and shared is not None:
             memo = getattr(shared, "_win_attend_memo", None)
             if (memo is not None and memo[0] is positions and memo[1] == T
-                    and memo[2] == self.window_size and memo[3] == (b, s)):
+                    and memo[2] == self.window_size and memo[3] == (b, s)
+                    and len(memo) > 5 and memo[5] == drop_offset):
                 return memo[4]
-        wpos = mx.arange(T)
+        wpos = drop_offset + mx.arange(T)                 # absolute positions of rows
         qp = positions[:, None]
         wp = wpos[None, :]
         win_attend = (wp <= qp) & (wp > qp - self.window_size)  # [s, T]
         attend = mx.broadcast_to(win_attend[None], (b, s, T))
         if _ATTN_WIN_MEMO and shared is not None:
-            shared._win_attend_memo = (positions, T, self.window_size, (b, s), attend)
+            shared._win_attend_memo = (
+                positions, T, self.window_size, (b, s), attend, drop_offset
+            )
         return attend
 
     def _publish_compressed(self, x, positions, layer_cache, shared, qcos, qsin):
@@ -1161,6 +1182,10 @@ class Attention(nn.Module):
                 _stime.stage_decode("attn." + mode + ".cache_append") as _sd:
             layer_cache.append_window(kv_new)
             window_all = layer_cache.window
+            # W80: absolute position of physical window row 0 (0 unless the bounded
+            # ring dropped front rows); threaded into the selected-gather / SWA-mask
+            # so they address the same absolute positions as the full store.
+            win_drop = layer_cache.window_drop_offset
             _sp.add(window_all)
             _sd.add(window_all)
         # K30 (W59): gather only the selected keys per query instead of scoring the
@@ -1175,7 +1200,7 @@ class Attention(nn.Module):
         # of this forward; memoize it on the per-forward shared runtime under
         # MTPLX_DSV41_ATTN_WIN_MEMO (byte-identical, a pure host-dispatch cut).
         attend = None if use_selected else self._window_attend(
-            positions, window_all.shape[1], b, s, shared
+            positions, window_all.shape[1], b, s, shared, win_drop
         )
         KV = window_all
         sel_compress_kv = None
@@ -1202,7 +1227,7 @@ class Attention(nn.Module):
         with _stime.stage_prefill("attn." + mode + ".score") as _st:
             if use_selected:
                 o = self._sparse_attend_selected(
-                    q, window_all, sel_compress_kv, sel_comp_idx, positions
+                    q, window_all, sel_compress_kv, sel_comp_idx, positions, win_drop
                 )
             else:
                 o = self._sparse_attend(q, KV, attend)
@@ -2524,8 +2549,15 @@ class DeepseekV41Backbone(nn.Module):
         arrays = [a for a in extra if a is not None]
         # getattr with a default keeps this robust to W22's cache-container
         # reshaping (mlx_lm per-layer protocol): it forces whatever stored arrays
-        # are present, and simply skips any renamed field.
+        # are present, and simply skips any renamed field.  W80 (item 4): when the
+        # entry exposes ``eval_backing`` it forces the RAW preallocated ring /
+        # _GrowBuffer buffers, so a per-token settle fence never materialises a
+        # fresh T-sized (window) / n_comp-sized (compress/index) slice.
         for lc in cache.layers:
+            eb = getattr(lc, "eval_backing", None)
+            if callable(eb):
+                arrays.extend(eb())
+                continue
             for name in ("window", "compress_kv", "index_k"):
                 a = getattr(lc, name, None)
                 if a is not None:
@@ -2770,16 +2802,22 @@ class DeepseekV41Backbone(nn.Module):
         graph.  Scoped to the current layer's store -- earlier layers are already
         evaluated under the layer-major loop."""
         arrays = [a for a in extra if a is not None]
-        for name in ("window", "compress_kv", "index_k"):
-            a = getattr(lc, name, None)
-            if a is not None:
-                arrays.append(a)
-        cs = getattr(lc, "comp_state", None)
-        if cs is not None:
-            for name in ("raw_kv", "raw_score"):
-                a = getattr(cs, name, None)
+        eb = getattr(lc, "eval_backing", None)
+        if callable(eb):
+            # W80 (item 4): force the RAW ring / _GrowBuffer buffers, never a fresh
+            # per-token slice.
+            arrays.extend(eb())
+        else:
+            for name in ("window", "compress_kv", "index_k"):
+                a = getattr(lc, name, None)
                 if a is not None:
                     arrays.append(a)
+            cs = getattr(lc, "comp_state", None)
+            if cs is not None:
+                for name in ("raw_kv", "raw_score"):
+                    a = getattr(cs, name, None)
+                    if a is not None:
+                        arrays.append(a)
         if arrays:
             mx.eval(arrays)
             # W75: a settled layer-major (layer, chunk) prefill fence -- ticks

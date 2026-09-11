@@ -196,6 +196,23 @@ SELECT_FENCE_ENV = "MTPLX_DSV41_SELECT_FENCE"  # W76: fence K30 selected_idx arg
 # belongs. A stage-timing ATTRIBUTION lever: byte-identical token/cache/logits (the
 # fenced array is the same object the gather forces; the extra fence is a no-op in
 # production / prefill), so it changes only the decode census, never the output.
+WINDOW_RING_ENV = "MTPLX_DSV41_WINDOW_RING"  # W80 / K34: bounded window ring.
+# The window store is a genuine sliding window of window_size (128); the decode
+# gather / SWA mask only ever read the last 128 rows, yet the phase-1 store keeps
+# FULL history (~0.7 GB at 16K across 40 layers).  W76/W78 pinned that resident
+# churn as the memory-pressure amplifier that inflates the whole 16K decode step.
+# This arms a BOUNDED ring of window_size + max_verify + slack (~136) rows in fixed
+# ping-pong buffers (a ~128x cut), plus preallocated compress/index stores (the
+# indexer needs them in full, so they can't be bounded, but the per-token realloc
+# is removed).  A logical drop_offset addresses the same absolute positions, and
+# dropped rows are always beyond the causal window, so the SELECTED-key decode path
+# (cell16k) is BYTE-IDENTICAL; the masked-full path is reassociation-level (the
+# score-reduction width shrinks -- greedy-identical, max|d|~1e-6, in-family with the
+# other DSV4.1 score levers).  A DECODE-shape lever (prefill fills it chunk-wise).
+WINDOW_RING_MAX_VERIFY_ENV = "MTPLX_DSV41_WINDOW_RING_MAX_VERIFY"  # widest verify block
+WINDOW_RING_SLACK_ENV = "MTPLX_DSV41_WINDOW_RING_SLACK"            # safety margin
+WINDOW_RING_HEADROOM_ENV = "MTPLX_DSV41_WINDOW_RING_HEADROOM"      # appends per compaction
+WINDOW_RING_MAXKV_ENV = "MTPLX_DSV41_WINDOW_RING_MAXKV"            # compress/index prealloc
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -238,6 +255,11 @@ ALL_LEVER_ENVS = (
     DEVICE_ROUTE_PINNED_ENV,
     KV_CHUNK_GROW_ENV,
     SELECT_FENCE_ENV,
+    WINDOW_RING_ENV,
+    WINDOW_RING_MAX_VERIFY_ENV,
+    WINDOW_RING_SLACK_ENV,
+    WINDOW_RING_HEADROOM_ENV,
+    WINDOW_RING_MAXKV_ENV,
 )
 
 
@@ -251,6 +273,8 @@ def _preset(
     layout_fix=None, down_k_pad=None, selected_keys=None,
     softmax_kernel=None, decode_attn_kernel=None, mlx_max_mb_per_buffer=None,
     kv_chunk_grow=None, select_fence=None,
+    window_ring=None, window_ring_max_verify=None, window_ring_slack=None,
+    window_ring_headroom=None, window_ring_maxkv=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
@@ -298,6 +322,11 @@ def _preset(
         DEVICE_ROUTE_PINNED_ENV: device_route_pinned,
         KV_CHUNK_GROW_ENV: kv_chunk_grow,
         SELECT_FENCE_ENV: select_fence,
+        WINDOW_RING_ENV: window_ring,
+        WINDOW_RING_MAX_VERIFY_ENV: window_ring_max_verify,
+        WINDOW_RING_SLACK_ENV: window_ring_slack,
+        WINDOW_RING_HEADROOM_ENV: window_ring_headroom,
+        WINDOW_RING_MAXKV_ENV: window_ring_maxkv,
     }
 
 
@@ -513,6 +542,33 @@ ARM_PRESETS = {
     "cell16k": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         kv_chunk_grow="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+    ),
+    # W80 / K34: the bounded window ring in ISOLATION, with selected keys on so the
+    # decode gather path (the ring's bit-identical composition -- see below) is the
+    # one measured.  The window store is a bounded ring (~window_size+max_verify+
+    # slack rows) and the compress/index stores are preallocated, removing the
+    # per-token full-store realloc for all three lanes and cutting the 16K resident
+    # window ~128x (0.7 GB -> ~5.5 MB).  BYTE-IDENTICAL to selected-keys control (the
+    # dropped rows are always beyond the causal window, so every reachable gather /
+    # SWA read is unchanged); the byte-identity summary must show it clean.  On the
+    # masked-full path (selected keys off) it is reassociation-level instead (the
+    # score-reduction width shrinks -- greedy-identical, ~1e-6), so the isolation arm
+    # pins selected keys on.
+    "window_ring": _preset(selected_keys="1", window_ring="1"),
+    # W80: cell16k + the window ring -- the standard 16,384-token cell with the
+    # bounded window store and preallocated compress/index stores replacing the
+    # phase-1 full-history / chunk-grow append.  The direct A/B against cell16k that
+    # isolates the ring's decode effect at 16K: the per-token append lanes stop
+    # reallocating and the resident window collapses, which -- per W76/W78's
+    # memory-pressure finding -- should recover the ballooned context-independent
+    # decode stages far beyond the ~58 ms/tok raw append.  Byte-identical to cell16k
+    # (both run selected keys), so the byte-identity summary must show it matching
+    # cell16k's class (cell16k itself is lossy vs control ONLY through head=bf16 +
+    # the dense/lean prefill reassoc; the ring adds NO new lossiness).
+    "cell16k_ring": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
 }
@@ -1288,6 +1344,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
     try:
         from mtplx.models import deepseek_v41_cache as _dsv41_cache
         _dsv41_cache.reset_kv_chunk_grow_stats()
+        # W80 / K34: zero the window-ring telemetry too, so the receipt reports THIS
+        # arm's ring engagement + drop/copy counts.
+        _reset_ring = getattr(_dsv41_cache, "reset_window_ring_stats", None)
+        if callable(_reset_ring):
+            _reset_ring()
     except Exception:  # pragma: no cover - defensive
         _dsv41_cache = None
     try:
@@ -1527,6 +1588,25 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "cost, compare vs the measured cache_append census stage"
             )
             receipt["kv_chunk_grow"] = stats
+            # W80 / K34 window-ring engagement + drop/copy telemetry.  enabled ==
+            # False means the flag did not reach cache construction (env timing /
+            # wrong class).  enabled == True: `capacity` is the steady logical keep
+            # (window_size + max_verify + slack), `phys_capacity` the ping-pong
+            # buffer rows, `drops`/`rows_dropped` the compactions/logical rows
+            # dropped, `rows_copied` the physical rows written (appends + compaction
+            # carries) -- flat-per-token (amortized O(1)) is the win, vs the phase-1
+            # O(T) concatenate.  `reallocs` should be ~0 in decode (a prefill chunk
+            # wider than the ping-pong buffers is the only grow).
+            ring_stats_fn = getattr(_dsv41_cache, "window_ring_stats", None)
+            if callable(ring_stats_fn):
+                rstats = ring_stats_fn()
+                rstats["env"] = os.environ.get(WINDOW_RING_ENV)
+                rstats["maxkv_env"] = os.environ.get(WINDOW_RING_MAXKV_ENV)
+                rstats["note"] = (
+                    "cumulative over this arm; capacity = window_size + max_verify + "
+                    "slack (bounded); rows_copied flat-per-token == amortized O(1)"
+                )
+                receipt["window_ring"] = rstats
         return receipt
     finally:
         if runtime is not None:
