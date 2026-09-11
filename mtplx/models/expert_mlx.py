@@ -40,6 +40,41 @@ from mtplx.mmap_mlx import mmap_u32
 _MIXED_AFFINE_BITS = {"affine2": 2, "affine3": 3}
 _MIXED_DOWN_BITS = 3
 
+# W51 / KERNEL_LEDGER K26 -- prefill-only "dequantize once, matmul dense" expert
+# path.  The mxfp4 gs32 ``gather_qmm`` is ALU/dequant-bound at the large per-expert
+# row counts of the 16 K layer-major prefill (W47: ~2.9 TFLOPS vs a dense bf16
+# matmul's ~15-25 TFLOPS on this box; [[metal-sub4bit-alu-bound]]).  When
+# ``MTPLX_DSV41_PREFILL_DENSE_EXPERTS`` is armed, a prefill wave dequantizes each
+# expert's three matrices from the resident component bank to bf16 ONCE (mx.dequantize
+# mode "mxfp4", weight + E8M0 scales, no bias) and runs gate/up/down as dense bf16
+# matmuls over that expert's rows, scattering back; experts with fewer than
+# ``MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS`` rows keep ``gather_qmm``.  Default OFF; never
+# engages at decode (the switch gates it to ``RoutingPhase.PREFILL``, so M=1 is
+# byte-identical).  NOT bit-identical to gather_qmm -- fp32 matmul accumulation order
+# differs -- within the tolerance the W51 CPU test measures.
+_PREFILL_DENSE_ENV = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"
+_PREFILL_DENSE_MIN_ROWS_ENV = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"
+_PREFILL_DENSE_BATCH_ENV = "MTPLX_DSV41_PREFILL_DENSE_BATCH"
+_PREFILL_DENSE_MIN_ROWS_DEFAULT = 128
+_PREFILL_DENSE_BATCH_DEFAULT = 8
+
+
+def _prefill_dense_experts_enabled() -> bool:
+    """Read at use (not import): the server stamps optimization keys after importing
+    modules ([[env-flags-read-at-use-not-import]])."""
+    return os.environ.get(_PREFILL_DENSE_ENV) == "1"
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 1 else default
+
 _ROUTING_PHASE: ContextVar[RoutingPhase | None] = ContextVar(
     "mtplx_expert_routing_phase",
     default=None,
@@ -1507,6 +1542,160 @@ def _run_component_bank_q4(
     )
 
 
+def _dequantize_mxfp4_slot(
+    bank: MlxComponentBank,
+    slot: int,
+    projection: str,
+    *,
+    group_size: int,
+    bits: int,
+) -> mx.array:
+    """Dense ``[out, in]`` bf16 for one expert's mxfp4 gs32 projection.
+
+    The native-mxfp4 component bank stores ``{projection}.weight`` (packed FP4
+    codes, uint32) and ``{projection}.scales`` (one E8M0 exponent byte per
+    ``group_size`` columns, no bias leaf) row-major by slot, exactly the leaves
+    :func:`_gather_component_bank`'s ``mode="mxfp4"`` gather feeds ``gather_qmm``.
+    ``mx.dequantize(weight, scales, mode="mxfp4")`` reverses the same codec once,
+    at bank precision -- FP4 code x 2^E8M0 lands exactly in bf16, so the dequant
+    itself is lossless; only the later dense matmul reassociates vs the fused
+    gather (see :func:`_run_component_bank_dense_prefill`)."""
+    weight = bank.arrays[f"{projection}.weight"][slot]
+    scales = bank.arrays[f"{projection}.scales"][slot]
+    return mx.dequantize(
+        weight,
+        scales,
+        group_size=group_size,
+        bits=bits,
+        mode="mxfp4",
+    )
+
+
+def _run_component_bank_dense_prefill(
+    x: mx.array,
+    bindings: tuple[ExpertSlotBinding, ...],
+    *,
+    group_size: int,
+    bits: int = 4,
+    swiglu_limit: float | None = None,
+    min_rows: int,
+    batch: int,
+) -> mx.array:
+    """Prefill "dequantize once, matmul dense" expert wave (W51, K26).
+
+    Groups this wave's assignment-aligned rows by expert (bank slot; the host-side
+    ``binding.buffer.bank_index`` needs no device sync).  For every expert with at
+    least ``min_rows`` rows it dequantizes gate/up/down from mxfp4 gs32 to bf16
+    ONCE and runs three dense bf16 matmuls over that expert's rows (ClampedSwiGLU
+    unchanged), instead of the per-row ALU/dequant-bound mxfp4 ``gather_qmm``.
+    Experts below the threshold keep ``gather_qmm`` (one grouped gather).  Results
+    are scattered back into the input row order, so the return matches
+    :func:`_gather_component_bank`'s ``[rows, out]`` contract exactly.
+
+    Bounded transient: each dequantized expert is ~3 x 2 x hidden x inter bytes of
+    bf16 (~71 MB at 5120x2304); experts are processed in batches of ``batch`` with
+    an ``mx.eval`` between batches, so at most ``batch`` experts' dequantized copies
+    are live at once (~0.57 GB at the default 8) and none survives the call.
+
+    NOT bit-identical to the pure ``gather_qmm`` wave: the dequant is exact, but the
+    dense fp32 matmul accumulation order differs from the fused gather's, so outputs
+    match only within the tolerance the W51 CPU test measures.  When no expert clears
+    the threshold this is a pure ``gather_qmm`` fall-through (byte-identical)."""
+
+    if not bindings or int(x.shape[0]) != len(bindings):
+        raise ValueError(
+            "component-bank inputs and bindings must be non-empty and aligned"
+        )
+    bank = getattr(bindings[0].buffer, "bank", None)
+    if bank is None or any(
+        getattr(binding.buffer, "bank", None) is not bank for binding in bindings
+    ):
+        raise ValueError("component-bank execution requires one shared bank")
+
+    slot_of_row = [int(binding.buffer.bank_index) for binding in bindings]
+    groups: dict[int, list[int]] = {}
+    for row, slot in enumerate(slot_of_row):
+        groups.setdefault(slot, []).append(row)
+
+    dense_slots = [slot for slot, rows in groups.items() if len(rows) >= min_rows]
+    if not dense_slots:
+        # No expert clears the threshold (small-M waves, decode-shaped inputs):
+        # a pure gather_qmm wave, byte-identical to the flag-off path.
+        slot_indices = mx.array(slot_of_row, dtype=mx.int32).reshape((-1, 1))
+        return _gather_component_bank(
+            x,
+            bank,
+            slot_indices,
+            group_size=group_size,
+            bits=bits,
+            swiglu_limit=swiglu_limit,
+            codec="mxfp4",
+        )
+
+    parts: list[mx.array] = []
+    part_positions: list[int] = []
+    pending: list[mx.array] = []
+    for index, slot in enumerate(dense_slots):
+        rows = groups[slot]
+        x_slot = mx.take(x, mx.array(rows, dtype=mx.int32), axis=0)
+        dq_gate = _dequantize_mxfp4_slot(
+            bank, slot, "gate_proj", group_size=group_size, bits=bits
+        ).astype(x_slot.dtype)
+        dq_up = _dequantize_mxfp4_slot(
+            bank, slot, "up_proj", group_size=group_size, bits=bits
+        ).astype(x_slot.dtype)
+        gate = mx.matmul(x_slot, dq_gate.T)
+        up = mx.matmul(x_slot, dq_up.T)
+        hidden = _clamped_swiglu(gate, up, swiglu_limit)
+        dq_down = _dequantize_mxfp4_slot(
+            bank, slot, "down_proj", group_size=group_size, bits=bits
+        ).astype(hidden.dtype)
+        y_slot = mx.matmul(hidden, dq_down.T)
+        parts.append(y_slot)
+        part_positions.extend(rows)
+        pending.append(y_slot)
+        # Bound the peak: materialize each batch of experts so their dequantized
+        # bf16 transients (unreferenced past this iteration) are freed before the
+        # next batch dequantizes.  The small [rows, out] outputs stay in ``parts``.
+        if len(pending) >= batch:
+            mx.eval(pending)
+            pending = []
+    if pending:
+        mx.eval(pending)
+
+    dense_set = set(dense_slots)
+    small_rows = [
+        row
+        for slot, slot_rows in groups.items()
+        if slot not in dense_set
+        for row in slot_rows
+    ]
+    if small_rows:
+        small_idx = mx.array(small_rows, dtype=mx.int32)
+        sub_x = mx.take(x, small_idx, axis=0)
+        sub_slots = mx.array(
+            [slot_of_row[row] for row in small_rows], dtype=mx.int32
+        ).reshape((-1, 1))
+        parts.append(
+            _gather_component_bank(
+                sub_x,
+                bank,
+                sub_slots,
+                group_size=group_size,
+                bits=bits,
+                swiglu_limit=swiglu_limit,
+                codec="mxfp4",
+            )
+        )
+        part_positions.extend(small_rows)
+
+    if len(parts) == 1 and part_positions == list(range(len(slot_of_row))):
+        return parts[0]
+    joined = mx.concatenate(parts, axis=0)
+    order = mx.argsort(mx.array(part_positions, dtype=mx.int32))
+    return mx.take(joined, order, axis=0)
+
+
 def _gather_component_bank(
     x: mx.array,
     bank: MlxComponentBank,
@@ -1888,8 +2077,14 @@ class HotExpertSwitchGLU(nn.Module):
         self,
         selected: mx.array,
         bindings: tuple[ExpertSlotBinding, ...],
+        *,
+        dense_prefill: bool = False,
     ) -> mx.array:
-        """Execute one component-bank wave under this layer's record codec."""
+        """Execute one component-bank wave under this layer's record codec.
+
+        ``dense_prefill`` (W51/K26) is threaded True only from the streamed switch's
+        PREFILL split path; the decode all-hit / device-route / shadow callers leave
+        it at the default, so the dense expert path can never engage at M=1."""
 
         # W44: capture this layer's component bank from a routed binding the
         # first time we see one, so the barrier-free device-route path can gather
@@ -1901,6 +2096,20 @@ class HotExpertSwitchGLU(nn.Module):
                 register(self.layer_index, getattr(bindings[0].buffer, "bank", None))
 
         if self.codec in ("affine", "mxfp4"):
+            if dense_prefill and self.codec == "mxfp4":
+                return _run_component_bank_dense_prefill(
+                    selected,
+                    bindings,
+                    group_size=self.group_size,
+                    bits=self.bits,
+                    swiglu_limit=self.swiglu_limit,
+                    min_rows=_positive_env_int(
+                        _PREFILL_DENSE_MIN_ROWS_ENV, _PREFILL_DENSE_MIN_ROWS_DEFAULT
+                    ),
+                    batch=_positive_env_int(
+                        _PREFILL_DENSE_BATCH_ENV, _PREFILL_DENSE_BATCH_DEFAULT
+                    ),
+                )
             return _run_component_bank_q4(
                 selected,
                 bindings,
@@ -2160,6 +2369,16 @@ class HotExpertSwitchGLU(nn.Module):
             with _stime.stage_nested("switch.admission"):
                 self.runtime.prepare_prefill_seed(self.layer_index, expert_ids)
 
+        # W51 / K26 -- the prefill-only "dequantize once, matmul dense" expert path.
+        # Gated to PREFILL (so the decode M=1 path is structurally excluded and stays
+        # byte-identical) + native mxfp4 + the env flag, read at use.  Threaded into
+        # ``_dispatch_component_bank`` from the split-route waves below.
+        _dense_prefill_active = (
+            phase is RoutingPhase.PREFILL
+            and self.codec == "mxfp4"
+            and _prefill_dense_experts_enabled()
+        )
+
         outputs: list[mx.array] = []
         output_positions: list[int] = []
         # Seed from the hoist (above): when set, the shared branch is already
@@ -2275,7 +2494,11 @@ class HotExpertSwitchGLU(nn.Module):
                 )
                 selected = mx.take(tokens, token_positions, axis=0)
                 wave_outputs.append(
-                    self._dispatch_component_bank(selected, grouped_bindings)
+                    self._dispatch_component_bank(
+                        selected,
+                        grouped_bindings,
+                        dense_prefill=_dense_prefill_active,
+                    )
                 )
                 wave_positions.extend(grouped_positions)
             if defer:

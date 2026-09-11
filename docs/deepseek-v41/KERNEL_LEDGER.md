@@ -755,6 +755,57 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 
 ---
 
+### K26 — Prefill dequantize-once / dense-bf16 experts (`MTPLX_DSV41_PREFILL_DENSE_EXPERTS`) — **Rank (W51, the ALU-bound 16K prefill switch)**
+- **Mechanism:** W47's 16K layer-major stage timing put `moe.routed_switch` at **105 s / 40
+  layer-major calls** (~2.6 s/layer for ~98,304 routed rows = 16,384 tokens x top-6), of which the
+  `switch_breakdown` attributes ~95 s to the `gather_qmm` compute itself (miss_submit 6.2 s, route_plan
+  4.0 s) and ~22 s to the bank read (269 GiB once under layer-major @ 13 GB/s). The arithmetic:
+  98,304 rows x 3 projections (gate/up 5120->2304, down 2304->5120) = **6.96 TFLOP/layer x 40 = 278
+  TFLOP in 95 s ≈ 2.9 TFLOPS** — the mxfp4 gs32 `gather_qmm` at large M is **ALU/dequant-bound**
+  ([[metal-sub4bit-alu-bound]]: dequant ALU/occupancy binds before bandwidth), while a dense bf16
+  matmul on this box runs ~15-25 TFLOPS. K26 (env, default OFF) groups a prefill wave's rows by expert
+  (the host-side `binding.buffer.bank_index`, **no device sync**); for every expert with ≥
+  `MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS` rows (default 128) it **dequantizes gate/up/down from mxfp4 gs32
+  to bf16 ONCE** (`mx.dequantize(weight, scales, group_size=32, bits=4, mode="mxfp4")` — E8M0 scales,
+  no bias) and runs three **dense bf16 matmuls** over that expert's rows (ClampedSwiGLU unchanged),
+  scattering back into router order; experts below the threshold keep `gather_qmm`. **Where:** prefill
+  only — the switch gates it to `RoutingPhase.PREFILL` + `codec=="mxfp4"`, so the decode M=1 path is
+  structurally excluded and byte-identical.
+- **Cost model (16K layer-major, 384 experts, ~256 rows/expert avg so ~all clear 128):**
+  - *dequant bf16 written/layer* = experts x 3 x 2304 x 5120 x 2 B ≈ 384 x **70.8 MB ≈ 27 GB/layer**;
+    x40 ≈ **1.09 TB** across the prefill (the whole routed bank expanded from ~0.53 B/weight mxfp4 to
+    2 B/weight bf16). DRAM round-trip @ 614 GB/s ≈ **1.8 s write + 1.8 s read ≈ 3.5 s total** (the 269
+    GiB packed read is unchanged, paid by both paths).
+  - *matmul FLOPs unchanged* at 278 TFLOP; at dense **15-25 TFLOPS → 11-19 s** (vs the measured 2.9
+    TFLOPS / **95 s** gather).
+  - *expected:* switch compute **95 s → ~15-22 s** (dense matmul + dequant DRAM), so `moe.routed_switch`
+    **105 s → ~25-35 s** (bank read 22 s now co-binds) — **≈ 70-80 s off the 16K prefill**, i.e. the
+    layer-major TTFT **370 s → ~295 s (44 → ~55 tok/s)**, contingent on the GPU-window measurement.
+  - *transient peak* bounded by processing experts in batches of `MTPLX_DSV41_PREFILL_DENSE_BATCH`
+    (default 8) with `mx.eval` between batches: ≤ 8 x 70.8 MB ≈ **0.57 GB** live, none kept across
+    layers (well under the 60 GiB plan / 100 GiB knob, [[never-exceed-the-memory-knob]]).
+- **Exactness:** NOT bit-identical to `gather_qmm` (fp32 matmul accumulation order differs; the dequant
+  itself is lossless — FP4 code x 2^E8M0 lands exactly in bf16). CPU test on random mxfp4 gs32 weights
+  (`tests/models/test_deepseek_v41_prefill_dense_experts.py`, hidden 256 / inter 128, 436 rows / 5
+  experts) vs a **float64 reference**: `gather_qmm` max|Δ|=**9.40e-4** (rel 2.00e-2), dense bf16
+  max|Δ|=**2.81e-4** (rel 5.96e-3) — the dense path is *closer* to fp64 (lossless dequant + fp32-
+  accumulated dense matmul); dense-vs-gather max|Δ|=**1.22e-3** (rel 2.56e-2 to peak), the bf16
+  accumulation-order divergence, David's documented FP class (cf. #171 vk_k split-K, the K16/K24
+  compile divergences). Decode (M=1) and every below-threshold / small-M wave are a **byte-identical
+  `gather_qmm` fall-through** (`mx.array_equal`, same test). This is the opposite of the "hand dequant
+  kernel" dead entry below (§6): it uses **stock `mx.dequantize` + stock dense `mx.matmul`**, no hand
+  kernel, and only at the large-M regime where dense wins — the W17 microbench (`window-17/
+  gather-qmm-microbench.json`) confirms dense **LOSES** at M≤4 (bf16_dense 3197 µs vs mxfp4 982 µs @
+  M=4, memory-bound reading 3.8x the bytes), which is exactly why the threshold + prefill gate exist.
+- **STATUS (W51, `feat/deepseek-v41-w51`):** IMPLEMENTED + CPU-proven, default OFF.
+  `expert_mlx.py`: `_run_component_bank_dense_prefill` + `_dequantize_mxfp4_slot`, threaded through
+  `HotExpertSwitchGLU._dispatch_component_bank(dense_prefill=...)` from the PREFILL split wave only.
+  Arm `prefill_dense_experts` (layer-major + dense on) in `scripts/deepseek_v41/ab_decode_env_levers.py`
+  (dry-run extended). **Realized GPU delta is the open GPU-window question** (KG-k, unmeasured — the
+  crossover M and realized dense TFLOPS on the real 5120x2304 experts). See `W51_PREFILL_DENSE_EXPERTS.md`.
+
+---
+
 ## 6. Dead-here (GPU-side; do not re-propose)
 
 | Lever | Why dead |

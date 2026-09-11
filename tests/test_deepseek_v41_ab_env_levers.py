@@ -49,14 +49,18 @@ _SB = "MTPLX_DSV41_SWITCH_SUBMIT"      # W42 / K23 var B: all-hit async submit
 _AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
 _WM = "MTPLX_DSV41_ATTN_WIN_MEMO"      # W45 / K24: sliding-window mask memo
 _DR = "MTPLX_DSV41_DEVICE_ROUTE"       # W44 / K24: barrier-free all-hit device route
+_PD = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"     # W51 / K26: prefill dense experts
+_PDMR = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"  # W51 / K26: per-expert row threshold
+_PDB = "MTPLX_DSV41_PREFILL_DENSE_BATCH"      # W51 / K26: dequant batch size
 _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
-# The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) is a
-# separate boolean tracked like the head codec: byte-identical (incl. cold
-# recovery) but carrying a cold-token recovery cost, and NOT part of all_levers
-# (which already covers the switch lever via the variant-B fast-path) -- so it
-# never joins the "all-on" independence invariant. It IS in stack_a.
+# The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
+# PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
+# NOT part of all_levers, so they never join the "all-on" independence invariant.
+# DEVICE_ROUTE is in stack_a; PREFILL_DENSE_EXPERTS is its own arm. The two dense
+# value knobs (min_rows, batch) take an integer string and are left unset by every
+# arm (the code default applies), so they are always recorded None.
 _ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight booleans all_levers sets
-_BOOL_AND_HEAD = _ALL_KEYS + (_DR, _HM)  # + device_route + head codec = all ten keys
+_BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _HM)  # every key a preset pins
 
 ALL_ARMS = [
     "control",
@@ -69,6 +73,7 @@ ALL_ARMS = [
     "attn_compile",
     "attn_win_memo",
     "device_route",
+    "prefill_dense_experts",
     "both",
     "all_levers",
     "stack_a",
@@ -89,6 +94,9 @@ EXPECTED_ON = {
     "attn_compile": {_AC},
     "attn_win_memo": {_WM},
     "device_route": set(),   # its only key is _DR, tracked in EXPECTED_DEVICE
+    # W51: the dense-experts arm rides the layer-major schedule; its own boolean
+    # (_PD) is tracked in EXPECTED_DENSE, so _LM is the only _ALL_KEYS member here.
+    "prefill_dense_experts": {_LM},
     "both": {_OV, _LM},
     "all_levers": {_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM},
     # W42 window-14: pure fast path LEFT OUT (−13.4%).  W45: the window-mask memo
@@ -106,6 +114,10 @@ EXPECTED_ON = {
 # vs mid-decode slot recycling), so it is OUT of stack_a until parity is clean.
 EXPECTED_DEVICE = {arm: (arm == "device_route") for arm in ALL_ARMS}
 
+# The prefill-dense-experts boolean each arm pins (W51 K26; separate from
+# _ALL_KEYS, not part of all_levers). Only its own arm sets it.
+EXPECTED_DENSE = {arm: (arm == "prefill_dense_experts") for arm in ALL_ARMS}
+
 # The head-codec value each arm pins on MTPLX_DSV41_HEAD_MODE (None = force-unset).
 EXPECTED_HEAD = {
     "control": None,
@@ -118,6 +130,7 @@ EXPECTED_HEAD = {
     "attn_compile": None,
     "attn_win_memo": None,
     "device_route": None,
+    "prefill_dense_experts": None,
     "both": None,
     "all_levers": None,
     "stack_a": "bf16",
@@ -216,6 +229,14 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert os.environ.get(_DR) == "1", f"{arm}: {_DR} should be '1'"
     else:
         assert _DR not in os.environ, f"{arm}: {_DR} should be force-unset"
+    # the prefill-dense-experts boolean is set for exactly its own arm.
+    if EXPECTED_DENSE[arm]:
+        assert os.environ.get(_PD) == "1", f"{arm}: {_PD} should be '1'"
+    else:
+        assert _PD not in os.environ, f"{arm}: {_PD} should be force-unset"
+    # the dense value knobs are never pinned by an arm (code default applies).
+    assert _PDMR not in os.environ, f"{arm}: {_PDMR} should be force-unset"
+    assert _PDB not in os.environ, f"{arm}: {_PDB} should be force-unset"
     # the head codec pins its value (a string), or is force-unset when None.
     if EXPECTED_HEAD[arm] is None:
         assert _HM not in os.environ, f"{arm}: {_HM} should be force-unset"
@@ -258,6 +279,21 @@ def test_apply_arm_env_independent_across_arms(env_levers):
     assert all(k not in os.environ for k in set(_ALL_KEYS) - {_WM})
 
 
+def test_prefill_dense_arm_sets_only_its_keys_and_clears(env_levers):
+    # The dense arm rides layer-major and sets its own boolean; nothing else.
+    env_levers._apply_arm_env("all_levers")
+    env_levers._apply_arm_env("prefill_dense_experts")
+    assert os.environ.get(_PD) == "1"
+    assert os.environ.get(_LM) == "1"
+    assert all(k not in os.environ for k in set(_ALL_KEYS) - {_LM})
+    assert _DR not in os.environ and _HM not in os.environ
+    # the value knobs stay unset (code default), even for the dense arm.
+    assert _PDMR not in os.environ and _PDB not in os.environ
+    # a later arm clears the dense boolean (arms are independent).
+    env_levers._apply_arm_env("control")
+    assert _PD not in os.environ
+
+
 def test_apply_arm_env_rejects_unknown_arm(env_levers):
     with pytest.raises(ValueError):
         env_levers._apply_arm_env("does_not_exist")
@@ -291,6 +327,8 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_OV] = "bogus"
     os.environ[_HC] = "bogus"
     os.environ[_HM] = "bogus"
+    os.environ[_PD] = "bogus"
+    os.environ[_PDMR] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -304,6 +342,10 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         # the device-route boolean and the head codec are recorded per arm.
         assert (r["arm_env"].get(_DR) == "1") == EXPECTED_DEVICE[r["arm"]], r["arm"]
         assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]
+        # the prefill-dense boolean is recorded per arm; its value knobs stay None.
+        assert (r["arm_env"].get(_PD) == "1") == EXPECTED_DENSE[r["arm"]], r["arm"]
+        assert r["arm_env"].get(_PDMR) is None, r["arm"]
+        assert r["arm_env"].get(_PDB) is None, r["arm"]
 
 
 def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path):
