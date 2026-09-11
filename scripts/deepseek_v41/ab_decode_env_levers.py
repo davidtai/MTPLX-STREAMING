@@ -166,6 +166,16 @@ MLX_MAX_MB_PER_BUFFER_ENV = "MLX_MAX_MB_PER_BUFFER"  # K14 (W63): MLX command-bu
 # 200 -> -0.9%, but the Qwen lane measured +1.6% at 500 MB). The arm pins the
 # value and the receipt records it so a re-falsifier in the DSV4.1 streaming
 # regime is reproducible.
+KV_CHUNK_GROW_ENV = "MTPLX_DSV41_KV_CHUNK_GROW"  # W73 / K32: chunk-grown KV append.
+# The phase-1 cache re-concatenates the WHOLE window / compressed-KV / index-key
+# store on every token (O(current-length) copy per layer per token); at T=16384 the
+# window append alone is ~2 ms/layer on the CPU double (~40x its 1K cost) and, across
+# 40 layers, the dominant per-token O(T) work once K30 selected keys has already
+# bounded the attention score.  This arms a geometric-capacity buffer + logical
+# length + a donated mx.slice_update in-place write -> amortized O(new-rows) per token
+# (the copy-everything resize fires only on the O(log T) doublings).  BYTE-IDENTICAL
+# (the buf[:, :length] view equals the concatenated store).  A decode-shape lever
+# (fixes the 16K decode append; prefill grows in bulk anyway).
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -206,6 +216,7 @@ ALL_LEVER_ENVS = (
     PIN_REFRESH_TOKENS_ENV,
     MLX_MAX_MB_PER_BUFFER_ENV,
     DEVICE_ROUTE_PINNED_ENV,
+    KV_CHUNK_GROW_ENV,
 )
 
 
@@ -218,6 +229,7 @@ def _preset(
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
     layout_fix=None, down_k_pad=None, selected_keys=None,
     softmax_kernel=None, decode_attn_kernel=None, mlx_max_mb_per_buffer=None,
+    kv_chunk_grow=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
@@ -229,8 +241,9 @@ def _preset(
     ``softmax_kernel`` a "1"/None boolean (W58/K28, the fused mask+sink+softmax
     Metal kernel), ``decode_attn_kernel`` a "1"/None boolean (W60/K29, the fused
     decode/verify MLA attention Metal kernel), ``mlx_max_mb_per_buffer`` a
-    positive-int string (K14/W63, the MLX command-buffer MB cap passthrough); the
-    rest a "1"/None boolean."""
+    positive-int string (K14/W63, the MLX command-buffer MB cap passthrough),
+    ``kv_chunk_grow`` a "1"/None boolean (W73/K32, the chunk-grown KV append
+    backing); the rest a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -260,6 +273,7 @@ def _preset(
         PIN_REFRESH_TOKENS_ENV: pin_refresh,
         MLX_MAX_MB_PER_BUFFER_ENV: mlx_max_mb_per_buffer,
         DEVICE_ROUTE_PINNED_ENV: device_route_pinned,
+        KV_CHUNK_GROW_ENV: kv_chunk_grow,
     }
 
 
@@ -433,6 +447,24 @@ ARM_PRESETS = {
     # verify only (prefill untouched).  Reassociation-level (greedy-identical),
     # NOT byte-identical.  NOT in stack_a until the MTPLX_GPU_PARITY window is clean.
     "decode_attn_kernel": _preset(decode_attn_kernel="1"),
+    # W73 K32: chunk-grown KV append -- standalone, to isolate the append delta
+    # against control on the 16K decode shape (the window / compressed-KV / index-key
+    # stores grow via a geometric buffer + donated slice_update instead of a full
+    # concatenate per token).  BYTE-IDENTICAL to control (the buf[:, :length] view
+    # equals the concatenated store), so the byte-identity summary must show it clean.
+    "kv_chunk_grow": _preset(kv_chunk_grow="1"),
+    # W73: the measured 16K arm (prefill_lean_sel = layer-major + dense experts +
+    # lean score path + K30 selected keys) PLUS the K32 chunk-grow append fix -- the
+    # direct A/B that isolates the decode-append O(T) cut at 16K on the real model.
+    # Selected keys already bounds the attention score, so this arm's decode delta vs
+    # prefill_lean_sel is exactly the window/compressed-KV/index-key append lanes
+    # going from O(T)/O(n_comp) to amortized O(1).  LOSSY vs control only through the
+    # inherited prefill_lean_sel levers (dense fp32 accumulation + score reassoc);
+    # the K32 addition itself is byte-identical.
+    "prefill_lean_sel_chunk": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        kv_chunk_grow="1",
+    ),
 }
 
 
@@ -1266,6 +1298,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
             receipt["stage_timing"] = _stage_timing_pass(
                 model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
             )
+            _print_decode_stage_summary(
+                arm, int(args.context_tokens), receipt["stage_timing"]
+            )
         if getattr(args, "prefill_stage_timing", False):
             receipt["prefill_stage_timing"] = _prefill_stage_timing_pass(
                 model=model, ops=ops, prompt_ids=prompt_ids,
@@ -1332,6 +1367,73 @@ def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> 
         "cold_token_ids_sha256": cold_sha,
         "token_ids_match": warm_ids == cold,
     }
+
+
+#: CSA mode -> the human class label used in the W73 decode summary.
+_CSA_MODE_CLASS = {
+    "swa_only": "SWA-only",
+    "full": "Full",
+    "reindex": "Reindex",
+    "reuse": "Reuse",
+}
+
+
+def _print_decode_stage_summary(arm: str, context_tokens: int, report: dict) -> None:
+    """W73: print the decode stage census so the GPU window can read the 16K
+    attribution at a glance -- attention per CSA mode class (SWA-only / Full /
+    Reindex / Reuse) plus the KV-append / compressed-append / indexer-select
+    sub-stages peeled out of the single ``attn.<mode>`` bracket
+    (``decode_breakdown``, kept out of the flat sum, so it decomposes the flat
+    ``attn.<mode>`` totals rather than adding to them).  The fences inflate absolute
+    time, so the RATIOS between rows are the signal, not the totals."""
+    if not report or not report.get("enabled") or report.get("kind") != "decode":
+        return
+    stages = report.get("stages", {})
+    breakdown = report.get("decode_breakdown", {})
+
+    def _mm(d, key):
+        v = (d.get(key) or {}).get("mean_ms_per_token")
+        return v if v is not None else 0.0
+
+    print(
+        f"[ab] --- W73 decode stage census: arm={arm} ctx={context_tokens} "
+        f"tokens={report.get('tokens')} (fenced; ratios are the signal) ---"
+    )
+    print(
+        f"[ab]   frame_wall={report.get('frame_wall_ms_per_token', 0):.3f} ms/tok  "
+        f"stage_sum={report.get('stage_sum_ms_per_token', 0):.3f} ms/tok"
+    )
+    # attention per CSA mode class (flat attn.<mode> totals) + its append/select
+    # decomposition (from decode_breakdown).
+    for mode, label in _CSA_MODE_CLASS.items():
+        attn_key = f"attn.{mode}"
+        if attn_key not in stages and not any(
+            k.startswith(attn_key + ".") for k in breakdown
+        ):
+            continue
+        attn_ms = _mm(stages, attn_key)
+        cnt = (stages.get(attn_key) or {}).get("count", 0)
+        cache_ms = _mm(breakdown, f"{attn_key}.cache_append")
+        comp_ms = _mm(breakdown, f"{attn_key}.compress_append")
+        sel_ms = _mm(breakdown, f"{attn_key}.select")
+        print(
+            f"[ab]   {label:9s} attn={attn_ms:8.3f} ms/tok (layers/tok={cnt:3d})  "
+            f"| KV-append={cache_ms:7.3f}  compress-append={comp_ms:7.3f}  "
+            f"indexer-select={sel_ms:7.3f}  ms/tok"
+        )
+    # totals across modes for the append lanes (the W73 O(T) suspects).
+    tot_cache = sum(
+        _mm(breakdown, k) for k in breakdown if k.endswith(".cache_append")
+    )
+    tot_comp = sum(
+        _mm(breakdown, k) for k in breakdown if k.endswith(".compress_append")
+    )
+    tot_sel = sum(_mm(breakdown, k) for k in breakdown if k.endswith(".select"))
+    print(
+        f"[ab]   TOTAL/tok  KV-append={tot_cache:7.3f}  "
+        f"compress-append={tot_comp:7.3f}  indexer-select={tot_sel:7.3f}  ms/tok "
+        f"(KV_CHUNK_GROW cuts the two append rows to ~O(1))"
+    )
 
 
 def _stage_timing_pass(*, model, ops, prompt_ids, steps) -> dict:

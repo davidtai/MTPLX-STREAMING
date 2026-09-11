@@ -282,6 +282,64 @@ def test_stage_counts_and_partition_and_schema():
     assert 0.6 <= ratio <= 1.05, f"stage sum / frame wall = {ratio:.3f} (a stage is un-bracketed?)"
 
 
+def test_decode_breakdown_peels_kv_append_and_select(monkeypatch):
+    # W73: a decode session records a ``decode_breakdown`` that peels the KV-append
+    # (cache_append), the compressed-append and the indexer-select out of the single
+    # ``attn.<mode>`` bracket -- per CSA mode class -- kept OUT of the flat sum so it
+    # never double-counts.  This is what ab_decode_env_levers.py --stage-timing
+    # prints at 16K for the window-29 attribution.
+    monkeypatch.delenv("MTPLX_DSV41_KV_CHUNK_GROW", raising=False)
+    model, args = _new_model(seed=13)
+    stream = [3, 17, 5, 29, 11]
+    with _hc(False):
+        cache, _ = _prefill(model, args, s=10, seed=6)
+        with _session():
+            stime.active().enter_forward(1)
+            _decode_record(model, cache, stream)
+            report = model.stage_timing_report()
+
+    tokens = len(stream)
+    assert report["kind"] == "decode"
+    bd = report["decode_breakdown"]
+    assert bd, "decode_breakdown is empty"
+    # every layer contributes a per-mode KV-append; the four CSA classes appear.
+    append_keys = {k for k in bd if k.endswith(".cache_append")}
+    modes = {k.split(".")[1] for k in append_keys}
+    assert modes <= {"swa_only", "full", "reindex", "reuse"}
+    assert append_keys, "no cache_append rows in decode_breakdown"
+    # the append sub-stages sum to one call per layer per token...
+    append_calls = sum(bd[k]["count"] for k in append_keys)
+    assert append_calls == args.num_hidden_layers * tokens
+    # ...and every compress-ratio layer records a per-token select (the index
+    # sources compute it, the reuse layers read the source's mask -- both bracketed).
+    n_compress_layers = sum(1 for r in args.compress_ratios if r != 0)
+    select_calls = sum(bd[k]["count"] for k in bd if k.endswith(".select"))
+    assert select_calls == n_compress_layers * tokens
+    # schema + kept OUT of the flat partition sum (decomposes attn.<mode>).
+    for name, s in bd.items():
+        assert set(s) == {"total_ms", "count", "mean_ms", "mean_ms_per_token"}, name
+        assert name not in report["stages"], f"{name} double-counted in flat sum"
+
+
+def test_decode_breakdown_absent_in_prefill_report():
+    # The decode breakdown is a decode-session view only; a prefill session emits
+    # the prefill views (attn_breakdown / by_chunk) and no decode_breakdown.
+    model, args = _new_model(seed=14)
+    with _hc(False):
+        cache = model.make_cache()
+        stime.begin(kind="prefill")
+        try:
+            stime.active().enter_forward(12)
+            logits = model(mx.array([list(range(12))]), cache=cache)
+            mx.eval(logits)
+            report = model.stage_timing_report()
+        finally:
+            stime.end()
+    assert report["kind"] == "prefill"
+    assert "decode_breakdown" not in report
+    assert "attn_breakdown" in report
+
+
 # ---------------------------------------------------------------------------
 # 5. engram hook splits into hash / row_fetch / apply (isolated; no 104 GiB bank)
 # ---------------------------------------------------------------------------

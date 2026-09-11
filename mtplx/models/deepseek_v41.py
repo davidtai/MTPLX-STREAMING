@@ -1033,9 +1033,11 @@ class Attention(nn.Module):
             # W47: compress/index KV build (pool + RoPE + indexer keys) + the
             # compress/index cache appends -- the "cache append" work on kv_source
             # layers, distinct from the window append in _attend.
-            with _stime.stage_prefill("attn." + self.mode + ".compress_append") as _st:
+            with _stime.stage_prefill("attn." + self.mode + ".compress_append") as _sp, \
+                    _stime.stage_decode("attn." + self.mode + ".compress_append") as _sd:
                 self._publish_compressed(x, positions, layer_cache, shared, qcos, qsin)
-                _st.add(shared.compress_kv, shared.index_k)
+                _sp.add(shared.compress_kv, shared.index_k)
+                _sd.add(shared.compress_kv, shared.index_k)
         compress_kv = shared.compress_kv
         index_k = shared.index_k
         if compress_kv is None:
@@ -1053,7 +1055,13 @@ class Attention(nn.Module):
 
         # W47 indexer/candidate selection: the data-dependent CSA row pick (top-k
         # over the compressed rows).  Reuse layers read the source's mask (cheap).
-        with _stime.stage_prefill("attn." + self.mode + ".select") as _st:
+        # W47 prefill sub-stage AND W73 decode sub-stage: the indexer's data-dependent
+        # CSA row pick.  On an index source it scores ALL n_comp compressed rows and
+        # sorts (O(n_comp)); Reuse layers just read the source's mask (cheap).  At
+        # decode the single ``attn.<mode>`` bracket hides it, so peel it out via
+        # stage_decode too (kept out of the flat sum; one bracket no-ops per kind).
+        with _stime.stage_prefill("attn." + self.mode + ".select") as _sp, \
+                _stime.stage_decode("attn." + self.mode + ".select") as _sd:
             if self.is_index_source:
                 set_c = self.is_candidate_source
                 cand = None if set_c else shared.candidates
@@ -1073,7 +1081,8 @@ class Attention(nn.Module):
                     )
             else:  # Reuse: read the source's selection
                 mask = shared.topk_mask
-            _st.add(mask)
+            _sp.add(mask)
+            _sd.add(mask)
         if self.capture_selection:
             self.last_selection = mask
             self.last_candidates = shared.candidates
@@ -1124,10 +1133,18 @@ class Attention(nn.Module):
         # window mask over absolute positions -- equivalent to the reference ring
         # for every query that can still reach a slot; ``ring()`` is the bounded
         # phase-2 view.
-        with _stime.stage_prefill("attn." + mode + ".cache_append") as _st:
+        # W47 prefill sub-stage AND W73 decode sub-stage: the window KV append is
+        # O(current-length) under the phase-1 concatenate backing (the K32
+        # MTPLX_DSV41_KV_CHUNK_GROW lever makes it amortized O(1)).  At decode the
+        # single ``attn.<mode>`` bracket hides it, so peel it out via stage_decode
+        # (kept out of the flat sum, like the prefill attn/switch breakdowns) -- one
+        # of the two brackets is a no-op in each session kind, so at most one fires.
+        with _stime.stage_prefill("attn." + mode + ".cache_append") as _sp, \
+                _stime.stage_decode("attn." + mode + ".cache_append") as _sd:
             layer_cache.append_window(kv_new)
             window_all = layer_cache.window
-            _st.add(window_all)
+            _sp.add(window_all)
+            _sd.add(window_all)
         # K30 (W59): gather only the selected keys per query instead of scoring the
         # full history and masking -- for prefill (rows > 1), decode (s == 1) AND the
         # K+1 verify batch (W59 decode extension).  The window store and the indexer

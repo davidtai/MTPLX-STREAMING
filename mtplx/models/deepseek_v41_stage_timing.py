@@ -58,6 +58,7 @@ __all__ = [
     "stage_prefill",
     "stage_nested",
     "stage_attn",
+    "stage_decode",
     "frame",
     "chunk",
     "set_schedule",
@@ -134,6 +135,7 @@ class _Probe:
         "_chunk_idx", "_chunk_sums", "_chunk_counts", "_chunk_wall",
         "_nested_sums", "_nested_counts", "_nested_tallies",
         "_attn_sums", "_attn_counts", "_schedule",
+        "_decode_sums", "_decode_counts",
     )
 
     def __init__(self, kind: str = _KIND_DECODE) -> None:
@@ -164,6 +166,14 @@ class _Probe:
         self._attn_sums: dict[str, int] = defaultdict(int)
         self._attn_counts: dict[str, int] = defaultdict(int)
         self._schedule: "Optional[str]" = None
+        #: W73 DECODE attention breakdown (KV-append, and any other decode sub-stage
+        #: that wants to peel out of the single ``attn.<mode>`` bracket).  Kept OUT
+        #: of the flat partition sum -- it decomposes ``attn.<mode>`` at decode the
+        #: way ``attn_breakdown`` decomposes ``attn.<mode>.score`` at prefill, so it
+        #: never double-counts.  Exported as ``decode_breakdown`` in a decode
+        #: snapshot.
+        self._decode_sums: dict[str, int] = defaultdict(int)
+        self._decode_counts: dict[str, int] = defaultdict(int)
 
     def _tally(self, name: str, value: int) -> None:
         self._nested_tallies[name] += int(value)
@@ -187,7 +197,8 @@ class _Probe:
             self._recording_now = 1 <= seq_len <= _DECODE_STAGE_MAX_ROWS
 
     @contextmanager
-    def _stage(self, name: str, nested: bool = False, attn: bool = False):
+    def _stage(self, name: str, nested: bool = False, attn: bool = False,
+               decode: bool = False):
         fence = _Fence()
         t0 = time.perf_counter_ns()
         try:
@@ -196,7 +207,10 @@ class _Probe:
             if fence._arrays:
                 mx.eval(fence._arrays)
             dt = time.perf_counter_ns() - t0
-            if attn:
+            if decode:
+                self._decode_sums[name] += dt
+                self._decode_counts[name] += 1
+            elif attn:
                 self._attn_sums[name] += dt
                 self._attn_counts[name] += 1
             elif nested:
@@ -258,7 +272,29 @@ class _Probe:
         }
         if self._kind == _KIND_PREFILL:
             report.update(self._prefill_views())
+        else:
+            report["decode_breakdown"] = self._decode_breakdown()
         return report
+
+    def _decode_breakdown(self) -> dict:
+        """W73: the decode attention sub-stages (KV-append, ...) peeled out of the
+        single ``attn.<mode>`` bracket.  ``mean_ms_per_token`` divides by the token
+        count so a per-mode append cost is directly comparable to the flat stages.
+        Kept OUT of ``stage_sum_ms`` (it decomposes ``attn.<mode>``)."""
+        tokens = self._tokens or 1
+        return {
+            name: {
+                "total_ms": self._decode_sums[name] / 1e6,
+                "count": self._decode_counts[name],
+                "mean_ms": (
+                    self._decode_sums[name] / self._decode_counts[name] / 1e6
+                    if self._decode_counts.get(name)
+                    else None
+                ),
+                "mean_ms_per_token": self._decode_sums[name] / 1e6 / tokens,
+            }
+            for name in sorted(self._decode_sums)
+        }
 
     def _prefill_views(self) -> dict:
         chunk_ids = sorted(
@@ -433,6 +469,34 @@ def stage_attn(name: str):
     if not _prefill_recording(p):
         return _NOOP_CM
     return p._stage(name, attn=True)
+
+
+def _decode_recording(p) -> bool:
+    """Is ``p`` an armed probe recording a *decode* forward that owns the decode
+    breakdown store?  Unlike :func:`_prefill_recording`, this requires ``_kind`` to
+    be *explicitly* ``"decode"``: a lightweight probe DOUBLE that never sets ``_kind``
+    (e.g. the W41 dispatch census, which reuses the plain ``stage()`` brackets and
+    has no ``_decode_sums`` slot / no ``decode=`` support) must NOT enter the decode
+    sub-brackets -- so it stays byte-identical to the pre-W73 code, exactly as it is
+    already a no-op for the prefill sub-brackets."""
+    return (
+        p is not None
+        and p._recording_now
+        and getattr(p, "_kind", None) == _KIND_DECODE
+    )
+
+
+def stage_decode(name: str):
+    """A decode-only nested bracket (W73) for the decode attention breakdown --
+    KV-append time peeled out of the single ``attn.<mode>`` bracket.  Recorded into
+    ``decode_breakdown`` and kept OUT of the flat partition sum, so it never double-
+    counts ``attn.<mode>``; a no-op unless a *decode* session is recording (so the
+    same code, run under a prefill session or off, is byte-identical -- the prefill
+    census keeps its own ``cache_append`` sub-stage via :func:`stage_prefill`)."""
+    p = _ACTIVE
+    if not _decode_recording(p):
+        return _NOOP_CM
+    return p._stage(name, decode=True)
 
 
 def frame():
