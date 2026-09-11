@@ -1,0 +1,132 @@
+{
+ "schema": "mtplx-server-cell-v1",
+ "server": "deepseek-v41",
+ "stack": "remote",
+ "mode": "cells",
+ "model_family": "deepseek-v41",
+ "served_model_id": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+ "template_settings": {
+  "model_family": "deepseek-v41",
+  "chat_template_source": "artifact chat_template.jinja (W52 port of the official reference encoder) + served code fallback (mtplx.chat_encoding.encode_deepseek_v41_messages)",
+  "render": "DeepSeek-V4.1 reference chat format: BOS + [<\uff5cSystem\uff5c>effort/system] + <\uff5cUser\uff5c>content + <\uff5cAssistant\uff5c> + <think>|</think>",
+  "render_cite": "mtplx/templates/deepseek_v41/chat_template.jinja; DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages",
+  "add_special_tokens": false,
+  "enable_thinking": false,
+  "reasoning_effort": null,
+  "thinking_mode": false,
+  "bos_id_prepended": true,
+  "bos_token_id": 0,
+  "note": "DSV4.1 now templates the real chat prompt (BOS id 0 first). The OFFICIAL default is thinking OFF (reference generate.py --thinking-mode 'chat'; the encoding-test harness renders thinking_mode='chat'); reasoning_effort is inert in chat mode and omitted there. DeepSeek's instruct evals use thinking + reasoning_effort=100 -- set --dsv41-enable-thinking (DSV41_ENABLE_THINKING) + --dsv41-reasoning-effort to mirror them. The exported ids match the server byte-for-byte WITH BOS."
+ },
+ "base_url": "http://127.0.0.1:18080",
+ "prompt_cache": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-23/ar-16k/prompts-deepseek-v41.json",
+ "prompt_cache_context_sha256": "c8ae2b1790c0300aa7c1421b55e7cd5d43c93461f7fba5d3a732fd34e156b4c4",
+ "contexts": [
+  16384
+ ],
+ "seeds": [
+  20260829
+ ],
+ "max_tokens": 1024,
+ "sampler": {
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 20
+ },
+ "started_epoch_s": 1789136708.701741,
+ "elapsed_s": 9.224061012268066,
+ "fastest_of_seeds": [],
+ "records": [
+  {
+   "server": "deepseek-v41",
+   "cell": "sweep",
+   "target_tokens": 16384,
+   "seed": 20260829,
+   "repeat": 0,
+   "ok": false,
+   "prompt_tokens": null,
+   "new_prefill_tokens": 16384,
+   "completion_tokens": null,
+   "finish_reason": null,
+   "prefill_time_s": null,
+   "prefill_time_source": "none",
+   "prefill_tok_s": null,
+   "ttft_s": null,
+   "decode_s": null,
+   "decode_tok_s": null,
+   "wall_s": null,
+   "peak_memory_bytes": null,
+   "peak_memory_gb": null,
+   "peak_memory_source": "none",
+   "client_rss_bytes": null,
+   "server_peak_memory_bytes": null,
+   "text_sha256": null,
+   "text_chars": 0,
+   "text_head": "",
+   "text_tail": "",
+   "reasoning_chars": null,
+   "reasoning_sha256": null,
+   "thermal_gate": null,
+   "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+   "request_body": null,
+   "server_stats": {},
+   "usage": null,
+   "server_error": null,
+   "error": "HTTPError: HTTP Error 400: Bad Request",
+   "raw_engagement": {},
+   "mtp_accept_rate": null,
+   "templated_tokens_expected": 16384,
+   "request_parity": {
+    "enable_thinking": false,
+    "max_tokens": 1024,
+    "prompt_chars": 61760,
+    "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+    "seed": 20260829,
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95
+   },
+   "request_parity_source": "planned",
+   "request_body_sha256": "a81827390fb03caefc59c7dd5eba733dc59d0a2ad21cd6c71e29f7cc4120aebc",
+   "response_parity": {
+    "applied_sampler": {
+     "available": false,
+     "source": "none",
+     "temperature": null,
+     "requested_temperature": null,
+     "top_p": null,
+     "requested_top_p": null,
+     "top_k": null,
+     "requested_top_k": null,
+     "seed": null,
+     "client_sampler_fields_ignored": null,
+     "control_owner": null,
+     "content_empty_reason": null,
+     "reasoning_tokens": null,
+     "answer_tokens": null
+    },
+    "sampler_honoured": {
+     "temperature": null,
+     "top_p": null,
+     "top_k": null
+    },
+    "completion_tokens": null,
+    "finish_reason": null,
+    "reasoning_chars": null,
+    "reasoning_tokens": null,
+    "reasoning_tokens_source": "none",
+    "thinking_observed": null,
+    "thinking_requested": false,
+    "reasoning_effort_requested": null,
+    "temperature_requested": 1.0,
+    "top_p_requested": 0.95,
+    "top_k_requested": 20,
+    "seed_requested": 20260829
+   }
+  }
+ ]
+}
