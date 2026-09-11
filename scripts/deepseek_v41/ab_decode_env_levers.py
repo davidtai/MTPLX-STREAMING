@@ -64,16 +64,17 @@ SWITCH_SUBMIT_ENV = "MTPLX_DSV41_SWITCH_SUBMIT"  # K23 variant B (W42 window-14)
 # each all-hit wave output (non-blocking submit, keeps the GPU fed); byte-identical.
 HEAD_MODE_ENV = "MTPLX_DSV41_HEAD_MODE"             # W40 / K21, output-head codec
 ATTN_COMPILE_ENV = "MTPLX_DSV41_ATTN_COMPILE"       # K22, W41 landing
+ATTN_WIN_MEMO_ENV = "MTPLX_DSV41_ATTN_WIN_MEMO"     # K24, W45: window-mask memo
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
-# prior arm in the same process left set -- the arms are independent. The seven
+# prior arm in the same process left set -- the arms are independent. The eight
 # boolean levers (OVERLAP/LAYER_MAJOR/SINKHORN_METAL/HC_COMPILE/SWITCH_FASTPATH/
-# SWITCH_SUBMIT/ATTN_COMPILE) are per-forward, byte-identical execution reorders;
-# HEAD_MODE is a LOAD-TIME codec taking a value ("bf16"/"mxfp8"/"q8") whose arms
-# are lossy-by-design (bf16 rounding / 8-bit weight), so the head-* arms are NOT
-# byte-identical to control -- the final byte-identity summary flags them
-# (expected, cf. W40_HEAD_LEVER.md).
+# SWITCH_SUBMIT/ATTN_COMPILE/ATTN_WIN_MEMO) are per-forward, byte-identical
+# execution reorders; HEAD_MODE is a LOAD-TIME codec taking a value
+# ("bf16"/"mxfp8"/"q8") whose arms are lossy-by-design (bf16 rounding / 8-bit
+# weight), so the head-* arms are NOT byte-identical to control -- the final
+# byte-identity summary flags them (expected, cf. W40_HEAD_LEVER.md).
 ALL_LEVER_ENVS = (
     OVERLAP_ENV,
     LAYER_MAJOR_ENV,
@@ -82,16 +83,17 @@ ALL_LEVER_ENVS = (
     SWITCH_FASTPATH_ENV,
     SWITCH_SUBMIT_ENV,
     ATTN_COMPILE_ENV,
+    ATTN_WIN_MEMO_ENV,
     HEAD_MODE_ENV,
 )
 
 
 def _preset(
     *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None,
-    submit=None, attn=None, head=None,
+    submit=None, attn=None, win_memo=None, head=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
-    codec value ("bf16"/"mxfp8"/"q8"), the other seven a "1"/None boolean."""
+    codec value ("bf16"/"mxfp8"/"q8"), the other eight a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -100,6 +102,7 @@ def _preset(
         SWITCH_FASTPATH_ENV: fastpath,
         SWITCH_SUBMIT_ENV: submit,
         ATTN_COMPILE_ENV: attn,
+        ATTN_WIN_MEMO_ENV: win_memo,
         HEAD_MODE_ENV: head,
     }
 
@@ -113,18 +116,20 @@ ARM_PRESETS = {
     "switch_fastpath": _preset(fastpath="1"),               # W42 K23: pure defer (−13.4% @ w14)
     "switch_fastpath_b": _preset(fastpath="1", submit="1"),  # W42 K23 var B: defer + async submit
     "attn_compile": _preset(attn="1"),                      # K22 lever ON (W41 landing)
+    "attn_win_memo": _preset(win_memo="1"),                 # K24 lever ON (W45): window-mask memo
     "both": _preset(overlap="1", layer_major="1"),          # shared_overlap + layer_major
     "all_levers": _preset(
         overlap="1", layer_major="1", sinkhorn="1", hc="1",
-        fastpath="1", submit="1", attn="1",
+        fastpath="1", submit="1", attn="1", win_memo="1",
     ),  # everything on -> the fast-path here is variant B (defer + async submit)
-    # W41: the measured-positive levers stacked (head bf16 fixes the fp32-cast trap
-    # + Sinkhorn kernel + attention-chain compile).  The switch fast-path is LEFT
-    # OUT (W42 window-14: pure defer -13.4%; variant B unproven -- do not stack an
+    # W41/W45: the measured-positive levers stacked (head bf16 fixes the fp32-cast
+    # trap + Sinkhorn kernel + attention-chain compile + the K24 window-mask memo,
+    # both byte-identical dispatch cuts).  The switch fast-path is LEFT OUT (W42
+    # window-14: pure defer -13.4%; variant B unproven -- do not stack an
     # unproven-or-negative lever into the best-known combination). overlap /
     # layer_major / hc also OFF.  Re-add the fast-path here only once switch_
     # fastpath_b beats control in a window.
-    "stack_a": _preset(head="bf16", sinkhorn="1", attn="1"),
+    "stack_a": _preset(head="bf16", sinkhorn="1", attn="1", win_memo="1"),
     "head_bf16": _preset(head="bf16"),                      # W40 K21: fix fp32-cast trap
     "head_mxfp8": _preset(head="mxfp8"),                    # W40 K21: native mxfp8 gs32 head
     "head_q8": _preset(head="q8"),                          # W40 K21: affine q8 gs64 head
@@ -158,7 +163,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=["control", "shared_overlap"],
         help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, "
         "sinkhorn_metal, hc_compile, switch_fastpath, switch_fastpath_b, "
-        "attn_compile, both, all_levers, stack_a, head_bf16, head_mxfp8, head_q8)",
+        "attn_compile, attn_win_memo, both, all_levers, stack_a, head_bf16, "
+        "head_mxfp8, head_q8)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that

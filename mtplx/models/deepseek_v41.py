@@ -670,6 +670,31 @@ class Attention(nn.Module):
         w = mx.softmax(full, axis=-1)[..., : KV.shape[1]]  # drop the sink column (value 0)
         return mx.einsum("bsht,btd->bshd", w, KV.astype(mx.float32))
 
+    def _window_attend(self, positions, T, b, s, shared):
+        """The causal sliding-window attend mask ``[b, s, T]``.
+
+        Identical across every backbone layer of one forward (same ``positions``
+        object, same lockstep window length ``T``, same ``window_size``).  Under
+        ``MTPLX_DSV41_ATTN_WIN_MEMO`` (K24) it is computed once per forward and
+        memoized on the per-forward ``shared`` runtime, reused for the other
+        layers -- byte-identical (the reused array is the same object; reuse fires
+        only when ``positions`` is the same object and ``(T, window_size, b, s)``
+        match, else it recomputes, so a forward whose layers differ is never
+        wrong).  With the flag off it is exactly the original per-layer build."""
+        if _ATTN_WIN_MEMO and shared is not None:
+            memo = getattr(shared, "_win_attend_memo", None)
+            if (memo is not None and memo[0] is positions and memo[1] == T
+                    and memo[2] == self.window_size and memo[3] == (b, s)):
+                return memo[4]
+        wpos = mx.arange(T)
+        qp = positions[:, None]
+        wp = wpos[None, :]
+        win_attend = (wp <= qp) & (wp > qp - self.window_size)  # [s, T]
+        attend = mx.broadcast_to(win_attend[None], (b, s, T))
+        if _ATTN_WIN_MEMO and shared is not None:
+            shared._win_attend_memo = (positions, T, self.window_size, (b, s), attend)
+        return attend
+
     def _publish_compressed(self, x, positions, layer_cache, shared, qcos, qsin):
         """Full/kv_source layer: pool this call's compressed latents (prefill chunk
         or one decode step, both via W13's CompressorState frontier), RoPE the new
@@ -767,11 +792,10 @@ class Attention(nn.Module):
         # phase-2 view.
         layer_cache.append_window(kv_new)
         window_all = layer_cache.window
-        wpos = mx.arange(window_all.shape[1])
-        qp = positions[:, None]
-        wp = wpos[None, :]
-        win_attend = (wp <= qp) & (wp > qp - self.window_size)  # [s, Tw]
-        attend = mx.broadcast_to(win_attend[None], (b, s, window_all.shape[1]))
+        # K24 (W45): the sliding-window attend mask is identical across every layer
+        # of this forward; memoize it on the per-forward shared runtime under
+        # MTPLX_DSV41_ATTN_WIN_MEMO (byte-identical, a pure host-dispatch cut).
+        attend = self._window_attend(positions, window_all.shape[1], b, s, shared)
         KV = window_all
 
         if self.compress_ratio:
@@ -872,6 +896,29 @@ _ATTN_COMPILE_MAX_ROWS = 32
 #: each projection's ``_lin_desc`` (dense vs the quant codec) plus the head/group
 #: geometry, so a quantized-resident model gets its own bit-exact tape.
 _ATTN_COMPILED: dict = {}
+
+#: W45 (kernel-ledger K24): dedup the sliding-window attend mask across the
+#: backbone layers of one decode/verify/chunk forward.  The mask
+#: ``(wp <= qp) & (wp > qp - window_size)`` broadcast to ``[b, s, T]`` is a pure
+#: function of ``(positions, window length T, window_size)`` -- all invariant
+#: across the layers of one ``_forward_span`` (positions and the per-forward
+#: ``shared`` runtime are created once and handed to every layer, and every
+#: layer's window store grows in lockstep to the same ``T``), yet each layer
+#: rebuilds it from scratch (~arange + 2 compares + subtract + and + broadcast,
+#: ~11 graph nodes) -- the census measured this as the largest remaining
+#: mode-invariant per-layer dispatch chunk after K22.  Memoizing it on the
+#: per-forward ``shared`` runtime computes it ONCE and reuses the identical array
+#: for the other ``n_layers - 1`` layers: a pure host-dispatch reduction,
+#: byte-identical (the reused mask is the same array; reuse fires only when the
+#: query positions are the *same object* and ``(T, window_size, b, s)`` match, so
+#: any forward whose layers differ falls back to per-layer recompute -- never
+#: wrong).  Default OFF; read through the module global so tests/operators flip it
+#: after import (the serving harness stamps keys after import,
+#: [[env-flags-read-at-use-not-import]]).
+_ATTN_WIN_MEMO_ENV = "MTPLX_DSV41_ATTN_WIN_MEMO"
+_ATTN_WIN_MEMO = (os.environ.get(_ATTN_WIN_MEMO_ENV) or "").strip().lower() not in (
+    "", "0", "false", "no", "off", "auto",
+)
 
 
 def _lin_desc(linear):
