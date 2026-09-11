@@ -65,6 +65,13 @@ SWITCH_SUBMIT_ENV = "MTPLX_DSV41_SWITCH_SUBMIT"  # K23 variant B (W42 window-14)
 HEAD_MODE_ENV = "MTPLX_DSV41_HEAD_MODE"             # W40 / K21, output-head codec
 ATTN_COMPILE_ENV = "MTPLX_DSV41_ATTN_COMPILE"       # K22, W41 landing
 ATTN_WIN_MEMO_ENV = "MTPLX_DSV41_ATTN_WIN_MEMO"     # K24, W45: window-mask memo
+DRAFT_COMPILE_ENV = "MTPLX_DSV41_DRAFT_COMPILE"     # K33 (W65): DSpark draft-block
+# tape collapse -- replays the draft block's PURE chains (attention prep + Hyper-
+# Connection prep reuse the K22/K4 tapes; the MoE gate-prefix/combine folds; the
+# markov step; the confidence head) from mx.compile tapes instead of rebuilding the
+# graph from Python each cycle.  Byte-identical (draft tokens/logits/confidence),
+# fixed-shape + row-cap.  Only touches the DSpark-DIRECT draft path (--decode-mode
+# dspark), so it composes with the decode levers on the target verify forward.
 VERIFY_SINGLE_BARRIER_ENV = "MTPLX_DSV41_VERIFY_SINGLE_BARRIER"  # K31 (W61):
 # small-M (2..8-row) DECODE verify -- pin the whole route all-hit and gather
 # rows*top_k in ONE wave (K27 sorted gather) with one deferred release, so a
@@ -151,6 +158,7 @@ ALL_LEVER_ENVS = (
     SWITCH_SUBMIT_ENV,
     ATTN_COMPILE_ENV,
     ATTN_WIN_MEMO_ENV,
+    DRAFT_COMPILE_ENV,
     DEVICE_ROUTE_ENV,
     VERIFY_SINGLE_BARRIER_ENV,
     PREFILL_DENSE_ENV,
@@ -171,7 +179,7 @@ ALL_LEVER_ENVS = (
 
 def _preset(
     *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None,
-    submit=None, attn=None, win_memo=None, device_route=None,
+    submit=None, attn=None, win_memo=None, draft=None, device_route=None,
     verify_single=None,
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
@@ -197,6 +205,7 @@ def _preset(
         SWITCH_SUBMIT_ENV: submit,
         ATTN_COMPILE_ENV: attn,
         ATTN_WIN_MEMO_ENV: win_memo,
+        DRAFT_COMPILE_ENV: draft,
         DEVICE_ROUTE_ENV: device_route,
         VERIFY_SINGLE_BARRIER_ENV: verify_single,
         PREFILL_DENSE_ENV: prefill_dense,
@@ -225,6 +234,7 @@ ARM_PRESETS = {
     "switch_fastpath_b": _preset(fastpath="1", submit="1"),  # W42 K23 var B: defer + async submit
     "attn_compile": _preset(attn="1"),                      # K22 lever ON (W41 landing)
     "attn_win_memo": _preset(win_memo="1"),                 # K24 lever ON (W45): window-mask memo
+    "draft_compile": _preset(draft="1"),                    # K33 lever ON (W65): DSpark draft-block tape collapse (--decode-mode dspark)
     "device_route": _preset(device_route="1"),              # W44 K24: barrier-free all-hit
     "verify_single_barrier": _preset(verify_single="1"),    # W61 K31: 1 barrier/layer for small-M verify (default ON)
     # W51 K26: prefill dense experts, armed on the 16K layer-major schedule it
@@ -423,7 +433,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=["control", "shared_overlap"],
         help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, "
         "sinkhorn_metal, hc_compile, switch_fastpath, switch_fastpath_b, "
-        "attn_compile, attn_win_memo, device_route, prefill_dense_experts, "
+        "attn_compile, attn_win_memo, draft_compile, device_route, "
+        "prefill_dense_experts, "
         "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
         "stack_b, head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
         "score_bf16_chunked, score_lean, prefill_fast, prefill_lean, "

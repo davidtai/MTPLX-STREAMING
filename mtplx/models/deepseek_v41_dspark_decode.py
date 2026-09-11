@@ -426,6 +426,12 @@ def _decode_cycles(
         # ---- draft a block, apply the confidence early stop --------------
         # The 3 DSpark stages run RESIDENT mxfp4 experts (SwitchGLU), never the
         # streamed switch, so drafting stays on resident weights (no phase issue).
+        # The draft block's PURE chains (attention prep, Hyper-Connection prep, MoE
+        # gate/combine, markov, confidence) collapse to mx.compile tapes under
+        # MTPLX_DSV41_DRAFT_COMPILE (K33/W65, default OFF, byte-identical: draft
+        # tokens are identical with the flag on/off, so greedy verify == AR holds
+        # regardless). One host sync per cycle (the mx.eval below), never per markov
+        # step -- the markov argmax stays lazy inside draft_block.
         k_eff = 0
         drafts: List[int] = []
         _t = _time.perf_counter()
