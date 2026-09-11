@@ -399,15 +399,18 @@ class LayerAttentionCache:
             _rows(self.compress_kv),
             _rows(self.index_k),
             None if self.comp_state is None else self.comp_state.mark(),
-            None if self.engram_state is None else int(self.engram_state.length),
         )
 
     def rollback(self, mark) -> None:
-        offset, nw, nc, ni, comp_mark, engram_len = mark
-        if self.engram_state is not None and engram_len is not None:
-            cur = int(self.engram_state.length)
-            if cur > engram_len:
-                self.engram_state.trim(cur - engram_len)
+        offset, nw, nc, ni, comp_mark = mark
+        # The engram history advances one position per token, in lockstep with
+        # ``offset``, so the rollback depth is exactly the offset delta -- trim by
+        # it (no dependence on the engram exposing a length, so a hook stand-in
+        # that only records ``trim`` still rewinds correctly).
+        if self.engram_state is not None:
+            back = int(self.offset) - int(offset)
+            if back > 0:
+                self.engram_state.trim(back)
         self.window = _truncate(self.window, nw)
         self.compress_kv = _truncate(self.compress_kv, nc)
         self.index_k = _truncate(self.index_k, ni)
@@ -536,15 +539,14 @@ class DeepseekV41Cache:
             )
             for i in range(n_layers)
         ]
-        #: the engram history is one object per sequence; the first entry owns
-        #: its rewind so a per-entry ``trim`` (the rollback the serve path calls)
-        #: moves it exactly once, and the backbone reaches it via
-        #: :attr:`engram_state`.
-        if self.layers:
-            self.layers[0].engram_state = engram_state
+        #: fallback slot for the (unreachable) zero-layer case; the real owner of
+        #: the engram history is the first entry -- see :attr:`engram_state`.
+        self._engram_state = None
         #: an :class:`mtplx.engram_v41.NgramHashState` clone, or None when engram
         #: is not wired; advanced by the W10 backbone (once per forward, before
-        #: the layers), rewound through the owning entry in step.
+        #: the layers) and rewound through the owning (first) entry in step.  The
+        #: property setter keeps that entry's reference in sync, so re-pointing
+        #: ``cache.engram_state`` re-owns the history on the entry that trims it.
         self.engram_state = engram_state
 
     # -- mlx_lm sequence protocol (a list of per-layer caches) -------------
@@ -572,6 +574,20 @@ class DeepseekV41Cache:
         its own and they advance/trim in lockstep, so the first entry's is the
         sequence's."""
         return int(self.layers[0].offset) if self.layers else 0
+
+    @property
+    def engram_state(self):
+        """The per-sequence engram n-gram history, owned by the first entry (so
+        its trim/rollback moves it) and published here for the backbone to
+        advance.  Setting it re-owns the history on that entry."""
+        return self.layers[0].engram_state if self.layers else self._engram_state
+
+    @engram_state.setter
+    def engram_state(self, value) -> None:
+        if self.layers:
+            self.layers[0].engram_state = value
+        else:
+            self._engram_state = value
 
     # a fresh shared runtime per forward (reference re-uses one module global;
     # the backbone calls this once at the top of every forward and threads it
