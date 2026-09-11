@@ -451,7 +451,7 @@ def _start_rss_watchdog(limit_gib: float, log) -> threading.Event:
     stop = threading.Event()
 
     def _poll():
-        while not stop.wait(2.0):
+        while not stop.wait(0.5):
             rss = _rss_gib()
             if rss >= limit_gib:
                 log(f"[watchdog] RSS {rss:.2f} GiB >= {limit_gib} GiB -- aborting")
@@ -514,6 +514,7 @@ def run_census(args, log) -> dict:
 
     record_bytes = _record_bytes(runtime, args.record_bytes, log)
     n_layers = len(model.model.layers)
+    n_experts_spec = getattr(getattr(runtime, "spec", None), "expert_count", None)
 
     tokenizer = load_tokenizer(Path(args.model))
     from mtplx.prefill_bench import _prompt_build_for_context
@@ -771,6 +772,40 @@ def run_census(args, log) -> dict:
                  "reports the authoritative GPU realized BW inside gpu_window.sh"),
     }
 
+    # ---- GATE R5: prefill read-once (ledger R5 / W20 16K chunk re-read) ------
+    prefill_distinct = [per_layer[L]["prefill_distinct_experts"] for L in layers]
+    all_ids = [e for L in layers for step in full_trace[L] for e in step]
+    observed_n_experts = (max(all_ids) + 1) if all_ids else None
+    n_exp = n_experts_spec or observed_n_experts or 384
+    mean_distinct = statistics.mean(prefill_distinct) if prefill_distinct else None
+    N_CHUNKS_16K, CHUNK_16K = 13, 1271  # W20 chunked prefill at 16,384 tokens
+    gate_r5 = {
+        "n_routed_experts": n_exp,
+        "record_bytes": record_bytes,
+        "prefill_context_tokens": args.context_tokens,
+        "prefill_distinct_experts_per_layer_mean": mean_distinct,
+        "prefill_distinct_experts_per_layer_median": (
+            statistics.median(prefill_distinct) if prefill_distinct else None),
+        "prefill_distinct_experts_per_layer_min": min(prefill_distinct) if prefill_distinct else None,
+        "prefill_distinct_experts_per_layer_max": max(prefill_distinct) if prefill_distinct else None,
+        "prefill_distinct_fraction_of_bank": (
+            mean_distinct / n_exp if mean_distinct and n_exp else None),
+        "reread_note": (
+            f"16K prefill (W20) runs ~{N_CHUNKS_16K} chunks of ~{CHUNK_16K} tok; each "
+            f"chunk's MoE gathers its experts independently. A {CHUNK_16K}-tok chunk "
+            f"touches >= the {args.context_tokens}-tok distinct measured here."),
+        "projected_16k_naive_bank_reads": (
+            N_CHUNKS_16K * (mean_distinct / n_exp) if mean_distinct and n_exp else None),
+        "projected_16k_naive_gib": (
+            N_CHUNKS_16K * mean_distinct * n_layers * record_bytes / GIB
+            if mean_distinct else None),
+        "readonce_floor_gib": (
+            n_exp * n_layers * record_bytes / GIB),
+        "fix": ("expert-major prefill (per layer, group all chunk rows by expert, "
+                "gather each record once) OR prefill-phase pin-until-consumed cache "
+                "policy => bank read ~once (the union) instead of per-chunk."),
+    }
+
     census = {
         "meta": {
             "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -814,6 +849,7 @@ def run_census(args, log) -> dict:
             "supplementary_allocation_water_fill": alloc_gate,
         },
         "gate_d_realized_bandwidth": gate_d,
+        "gate_r5_prefill_read_once": gate_r5,
         "per_layer": {str(L): per_layer[L] for L in layers},
     }
     try:
