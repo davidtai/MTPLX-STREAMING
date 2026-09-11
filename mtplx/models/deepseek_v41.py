@@ -2404,6 +2404,22 @@ class Model(nn.Module):
     def layers(self):
         return self.model.layers
 
+    @property
+    def lm_head(self):
+        """The output projection under its ``lm_head`` alias.
+
+        DeepSeek-V4.1 names the untied output projection ``head`` (with the W40 /
+        K21 ``MTPLX_DSV41_HEAD_MODE`` codec repack applied in
+        :meth:`apply_head_mode`).  The served MTP machinery
+        (``mtplx.draft_lm_head._install_draft_lm_head``,
+        ``mtplx.mtp_patch``) resolves the output projection as ``lm_head`` --
+        this property routes that lookup to the same module the AR head path
+        (:meth:`_apply_head`) uses, so the draft head is requantized from the
+        real (bf16 / mxfp8 / q8) head weight with no fp32-cast reintroduced. It
+        is a plain alias, not a new submodule, so ``parameters()`` is unchanged
+        (the head is counted once, under ``head``)."""
+        return self.head
+
     # -- DSpark MTP (speculative draft head) -------------------------------
     @property
     def mtp_blocks(self) -> list:
