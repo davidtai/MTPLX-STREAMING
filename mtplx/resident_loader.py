@@ -353,8 +353,16 @@ def construct_resident_model(
     model_class_resolver: Callable[[dict[str, Any]], tuple[type, type]] | None = None,
     switch_binder: Callable[[Any, Any], int] | None = None,
     strict: bool = True,
+    with_mtp: bool | None = None,
 ) -> ResidentModel:
-    """Instantiate, bind, strictly load, and evaluate only resident parameters."""
+    """Instantiate, bind, strictly load, and evaluate only resident parameters.
+
+    ``with_mtp`` is the serve-path glue for DeepSeek-V4.1 DSpark MTP (worker W23):
+    the runtime derives it from ``--generation-mode mtp`` and threads it here so
+    the dedicated loader keeps the ``mtp.*`` residents and builds the head, with
+    no ``MTPLX_DSV41_MTP`` env step. ``None`` (the default, every non-deepseek
+    caller) leaves the loader's own resolution (env / auto) unchanged.
+    """
 
     artifact_root = Path(root).resolve()
     if config is None:
@@ -383,6 +391,7 @@ def construct_resident_model(
             mx_module=mx_module,
             switch_binder=switch_binder,
             strict=strict,
+            with_mtp=with_mtp,
         )
     if str(config.get("model_type") or "") not in {"hy_v3", "glm_moe_dsa"}:
         raise ResidentLoadError(

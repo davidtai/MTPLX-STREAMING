@@ -12,7 +12,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -864,8 +864,23 @@ def _load_impl(
         if not isinstance(expert_streaming_config, ExpertStreamingConfig):
             raise TypeError("expert_streaming_config must be an ExpertStreamingConfig")
         streaming_spec = get_model_spec(expert_streaming_config.model_key)
+        # DeepSeek-V4.1 DSpark MTP is a NATIVE in-artifact draft head (worker W23),
+        # not an external hy3/glm MTP adapter. When --generation-mode mtp selects
+        # it (mtp=True) the loader keeps the mtp.* residents and builds the head,
+        # and the head-injection dispatch below publishes it; the external-MTP path
+        # (_streamed_mtp_backend, which requires mtp_artifacts) must be skipped.
+        # The plan must also PRICE the wired mtp.* residents: mtp_included=True so
+        # text_only_resident_discount stops discounting them (+7.95 GB / 7.404 GiB
+        # for the mxfp4 artifact -- the DSpark head's ~6.7 GiB active experts plus
+        # the remaining mtp.* residents partition_text_residents(with_mtp=True)
+        # keeps). The swap flows to the pre-flight plan and open()'s pool plan.
+        from .models.deepseek_v41 import is_deepseek_v41_mtp_config
+
+        native_streamed_mtp = bool(mtp) and is_deepseek_v41_mtp_config(config)
+        if native_streamed_mtp:
+            streaming_spec = replace(streaming_spec, mtp_included=True)
         verified_artifact_context = nullcontext(None)
-        if mtp:
+        if mtp and not native_streamed_mtp:
             streamed_mtp_backend = _streamed_mtp_backend(
                 expert_streaming_config.model_key,
                 mtp_precision,
@@ -1073,7 +1088,9 @@ def _load_impl(
             )
             _expert_runtime_owner[:] = [expert_runtime]
             try:
-                resident = construct_resident_model(path, expert_runtime, config=config)
+                resident = construct_resident_model(
+                    path, expert_runtime, config=config, with_mtp=native_streamed_mtp
+                )
                 model = resident.model
                 resident_load_report = resident.report.as_dict()
                 tokenizer = _load_tokenizer_resilient(path, config)

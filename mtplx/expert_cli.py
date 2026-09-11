@@ -683,6 +683,36 @@ def _profile_customization(
     return changed, effective
 
 
+def _is_native_streamed_mtp(root: Path, manifest_path: Path) -> bool:
+    """Whether this streamed artifact serves a NATIVE in-artifact MTP head.
+
+    Currently only DeepSeek-V4.1 DSpark (worker W23): the merged config declares
+    MTP stages and the manifest ships ``mtp.*`` residents. This lets the serve
+    path honour ``--generation-mode mtp`` for that artifact while keeping the
+    AR-only rule for the external-MTP hy3/glm streamed profiles (whose model_type
+    never matches ``is_deepseek_v41_mtp_config``).
+    """
+
+    try:
+        from mlx_lm.utils import load_config
+
+        config = load_config(root)
+    except Exception:
+        return False
+    from .models.deepseek_v41 import is_deepseek_v41_mtp_config
+
+    if not is_deepseek_v41_mtp_config(config):
+        return False
+    from .expert_manifest import load_expert_manifest
+    from .models.deepseek_v41_loader import manifest_has_mtp_residents
+
+    try:
+        manifest = load_expert_manifest(manifest_path)
+    except Exception:
+        return False
+    return manifest_has_mtp_residents(manifest)
+
+
 def expert_streaming_load_kwargs(
     args: Any,
     model_path: Path | str,
@@ -692,7 +722,7 @@ def expert_streaming_load_kwargs(
     if not expert_streaming_requested(args):
         return {}
     cli_flags = set(getattr(args, "_cli_flags", set()) or set())
-    if (
+    mtp_requested = (
         (
             "generation-mode" in cli_flags
             and str(getattr(args, "generation_mode", "") or "").strip().lower()
@@ -703,13 +733,21 @@ def expert_streaming_load_kwargs(
             "load-mtp" in cli_flags
             and getattr(args, "load_mtp", True) is True
         )
-    ):
-        raise ValueError(
-            "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1"
-        )
+    )
     root = Path(model_path).resolve()
-    receipt = ensure_expert_admitted(root)
     manifest = _authoritative_manifest_path(root)
+    # DeepSeek-V4.1 DSpark native MTP (worker W23) is served with
+    # --generation-mode mtp; the AR-only rule stays for every external-MTP
+    # (hy3/glm) streamed profile. This is the serve glue that removes the
+    # MTPLX_DSV41_MTP env step -- with_mtp is threaded from mtp below.
+    native_mtp = bool(mtp_requested) and _is_native_streamed_mtp(root, manifest)
+    if mtp_requested and not native_mtp:
+        raise ValueError(
+            "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1 "
+            "(only the DeepSeek-V4.1 DSpark native MTP head supports "
+            "--generation-mode mtp)"
+        )
+    receipt = ensure_expert_admitted(root)
     explicit_manifest = getattr(args, "expert_manifest", None)
     if explicit_manifest:
         _validate_explicit_manifest(
@@ -781,7 +819,10 @@ def expert_streaming_load_kwargs(
     setattr(args, "_resolved_expert_effective_config", effective_config)
     setattr(args, "_expert_admission_receipt", receipt)
     return {
-        "mtp": False,
+        # True only for the DeepSeek-V4.1 DSpark native MTP head under
+        # --generation-mode mtp; runtime.load then threads with_mtp to the loader
+        # and prices the mtp.* residents. Every other streamed profile is AR-only.
+        "mtp": native_mtp,
         "expert_streaming_config": config,
         "expert_manifest": manifest,
         "expert_admission_receipt": receipt,
