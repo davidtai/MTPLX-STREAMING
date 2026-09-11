@@ -416,6 +416,49 @@ def _restore_lever_env():
 
 
 # --------------------------------------------------------------------------
+# W79: the served profile's lever child_env MUST equal the cell16k preset
+# --------------------------------------------------------------------------
+
+
+def test_profile_child_env_equals_cell16k_preset(env_levers):
+    """The deepseek-v41-mxfp4-75 profile ships the cell16k lever set as served
+    defaults (W79).  Pin the profile child_env and the A/B preset to ONE source of
+    truth -- the ab script's ``ARM_PRESETS['cell16k']`` -- so neither can drift
+    from the other silently.  The preset pins EVERY lever key (most to None =
+    force-unset); the profile carries only the armed ones plus its non-lever memory
+    caps, so compare the profile's child_env RESTRICTED to the preset's lever key
+    space against the preset's non-None (armed) entries.
+    """
+    from mtplx.expert_profiles import load_expert_profiles
+
+    preset = env_levers.ARM_PRESETS["cell16k"]
+    lever_keys = set(preset)  # every DSV4.1 lever env key the preset knows
+    preset_armed = {k: v for k, v in preset.items() if v is not None}
+
+    child_env = dict(load_expert_profiles()["deepseek-v41-mxfp4-75"].child_env)
+    child_levers = {k: v for k, v in child_env.items() if k in lever_keys}
+
+    # The drift guard: profile lever env == cell16k preset armed env, exactly.
+    assert child_levers == preset_armed
+    # Pin the preset itself to the known-good contract so it, too, cannot silently
+    # change: the prefill lane (W30/W51/W50/W59/W73/W56) + the decode lane (W40/
+    # W32/W41/W45).  Changing cell16k requires changing this and the profile JSON
+    # together, on purpose.
+    assert preset_armed == {
+        "MTPLX_DSV41_PREFILL_LAYER_MAJOR": "1",
+        "MTPLX_DSV41_PREFILL_DENSE_EXPERTS": "1",
+        "MTPLX_DSV41_PREFILL_SCORE_PATH": "lean",
+        "MTPLX_DSV41_SELECTED_KEYS": "1",
+        "MTPLX_DSV41_KV_CHUNK_GROW": "1",
+        "MTPLX_DSV41_LAYOUT_FIX": "1",
+        "MTPLX_DSV41_HEAD_MODE": "bf16",
+        "MTPLX_DSV41_SINKHORN_METAL": "1",
+        "MTPLX_DSV41_ATTN_COMPILE": "1",
+        "MTPLX_DSV41_ATTN_WIN_MEMO": "1",
+    }
+
+
+# --------------------------------------------------------------------------
 # W11 crash fix: the parser now carries the prompt options _prompt_args reads
 # --------------------------------------------------------------------------
 

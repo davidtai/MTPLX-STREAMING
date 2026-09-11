@@ -39,22 +39,31 @@ from mtplx.expert_profiles import load_expert_profiles
 
 PROFILE_NAME = "deepseek-v41-mxfp4-75"
 
-# The measured-positive, byte-identical levers promoted to served defaults (W46;
-# windows 14-16 + W40/W41/W32/W45): head bf16, Metal Sinkhorn, attn-chain
-# compile, and the sliding-window mask memo.
+# The measured-positive, byte-identical levers promoted to served defaults: the
+# full cell16k A/B preset (W79).  Decode lane (W46; windows 14-16 + W40/W41/W32/
+# W45): head bf16, Metal Sinkhorn, attn-chain compile, sliding-window mask memo.
+# Prefill lane (W30/W51/W50/W59/W73/W56): layer-major schedule, dense experts,
+# lean score path, selected-key gather, chunk-grown KV, sorted-routed layout fix.
+# This set MUST equal the non-None keys of the ab script's cell16k preset -- the
+# drift guard in tests/test_deepseek_v41_ab_env_levers.py pins that equality.
 DEFAULT_LEVERS = {
     "MTPLX_DSV41_HEAD_MODE": "bf16",
     "MTPLX_DSV41_SINKHORN_METAL": "1",
     "MTPLX_DSV41_ATTN_COMPILE": "1",
     "MTPLX_DSV41_ATTN_WIN_MEMO": "1",
+    "MTPLX_DSV41_PREFILL_LAYER_MAJOR": "1",
+    "MTPLX_DSV41_PREFILL_DENSE_EXPERTS": "1",
+    "MTPLX_DSV41_PREFILL_SCORE_PATH": "lean",
+    "MTPLX_DSV41_SELECTED_KEYS": "1",
+    "MTPLX_DSV41_KV_CHUNK_GROW": "1",
+    "MTPLX_DSV41_LAYOUT_FIX": "1",
 }
 # Left OFF pending an A/B window (SWITCH_* measured +2.9% but unconfirmed on the
-# served path; DEVICE_ROUTE has no reader yet; LAYER_MAJOR is a prefill lever).
+# served path; DEVICE_ROUTE has no reader yet).
 LEVERS_LEFT_OFF = (
     "MTPLX_DSV41_SWITCH_FASTPATH",
     "MTPLX_DSV41_SWITCH_SUBMIT",
     "MTPLX_DSV41_DEVICE_ROUTE",
-    "MTPLX_DSV41_PREFILL_LAYER_MAJOR",
 )
 # The forced memory-safety caps (never in the lever namespace).
 FORCED_MEMORY_KEYS = {
@@ -192,7 +201,9 @@ def test_served_startup_log_resolver_reports_every_lever() -> None:
         _format_dsv41_lever_env,
     )
 
-    # Every key the task requires the window log to surface is present + ordered.
+    # Every key the window log must surface is present + ordered: the decode lane,
+    # the unconfirmed/no-reader levers (reported for operator intent), and -- W79 --
+    # the full prefill lane now shipping as a served default.
     for key in (
         "MTPLX_DSV41_HEAD_MODE",
         "MTPLX_DSV41_SINKHORN_METAL",
@@ -204,19 +215,35 @@ def test_served_startup_log_resolver_reports_every_lever() -> None:
         "MTPLX_DSV41_HC_COMPILE",
         "MTPLX_DSV41_SHARED_OVERLAP",
         "MTPLX_DSV41_PREFILL_LAYER_MAJOR",
+        "MTPLX_DSV41_PREFILL_DENSE_EXPERTS",
+        "MTPLX_DSV41_PREFILL_SCORE_PATH",
+        "MTPLX_DSV41_SELECTED_KEYS",
+        "MTPLX_DSV41_KV_CHUNK_GROW",
+        "MTPLX_DSV41_LAYOUT_FIX",
     ):
         assert key in _DSV41_LEVER_ENV_KEYS, key
 
-    env = dict(DEFAULT_LEVERS)  # only the served defaults set
+    env = dict(DEFAULT_LEVERS)  # only the served defaults set (the cell16k stack)
     resolved = _dsv41_resolved_lever_env(env)
     assert list(resolved.keys()) == list(_DSV41_LEVER_ENV_KEYS)
     assert resolved["MTPLX_DSV41_HEAD_MODE"] == "bf16"
+    assert resolved["MTPLX_DSV41_PREFILL_SCORE_PATH"] == "lean"
+    # DEVICE_ROUTE / SWITCH_* are not served defaults -> still unset.
     assert resolved["MTPLX_DSV41_DEVICE_ROUTE"] is None
 
     line = _format_dsv41_lever_env(resolved)
+    # Decode lane armed.
     assert "HEAD_MODE=bf16" in line
     assert "SINKHORN_METAL=1" in line
     assert "ATTN_COMPILE=1" in line
     assert "ATTN_WIN_MEMO=1" in line
+    # Prefill lane armed (W79) -- the whole cell16k stack now proves out in a log.
+    assert "PREFILL_LAYER_MAJOR=1" in line
+    assert "PREFILL_DENSE_EXPERTS=1" in line
+    assert "PREFILL_SCORE_PATH=lean" in line
+    assert "SELECTED_KEYS=1" in line
+    assert "KV_CHUNK_GROW=1" in line
+    assert "LAYOUT_FIX=1" in line
+    # Reported-but-off levers still render as <unset>.
     assert "DEVICE_ROUTE=<unset>" in line
-    assert "PREFILL_LAYER_MAJOR=<unset>" in line
+    assert "SWITCH_FASTPATH=<unset>" in line
