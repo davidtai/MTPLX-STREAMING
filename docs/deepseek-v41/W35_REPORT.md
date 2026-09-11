@@ -132,3 +132,46 @@ absent; reads config + manifest only), `test_memory_plan_bank_yields_to_explicit
 `/health` reports `generation_mode='mtp'` for `--generation-mode mtp`; the memory
 plan line shows the ≤2 GiB session bank; AR (no flag) loads text-only with no MTP
 head.
+
+---
+
+## Window-14 follow-up (MTP lane engaged; strict resident load failed)
+
+Re-smoke on `7770960a9`: `--generation-mode mtp` now takes the MTP lane (the gate
++ forcing fixes worked), but load died with `ResidentLoadError: resident
+parameter validation failed: Received 3 parameters not in model:
+mtp.layers.{0,1,2}.mlp.gate.e_score_correction_bias_vl`.
+
+### Root cause
+The artifact ships a vision-language gate-bias variant (`*_vl`) for every routed
+layer — 40 `layers.*.ffn.gate.bias_vl` (backbone) and 3 `mtp.*.ffn.gate.bias_vl`
+(MTP stages). The backbone model's `sanitize` folds its 40 (the constructed model
+declares **no** `*_vl` param at all); the text-only DSpark head (worker W23)
+omits its own VL gate bias. `partition_text_residents(with_mtp=True)` kept **all**
+`mtp.*` residents including the 3 `*_vl`, which `_map_mtp_residents` maps to
+`mtp.layers.{0,1,2}.mlp.gate.e_score_correction_bias_vl` — params the head does
+not have — so `load_weights(strict=True)` rejected them. W23's DSpark tests never
+hit it (synthetic residents, the 376 GiB artifact was never loaded).
+
+### Fix
+`partition_text_residents(with_mtp=True)` now drops `mtp.*_vl` residents (via
+`_is_kept_mtp_resident`); the backbone `layers.*_vl` are untouched (sanitize
+handles them). So the served MTP resident load provides exactly the head's
+declared params.
+
+### Verification (CPU, real config + manifest, lazy zeros → no experts.bin, 468 MB RSS)
+- The constructed model (`mtp=True`) has 1438 params; the sanitized MTP partition
+  keys are a subset with **0 keys not in the model** (was 3). The only model
+  params the residents don't provide are the streamed `switch_mlp` backbone
+  experts (bound via `bind_streamed_switches`, not residents).
+- The model declares no `*_vl` gate bias; the partition drops the 3 `mtp.*_vl`
+  and keeps the 40 backbone `layers.*_vl`.
+
+Tests: `test_served_mtp_partition_matches_constructed_model_params`,
+`test_mtp_vl_gate_bias_is_dropped_and_absent_from_the_head` (both skip if the
+artifact is absent). W23's synthetic-manifest partition/mapping tests still green
+(no `_vl` in their fixtures). Full `test_deepseek_v41_mtp_gate_w35.py`: 13 passed.
+
+### Next GPU smoke should confirm
+`--generation-mode mtp` reaches `/health` with `generation_mode='mtp'` and the
+DSpark head active (no strict-load failure); AR still text-only.
