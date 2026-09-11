@@ -9,6 +9,7 @@ import stat
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -236,6 +237,7 @@ class PositionalExpertReader:
         codec_sidecar: Any | None = None,
         codec_verify: bool = True,
         expert_admission_receipt: Mapping[str, Any] | None = None,
+        io_read_fanout: int = 1,
     ) -> None:
         if isinstance(max_open_files, bool) or not isinstance(max_open_files, int):
             raise TypeError("max_open_files must be an integer")
@@ -272,6 +274,25 @@ class PositionalExpertReader:
             codec_sidecar.record_map() if codec_sidecar is not None else None
         )
         self._decode_container = None  # lazily bound Metal decoder (needs MLX)
+        # W24 R4 (Factor D) lever, default OFF (==1): split one large record's
+        # positional read into N contiguous sub-range reads issued CONCURRENTLY
+        # on the shared (ref-counted) fd -- raises SSD queue depth beyond the
+        # per-record floor (mmap-willneed-unwired.md: single 10 MiB request draws
+        # ~5.2 GiB/s; the drive saturates only at qd>=64).  Byte-identical: the
+        # sub-ranges partition [0,len) contiguously into disjoint destination
+        # slices; os.preadv with an explicit offset is thread-safe on a shared fd.
+        if isinstance(io_read_fanout, bool) or not isinstance(io_read_fanout, int):
+            raise TypeError("io_read_fanout must be an integer")
+        if io_read_fanout < 1:
+            raise ValueError("io_read_fanout must be >= 1")
+        self.io_read_fanout = io_read_fanout
+        self._fanout_executor = (
+            ThreadPoolExecutor(
+                max_workers=io_read_fanout, thread_name_prefix="mtplx-io-fanout"
+            )
+            if io_read_fanout > 1
+            else None
+        )
         self.metrics = ExpertIOMetrics()
         self._condition = threading.Condition()
         self._entries: OrderedDict[str, _FDEntry] = OrderedDict()
@@ -548,7 +569,74 @@ class PositionalExpertReader:
         except Exception:
             cls._mark_pipeline_incomplete(pipeline_ledger, pipeline_phase)
 
+    @staticmethod
+    def _fanout_split(total: int, parts: int) -> list[tuple[int, int]]:
+        """Partition ``total`` bytes into up to ``parts`` contiguous, disjoint
+        (start, length) sub-ranges that exactly cover ``[0, total)``."""
+        base, rem = divmod(total, parts)
+        out: list[tuple[int, int]] = []
+        start = 0
+        for i in range(parts):
+            length = base + (1 if i < rem else 0)
+            if length:
+                out.append((start, length))
+                start += length
+        return out
+
     def _read_range_into(
+        self,
+        relative_name: str,
+        source_offset: int,
+        destination: memoryview,
+        *,
+        cancel_event: threading.Event | None,
+        deadline_ns: int | None,
+        pipeline_phase: str | None = None,
+    ) -> None:
+        """Fill ``destination`` from ``[source_offset, +len)``.
+
+        With ``io_read_fanout > 1`` a record larger than one read chunk is split
+        into concurrent contiguous sub-reads (byte-identical; see ctor).  Small
+        records and the default (fanout==1) go straight to the sequential body.
+        """
+        executor = self._fanout_executor
+        if executor is not None and len(destination) > self.max_read_chunk_bytes:
+            parts = self._fanout_split(len(destination), self.io_read_fanout)
+            if len(parts) > 1:
+                futures = []
+                for start, length in parts:
+                    sub = destination[start : start + length]
+                    futures.append(
+                        executor.submit(
+                            self._read_range_into_seq,
+                            relative_name,
+                            source_offset + start,
+                            sub,
+                            cancel_event=cancel_event,
+                            deadline_ns=deadline_ns,
+                            pipeline_phase=pipeline_phase,
+                        )
+                    )
+                error: BaseException | None = None
+                for future in futures:
+                    try:
+                        future.result()
+                    except BaseException as exc:  # drain all, re-raise the first
+                        if error is None:
+                            error = exc
+                if error is not None:
+                    raise error
+                return
+        self._read_range_into_seq(
+            relative_name,
+            source_offset,
+            destination,
+            cancel_event=cancel_event,
+            deadline_ns=deadline_ns,
+            pipeline_phase=pipeline_phase,
+        )
+
+    def _read_range_into_seq(
         self,
         relative_name: str,
         source_offset: int,
@@ -1190,6 +1278,11 @@ class PositionalExpertReader:
         return tuple(digests)
 
     def close(self) -> None:
+        # Drain in-flight fanout sub-reads first so their fd leases release
+        # before the descriptor-cache teardown waits on users==0.
+        if self._fanout_executor is not None:
+            self._fanout_executor.shutdown(wait=True)
+            self._fanout_executor = None
         with self._condition:
             self._closed = True
             while any(
