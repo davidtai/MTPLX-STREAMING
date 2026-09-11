@@ -176,6 +176,14 @@ decode). Do not confuse the two — that is the mistake the Qwen3.8 dispatch sto
   **AR-with-head 2.8×**: main_hidden capture identical, MTP experts resident (not streamed) — so it is the
   reprice shrinking the COLD expert cache ~7 GiB (peak 76.3≈75.9, i.e. slots traded for MTP residents);
   `--with-mtp --no-reprice` added so window 26 separates budget/slots from a code path.
+- **W57 window-27 (integration b582b73a3; W57_DSPARK_DIRECT.md §6d):** verify still 1.88 s/cycle even with
+  K29 engaged, and `verify_stage_timing` was EMPTY — the W37 probe recorded only s==1 forwards, so the
+  4-row verify was invisible. FIXED: `enter_forward` (decode) now records 1≤s≤8 (the K+1 verify), and the
+  route-stage probe + W61 engagement counter (`hot.verify_single_barrier`) are surfaced in the receipt.
+  Full audit table of every rows>1 branch in the verify (attn score-path vs K29, streamed switch M=4
+  host-sync barriers vs W61 all-hit, prefill-softmax kernel, HC/attn compile caps, one-shot vs chunked,
+  K19, engram) in §6d. Draft 261 ms explained: 3 SHALLOW stages (not 3×40) over 4 resident rows + markov
+  loop. Added `MTPLX_DSV41_DSPARK_VERIFY_K29=0` (K30 on, K29 off) so window 29 isolates the fused kernel.
 
 ### R2 — Expert-record dedup across MTP verify rows — Factor B
 

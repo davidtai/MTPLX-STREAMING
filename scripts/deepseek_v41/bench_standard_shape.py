@@ -1181,13 +1181,11 @@ def main(argv=None) -> int:
         # verify share the (greedy-identical) decode attention branch -- see
         # ab_decode_env_levers._run_arm. MTPLX_DSV41_DSPARK_DECODE_KERNELS=0 opts out.
         from mtplx.models.deepseek_v41_dspark_decode import (
-            _DSPARK_DECODE_KERNEL_ENVS,
-            _dspark_decode_kernels_disabled,
+            dspark_decode_kernel_env_defaults,
         )
 
-        if not _dspark_decode_kernels_disabled():
-            for _k in _DSPARK_DECODE_KERNEL_ENVS:
-                os.environ.setdefault(_k, "1")
+        for _k, _v in dspark_decode_kernel_env_defaults().items():
+            os.environ.setdefault(_k, _v)
 
     if args.dry_run:
         return run_dry(args)

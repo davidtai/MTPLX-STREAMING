@@ -67,6 +67,11 @@ __all__ = [
 
 _KIND_DECODE = "decode"
 _KIND_PREFILL = "prefill"
+#: Max query rows a DECODE-kind session records: 1 (AR decode) .. 8 (the DSpark
+#: K+1 speculative-verify batch, matching the K29 fused decode-attention row cap).
+#: A forward wider than this is a genuine prefill and is left unrecorded so its
+#: multi-GB transients never pollute the per-token decode census (W57).
+_DECODE_STAGE_MAX_ROWS = 8
 
 #: The armed probe for the current process, or ``None`` when no session is open.
 #: Read on every stage bracket, so keep it a bare module global (one attribute
@@ -166,15 +171,20 @@ class _Probe:
     def enter_forward(self, seq_len: int) -> None:
         """Arm recording for this forward.
 
-        decode: only a single query row (``s == 1``) -- prefill forwards would
-        fence multi-GB transients and pollute the per-token census.  prefill:
-        record the whole forward (the chunk loop inside tags each chunk).  The flag
+        decode: a single query row (``s == 1``) OR a small-M speculative-verify
+        batch (``2 <= s <= _DECODE_STAGE_MAX_ROWS`` == 8, the DSpark K+1 verify /
+        K29 cap) -- both are per-token decode traffic with tiny transients, so the
+        W37 probe records them (W57: the 4-row verify was invisible before this,
+        so ``--decode-mode dspark --stage-timing`` produced an empty verify table).
+        A genuine prefill forward (``s > 8``) is NOT recorded here -- it would fence
+        multi-GB transients and pollute the per-token census.  prefill kind: record
+        the whole forward (the chunk loop inside tags each chunk).  The flag
         persists after the forward returns so the harness' ``sample`` bracket --
         which runs *between* decode forwards -- still records."""
         if self._kind == _KIND_PREFILL:
             self._recording_now = seq_len >= 1
         else:
-            self._recording_now = seq_len == 1
+            self._recording_now = 1 <= seq_len <= _DECODE_STAGE_MAX_ROWS
 
     @contextmanager
     def _stage(self, name: str, nested: bool = False, attn: bool = False):
@@ -326,6 +336,19 @@ def end() -> "Optional[_Probe]":
 
 def active() -> "Optional[_Probe]":
     return _ACTIVE
+
+
+def arm_recording() -> None:
+    """Force ``_recording_now`` on for the active session (no-op when off).
+
+    The DSpark draft (``draft_block``) does not go through ``Model.__call__``, so
+    it never calls :meth:`_Probe.enter_forward`; without this the draft's coarse
+    ``dspark.draft`` bracket would only record from the cycle *after* the first
+    verify (the stale flag). The caller arms recording at each cycle start so both
+    the draft and the K+1 verify are recorded deterministically from cycle 0 (W57).
+    The verify's own ``enter_forward`` re-arms it inside the target forward."""
+    if _ACTIVE is not None:
+        _ACTIVE._recording_now = True
 
 
 def is_active() -> bool:
