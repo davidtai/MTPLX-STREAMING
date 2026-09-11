@@ -278,6 +278,40 @@ def test_session_bank_gate_disables_the_generation_features(monkeypatch) -> None
     assert _store_on_prefill_env_enabled() is False
 
 
+def test_head_last_row_prefill_enabled_for_mxfp4() -> None:
+    # W29 / K19: the mxfp4 lane heads only the last prefill row. W20 chunking
+    # bounds the attention/score transients but the lm head still built the
+    # [1, s, vocab] logits (8.47 GB at 16,384 tokens) until this env turned the
+    # runner's final-logits-only prefill on for the lane. Output is unchanged
+    # (decode seeds from the last token only); score_prompt_logprobs stays all-rows.
+    profiles = load_expert_profiles()
+    child_env = dict(profiles[PROFILE_NAME].child_env)
+    assert child_env.get("MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS") == "0"
+
+
+def test_head_last_row_gate_flips_when_child_env_applied(monkeypatch) -> None:
+    # The child_env, applied to the serve daemon, actually turns the
+    # last-row-head prefill on at its generation-path gate.
+    from mtplx.expert_cli import apply_expert_profile_child_env
+    from mtplx.generation import _env_falsey, _final_logits_prefill_enabled
+
+    profiles = load_expert_profiles()
+
+    class _Args:
+        _resolved_expert_profile = profiles[PROFILE_NAME]
+
+    # without the lane env the last-row lever is off (read live, not frozen)
+    monkeypatch.delenv("MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS", raising=False)
+    assert _env_falsey("MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS") is False
+
+    environ: dict[str, str] = {}
+    apply_expert_profile_child_env(_Args(), environ)
+    for key, value in environ.items():
+        monkeypatch.setenv(key, value)
+    assert _env_falsey("MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS") is True
+    assert _final_logits_prefill_enabled() is True
+
+
 def test_hy3_profiles_do_not_gate_the_session_bank() -> None:
     # hy3/glm are untouched: they never set the session-bank kill switches, so
     # the engine's default (bank on) still applies to them.

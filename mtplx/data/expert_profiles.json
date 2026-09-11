@@ -116,7 +116,8 @@
       "child_env": {
         "MTPLX_ENGRAM_CACHE_LIMIT": "2GiB",
         "MTPLX_SESSION_NEAR_PREFIX_RESTORE": "0",
-        "MTPLX_SESSION_STORE_ON_PREFILL": "0"
+        "MTPLX_SESSION_STORE_ON_PREFILL": "0",
+        "MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS": "0"
       }
     }
   ]

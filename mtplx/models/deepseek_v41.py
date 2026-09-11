@@ -1085,6 +1085,55 @@ def _make_mtp_expert_quant_predicate(group_size: int):
     return predicate
 
 
+def _logits_rows_to_keep(logits_rows) -> Optional[int]:
+    """Map a K19 ``logits_rows`` selector to a ``keep the last N rows`` count.
+
+    ``"last"`` -> ``1`` (only the final position's logits, the single row decode
+    seeds from); ``"all"`` / ``None`` -> ``None`` (head every row, the pre-K19
+    default); a positive int (or its string form) -> that many trailing rows.
+    """
+    if logits_rows is None:
+        return None
+    if isinstance(logits_rows, str):
+        token = logits_rows.strip().lower()
+        if token == "last":
+            return 1
+        if token == "all":
+            return None
+        try:
+            value = int(token)
+        except ValueError:
+            raise ValueError(
+                "logits_rows must be 'last', 'all', or a positive int; "
+                f"got {logits_rows!r}"
+            )
+        return max(1, value)
+    return max(1, int(logits_rows))
+
+
+def _resolve_logits_keep(logits_keep, logits_rows) -> Optional[int]:
+    """Normalise the two last-row head selectors into a single trailing-row
+    count (``int >= 1``) or ``None`` (every row).
+
+    ``logits_keep`` is the runtime ``forward_ar`` contract (an int row count,
+    shared with every other MTPLX backend); ``logits_rows`` is the explicit K19
+    alias (``"last"`` / ``"all"`` / int). ``logits_keep=1`` and
+    ``logits_rows="last"`` are the same slice. When both are supplied they must
+    resolve to the same count, so a caller can never silently ask for two
+    different widths.
+    """
+    keep = None if logits_keep is None else max(1, int(logits_keep))
+    if logits_rows is not None:
+        rows = _logits_rows_to_keep(logits_rows)
+        if keep is not None and rows != keep:
+            raise ValueError(
+                f"logits_rows={logits_rows!r} and logits_keep={logits_keep!r} "
+                "select different row counts"
+            )
+        keep = rows
+    return keep
+
+
 class Model(nn.Module):
     """DeepSeek-V4.1-Flash text AR model.  ``model.model.layers[i].mlp.switch_mlp``
     is the streamed-expert seam; ``head`` is the (untied) output projection.
@@ -1167,8 +1216,9 @@ class Model(nn.Module):
                 )
 
     def __call__(self, input_ids, cache=None, *, return_hidden: bool = False,
-                 emit_logits: bool = True, logits_keep=None, input_embeddings=None,
-                 hidden_variant=None, prefill_chunk=None, **kwargs):
+                 emit_logits: bool = True, logits_keep=None, logits_rows=None,
+                 input_embeddings=None, hidden_variant=None, prefill_chunk=None,
+                 **kwargs):
         """Target forward and the MTPLX runtime's ``forward_ar`` surface.
 
         Plain ``model(ids)`` / ``model(ids, cache=cache)`` is unchanged (returns
@@ -1181,18 +1231,37 @@ class Model(nn.Module):
         ``prefill_chunk`` is W20's token-chunked-prefill knob threaded to the
         backbone.  ``input_embeddings`` (a vision splice) is rejected -- the text
         path has none.
+
+        **K19 (head only the last row at prefill).** ``logits_rows`` is the
+        explicit last-row selector -- ``"last"`` heads only the final position
+        (equivalent to the runtime's ``logits_keep=1``), ``"all"``/``None`` keeps
+        every row.  At a 16,384-token prefill the full-row head builds a
+        ``[1, 16384, vocab]`` f32 logits transient (8.47 GB at vocab 129,280) and
+        runs the output GEMM over 16,383 rows the AR path never reads -- decode
+        seeds only from the last token.  Slicing the (already final-norm /
+        hyper-connection-merged) hidden to the trailing rows before the head drops
+        both.  The head lives here, outside the backbone's per-chunk loop, so
+        under W20 chunked prefill it is still invoked exactly once -- intermediate
+        chunks never touch it -- and the narrowing composes with chunking for free.
+        MTP verify (the K+1-row decode-verify batch) is *not* prefill and passes
+        neither selector, so it keeps every row unchanged.  The default
+        (both ``None``) heads every row and is byte-identical to the pre-K19
+        forward.
         """
         if input_embeddings is not None:
             raise ValueError(
                 "the DeepSeek-V4.1 text backend does not support input_embeddings "
                 "(no vision splice path)"
             )
+        keep_last = _resolve_logits_keep(logits_keep, logits_rows)
         h, main_hidden = self.model(
             input_ids, cache, prefill_chunk=prefill_chunk, return_main_hidden=True
         )
         logits = None
         if emit_logits:
-            source = h if logits_keep is None else h[:, -max(1, int(logits_keep)):, :]
+            # Row-independent GEMM: head(h)[:, -k:] == head(h[:, -k:]) exactly, so
+            # narrowing the head input never changes the surviving rows' logits.
+            source = h if keep_last is None else h[:, -keep_last:, :]
             logits = self.head(source.astype(mx.float32))
         if not return_hidden:
             return logits
