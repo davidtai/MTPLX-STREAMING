@@ -151,6 +151,10 @@ class ExpertStreamingConfig:
     max_inflight_io_bytes: int | None = None
     max_open_files: int = 16
     max_read_chunk_bytes: int = 8 * 1024 * 1024
+    # W24 R4 (Factor D) lever, default 1 (OFF): split each large record's
+    # positional read into N concurrent contiguous sub-reads to raise SSD queue
+    # depth on the serially-layer-dependent decode path. Byte-identical.
+    io_read_fanout: int = 1
     frequency_decay: float = 0.995
     prefer_sidecar: bool = True
     verify_record_hashes: bool = True
@@ -241,6 +245,7 @@ class ExpertStreamingConfig:
             ("execution_workspace_bytes", 0),
             ("max_open_files", 1),
             ("max_read_chunk_bytes", 1),
+            ("io_read_fanout", 1),
         ):
             object.__setattr__(
                 self, name, _integer(name, getattr(self, name), minimum=minimum)
@@ -2155,6 +2160,7 @@ class ExpertStreamingRuntime:
                 bypass_page_cache=config.bypass_page_cache,
                 codec_sidecar=codec_sidecar,
                 codec_verify=config.streamed_codec_verify,
+                io_read_fanout=config.io_read_fanout,
                 **pipeline_kwargs,
                 **admission_kwargs,
             )
