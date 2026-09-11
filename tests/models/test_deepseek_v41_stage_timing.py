@@ -518,3 +518,78 @@ def test_stage_nested_and_chunk_tagging_mechanism():
     # chunk tagging routed the flat stage under chunk index 2.
     assert "2" in prep["by_chunk"]
     assert prep["by_chunk"]["2"]["stages"]["attn.full.score"]["count"] == 1
+
+
+# ===========================================================================
+# W48 -- a minimal probe DOUBLE without ``_kind`` reads as decode (regression).
+#
+# The W41 dispatch census (scripts/deepseek_v41/dispatch_census.py) installs a
+# hand-rolled ``_CensusProbe`` into ``_stime._ACTIVE`` that has ``_recording_now``
+# and reuses ``stage()`` but predates -- and never sets -- the W47 ``_kind``
+# attribute.  Reading ``_kind`` directly (AttributeError) broke the attn-compile /
+# win-memo census tests; ``_kind`` is an opt-in prefill marker, so a double that
+# omits it must default to decode.  This gates that contract without importing the
+# script: any object exposing only ``_recording_now`` + ``_stage`` works, prefill
+# surfaces are no-ops, and a real model forward runs under it.
+# ===========================================================================
+class _MinimalDouble:
+    """Mirrors the census double's surface: ``_recording_now`` + a ``_stage``
+    context manager, and NO ``_kind`` / ``_chunk`` / prefill state."""
+
+    def __init__(self):
+        self._recording_now = False
+        self.stage_names = []
+
+    def enter_forward(self, seq_len):
+        self._recording_now = seq_len == 1  # decode semantics, like the census
+
+    @contextlib.contextmanager
+    def _stage(self, name):
+        self.stage_names.append(name)
+        yield stime._NULL_FENCE
+
+
+@contextlib.contextmanager
+def _install(probe):
+    old = stime._ACTIVE
+    stime._ACTIVE = probe
+    try:
+        yield probe
+    finally:
+        stime._ACTIVE = old
+
+
+def test_probe_without_kind_reads_as_decode():
+    dbl = _MinimalDouble()
+    with _install(dbl):
+        dbl.enter_forward(1)
+        # the accessors that read _kind must tolerate its absence (default decode).
+        assert stime.recording() is True
+        assert stime.is_prefill() is False
+        # prefill-only surfaces are no-ops and never touch the double.
+        assert stime.stage_prefill("attn.full.score") is stime._NOOP_CM
+        assert stime.stage_nested("switch.admission") is stime._NOOP_CM
+        assert stime.chunk(0) is stime._NOOP_CM
+        stime.set_schedule("layer_major")  # must not raise / must not set anything
+        assert not hasattr(dbl, "_schedule")
+        # the decode ``stage`` surface still routes to the double.
+        with stime.stage("embed"):
+            pass
+        assert dbl.stage_names == ["embed"]
+
+
+def test_model_forward_under_kindless_double_does_not_crash():
+    # A real decode forward calls _stime.is_prefill() (Attention.__call__) and
+    # _stime.stage(...) throughout; none may raise on a _kind-less double.
+    with _hc(False), _no_attn_compile():
+        model, args = _new_model(seed=21)
+        cache, token = _prefill(model, args, s=10, seed=8)
+    dbl = _MinimalDouble()
+    with _install(dbl):
+        dbl.enter_forward(1)
+        logits = model(mx.array([[token]]), cache=cache)
+        mx.eval(logits)
+    assert logits.shape[1] == 1
+    # the double saw the decode stage brackets (embed + attn.<mode> + moe.* + ...).
+    assert "embed" in dbl.stage_names
+    assert any(n.startswith("attn.") and "." not in n[len("attn."):] for n in dbl.stage_names)
