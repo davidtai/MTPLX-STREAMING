@@ -87,6 +87,14 @@ def _stage(name: str):
     return _stime.stage(name) if _stime is not None else contextlib.nullcontext()
 
 
+def _arm_stage_recording() -> None:
+    if _stime is not None:
+        try:
+            _stime.arm_recording()
+        except Exception:
+            pass
+
+
 def _frame():
     return _stime.frame() if _stime is not None else contextlib.nullcontext()
 
@@ -99,10 +107,9 @@ def _frame():
 #: attention branch; they are greedy-identical to the eager path (float
 #: reassociation, never bit-identical), so both the served verify and the offline
 #: AR-reference must share the setting -- the lane arms them for the WHOLE run.
-_DSPARK_DECODE_KERNEL_ENVS = (
-    "MTPLX_DSV41_DECODE_ATTN_KERNEL",
-    "MTPLX_DSV41_SELECTED_KEYS",
-)
+_K29_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"
+_K30_ENV = "MTPLX_DSV41_SELECTED_KEYS"
+_DSPARK_DECODE_KERNEL_ENVS = (_K29_ENV, _K30_ENV)
 
 
 def _dspark_decode_kernels_disabled() -> bool:
@@ -114,22 +121,46 @@ def _dspark_decode_kernels_disabled() -> bool:
     }
 
 
+def _dspark_verify_k29_enabled() -> bool:
+    """Whether the lane arms K29 (the fused decode-attention kernel). Default ON;
+    ``MTPLX_DSV41_DSPARK_VERIFY_K29=0`` keeps K30 (selected keys) but leaves K29
+    unarmed, so window 29 can separate the kernel's cost (K29 is itself -38% vs
+    eager at M=1, so it may be hurting the wider verify)."""
+    return os.environ.get("MTPLX_DSV41_DSPARK_VERIFY_K29", "").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def dspark_decode_kernel_env_defaults() -> dict:
+    """The env vars the lane sets by default for a DSpark run: K30 (selected keys)
+    always, K29 (fused decode attention) unless ``MTPLX_DSV41_DSPARK_VERIFY_K29=0``.
+    Single source used by both the served context and the bench harness (setdefault),
+    so an operator's explicit setting always wins."""
+    if _dspark_decode_kernels_disabled():
+        return {}
+    armed = {_K30_ENV: "1"}
+    if _dspark_verify_k29_enabled():
+        armed[_K29_ENV] = "1"
+    return armed
+
+
 @contextlib.contextmanager
 def arm_dspark_decode_kernels():
     """Arm K29/K30 for the duration of a DSpark run (default ON): set each env flag
     to "1" only where the operator has not already set it, restoring after. The
     small-M verify then routes through the fused decode attention + selected-key
     gather instead of the prefill path. ``MTPLX_DSV41_DSPARK_DECODE_KERNELS=0``
-    opts out (window A/B)."""
-    if _dspark_decode_kernels_disabled():
-        yield
-        return
+    opts out of both; ``MTPLX_DSV41_DSPARK_VERIFY_K29=0`` keeps K30 but not K29."""
+    defaults = dspark_decode_kernel_env_defaults()
     saved = {}
     try:
-        for key in _DSPARK_DECODE_KERNEL_ENVS:
+        for key, val in defaults.items():
             if key not in os.environ:
                 saved[key] = None
-                os.environ[key] = "1"
+                os.environ[key] = val
         yield
     finally:
         for key, prev in saved.items():
@@ -422,6 +453,9 @@ def _decode_cycles(
         if abort_check is not None and abort_check():
             finish_reason = "abort"
             break
+        # arm the W37 probe (if a --stage-timing session is active) so BOTH the
+        # draft and the verify record from cycle 0, not just after the first verify.
+        _arm_stage_recording()
 
         # ---- draft a block, apply the confidence early stop --------------
         # The 3 DSpark stages run RESIDENT mxfp4 experts (SwitchGLU), never the

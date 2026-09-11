@@ -392,6 +392,62 @@ Both the K29/K30 win and the switch host-sync fix need a GPU-window A/B
 has no streamed switch, so the lane changes here are proven byte-identical and the
 throughput is window-26 measurement.
 
+## 6d. Window-27: probe fix, the rows>1 audit, and the K29-off knob
+
+Window 27 (integration b582b73a3, W57d + W60/K29 + W61 single-barrier merged):
+dspark verify still **1,876 ms/cycle** with K29 engaged for every verify row
+(10,280 kernel calls, 0 fallbacks), and `verify_stage_timing` was **empty** — the
+W37 probe recorded only `s == 1` steps, so the 4-row verify forward was invisible.
+
+### (1) Probe records the verify; route-stage + W61 engagement in the receipt
+- **`enter_forward`** (decode kind) now arms recording for `1 ≤ s ≤ 8`
+  (`_DECODE_STAGE_MAX_ROWS`), not only `s == 1`; a genuine prefill (`s > 8`) stays
+  unrecorded. `--decode-mode dspark --stage-timing` now yields the verify's
+  internal stage table (`moe.*`, `attn.*`, `hc.*`, `head`) plus coarse
+  `dspark.draft` / `dspark.verify` brackets; `arm_recording()` is called at each
+  cycle start so both record from cycle 0 (the draft doesn't call `enter_forward`).
+- The route-stage probe (`expert_route_probe.ENABLED`, read at use) is armed and
+  cleared for the dspark pass, and its **W61 engagement counter**
+  (`hot.verify_single_barrier`, plus `hot.all_hit` / `hot.eval_indices` /
+  `hot.begin_split_route`) is surfaced in the receipt as `dspark.w61_engagement` —
+  so window 28 sees whether W61's single-barrier fast path actually fires (it
+  engages only on an **all-hit** verify; a cold/missing verify falls back to the
+  multi-barrier `route_waves` loop).
+
+### (2) Audit — every 4-row verify branch keyed on rows>1
+
+| Branch (file) | rows>1 behavior | armed? | expected cost | note |
+|---|---|---|---|---|
+| `_sparse_attend` q.shape[1]>1 (deepseek_v41.py:686) | prefill score path (one-shot/lean/chunked) | **K29 default now ON** → fused decode kernel (rows≤8), checked *before* the s>1 branch (`:682`) | K29 on: one dispatch; K29 off: ~830 ms | the window-25 attn cost; K29 is −38% vs eager at M=1 so it may hurt the wider verify — `MTPLX_DSV41_DSPARK_VERIFY_K29=0` isolates it (task 3) |
+| streamed switch DECODE phase, M=4 (expert_streaming.py) | union routed via `plan()` (deduped, not per-row), then **route_waves** unless W61 all-hit | W61 default ON but engages ONLY all-hit | ~630 ms when W61 misses: `hot.eval_indices` ~10 ms × several barriers/layer | the dominant residual; **streamed-runtime fix, GPU-only** — keep indices on-device / one barrier/layer |
+| prefill softmax kernel `s>1 and _prefill_softmax_kernel_use()` (:776) | prefill tiled softmax | default OFF | 0 (off) | would apply to the verify if `MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL=1` |
+| HC compile `rows ≤ _HC_COMPILE_MAX_ROWS=32` (:1874) | compiled HC tape engages for the verify | on when `MTPLX_DSV41_HC_COMPILE` | one-time trace per new (4-row) shape, then replay | verify is *inside* the cap — helps, not a penalty |
+| attn compile `rows ≤ _ATTN_COMPILE_MAX_ROWS=32` (:1625) | compiled attn prep engages | on when `MTPLX_DSV41_ATTN_COMPILE` | one-time trace, then replay | same |
+| backbone one-shot vs chunked | 4 rows ≪ the chunk byte-threshold → one-shot span | n/a | 0 | the verify is never chunk-major / layer-major (those are for large prefills) |
+| K19 logits (Model.__call__) | verify passes NO `logits_keep` → keeps all K+1 rows | n/a | tiny `[1,4,vocab]` transient (not the 16k prefill narrowing) | correct — MTP verify must keep every row |
+| main_hidden capture (`_mtp_target_layer_ids`) | mean over hc at 3 target layers, ×4 rows | always (config) | ~µs, same as AR per row | not the diff |
+| engram advance + cache appends (window/compress/index) | advanced/appended for 4 rows, trimmed on rollback | when engram wired | small; O(rows) | rollback restores exactly |
+| MoE main path (draft) — see below | — | — | — | — |
+
+**The draft's 261 ms** is NOT `3 × 40` layers: `DSparkHead` is **3 shallow stages**
+(`self.layers = [DSparkBlock(...) for i in range(n_mtp_layers==3)]`), each ONE
+decoder block — DSparkAttention (sliding window over 4 rows) + a **resident**
+128-expert top-3 MoE — plus `forward_embed` and `forward_head`'s markov
+autoregression (`block_size==4` sequential steps). The markov samples are lazy
+`mx.argmax` (no per-step host sync — `_sample`), so the 261 ms is the 3-stage
+forward's compute/dispatch over 4 rows (resident weights, no streamed misses) +
+the head, evaluated once. Being on resident experts it is not the SSD/host-sync
+problem the verify has; ~87 ms/stage is dispatch-bound and a candidate for the
+same K29/decode-attention treatment (the drafter's DSparkAttention also hits
+`_sparse_attend` at 4 rows).
+
+### (3) K29-off knob (task 3)
+`MTPLX_DSV41_DSPARK_VERIFY_K29=0` arms K30 (selected keys) but leaves K29
+unarmed, so window 29 can separate the fused-kernel's cost from the routing/switch
+cost. Single source `dspark_decode_kernel_env_defaults()` drives both the served
+`arm_dspark_decode_kernels()` and the bench harness `setdefault`, honoring the
+toggle and `MTPLX_DSV41_DSPARK_DECODE_KERNELS=0` (both off).
+
 ## 7. Caveats
 
 - **Acceptance α + `T_{K+1}/T1` unmeasured on this box** — the tok/s win is a GPU

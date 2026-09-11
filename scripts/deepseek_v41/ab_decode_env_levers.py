@@ -685,9 +685,24 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_ti
     mem_probe.reset_peak()
     stats = DSparkDecodeStats()
     stime = None
+    route_probe = None
+    route_prev_enabled = None
     if stage_timing:
         from mtplx.models import deepseek_v41_stage_timing as stime
 
+        # Arm the route-stage probe (hot.* per-layer counters incl. W61's
+        # hot.verify_single_barrier engagement) for the dspark run, clearing it so
+        # the census is scoped to this pass. ENABLED is read at use, so setting it
+        # here arms the module even if the launch env did not.
+        try:
+            from mtplx import expert_route_probe as route_probe
+
+            route_prev_enabled = route_probe.ENABLED
+            route_probe.ENABLED = True
+            route_probe._SUMS.clear()
+            route_probe._COUNTS.clear()
+        except Exception:
+            route_probe = None
         stime.begin()
     t0 = time.perf_counter()
     toks = dspark_generate(
@@ -701,9 +716,29 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_ti
     )
     wall = time.perf_counter() - t0
     report = None
+    w61 = None
     if stime is not None:
         report = model.stage_timing_report()
         stime.end()
+    if route_probe is not None:
+        snap = route_probe.snapshot()
+        stg = snap.get("stages", {}) if isinstance(snap, dict) else {}
+
+        def _count(name):
+            return int(stg.get(name, {}).get("count", 0))
+
+        # W61 engages (one routing barrier/layer) only on an ALL-HIT verify;
+        # a cold/missing verify falls back to the multi-barrier route_waves loop.
+        w61 = {
+            "verify_single_barrier": _count("hot.verify_single_barrier"),
+            "all_hit": _count("hot.all_hit"),
+            "try_all_hit": _count("hot.try_all_hit"),
+            "eval_indices": _count("hot.eval_indices"),
+            "begin_split_route": _count("hot.begin_split_route"),
+            "note": "cumulative over this dspark pass (prefill + drafts + verifies); "
+                    "verify_single_barrier is verify-only",
+        }
+        route_probe.ENABLED = bool(route_prev_enabled)
     out = {
         "generated": [int(t) for t in toks],
         "decode_wall_s": wall,
@@ -712,6 +747,8 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_ti
     }
     if report is not None:
         out["verify_stage_timing"] = report
+    if w61 is not None:
+        out["w61_engagement"] = w61
     return out
 
 
@@ -750,13 +787,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # setting. setdefault respects an arm that set them explicitly;
         # MTPLX_DSV41_DSPARK_DECODE_KERNELS=0 opts out.
         from mtplx.models.deepseek_v41_dspark_decode import (
-            _DSPARK_DECODE_KERNEL_ENVS,
-            _dspark_decode_kernels_disabled,
+            dspark_decode_kernel_env_defaults,
         )
 
-        if not _dspark_decode_kernels_disabled():
-            for _k in _DSPARK_DECODE_KERNEL_ENVS:
-                os.environ.setdefault(_k, "1")
+        for _k, _v in dspark_decode_kernel_env_defaults().items():
+            os.environ.setdefault(_k, _v)
     if getattr(args, "dry_run", False):
         return _dry_run_arm(args, arm, bench)
     build_prompt = bench._load_build_prompt()
@@ -874,6 +909,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 # W37 internal breakdown of the verify forward (attention +
                 # moe.routed_switch): the census that shows the routing phase.
                 receipt["dspark"]["verify_stage_timing"] = dsp["verify_stage_timing"]
+            if dsp.get("w61_engagement") is not None:
+                # W61 single-barrier fast-path engagement (+ eval_indices barrier
+                # count) from the route-stage probe.
+                receipt["dspark"]["w61_engagement"] = dsp["w61_engagement"]
             # Byte-identity is a hard correctness gate, not a soft metric: a
             # differing greedy sequence means the speculative lane is broken.
             if not byte_identical:

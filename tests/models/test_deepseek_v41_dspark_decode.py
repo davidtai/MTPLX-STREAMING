@@ -367,6 +367,66 @@ def test_dspark_per_cycle_timing_populates():
     assert sum(d["phase_time_s"].values()) > 0
 
 
+def test_stage_timing_decode_session_records_verify_rows():
+    """W57: the W37 decode-kind probe must arm recording for the K+1 verify batch
+    (2..8 rows), not only M=1 -- otherwise the 4-row verify forward records nothing
+    and --stage-timing yields an empty verify table."""
+    from mtplx.models import deepseek_v41_stage_timing as stime
+
+    stime.begin(kind="decode")
+    try:
+        p = stime.active()
+        for rows in (1, 2, 4, 8):
+            p.enter_forward(rows)
+            assert p._recording_now is True, f"rows={rows} must record"
+        for rows in (9, 16, 1024):
+            p.enter_forward(rows)
+            assert p._recording_now is False, f"rows={rows} (prefill) must not record"
+    finally:
+        stime.end()
+
+
+def test_stage_timing_records_verify_stages_end_to_end():
+    from mtplx.models import deepseek_v41_stage_timing as stime
+
+    _args_, model = _seeded_model(seed=0)
+    prompt = _prompt(17)
+    stime.begin()
+    try:
+        stats = DSparkDecodeStats()
+        dspark_generate(model, prompt, max_tokens=24, sampler=GREEDY, seed=0,
+                        speculative_depth=3, stats=stats)
+        report = model.stage_timing_report()
+    finally:
+        stime.end()
+    assert report is not None and report.get("stage_sum_ms", 0) > 0, (
+        "the 4-row verify forward recorded no stages"
+    )
+    names = set(report.get("stages", {}))
+    assert "dspark.verify" in names and "dspark.draft" in names
+    assert any(n.startswith(("attn.", "moe")) for n in names), (
+        "the verify's internal backbone stages must be captured"
+    )
+
+
+def test_dspark_decode_kernel_env_defaults_k29_toggle(monkeypatch):
+    from mtplx.models.deepseek_v41_dspark_decode import (
+        dspark_decode_kernel_env_defaults,
+    )
+
+    for k in ("MTPLX_DSV41_DSPARK_VERIFY_K29", "MTPLX_DSV41_DSPARK_DECODE_KERNELS"):
+        monkeypatch.delenv(k, raising=False)
+    # default: both K29 + K30
+    d = dspark_decode_kernel_env_defaults()
+    assert d == {"MTPLX_DSV41_SELECTED_KEYS": "1", "MTPLX_DSV41_DECODE_ATTN_KERNEL": "1"}
+    # K29 off (window-29 A/B): K30 only
+    monkeypatch.setenv("MTPLX_DSV41_DSPARK_VERIFY_K29", "0")
+    assert dspark_decode_kernel_env_defaults() == {"MTPLX_DSV41_SELECTED_KEYS": "1"}
+    # all off
+    monkeypatch.setenv("MTPLX_DSV41_DSPARK_DECODE_KERNELS", "0")
+    assert dspark_decode_kernel_env_defaults() == {}
+
+
 def test_dspark_direct_confidence_early_stop_is_lossless():
     _args_, model = _seeded_model(seed=3, vocab=8)
     prompt = _prompt(17, vocab=8)
