@@ -134,3 +134,85 @@ def test_ar_profile_does_not_request_mtp() -> None:
     from mtplx.expert_profiles import load_expert_profiles
 
     assert load_expert_profiles()[PROFILE_NAME].generation_mode == "ar"
+
+
+# --------------------------------------------------------------------------
+# window-12 follow-up: the parent AR-forcing, the session-bank plan, the cap
+# --------------------------------------------------------------------------
+import os  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_MXFP4 = Path(os.path.expanduser(
+    "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
+))
+
+
+@pytest.mark.skipif(not _MXFP4.exists(), reason="mxfp4 artifact not on this box")
+def test_real_artifact_generation_mode_resolves_to_mtp() -> None:
+    # Builds the serve decision from the real artifact's metadata (config.json +
+    # expert-manifest.json; no experts.bin) + the argv. The parent AR-forcing
+    # block that reported generation_mode='ar' in window 12 is now gated on this.
+    from mtplx.commands import public as pub
+
+    mtp_args = types.SimpleNamespace(
+        _cli_flags={"generation-mode"}, generation_mode="mtp", load_mtp=True
+    )
+    assert pub._streamed_native_mtp_requested(mtp_args, _MXFP4) is True
+    # the gated forcing block keeps MTP (mirrors public.py):
+    if pub._streamed_native_mtp_requested(mtp_args, _MXFP4):
+        mtp_args.generation_mode = pub.GENERATION_MODE_MTP
+        mtp_args.load_mtp = True
+        mtp_args.no_mtp = False
+    else:  # pragma: no cover
+        mtp_args.generation_mode = pub.GENERATION_MODE_AR
+    assert mtp_args.generation_mode == "mtp"
+    # AR (no flag) on the same artifact stays AR
+    ar_args = types.SimpleNamespace(
+        _cli_flags=set(), generation_mode="ar", load_mtp=False
+    )
+    assert pub._streamed_native_mtp_requested(ar_args, _MXFP4) is False
+
+
+def test_memory_plan_bank_yields_to_explicit_cap() -> None:
+    # The profile child_env's MTPLX_SESSION_BANK_MAX_BYTES=2GiB now governs the
+    # advertised plan bank (was the module's 48G cap), matching the engine bank.
+    from mtplx.memory_plan import plan_memory
+
+    GiB = 1024**3
+    base = dict(
+        total_ram_bytes=128 * GiB, model_weights_bytes=int(9.7 * GiB),
+        usable_bytes_override=75 * GiB, usable_bytes_explicit=True,
+        kv_bytes_per_token=3200, requested_context=16384,
+    )
+    assert round(plan_memory(**base).bank_idle_max_bytes / GiB) == 48
+    capped = plan_memory(**base, session_bank_max_bytes=2 * GiB)
+    assert round(capped.bank_idle_max_bytes / GiB) == 2
+    assert round(capped.bank_steady_bytes / GiB) == 2
+
+
+def test_explicit_session_bank_env_wins_over_the_plan(monkeypatch) -> None:
+    # engine_session is the process that reads MTPLX_SESSION_BANK_MAX_BYTES; an
+    # explicit value wins over the auto/plan sizing (so the child_env reaches the
+    # actual bank, not just the display).
+    from mtplx.engine_session import resolve_session_bank_max_bytes
+
+    monkeypatch.setenv("MTPLX_SESSION_BANK_MAX_BYTES", "2GiB")
+    max_bytes, auto = resolve_session_bank_max_bytes(int(9.7 * 1024**3))
+    assert auto is False
+    assert max_bytes == 2 * 1024**3
+
+
+def test_engine_budget_is_ceiling_minus_reserve() -> None:
+    # issue #3: the 75 GiB engine budget (MTPLX_MEMORY_LIMIT_BYTES) IS the 82 GiB
+    # profile ceiling minus the 7 GiB reserve — the two are consistent, not
+    # competing. The Metal limit governs weights + expert cache.
+    from mtplx.expert_profiles import build_expert_streaming_config, load_expert_profiles
+    from mtplx.expert_runtime import reconcile_mlx_memory_cap
+    from mtplx.expert_streaming_models import get_model_spec
+
+    cfg = build_expert_streaming_config(load_expert_profiles()[PROFILE_NAME])
+    plan = cfg.memory_plan(get_model_spec(cfg.model_key))
+    engine_budget = reconcile_mlx_memory_cap(plan)
+    assert engine_budget == cfg.memory_limit_bytes - cfg.runtime_reserve_bytes
+    assert engine_budget == 75 * 1024**3
+    assert cfg.memory_limit_bytes == 82 * 1024**3
