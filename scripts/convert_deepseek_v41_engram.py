@@ -96,6 +96,45 @@ def _mxfp8_chunk_records(weight_u8: np.ndarray, scale_u8: np.ndarray) -> np.ndar
         raise RuntimeError(f"mxfp8 record width {rec.shape[1]} != expected {exp}")
     return np.ascontiguousarray(rec, dtype=np.uint8)
 
+
+def repack_dense_fp8_block_to_mxfp8(weight_u8: np.ndarray, scale_u8: np.ndarray, name: str = ""):
+    """EXACT verbatim repack of a dense ``F8_E4M3`` weight with ``F8_E8M0`` block scales to mxfp8.
+
+    ``weight_u8``: uint8 ``[O, I]`` (E4M3 code bytes, ``I`` divisible by 32).
+    ``scale_u8``:  uint8 ``[O/bo, I/32]`` (E8M0 block-scale bytes; each covers a ``bo x 32`` block).
+
+    Keeps the E4M3 code bytes verbatim (``codes = weight viewed as U32`` -> ``[O, I/4]``) and
+    expands the block scale to MLX's per-(row, 32-col-group) E8M0 layout by replicating each
+    block's scale byte across its ``bo`` rows (``np.repeat(scale, bo, axis=0)`` -> ``[O, I/32]``;
+    the column axis is already at the 32-col granularity mxfp8 uses).  Returns ``(codes_u32,
+    scales_u8, ref_f32)`` and ASSERTS whole-tensor bit-exactness:
+    ``mx.dequantize(codes, scales, group_size=32, bits=8, mode="mxfp8") == dequant_fp8_block``.
+
+    Same mapping as worker W18's ``repack_fp8_block_to_mxfp8`` (feat/deepseek-v41-w18), except W18
+    dequantizes then re-quantizes via ``mx.quantize(mode="mxfp8")`` (numerically equal); this keeps
+    the source code bytes byte-for-byte, per David's directive.
+    """
+    mx = dc._cpu_mx()
+    weight_u8 = np.ascontiguousarray(weight_u8, dtype=np.uint8)
+    scale_u8 = np.ascontiguousarray(scale_u8, dtype=np.uint8)
+    O, I = weight_u8.shape
+    so, si = scale_u8.shape
+    if I % MXFP8_GROUP_SIZE or O % so or I % si:
+        raise ValueError(f"weight {weight_u8.shape} not mxfp8/gs{MXFP8_GROUP_SIZE} with scale {scale_u8.shape}")
+    bo, bi = O // so, I // si
+    if bi != MXFP8_GROUP_SIZE:
+        raise ValueError(f"{name}: block col width {bi} != mxfp8 group_size {MXFP8_GROUP_SIZE}")
+    ref = dc.dequant_fp8_block(weight_u8, scale_u8)                       # [O, I] f32, bo x 32 blocks
+    codes = mx.array(weight_u8.view("<u4").reshape(O, I // 4))            # [O, I/4] u32, verbatim
+    scales = mx.array(np.repeat(scale_u8, bo, axis=0))                    # [O, I/32] u8 (E8M0)
+    deq = np.array(mx.dequantize(codes, scales, group_size=MXFP8_GROUP_SIZE,
+                                 bits=8, mode="mxfp8").astype(mx.float32))
+    if not np.array_equal(deq, ref):
+        nbad = int((deq != ref).sum())
+        raise RuntimeError(f"{name}: mxfp8 wkv repack NOT bit-exact ({nbad}/{ref.size} values differ)")
+    return codes, scales, ref
+
+
 # ---- resident Engram projections (W4 sidecar) ----------------------------
 # The streaming artifact carries the row banks but NOT the small resident Engram
 # projection tensors.  This sidecar re-materialises them next to the banks:
@@ -611,13 +650,22 @@ def convert_residents(
     wait: bool,
     poll: float,
     verify: bool = True,
+    wkv_codec: str = "affine",
 ) -> tuple[dict, dict, Path]:
     """Build ``engram/engram-residents.safetensors`` (does NOT touch the manifest).
 
     Streams only the four resident tensors per layer from the source shard (never
     mmaps the 95 GiB shard): wkv weight/scale (157 MB) + q/k (40 KB each).  Returns
     ``(residents_manifest_entry, parity_by_layer, sidecar_path)``.
+
+    ``wkv_codec="affine"`` (default): dequant the FP8 wkv and requantize to affine q8/gs64
+    (``wkv.{weight,scales,biases}``).  ``wkv_codec="mxfp8"``: EXACT verbatim repack to mxfp8/gs32
+    (``wkv.{weight,scales}``, U32 codes + U8 e8m0 scales, no bias), bit-exact to the source FP8
+    dequant.  q/k are F32-exact in both.  The sidecar is written to ``<name>.new``, its header
+    verified, then atomically renamed over the existing sidecar.
     """
+    if wkv_codec not in ("affine", "mxfp8"):
+        raise ValueError(f"unknown wkv_codec {wkv_codec!r}")
     mx = dc._cpu_mx()
     residents: dict = {}
     per_layer_meta: list[dict] = []
@@ -646,8 +694,9 @@ def convert_residents(
             raise RuntimeError(f"{wkv_w} dtype {we.dtype} != F8_E4M3")
         if se.dtype != "F8_E8M0":
             raise RuntimeError(f"{wkv_s} dtype {se.dtype} != F8_E8M0")
-        if len(we.shape) != 2 or we.shape[1] % RESIDENT_GROUP:
-            raise RuntimeError(f"{wkv_w} shape {we.shape} not q8/gs{RESIDENT_GROUP} quantizable")
+        _grp = MXFP8_GROUP_SIZE if wkv_codec == "mxfp8" else RESIDENT_GROUP
+        if len(we.shape) != 2 or we.shape[1] % _grp:
+            raise RuntimeError(f"{wkv_w} shape {we.shape} not {wkv_codec}/gs{_grp} quantizable")
 
         fd = os.open(str(shard), os.O_RDONLY)
         try:
@@ -660,13 +709,35 @@ def convert_residents(
 
         w_u8 = np.frombuffer(w_raw, dtype=np.uint8).reshape(we.shape)
         s_u8 = np.frombuffer(s_raw, dtype=np.uint8).reshape(se.shape)
-        wkv_f32 = dc.dequant_fp8_block(w_u8, s_u8)             # [out, in] f32
-        packed, scales, biases = dc.quantize_affine(
-            wkv_f32, bits=RESIDENT_BITS, group_size=RESIDENT_GROUP)
         base = f"layers.{L}.engram.{RESIDENT_WKV}"
-        residents[f"{base}.weight"] = packed
-        residents[f"{base}.scales"] = scales
-        residents[f"{base}.biases"] = biases
+        wkv_f32 = None
+        if wkv_codec == "mxfp8":
+            # EXACT verbatim repack: keep E4M3 codes, expand the 32x32 block scale per (row,32col)
+            codes, mxscales, wkv_f32 = repack_dense_fp8_block_to_mxfp8(w_u8, s_u8, name=wkv_w)
+            residents[f"{base}.weight"] = codes
+            residents[f"{base}.scales"] = mxscales
+            wkv_meta = {
+                "weight": f"{base}.weight", "scales": f"{base}.scales",
+                "source_tensor": wkv_w, "scale_tensor": wkv_s,
+                "source_dtype": we.dtype, "source_scale_dtype": se.dtype,
+                "source_shape": list(we.shape), "source_scale_shape": list(se.shape),
+                "fp8_block": [we.shape[0] // se.shape[0], we.shape[1] // se.shape[1]],
+            }
+        else:
+            wkv_f32 = dc.dequant_fp8_block(w_u8, s_u8)             # [out, in] f32
+            packed, scales, biases = dc.quantize_affine(
+                wkv_f32, bits=RESIDENT_BITS, group_size=RESIDENT_GROUP)
+            residents[f"{base}.weight"] = packed
+            residents[f"{base}.scales"] = scales
+            residents[f"{base}.biases"] = biases
+            wkv_meta = {
+                "weight": f"{base}.weight", "scales": f"{base}.scales",
+                "biases": f"{base}.biases",
+                "source_tensor": wkv_w, "scale_tensor": wkv_s,
+                "source_dtype": we.dtype, "source_scale_dtype": se.dtype,
+                "source_shape": list(we.shape), "source_scale_shape": list(se.shape),
+                "fp8_block": [we.shape[0] // se.shape[0], we.shape[1] // se.shape[1]],
+            }
 
         # q/k: kept exact, widened losslessly to F32 (source is BF16 for this checkpoint)
         q_f32 = np.ascontiguousarray(dc.raw_to_f32(qe, q_raw), dtype=np.float32)
@@ -678,21 +749,19 @@ def convert_residents(
             "layer_id": L,
             "source_shard": shard_file,
             "source_sha256": source_sha256(src, shard_file),
-            "wkv": {
-                "weight": f"{base}.weight", "scales": f"{base}.scales",
-                "biases": f"{base}.biases",
-                "source_tensor": wkv_w, "scale_tensor": wkv_s,
-                "source_dtype": we.dtype, "source_scale_dtype": se.dtype,
-                "source_shape": list(we.shape), "source_scale_shape": list(se.shape),
-                "fp8_block": [we.shape[0] // se.shape[0], we.shape[1] // se.shape[1]],
-            },
+            "wkv": wkv_meta,
             "q_weight": {"name": q_name, "source_tensor": q_name,
                          "source_dtype": qe.dtype, "shape": list(qe.shape)},
             "k_weight": {"name": k_name, "source_tensor": k_name,
                          "source_dtype": ke.dtype, "shape": list(ke.shape)},
         }
         if verify:
-            p = _wkv_parity(wkv_f32, packed, scales, biases)
+            if wkv_codec == "mxfp8":
+                # verbatim repack is proven bit-exact inside repack_dense_fp8_block_to_mxfp8
+                p = {"wkv_bit_exact": True, "wkv_max_abs_err": 0.0, "wkv_cos_flat": 1.0,
+                     "wkv_cos_row_min": 1.0}
+            else:
+                p = _wkv_parity(wkv_f32, packed, scales, biases)
             q_err = float(np.max(np.abs(np.array(residents[q_name]) - q_f32)))
             k_err = float(np.max(np.abs(np.array(residents[k_name]) - k_f32)))
             p["q_max_abs_err"] = q_err
@@ -701,17 +770,26 @@ def convert_residents(
             p["k_exact"] = k_err == 0.0
             parity[L] = p
             lmeta["parity"] = p
-            log(f"L{L}: wkv q8 parity cos_row_min={p['wkv_cos_row_min']:.6f} "
-                f"cos_flat={p['wkv_cos_flat']:.6f} max_abs_err={p['wkv_max_abs_err']:.4e} "
-                f"| q/k exact={p['q_exact'] and p['k_exact']}")
+            if wkv_codec == "mxfp8":
+                log(f"L{L}: wkv mxfp8 verbatim repack bit-exact=True (max_abs_err 0.0) "
+                    f"| q/k exact={p['q_exact'] and p['k_exact']}")
+            else:
+                log(f"L{L}: wkv q8 parity cos_row_min={p['wkv_cos_row_min']:.6f} "
+                    f"cos_flat={p['wkv_cos_flat']:.6f} max_abs_err={p['wkv_max_abs_err']:.4e} "
+                    f"| q/k exact={p['q_exact'] and p['k_exact']}")
         per_layer_meta.append(lmeta)
         del wkv_f32, q_f32, k_f32
 
-    # -- write the sidecar atomically (temp keeps the .safetensors extension) --
+    # -- write the sidecar to <name>.new, verify its header, then atomic rename --
     mx.eval(*residents.values())
     out.mkdir(parents=True, exist_ok=True)
-    tmp = out / RESIDENT_SIDECAR.replace(".safetensors", ".partial.safetensors")
+    tmp = out / RESIDENT_SIDECAR.replace(".safetensors", ".new.safetensors")
     mx.save_safetensors(str(tmp), residents, metadata={"format": "mlx"})
+    # verify the written file holds exactly the expected tensors before the swap
+    tmp_header, _ = dc.read_safetensors_header(str(tmp))
+    written = {k for k in tmp_header if k != "__metadata__"}
+    if written != set(residents):
+        raise RuntimeError(f"sidecar .new tensor set mismatch: {sorted(written ^ set(residents))[:4]}")
     sidecar = out / RESIDENT_SIDECAR
     os.replace(tmp, sidecar)
 
@@ -721,12 +799,16 @@ def convert_residents(
         {"name": nm, "dtype": header[nm]["dtype"], "shape": list(header[nm]["shape"])}
         for nm in sorted(k for k in header if k != "__metadata__")
     ]
+    if wkv_codec == "mxfp8":
+        wkv_quant = {"bits": 8, "group_size": MXFP8_GROUP_SIZE, "mode": "mxfp8"}
+    else:
+        wkv_quant = {"bits": RESIDENT_BITS, "group_size": RESIDENT_GROUP, "mode": "affine"}
     entry = {
         "file": RESIDENT_SIDECAR,
         "total_bytes": sidecar.stat().st_size,
         "sha256": _hash_file(sidecar),
         "quant": {
-            "wkv": {"bits": RESIDENT_BITS, "group_size": RESIDENT_GROUP, "mode": "affine"},
+            "wkv": wkv_quant,
             "q_weight": "f32-exact", "k_weight": "f32-exact",
         },
         "dequant": {
@@ -807,6 +889,10 @@ def main() -> int:
                          "(264 B/row EXACT repack of the source E4M3 codes + E8M0 scales; "
                          "writes engram-L{L}.bin.new then atomically renames over the bank "
                          "and rewrites the manifest in one step).")
+    ap.add_argument("--wkv-codec", choices=("affine", "mxfp8"), default="affine",
+                    help="residents mode: wkv codec. 'affine' (q8/gs64 requantize, default) or "
+                         "'mxfp8' (EXACT verbatim repack of the source E4M3 codes + expanded "
+                         "E8M0 32x32 block scales to gs32; bit-exact, no bias). q/k stay F32.")
     args = ap.parse_args()
 
     layers = [int(x) for x in args.layers.split(",") if x.strip()]
@@ -818,11 +904,12 @@ def main() -> int:
     weight_map = idx["weight_map"]
 
     if args.mode == "residents":
-        log(f"pid {os.getpid()} | mode residents | layers {layers} | out {args.out} | "
-            f"sidecar {RESIDENT_SIDECAR}")
+        log(f"pid {os.getpid()} | mode residents | wkv_codec {args.wkv_codec} | layers {layers} | "
+            f"out {args.out} | sidecar {RESIDENT_SIDECAR}")
         entry, parity, sidecar = convert_residents(
             args.src, args.out, weight_map, layers=layers,
             wait=args.wait, poll=args.poll_interval, verify=not args.no_verify,
+            wkv_codec=args.wkv_codec,
         )
         if not args.no_manifest:
             update_manifest_with_residents(args.out, entry, backup_path=args.manifest_backup)
