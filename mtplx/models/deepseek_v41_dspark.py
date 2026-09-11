@@ -277,19 +277,29 @@ class DSparkAttention(Attention):
         L1054-1073), through the per-head sink softmax + grouped o-LoRA.
         """
         b, S, _ = main_x.shape
-        rd = self.rope_head_dim
         # main KV from this stage's wkv, roped at the main tokens' positions
         main_pos = mx.arange(cache.offset, cache.offset + S)
         mcos, msin = _cos_sin(self.inv_freq, main_pos)
         main_kv = _rmsnorm(self.wkv(main_x), self.kv_norm_weight, self.eps)
         main_kv = _rope_last(main_kv, mcos, msin)
-        cache.append_main(main_kv)
-        if seed_only:  # reference L1044-1052: prefill only seeds the window
+        if seed_only:
+            # commit the main KV to the window (reference L1044-1065 ring write);
+            # the update-cache path drives this for the tokens the target committed.
+            cache.append_main(main_kv)
             return x
 
+        # Draft: attend over the committed window PLUS this cycle's (uncommitted)
+        # main KV, capped to window_size, WITHOUT appending it -- the draft must
+        # not mutate the window (mtp_update_cache commits accepted tokens later;
+        # the draft cache conditions acceptance only).
+        window = cache.window  # [b, <=window_size, head_dim] committed main rows
+        win_all = main_kv if window is None else mx.concatenate([window, main_kv], axis=1)
+        if win_all.shape[1] > self.window_size:
+            win_all = win_all[:, -self.window_size :, :]
+        Wp = int(win_all.shape[1])
+
         b, T, _ = x.shape  # T == block_size
-        # draft positions: immediately after the main token(s) just appended
-        base = cache.offset
+        base = cache.offset + S  # draft rows follow the current main token(s)
         dpos = mx.arange(base, base + T)
         dcos, dsin = _cos_sin(self.inv_freq, dpos)
         qr = _rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
@@ -298,12 +308,7 @@ class DSparkAttention(Attention):
         kv = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
         kv = _rope_last(kv, dcos, dsin)
 
-        window = cache.window  # [b, Wp, head_dim] (last <=window_size main rows)
-        Wp = 0 if window is None else int(window.shape[1])
-        if window is None:
-            KV = kv
-        else:
-            KV = mx.concatenate([window, kv], axis=1)
+        KV = mx.concatenate([win_all, kv], axis=1)  # [b, Wp+T, head_dim]
         # reference get_dspark_topk_idxs (L1020-1029): every draft query attends
         # to all valid window rows + all block draft rows.
         attend = mx.ones((b, T, Wp + T), dtype=mx.bool_)
@@ -360,23 +365,31 @@ class DSparkBlock(DecoderLayer):
             self.norm_weight = mx.ones((args.hidden_size,))
             self.markov_head = DSparkMarkovHead(args.vocab_size, _dspark_markov_rank(args))
             self.confidence_head = DSparkConfidenceHead(args.hidden_size + _dspark_markov_rank(args))
-        # shared modules (reference wires Transformer.embed / .head onto the
-        # stages, L1212-1213); DSparkHead sets these.
-        self.embed: Optional[nn.Module] = None
-        self.head: Optional[nn.Module] = None
+        # The trunk token embedding + output head are NOT stored on the stage
+        # (that would alias the backbone modules into the MTP parameter tree and
+        # double-quantise them); they are passed in at call time, exactly as
+        # DeepseekV4MTP takes ``embed_tokens``/``lm_head`` as forward arguments.
 
-    def forward_embed(self, main_hidden: mx.array, input_ids: mx.array) -> Tuple[mx.array, mx.array]:
+    def main_project(self, main_hidden: mx.array) -> mx.array:
+        """Reference ``main_x = main_norm(main_proj(main_hidden))`` (model.py
+        L1130), stage 0 only.  Split out so the seeding path can build ``main_x``
+        without also embedding a draft block."""
+        return _rmsnorm(self.main_proj(main_hidden), self.main_norm_weight, self.norm_eps)
+
+    def forward_embed(
+        self, main_hidden: mx.array, input_ids: mx.array, embed: nn.Module
+    ) -> Tuple[mx.array, mx.array]:
         """Reference ``DSparkBlock.forward_embed`` (model.py L1128-1135), stage 0
         only.  Projects the concatenated target-layer hiddens to ``main_x`` and
         builds the draft input ``[real_token, noise, ..., noise]`` of length
-        ``block_size``, embedded and expanded to ``hc_mult`` copies."""
-        assert self.embed is not None
-        main_x = _rmsnorm(self.main_proj(main_hidden), self.main_norm_weight, self.norm_eps)
+        ``block_size``, embedded (through the shared trunk embedding) and expanded
+        to ``hc_mult`` copies."""
+        main_x = self.main_project(main_hidden)
         b = int(input_ids.shape[0])
         first = input_ids.reshape(b, 1)
         noise = mx.full((b, self.block_size - 1), self.noise_token_id, dtype=first.dtype)
         draft_input_ids = mx.concatenate([first, noise], axis=1)  # [b, block_size]
-        x = self.embed(draft_input_ids)  # [b, block_size, dim]
+        x = embed(draft_input_ids)  # [b, block_size, dim]
         x = mx.broadcast_to(x[:, :, None, :], (b, self.block_size, self.hc_mult, x.shape[-1]))
         return x, main_x
 
@@ -415,7 +428,7 @@ class DSparkBlock(DecoderLayer):
         return h, ffn_pre
 
     def forward_head(
-        self, x: mx.array, pre_mix: mx.array, input_ids: mx.array
+        self, x: mx.array, pre_mix: mx.array, input_ids: mx.array, head: nn.Module
     ) -> Tuple[mx.array, mx.array, mx.array]:
         """Reference ``DSparkBlock.forward_head`` (model.py L1137-1156), last
         stage only.  Collapses the hc copies, projects to logits through the
@@ -424,9 +437,8 @@ class DSparkBlock(DecoderLayer):
         the markov bias of draft token ``i``.  Returns ``(output_ids
         [b, block_size+1], logits [b, block_size, vocab], confidence
         [b, block_size])``."""
-        assert self.head is not None
         x = self._hc_pre(x, pre_mix)  # [b, block_size, dim]
-        base_logits = self.head(_rmsnorm(x, self.norm_weight, self.norm_eps).astype(mx.float32))
+        base_logits = head(_rmsnorm(x, self.norm_weight, self.norm_eps).astype(mx.float32))
 
         b = int(input_ids.shape[0])
         out_cols: List[mx.array] = [input_ids.reshape(b)]
@@ -451,9 +463,10 @@ class DSparkHead(nn.Module):
 
     ``self.layers`` are the ``DSparkBlock`` stages (parameter paths
     ``layers.{0,1,2}.*`` so the loader maps ``mtp.{0,1,2}.*`` onto them).  The
-    shared token embedding and output head are wired in by :meth:`bind_shared`
-    so the draft's logits land in the trunk's vocab, exactly as the reference
-    assigns ``Transformer.embed`` / ``.head`` onto every stage.
+    trunk token embedding and output head are passed into :meth:`seed_main` /
+    :meth:`draft_block` at call time (not stored on the stages), so the draft's
+    logits land in the trunk vocab without aliasing the backbone modules into the
+    MTP parameter tree -- exactly as ``DeepseekV4MTP`` takes them as arguments.
     """
 
     def __init__(self, args: ModelArgs):
@@ -465,38 +478,32 @@ class DSparkHead(nn.Module):
         self.layers = [DSparkBlock(args, i, stages) for i in range(stages)]
         self.hc_mult = args.hc_mult
 
-    def bind_shared(self, embed: nn.Module, head: nn.Module) -> None:
-        """Wire the trunk's token embedding + output head onto every stage
-        (reference L1212-1213)."""
-        for stage in self.layers:
-            stage.embed = embed
-            stage.head = head
-
     def _identity_pre_mix(self, b: int, s: int) -> mx.array:
         return mx.concatenate(
             [mx.ones((b, s, 1)), mx.zeros((b, s, self.hc_mult - 1))], axis=-1
         ).astype(mx.float32)
 
-    def seed(self, main_hidden: mx.array, input_ids: mx.array, caches: List[DSparkStageCache]) -> None:
+    def seed_main(self, main_hidden: mx.array, caches: List[DSparkStageCache]) -> None:
         """Reference ``forward_spec`` at ``start_pos == 0`` (model.py L1276-1281):
-        seed each stage's window KV from the prefill main hiddens; returns
-        nothing."""
-        x, main_x = self.layers[0].forward_embed(main_hidden, input_ids)
-        b, s = x.shape[0], x.shape[1]
-        pre_mix = self._identity_pre_mix(b, s)
+        append each stage's window KV from committed main hiddens (its own
+        ``wkv`` over the shared ``main_x``).  No draft is produced; the draft
+        block is embedded only when :meth:`draft_block` runs, so this needs no
+        token embedding."""
+        main_x = self.layers[0].main_project(main_hidden)
         for stage, cache in zip(self.layers, caches):
-            stage(x, pre_mix, main_x, cache, seed_only=True)
+            stage.attn(main_x, main_x, cache, seed_only=True)
 
     def draft_block(
-        self, main_hidden: mx.array, input_ids: mx.array, caches: List[DSparkStageCache]
+        self, main_hidden: mx.array, input_ids: mx.array, caches: List[DSparkStageCache],
+        embed: nn.Module, head: nn.Module,
     ) -> Tuple[mx.array, mx.array, mx.array]:
         """Reference ``forward_spec`` at ``start_pos > 0`` (model.py L1276-1282):
         embed -> 3 stages (threading ``main_x``) -> the last stage's head.
         Returns ``(output_ids [b, block_size+1], logits [b, block_size, vocab],
         confidence [b, block_size])``."""
-        x, main_x = self.layers[0].forward_embed(main_hidden, input_ids)
+        x, main_x = self.layers[0].forward_embed(main_hidden, input_ids, embed)
         b, s = x.shape[0], x.shape[1]
         pre_mix = self._identity_pre_mix(b, s)
         for stage, cache in zip(self.layers, caches):
             x, pre_mix = stage(x, pre_mix, main_x, cache, seed_only=False)
-        return self.layers[-1].forward_head(x, pre_mix, input_ids)
+        return self.layers[-1].forward_head(x, pre_mix, input_ids, head)

@@ -143,6 +143,18 @@ class ModelArgs(BaseModelArgs):
     # engram (hooked externally; only the layer ids are read here)
     engram_layer_ids: List[int] = field(default_factory=list)
     tie_word_embeddings: bool = False
+    # DSpark MTP draft head (worker W23; consumed by mtplx.models.deepseek_v41_dspark).
+    # ``n_mtp_layers`` == ``num_nextn_predict_layers`` == 3 in the released config;
+    # the draft head is built only on the opt-in ``mtp=True`` load path.
+    n_mtp_layers: int = 0
+    num_nextn_predict_layers: int = 0
+    dspark_block_size: int = 0
+    dspark_noise_token_id: int = 0
+    dspark_target_layer_ids: List[int] = field(default_factory=list)
+    dspark_markov_rank: int = 256
+    dspark_n_routed_experts: int = 128
+    dspark_num_experts_per_tok: int = 3
+    dspark_n_activated_experts: int = 0
 
     def __post_init__(self):
         rs = self.rope_scaling or {}
@@ -157,6 +169,14 @@ class ModelArgs(BaseModelArgs):
         if not self.compress_ratios:
             self.compress_ratios = [0] * self.num_hidden_layers
         self.layer_modes = _derive_layer_modes(self)
+        # DSpark: ``n_mtp_layers`` and ``num_nextn_predict_layers`` are the same
+        # count under two config spellings; keep both fields agreeing so either
+        # source builds the head.
+        stages = int(self.n_mtp_layers or self.num_nextn_predict_layers or 0)
+        self.n_mtp_layers = stages
+        self.num_nextn_predict_layers = stages
+        if not self.dspark_num_experts_per_tok:
+            self.dspark_num_experts_per_tok = int(self.dspark_n_activated_experts or 3)
 
     @classmethod
     def from_dict(cls, params: dict) -> "ModelArgs":
@@ -686,6 +706,12 @@ class DeepseekV41Backbone(nn.Module):
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
         self.layers = [DecoderLayer(args, i) for i in range(args.num_hidden_layers)]
         self.norm_weight = mx.ones((args.hidden_size,))
+        #: DSpark MTP target layers (reference ``Transformer.forward`` L1265-1266):
+        #: the DSpark head reads the *attention input* (pre-layer, mean over the
+        #: hc copies) of these backbone layers, concatenated, as its ``main_hidden``.
+        self._mtp_target_layer_ids = tuple(
+            int(i) for i in (getattr(args, "dspark_target_layer_ids", None) or ())
+        )
         #: Engram row-id prototype (an :class:`~mtplx.engram_v41.NgramHashState`),
         #: attached by :meth:`Model.attach_engram`; ``None`` when engram is not
         #: wired.  It is a *config-only* template -- each KV cache gets its own
@@ -693,7 +719,7 @@ class DeepseekV41Backbone(nn.Module):
         #: per-sequence.  Mirrors the reference ``Transformer.engram_hash``.
         self.engram_hash = None
 
-    def __call__(self, input_ids, cache=None):
+    def __call__(self, input_ids, cache=None, *, return_main_hidden: bool = False):
         b, s = input_ids.shape
         if cache is None:
             # a bare forward (no persistent cache) still needs a per-layer cache
@@ -717,15 +743,25 @@ class DeepseekV41Backbone(nn.Module):
             engram_state.advance(input_ids)
 
         shared = cache.new_shared_runtime()
+        want_main = return_main_hidden and bool(self._mtp_target_layer_ids)
+        main_hiddens: List[mx.array] = []
         for layer in self.layers:
             if layer.engram_hook is not None and engram_state is not None:
                 h = layer.engram_hook(h, input_ids, engram_state)
+            # DSpark reads the attention INPUT (pre-layer) of the target layers,
+            # mean over the hc copies (reference L1265-1266).
+            if want_main and layer.layer_id in self._mtp_target_layer_ids:
+                main_hiddens.append(mx.mean(h.astype(mx.float32), axis=2).astype(h.dtype))
             h, pre_mix = layer(h, pre_mix, positions, cache.layers[layer.layer_id], shared)
         cache.advance(s)
 
         # final collapse of the hc copies with the last pre_mix, then RMSNorm
         h = mx.sum(pre_mix[..., None] * h.astype(mx.float32), axis=2).astype(h.dtype)
-        return _rmsnorm(h, self.norm_weight, self.args.rms_norm_eps)
+        out = _rmsnorm(h, self.norm_weight, self.args.rms_norm_eps)
+        if not return_main_hidden:
+            return out
+        main_hidden = mx.concatenate(main_hiddens, axis=-1) if main_hiddens else None
+        return out, main_hidden
 
 
 def _sanitize_name(name: str) -> str:
@@ -822,6 +858,45 @@ def _is_resident_quant_module(path: str, module: nn.Module) -> bool:
     )
 
 
+def _make_mtp_dense_quant_predicate(group_size: int):
+    """Native-mxfp8 predicate for the DSpark head's DENSE tensors (``main_proj``,
+    ``attn.*``, ``ffn.shared_experts.*``).  Skips the routed experts (``switch_mlp``,
+    mxfp4 -- a separate pass), the MoE router gate (bf16), and the markov/confidence
+    heads and stage norms (kept bf16/f32 verbatim, W18_REPORT)."""
+
+    def predicate(path: str, module: nn.Module):
+        if not hasattr(module, "to_quantized"):
+            return False
+        if "switch_mlp" in path or path.endswith("mlp.gate"):
+            return False
+        if "markov_head" in path or "confidence_head" in path:
+            return False
+        weight = getattr(module, "weight", None)
+        if weight is not None and weight.shape[-1] % group_size != 0:
+            return False
+        return True
+
+    return predicate
+
+
+def _make_mtp_expert_quant_predicate(group_size: int):
+    """Native-mxfp4 predicate for the DSpark head's RESIDENT routed experts
+    (``switch_mlp`` only): the 128 experts per stage the artifact ships as mxfp4
+    gs32 (config per-module overrides).  Everything else is left to the dense pass."""
+
+    def predicate(path: str, module: nn.Module):
+        if not hasattr(module, "to_quantized"):
+            return False
+        if "switch_mlp" not in path:
+            return False
+        weight = getattr(module, "weight", None)
+        if weight is not None and weight.shape[-1] % group_size != 0:
+            return False
+        return True
+
+    return predicate
+
+
 class Model(nn.Module):
     """DeepSeek-V4.1-Flash text AR model.  ``model.model.layers[i].mlp.switch_mlp``
     is the streamed-expert seam; ``head`` is the (untied) output projection.
@@ -839,13 +914,17 @@ class Model(nn.Module):
     """
 
     def __init__(self, args: ModelArgs, *, engram_bank_path=None, quantize: bool = True,
-                 quantization=None):
+                 quantization=None, mtp: bool = False):
         super().__init__()
         self.args = args
         self.model_type = args.model_type
         self.engram_bank_path = engram_bank_path
         self.model = DeepseekV41Backbone(args)
         self.head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        #: The DSpark draft head (worker W23), built only on the opt-in ``mtp``
+        #: load path when the config declares MTP stages; ``None`` on the text-only
+        #: AR path (which leaves construction and quantisation untouched).
+        self.mtp = None
         self.resident_quant = _resolve_resident_quant(quantization) if quantize else None
         if quantize:
             qcfg = self.resident_quant
@@ -856,14 +935,182 @@ class Model(nn.Module):
                 mode=qcfg["mode"],
                 class_predicate=_make_resident_quant_predicate(qcfg["mode"], qcfg["group_size"]),
             )
+        if mtp and int(getattr(args, "n_mtp_layers", 0) or 0) > 0:
+            self._build_mtp_head(quantize=quantize, quantization=quantization)
 
-    def __call__(self, input_ids, cache=None):
-        h = self.model(input_ids, cache)
-        return self.head(h.astype(mx.float32))
+    def _build_mtp_head(self, *, quantize: bool, quantization) -> None:
+        """Construct the DSpark draft head after the backbone quantise (so the
+        backbone predicate never touches the MTP tensors) and wire the shared
+        token embedding + output head onto its stages.
+
+        When ``quantize`` and the artifact carries a native float codec, the MTP
+        stages' resident tensors are quantised in place: the dense projections
+        (``main_proj`` / ``attn.*`` / ``ffn.shared_experts.*``) and the 128 routed
+        experts (``switch_mlp``, mxfp4 gs32) -- unlike the backbone, whose routed
+        experts stream from the bank, the DSpark experts are RESIDENT, so they are
+        quantised here through mlx-lm's :class:`SwitchGLU` (``mx.gather_qmm`` has no
+        ``mode=`` in mlx 0.32.2; the resident mxfp4 path is the SwitchGLU quantised
+        matmul carrying the reference clamped SwiGLU).  See W23_REPORT for the
+        artifact-verification gap (the 12 GiB CPU cap forbids loading the bank).
+        """
+        from .deepseek_v41_dspark import DSparkHead
+
+        self.mtp = DSparkHead(self.args)
+        if quantize:
+            qcfg = self.resident_quant
+            mode = qcfg["mode"]
+            if mode in _NATIVE_QUANT_MODES:
+                # Native repack: MTP dense at mxfp8 (the artifact default), the 128
+                # routed experts at mxfp4 gs32 (config per-module overrides).
+                nn.quantize(
+                    self.mtp,
+                    group_size=32,
+                    bits=8,
+                    mode="mxfp8",
+                    class_predicate=_make_mtp_dense_quant_predicate(32),
+                )
+                nn.quantize(
+                    self.mtp,
+                    group_size=32,
+                    bits=4,
+                    mode="mxfp4",
+                    class_predicate=_make_mtp_expert_quant_predicate(32),
+                )
+
+    def __call__(self, input_ids, cache=None, *, return_hidden: bool = False,
+                 emit_logits: bool = True, logits_keep=None, input_embeddings=None,
+                 hidden_variant=None, **kwargs):
+        """Target forward and the MTPLX runtime's ``forward_ar`` surface.
+
+        Plain ``model(ids)`` / ``model(ids, cache=cache)`` is unchanged (returns
+        logits).  The extra keywords are the uniform contract
+        :meth:`mtplx.runtime.MTPLXRuntime.forward_ar` drives every MTP backend
+        through: ``return_hidden`` also returns the DSpark ``main_hidden`` (the
+        concatenated target-layer hiddens the draft head consumes); ``emit_logits``
+        / ``logits_keep`` skip or restrict the ``lm_head`` matmul; ``hidden_variant``
+        is accepted and ignored (V4.1's draft input is one defined tensor).
+        ``input_embeddings`` (a vision splice) is rejected -- the text path has none.
+        """
+        if input_embeddings is not None:
+            raise ValueError(
+                "the DeepSeek-V4.1 text backend does not support input_embeddings "
+                "(no vision splice path)"
+            )
+        h, main_hidden = self.model(input_ids, cache, return_main_hidden=True)
+        logits = None
+        if emit_logits:
+            source = h if logits_keep is None else h[:, -max(1, int(logits_keep)):, :]
+            logits = self.head(source.astype(mx.float32))
+        if not return_hidden:
+            return logits
+        return logits, main_hidden
 
     @property
     def layers(self):
         return self.model.layers
+
+    # -- DSpark MTP (speculative draft head) -------------------------------
+    @property
+    def mtp_blocks(self) -> list:
+        """The DSpark draft stages (``mtplx.mtp_patch.validate_mtp_support``
+        probes this)."""
+        return list(getattr(self.mtp, "layers", [])) if self.mtp is not None else []
+
+    @property
+    def has_mtp(self) -> bool:
+        return bool(self.mtp_blocks)
+
+    def hc_hidden(self, inputs, cache=None):
+        """The pre-draft state the DSpark head consumes: the concatenated
+        target-layer hiddens (``main_hidden``).  Mirror of the V4 ``hc_hidden``
+        surface, adapted to DSpark's target-layer taps."""
+        _logits, main_hidden = self.model(inputs, cache, return_main_hidden=True)
+        return main_hidden
+
+    def make_mtp_cache(self):
+        """One :class:`DSparkStageCache` per DSpark stage (each its own
+        sliding-window KV of the main hiddens).  The runtime iterates this list
+        and trims each entry on rollback (the W13/PORT_CONTRACT ``trim`` seam);
+        the draft consumes all stages together in one ``draft_block``."""
+        from .deepseek_v41_dspark import DSparkStageCache
+
+        win = int(self.args.window_size)
+        head_dim = int(self.args.head_dim)
+        return [DSparkStageCache(win, head_dim) for _ in self.mtp_blocks]
+
+    def _resolve_mtp_caches(self, cache, mtp_cache):
+        if mtp_cache is not None:
+            if not isinstance(mtp_cache, (list, tuple)):
+                raise TypeError("mtp_cache must be the make_mtp_cache() list")
+            if cache is not None:
+                raise TypeError("pass either cache= or mtp_cache=, not both")
+            return list(mtp_cache)
+        if cache is None:
+            return self.make_mtp_cache()
+        return list(cache) if isinstance(cache, (list, tuple)) else [cache]
+
+    def mtp_forward(self, h, input_ids, index: int = 0, cache=None, *, mtp_cache=None,
+                    concat_order=None, return_hidden: bool = False,
+                    mtp_hidden_variant=None, position_offset=None, mtp_depth=None):
+        """DSpark draft for one runtime depth step (the uniform
+        ``MTPLXRuntime.draft_mtp`` surface).
+
+        DSpark drafts a whole block (``block_size`` tokens) in one
+        ``forward_spec``; this adapter serves that block across the runtime's
+        per-depth draft chain -- on the first depth of a cycle (or a fresh
+        per-depth cache) it runs the 3-stage net + markov autoregression and
+        stashes the block on the stage cache, and deeper depths read the next
+        block column.  The runtime's greedy target verify is authoritative
+        (``draft cache conditions acceptance only``), so any consistent draft
+        here stays lossless.  ``concat_order``/``mtp_hidden_variant`` are
+        Qwen-shaped knobs with no V4.1 counterpart (accepted and ignored);
+        ``position_offset`` is accepted (the default "cache" position mode passes
+        ``None``, and DSpark takes its RoPE offset from its own stage cache)."""
+        if self.mtp is None:
+            raise RuntimeError("this model carries no DSpark MTP head")
+        caches = self._resolve_mtp_caches(cache, mtp_cache)
+        embed, head = self.model.embed_tokens, self.head
+        depth = 1 if mtp_depth is None else int(mtp_depth)
+        b = int(input_ids.shape[0])
+        tok = input_ids.reshape(b, -1)[:, -1]  # [b]
+        main_h = h[:, -1:, :]                    # [b, 1, D_main]
+
+        pending = getattr(caches[0], "_dspark_pending", None) if caches else None
+        if pending is None or depth <= 1:
+            out_ids, logits, conf = self.mtp.draft_block(main_h, tok, caches, embed, head)
+            if caches:
+                caches[0]._dspark_pending = (out_ids, logits, conf, depth)
+            col = 0
+        else:
+            out_ids, logits, conf, base = pending
+            col = depth - base
+            if col < 0 or col >= int(logits.shape[1]):
+                out_ids, logits, conf = self.mtp.draft_block(main_h, tok, caches, embed, head)
+                if caches:
+                    caches[0]._dspark_pending = (out_ids, logits, conf, depth)
+                col = 0
+        row_logits = logits[:, col : col + 1, :]  # [b, 1, vocab]
+        if not return_hidden:
+            return row_logits
+        # The fed-back hidden is ignored by the stash path; shape it like
+        # main_hidden so the runtime's [:, -1:, :] slice type-checks.
+        return row_logits, main_h
+
+    def mtp_update_cache(self, h, input_ids, index: int = 0, *, mtp_cache=None,
+                         concat_order=None, mtp_hidden_variant=None,
+                         position_offset=None, mtp_depth=None, input_embeddings=None):
+        """Append committed main hiddens to the DSpark stage windows and drop any
+        pending draft block; returns the last committed main hidden.  Keeps the
+        draft's window KV in step with the tokens the target committed."""
+        if input_embeddings is not None:
+            raise ValueError(
+                "deepseek_v41 DSpark has no vision splice path (input_embeddings)"
+            )
+        caches = self._resolve_mtp_caches(None, mtp_cache)
+        self.mtp.seed_main(h, caches)
+        if caches:
+            caches[0]._dspark_pending = None
+        return h[:, -1:, :]
 
     def make_cache(self):
         # W13's factory builds one LayerAttentionCache per layer from the config
