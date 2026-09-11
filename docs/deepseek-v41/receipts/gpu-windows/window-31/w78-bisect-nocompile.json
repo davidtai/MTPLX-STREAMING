@@ -1,0 +1,202 @@
+{
+  "worker": "W78",
+  "script": "scripts/deepseek_v41/metal_decode_attn_bisect.py",
+  "device": "gpu",
+  "tiny": false,
+  "dims": {
+    "head_dim": 512,
+    "n_heads": 64,
+    "window": 128,
+    "index_topk": 512,
+    "index_n_heads": 32,
+    "index_head_dim": 128,
+    "hidden": 5120
+  },
+  "mode_layer": {
+    "swa_only": 0,
+    "full": 2,
+    "reindex": 24,
+    "reuse": 3
+  },
+  "env": {
+    "MTPLX_DSV41_SELECTED_KEYS": "1",
+    "MTPLX_DSV41_ATTN_COMPILE": false,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": true,
+    "MTPLX_DSV41_KV_CHUNK_GROW": "1",
+    "MTPLX_DSV41_SELECT_FENCE": "1"
+  },
+  "path": "selected_keys",
+  "Ts": [
+    1024,
+    4096,
+    16384
+  ],
+  "iters": 30,
+  "warmup": 5,
+  "results": {
+    "swa_only": {
+      "1024": {
+        "whole": 2.071544466666667,
+        "qkv_proj": 0.4904984666666667,
+        "cache_append": 0.1720653,
+        "mask_build": 0.0,
+        "compress_append": 0.0,
+        "select": 0.0,
+        "attend": 0.28510956666666665,
+        "out_proj": 1.6170152666666666,
+        "gather_iso": 0.20200286666666667,
+        "score": 0.08310669999999998,
+        "peeled_sum": 2.5646885999999998
+      },
+      "4096": {
+        "whole": 2.0385222333333335,
+        "qkv_proj": 0.47757643333333333,
+        "cache_append": 0.17731666666666665,
+        "mask_build": 0.0,
+        "compress_append": 0.0,
+        "select": 0.0,
+        "attend": 0.27288613333333334,
+        "out_proj": 1.6150903666666667,
+        "gather_iso": 0.1898333,
+        "score": 0.08305283333333333,
+        "peeled_sum": 2.5428696
+      },
+      "16384": {
+        "whole": 2.0526972,
+        "qkv_proj": 0.4939209,
+        "cache_append": 0.18485963333333333,
+        "mask_build": 0.0,
+        "compress_append": 0.0,
+        "select": 0.0,
+        "attend": 0.27592493333333334,
+        "out_proj": 1.6146832333333334,
+        "gather_iso": 0.1906889,
+        "score": 0.08523603333333335,
+        "peeled_sum": 2.5693887
+      }
+    },
+    "full": {
+      "1024": {
+        "whole": 2.4419473333333332,
+        "qkv_proj": 0.48580413333333333,
+        "cache_append": 0.1681833,
+        "mask_build": 0.0,
+        "compress_append": 0.3071237,
+        "select": 0.37230826666666667,
+        "attend": 0.29727213333333335,
+        "out_proj": 1.6488903333333333,
+        "gather_iso": 0.22219583333333331,
+        "score": 0.07507630000000004,
+        "peeled_sum": 3.2795818666666667
+      },
+      "4096": {
+        "whole": 2.5452235666666665,
+        "qkv_proj": 0.5084875666666666,
+        "cache_append": 0.17176526666666667,
+        "mask_build": 0.0,
+        "compress_append": 0.3481833,
+        "select": 0.41396109999999997,
+        "attend": 0.30146666666666666,
+        "out_proj": 1.6568833,
+        "gather_iso": 0.2249014,
+        "score": 0.07656526666666666,
+        "peeled_sum": 3.4007472
+      },
+      "16384": {
+        "whole": 2.8981930666666664,
+        "qkv_proj": 0.49093889999999996,
+        "cache_append": 0.17422626666666666,
+        "mask_build": 0.0,
+        "compress_append": 0.5010625333333334,
+        "select": 0.44578886666666667,
+        "attend": 0.304886,
+        "out_proj": 1.6531138,
+        "gather_iso": 0.21321669999999998,
+        "score": 0.09166930000000001,
+        "peeled_sum": 3.5700163666666667
+      }
+    },
+    "reindex": {
+      "1024": {
+        "whole": 2.2485972666666667,
+        "qkv_proj": 0.49499716666666665,
+        "cache_append": 0.17596673333333335,
+        "mask_build": 0.0,
+        "compress_append": 0.0019152666666666666,
+        "select": 0.3649361333333333,
+        "attend": 0.3014542,
+        "out_proj": 1.6155806333333333,
+        "gather_iso": 0.21697783333333334,
+        "score": 0.08447636666666666,
+        "peeled_sum": 2.9548501333333332
+      },
+      "4096": {
+        "whole": 2.255636066666667,
+        "qkv_proj": 0.4905249666666667,
+        "cache_append": 0.17270133333333335,
+        "mask_build": 0.0,
+        "compress_append": 0.0020709666666666664,
+        "select": 0.3904972666666667,
+        "attend": 0.3068362,
+        "out_proj": 1.6220137333333333,
+        "gather_iso": 0.21211953333333333,
+        "score": 0.09471666666666667,
+        "peeled_sum": 2.9846444666666665
+      },
+      "16384": {
+        "whole": 2.3167514666666666,
+        "qkv_proj": 0.49743750000000003,
+        "cache_append": 0.1790208,
+        "mask_build": 0.0,
+        "compress_append": 0.0017832666666666665,
+        "select": 0.4368430333333333,
+        "attend": 0.2996029,
+        "out_proj": 1.6446791,
+        "gather_iso": 0.20430556666666666,
+        "score": 0.09529733333333334,
+        "peeled_sum": 3.0593666
+      }
+    },
+    "reuse": {
+      "1024": {
+        "whole": 2.1021486333333335,
+        "qkv_proj": 0.49386796666666666,
+        "cache_append": 0.17259303333333334,
+        "mask_build": 0.0,
+        "compress_append": 0.0017611666666666667,
+        "select": 0.0010764000000000001,
+        "attend": 0.3010777333333333,
+        "out_proj": 1.6177833,
+        "gather_iso": 0.20392786666666665,
+        "score": 0.09714986666666667,
+        "peeled_sum": 2.5881596
+      },
+      "4096": {
+        "whole": 2.062680466666667,
+        "qkv_proj": 0.4929611666666667,
+        "cache_append": 0.17390543333333333,
+        "mask_build": 0.0,
+        "compress_append": 0.0017097666666666667,
+        "select": 0.0010805666666666668,
+        "attend": 0.30245416666666664,
+        "out_proj": 1.6214901333333331,
+        "gather_iso": 0.21433606666666666,
+        "score": 0.08811809999999998,
+        "peeled_sum": 2.593601233333333
+      },
+      "16384": {
+        "whole": 2.0862681333333333,
+        "qkv_proj": 0.4883570333333333,
+        "cache_append": 0.16793333333333335,
+        "mask_build": 0.0,
+        "compress_append": 0.0018762666666666667,
+        "select": 0.0010597666666666667,
+        "attend": 0.30292633333333335,
+        "out_proj": 1.6176915666666667,
+        "gather_iso": 0.20712776666666669,
+        "score": 0.09579856666666667,
+        "peeled_sum": 2.5798443
+      }
+    }
+  }
+}
