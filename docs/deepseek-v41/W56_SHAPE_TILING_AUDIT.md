@@ -159,9 +159,19 @@ pinned to CPU): flag on/off byte-identical for decode / verify-batch / chunk-maj
 layer-major waves (mxfp4 + affine); default-threshold leaves small waves untouched;
 rows-per-call 512/1000/4096 byte-identical.
 
-**F2 (pad down-proj K→2560) is NOT implemented**: it repacks the mxfp4 bank at load time
-(outside the mechanical-reorder allowlist and the streamed-bank build). It is documented
-and armed as a microbench case (`down_align`) so a window prices it before any bank change.
+**F2 (pad down-proj K→2560) — contained core implemented (follow-up commit), default OFF.**
+`MTPLX_DSV41_DOWN_K_PAD`: `pad_mxfp4_down_component` (exact packed+E8M0 zero-tail layout),
+`down_k_pad_slot_bytes` (arithmetic), and `_gather_component_bank` zero-pads the SwiGLU
+activation to the bank's actual down-K (no-op when the bank is unpadded → byte-identical;
+the fast `gather_qmv` engages only once the down bank is laid out 2560-wide). CPU
+byte-identity at M=1 / M=4 / prefill in `tests/models/test_deepseek_v41_w56_down_k_pad.py`;
+a zeroed mxfp4 gs32 group dequantizes to exactly 0.0 (scale byte 0/127; 0xFF/NaN unsafe).
+Slot growth: down component **+0.664 MiB (+11.1%)**, record **+3.70%**, `slots_per_layer`
+×0.9643 (−3.57%). **Real-streamed-path BLOCKER:** admission is a zero-copy `os.preadv` into
+contiguous slot views (`expert_io.py:890` asserts `Σ views == record.logical_bytes`), so a
+per-row-padded 2560 slot needs a staging + strided-copy in `expert_io.py`/`expert_runtime.py`
+(shared by 7 models, outside the w56 allowlist) OR an offline bank re-pack. See K27 F2 note.
+The `down_align` microbench arm still prices the fast-vs-ragged kernel gap in a window.
 
 ---
 

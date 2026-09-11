@@ -959,6 +959,43 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   Open GPU-window question (**KG-l**): does `MTPLX_DSV41_LAYOUT_FIX=1` route the 16K
   layer-major switch to `gather_qmm_rhs_nax` and cut TTFT, decode byte-identical.
 
+#### K27 F2 — down-proj K pad 2304→2560 (`MTPLX_DSV41_DOWN_K_PAD`) — W56 follow-up
+- **Defect:** expert down-proj K = `moe_intermediate_size` = 2304; `2304 % 512 = 256`,
+  so the mxfp4 **fast** `gather_qmv` (needs `K % qmv_fast_k_alignment(4) = 512`,
+  `quantized.cpp:1337,147-148`) is DISABLED for the down gather — gate/up (K=hidden 5120,
+  %512==0) hit it. Down is ~⅓ of the ~74 ms/tok decode switch.
+- **Fix (byte-identical):** lay the down slot out K=2560 with a **zero** tail (256 packed
+  cols + 8 E8M0 scale bytes) and zero-pad the down-gather activation to 2560. A zeroed
+  mxfp4 gs32 group dequantizes to **exactly 0.0** for scale byte 0/127 (2^e·0 = 0; only
+  0xFF/NaN is unsafe, and a `mx.zeros` bank tail is scale byte 0) — **verified on CPU**
+  (`test_deepseek_v41_w56_down_k_pad.py`, `mx.dequantize` tail all `== 0.0`, no NaN), and
+  the padded gather is byte-identical (max|Δ|=0.0) at M=1 / M=4 / prefill.
+- **Implemented (contained, in expert_mlx.py, default OFF):** `pad_mxfp4_down_component`
+  (exact layout transform, packed+E8M0 zero tail), `down_k_pad_slot_bytes` (slot
+  arithmetic), and `_gather_component_bank` pads the SwiGLU activation to the bank's
+  actual down-K when `MTPLX_DSV41_DOWN_K_PAD=1` (a **no-op when the bank is unpadded** →
+  byte-identical; the fast kernel engages only once the down bank itself is 2560-wide).
+- **Slot arithmetic (computed, mxfp4 gs32, hidden 5120 / inter 2304):** down component
+  `6,266,880 → 6,963,200 B` = **+696,320 B = +0.664 MiB, +11.1% on down** (2560/2304).
+  Full 3-projection record `18,800,640 → 19,496,960 B` = **+3.70%/record**. (David's
+  "+1.8 MB/record" overshoots — only the down K is sub-512; gate/up K=5120 already align.)
+  Planner effect: `slots_per_layer` scales by `18800640/19496960 = 0.9643` → **−3.57%
+  slots** at any per-layer bank budget (so ~−3.6% at both the 82 GiB and 60 GiB plans);
+  the concrete per-plan counts come from `memory_plan.py` once the admission path lands.
+- **BLOCKER (real streamed path — needs a decision, NOT in the w56 allowlist):** admission
+  is a **zero-copy `os.preadv`** into per-segment slot memoryviews, and `expert_io.py:890`
+  asserts `sum(component_views) == record.logical_bytes` (the on-disk 2304 width). A
+  per-row-K-padded 2560 slot is **not byte-contiguous** with the 2304 record, so preadv
+  cannot fill it — the padded down bank requires a **staging buffer + strided copy (+ a
+  post-fill commit hook)** in `expert_io.py`/`expert_runtime.py` (shared by hy3/glm/a3b/
+  laguna/qwen) OR an **offline bank re-pack** (pad the dense down cols to 2560 before
+  quantize — exact, no runtime change). The plan/manifest sizing (`memory_plan.py`,
+  `expert_manifest.py`) threads through whichever path is chosen. The contained core here
+  (transform + activation pad + arithmetic + tests) is design-stable for either.
+- **Arms:** `down_k_pad`, `layout_fix`, `k27_stack` in `ab_decode_env_levers.py` (pin all
+  19 keys). **STATUS:** contained core IMPLEMENTED + CPU-proven, default OFF; real-path
+  admission awaiting the shared-infra decision above.
+
 ---
 
 ## 6. Dead-here (GPU-side; do not re-propose)
