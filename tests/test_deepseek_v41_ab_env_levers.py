@@ -58,6 +58,7 @@ _FP = "MTPLX_DSV41_SWITCH_FASTPATH"    # W42 / K23: switch all-hit fast-path
 _SB = "MTPLX_DSV41_SWITCH_SUBMIT"      # W42 / K23 var B: all-hit async submit
 _AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
 _WM = "MTPLX_DSV41_ATTN_WIN_MEMO"      # W45 / K24: sliding-window mask memo
+_DC = "MTPLX_DSV41_DRAFT_COMPILE"      # W65 / K33: DSpark draft-block tape collapse
 _DR = "MTPLX_DSV41_DEVICE_ROUTE"       # W44 / K24: barrier-free all-hit device route
 _VSB = "MTPLX_DSV41_VERIFY_SINGLE_BARRIER"  # W61 / K31: small-M verify one barrier/layer (default ON)
 _PD = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"     # W51 / K26: prefill dense experts
@@ -86,7 +87,7 @@ _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50
 # + the three W50 score-path keys + the W59 K30 selected-key gather boolean + the
 # W58 K28 fused-softmax-kernel boolean + the K27 layout_fix boolean (the W58
 # prefill_best* full-stack arms set it) + the W60 K29 decode-attention-kernel boolean.
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF)
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF, _DC)
 
 ALL_ARMS = [
     "control",
@@ -98,6 +99,7 @@ ALL_ARMS = [
     "switch_fastpath_b",
     "attn_compile",
     "attn_win_memo",
+    "draft_compile",
     "device_route",
     "verify_single_barrier",
     "prefill_dense_experts",
@@ -139,6 +141,7 @@ EXPECTED_ON = {
     "switch_fastpath_b": {_FP, _SB},
     "attn_compile": {_AC},
     "attn_win_memo": {_WM},
+    "draft_compile": set(),  # its only key is _DC, tracked in EXPECTED_DRAFT
     "device_route": set(),   # its only key is _DR, tracked in EXPECTED_DEVICE
     "verify_single_barrier": set(),  # its only key is _VSB, tracked in EXPECTED_VERIFY
     # W51: the dense-experts arms all ride layer-major; the dense boolean (_PD) and
@@ -199,6 +202,9 @@ EXPECTED_ON = {
 EXPECTED_DEVICE = {arm: (arm == "device_route") for arm in ALL_ARMS}
 # W61 K31: verify single-barrier (default ON in code; the arm pins it explicitly).
 EXPECTED_VERIFY = {arm: (arm == "verify_single_barrier") for arm in ALL_ARMS}
+# W65 K33: DSpark draft-block compile (separate boolean, not in _ALL_KEYS -- like
+# device_route / verify_single_barrier; only the standalone draft_compile arm sets it).
+EXPECTED_DRAFT = {arm: (arm == "draft_compile") for arm in ALL_ARMS}
 
 # The prefill-dense-experts boolean each arm pins (W51 K26; separate from
 # _ALL_KEYS, not part of all_levers). Every dense arm sets it -- W51's sweeps plus
@@ -230,6 +236,7 @@ EXPECTED_HEAD = {
     "switch_fastpath_b": None,
     "attn_compile": None,
     "attn_win_memo": None,
+    "draft_compile": None,
     "device_route": None,
     "verify_single_barrier": None,
     "prefill_dense_experts": None,
@@ -416,6 +423,11 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert os.environ.get(_VSB) == "1", f"{arm}: {_VSB} should be '1'"
     else:
         assert _VSB not in os.environ, f"{arm}: {_VSB} should be force-unset"
+    # the K33 draft-block compile boolean is set for exactly its arm (draft_compile).
+    if EXPECTED_DRAFT[arm]:
+        assert os.environ.get(_DC) == "1", f"{arm}: {_DC} should be '1'"
+    else:
+        assert _DC not in os.environ, f"{arm}: {_DC} should be force-unset"
     # the prefill-dense-experts boolean is set for exactly the dense arms.
     if EXPECTED_DENSE[arm]:
         assert os.environ.get(_PD) == "1", f"{arm}: {_PD} should be '1'"
@@ -488,6 +500,14 @@ def test_apply_arm_env_independent_across_arms(env_levers):
     env_levers._apply_arm_env("attn_win_memo")
     assert os.environ.get(_WM) == "1"
     assert all(k not in os.environ for k in set(_ALL_KEYS) - {_WM})
+    # the K33 draft_compile arm sets only its own (non-_ALL_KEYS) boolean and
+    # clears every _ALL_KEYS lever a prior arm left set.
+    env_levers._apply_arm_env("all_levers")
+    env_levers._apply_arm_env("draft_compile")
+    assert os.environ.get(_DC) == "1"
+    assert all(k not in os.environ for k in _ALL_KEYS)
+    env_levers._apply_arm_env("control")
+    assert _DC not in os.environ
 
 
 def test_prefill_dense_arm_sets_only_its_keys_and_clears(env_levers):
@@ -555,6 +575,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_LFX] = "bogus"
     os.environ[_DAK] = "bogus"
     os.environ[_MLXBUF] = "bogus"
+    os.environ[_DC] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -568,6 +589,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         # the device-route boolean and the head codec are recorded per arm.
         assert (r["arm_env"].get(_DR) == "1") == EXPECTED_DEVICE[r["arm"]], r["arm"]
         assert (r["arm_env"].get(_VSB) == "1") == EXPECTED_VERIFY[r["arm"]], r["arm"]
+        assert (r["arm_env"].get(_DC) == "1") == EXPECTED_DRAFT[r["arm"]], r["arm"]
         assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]
         # the prefill-dense boolean + value knobs are recorded per arm.
         assert (r["arm_env"].get(_PD) == "1") == EXPECTED_DENSE[r["arm"]], r["arm"]

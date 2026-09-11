@@ -412,6 +412,98 @@ def _render_micro(micro):
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# K33 (W65): draft-block census -- the DSpark-DIRECT draft block on the tiny double
+# ---------------------------------------------------------------------------
+# The draft block's own stage brackets (deepseek_v41_dspark, no-op unless a probe
+# is armed) tile it: forward_embed, the 3 stages' attention prep (main_kv / qkv /
+# sdpa / out) + Hyper-Connection prep (attn_prep / ffn_prep / moe_combine) + the
+# reused MoE (gate_topk / routed_switch / shared_expert / combine), then the last
+# stage's head + markov + confidence.  We arm the census probe, run ONE draft_block
+# (one cycle == one "token" here), and count primitives per stage before/after
+# MTPLX_DSV41_DRAFT_COMPILE -- the same _CensusProbe / count_prims machinery as the
+# full-model backbone census, so the reduction is a number.
+def _dspark_args():
+    return ModelArgs(
+        vocab_size=64, hidden_size=32, num_hidden_layers=5, num_attention_heads=4,
+        head_dim=16, qk_rope_head_dim=8, q_lora_rank=16, o_lora_rank=8, o_groups=2,
+        moe_intermediate_size=16, n_routed_experts=8, num_experts_per_tok=2,
+        sliding_window=8, window_size=8, hc_mult=4, hc_sinkhorn_iters=2,
+        scoring_func="sqrtsoftplus", routed_scaling_factor=1.5, swiglu_limit=0.0,
+        n_mtp_layers=3, dspark_block_size=4, dspark_noise_token_id=63,
+        dspark_target_layer_ids=[2, 3, 4], dspark_markov_rank=12,
+        dspark_n_routed_experts=8, dspark_num_experts_per_tok=2,
+    )
+
+
+def _build_dspark(seed=1):
+    """Tiny real-structure DSpark head (3 stages, block_size 4, resident 8-expert
+    top-2 MoE == the 128-expert top-3 structure at small scale).  Power-of-2
+    reductions (hidden 32, hc*dim 128, q_lora 16, head_dim 16) so every compiled
+    chain is bit-exact vs eager (the K22 tiny-config RMSNorm caveat)."""
+    mx.random.seed(seed)
+    args = _dspark_args()
+    model = Model(args, quantize=False, mtp=True)
+    filled = []
+    for name, value in tree_flatten(model.parameters()):
+        leaf = name.split(".")[-1]
+        if value.ndim == 1:
+            centre = 1.0 if leaf.endswith("norm_weight") or leaf == "scale" else 0.0
+            new = mx.random.normal(value.shape) * 0.1 + centre
+        else:
+            new = mx.random.normal(value.shape) * (value.shape[-1] ** -0.5)
+        filled.append((name, new.astype(value.dtype)))
+    model.update(tree_unflatten(filled))
+    mx.eval(model.parameters())
+    return model, args
+
+
+@contextmanager
+def _draft_flag(flag):
+    import mtplx.models.deepseek_v41_dspark as dsp
+    prev = dsp._DRAFT_COMPILE
+    dsp._DRAFT_COMPILE = flag
+    dsp._DRAFT_COMPILED.clear()
+    dv41._ATTN_COMPILED.clear()
+    dv41._HC_COMPILED.clear()
+    try:
+        yield
+    finally:
+        dsp._DRAFT_COMPILE = prev
+        dsp._DRAFT_COMPILED.clear()
+        dv41._ATTN_COMPILED.clear()
+        dv41._HC_COMPILED.clear()
+
+
+def _run_draft_census(flag, seed=1):
+    """One draft_block under the census probe; return the per-stage snapshot.
+
+    ``flag`` = K33 draft-block compile (the module global, flipped like the K22
+    census flips ``deepseek_v41._ATTN_COMPILE``)."""
+    model, args = _build_dspark(seed=seed)
+    # a real prompt forward to produce main_hidden + seed the DSpark windows, then
+    # draft one block from the last prompt hidden (exactly the decode-lane cycle).
+    ids = mx.array(np.random.RandomState(0).randint(0, args.vocab_size, size=(1, 17)))
+    logits, main_hidden = model(ids, return_hidden=True)
+    mx.eval(logits, main_hidden)
+    caches = model.make_mtp_cache()
+    model.mtp.seed_main(main_hidden, caches)
+    primary = mx.array([int(mx.argmax(logits[0, -1]))])
+    main_h = main_hidden[:, -1:, :]
+    embed, head = model.model.embed_tokens, model.head
+    with _draft_flag(flag):
+        with _census_session() as probe:
+            probe._recording_now = True  # the draft block is a block-row chain, not a 1-row model forward
+            with _stime.frame():
+                out_ids, dlogits, conf = model.mtp.draft_block(
+                    main_h, primary, caches, embed, head
+                )
+                with probe._stage("sample") as _st:
+                    _st.add(out_ids, conf)
+                mx.eval(out_ids, dlogits, conf)
+        return probe.snapshot()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -419,7 +511,14 @@ def main():
     ap.add_argument("--cap", type=int, default=7,
                     help="row cap for the census decode (default 7: prefill s=12 stays eager)")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--draft", action="store_true",
+                    help="census the DSpark-DIRECT draft block (K33, W65) instead of "
+                         "the backbone decode: primitives per draft cycle per stage, "
+                         "before/after MTPLX_DSV41_DRAFT_COMPILE")
     args = ap.parse_args()
+
+    if args.draft:
+        return _draft_main(args)
 
     # before = all off (eager); k22 = attention-tape compile only; after = K22 +
     # K24 window-mask memo (the full W45 attention-compile mode).
@@ -460,6 +559,51 @@ def main():
         "k22_compile_only": k22,
         "after_k22_k24": after,
         "micro_census": micro,
+    }
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
+def _draft_main(args):
+    """K33/W65 draft-block census: primitives per draft cycle per stage, before /
+    after ``MTPLX_DSV41_DRAFT_COMPILE`` (the DSpark-DIRECT drafter tape collapse)."""
+    before = _run_draft_census(False, seed=args.seed)
+    after = _run_draft_census(True, seed=args.seed)
+
+    table = _render_table(before, after)
+    print("=" * 82)
+    print("W65 DSpark draft-block dispatch census -- primitives per draft cycle per stage")
+    print("before=OFF (eager)  after=ON (MTPLX_DSV41_DRAFT_COMPILE: K33 tape collapse)")
+    print("(tiny real-structure DSpark head: 3 stages, block_size 4, resident 8-expert top-2 MoE)")
+    print("=" * 82)
+    print(table)
+    print()
+
+    def _grp(r, pred):
+        return sum(v["primitives_per_token"] for k, v in r["stages"].items() if pred(k))
+
+    attn = lambda r: _grp(r, lambda k: k.startswith("dspark.attn."))
+    hc = lambda r: _grp(r, lambda k: k.startswith("dspark.hc."))
+    moe = lambda r: _grp(r, lambda k: k.startswith("moe."))
+    mark = lambda r: _grp(r, lambda k: k in ("dspark.markov", "dspark.confidence"))
+    tot = lambda r: r["total_primitives_per_token"]
+    print(f"attention prep primitives/cycle:  eager {attn(before):.1f}  ->  K33 {attn(after):.1f}")
+    print(f"Hyper-Connection primitives/cycle: eager {hc(before):.1f}  ->  K33 {hc(after):.1f}")
+    print(f"MoE (gate/switch/combine)/cycle:   eager {moe(before):.1f}  ->  K33 {moe(after):.1f}")
+    print(f"markov + confidence /cycle:        eager {mark(before):.1f}  ->  K33 {mark(after):.1f}")
+    print(f"TOTAL primitives/draft cycle:      eager {tot(before):.1f}  ->  K33 {tot(after):.1f}"
+          f"  (delta {tot(before) - tot(after):.1f})")
+
+    receipt = {
+        "flag": {"K33": "MTPLX_DSV41_DRAFT_COMPILE"},
+        "census": "dspark_draft_block",
+        "seed": args.seed,
+        "mlx_version": mx.__version__,
+        "before_off": before,
+        "after_on": after,
     }
     if args.out:
         with open(args.out, "w") as f:

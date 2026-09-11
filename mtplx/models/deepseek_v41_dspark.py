@@ -45,12 +45,16 @@ mxfp4 path is the SwitchGLU quantised matmul, not a bespoke gather_qmm(mode=).
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import os
 from typing import List, Optional, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
 
+from mtplx.models import deepseek_v41 as _dv41
+from mtplx.models import deepseek_v41_stage_timing as _stime
 from mtplx.models.deepseek_v41 import (
     Attention,
     DecoderLayer,
@@ -63,6 +67,153 @@ from mtplx.models.deepseek_v41 import (
     _rope_last,
     _swa_inv_freq,
 )
+
+
+# ---------------------------------------------------------------------------
+# DSpark draft-block dispatch collapse (kernel-ledger K33, W65)
+# ---------------------------------------------------------------------------
+# The DSpark-DIRECT draft block (W57 / W65) runs 3 shallow stages -- each a full
+# V4.1 decoder block (sliding-window attention + a RESIDENT 128-expert top-3 MoE)
+# over the ``block_size`` draft rows -- plus ``forward_embed`` and a markov
+# autoregression over ``block_size`` sequential steps.  That is a tiny amount of
+# math dispatched as dozens of small graph primitives per stage: pure dispatch
+# count, the same regime the backbone's K22 attention tapes and K4 Hyper-Connection
+# tapes address ([[b1-decode-dispatch-removal-hides]]).  K33 replays the draft
+# block's PURE chains from ``mx.compile`` tapes instead of rebuilding the graph
+# from Python each cycle, behind ``MTPLX_DSV41_DRAFT_COMPILE`` (default OFF -- the
+# decode win is a GPU-window measurement):
+#   * the attention prep (draft QKV + output) REUSES the backbone K22 tapes
+#     (``deepseek_v41._attn_qkv_prep`` / ``_attn_out_prep`` -- byte-identical, same
+#     projection codec, one tape shared across the stages), plus a small local
+#     main-KV tape for the window chain;
+#   * the two Hyper-Connection prep chains + the moe-combine post REUSE the backbone
+#     K4 tapes (``deepseek_v41._hc_compiled`` -- a DSpark stage IS structurally the
+#     backbone layer, so the same pure array functions apply byte-for-byte);
+#   * the MoE gate prefix + combine folds fire by arming the backbone ATTN_COMPILE
+#     window around the resident switch call (the resident 128-expert top-3 MoE is
+#     ALREADY one ``mx.gather_qmm`` over the ``block_size*top_k`` rows via mlx-lm's
+#     ``SwitchGLU``, not a Python per-expert loop -- W65 census);
+#   * the markov autoregression folds each step's embed+head+add+argmax into one
+#     compiled tape (argmax stays lazy -- no per-step host sync) and the markov
+#     embed for the confidence head is gathered ONCE over the sampled block instead
+#     of per step; the confidence head is a single batched matmul.
+# Every tape is fixed-shape + row-cap (``<= _DRAFT_COMPILE_MAX_ROWS``), following
+# W33/K4/K22: byte-identical to the eager body in the tiny draft-row regime, and
+# the eager body runs unchanged above the cap and with the flag off, so the shipped
+# greedy-verify == AR contract is untouched.
+_DRAFT_COMPILE_ENV = "MTPLX_DSV41_DRAFT_COMPILE"
+_DRAFT_COMPILE_OFF_ALIASES = ("", "0", "false", "no", "off", "auto")
+#: Module-global override.  ``None`` -> read the env key at USE (never frozen at
+#: import, so a harness that stamps the key after importing this module still arms
+#: the tape -- [[env-flags-read-at-use-not-import]]); a bool pins it (the W65
+#: census / exactness tests flip this directly, like the K22 census flips
+#: ``deepseek_v41._ATTN_COMPILE``).
+_DRAFT_COMPILE: Optional[bool] = None
+#: Row count (``b * block_size``) at or below which the draft tapes fire; above it
+#: the eager body runs (byte-identical), confining compile to the tiny repeating
+#: draft shape where per-primitive host encode dominates.
+_DRAFT_COMPILE_MAX_ROWS = 32
+#: Local tape cache for the DSpark-specific chains (main-KV / markov step /
+#: confidence).  The attention-prep + Hyper-Connection chains reuse deepseek_v41's
+#: shared ``_ATTN_COMPILED`` / ``_HC_COMPILED`` caches, so a test that clears those
+#: resets them; this dict holds only the leaves those caches do not carry.
+_DRAFT_COMPILED: dict = {}
+
+
+def _draft_compile_on() -> bool:
+    """The draft-compile switch: the module-global pin if set, else the env key read
+    at use (never frozen at import)."""
+    if _DRAFT_COMPILE is not None:
+        return bool(_DRAFT_COMPILE)
+    raw = (os.environ.get(_DRAFT_COMPILE_ENV) or "").strip().lower()
+    return raw not in _DRAFT_COMPILE_OFF_ALIASES
+
+
+def _draft_use_compile(rows: int) -> bool:
+    """Is this ``rows``-row draft chain in the regime the K33 tapes are kept for?
+    Reads the switch + cap at call time so a test/operator can flip either after
+    import."""
+    return _draft_compile_on() and int(rows) <= _DRAFT_COMPILE_MAX_ROWS
+
+
+@contextlib.contextmanager
+def _moe_compile_window(active: bool):
+    """Arm the backbone ATTN_COMPILE window (K22 gate-prefix + combine folds) around
+    the resident MoE switch call so the draft stage's MoE gate prefix + combine run
+    as the compiled tapes (byte-identical, W41), then restore the prior state.  Only
+    the pure gate-prefix / combine folds read this module global; the resident
+    ``SwitchGLU`` gather is unaffected.  A scoped toggle, not a permanent flip:
+    ``deepseek_v41._attn_use_compile`` still gates on its own row cap + prefill
+    guard, so nothing outside this ``with`` body changes behaviour."""
+    if not active:
+        yield
+        return
+    saved = _dv41._ATTN_COMPILE
+    _dv41._ATTN_COMPILE = True
+    try:
+        yield
+    finally:
+        _dv41._ATTN_COMPILE = saved
+
+
+def _draft_kv_prep(attn: "DSparkAttention"):
+    """Compiled KV prep tape ``rope(rmsnorm(wkv(m)))`` -- reused for the window seed
+    (main positions) and, structurally, the draft KV; cos/sin are tape inputs.
+    Byte-identical to the eager ``_rope_last(_rmsnorm(wkv(m), kv_norm, eps), cos,
+    sin)`` (``_apply_lin`` replays ``nn.Linear`` / ``nn.QuantizedLinear`` exactly)."""
+    dk = _dv41._lin_desc(attn.wkv)
+    key = ("dspark_kv", dk, int(attn.head_dim), float(attn.eps))
+    fn = _DRAFT_COMPILED.get(key)
+    if fn is None:
+        eps = float(attn.eps)
+
+        def impl(m, cos, sin, kv_norm_w, *warrs):
+            kv = _rmsnorm(_dv41._apply_lin(dk, warrs, m), kv_norm_w, eps)
+            return _rope_last(kv, cos, sin)
+
+        fn = mx.compile(impl)
+        _DRAFT_COMPILED[key] = fn
+    return fn
+
+
+def _draft_markov_step(mh: "DSparkMarkovHead"):
+    """Compiled markov step: ``(li, markov_embed, next_token)`` from one draft
+    token.  Folds the per-step embed + head-matmul + base-logit add + argmax
+    (greedy) into one tape; ``argmax`` stays lazy (no per-step host sync).
+    Byte-identical to the eager ``base_row + markov_head.head(embed(token))`` then
+    ``argmax`` -- the embedding gather and the ``rank -> vocab`` matmul are single
+    primitives compile never reassociates."""
+    key = ("dspark_markov_step",)
+    fn = _DRAFT_COMPILED.get(key)
+    if fn is None:
+
+        def impl(token, base_row, embed_w, head_w):
+            me = mx.take(embed_w, token, axis=0)          # markov_head.embed(token)
+            lb = me @ head_w.T                            # markov_head.head(me), bias=False
+            li = base_row + lb
+            nxt = mx.argmax(li, axis=-1)                  # _sample(li, 0.0)
+            return li, me, nxt
+
+        fn = mx.compile(impl)
+        _DRAFT_COMPILED[key] = fn
+    return fn
+
+
+def _draft_confidence(ch: "DSparkConfidenceHead"):
+    """Compiled confidence head: ``(concat([hidden, markov_embed]).f32 @ w.T).squeeze``.
+    Already batched over the block rows; the tape folds the concat + cast + matmul +
+    squeeze.  Byte-identical to :meth:`DSparkConfidenceHead.__call__`."""
+    key = ("dspark_confidence",)
+    fn = _DRAFT_COMPILED.get(key)
+    if fn is None:
+
+        def impl(hidden, markov_embed, w):
+            h = mx.concatenate([hidden, markov_embed], axis=-1)
+            return (h.astype(mx.float32) @ w.astype(mx.float32).T).squeeze(-1)
+
+        fn = mx.compile(impl)
+        _DRAFT_COMPILED[key] = fn
+    return fn
 
 
 # ---------------------------------------------------------------------------
@@ -286,11 +437,22 @@ class DSparkAttention(Attention):
         L1054-1073), through the per-head sink softmax + grouped o-LoRA.
         """
         b, S, _ = main_x.shape
-        # main KV from this stage's wkv, roped at the main tokens' positions
+        # main KV from this stage's wkv, roped at the main tokens' positions.  In
+        # the draft (non-seed) cycle S == 1 (one committed main token), so the K33
+        # main-KV tape fires; the seed path (prefill / commit, S up to prompt len)
+        # stays eager (above the row cap).
         main_pos = mx.arange(cache.offset, cache.offset + S)
         mcos, msin = _cos_sin(self.inv_freq, main_pos)
-        main_kv = _rmsnorm(self.wkv(main_x), self.kv_norm_weight, self.eps)
-        main_kv = _rope_last(main_kv, mcos, msin)
+        main_use = (not seed_only) and _draft_use_compile(b * S)
+        with _stime.stage("dspark.attn.main_kv") as _st:
+            if main_use:
+                main_kv = _draft_kv_prep(self)(
+                    main_x, mcos, msin, self.kv_norm_weight, *_dv41._lin_arrays(self.wkv)
+                )
+            else:
+                main_kv = _rmsnorm(self.wkv(main_x), self.kv_norm_weight, self.eps)
+                main_kv = _rope_last(main_kv, mcos, msin)
+            _st.add(main_kv)
         if seed_only:
             # commit the main KV to the window (reference L1044-1065 ring write);
             # the update-cache path drives this for the tokens the target committed.
@@ -311,21 +473,46 @@ class DSparkAttention(Attention):
         base = cache.offset + S  # draft rows follow the current main token(s)
         dpos = mx.arange(base, base + T)
         dcos, dsin = _cos_sin(self.inv_freq, dpos)
-        qr = _rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
-        q = self.wq_b(qr).reshape(b, T, self.n_heads, self.head_dim)
-        q = _rope_last(q, dcos, dsin)
-        kv = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
-        kv = _rope_last(kv, dcos, dsin)
+        d_use = _draft_use_compile(b * T)
+        # QKV prep: reuse the backbone K22 tape (q = rope(unflatten(wq_b(rmsnorm(
+        # wq_a(x))))); kv = rope(rmsnorm(wkv(x)))) -- byte-identical to the eager
+        # body; the returned ``qr`` (indexer intermediate) is unused by DSpark.
+        with _stime.stage("dspark.attn.qkv_prep") as _st:
+            if d_use:
+                q, _qr, kv = _dv41._attn_qkv_prep(self)(
+                    x, dcos, dsin, self.q_norm_weight, self.kv_norm_weight,
+                    *_dv41._lin_arrays(self.wq_a), *_dv41._lin_arrays(self.wq_b),
+                    *_dv41._lin_arrays(self.wkv),
+                )
+            else:
+                qr = _rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
+                q = self.wq_b(qr).reshape(b, T, self.n_heads, self.head_dim)
+                q = _rope_last(q, dcos, dsin)
+                kv = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
+                kv = _rope_last(kv, dcos, dsin)
+            _st.add(q, kv)
 
         KV = mx.concatenate([win_all, kv], axis=1)  # [b, Wp+T, head_dim]
         # reference get_dspark_topk_idxs (L1020-1029): every draft query attends
         # to all valid window rows + all block draft rows.
         attend = mx.ones((b, T, Wp + T), dtype=mx.bool_)
-        o = self._sparse_attend(q, KV, attend)  # [b, T, H, head_dim]
-        o = _rope_last(o, dcos, dsin, inverse=True)
-        o = o.reshape(b, T, self.n_groups, -1)
-        o = self._o_lora_down(o)
-        return self.wo_b(o.reshape(b, T, -1))
+        with _stime.stage("dspark.attn.sdpa") as _st:
+            o = self._sparse_attend(q, KV, attend)  # [b, T, H, head_dim]
+            _st.add(o)
+        # Output prep: reuse the backbone K22 tape (query-RoPE removal + grouped
+        # o-LoRA down einsum + wo_b) -- byte-identical to the eager tail.
+        with _stime.stage("dspark.attn.out_prep") as _st:
+            if d_use:
+                out = _dv41._attn_out_prep(self)(
+                    o, dcos, dsin, self._o_lora_dense_weight(), *_dv41._lin_arrays(self.wo_b)
+                )
+            else:
+                o = _rope_last(o, dcos, dsin, inverse=True)
+                o = o.reshape(b, T, self.n_groups, -1)
+                o = self._o_lora_down(o)
+                out = self.wo_b(o.reshape(b, T, -1))
+            _st.add(out)
+        return out
 
 
 class DSparkBlock(DecoderLayer):
@@ -393,13 +580,15 @@ class DSparkBlock(DecoderLayer):
         builds the draft input ``[real_token, noise, ..., noise]`` of length
         ``block_size``, embedded (through the shared trunk embedding) and expanded
         to ``hc_mult`` copies."""
-        main_x = self.main_project(main_hidden)
-        b = int(input_ids.shape[0])
-        first = input_ids.reshape(b, 1)
-        noise = mx.full((b, self.block_size - 1), self.noise_token_id, dtype=first.dtype)
-        draft_input_ids = mx.concatenate([first, noise], axis=1)  # [b, block_size]
-        x = embed(draft_input_ids)  # [b, block_size, dim]
-        x = mx.broadcast_to(x[:, :, None, :], (b, self.block_size, self.hc_mult, x.shape[-1]))
+        with _stime.stage("dspark.forward_embed") as _st:
+            main_x = self.main_project(main_hidden)
+            b = int(input_ids.shape[0])
+            first = input_ids.reshape(b, 1)
+            noise = mx.full((b, self.block_size - 1), self.noise_token_id, dtype=first.dtype)
+            draft_input_ids = mx.concatenate([first, noise], axis=1)  # [b, block_size]
+            x = embed(draft_input_ids)  # [b, block_size, dim]
+            x = mx.broadcast_to(x[:, :, None, :], (b, self.block_size, self.hc_mult, x.shape[-1]))
+            _st.add(x, main_x)
         return x, main_x
 
     def __call__(
@@ -417,23 +606,60 @@ class DSparkBlock(DecoderLayer):
             self.attn(x, main_x, cache, seed_only=True)
             return h, pre_mix
 
-        residual = h
-        attn_pre, attn_post, attn_comb = self._mixes(
-            h, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale
-        )
-        x = self._hc_pre(h, pre_mix)
-        x = _rmsnorm(x, self.attn_norm_weight, self.norm_eps)
-        x = self.attn(x, main_x, cache, seed_only=False)
-        h = _hc_post_impl(x, residual, attn_post, attn_comb)
+        use = _draft_use_compile(int(h.shape[0]) * int(h.shape[1]))
+        # Trailing bool keys the mix tapes on the active Sinkhorn route (W32); on
+        # CPU it is always the recurrence, so it never perturbs the numerics.
+        hc_consts = (self.hc_mult, self.hc_iters, self.norm_eps, self.hc_eps,
+                     _dv41._sinkhorn_use_kernel())
 
         residual = h
-        ffn_pre, ffn_post, ffn_comb = self._mixes(
-            h, self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale
-        )
-        x = self._hc_pre(h, attn_pre)
-        x = _rmsnorm(x, self.ffn_norm_weight, self.norm_eps)
-        x = self.mlp(x)
-        h = _hc_post_impl(x, residual, ffn_post, ffn_comb)
+        # Attention Hyper-Connection prep (mix + Sinkhorn + pre_mix collapse + attn
+        # RMSNorm) -> the attention input.  K33 reuses the backbone K4 tape.
+        with _stime.stage("dspark.hc.attn_prep") as _st:
+            if use:
+                x, attn_pre, attn_post, attn_comb = _dv41._hc_compiled(
+                    "attn_prep", *hc_consts
+                )(
+                    h, pre_mix, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale,
+                    self.attn_norm_weight,
+                )
+            else:
+                attn_pre, attn_post, attn_comb = self._mixes(
+                    h, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale
+                )
+                x = self._hc_pre(h, pre_mix)
+                x = _rmsnorm(x, self.attn_norm_weight, self.norm_eps)
+            _st.add(x, attn_pre, attn_post, attn_comb)
+        x = self.attn(x, main_x, cache, seed_only=False)  # writes nothing (draft)
+        # Post-attention HC + ffn HC prep -> the routed-expert input (+ the residual
+        # the moe combine folds back).  K33 reuses the backbone K4 tape.
+        with _stime.stage("dspark.hc.ffn_prep") as _st:
+            if use:
+                moe_input, moe_residual, ffn_post, ffn_comb, ffn_pre = _dv41._hc_compiled(
+                    "ffn_prep", *hc_consts
+                )(
+                    x, residual, attn_pre, attn_post, attn_comb,
+                    self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale,
+                    self.ffn_norm_weight,
+                )
+            else:
+                moe_residual = _hc_post_impl(x, residual, attn_post, attn_comb)
+                ffn_pre, ffn_post, ffn_comb = self._mixes(
+                    moe_residual, self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale
+                )
+                xin = self._hc_pre(moe_residual, attn_pre)
+                moe_input = _rmsnorm(xin, self.ffn_norm_weight, self.norm_eps)
+            _st.add(moe_input, moe_residual, ffn_post, ffn_comb, ffn_pre)
+        # Resident 128-expert top-3 MoE (one gather_qmm over block_size*top_k rows
+        # via SwitchGLU); arm the K22 gate-prefix + combine folds around it.
+        with _moe_compile_window(use):
+            x = self.mlp(moe_input)
+        with _stime.stage("dspark.hc.moe_combine") as _st:
+            if use:
+                h = _dv41._hc_compiled("moe_combine")(x, moe_residual, ffn_post, ffn_comb)
+            else:
+                h = _hc_post_impl(x, moe_residual, ffn_post, ffn_comb)
+            _st.add(h)
         return h, ffn_pre
 
     def forward_head(
@@ -446,23 +672,54 @@ class DSparkBlock(DecoderLayer):
         the markov bias of draft token ``i``.  Returns ``(output_ids
         [b, block_size+1], logits [b, block_size, vocab], confidence
         [b, block_size])``."""
-        x = self._hc_pre(x, pre_mix)  # [b, block_size, dim]
-        base_logits = head(_rmsnorm(x, self.norm_weight, self.norm_eps).astype(mx.float32))
-
         b = int(input_ids.shape[0])
+        use = _draft_use_compile(b * self.block_size)
+        greedy = float(self.temperature) <= 0.0
+        with _stime.stage("dspark.head") as _st:
+            x = self._hc_pre(x, pre_mix)  # [b, block_size, dim]
+            base_logits = head(
+                _rmsnorm(x, self.norm_weight, self.norm_eps).astype(mx.float32)
+            )
+            _st.add(x, base_logits)
+
         out_cols: List[mx.array] = [input_ids.reshape(b)]
         logit_cols: List[mx.array] = []
-        markov_embeds: List[mx.array] = []
-        for i in range(self.block_size):
-            logits_bias, markov_embed = self.markov_head(out_cols[i])
-            li = base_logits[:, i, :] + logits_bias
-            logit_cols.append(li)
-            markov_embeds.append(markov_embed)
-            out_cols.append(_sample(li, self.temperature).reshape(b))
-        output_ids = mx.stack(out_cols, axis=1)  # [b, block_size+1]
-        logits = mx.stack(logit_cols, axis=1)  # [b, block_size, vocab]
-        markov_embed = mx.stack(markov_embeds, axis=1)  # [b, block_size, rank]
-        confidence = self.confidence_head(x, markov_embed)  # [b, block_size]
+        with _stime.stage("dspark.markov") as _st:
+            if use and greedy:
+                # Fold each step's embed + head-matmul + add + argmax into one tape
+                # (argmax stays lazy -- no per-step host sync); the markov embed for
+                # the confidence head is gathered ONCE over the sampled block below.
+                step = _draft_markov_step(self.markov_head)
+                embed_w = self.markov_head.embed.weight
+                head_w = self.markov_head.head.weight
+                for i in range(self.block_size):
+                    li, _me, nxt = step(out_cols[i], base_logits[:, i, :], embed_w, head_w)
+                    logit_cols.append(li)
+                    out_cols.append(nxt.reshape(b))
+            else:
+                markov_embeds: List[mx.array] = []
+                for i in range(self.block_size):
+                    logits_bias, markov_embed = self.markov_head(out_cols[i])
+                    li = base_logits[:, i, :] + logits_bias
+                    logit_cols.append(li)
+                    markov_embeds.append(markov_embed)
+                    out_cols.append(_sample(li, self.temperature).reshape(b))
+            output_ids = mx.stack(out_cols, axis=1)  # [b, block_size+1]
+            logits = mx.stack(logit_cols, axis=1)  # [b, block_size, vocab]
+            _st.add(output_ids, logits)
+
+        with _stime.stage("dspark.confidence") as _st:
+            if use and greedy:
+                # Batch the markov embed over the sampled draft block (one gather),
+                # not per step -- byte-identical to stacking the per-step embeds.
+                markov_embed = self.markov_head.embed(output_ids[:, : self.block_size])
+                confidence = _draft_confidence(self.confidence_head)(
+                    x, markov_embed, self.confidence_head.proj.weight
+                )
+            else:
+                markov_embed = mx.stack(markov_embeds, axis=1)  # [b, block_size, rank]
+                confidence = self.confidence_head(x, markov_embed)  # [b, block_size]
+            _st.add(confidence)
         return output_ids, logits, confidence
 
 

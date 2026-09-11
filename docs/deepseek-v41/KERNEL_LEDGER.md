@@ -1238,6 +1238,52 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   A split verify whose unique misses exceed transient capacity still batches (the single-submission split
   is the follow-up if the A/B shows a miss-heavy verify).
 
+### K33 — DSpark draft-block tape collapse (`MTPLX_DSV41_DRAFT_COMPILE`, W65) — **the drafter sibling of K22/K4 (the DIRECT lane's other half)**
+- **Mechanism:** the DSpark-DIRECT draft block (W57 §6d) measured ~261 ms/cycle on the GPU — 3 shallow
+  stages (each = sliding-window attention + a RESIDENT 128-expert top-3 MoE) over `block_size` rows, plus
+  `forward_embed` and the markov autoregression, ~87 ms/stage for a tiny amount of math: **pure dispatch
+  count**, the same regime K22 (attention tapes) and K4 (Hyper-Connection tapes) address on the backbone
+  ([[b1-decode-dispatch-removal-hides]]). K33 replays the draft block's PURE chains from `mx.compile`
+  tapes instead of rebuilding the graph from Python each cycle: the attention prep (draft QKV + output)
+  **reuses the backbone K22 tapes** (`_attn_qkv_prep` / `_attn_out_prep`) + a small local main-KV tape;
+  the two HC prep chains + the moe-combine post **reuse the backbone K4 tapes** (`_hc_compiled` — a DSpark
+  stage IS structurally the backbone layer); the MoE gate-prefix + combine folds fire by arming the K22
+  `ATTN_COMPILE` window around the resident switch; the markov step folds each cycle's embed+head+add+argmax
+  into one tape (argmax stays lazy — no per-step host sync) and the confidence-head markov embed is
+  gathered ONCE over the sampled block. Fixed-shape + row-cap (`<= 32`), following W33/K4/K22.
+- **Census (CPU, tiny real-structure DSpark head — 3 stages, `block_size` 4, resident 8-expert top-2 MoE;
+  `scripts/deepseek_v41/dispatch_census.py --draft`):** primitives per DRAFT CYCLE **1,591 → 1,145
+  (−446, −28 %)**, all byte-identical (`mx.array_equal` on draft tokens AND logits AND confidence, 0/4
+  seeds diverge):
+
+  | group | eager | K33 | Δ |
+  |---|---:|---:|---:|
+  | Hyper-Connection prep (attn_prep + ffn_prep + moe_combine, ×3) | 542 | 284 | **258** |
+  | attention prep (main_kv + qkv_prep + out_prep, ×3) | 519 | 351 | **168** |
+  | MoE gate-prefix + combine folds (×3) | 96 | 78 | **18** |
+  | markov + confidence (batched embed) | 63 | 61 | 2 |
+  | SDPA (`_sparse_attend`) + resident routed gather + shared expert (unchanged) | 371 | 371 | 0 |
+
+  The resident 128-expert top-3 MoE is **one `mx.gather_qmm`** over the `block_size*top_k` rows via mlx-lm's
+  `SwitchGLU` (`moe.routed_switch` ~21 prim/stage, NOT O(n_experts) — no Python per-expert loop); the SDPA
+  and that gather are the two chains a tape cannot fold (dynamic `T`, one opaque gather), left eager.
+- **Expected ms saved:** the census bounds the **dispatch** cut at −28 % of the draft block; the draft is
+  dispatch/host-encode-bound (W57 §6d: ~87 ms/stage for trivial math), so at ~261 ms/cycle the removed
+  Python-graph rebuild maps toward a **~50–70 ms/cycle** upper bound — the realized figure is a GPU-window
+  A/B (`draft_compile` vs control on `--decode-mode dspark`), like K22's KG-i. At 3.78 tokens/cycle (W57
+  §6b) the draft is a minority of the cycle (verify dominates); K33 is the drafter half of getting the
+  DIRECT lane's per-cycle cost down, paired with K31 (verify) on the target forward.
+- **Exactness:** byte-identical — each tape replays `nn.Linear` / `nn.QuantizedLinear` / the Sinkhorn
+  recurrence exactly (compile never reassociates a single matmul/gather primitive; the tiny-config
+  reductions are power-of-2, dodging the K22 RMSNorm caveat). Flag on vs off is `array_equal` on the draft
+  tokens/logits/confidence (4 seeds), the greedy-verify == AR gate stays green with the flag on
+  (depth 1/2/3), and flag-off is byte-for-byte the shipped eager drafter. Peak RSS: census 0.10 GB, the new
+  exactness suite 0.12 GB.
+- **Default OFF**, arm `draft_compile` (`ARM_PRESETS`, pins all lever keys). Only the `--decode-mode dspark`
+  DIRECT lane runs the draft block, so K33 composes with the decode/verify levers (K29/K30/K31) on the
+  target forward. Tests: `tests/models/test_deepseek_v41_dspark_draft_compile.py` (12) +
+  `tests/test_deepseek_v41_ab_env_levers.py` (the `draft_compile` arm). See `W65_DRAFT_DISPATCH.md`.
+
 ---
 
 ### K32 — Device-side sampling AR decode (`MTPLX_DSV41_DEVICE_SAMPLE`, W63) — **default OFF; greedy byte-identical; the per-token host round-trip removal**
@@ -1321,6 +1367,7 @@ two microbenches (K7/K8), which are CPU/queued and can run now.
 | **KG-m** | K29 fused decode/verify attention kernel | **CLOSED — SHELVED (window-27).** Kernel engaged (10,280 calls, 0 fallbacks, split-K) but 1K decode **−38% vs stack_a** (slower than eager at M=1 even with ≥512 TGs/layer) AND parity **max\|Δ\| ~1e-3 unchanged by precise::exp** (bf16-precision-class, not f32-reassociation; the eager path/KV latent is itself bf16). = the V4 hand-MLA verdict recurring; §6 dead-here. Default OFF, in no stack. K29 entry + `W60_FUSED_DECODE_ATTENTION.md` §7. | window-27 | done (negative) |
 | **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk + K19 head-last-row | 16K prefill ± two-pass split-K + tiling + head-last-row on the K16 base. **Pass if TTFT −≥15 % beyond K16 AND peak −≥8 GB (K19 drops the 8.47 GB logits), parity on long-prompt A/B.** | after KG-b | 1 window |
 | **KG-h** | K9 head byte cut + K13 in-place verify-KV | q8/mxfp8 head vs bf16 head: **ship only if argmax parity + HumanEval(164) ≥ exact−noise**; K13 footprint-guard folded into first MTP window. | after KG-e | folded |
+| **KG-n** | K33 DSpark draft-block tape collapse | `draft_compile` vs control on `--decode-mode dspark`: **byte-identical draft tokens (flag on==off) + greedy-verify == AR + draft-phase ms −**. CPU census −446 prim/draft cycle (−28 %; HC −258, attn prep −168). The drafter sibling of KG-i; only the DIRECT lane runs the draft block, so it composes with K29/K30/K31 on the verify. | after W57 DIRECT lane | folded |
 
 **Sequencing rationale:** KG-a/KG-b run **now** (CPU/queued microbenches + the today 16K-TTFT
 restructure). The decode kernel/fusion gates (KG-c…KG-f) only pay once OPT_LEDGER R1–R4 have exposed
