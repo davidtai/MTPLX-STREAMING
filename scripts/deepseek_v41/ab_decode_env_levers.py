@@ -255,6 +255,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--bos-id", type=int, default=DEFAULT_BOS_ID)
     p.add_argument(
+        "--prompt-ids-file",
+        default=None,
+        help="run every arm on the EXACT server token ids exported by "
+        "scripts/fable/server_cell_bench.py --prompt-ids-out (the Qwen-PR sized "
+        "cells), so the in-process A/B uses the SAME ids as the served cell. "
+        "Overrides the prefill_bench builder AND --bos (the exported ids already "
+        "are what the server saw; DSV4.1 served ids carry NO BOS). Selects "
+        "(cell=sweep, target_tokens==--context-tokens, seed==--prompt-seed). "
+        "Default None keeps the built prompt so old receipts stay comparable.",
+    )
+    p.add_argument(
+        "--prompt-seed",
+        type=int,
+        default=None,
+        help="which seed's ids to take from --prompt-ids-file (e.g. 20260829).",
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -353,8 +370,8 @@ def _dry_run_arm(args, arm, bench) -> dict:
     ``--dry-run`` for the same context cell."""
     build_prompt = bench._load_build_prompt()
     tokenizer = bench._FakeTokenizer()
-    prompt_ids, prompt_meta = build_prompt(
-        tokenizer, bench._prompt_args(args, args.context_tokens)
+    prompt_ids, prompt_meta = bench._resolve_prompt(
+        args, tokenizer, build_prompt, args.context_tokens
     )
     return {
         "arm": arm,
@@ -464,9 +481,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
     if getattr(args, "dry_run", False):
         return _dry_run_arm(args, arm, bench)
     build_prompt = bench._load_build_prompt()
-    prompt_ids, prompt_meta = build_prompt(
-        _tokenizer(args, bench),
-        bench._prompt_args(args, args.context_tokens),
+    _tok = None if getattr(args, "prompt_ids_file", None) else _tokenizer(args, bench)
+    prompt_ids, prompt_meta = bench._resolve_prompt(
+        args, _tok, build_prompt, args.context_tokens
     )
     resident = _load_model(args, bench, mx)
     model = resident.model
