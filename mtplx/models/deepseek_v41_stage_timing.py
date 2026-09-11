@@ -1,30 +1,41 @@
-"""Opt-in per-token decode stage timing for DeepSeek-V4.1-Flash (W37).
+"""Opt-in per-token / per-chunk stage timing for DeepSeek-V4.1-Flash (W37 + W47).
 
-Window 12 measured 246 ms/token at 4.06 tok/s but could not say *where* the time
-goes: the existing route-stage probe (``mtplx.expert_route_probe``,
+Window 12 measured 246 ms/token decode but could not say *where* the time goes;
+window 16 measured 16,384-token prefill at 490 s chunk-major / 370 s layer-major
+against a ~20 s bank read and a ~100 s compute floor -- also unattributed.  The
+existing route-stage probe (``mtplx.expert_route_probe``,
 ``MTPLX_ROUTE_STAGE_PROBE``) brackets the streamed switch, but MLX is lazy, so a
 bracket that wraps only graph construction records ~0 ms -- it counts, it does not
-time.  This probe fixes that for the whole decode forward by placing an explicit
+time.  This probe fixes that for the whole forward by placing an explicit
 ``mx.eval`` fence at each stage boundary, so a bracket's wall time is the stage's
 dispatch **plus** its GPU execution, not just the Python encode.
 
+Two session kinds
+-----------------
+* **decode** (W37): one query row (``s == 1``) per forward; the harness wraps each
+  decode iteration in :func:`frame` and the argmax in a ``sample`` stage.  Per-token
+  means; the per-stage sum tiles ``frame_wall``.
+* **prefill** (W47): the 16K prompt runs as chunks through either schedule
+  (``_forward_span`` per chunk = *chunk-major*, or ``_forward_layer_major`` =
+  *layer-major*).  Attention is split (q/kv proj, indexer/candidate select,
+  score+softmax+value, cache appends); the streamed switch is split into
+  admission / route-plan / miss-submit host stages plus the fenced gather total.
+  Brackets are tagged by chunk index via :func:`chunk`, so the report can show
+  whether cost grows with chunk index (attention over growing T) or is flat (MoE).
+
 Contract
 --------
-* OFF is the default and free: when no session is armed, :func:`stage` returns a
-  shared no-op context manager and :func:`recording` is ``False`` -- no fence, no
-  allocation, no array touched, so the forward is byte-for-byte the shipped path.
-* A session is armed by :func:`begin` (around the *decode* loop, after prefill)
-  and torn down by :func:`end`.  While armed, :meth:`_Probe.enter_forward` gates
-  recording on ``s == 1`` so prefill forwards (which would fence multi-GB
-  transients) stay untouched; only decode (one query row) is timed.
+* OFF is the default and free: no session armed -> :func:`stage` returns a shared
+  no-op context manager, :func:`recording` is ``False``, nothing is touched, so
+  the forward is byte-for-byte the shipped path.
+* A session is armed by :func:`begin` (kind="decode" default, or "prefill") and
+  torn down by :func:`end`.  :meth:`_Probe.enter_forward` gates recording: decode
+  records only ``s == 1`` forwards; prefill records the whole prefill forward.
 * Every fence **inflates** absolute time (an extra host round-trip serialises the
-  stage), so the reported tok/s of a stage-timing pass is NOT a throughput
-  number.  What survives the inflation is the *ratio* between stages, which is the
-  question W37 asks.  Run the clean tok/s pass with the probe OFF.
+  stage), so a stage-timing pass's tok/s is NOT throughput -- the *ratios* between
+  stages are the signal.  Run the clean tok/s pass with the probe OFF.
 
 The probe is a module-level singleton (no threading through every call site).
-:func:`begin` installs it; the model/engram/attention/MoE call sites read it via
-:func:`stage`; :func:`report` / :meth:`Model.stage_timing_report` read it back.
 """
 
 from __future__ import annotations
@@ -42,10 +53,18 @@ __all__ = [
     "active",
     "is_active",
     "recording",
+    "is_prefill",
     "stage",
+    "stage_prefill",
+    "stage_nested",
     "frame",
+    "chunk",
+    "set_schedule",
     "report",
 ]
+
+_KIND_DECODE = "decode"
+_KIND_PREFILL = "prefill"
 
 #: The armed probe for the current process, or ``None`` when no session is open.
 #: Read on every stage bracket, so keep it a bare module global (one attribute
@@ -61,7 +80,6 @@ class _NullFence:
     def add(self, *_arrays) -> None:
         return None
 
-    # ``fence`` reads the same as ``add`` at the call sites.
     fence = add
 
 
@@ -84,7 +102,7 @@ class _Fence:
 
 class _NoopCM:
     """A reusable, stateless no-op context manager (returned when the probe is off
-    or not recording this forward), so the off path allocates nothing per site."""
+    or not recording), so the off path allocates nothing per site."""
 
     __slots__ = ()
 
@@ -100,31 +118,50 @@ _NOOP_CM = _NoopCM()
 
 
 class _Probe:
-    """Per-session accumulator: nanosecond sums + counts per stage, a decode-token
-    counter, and a frame-wall total (the reference the per-stage sum tiles)."""
+    """Per-session accumulator: nanosecond sums + counts per stage, a unit counter
+    (decode tokens or prefill chunks), a frame/chunk-wall total, plus -- for
+    prefill -- per-(chunk, stage) sums and a nested switch breakdown."""
 
-    __slots__ = ("_sums", "_counts", "_tokens", "_frame_ns", "_recording_now")
+    __slots__ = (
+        "_kind", "_sums", "_counts", "_tokens", "_frame_ns", "_recording_now",
+        "_chunk_idx", "_chunk_sums", "_chunk_counts", "_chunk_wall",
+        "_nested_sums", "_nested_counts", "_schedule",
+    )
 
-    def __init__(self) -> None:
+    def __init__(self, kind: str = _KIND_DECODE) -> None:
+        self._kind = kind
         self._sums: dict[str, int] = defaultdict(int)
         self._counts: dict[str, int] = defaultdict(int)
         self._tokens: int = 0
         self._frame_ns: int = 0
-        #: Set per forward by :meth:`enter_forward`; ``True`` only for a decode
-        #: (single query row) forward while the session is armed.
+        #: Set per forward by :meth:`enter_forward`.
         self._recording_now: bool = False
+        #: Current chunk index (prefill) or ``None`` (decode / untagged).
+        self._chunk_idx: "Optional[int]" = None
+        self._chunk_sums: dict[tuple, int] = defaultdict(int)
+        self._chunk_counts: dict[tuple, int] = defaultdict(int)
+        self._chunk_wall: dict[int, int] = defaultdict(int)
+        #: Nested switch breakdown (miss-I/O submit / route-plan / admission);
+        #: kept OUT of the flat partition sum -- it decomposes moe.routed_switch.
+        self._nested_sums: dict[str, int] = defaultdict(int)
+        self._nested_counts: dict[str, int] = defaultdict(int)
+        self._schedule: "Optional[str]" = None
 
     def enter_forward(self, seq_len: int) -> None:
-        """Arm recording for this forward iff it is a decode step (``s == 1``).
+        """Arm recording for this forward.
 
-        Prefill forwards (``s > 1``) build multi-GB transients whose fences would
-        both crater the process and pollute the per-token census, so they stay
-        untouched; the flag persists after the forward returns so the harness'
-        ``sample`` bracket -- which runs *between* forwards -- still records."""
-        self._recording_now = seq_len == 1
+        decode: only a single query row (``s == 1``) -- prefill forwards would
+        fence multi-GB transients and pollute the per-token census.  prefill:
+        record the whole forward (the chunk loop inside tags each chunk).  The flag
+        persists after the forward returns so the harness' ``sample`` bracket --
+        which runs *between* decode forwards -- still records."""
+        if self._kind == _KIND_PREFILL:
+            self._recording_now = seq_len >= 1
+        else:
+            self._recording_now = seq_len == 1
 
     @contextmanager
-    def _stage(self, name: str):
+    def _stage(self, name: str, nested: bool = False):
         fence = _Fence()
         t0 = time.perf_counter_ns()
         try:
@@ -132,8 +169,17 @@ class _Probe:
         finally:
             if fence._arrays:
                 mx.eval(fence._arrays)
-            self._sums[name] += time.perf_counter_ns() - t0
-            self._counts[name] += 1
+            dt = time.perf_counter_ns() - t0
+            if nested:
+                self._nested_sums[name] += dt
+                self._nested_counts[name] += 1
+            else:
+                self._sums[name] += dt
+                self._counts[name] += 1
+                idx = self._chunk_idx
+                if idx is not None:
+                    self._chunk_sums[(idx, name)] += dt
+                    self._chunk_counts[(idx, name)] += 1
 
     @contextmanager
     def _frame(self):
@@ -144,12 +190,24 @@ class _Probe:
             self._frame_ns += time.perf_counter_ns() - t0
             self._tokens += 1
 
+    @contextmanager
+    def _chunk(self, idx: int):
+        prev = self._chunk_idx
+        self._chunk_idx = int(idx)
+        t0 = time.perf_counter_ns()
+        try:
+            yield
+        finally:
+            self._chunk_wall[int(idx)] += time.perf_counter_ns() - t0
+            self._chunk_idx = prev
+
     def snapshot(self) -> dict:
         tokens = self._tokens or 1
         names = sorted(set(self._sums) | set(self._counts))
         total_ns = sum(self._sums.values())
-        return {
+        report: dict = {
             "enabled": True,
+            "kind": self._kind,
             "tokens": self._tokens,
             "stage_sum_ms": total_ns / 1e6,
             "stage_sum_ms_per_token": total_ns / 1e6 / tokens,
@@ -169,16 +227,59 @@ class _Probe:
                 for name in names
             },
         }
+        if self._kind == _KIND_PREFILL:
+            report.update(self._prefill_views())
+        return report
+
+    def _prefill_views(self) -> dict:
+        chunk_ids = sorted(
+            {c for (c, _n) in self._chunk_sums} | set(self._chunk_wall)
+        )
+        by_chunk: dict = {}
+        for c in chunk_ids:
+            stages = {
+                n: {
+                    "total_ms": self._chunk_sums[(cc, n)] / 1e6,
+                    "count": self._chunk_counts[(cc, n)],
+                }
+                for (cc, n) in self._chunk_sums
+                if cc == c
+            }
+            by_chunk[str(c)] = {
+                "wall_ms": self._chunk_wall.get(c, 0) / 1e6,
+                "stage_sum_ms": sum(s["total_ms"] for s in stages.values()),
+                "stages": stages,
+            }
+        switch_breakdown = {
+            name: {
+                "total_ms": self._nested_sums[name] / 1e6,
+                "count": self._nested_counts[name],
+                "mean_ms": (
+                    self._nested_sums[name] / self._nested_counts[name] / 1e6
+                    if self._nested_counts.get(name)
+                    else None
+                ),
+            }
+            for name in sorted(self._nested_sums)
+        }
+        return {
+            "schedule": self._schedule,
+            "chunks": len(chunk_ids),
+            "chunk_wall_sum_ms": sum(self._chunk_wall.values()) / 1e6,
+            "by_chunk": by_chunk,
+            "switch_breakdown": switch_breakdown,
+        }
 
 
 # ---------------------------------------------------------------------------
 # module-level session control + the call-site surface
 # ---------------------------------------------------------------------------
-def begin() -> "_Probe":
-    """Open a stage-timing session (call around the decode loop, after prefill).
+def begin(kind: str = _KIND_DECODE) -> "_Probe":
+    """Open a stage-timing session.  ``kind="decode"`` (default) records single-row
+    decode forwards; ``kind="prefill"`` records the prefill forward and its chunks.
     Replaces any open session, so a fresh census starts each pass."""
     global _ACTIVE
-    _ACTIVE = _Probe()
+    _ACTIVE = _Probe(kind=kind)
     return _ACTIVE
 
 
@@ -199,37 +300,81 @@ def is_active() -> bool:
 
 
 def recording() -> bool:
-    """True while a decode forward of an armed session is in flight.  Read by
-    ``deepseek_v41._hc_use_compile`` to force the eager Hyper-Connection path when
-    timing (the compiled tape is opaque to per-stage fences), so the stage census
-    always reflects one code path regardless of ``MTPLX_DSV41_HC_COMPILE``."""
+    """True while a forward of an armed session is being timed (either kind).  Read
+    by ``deepseek_v41._hc_use_compile`` / ``_attn_use_compile`` to force the eager
+    Hyper-Connection / attention path when timing (a compiled tape is opaque to
+    per-stage fences), so the census reflects one code path regardless of the K4 /
+    K22 compile flags."""
     p = _ACTIVE
     return p is not None and p._recording_now
 
 
-def stage(name: str):
-    """A timing bracket for one decode stage.
+def is_prefill() -> bool:
+    """True while a *prefill* session is recording -- selects the finer prefill
+    attention/switch sub-brackets over the single decode ``attn.<mode>`` stage."""
+    p = _ACTIVE
+    return p is not None and p._recording_now and p._kind == _KIND_PREFILL
 
-    Returns a shared no-op context manager unless a session is armed *and* the
-    current forward is a decode step; otherwise the ``with`` body runs untouched
-    and the yielded fence's ``add`` is a no-op.  When active, the bracket fences
-    the arrays handed to ``fence.add(...)`` on exit and books the elapsed wall
-    time under ``name``."""
+
+def stage(name: str):
+    """A timing bracket for one stage (fires in either session kind while
+    recording).  Returns a shared no-op context manager otherwise, so the ``with``
+    body runs untouched and the yielded fence's ``add`` is a no-op.  When active,
+    fences the arrays handed to ``fence.add(...)`` on exit and books the elapsed
+    wall time under ``name`` (and under the current chunk, if one is set)."""
     p = _ACTIVE
     if p is None or not p._recording_now:
         return _NOOP_CM
     return p._stage(name)
 
 
+def stage_prefill(name: str):
+    """A prefill-only timing bracket (the finer attention / cache sub-stages).
+    No-op unless a prefill session is recording -- so the same code, run under a
+    decode session or off, is byte-identical and never double-counts the single
+    decode ``attn.<mode>`` bracket."""
+    p = _ACTIVE
+    if p is None or not p._recording_now or p._kind != _KIND_PREFILL:
+        return _NOOP_CM
+    return p._stage(name)
+
+
+def stage_nested(name: str):
+    """A prefill-only *nested* bracket for the streamed switch breakdown
+    (admission / route-plan / miss-submit).  Recorded into ``switch_breakdown`` and
+    kept OUT of the flat partition sum, since it decomposes moe.routed_switch."""
+    p = _ACTIVE
+    if p is None or not p._recording_now or p._kind != _KIND_PREFILL:
+        return _NOOP_CM
+    return p._stage(name, nested=True)
+
+
 def frame():
     """Times one whole decode iteration (forward + sample) and counts it as a
     token.  Does NOT fence -- the inner :func:`stage` brackets already tile the
-    work -- so ``frame_wall`` is the reference the per-stage sum should match, not
-    a double count.  A no-op when no session is armed."""
+    work.  A no-op when no session is armed."""
     p = _ACTIVE
     if p is None:
         return _NOOP_CM
     return p._frame()
+
+
+def chunk(idx: int):
+    """Tags every :func:`stage` bracket inside the block with prefill chunk ``idx``
+    and times the block as that chunk's wall.  A no-op unless a prefill session is
+    recording, so decode / one-shot paths are untouched."""
+    p = _ACTIVE
+    if p is None or not p._recording_now or p._kind != _KIND_PREFILL:
+        return _NOOP_CM
+    return p._chunk(idx)
+
+
+def set_schedule(name: str) -> None:
+    """Record which prefill schedule ran (``chunk_major`` / ``layer_major`` /
+    ``one_shot``).  A no-op unless a prefill session is recording."""
+    p = _ACTIVE
+    if p is not None and p._recording_now and p._kind == _KIND_PREFILL:
+        p._schedule = name
 
 
 def report() -> "Optional[dict]":

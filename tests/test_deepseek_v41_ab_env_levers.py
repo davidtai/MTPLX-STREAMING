@@ -375,3 +375,106 @@ def test_warm_and_stage_timing_pass_helpers_exist(env_levers):
     }
     st = inspect.signature(env_levers._stage_timing_pass)
     assert set(st.parameters) == {"model", "ops", "prompt_ids", "steps"}
+
+
+# --------------------------------------------------------------------------
+# W47: --prefill-stage-timing parser + dry-run flow + a small real forward
+# --------------------------------------------------------------------------
+
+
+def test_parser_has_prefill_stage_timing(env_levers):
+    args = env_levers.build_parser().parse_args(["--out", "/dev/null"])
+    assert args.prefill_stage_timing is False
+    on = env_levers.build_parser().parse_args(
+        ["--out", "/dev/null", "--prefill-stage-timing"]
+    )
+    assert on.prefill_stage_timing is True
+
+
+def test_dry_run_records_prefill_stage_timing_flag(env_levers, tmp_path):
+    out = tmp_path / "r.jsonl"
+    rc = env_levers.main(
+        ["--dry-run", "--context-tokens", "16384", "--arms", "control", "layer_major",
+         "--prefill-stage-timing", "--out", str(out)]
+    )
+    assert rc == 0
+    rows = [json.loads(x) for x in out.read_text().splitlines() if x]
+    assert [r["arm"] for r in rows] == ["control", "layer_major"]
+    for r in rows:
+        assert r["prefill_stage_timing"] is True
+        assert r["context_tokens"] == 16384
+    # the layer_major arm records the schedule env for the prefill pass to read.
+    assert rows[1]["prefill_layer_major"] == "1"
+    assert rows[0]["prefill_layer_major"] is None
+
+
+def test_prefill_pass_helper_signature(env_levers):
+    import inspect
+
+    sig = inspect.signature(env_levers._prefill_stage_timing_pass)
+    assert set(sig.parameters) == {"model", "ops", "prompt_ids"}
+
+
+class _Ops:
+    """Minimal MLXOps shim (real forward, CPU) for the pass function."""
+
+    def input(self, ids_2d):
+        return mx.array(ids_2d)
+
+    def sync(self, logits):
+        mx.eval(logits)
+
+    def argmax_last(self, logits):
+        return int(mx.argmax(logits[0, -1]).item())
+
+
+def _tiny_model():
+    from mlx.utils import tree_flatten, tree_unflatten
+    from mtplx.models.deepseek_v41 import Model, ModelArgs
+
+    args = ModelArgs(
+        vocab_size=48, hidden_size=32, num_hidden_layers=8,
+        num_attention_heads=4, head_dim=16, qk_rope_head_dim=4,
+        q_lora_rank=12, o_lora_rank=8, o_groups=2,
+        moe_intermediate_size=16, n_routed_experts=8, num_experts_per_tok=2,
+        index_n_heads=2, index_head_dim=8, index_topk=5,
+        sliding_window=8, window_size=8, swiglu_limit=0.5,
+        compress_ratios=[0, 0, 2, 2, 2, 1, 1, 1],
+        kv_source_layer_ids=[2, 5], index_source_layer_ids=[2, 5, 6],
+        candidate_source_layer_id=5, candidate_topk_blocks=3, candidate_block_size=2,
+        rope_scaling={"rope_type": "yarn", "factor": 16, "beta_fast": 32,
+                      "beta_slow": 1, "original_max_position_embeddings": 65536},
+    )
+    model = Model(args)
+    mx.random.seed(1)
+    new = []
+    for name, arr in tree_flatten(model.parameters()):
+        if arr.ndim == 1 and ("norm_weight" in name or name.endswith("norm.weight")):
+            v = 1.0 + 0.2 * mx.random.normal(arr.shape)
+        elif "attn_sink" in name:
+            v = 0.5 * mx.random.normal(arr.shape)
+        else:
+            v = 0.1 * mx.random.normal(arr.shape)
+        new.append((name, v.astype(mx.float32)))
+    model.update(tree_unflatten(new))
+    mx.eval(model.parameters())
+    return model, args
+
+
+def test_prefill_stage_timing_pass_small_real_forward(env_levers, monkeypatch):
+    # A small real prefill forward through the harness function on the tiny double
+    # (chunk 4 over 12 tokens -> 3 chunks), proving the pass builds a valid
+    # per-chunk prefill report and always tears the session down.
+    monkeypatch.setenv("MTPLX_DSV41_PREFILL_CHUNK", "4")
+    model, args = _tiny_model()
+    report = env_levers._prefill_stage_timing_pass(
+        model=model, ops=_Ops(), prompt_ids=list(range(12)),
+    )
+    assert report["kind"] == "prefill"
+    assert report["schedule"] == "chunk_major"
+    assert report["chunks"] == 3
+    assert any(k.endswith(".score") for k in report["stages"])
+    assert "moe.routed_switch" in report["stages"]
+    # the session is closed after the pass (no leaked global probe).
+    import mtplx.models.deepseek_v41_stage_timing as stime
+    assert stime.active() is None

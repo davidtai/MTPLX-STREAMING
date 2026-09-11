@@ -21,6 +21,7 @@ import numpy as np
 from mlx_lm.models.activations import swiglu
 
 from mtplx import expert_route_probe as _route_probe
+from mtplx.models import deepseek_v41_stage_timing as _stime
 
 from mtplx.expert_io import PositionalExpertReader
 from mtplx.expert_runtime import ExpertStreamingRuntime
@@ -2062,7 +2063,11 @@ class HotExpertSwitchGLU(nn.Module):
             token_count=int(tokens.shape[0]),
         )
         if phase is RoutingPhase.PREFILL:
-            self.runtime.prepare_prefill_seed(self.layer_index, expert_ids)
+            # W47 switch breakdown (prefill stage timing only; no-op otherwise):
+            # the admission / prefill-seed bookkeeping that primes the persistent
+            # hot set for this layer's routed experts.  A host-side stage.
+            with _stime.stage_nested("switch.admission"):
+                self.runtime.prepare_prefill_seed(self.layer_index, expert_ids)
 
         outputs: list[mx.array] = []
         output_positions: list[int] = []
@@ -2268,15 +2273,18 @@ class HotExpertSwitchGLU(nn.Module):
             )
 
         try:
-            waves = tuple(
-                self.runtime.route_waves(
-                    expert_ids,
-                    sort_unique=(
-                        phase is RoutingPhase.PREFILL
-                        and self.runtime.manifest.sidecar is not None
-                    ),
+            # W47 switch breakdown (prefill only; no-op otherwise): the host-side
+            # route planning that groups this layer's expert ids into gather waves.
+            with _stime.stage_nested("switch.route_plan"):
+                waves = tuple(
+                    self.runtime.route_waves(
+                        expert_ids,
+                        sort_unique=(
+                            phase is RoutingPhase.PREFILL
+                            and self.runtime.manifest.sidecar is not None
+                        ),
+                    )
                 )
-            )
             # Deferring hands this layer's lock and slot pins to the next
             # generation-thread flush, so it is only legal on the wave that
             # ends the layer's routing.  A wide verify batch splits into
@@ -2535,7 +2543,12 @@ class HotExpertSwitchGLU(nn.Module):
                 deferred_parts: list[ReadyRoute] = []
                 split_completed = False
                 wave_output_start = len(outputs)
-                with _route_probe.bracket("hot.begin_split_route"):
+                # W47 switch breakdown (prefill only; no-op otherwise): submitting
+                # the miss reads for this wave (host-side; the SSD reads then stream
+                # asynchronously and the blocking wait is folded into the fenced
+                # moe.routed_switch total, since reads overlap the gather).
+                with _stime.stage_nested("switch.miss_submit"), \
+                        _route_probe.bracket("hot.begin_split_route"):
                     pending = self.runtime.begin_split_route(
                         self.layer_index,
                         wave.experts,

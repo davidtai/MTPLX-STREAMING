@@ -232,6 +232,19 @@ def build_parser() -> argparse.ArgumentParser:
         "pass's decode/prefill tok/s + TTFT as ``warm_*``; bounds the no-miss "
         "ceiling. Token ids must match the cold pass (recorded, not asserted).",
     )
+    p.add_argument(
+        "--prefill-stage-timing",
+        action="store_true",
+        default=False,
+        help="extra W47 fenced PREFILL pass -> receipt ``prefill_stage_timing``: "
+        "per (chunk, layer-type) brackets for attention (qkv_proj / select / "
+        "score / cache_append / compress_append), HC, gate+top-k, streamed-switch "
+        "breakdown (admission / route-plan / miss-submit) + gather total, shared "
+        "expert, combine, engram, with per-chunk aggregation.  Reads the schedule "
+        "(chunk-major vs layer-major) from the arm's MTPLX_DSV41_PREFILL_LAYER_MAJOR "
+        "and the chunk from MTPLX_DSV41_PREFILL_CHUNK.  Fences inflate absolute "
+        "time; ratios are the signal.  Use with --context-tokens 16384.",
+    )
     # GPU-window defaults (agent booted out -> ~82 GiB planner budget).
     p.add_argument("--memory-limit-gib", type=float, default=82.0)
     p.add_argument("--expert-cache-limit-gib", type=float, default=None)
@@ -294,6 +307,9 @@ def _dry_run_arm(args, arm, bench) -> dict:
             else int(args.decode_tokens)
         ),
         "warm_repeat": bool(getattr(args, "warm_repeat", False)),
+        "prefill_stage_timing": bool(getattr(args, "prefill_stage_timing", False)),
+        "prefill_layer_major": os.environ.get(LAYER_MAJOR_ENV),
+        "prefill_chunk_env": os.environ.get("MTPLX_DSV41_PREFILL_CHUNK"),
     }
 
 
@@ -450,6 +466,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
             receipt["stage_timing"] = _stage_timing_pass(
                 model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
             )
+        if getattr(args, "prefill_stage_timing", False):
+            receipt["prefill_stage_timing"] = _prefill_stage_timing_pass(
+                model=model, ops=ops, prompt_ids=prompt_ids,
+            )
         if args.syncs > 0:
             receipt["sync_census"] = _sync_census(
                 model=model, ops=ops, mem_probe=mem_probe,
@@ -550,6 +570,36 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps) -> dict:
     return report if report is not None else {"enabled": False}
 
 
+def _prefill_stage_timing_pass(*, model, ops, prompt_ids) -> dict:
+    """W47 fenced PREFILL pass -> ``model.stage_timing_report()`` (kind=prefill).
+
+    One prefill forward of the whole prompt under a prefill session.  The backbone
+    picks the schedule from ``MTPLX_DSV41_PREFILL_LAYER_MAJOR`` and the chunk from
+    ``MTPLX_DSV41_PREFILL_CHUNK`` (the arm's env), and records per (chunk, layer
+    type): attention split (qkv_proj / select / score / cache_append /
+    compress_append), HC, gate+top-k, streamed-switch breakdown, shared expert,
+    combine, engram -- plus per-chunk walls.  The route-stage probe window is
+    cleared first so the merged ``route_stage`` reflects this forward.  Fences
+    inflate absolute time; the reported tok/s pass never runs the probe."""
+    from mtplx.models import deepseek_v41_stage_timing as stime
+
+    cache = model.make_cache()
+    try:
+        from mtplx import expert_route_probe as route_probe
+
+        if getattr(route_probe, "ENABLED", False):
+            route_probe._SUMS.clear()
+            route_probe._COUNTS.clear()
+    except Exception:
+        pass
+    stime.begin(kind="prefill")
+    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    ops.sync(logits)
+    report = model.stage_timing_report()
+    stime.end()
+    return report if report is not None else {"enabled": False}
+
+
 def _sync_census(*, model, ops, mem_probe, prompt_ids, steps) -> dict:
     """A short probe pass (route stage probe must be ENABLED via PROBE_ENV set
     before mtplx import) that counts the routing barrier per decoded token."""
@@ -619,13 +669,14 @@ def main(argv=None) -> int:
     if args.dry_run:
         return _run_dry(args, bench)
 
-    if args.syncs > 0 or args.stage_timing:
+    if args.syncs > 0 or args.stage_timing or args.prefill_stage_timing:
         # The route-stage probe reads its ENABLED flag at import, so arm it before
-        # any mtplx import happens inside the arm run.  --stage-timing arms it too,
-        # so model.stage_timing_report() can merge the switch-internal breakdown
-        # (hot.eval_indices barrier / miss-I/O / gather) under ``route_stage``.
+        # any mtplx import happens inside the arm run.  --stage-timing /
+        # --prefill-stage-timing arm it too, so model.stage_timing_report() can
+        # merge the route-stage census (hot.eval_indices barrier count) under
+        # ``route_stage`` alongside the fenced DSV4.1 stages.
         os.environ[PROBE_ENV] = "1"
-    if args.stage_timing:
+    if args.stage_timing or args.prefill_stage_timing:
         # Advisory marker in the receipt env snapshot; the fenced session is armed
         # in-process by deepseek_v41_stage_timing.begin(), not by this env.
         os.environ[STAGE_TIMING_ENV] = "1"

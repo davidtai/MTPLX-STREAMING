@@ -330,8 +330,16 @@ class MoE(nn.Module):
         # f32 to match the reference's f32 accumulator (L893).
         # Routed through the same compiled/eager combine dispatch as __call__ so
         # the layer-major path stays byte-identical to chunk-major under K4/K22.
-        shared = self.shared_experts(xf).astype(mx.float32)
-        return _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
+        # W47: bracket the shared expert + combine so layer-major prefill reports
+        # the same moe.shared_expert / moe.combine stages as chunk-major
+        # (MoE.__call__); no-op off / decode (combine_routed is layer-major only).
+        with _stime.stage("moe.shared_expert") as _st:
+            shared = self.shared_experts(xf).astype(mx.float32)
+            _st.add(shared)
+        with _stime.stage("moe.combine") as _st:
+            out = _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
+            _st.add(out)
+        return out
 
     def __call__(self, x: mx.array, image_mask: Optional[mx.array] = None) -> mx.array:
         # reference MoE.forward, L889-904.
