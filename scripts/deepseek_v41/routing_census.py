@@ -393,6 +393,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     p.add_argument("--context-tokens", type=int, default=1024, choices=(1024, 16384))
     p.add_argument("--decode-tokens", type=int, default=64)
+    # chunk the prefill (query-chunks + per-chunk mx.eval, accumulating KV) so the
+    # activation/attention-score peak stays under the RSS watchdog; per-position
+    # routing is identical to a single 1,024-token forward (causal, same KV).
+    p.add_argument("--prefill-chunk", type=int, default=256)
     p.add_argument("--prompt-format", default="raw", choices=("raw", "chat"))
     p.add_argument("--bos-id", type=int, default=0)
     p.add_argument("--no-bos", dest="bos", action="store_false", default=True)
@@ -569,11 +573,17 @@ def run_census(args, log) -> dict:
     try:
         from mlx_lm.models.cache import make_prompt_cache
         cache = make_prompt_cache(model)
-        # -- prefill --
+        # -- prefill (chunked to bound the activation/score peak) --
         ctx["phase"] = "prefill"; ctx["step"] = 0
         tp = time.time()
-        logits = model(mx.array([prompt_ids]), cache=cache)
-        mx.eval(logits)
+        chunk = max(1, int(args.prefill_chunk))
+        logits = None
+        for i in range(0, len(prompt_ids), chunk):
+            seg = prompt_ids[i:i + chunk]
+            logits = model(mx.array([seg]), cache=cache)
+            mx.eval(logits)
+            if len(prompt_ids) > chunk:
+                log(f"[census] prefill chunk {i}..{i+len(seg)}  RSS={_rss_gib():.2f} GiB")
         prefill_s = time.time() - tp
         ttft_s = prefill_s
         token = int(mx.argmax(logits[0, -1]).item())
