@@ -104,12 +104,26 @@ SCORE_PATH_ENV = "MTPLX_DSV41_PREFILL_SCORE_PATH"          # W50: prefill score
 # three passes over the [rows,64,T] transient.  Reassociation-level vs control
 # (greedy-identical); the throughput play once window-20 showed the stage is
 # pass/bandwidth-bound.  Unset = "oneshot" (byte-identical).
+SELECTED_KEYS_ENV = "MTPLX_DSV41_SELECTED_KEYS"    # W59 / K30: selected-key gather --
+# gather only the window + index_topk selected compressed rows each query attends
+# into a compact [rows, k, 512] operand and score over k (~640) keys, vs the shipped
+# masked-full [rows,64,T] score that grows with T.  Reassociation-level vs control
+# (greedy-identical); the score-stage FLOP/byte play (24x FLOPs, 50x score bytes at
+# 16K prefill; 46x decode KV read at 16K).  Prefill + decode + verify.  Composes with
+# K29 (decode kernel consumes the gathered-k operands).  Unset = masked-full.
 SOFTMAX_KERNEL_ENV = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"  # W58 / K28: fuse the
 # prefill mask + per-head value-0 sink + f32 softmax over the [rows,64,T] transient
 # into ONE mx.fast.metal_kernel dispatch (2 device reads + 1 write, no T-wide
 # masked_scores/ex/concat intermediate).  Prefill + one-shot only, GPU-only (CPU
 # falls back to eager).  Reassociation-level vs control (greedy-identical, <=1e-6),
 # NOT byte-identical.  Composes with the lean path (see prefill_lean_k28).
+DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fuse the
+# M=1 decode / K+1 verify MLA attention step -- QK^T score + CSA/causal mask +
+# per-head value-0 sink + f32 softmax + PV -- into ONE mx.fast.metal_kernel dispatch
+# per layer, online-softmax over key tiles (no [64,T] score row).  Decode + small-M
+# verify only (prefill untouched), GPU-only (CPU falls back to the eager one-shot).
+# Reassociation-level vs control (greedy-identical, <=1e-6), NOT byte-identical.
+# LEFT OUT of stack_a until the MTPLX_GPU_PARITY window is clean (W60 report).
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -140,8 +154,10 @@ ALL_LEVER_ENVS = (
     SCORE_KEY_CHUNK_ENV,
     SCORE_PATH_ENV,
     SOFTMAX_KERNEL_ENV,
+    DECODE_ATTN_KERNEL_ENV,
     LAYOUT_FIX_ENV,
     DOWN_K_PAD_ENV,
+    SELECTED_KEYS_ENV,
 )
 
 
@@ -151,8 +167,8 @@ def _preset(
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
-    softmax_kernel=None,
-    layout_fix=None, down_k_pad=None,
+    layout_fix=None, down_k_pad=None, selected_keys=None,
+    softmax_kernel=None, decode_attn_kernel=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -161,7 +177,8 @@ def _preset(
     matmul dtype), ``score_key_chunk`` a positive-int string (W50/K25 split-K chunk
     width), ``score_path`` a "lean" value (W50 f32 pass-cut one-shot),
     ``softmax_kernel`` a "1"/None boolean (W58/K28, the fused mask+sink+softmax
-    Metal kernel); the rest a "1"/None boolean."""
+    Metal kernel), ``decode_attn_kernel`` a "1"/None boolean (W60/K29, the fused
+    decode/verify MLA attention Metal kernel); the rest a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -181,8 +198,10 @@ def _preset(
         SCORE_KEY_CHUNK_ENV: score_key_chunk,
         SCORE_PATH_ENV: score_path,
         SOFTMAX_KERNEL_ENV: softmax_kernel,
+        DECODE_ATTN_KERNEL_ENV: decode_attn_kernel,
         LAYOUT_FIX_ENV: layout_fix,
         DOWN_K_PAD_ENV: down_k_pad,
+        SELECTED_KEYS_ENV: selected_keys,
     }
 
 
@@ -240,6 +259,12 @@ ARM_PRESETS = {
     # The K23 fast-path also stays OUT (W42 window-14 pure defer -13.4%). overlap /
     # layer_major / hc also OFF.
     "stack_a": _preset(head="bf16", sinkhorn="1", attn="1", win_memo="1"),
+    # W59: stack_a + the K30 selected-key gather (now also covering decode/verify).
+    # All byte-identical/reassociation-level levers -- head bf16 (K21) + Sinkhorn
+    # (K3) + attn compile (K22) + window memo (K24) + selected keys (K30).  K30 is
+    # reassociation-level (greedy-identical), so stack_b as a whole is greedy-
+    # identical, not byte-identical (like stack_a once head_bf16 is in).
+    "stack_b": _preset(head="bf16", sinkhorn="1", attn="1", win_memo="1", selected_keys="1"),
     "head_bf16": _preset(head="bf16"),                      # W40 K21: fix fp32-cast trap
     "head_mxfp8": _preset(head="mxfp8"),                    # W40 K21: native mxfp8 gs32 head
     "head_q8": _preset(head="q8"),                          # W40 K21: affine q8 gs64 head
@@ -264,6 +289,21 @@ ARM_PRESETS = {
     # the lean pass-cut score path (bf16 dropped, it lost on the GPU).  LOSSY
     # (dense fp32 accumulation order + score reassociation), task-eval gated.
     "prefill_lean": _preset(layer_major="1", prefill_dense="1", score_path="lean"),
+    # W59 K30: prefill selected-key gather.  Gather only the window + index_topk
+    # selected compressed rows each query attends into a compact [rows, k, 512]
+    # operand (k ~= 640, T-independent) and score over k keys, vs the shipped
+    # masked-full [rows,64,T] score.  Reassociation-level vs control (greedy-
+    # identical, NOT byte-identical -- softmax sum reassociates over a different key
+    # order).  Score-stage FLOPs 24x, peak score bytes ~50x at 16K; expected to cut
+    # the reuse-layer attention (~144-184 s of TTFT at 16K) ~24x.  Prefill only.
+    "selected_keys": _preset(selected_keys="1"),
+    # W59: the K30 gather stacked onto the current best f32 prefill candidate
+    # (prefill_lean = layer-major + dense experts + lean score path).  Pins every
+    # key.  LOSSY vs control (dense fp32 accumulation order + score reassociation),
+    # task-eval gated like prefill_lean.
+    "prefill_lean_sel": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1"
+    ),
     # W58 K28: the fused mask + per-head value-0 sink + f32 softmax Metal kernel
     # (2 device reads + 1 write of the [rows,64,T] transient, no T-wide
     # masked_scores/ex/concat intermediate).  Standalone (one-shot f32 + kernel),
@@ -291,6 +331,14 @@ ARM_PRESETS = {
     "prefill_best_nok28": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
     ),
+    # W60 K29: the fused decode / verify MLA attention Metal kernel -- QK^T score +
+    # CSA/causal mask + per-head value-0 sink + f32 softmax + PV in ONE dispatch per
+    # layer (online-softmax over key tiles, no [64,T] score row).  Standalone, to
+    # isolate the fused-decode-attention delta against control on the 1K decode
+    # shape (mode-agnostic: all four CSA modes route through it).  Decode + small-M
+    # verify only (prefill untouched).  Reassociation-level (greedy-identical),
+    # NOT byte-identical.  NOT in stack_a until the MTPLX_GPU_PARITY window is clean.
+    "decode_attn_kernel": _preset(decode_attn_kernel="1"),
 }
 
 
@@ -354,9 +402,10 @@ def build_parser() -> argparse.ArgumentParser:
         "sinkhorn_metal, hc_compile, switch_fastpath, switch_fastpath_b, "
         "attn_compile, attn_win_memo, device_route, prefill_dense_experts, "
         "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
-        "head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
+        "stack_b, head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
         "score_bf16_chunked, score_lean, prefill_fast, prefill_lean, "
-        "softmax_kernel, prefill_lean_k28, prefill_best, prefill_best_nok28)",
+        "selected_keys, prefill_lean_sel, softmax_kernel, prefill_lean_k28, "
+        "prefill_best, prefill_best_nok28, decode_attn_kernel)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that

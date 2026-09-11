@@ -1035,6 +1035,137 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   `softmax_kernel`, `prefill_lean_k28` in `ab_decode_env_levers.py` (pin all 20 keys). Report
   `W58_FUSED_SOFTMAX.md`. Numeric-throughput A/B pending a GPU window.
 
+### K29 — Fused decode / verify MLA attention Metal kernel (`MTPLX_DSV41_DECODE_ATTN_KERNEL`) — **W60 (decode, sibling of K22/K24; the SDPA tail a tape cannot fold)**
+- **Mechanism:** decode at 1K is dispatch-bound at ~160 ms/token, attention ~60 ms (`attn.reuse` 50 ms /
+  30 layers ≈ 1.5–1.9 ms per M=1 layer) with ~110 Metal primitives/layer after K22/K24, while the M=1
+  math is tiny (64 heads × head_dim 512 vs ~1K–16K keys). K22 folded the prep chains (qkv 33 + out 7 =
+  40 prim/call) and K24 the window mask (~429 prim/tok @ 40 layers); **W45 proved the SDPA proper
+  (`_sparse_attend`: two einsums + softmax + mask + sink-concat + slice) is an irreducible ~22-primitive
+  reduction a shapeless `mx.compile` CANNOT fold** (the dynamic sink-slice `softmax(full)[...,:KV]`
+  raises `Slice cannot infer output shapes`; verdict *"do not spend a GPU window on a shapeless SDPA
+  tape"*). K29 is the viable alternative: ONE `mx.fast.metal_kernel` per layer does QK^T score + CSA/
+  causal mask + per-head value-0 sink + f32 softmax + PV, **online-softmax over `TG`-wide key tiles**
+  (one threadgroup per `(row,head)`, `TG=128`, one key/lane/tile) so the `[64,T]` per-head score row
+  never materialises (T=16K+ streams through ~5.6 KiB threadgroup memory). Runtime `H`/`T`/`S`/`scale`
+  scalars (one kernel for every length/batch/mode); `TG`/`HD=512` compile-time. Finite `NEG=-3e38f`
+  sentinel → all-masked row is finite 0, never NaN. MLA: `k_cache`≡`v_cache` (one latent, RoPE
+  pre-baked). MLX fused SDPA unusable (head_dim 512 unsupported; sink differs, W50 2.1e-3).
+- **Dispatch (per layer, per call):** eager SDPA **~22 primitives** (W45) → K29 **~2–4** (1 kernel +
+  bool→additive-mask `where` [+ q/KV contiguity, usually a decode no-op]). Mode-invariant (all four CSA
+  modes route through the identical `_sparse_attend`). At 40 layers ≈ **−760 primitives/token** on the
+  attention SDPA — larger than K22's whole-token −368 and K24's −429, and on the chain a tape can't
+  touch. Decode-only lever: the M=1 score row is `[1,64,T]` (~4 MB @16K), so **no material peak-GB
+  relief** (unlike K28's prefill ~6 GiB transient) — the win is dispatch count.
+- **Est. ms/token saved at 1K (GPU-window-gated, NOT measured):** SDPA ≈ 14% of the ~162-prim reuse
+  attention call (W45 micro-census) → ~8 ms/token dispatch-uniform ceiling; central estimate
+  **−6…−12 ms/token** (160 → ~148–154, ~4–8%), minus the kernel's own single dispatch + ~70M-MAC/layer
+  compute at T=1088. **Same roofline caveat as K22/K25/K28** (window-20 overturned K25's FLOP roofline)
+  — an estimate; the paired in-window A/B is the gate. At 16K the reuse-layer kernel compute grows ~15×
+  (still ONE dispatch): the dispatch win holds, the per-kernel compute rises, net is the window's.
+- **Exactness: reassociation-level, NOT byte-identical** (online tile reduction reorders the max/denom/
+  value sums; sink folded into the denominator vs the shipped `softmax(concat)+slice`). Same class as
+  K25/K28. **CPU-proven:** the pure-MLX references (`decode_attention_reference` one-shot +
+  `decode_attention_reference_tiled` — the EXACT online-tile algorithm) vs the model eager
+  `_sparse_attend_oneshot`, over decode M=1 / verify M=4 × T∈{300,1088,4096} × every CSA mode, give
+  **max|Δ| ≤ 4.3e-7, argmax exact**; fully-masked row finite + all-zero. GPU parity
+  (`test_decode_attn_parity_gpu`, gated `MTPLX_GPU_PARITY=1`, receipt to `MTPLX_PARITY_RECEIPT`) confirms
+  the Metal kernel on random cache states at **T∈{1088,4096,16384} × each mode** (decode M=1 + verify
+  M=4) + 32 real-model decode steps if the artifact is present: **pass if max|Δ| ≤ 1e-6 and argmax
+  mismatch 0**.
+- **STATUS (W60, `feat/deepseek-v41-w60`):** IMPLEMENTED + CPU-proven (tiled-reference algorithm +
+  wrapper plumbing + model dispatch for decode & verify across all four modes + unsupported-mask
+  fallback + byte-identical CPU fallback), default OFF, GPU-only. Kernel + refs
+  `mtplx/models/deepseek_v41_attn_kernels.py`; integration `_sparse_attend` → `_decode_attn_kernel`;
+  tests `tests/models/test_deepseek_v41_decode_attn_kernel.py` (39 CPU + 1 GPU-gated), peak RSS < 0.2 GB.
+  Arm `decode_attn_kernel` in `ab_decode_env_levers.py` (pins all 21 keys); **LEFT OUT of `stack_a`
+  until the parity window is clean** (KG-m below). Report `W60_FUSED_DECODE_ATTENTION.md`.
+  Numeric-throughput A/B pending a GPU window.
+
+---
+
+### K30 — Prefill selected-key gather (`MTPLX_DSV41_SELECTED_KEYS`) — **W59 (the score-WIDTH lever; complements K25/K26)**
+- **Mechanism (the transliteration K25/K6 never fixed):** K25 found `attn.*.score` the largest
+  16K-prefill term (201 s of 370 s TTFT; reuse 153 s), and `lean` cut *passes* over the score
+  transient — but every K25/K6 path still computes the **full `[rows,64,T]` score over the entire
+  window+compressed history and masks it** (`_sparse_attend_oneshot`, `deepseek_v41.py`). **The
+  reference does not.** Its `sparse_attn` (`~/models/DeepSeek-V4.1-Flash-src/inference/kernel.py:311`)
+  **gathers only the selected keys** — `num_blocks = cdiv(topk, block)` (`kernel.py:325`),
+  `kv_shared[i,j] = kv[by, idxs[i], j]` (`kernel.py:362`) — so the score is `[rows,64,k]` with
+  `k = topk_idxs.width`, **not** `[rows,64,T]`. `topk_idxs = cat(window_idxs, compress_idxs)`
+  (`model.py:777-780`); the pure-torch golden gathers identically (`ref_forward._k_sparse_attn`
+  `torch.gather(kv_e, 2, idxc…)`, `torchref/ref_forward.py:145`). **The port's mask-then-full-score is
+  a faithful but wasteful transliteration** — masked keys contribute exactly 0 to the softmax, so the
+  two are mathematically identical; the port just materializes and computes over `T` columns where the
+  reference touches `k`. K30 (`_sparse_attend_selected`, prefill/`rows>1` only, decode untouched)
+  gathers the window band (`_window_selected_idx`, reference `get_window_topk_idxs` model.py:410-420)
+  **plus** the indexer's selected compressed rows (the `select` stage's mask, converted once per index
+  source to gather indices `_mask_to_topk_idx` and published on `shared.selected_idx`, reused by the
+  Reuse layers exactly like `topk_mask`) into a compact **`[rows,k,512]`** operand (KV is 1 shared head
+  → no per-head copy, the least-traffic layout; single flat `mx.take`, never the `[rows,T,512]`
+  broadcast), then one softmax with the value-0 sink over `k` keys.
+- **k per mode as f(T) (config: window 128, index_topk 512, ratios L0-1=0, L2-19=2, L20-39=1):**
+  `k = min(T,128) + min(512, T//ratio)`. **k SATURATES independent of T** once `T//ratio ≥ 512`:
+  | mode | layers | ratio | k @1K | k @16K |
+  |---|---|---|---|---|
+  | SWA-only | 0-1 | 0 | 128 | 128 |
+  | Full/Reuse (r2) | 2-19 | 2 | 640 | 640 |
+  | Full/Reindex/Reuse (r1) | 20-39 | 1 | 640 | 640 |
+- **FLOP / byte arithmetic (16K, layer-major, default 8 GB chunk = 953, 18 chunks):** control score
+  width for a ratio-1 layer **grows 1906 → 32768 across chunks (3.0× → 51.2×** vs K30's flat 640);
+  K30's per-query score width is chunk-independent. Totals over 40 backbone layers:
+  **control score FLOPs 6.42e14 vs K30 2.64e13 = 24.4× fewer** (reuse-only layers 23.7×; reuse is 76 %
+  of the all-layer control score). Peak fp32 **score transient** per chunk (ratio-1 layer): **7.91 GB
+  → 0.156 GB = 50.6×** (the gathered KVg `[953,640,512]·4B ≈ 1.25 GB` replaces it as the largest attn
+  transient — still a large peak-GB cut and, unlike control, flat across chunks).
+- **Expected saving (GPU-window estimate, no GPU here):** the K25-measured reuse score ≈ **144–184 s**
+  is the T-growing term; at 23.7× it drops to **~6–8 s → saves ~138–176 s** on the reuse layers alone
+  (the 8 Full/Reindex + 2 SWA layers, the other 24 % of the score, shrink ~24× too). Stacks under
+  `prefill_lean` (K16+K26+K25-lean): the lean pass-cuts still apply to the now-`k`-wide score. Cuts
+  FLOPs *and* passes *and* peak GB — the width axis K25/K6 left on the table.
+- **DECODE + VERIFY extension (W59 follow-up):** the same lever now also covers decode (`rows == 1`)
+  and the `K+1` verify batch — the shipped path re-scores the whole `[1,64,T]` window+compressed
+  history **every decode token** (the port's window store is full-history append-only, so decode reads
+  all `T` rows, not a 128-ring), an O(T) per-token cost. K30 gathers `k = window + min(index_topk, T//r)`
+  per query = **640 (compress) / 128 (SWA), T-independent**. Per-token attention over the 40 backbone
+  layers (KV latent bytes read == score+PV FLOPs ratio, both f32):
+  | context | k (SWA / r2 / r1) | control KV read/tok | K30 KV read/tok | reduction |
+  |---|---|---|---|---|
+  | **1K** | 128 / 640 / 640 | 0.145 GB | 50.3 MB | **2.9×** |
+  | **16K** | 128 / 640 / 640 | 2.315 GB | 50.3 MB | **46×** |
+  K30's per-token attention is **flat 50.3 MB / 1.6 GFLOP at every context** (control grows with T).
+  **Expected decode saving:** at 16K the 2.315 GB attention KV read is **~20 % of the ~11.7 GB/token
+  DRAM** (9.4 GiB resident weights + KV); K30 cuts it 46× → **~9.45 GB/tok (−20 % DRAM)** — a decode
+  win that only bites in the **resident / DRAM-bound regime** (§0's 20–25 tok/s floor), and **grows with
+  context** (64K → control 4× worse, K30 still 50 MB). In today's SSD-streaming regime (1.4 tok/s @ 16K,
+  ~714 ms/tok) the saved ~3.7 ms KV-read is <1 % — the honest read is *T-independence + DRAM cut for the
+  resident regime*, not a headline tok/s at 1.4. At **1K** the KV read is only 0.145 GB (2.9×, ~0.15 ms)
+  — a small decode term; the extension's value scales with context.
+- **K30 × K29 composition:** W60's fused decode kernel (`_decode_attn_kernel` in `_sparse_attend`)
+  consumes the **masked-full** `[b,T]` form. When **both** `SELECTED_KEYS` and `DECODE_ATTN_KERNEL` are
+  armed at decode/verify (Metal, `b*s≤8`), `_sparse_attend_selected` hands the gathered-k operands to
+  the **same** `fused_decode_attention` with each query row as its own single-query batch
+  (`q [rows,1,H,hd]`, KV `[rows,k,hd]`, mask `[rows,k]` valid-count) — the kernel's `row // S` batch map
+  indexes each query's own gathered KV, so it scores + sink-softmax + PV over `k` (not `T`) keys in ONE
+  dispatch. Best of both: T-independent **and** single-dispatch. Composition order: **K30 selects,
+  K29 fuses**; no new Metal variant (the existing kernel serves the `S=1` per-row layout).
+- **Exactness (CPU-proven, `tests/models/test_deepseek_v41_selected_keys.py`, 15 tests):**
+  selected-gather vs masked-full is **identical up to float reassociation of the softmax sum** (same
+  key set — the gathered indices are exactly the mask's True set — summed in a different order): unit
+  `_sparse_attend_selected` vs masked-full one-shot **max |Δ| ≤ 1e-5** (with compressed + SWA-only),
+  NaN-free on a fully-invalid row (finite-max → 0, reference convention); tiny 8-layer CSA model (every
+  mode) logits vs control **max |Δ| ≈ 3–6e-6, greedy argmax identical** across one-shot, chunk {4,7,8},
+  layer-major, layer-major-chunked prefill, a **multi-step greedy decode** and the **K+1 verify batch**.
+  Not bit-identical (reassociation), like K25 `lean` / K29. (CPU host → eager gathered; the K29 kernel
+  route is GPU-only, proven by W60's suite.)
+- **Merge note:** the change is at the **key-selection level** (what keys/values are handed to the
+  attention math) — `_sparse_attend_oneshot` / `_sparse_attend_chunked` (W58's K28 fused softmax) are
+  untouched, and the K29 decode-kernel hook composes as above.
+- **Arms:** `selected_keys` (now decode+verify too), `prefill_lean_sel` (= `prefill_lean` + K30), and
+  `stack_b` (= `stack_a` + K30) in `ab_decode_env_levers.py` (pin all 21 keys, incl. K28/K29).
+  **STATUS (W59, `feat/deepseek-v41-w59`, merged with W60 K29):** IMPLEMENTED + CPU-proven, default OFF
+  (masked-full). Peak RSS of the exactness suite <3 GB. **GPU gate remains KG-g** (the 144–184 s → ~7 s
+  prefill and the −20 % 16K decode DRAM are window estimates). See `W59_SELECTED_KEYS.md`.
+
 ---
 
 ## 6. Dead-here (GPU-side; do not re-propose)
@@ -1043,7 +1174,7 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 |---|---|
 | **Hand affine / IQ sub-4-bit dequant kernel** | loses to stock `gather_qmm`: [[iq2xxs-kernel-loses-to-stock]] 1.74× slower, 80 % decode ALU; [[metal-sub4bit-alu-bound]]. Use stock native mxfp4 gather (K7 measures it), never a hand kernel. |
 | **Whole-forward `mx.compile`** | [[hy3-decode-roofline]] DEAD — async_eval already overlaps the graph rebuild; [[moe-exec-fusion-25-26-27]] fused-MoE slower than stock. (Per-*layer*-step compile is the open K5, not this.) |
-| **Hand MLA fused-attention kernel** | V4: NEUTRAL-to-NEGATIVE — attention is not the binding term at latent 512, and its fp32 logits tipped near-ties (accept 2.72→2.64, **hurt K3**), [[deepseek-v4-kernel-verdicts]]. Keep default fused SDPA (K4). |
+| **Hand MLA fused-attention kernel** | V4: NEUTRAL-to-NEGATIVE — attention is not the binding term at latent 512, and its fp32 logits tipped near-ties (accept 2.72→2.64, **hurt K3**), [[deepseek-v4-kernel-verdicts]]. Keep default fused SDPA (K4). **DSV4.1 K29 is a DIFFERENT regime, not a re-propose:** V4's verdict was the *experts-resident* regime where attention was not the binding term; DSV4.1 decode is streaming/**dispatch-bound** (§0 reframe), so a hand kernel that removes ~22 SDPA dispatches/layer targets the actual bind. The V4 near-tie caution transfers to K29's VERIFY path (a ≤1e-6 reassociation could tip a spec-decode acceptance near-tie) — that is exactly what KG-m gates: argmax parity + the served A/B's acceptance/byte-identity record before `stack_a`. |
 | **Dispatch-fusion as the *decode* lever _today_** | behind the SSD wall now (OPT_LEDGER R6). **Not dead after streaming** — that reframe is this file's §0; it is dead only as a *today* decode lever. |
 | **Verify WIDTH / tree / K>3** | widens the expert union → more bytes AND more barriers; V4 K>3 dead. Cross-ref OPT_LEDGER §4. |
 | **Top-k / sparse head to cut head compute** | greedy argmax needs the full 129280 logits; only the *byte* cut (K9) is valid, not a compute/candidate cut. |
@@ -1071,6 +1202,7 @@ two microbenches (K7/K8), which are CPU/queued and can run now.
 | **KG-f** | K4 HC-compile + fused CSA attn | carry from V4; **argmax parity + decode +** (expect the smaller residual after K3). | after KG-c | folded |
 | **KG-i** | K22 attention-chain compile (+ gate-prefix / combine folds) | `attn_compile` vs control (and folded into the K4 `all_levers` stack): **argmax parity (byte-identical decode/verify) + decode +**. CPU census −368 prim/tok (−40/attention call every mode); realized GPU decode delta is the open question. | after KG-c/KG-f | folded |
 | **KG-j** | K24 window-mask memo | `attn_win_memo` vs control, and `stack_a` (head_bf16 + sinkhorn_metal + attn_compile + win_memo) vs stack without it: **byte-identical decode/verify + decode +**. CPU census −77 attn prim/tok on 8 layers (~11 × (n_layers−1); ~429/tok at 40 layers). | after KG-i | folded |
+| **KG-m** | K29 fused decode/verify attention kernel | (1) parity `test_decode_attn_parity_gpu` (`MTPLX_GPU_PARITY=1`): **max\|Δ\| ≤ 1e-6 + argmax mismatch 0** on T∈{1088,4096,16384}×each mode (decode M=1 + verify M=4); THEN (2) `decode_attn_kernel` vs control 1K decode A/B: **decode + AND argmax parity** (record token-id sha256 — reassociation-level, so NOT byte-identical) AND, for the verify path, **no spec-decode acceptance regression** (the V4 near-tie caution). CPU census: eager SDPA ~22 prim/layer → ~2–4 (~−760/tok @40 layers). Add to `stack_a` only after this window is clean. | after KG-i/KG-j | 1 window |
 | **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk + K19 head-last-row | 16K prefill ± two-pass split-K + tiling + head-last-row on the K16 base. **Pass if TTFT −≥15 % beyond K16 AND peak −≥8 GB (K19 drops the 8.47 GB logits), parity on long-prompt A/B.** | after KG-b | 1 window |
 | **KG-h** | K9 head byte cut + K13 in-place verify-KV | q8/mxfp8 head vs bf16 head: **ship only if argmax parity + HumanEval(164) ≥ exact−noise**; K13 footprint-guard folded into first MTP window. | after KG-e | folded |
 
