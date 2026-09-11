@@ -363,3 +363,57 @@ def test_mtp_resident_name_mapping_covers_the_head_parameter_tree():
     # experts stacked over the expert axis
     ge = mapped[f"mtp.layers.0.mlp.switch_mlp.gate_proj.weight"]
     assert ge.shape[0] == args.dspark_n_routed_experts
+
+
+# --------------------------------------------------------------------------- #
+# 5. the loader opt-in mtp=True path
+# --------------------------------------------------------------------------- #
+import types  # noqa: E402
+
+
+def _fake_manifest(names):
+    return types.SimpleNamespace(
+        resident_tensors=[
+            types.SimpleNamespace(tensor=n, length=8, shard="s0", shape=(1,), dtype="F32")
+            for n in names
+        ]
+    )
+
+
+def test_loader_partition_keeps_mtp_only_when_opted_in():
+    from mtplx.models import deepseek_v41_loader as L
+
+    man = _fake_manifest([
+        "model.embed_tokens.weight", "layers.0.attn.wq_a.weight",
+        "vision.foo", "mtp.0.attn.wq_a.weight", "mtp.0.ffn.experts.0.w1.weight",
+    ])
+    ar = L.partition_text_residents(man)
+    mtp = L.partition_text_residents(man, with_mtp=True)
+    assert ar.skipped_mtp_count == 2 and not any(
+        t.tensor.startswith("mtp.") for t in ar.kept
+    )
+    assert mtp.skipped_mtp_count == 0 and sum(
+        t.tensor.startswith("mtp.") for t in mtp.kept
+    ) == 2
+    # vision is always skipped
+    assert not any(t.tensor.startswith("vision.") for t in mtp.kept)
+
+
+def test_resolve_with_mtp_is_opt_in_and_fails_loud_when_unsatisfiable(monkeypatch):
+    from mtplx.models import deepseek_v41_loader as L
+
+    man = _fake_manifest(["mtp.0.attn.wq_a.weight"])
+    cfg = {"model_type": "deepseek_v41", "num_nextn_predict_layers": 3}
+    monkeypatch.delenv("MTPLX_DSV41_MTP", raising=False)
+    assert L.resolve_with_mtp(cfg, man, None) is False  # default off
+    assert L.resolve_with_mtp(cfg, man, True) is True
+    assert L.resolve_with_mtp(cfg, man, False) is False
+    monkeypatch.setenv("MTPLX_DSV41_MTP", "1")
+    assert L.resolve_with_mtp(cfg, man, None) is True  # env opt-in
+    monkeypatch.setenv("MTPLX_DSV41_MTP", "0")
+    assert L.resolve_with_mtp(cfg, man, None) is False
+    # opting in against an artifact that cannot honour it is a loud error
+    with pytest.raises(L.ResidentLoadError, match="no MTP stages"):
+        L.resolve_with_mtp({"model_type": "deepseek_v41"}, man, True)
+    with pytest.raises(L.ResidentLoadError, match="no mtp"):
+        L.resolve_with_mtp(cfg, _fake_manifest(["layers.0.attn.wq_a.weight"]), True)
