@@ -1962,11 +1962,18 @@ class HotExpertSwitchGLU(nn.Module):
         # window of the sync round-trip instead. Pure execution reorder: same
         # shared_mlp(x), same combine, bitwise-identical output. Decode single
         # token only; requires async_eval so the dispatch does not itself block.
+        # ``MTPLX_DSV41_SHARED_OVERLAP`` (W28, K1) drives the identical reorder
+        # for the DeepSeek-V4.1 MoE, whose W11 module now hands its shared expert
+        # in as ``shared_work``.  Same hoist, same bitwise-identical combine; a
+        # distinct env name so DSV4.1 can be A/B'd without arming hy3/glm.
         _hoisted_shared: mx.array | None = None
         if (
             shared_work is not None
             and int(x.shape[-2]) == 1
-            and os.environ.get("MTPLX_HY3_SHARED_HOIST") == "1"
+            and (
+                os.environ.get("MTPLX_HY3_SHARED_HOIST") == "1"
+                or os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1"
+            )
         ):
             _async_eval = getattr(mx, "async_eval", None)
             if callable(_async_eval):
