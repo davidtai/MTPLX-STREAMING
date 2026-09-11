@@ -277,6 +277,20 @@ ARM_PRESETS = {
     "prefill_lean_k28": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", softmax_kernel="1"
     ),
+    # W58: the full prefill stack for the next window's headline A/B on the 16K
+    # layer-major schedule -- dense experts (K26) + lean pass-cut score path (K25)
+    # + sorted routed gather / gather_qmm_rhs (K27 layout_fix) + the K28 fused
+    # mask/sink/softmax kernel.  LOSSY (dense fp32 accumulation order + score
+    # reassociation), task-eval gated.  ``prefill_best_nok28`` is its no-kernel
+    # twin (everything but K28), so the pair isolates the fused-softmax delta on
+    # top of the otherwise-identical full stack.
+    "prefill_best": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
+        softmax_kernel="1",
+    ),
+    "prefill_best_nok28": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
+    ),
 }
 
 
@@ -330,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
         "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
         "head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
         "score_bf16_chunked, score_lean, prefill_fast, prefill_lean, "
-        "softmax_kernel, prefill_lean_k28)",
+        "softmax_kernel, prefill_lean_k28, prefill_best, prefill_best_nok28)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that
