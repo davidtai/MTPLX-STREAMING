@@ -283,17 +283,18 @@ def cmd_finalize(args) -> int:
     """Build expert-manifest.json + conversion-manifest.json for the mxfp4 bank.
 
     Reuses W15's committed ``build_mxfp4_manifest`` (identical record framing to
-    this driver — verified) against the experts.bin THIS driver wrote and the
-    resident section of a sibling artifact's expert-manifest.json (q2-provenance,
-    since the live q2 artifact was deleted; its residents are byte-identical to
-    the ones hardlinked into <out>).
+    this driver — verified) against the experts.bin THIS driver wrote.
+
+    The resident section is built from the ACTUAL resident shards present in
+    <out> at finalize time (headers + real-file sha256), NOT a preserved sibling
+    manifest -- W18 replaces the resident shards (q8 -> mxfp8) and W19 the engram
+    banks in place, so the shipped manifest must match the shipped files.
+    Re-runnable: run once when the bank completes, again after W18/W19 land.
     """
     out = args.out.expanduser().resolve()
-    if not args.resident_manifest_dir:
-        raise SystemExit("finalize requires --resident-manifest-dir (dir with the "
-                         "sibling expert-manifest.json whose residents were hardlinked)")
     from mtplx.expert_streaming_models import get_model_spec
-    from mtplx.expert_manifest import load_expert_manifest, verify_expert_manifest
+    from mtplx.expert_manifest import verify_expert_manifest
+    from types import SimpleNamespace
     sys.path.insert(0, str(REPO / "scripts"))
     import convert_deepseek_v41_streamed as conv
 
@@ -306,11 +307,21 @@ def cmd_finalize(args) -> int:
     if len(all_records) != want:
         raise SystemExit(f"journal has {len(all_records)} records, expected {want}; write incomplete")
 
-    resident_src = Path(args.resident_manifest_dir).expanduser().resolve()
-    resident_manifest = load_expert_manifest(resident_src / "expert-manifest.json")
-    log(f"finalizing mxfp4 manifest: {len(all_records)} records, residents from {resident_manifest.model_key}")
+    # Resident section from the shards actually on disk right now (re-scanned each
+    # finalize so it tracks the W18 mxfp8 resident / MTP replacements).
+    shard_names = sorted(p.name for p in out.glob("model-*.safetensors"))
+    if not shard_names:
+        raise SystemExit(f"no resident model-*.safetensors in {out}")
+    resident_tensors, shard_infos, _weight_map, resident_total = \
+        conv.build_resident_index_and_manifest_inputs(out, shard_names)
+    resident_manifest = SimpleNamespace(
+        resident_tensors=resident_tensors, shards=shard_infos,
+        resident_tensor_bytes=resident_total, model_key="present-residents-scan",
+    )
+    log(f"finalize: {len(all_records)} records; resident scan {len(shard_names)} shards, "
+        f"{len(resident_tensors)} tensors, {resident_total/1024**3:.2f} GiB")
     manifest = conv.build_mxfp4_manifest(out, resident_manifest, spec, all_records,
-                                         require_pinned=True)
+                                         require_pinned=args.require_pinned)
     log(f"manifest: {len(manifest.records)} records, "
         f"resident={manifest.resident_tensor_bytes/1024**3:.2f} GiB, "
         f"routed={manifest.routed_expert_bytes/1024**3:.2f} GiB, digest={manifest.manifest_sha256[:12]}")
@@ -332,9 +343,10 @@ def main() -> int:
         s.add_argument("--index", type=Path, required=True)
         s.add_argument("--config", type=Path, default=None)
         s.add_argument("--shards", default="1-46")
-        s.add_argument("--resident-manifest-dir", default=None,
-                       help="finalize: dir holding the sibling expert-manifest.json "
-                            "(resident section) whose residents were hardlinked into --out")
+        s.add_argument("--require-pinned", action="store_true",
+                       help="finalize: also pin artifact/resident total bytes to the spec "
+                            "(off by default so finalize stays re-runnable while W18/W19 "
+                            "change the resident/engram byte totals)")
     args = ap.parse_args()
     return cmd_write(args) if args.cmd == "write" else cmd_finalize(args)
 

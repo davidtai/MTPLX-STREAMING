@@ -86,10 +86,11 @@ residents do not depend on the routed codec):
   `model.safetensors.index.json`, `encoding/`, `engram/` (L1+L14 banks +
   residents sidecar + manifest), `tokenizer*.json`, `LICENSE`, `README.md`,
   `route-census.json`.
-- new mxfp4 files (to be written): `experts.bin`, `expert-manifest.json`
-  (`model_key = deepseek-v41-flash-expert-mxfp4`; source identity =
-  `OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2 @
-  b64980a16283647bb213ab475335f38f516e0d9e`), `conversion-manifest.json`.
+- new mxfp4 files (written by this run): `experts.bin`, `expert-manifest.json`
+  (`model_key = deepseek-v41-flash-expert-mxfp4`; source identity stamped from
+  W15's spec = `OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4 @
+  unpublished-mxfp4-repack` — David directed a new HF repo for the fp artifact;
+  the real commit is pinned after upload), `conversion-manifest.json`.
 - **`island-placement.json` intentionally NOT hardlinked** — island placement is
   a function of `expert_record_bytes` (18.80 MB here vs 11.06 MB for q2), so the
   loader must recompute it for the larger record. The q2 artifact is never touched.
@@ -112,10 +113,35 @@ mxfp4-specific files are absent (to be generated); free space unchanged.
 
 Resumable per source shard (journal OUTSIDE the artifact), deterministic pwrite
 offsets into a pre-sized `experts.bin`, progress log with MB/s + ETA. Core
-validated on synthetic FP4 (repack → dequant → bit-exact, maxabs 0.0).
+validated on synthetic FP4 (repack → dequant → bit-exact, maxabs 0.0). W15's
+`quantize_expert_components_mxfp4` is byte- and metadata-identical to this
+driver (same component order, U32/U8 dtypes, offsets, `mxfp4_component_bytes`),
+so the bank this driver writes is the final W15-admissible one.
 
-- conversion rate (MB/s): _PENDING RUN (reported after shard 1)._
-- projected full-bank wall time: _PENDING RUN._
+- **conversion rate: 46–47 MB/s** (steady across shards 3–8; each source shard =
+  one 384-expert layer, ~6.72 GiB FP4 source → 7.2 GiB mxfp4 in ~155 s).
+- **projected full-bank wall time ≈ 100 min** (15,360 records at this rate;
+  driver's live ETA tracked 99→91 min as it progressed).
+- **CPU-bound, single core.** The writer runs at ~85–98 % of ONE core (3 threads,
+  1 active; MEM ~1.1 GB); the 46 MB/s write is trivial for the SSD, so throughput
+  is gated by the per-expert `dequant_fp4` (numpy) + `mx.quantize(mxfp4)` +
+  sha256, which are effectively serial. **A second shard-parallel writer on a
+  disjoint layer range would run on another core and roughly double aggregate
+  throughput (~92 MB/s, ~50 min), at ~2× RSS (≈2.2 GB — far under the 12 GB
+  cap).** Not started (per instruction); noted as an available 2× lever.
+
+### Finalize is re-runnable (W18/W19 sequencing)
+
+W18 replaces the resident shards in place (q8 → mxfp8, MTP experts → mxfp4) and
+W19 replaces `engram/*.bin` (→ mxfp8), both write-then-rename in this same
+directory. So `cmd_finalize` builds the manifest's resident section by scanning
+the **actual `model-*.safetensors` present on disk** (headers + real-file
+sha256), never a preserved sibling manifest. It runs once when the bank
+completes (against the current q8 residents) for admission + the probe, and
+again after W18/W19 land so the shipped manifest matches the shipped files.
+`--require-pinned` is OFF by default so the resident/total-byte pin does not
+block re-runs while those byte totals change; the routed-bank geometry (record
+bytes, codec, bank bytes, identity) is validated on every run regardless.
 
 ## Verification (all _PENDING RUN_, after conversion)
 
