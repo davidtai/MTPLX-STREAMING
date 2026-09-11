@@ -1580,6 +1580,44 @@ def proj_requant_plan_discount(manifest: Any, proj_requant: str | None) -> int:
     return discount
 
 
+# Residents a text-only autoregressive forward never wires. The DeepSeek-V4.1
+# converter keeps the MTP residents (mxfp8 dense + mxfp4 experts) and the
+# vision/aligner/image residents inside the streamed artifact, but phase-1 AR
+# serving loads only the text backbone
+# (``mtplx.models.deepseek_v41_loader.partition_text_residents`` drops exactly
+# these dotted-name prefixes). Kept here so the memory-plan discount and the
+# loader's text-only filter share one prefix set; a test locks the two equal.
+TEXT_ONLY_SKIP_PREFIXES = ("mtp.", "vision.", "aligner.", "image_")
+
+
+def text_only_resident_discount(manifest: Any, spec: Any) -> int:
+    """Bytes of residents the text-only AR forward skips at load, for planner pricing.
+
+    ``spec.resident_bytes`` counts every resident the converter emitted, but the
+    serve path materializes only the text backbone; without this discount the
+    planner over-reserves the fixed side. For the shipped DeepSeek-V4.1-Flash
+    mxfp4 artifact the skipped MTP + vision residents are 8.31 GiB, worth +11
+    resident expert slots/layer at the 82 GiB envelope (W3/W21).
+
+    Zero for every spec whose streamed manifest carries no such residents
+    (hy3/glm keep their MTP head in a separate external artifact and have no
+    vision residents), so their resolved memory plans stay byte-identical. When
+    ``spec.mtp_included`` is True (a future MTP serve path wires the MTP
+    residents), only vision/aligner/image are discounted.
+    """
+
+    mtp_wired = bool(getattr(spec, "mtp_included", False))
+    discount = 0
+    for tensor in manifest.resident_tensors:
+        name = tensor.tensor
+        if not name.startswith(TEXT_ONLY_SKIP_PREFIXES):
+            continue
+        if mtp_wired and name.startswith("mtp."):
+            continue
+        discount += tensor.length
+    return discount
+
+
 def reconcile_mlx_memory_cap(
     plan: ExpertMemoryPlan,
     *,
@@ -2042,7 +2080,8 @@ class ExpertStreamingRuntime:
             resident_discount_bytes=proj_quant_plan_discount(
                 manifest, config.proj_quant
             )
-            + proj_requant_plan_discount(manifest, config.proj_requant),
+            + proj_requant_plan_discount(manifest, config.proj_requant)
+            + text_only_resident_discount(manifest, model_spec),
             layer_record_bytes=(
                 manifest.record_bytes_by_layer() if mixed_official else None
             ),
