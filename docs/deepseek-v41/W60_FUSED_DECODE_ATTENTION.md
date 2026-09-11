@@ -1,5 +1,16 @@
 # W60 — Fused decode / verify MLA attention Metal kernel (KERNEL_LEDGER K29)
 
+> **VERDICT (window-27): SHELVED.** The kernel engaged on all 10,280 decode calls
+> (0 fallbacks, split-K path) yet the `decode_attn_kernel` 1K/256 arm ran at
+> **3.71 tok/s vs stack_a 6.01 (−38%)** — slower than the eager SDPA at M=1 even
+> after the split-K occupancy fix — and GPU parity still shows **max|Δ| ~1e-3**
+> (identical to window-26 to 8 digits: `precise::exp` changed nothing). The 1e-3 is
+> **bf16-precision-class, not fixable** without matching the eager path's exact
+> reduced-precision GPU op sequence (which defeats the fusion). Flag stays **default
+> OFF**, arm is **in no stack**. See §7. This is the V4 "hand MLA fused-attention
+> kernel" verdict recurring in the streaming/dispatch-bound regime (KERNEL_LEDGER
+> §6 dead-here). Sections 0–6 below are the pre-verdict design record.
+
 **Branch:** `feat/deepseek-v41-w60` (off `feat/deepseek-v41-streaming`).
 **Flag:** `MTPLX_DSV41_DECODE_ATTN_KERNEL=1` (default OFF, GPU-only).
 **Kernel + wrapper + references:** `mtplx/models/deepseek_v41_attn_kernels.py`.
@@ -305,3 +316,79 @@ pytest).
 T=4096, each recording its `n_splits` + engagement. Pass = max|Δ| ≤ 1e-6 + argmax
 mismatch 0 on every arm; then the `decode_attn_kernel` A/B with `calls > 0` and
 decode +.
+
+---
+
+## 7. Window-27 re-gate → SHELVED verdict
+
+Window 27 (integration `b582b73a3`, with the precise::exp + split-K fix
+`597d6122d` merged) re-ran both gates:
+
+**Engagement (the counter did its job).** The `decode_attn_kernel` arm ran the
+kernel on **all 10,280 decode calls, 0 fallbacks, all via the split-K path** — so
+the −45%/−38% is the kernel running (and being slow), NOT the kernel silently
+falling back. Window-26's "did-not-run vs slow" ambiguity is resolved: it **ran,
+and it is slow at M=1**.
+
+**Throughput.** `decode_attn_kernel` decoded **3.71 tok/s vs stack_a 6.01 (−38%)**
+— the split-K occupancy redesign (≥512 threadgroups/layer vs the v1 64) narrowed
+the v1 −45% only to −38%. The kernel is still **slower than the eager SDPA at M=1**.
+Even with good occupancy, a per-layer two-dispatch kernel doing the full
+`64 heads × 512 × T` attention loses to MLX's vendor-lowered einsum SDPA at
+batch-1: the eager path's ~22 primitives are cheap, well-tuned matmul/softmax
+kernels, and the QK^T/PV are already tile-aligned GEMMs (W56 F3/F4). The dispatch
+count K29 saves (~22 → ~3–5) does not pay when the GPU is not actually
+dispatch-starved at these small kernels — the M=1 attention math is a rounding
+error of the ~160 ms/token, most of which is elsewhere (MoE switch, barriers).
+
+**Parity — the 1e-3 is bf16-class, and `precise::exp` proved it is not exp.** The
+window-27 parity receipt shows **the same `max_abs_d` to 8 digits as window-26**
+(e.g. `decode_full_T1088` = 0.00107455 both), so switching `metal::exp` →
+`metal::precise::exp` changed the result by **zero** — on Apple silicon the two
+coincide for f32, and exp precision was never the source. Ruling out the two
+in-kernel hypotheses:
+
+  * **NOT fast-math exp** — precise::exp is byte-identical (above).
+  * **NOT the online/split reduction order** — the pure-MLX f32 references
+    (`decode_attention_reference` one-shot, `_tiled`, and `_splitk` at every G)
+    match the eager `_sparse_attend_oneshot` to **≤8.6e-7, argmax-exact** on CPU
+    (strict-f32), incl. the K30 gathered shapes.
+
+**Best explanation of the ~1e-3 (bf16-precision-class).** A CPU sensitivity check
+on the exact parity input (`decode_full_T1088`, seed 101) reproduces the observed
+magnitude by rounding a single operand to bf16 and back:
+
+| what is rounded to bf16 | max\|Δ\| vs strict-f32 ref |
+|---|---:|
+| K + V latent (both) | 0.001912 |
+| V only (PV inputs) | 0.001392 |
+| scores / QK inputs only | 0.001250 |
+| **observed kernel-vs-ref (window-26/27)** | **0.00107455** |
+
+The observed 0.00107 sits squarely inside the bf16-rounding band — i.e. the
+divergence is **bf16-precision-class**, an order of magnitude structure, not the
+~1e-6 f32-reassociation class the parity bar demands. Its source is the
+reduced-precision f32 execution path on the Apple GPU: the parity reference's
+`mx.einsum` lowers to the vendor simdgroup-matrix GEMM (bf16/tf32-class multiply
+accumulation), while the hand kernel accumulates its 512-dim dot and streaming
+softmax differently; on the **real model** the KV latent is stored **bf16**
+([[deepseek-v4-mtplx-port]] "bf16-acts"), so the eager SDPA the kernel must match
+is itself bf16-class. A hand kernel cannot hit ≤1e-6 against a reference that is
+not itself strict-f32 without replicating the eager path's exact GPU op sequence —
+which would defeat the whole point of the fusion.
+
+This is precisely the **V4 "hand MLA fused-attention kernel" verdict**
+([[deepseek-v4-kernel-verdicts]], KERNEL_LEDGER §6 dead-here): a fused MLA
+attention kernel's precision diverges from the eager path enough to tip near-ties
+(V4: accept 2.72→2.64; here: 1 argmax mismatch on every verify-M4 arm), and
+attention is not the binding term at latent 512. W60 tested whether the
+**streaming/dispatch-bound** reframe changed that verdict — it did not: the M=1
+dispatch win the reframe predicted did not materialise (kernel engaged, still
+−38%), and the precision divergence is unchanged.
+
+**Disposition.** SHELVED. `MTPLX_DSV41_DECODE_ATTN_KERNEL` stays **default OFF**;
+the `decode_attn_kernel` arm is standalone and **in no stack** (`stack_a`,
+`stack_b` do not set it). The code, CPU tests, and pure-MLX references remain as a
+documented negative result (and the split-K + engagement-counter machinery is
+reusable). No further kernel work. The DSV4.1 decode lever stays with the shipped
+eager SDPA + K22/K24 dispatch cuts.
