@@ -55,12 +55,39 @@ Call surface for W10 / the serve path is frozen in docs/deepseek-v41/PORT_CONTRA
 
 from __future__ import annotations
 
+import os
 from typing import Optional, Sequence
 
 import mlx.core as mx
 
 #: Reference ``ModelArgs.window_size`` default and released config value.
 WINDOW_SIZE_DEFAULT = 128
+
+#: W73 / K32: chunk-grown append backing for the window / compressed-KV / index-key
+#: stores.  The phase-1 backing (:func:`_grow`) re-``concatenate``s the WHOLE store
+#: on every token, an O(current-length) copy per layer per token -- at T=16384 the
+#: window append alone is ~2 ms/layer on the CPU double (measured), ~40x its 1K cost
+#: and, across 40 layers, the dominant per-token O(T) work once K30 selected keys
+#: has already bounded the attention score (docs/deepseek-v41/W73_DECODE_16K_AUDIT.md).
+#: Under this flag the stores grow via a geometric-capacity buffer with a logical
+#: length and a donated ``mx.slice_update`` in-place write (amortized O(new-rows) per
+#: token -- the resize concatenate fires only on the O(log T) doublings).  The logical
+#: view ``buf[:, :length]`` is BYTE-IDENTICAL to the concatenated store, so every
+#: downstream read (attention score/gather, indexer, trim/rollback, mlx_lm state) is
+#: unchanged.  Read at construction (per request, after the serve harness stamps the
+#: key; NOT frozen at import -- [[env-flags-read-at-use-not-import]]).  Default OFF ->
+#: the plain :func:`_grow` path, byte-for-byte the shipped cache.
+_KV_CHUNK_GROW_ENV = "MTPLX_DSV41_KV_CHUNK_GROW"
+
+
+def _kv_chunk_grow_enabled() -> bool:
+    """Whether ``MTPLX_DSV41_KV_CHUNK_GROW`` arms the chunk-grown append backing.
+
+    Read at call time (never frozen at import): the serving harness stamps the key
+    after importing this module, and each request builds a fresh cache."""
+    return (os.environ.get(_KV_CHUNK_GROW_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 #: Version tag for a per-layer entry's ``meta_state`` (mlx_lm session contract).
 _LAYER_META_VERSION = "mtplx-deepseek-v41-layer-cache-v1"
@@ -92,6 +119,107 @@ def _truncate(rows: Optional[mx.array], n: int) -> Optional[mx.array]:
 
 def _rows(rows: Optional[mx.array]) -> int:
     return 0 if rows is None else rows.shape[1]
+
+
+#: Byte counter for the W73 O(T) unit test: the logical rows an append copies.  A
+#: normal donated ``slice_update`` write touches only the ``new`` rows; a geometric
+#: resize copies the whole live prefix once.  ``_grow`` (the plain path) copies the
+#: whole live prefix every time.  Reset by the test; incremented per append so the
+#: test can assert bytes-copied-per-step does not scale with T.
+_APPEND_ROWS_COPIED = 0
+
+
+def _note_rows_copied(n: int) -> None:
+    global _APPEND_ROWS_COPIED
+    _APPEND_ROWS_COPIED += int(n)
+
+
+class _GrowBuffer:
+    """Geometric-capacity append backing for one store lane (W73 / K32).
+
+    Holds a ``[b, cap, *tail]`` buffer and a logical ``length``; :meth:`append`
+    writes the new rows in place with a donated ``mx.slice_update`` (amortized
+    O(new-rows) when the previous buffer is unreferenced at the write -- confirmed
+    on the CPU double: ~constant per step across cap 4k/16k/64k, vs ``concatenate``'s
+    O(cap)), growing the capacity geometrically so the copy-everything resize fires
+    only O(log T) times.  :meth:`view` returns ``buf[:, :length]`` -- BYTE-IDENTICAL
+    to the equivalent :func:`_grow` (concatenate) store, so no downstream reader
+    changes.  :meth:`set` rebuilds from a full array (trim/rollback/state restore).
+
+    Correctness never depends on the donation: if a live view keeps the buffer
+    referenced at write time MLX copies instead of donating -- slower (same class as
+    the plain path) but the same bytes.
+    """
+
+    __slots__ = ("_buf", "_len", "_init_cap")
+
+    def __init__(self, init_cap: int = 256):
+        self._buf: Optional[mx.array] = None
+        self._len: int = 0
+        self._init_cap = int(init_cap)
+
+    @staticmethod
+    def _starts(ndim: int, row: int) -> mx.array:
+        return mx.array([0, int(row)] + [0] * (ndim - 2), dtype=mx.int32)
+
+    def _write(self, buf: mx.array, new: mx.array, row: int) -> mx.array:
+        axes = tuple(range(new.ndim))
+        return mx.slice_update(buf, new, self._starts(new.ndim, row), axes=axes)
+
+    def append(self, new: Optional[mx.array]) -> None:
+        if new is None or (new.ndim >= 2 and new.shape[1] == 0):
+            return
+        n = int(new.shape[1])
+        if self._buf is None:
+            cap = max(self._init_cap, n)
+            tail = tuple(new.shape[2:])
+            buf = mx.zeros((new.shape[0], cap) + tail, dtype=new.dtype)
+            self._buf = self._write(buf, new, 0)
+            self._len = n
+            _note_rows_copied(n)
+            return
+        cap = int(self._buf.shape[1])
+        if self._len + n <= cap:
+            # in-place donated write of just the new rows
+            self._buf = self._write(self._buf, new, self._len)
+            self._len += n
+            _note_rows_copied(n)
+            return
+        # geometric resize: copy the live prefix once into a larger buffer
+        new_cap = max(cap * 2, self._len + n)
+        head = self._buf[:, : self._len]
+        tail = tuple(new.shape[2:])
+        buf = mx.zeros((new.shape[0], new_cap) + tail, dtype=new.dtype)
+        buf = self._write(buf, head, 0)
+        buf = self._write(buf, new, self._len)
+        self._buf = buf
+        _note_rows_copied(self._len + n)
+        self._len += n
+
+    def view(self) -> Optional[mx.array]:
+        if self._buf is None or self._len == 0:
+            return None
+        if self._len == self._buf.shape[1]:
+            return self._buf
+        return self._buf[:, : self._len]
+
+    def set(self, arr: Optional[mx.array]) -> None:
+        """Replace the whole store from a full array (or clear on ``None``)."""
+        self._buf = None
+        self._len = 0
+        self.append(arr)
+
+    def truncate_to(self, n: int) -> None:
+        """Drop back to the first ``n`` logical rows (length-only; keeps capacity)."""
+        n = max(0, int(n))
+        if n <= 0:
+            self._buf = None
+            self._len = 0
+        else:
+            self._len = min(n, self._len)
+
+    def rows(self) -> int:
+        return 0 if self._buf is None else self._len
 
 
 # ---------------------------------------------------------------------------
@@ -306,12 +434,19 @@ class LayerAttentionCache:
         #: rewind rides this entry's :meth:`trim`/:meth:`rollback` so a per-entry
         #: trim moves the shared history exactly once.  ``None`` otherwise.
         self.engram_state = engram_state
-        #: post-RoPE window KV rows, one per token (reference window_kv_cache seed)
-        self.window: Optional[mx.array] = None
-        #: pooled+RoPE'd compressed KV, one per completed group (compress_kv_cache)
-        self.compress_kv: Optional[mx.array] = None
-        #: index keys, one per completed group (Indexer.k_cache)
-        self.index_k: Optional[mx.array] = None
+        #: W73 / K32: pick the append backing once, at construction (per request,
+        #: after the harness stamps the env key).  OFF -> the three store lanes are
+        #: plain ``mx.array`` attributes grown by :func:`_grow` (byte-for-byte the
+        #: shipped cache); ON -> :class:`_GrowBuffer` lanes (chunk-grown append).
+        self._chunk_grow = _kv_chunk_grow_enabled()
+        #: post-RoPE window KV rows, one per token (reference window_kv_cache seed);
+        #: pooled+RoPE'd compressed KV / index keys, one per completed group.  Held
+        #: in ``_window`` / ``_compress_kv`` / ``_index_k`` (plain array or
+        #: :class:`_GrowBuffer`) and read/written through the same-named properties,
+        #: so every existing reader/writer of ``.window`` etc. is unchanged.
+        self._window = _GrowBuffer() if self._chunk_grow else None
+        self._compress_kv = _GrowBuffer() if self._chunk_grow else None
+        self._index_k = _GrowBuffer() if self._chunk_grow else None
         #: compressor frontier (CompressorState for ratio>1, else None)
         self.comp_state: Optional[CompressorState] = (
             CompressorState(self.compress_ratio)
@@ -319,12 +454,56 @@ class LayerAttentionCache:
             else None
         )
 
+    # -- store lanes: plain array (default) or _GrowBuffer (W73 chunk-grow) ----
+    # The properties keep every reader/writer of ``.window`` / ``.compress_kv`` /
+    # ``.index_k`` unchanged (attention, indexer, trim/rollback, mlx_lm state);
+    # only the append + backing changes under MTPLX_DSV41_KV_CHUNK_GROW.  A
+    # _GrowBuffer view is byte-identical to the concatenated store.
+    @staticmethod
+    def _lane_get(lane):
+        return lane.view() if isinstance(lane, _GrowBuffer) else lane
+
+    @staticmethod
+    def _lane_set(lane, value):
+        if isinstance(lane, _GrowBuffer):
+            lane.set(value)
+            return lane
+        return value
+
+    @property
+    def window(self) -> Optional[mx.array]:
+        return self._lane_get(self._window)
+
+    @window.setter
+    def window(self, value: Optional[mx.array]) -> None:
+        self._window = self._lane_set(self._window, value)
+
+    @property
+    def compress_kv(self) -> Optional[mx.array]:
+        return self._lane_get(self._compress_kv)
+
+    @compress_kv.setter
+    def compress_kv(self, value: Optional[mx.array]) -> None:
+        self._compress_kv = self._lane_set(self._compress_kv, value)
+
+    @property
+    def index_k(self) -> Optional[mx.array]:
+        return self._lane_get(self._index_k)
+
+    @index_k.setter
+    def index_k(self, value: Optional[mx.array]) -> None:
+        self._index_k = self._lane_set(self._index_k, value)
+
     # -- window (reference _window_kv L700-720) -----------------------------
     def append_window(self, kv_new: mx.array) -> None:
         """Seed the ring with this call's post-RoPE window KV (reference
         L708-719).  History is kept append-only; the reference's fixed ring is
         :meth:`ring`."""
-        self.window = _grow(self.window, kv_new)
+        if isinstance(self._window, _GrowBuffer):
+            self._window.append(kv_new)
+        else:
+            self._window = _grow(self._window, kv_new)
+            _note_rows_copied(_rows(self._window))
 
     def ring(self, length: int) -> Optional[mx.array]:
         """The reference ``window_kv_cache`` view after ``length`` tokens
@@ -338,12 +517,20 @@ class LayerAttentionCache:
     def append_compress(self, compress_new: mx.array) -> None:
         """Append pooled, RoPE'd, (phase-2) quantised compressed latents; one row
         per completed group (reference L761)."""
-        self.compress_kv = _grow(self.compress_kv, compress_new)
+        if isinstance(self._compress_kv, _GrowBuffer):
+            self._compress_kv.append(compress_new)
+        else:
+            self._compress_kv = _grow(self._compress_kv, compress_new)
+            _note_rows_copied(_rows(self._compress_kv))
 
     # -- index keys (reference Indexer.k_cache write L547) ------------------
     def append_index_k(self, index_new: mx.array) -> None:
         """Append this group's index keys (reference L547)."""
-        self.index_k = _grow(self.index_k, index_new)
+        if isinstance(self._index_k, _GrowBuffer):
+            self._index_k.append(index_new)
+        else:
+            self._index_k = _grow(self._index_k, index_new)
+            _note_rows_copied(_rows(self._index_k))
 
     # -- length / mlx_lm per-entry contract --------------------------------
     def advance(self, n: int) -> None:
