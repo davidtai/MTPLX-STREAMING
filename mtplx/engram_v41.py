@@ -35,7 +35,7 @@ import numpy as np
 import mlx.core as mx
 import mlx.nn as nn
 
-from mtplx.ngram_row_cache import NGramRowCache
+from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
 
 __all__ = [
     "build_compressed_token_map",
@@ -44,6 +44,7 @@ __all__ = [
     "EngramV41",
     "EngramResidents",
     "load_engram_residents",
+    "open_engram_row_cache",
     "n_hash_cols",
 ]
 
@@ -111,6 +112,50 @@ def load_engram_tokenizer(directory: str | Path):
     from transformers import AutoTokenizer
 
     return AutoTokenizer.from_pretrained(str(directory))
+
+
+# --------------------------------------------------------------------------
+# mode-aware row-cache constructor (reads the manifest's quant mode)
+# --------------------------------------------------------------------------
+def open_engram_row_cache(
+    engram_dir: str | Path,
+    layer: int,
+    *,
+    cache_rows: int = 32768,
+    cache_bytes: int | None = None,
+) -> NGramRowCache:
+    """Open one engram layer's on-disk bank as a mode-aware :class:`NGramRowCache`.
+
+    Reads ``engram-manifest.json``, picks the layer's ``quant`` block, and builds the resident
+    LRU with a :class:`RowGeometry` matching the declared ``mode`` (``affine`` -> 272 B/row bf16
+    scales+biases; ``mxfp8`` -> 264 B/row E4M3 codes + E8M0 scales, dequantized via
+    ``mx.dequantize(mode="mxfp8")``).  The cache's :meth:`NGramRowCache.dequantize` therefore
+    returns the correctly dequantized ``[.., head_dim]`` rows for whichever codec the bank uses,
+    so :class:`EngramV41` needs no codec awareness of its own.
+    """
+    directory = Path(engram_dir)
+    manifest = json.loads((directory / "engram-manifest.json").read_text())
+    entry = next((e for e in manifest["layers"] if e["layer_id"] == layer), None)
+    if entry is None:
+        raise KeyError(f"layer {layer} not in manifest ({directory})")
+    q = entry["quant"]
+    mode = q.get("mode", "affine")
+    geom = RowGeometry(
+        values_per_row=int(q["head_dim"]), bits=int(q["bits"]),
+        group_size=int(q["group_size"]), mode=mode,
+    )
+    if geom.row_bytes != int(entry["record_bytes"]):
+        raise ValueError(
+            f"layer {layer}: geometry row_bytes {geom.row_bytes} != manifest record_bytes "
+            f"{entry['record_bytes']} (mode {mode})"
+        )
+    reader = FileRowReader(
+        directory / entry["file"], row_bytes=int(entry["record_bytes"]), num_rows=int(entry["rows"]),
+    )
+    return NGramRowCache(
+        reader, geom, num_rows=int(entry["rows"]),
+        cache_bytes=cache_bytes, cache_rows=cache_rows,
+    )
 
 
 # --------------------------------------------------------------------------

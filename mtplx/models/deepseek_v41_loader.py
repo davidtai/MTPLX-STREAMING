@@ -441,7 +441,15 @@ def construct_deepseek_v41_resident_model(
         engram_bank_path = engram_bank_path_for(artifact_root)
     try:
         model_args = args_class.from_dict(config)
-        model = model_class(model_args, engram_bank_path=engram_bank_path)
+        # The artifact's config ``quantization`` block selects the resident codec
+        # (affine q8 gs64 for the original artifact; a native float mode --
+        # mxfp8/mxfp4/nvfp4 -- for the exact-repack artifact). Passed through so
+        # the model's nn.quantize matches the residents on disk for a strict load.
+        model = model_class(
+            model_args,
+            engram_bank_path=engram_bank_path,
+            quantization=config.get("quantization"),
+        )
     except Exception as exc:
         raise ResidentLoadError(f"could not construct deepseek_v41 model: {exc}") from exc
 

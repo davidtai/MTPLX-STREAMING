@@ -45,6 +45,57 @@ import mtplx.deepseek_v41_convert as dc  # noqa: E402
 DEFAULT_STATE_DIR = "/Users/davidtai/models/dsv41-convert-state/engram"
 MANIFEST_FORMAT = "mtplx-engram-manifest-v1"
 
+# ---- mxfp8 row codec (EXACT byte repack of the Hub source) ----------------
+# The source engram rows already ARE mxfp8: F8_E4M3 code bytes + one F8_E8M0 scale byte per
+# 32-col group.  The ``mxfp8`` codec keeps those bytes verbatim -- 256 code bytes (U32[64]) + 8
+# scale bytes (U8[8]) == 264 B/row -- so the bank dequantizes bit-exactly with
+# ``mx.dequantize(mode="mxfp8", group_size=32, bits=8)``.  No requantization, unlike the affine
+# codec.  Contrast the affine record (272 B): U32[64] levels + BF16[4] scales + BF16[4] biases.
+MXFP8_GROUP_SIZE = dc.ENGRAM_FP8_BLOCK            # 32 (source scale block == mlx mxfp8 group)
+
+
+def mxfp8_record_bytes(head_dim: int = dc.ENGRAM_HEAD_DIM,
+                       group: int = MXFP8_GROUP_SIZE) -> int:
+    """Bytes of one mxfp8 record: E4M3 code bytes (== head_dim) + one E8M0 scale byte / group."""
+    return head_dim + head_dim // group           # 256 + 8 == 264
+
+
+def mxfp8_record_layout(head_dim: int = dc.ENGRAM_HEAD_DIM,
+                        group: int = MXFP8_GROUP_SIZE) -> dict:
+    """Byte layout of one mxfp8 record (offsets within the fixed-size record; no biases)."""
+    groups = head_dim // group
+    return {
+        "weight": {"offset": 0, "length": head_dim, "dtype": "U32",
+                   "shape": [head_dim // 4]},
+        "scales": {"offset": head_dim, "length": groups, "dtype": "U8",
+                   "shape": [groups]},
+        "record_bytes": head_dim + groups,
+    }
+
+
+MXFP8_RECORD_BYTES = mxfp8_record_bytes()         # 264
+
+
+def _mxfp8_chunk_records(weight_u8: np.ndarray, scale_u8: np.ndarray) -> np.ndarray:
+    """Repack a chunk of source rows into mxfp8 records: ``[rows, 264]`` uint8.
+
+    ``weight_u8``: uint8 ``[rows, head_dim]`` (F8_E4M3 code bytes, kept verbatim).
+    ``scale_u8``:  uint8 ``[rows, head_dim//32]`` (F8_E8M0 scale bytes, kept verbatim).
+    The record is ``code_bytes | scale_bytes`` -- an EXACT copy of the source bytes, no
+    dequant/requant, so the row is bit-exact to the Hub source.
+    """
+    rows, hd = weight_u8.shape
+    groups = hd // MXFP8_GROUP_SIZE
+    if scale_u8.shape != (rows, groups):
+        raise ValueError(f"scale shape {scale_u8.shape} != {(rows, groups)}")
+    rec = np.concatenate(
+        [np.ascontiguousarray(weight_u8, dtype=np.uint8),
+         np.ascontiguousarray(scale_u8, dtype=np.uint8)], axis=1)
+    exp = mxfp8_record_bytes(hd)
+    if rec.shape[1] != exp:
+        raise RuntimeError(f"mxfp8 record width {rec.shape[1]} != expected {exp}")
+    return np.ascontiguousarray(rec, dtype=np.uint8)
+
 # ---- resident Engram projections (W4 sidecar) ----------------------------
 # The streaming artifact carries the row banks but NOT the small resident Engram
 # projection tensors.  This sidecar re-materialises them next to the banks:
@@ -164,8 +215,25 @@ def convert_layer(
     poll: float,
     fsync_every: int = 8,
     expected_rows: int | None = None,
+    row_codec: str = "affine",
+    finalize: bool = True,
 ) -> dict:
-    """Convert one engram table to an affine-8 bank.  Returns the manifest layer entry."""
+    """Convert one engram table to a row bank.  Returns the manifest layer entry.
+
+    ``row_codec="affine"`` (default): requantize the FP8-dequantized rows to affine-8
+    (272 B/row).  In-progress bin lives under ``state_dir``; the completed layer is
+    ``os.replace``-d into ``out/engram-L{layer}.bin`` (the artifact holds only finished files).
+
+    ``row_codec="mxfp8"``: EXACT byte repack of the source (264 B/row).  In-progress bytes are
+    written to ``out/engram-L{layer}.bin.new`` (alongside the affine bank, same filesystem so
+    the final rename is atomic); the journal still lives outside the artifact under
+    ``state_dir``.  With ``finalize=True`` the ``.bin.new`` is renamed over
+    ``out/engram-L{layer}.bin`` here; with ``finalize=False`` it is left in place so the caller
+    can rename every layer and rewrite the manifest together (see :func:`finalize_mxfp8`).
+    The returned entry carries the bank file's ``sha256``.
+    """
+    if row_codec not in ("affine", "mxfp8"):
+        raise ValueError(f"unknown row_codec {row_codec!r}")
     li = dc.ENGRAM_LAYER_IDS.index(layer)
     wname = f"layers.{layer}.engram.embed.weight"
     sname = f"layers.{layer}.engram.embed.scale"
@@ -195,74 +263,107 @@ def convert_layer(
         raise RuntimeError(f"layer {layer} rows {n_rows} != expected num_embeddings {cfg_rows}")
     num_embeddings = dc.ENGRAM_NUM_EMBEDDINGS[li] if expected_rows is None else n_rows
 
-    rec_bytes = dc.ENGRAM_RECORD_BYTES
+    rec_bytes = MXFP8_RECORD_BYTES if row_codec == "mxfp8" else dc.ENGRAM_RECORD_BYTES
     n_eff = n_rows if max_rows <= 0 else min(n_rows, max_rows)
     total_bytes = n_eff * rec_bytes
     n_chunks = (n_eff + chunk_rows - 1) // chunk_rows
 
     final = out / f"engram-L{layer}.bin"
-    if final.is_file() and final.stat().st_size == total_bytes:
-        log(f"L{layer}: final bin already present and correct size ({total_bytes} B) -- skip")
+
+    def _entry(bank_file: Path | None) -> dict:
+        if row_codec == "mxfp8":
+            sha = _hash_file(bank_file) if bank_file is not None and bank_file.is_file() else None
+            return _layer_manifest_entry_mxfp8(
+                layer, n_eff, num_embeddings, shard_file, src, we, se, sha)
         return _layer_manifest_entry(layer, n_eff, num_embeddings, shard_file, src, we, se)
 
+    if row_codec == "mxfp8":
+        # staging lives IN the artifact (.bin.new); the affine bank at `final` has a different
+        # size (272 B/row) so it never masquerades as a finished mxfp8 bank.
+        out.mkdir(parents=True, exist_ok=True)
+        bin_path = out / f"engram-L{layer}.bin.new"
+        if final.is_file() and final.stat().st_size == total_bytes:
+            log(f"L{layer}: mxfp8 bank already finalized ({total_bytes} B) -- skip")
+            return _entry(final)
+    else:
+        if final.is_file() and final.stat().st_size == total_bytes:
+            log(f"L{layer}: final bin already present and correct size ({total_bytes} B) -- skip")
+            return _entry(final)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        bin_path = build_bin_path(state_dir, layer)
+
     state_dir.mkdir(parents=True, exist_ok=True)
-    bin_path = build_bin_path(state_dir, layer)
     journal = load_journal(state_dir, layer)
-    done = set(journal.get("done_chunks", [])) if journal.get(
-        "n_eff") == n_eff and journal.get("record_bytes") == rec_bytes else set()
+    ok = (journal.get("n_eff") == n_eff and journal.get("record_bytes") == rec_bytes
+          and journal.get("row_codec", "affine") == row_codec)
+    done = set(journal.get("done_chunks", [])) if ok else set()
     if not done:
         journal = {"layer": layer, "n_eff": n_eff, "record_bytes": rec_bytes,
-                   "chunk_rows": chunk_rows, "n_chunks": n_chunks, "done_chunks": []}
+                   "chunk_rows": chunk_rows, "n_chunks": n_chunks, "done_chunks": [],
+                   "row_codec": row_codec}
 
-    wfd = os.open(str(shard), os.O_RDONLY)
-    bfd = os.open(str(bin_path), os.O_RDWR | os.O_CREAT, 0o644)
-    w_base = data_start + we.begin
-    s_base = data_start + se.begin
-    started = time.time()
-    rows_done_before = len(done) * chunk_rows
-    try:
-        for c in range(n_chunks):
-            if c in done:
-                continue
-            a = c * chunk_rows
-            b = min(a + chunk_rows, n_eff)
-            rows = b - a
-            wraw = dc._pread_exact(wfd, w_base + a * dc.ENGRAM_HEAD_DIM, rows * dc.ENGRAM_HEAD_DIM)
-            sraw = dc._pread_exact(wfd, s_base + a * groups32, rows * groups32)
-            wu8 = np.frombuffer(wraw, dtype=np.uint8).reshape(rows, dc.ENGRAM_HEAD_DIM)
-            su8 = np.frombuffer(sraw, dtype=np.uint8).reshape(rows, groups32)
-            f32 = dc.dequant_engram_embed(wu8, su8)
-            rec = dc.engram_chunk_records(f32)  # [rows, rec_bytes] uint8
-            payload = rec.tobytes()
-            if len(payload) != rows * rec_bytes:
-                raise RuntimeError(f"chunk {c}: payload {len(payload)} != {rows * rec_bytes}")
-            _pwrite_all(bfd, payload, a * rec_bytes)
-            done.add(c)
-            journal["done_chunks"] = sorted(done)
-            if (c + 1) % fsync_every == 0 or c == n_chunks - 1:
-                os.fsync(bfd)
-                save_journal(state_dir, layer, journal)
-                elapsed = max(1e-6, time.time() - started)
-                rows_this = (b) - rows_done_before
-                mbps = (rows_this * rec_bytes) / elapsed / 1e6
-                eta = (n_eff - b) * rec_bytes / max(1e-6, (rows_this * rec_bytes) / elapsed)
-                log(f"L{layer}: chunk {c+1}/{n_chunks} rows {b}/{n_eff} "
-                    f"({100*b/n_eff:.1f}%) {mbps:.1f} MB/s ETA {eta/60:.1f} min")
-        os.fsync(bfd)
-        save_journal(state_dir, layer, journal)
-    finally:
-        os.close(wfd)
-        os.close(bfd)
+    if not (bin_path.is_file() and os.stat(bin_path).st_size == total_bytes and
+            len(done) == n_chunks):
+        wfd = os.open(str(shard), os.O_RDONLY)
+        bfd = os.open(str(bin_path), os.O_RDWR | os.O_CREAT, 0o644)
+        w_base = data_start + we.begin
+        s_base = data_start + se.begin
+        started = time.time()
+        rows_done_before = len(done) * chunk_rows
+        try:
+            for c in range(n_chunks):
+                if c in done:
+                    continue
+                a = c * chunk_rows
+                b = min(a + chunk_rows, n_eff)
+                rows = b - a
+                wraw = dc._pread_exact(wfd, w_base + a * dc.ENGRAM_HEAD_DIM, rows * dc.ENGRAM_HEAD_DIM)
+                sraw = dc._pread_exact(wfd, s_base + a * groups32, rows * groups32)
+                wu8 = np.frombuffer(wraw, dtype=np.uint8).reshape(rows, dc.ENGRAM_HEAD_DIM)
+                su8 = np.frombuffer(sraw, dtype=np.uint8).reshape(rows, groups32)
+                if row_codec == "mxfp8":
+                    rec = _mxfp8_chunk_records(wu8, su8)  # exact byte repack, [rows, 264]
+                else:
+                    f32 = dc.dequant_engram_embed(wu8, su8)
+                    rec = dc.engram_chunk_records(f32)  # [rows, rec_bytes] uint8
+                payload = rec.tobytes()
+                if len(payload) != rows * rec_bytes:
+                    raise RuntimeError(f"chunk {c}: payload {len(payload)} != {rows * rec_bytes}")
+                _pwrite_all(bfd, payload, a * rec_bytes)
+                done.add(c)
+                journal["done_chunks"] = sorted(done)
+                if (c + 1) % fsync_every == 0 or c == n_chunks - 1:
+                    os.fsync(bfd)
+                    save_journal(state_dir, layer, journal)
+                    elapsed = max(1e-6, time.time() - started)
+                    rows_this = (b) - rows_done_before
+                    mbps = (rows_this * rec_bytes) / elapsed / 1e6
+                    eta = (n_eff - b) * rec_bytes / max(1e-6, (rows_this * rec_bytes) / elapsed)
+                    log(f"L{layer}[{row_codec}]: chunk {c+1}/{n_chunks} rows {b}/{n_eff} "
+                        f"({100*b/n_eff:.1f}%) {mbps:.1f} MB/s ETA {eta/60:.1f} min")
+            os.fsync(bfd)
+            save_journal(state_dir, layer, journal)
+        finally:
+            os.close(wfd)
+            os.close(bfd)
 
     actual = os.stat(bin_path).st_size
     if actual != total_bytes:
         raise RuntimeError(f"L{layer}: bin size {actual} != expected {total_bytes}")
+
+    if row_codec == "mxfp8" and not finalize:
+        journal["completed_staging"] = True
+        save_journal(state_dir, layer, journal)
+        log(f"L{layer}: mxfp8 staging complete -> {bin_path} ({total_bytes} B, {n_eff} rows) "
+            f"[awaiting finalize]")
+        return _entry(bin_path)
+
     out.mkdir(parents=True, exist_ok=True)
     os.replace(bin_path, final)  # atomic move into the artifact (same filesystem)
     journal["completed"] = True
     save_journal(state_dir, layer, journal)
-    log(f"L{layer}: complete -> {final} ({total_bytes} B, {n_eff} rows)")
-    return _layer_manifest_entry(layer, n_eff, num_embeddings, shard_file, src, we, se)
+    log(f"L{layer}[{row_codec}]: complete -> {final} ({total_bytes} B, {n_eff} rows)")
+    return _entry(final)
 
 
 def _pwrite_all(fd: int, payload: bytes, offset: int) -> None:
@@ -300,6 +401,54 @@ def _layer_manifest_entry(layer: int, rows: int, num_embeddings: int, shard_file
             "sha256": source_sha256(src, shard_file),
         },
     }
+
+
+def _layer_manifest_entry_mxfp8(layer: int, rows: int, num_embeddings: int, shard_file: str,
+                                src: Path, we, se, bank_sha256: str | None) -> dict:
+    """Manifest entry for an mxfp8 bank: 264 B/row, U32[64] codes + U8[8] e8m0 scales, no bias.
+
+    ``bank_sha256`` is the sha256 of the written ``.bin`` (streamed), added per David's request.
+    """
+    return {
+        "layer_id": layer,
+        "file": f"engram-L{layer}.bin",
+        "rows": rows,
+        "num_embeddings": num_embeddings,
+        "record_bytes": MXFP8_RECORD_BYTES,
+        "total_bytes": rows * MXFP8_RECORD_BYTES,
+        "sha256": bank_sha256,
+        "quant": {"bits": 8, "group_size": MXFP8_GROUP_SIZE,
+                  "mode": "mxfp8", "head_dim": dc.ENGRAM_HEAD_DIM},
+        "record_layout": mxfp8_record_layout(),
+        "source": {
+            "shard_file": shard_file,
+            "weight_tensor": f"layers.{layer}.engram.embed.weight",
+            "scale_tensor": f"layers.{layer}.engram.embed.scale",
+            "weight_dtype": we.dtype,
+            "weight_shape": list(we.shape),
+            "scale_dtype": se.dtype,
+            "scale_shape": list(se.shape),
+            "fp8_block": dc.ENGRAM_FP8_BLOCK,
+            "sha256": source_sha256(src, shard_file),
+            "exact_repack": True,
+        },
+    }
+
+
+def finalize_mxfp8(out: Path, layers: list[int]) -> None:
+    """Atomically rename each layer's ``engram-L{L}.bin.new`` over ``engram-L{L}.bin``.
+
+    Call after every layer's staging file is complete + verified, immediately before rewriting
+    the manifest, so the artifact flips from the affine banks to the mxfp8 banks in one step
+    (each rename is atomic; the manifest is updated right after).  Idempotent: a layer whose
+    ``.bin.new`` is already gone (renamed on a prior run) is left as-is.
+    """
+    for L in layers:
+        staging = out / f"engram-L{L}.bin.new"
+        final = out / f"engram-L{L}.bin"
+        if staging.is_file():
+            os.replace(staging, final)
+            log(f"L{L}: mxfp8 finalize -> {final}")
 
 
 # --------------------------------------------------------------------------
@@ -359,24 +508,53 @@ def build_hashing_block() -> dict:
     }
 
 
-def write_manifest(out: Path, layer_entries: list[dict]) -> Path:
+def read_existing_residents(out: Path) -> dict | None:
+    """Return the ``residents`` block of an existing manifest, if any (else ``None``).
+
+    The residents sidecar (``engram-residents.safetensors``) is a separate W4 artifact that
+    lives beside the banks; rewriting the manifest for a bank-codec change must not drop it.
+    """
+    p = out / "engram-manifest.json"
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text()).get("residents")
+    except Exception:
+        return None
+
+
+def write_manifest(out: Path, layer_entries: list[dict], *, row_codec: str = "affine",
+                   residents: dict | None = None) -> Path:
+    dequant = {
+        "source_weight_dtype": "F8_E4M3",
+        "source_scale_dtype": "F8_E8M0",
+        "source_scale_group": dc.ENGRAM_FP8_BLOCK,
+        "formula": "f32 = E4M3_LUT[weight] * 2**(scale_byte-127) per (row, 32-col group)",
+    }
+    if row_codec == "mxfp8":
+        quant = {"bits": 8, "group_size": MXFP8_GROUP_SIZE, "mode": "mxfp8",
+                 "head_dim": dc.ENGRAM_HEAD_DIM, "record_bytes": MXFP8_RECORD_BYTES}
+        dequant["note"] = (
+            "mxfp8: the bank stores the source F8_E4M3 code bytes (U32[64]) and F8_E8M0 scale "
+            "bytes (U8[8]) verbatim; dequantize with mx.dequantize(mode='mxfp8', group_size=32, "
+            "bits=8), bit-exact to the formula above."
+        )
+    else:
+        quant = {"bits": dc.ENGRAM_BITS, "group_size": dc.ENGRAM_GROUP_SIZE,
+                 "mode": "affine", "head_dim": dc.ENGRAM_HEAD_DIM,
+                 "record_bytes": dc.ENGRAM_RECORD_BYTES}
     manifest = {
         "format": MANIFEST_FORMAT,
         "model_key": dc.MODEL_KEY,
         "source_repo": "deepseek-ai/DeepSeek-V4.1-Flash",
         "source_revision": dc.SOURCE_REVISION,
-        "dequant": {
-            "source_weight_dtype": "F8_E4M3",
-            "source_scale_dtype": "F8_E8M0",
-            "source_scale_group": dc.ENGRAM_FP8_BLOCK,
-            "formula": "f32 = E4M3_LUT[weight] * 2**(scale_byte-127) per (row, 32-col group)",
-        },
-        "quant": {"bits": dc.ENGRAM_BITS, "group_size": dc.ENGRAM_GROUP_SIZE,
-                  "mode": "affine", "head_dim": dc.ENGRAM_HEAD_DIM,
-                  "record_bytes": dc.ENGRAM_RECORD_BYTES},
+        "dequant": dequant,
+        "quant": quant,
         "layers": sorted(layer_entries, key=lambda e: e["layer_id"]),
-        "hashing": build_hashing_block(),
     }
+    if residents is not None:               # preserve the W4 residents sidecar entry (after layers)
+        manifest["residents"] = residents
+    manifest["hashing"] = build_hashing_block()
     payload = json.dumps(manifest, indent=2).encode()
     manifest["manifest_sha256"] = hashlib.sha256(payload).hexdigest()
     out.mkdir(parents=True, exist_ok=True)
@@ -624,6 +802,11 @@ def main() -> int:
                          "(outside the artifact) before adding the residents entry")
     ap.add_argument("--no-verify", action="store_true",
                     help="residents mode: skip the q8 dequant-roundtrip parity check")
+    ap.add_argument("--row-codec", choices=("affine", "mxfp8"), default="affine",
+                    help="banks mode: 'affine' (272 B/row requantize, default) or 'mxfp8' "
+                         "(264 B/row EXACT repack of the source E4M3 codes + E8M0 scales; "
+                         "writes engram-L{L}.bin.new then atomically renames over the bank "
+                         "and rewrites the manifest in one step).")
     args = ap.parse_args()
 
     layers = [int(x) for x in args.layers.split(",") if x.strip()]
@@ -646,21 +829,33 @@ def main() -> int:
         log("done")
         return 0
 
-    log(f"pid {os.getpid()} | mode banks | layers {layers} | chunk_rows {args.chunk_rows} | "
-        f"max_rows {args.max_rows or 'all'} | out {args.out} | state {args.state_dir} | "
-        f"record_bytes {dc.ENGRAM_RECORD_BYTES}")
+    codec = args.row_codec
+    rec_bytes = MXFP8_RECORD_BYTES if codec == "mxfp8" else dc.ENGRAM_RECORD_BYTES
+    log(f"pid {os.getpid()} | mode banks | row_codec {codec} | layers {layers} | "
+        f"chunk_rows {args.chunk_rows} | max_rows {args.max_rows or 'all'} | out {args.out} | "
+        f"state {args.state_dir} | record_bytes {rec_bytes}")
 
+    # mxfp8: stage every layer to .bin.new, then flip all banks + manifest together (one step).
+    finalize_each = codec != "mxfp8"
+    # preserve the W4 residents sidecar entry across a manifest rewrite (captured pre-flip)
+    residents = read_existing_residents(args.out) if codec == "mxfp8" else None
     entries = []
     for L in layers:
         entry = convert_layer(
             L, args.src, args.out, weight_map,
             state_dir=args.state_dir, chunk_rows=args.chunk_rows,
             max_rows=args.max_rows, wait=args.wait, poll=args.poll_interval,
+            row_codec=codec, finalize=finalize_each,
         )
         entries.append(entry)
 
+    if codec == "mxfp8":
+        finalize_mxfp8(args.out, layers)   # atomic rename each .bin.new over the affine bank
+
     if not args.no_manifest:
-        mpath = write_manifest(args.out, entries)
+        mpath = write_manifest(args.out, entries, row_codec=codec, residents=residents)
+        if residents is not None:
+            log(f"manifest: preserved residents entry ({residents.get('file')})")
         log(f"manifest -> {mpath}")
 
     log("done")

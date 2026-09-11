@@ -386,6 +386,10 @@ class MappedExpertRecord:
             elif segment.dtype == "BF16":
                 typed = mx.view(self.base, mx.bfloat16)
                 item_size = 2
+            elif segment.dtype == "U8":
+                # mxfp4 E8M0 scales (one byte per group); base is already uint8.
+                typed = self.base
+                item_size = 1
             else:
                 raise TypeError(f"unsupported mapped component dtype {segment.dtype}")
             if cursor % item_size:
@@ -657,6 +661,7 @@ class DenseIslandSwitchGLU(nn.Module):
         self.group_size = runtime.spec.quant_group_size
         self.bits = runtime.spec.quant_bits
         self.swiglu_limit = getattr(runtime.spec, "swiglu_limit", None)
+        self.codec = getattr(runtime.spec, "expert_codec", "affine")
         self._bank = store.bank_for_layer(self.layer_index)
         # Lazily-built compiled expert gather (issue #51, 70 tps full-residency
         # goal). Full residency rebuilds the 79-layer graph in Python every
@@ -771,6 +776,7 @@ class DenseIslandSwitchGLU(nn.Module):
                 group_size=self.group_size,
                 bits=self.bits,
                 swiglu_limit=self.swiglu_limit,
+                codec=self.codec,
             )
         return output.reshape((*indices.shape, hidden_size))
 
@@ -1135,6 +1141,26 @@ def make_mlx_component_bank_allocator(
                 if projection in {"gate_proj", "up_proj"}
                 else spec.expert_hidden_size
             )
+            if expert_codec == "mxfp4":
+                # Native mxfp4: packed FP4 codes (uint32) + one uint8 E8M0
+                # exponent per 32-column group, no bias leaf.
+                expected_signature.extend(
+                    (
+                        (
+                            f"{projection}.weight",
+                            "U32",
+                            (output_size, input_size * spec.quant_bits // 32),
+                            output_size * input_size * spec.quant_bits // 8,
+                        ),
+                        (
+                            f"{projection}.scales",
+                            "U8",
+                            (output_size, input_size // spec.quant_group_size),
+                            output_size * (input_size // spec.quant_group_size),
+                        ),
+                    )
+                )
+                continue
             if expert_codec != "affine":
                 # Shadow-codec (q1) records: packed sign/trit words plus one
                 # bf16-bit scale per g64 group, no bias leaf (gate 3 of
@@ -1362,7 +1388,7 @@ def _clamped_swiglu(
     return swiglu(gate, up)
 
 
-def _run_q4_expert(
+def _run_mxfp4_expert(
     x: mx.array,
     binding: ExpertSlotBinding,
     *,
@@ -1370,6 +1396,36 @@ def _run_q4_expert(
     bits: int = 4,
     swiglu_limit: float | None = None,
 ) -> mx.array:
+    """Single-expert native-mxfp4 MLP: weight+scales (E8M0, no bias) via mxfp4 qmm."""
+
+    def qmm(values: mx.array, projection: str) -> mx.array:
+        return mx.quantized_matmul(
+            values,
+            _component_array(binding, f"{projection}.weight"),
+            scales=_component_array(binding, f"{projection}.scales"),
+            group_size=group_size,
+            bits=bits,
+            mode="mxfp4",
+        )
+
+    gate = qmm(x, "gate_proj")
+    up = qmm(x, "up_proj")
+    return qmm(_clamped_swiglu(gate, up, swiglu_limit), "down_proj")
+
+
+def _run_q4_expert(
+    x: mx.array,
+    binding: ExpertSlotBinding,
+    *,
+    group_size: int,
+    bits: int = 4,
+    swiglu_limit: float | None = None,
+    codec: str = "affine",
+) -> mx.array:
+    if codec == "mxfp4":
+        return _run_mxfp4_expert(
+            x, binding, group_size=group_size, bits=bits, swiglu_limit=swiglu_limit
+        )
     gate_weight = _component_array(binding, "gate_proj.weight")
     gate_scales = _component_array(binding, "gate_proj.scales")
     gate_biases = _component_array(binding, "gate_proj.biases")
@@ -1417,6 +1473,7 @@ def _run_component_bank_q4(
     group_size: int,
     bits: int = 4,
     swiglu_limit: float | None = None,
+    codec: str = "affine",
 ) -> mx.array:
     """Execute assignment-aligned rows from one component-major slot bank."""
 
@@ -1440,6 +1497,7 @@ def _run_component_bank_q4(
         group_size=group_size,
         bits=bits,
         swiglu_limit=swiglu_limit,
+        codec=codec,
     )
 
 
@@ -1451,24 +1509,43 @@ def _gather_component_bank(
     group_size: int,
     bits: int,
     swiglu_limit: float | None = None,
+    codec: str = "affine",
 ) -> mx.array:
-    """Row-gathered three-matrix expert MLP against one component bank."""
+    """Row-gathered three-matrix expert MLP against one component bank.
+
+    ``codec="affine"`` uses weight+scales+biases through ``gather_qmm(mode=
+    "affine")``; ``codec="mxfp4"`` uses weight+scales only (E8M0, no bias) through
+    ``gather_qmm(mode="mxfp4")``.  Both preserve the optional SwiGLU clamp.
+    """
 
     rows = int(x.shape[0])
     selected = x.reshape((rows, 1, 1, int(x.shape[-1])))
 
-    def qmm(values: mx.array, projection: str) -> mx.array:
-        return mx.gather_qmm(
-            values,
-            bank.arrays[f"{projection}.weight"],
-            bank.arrays[f"{projection}.scales"],
-            bank.arrays[f"{projection}.biases"],
-            rhs_indices=slot_indices,
-            transpose=True,
-            group_size=group_size,
-            bits=bits,
-            mode="affine",
-        )
+    if codec == "mxfp4":
+        def qmm(values: mx.array, projection: str) -> mx.array:
+            return mx.gather_qmm(
+                values,
+                bank.arrays[f"{projection}.weight"],
+                bank.arrays[f"{projection}.scales"],
+                rhs_indices=slot_indices,
+                transpose=True,
+                group_size=group_size,
+                bits=bits,
+                mode="mxfp4",
+            )
+    else:
+        def qmm(values: mx.array, projection: str) -> mx.array:
+            return mx.gather_qmm(
+                values,
+                bank.arrays[f"{projection}.weight"],
+                bank.arrays[f"{projection}.scales"],
+                bank.arrays[f"{projection}.biases"],
+                rhs_indices=slot_indices,
+                transpose=True,
+                group_size=group_size,
+                bits=bits,
+                mode="affine",
+            )
 
     gate = qmm(selected, "gate_proj")
     up = qmm(selected, "up_proj")
@@ -1666,19 +1743,31 @@ def _run_mapped_q4(
     group_size: int,
     bits: int = 4,
     swiglu_limit: float | None = None,
+    codec: str = "affine",
 ) -> mx.array:
     arrays = mapped.arrays
 
-    def qmm(values: mx.array, projection: str) -> mx.array:
-        return mx.quantized_matmul(
-            values,
-            arrays[f"{projection}.weight"],
-            scales=arrays[f"{projection}.scales"],
-            biases=arrays[f"{projection}.biases"],
-            group_size=group_size,
-            bits=bits,
-            mode="affine",
-        )
+    if codec == "mxfp4":
+        def qmm(values: mx.array, projection: str) -> mx.array:
+            return mx.quantized_matmul(
+                values,
+                arrays[f"{projection}.weight"],
+                scales=arrays[f"{projection}.scales"],
+                group_size=group_size,
+                bits=bits,
+                mode="mxfp4",
+            )
+    else:
+        def qmm(values: mx.array, projection: str) -> mx.array:
+            return mx.quantized_matmul(
+                values,
+                arrays[f"{projection}.weight"],
+                scales=arrays[f"{projection}.scales"],
+                biases=arrays[f"{projection}.biases"],
+                group_size=group_size,
+                bits=bits,
+                mode="affine",
+            )
 
     return qmm(
         _clamped_swiglu(qmm(x, "gate_proj"), qmm(x, "up_proj"), swiglu_limit),
@@ -1702,6 +1791,7 @@ class MappedExpertSwitchGLU(nn.Module):
         self.group_size = runtime.spec.quant_group_size
         self.bits = runtime.spec.quant_bits
         self.swiglu_limit = getattr(runtime.spec, "swiglu_limit", None)
+        self.codec = getattr(runtime.spec, "expert_codec", "affine")
 
     def __call__(self, x: mx.array, indices: mx.array) -> mx.array:
         hidden_size = int(x.shape[-1])
@@ -1737,6 +1827,7 @@ class MappedExpertSwitchGLU(nn.Module):
                     group_size=self.group_size,
                     bits=self.bits,
                     swiglu_limit=self.swiglu_limit,
+                    codec=self.codec,
                 )
             )
             output_positions.extend(positions)
@@ -1794,13 +1885,14 @@ class HotExpertSwitchGLU(nn.Module):
     ) -> mx.array:
         """Execute one component-bank wave under this layer's record codec."""
 
-        if self.codec == "affine":
+        if self.codec in ("affine", "mxfp4"):
             return _run_component_bank_q4(
                 selected,
                 bindings,
                 group_size=self.group_size,
                 bits=self.bits,
                 swiglu_limit=self.swiglu_limit,
+                codec=self.codec,
             )
         if self.codec == MIXED_OFFICIAL_CODEC:
             assert self._gate_up_tier is not None
@@ -2069,6 +2161,7 @@ class HotExpertSwitchGLU(nn.Module):
                         group_size=self.group_size,
                         bits=self.bits,
                         swiglu_limit=self.swiglu_limit,
+                        codec=self.codec,
                     )
                 )
                 wave_positions.extend(expert_positions)

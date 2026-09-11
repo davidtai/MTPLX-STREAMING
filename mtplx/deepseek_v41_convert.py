@@ -638,3 +638,139 @@ def dequant_affine_record(weight_u8: np.ndarray, scales_bf16: np.ndarray, biases
     b = bf16_bits_to_f32(biases_bf16).reshape(rows, -1)
     grp = np.arange(hd) // group
     return w * s[:, grp] + b[:, grp]
+
+
+# ==========================================================================
+# W18: MLX-native floating-point resident repacks (mxfp8 dense, mxfp4 MTP)
+# --------------------------------------------------------------------------
+# Additive helpers for ``scripts/convert_deepseek_v41_residents_native.py``.
+# Nothing above this line is modified.
+#
+# David's directive (2026-09-10): convert the resident tensors to MLX's native
+# float-quant formats as EXACT repacks of the Hub source, not affine
+# requantizations.  Verified on MLX 0.32.2 (this box, CPU stream):
+#   * every source ``F8_E4M3`` dense projection with ``F8_E8M0`` 32x32 block
+#     scales repacks bit-exactly to ``mxfp8`` gs32 -- ``mx.quantize(mode=
+#     "mxfp8")`` on the FP8-block dequant returns a (code, E8M0-scale) pair
+#     whose ``mx.dequantize`` is byte-for-byte the FP8 dequant (``np.array_equal``
+#     True, max|Δ| 0) for wq_a/wq_b/wkv/wo_a/wo_b, shared_experts w1/w2/w3,
+#     indexer.wq_b and the MTP dense projections.  (MLX picks an EQUIVALENT
+#     E8M0 scale byte -- typically one exponent smaller with correspondingly
+#     larger E4M3 codes -- so the stored bytes differ from the source block
+#     scale, but the reconstructed value is identical: FP8 values are already
+#     E4M3*2^k, and a power-of-two rescale that keeps them in E4M3's normal
+#     range is lossless.  The per-tensor ``np.array_equal`` gate below rejects
+#     any tensor where that does not hold.)
+#   * every source FP4 (E2M1) MTP routed expert repacks bit-exactly to
+#     ``mxfp4`` gs32 (the same recipe W9 proved for the backbone bank in
+#     scripts/deepseek_v41/torchref/bank_mx_probe.py).
+#
+# Source-dtype -> native resident format map (families enumerated from the
+# pinned revision's index; see docs/deepseek-v41/W18_REPORT.md):
+#   F8_E4M3 dense (attn wq_a/wq_b/wkv/wo_a/wo_b, ffn.shared_experts.w{1,2,3},
+#     attn.indexer.wq_b, mtp.* dense incl. main_proj)          -> mxfp8 gs32
+#   I8 FP4 MTP experts (mtp.N.ffn.experts.N.w{1,2,3})           -> mxfp4 gs32
+#   BF16 / F32 everything else (embed, head, norms, hc_*, gate  -> keep verbatim
+#     weight/bias, attn_sink, compressor wkv/wgate, indexer wk/
+#     weights_proj/k_norm, vision/aligner, image_* markers)
+#   ``.scale`` siblings                                         -> dropped
+#   layers.N.ffn.experts.* (backbone routed)  -> streamed bank (experts.bin, W16)
+#   *.engram.*                                 -> engram sidecar (engram/, W19)
+# embed/head are BF16 at source, so "keep verbatim" already restores them to
+# exact bf16 (the affine-q8 artifact had quantised them; reading the source
+# undoes that with no loss).
+
+NATIVE_GROUP_SIZE = 32  # mxfp8/mxfp4 group size (aligns with the source 32-col blocks)
+MXFP8_BITS = 8
+MXFP4_BITS = 4
+
+
+def _assert_bit_exact(deq_f32: np.ndarray, ref_f32: np.ndarray, mode: str, name: str) -> None:
+    ref = np.ascontiguousarray(ref_f32, dtype=np.float32)
+    if not np.array_equal(deq_f32, ref):
+        diff = np.abs(deq_f32.astype(np.float64) - ref.astype(np.float64))
+        raise ValueError(
+            f"{mode} repack is NOT bit-exact for {name!r}: "
+            f"max|Δ|={float(diff.max()):.6g}, mismatched elements="
+            f"{int((deq_f32 != ref).sum())}/{ref.size}. Block-scale layout does "
+            f"not map exactly onto MLX's per-(row,{NATIVE_GROUP_SIZE}-col) scales; "
+            f"stop and report (do not ship an inexact resident)."
+        )
+
+
+def quantize_mxfp8_exact(values_f32: np.ndarray, name: str = "", *, group_size: int = NATIVE_GROUP_SIZE):
+    """Exact ``mxfp8`` gs32 repack of ``values_f32``.
+
+    Returns ``(codes_u32, scales_u8)`` mlx arrays (the mxfp8 native layout:
+    uint32-packed E4M3 codes + one uint8 E8M0 scale per (row, ``group_size``
+    columns)).  Raises :class:`ValueError` (naming the tensor) unless
+    ``mx.dequantize(codes, scales, mode="mxfp8")`` equals ``values_f32``
+    byte-for-byte (``np.array_equal``).
+    """
+    mx = _cpu_mx()
+    ref = np.ascontiguousarray(values_f32, dtype=np.float32)
+    w = mx.array(ref)
+    codes, scales = mx.quantize(w, group_size=group_size, bits=MXFP8_BITS, mode="mxfp8")
+    mx.eval(codes, scales)
+    deq = np.array(
+        mx.dequantize(codes, scales, group_size=group_size, bits=MXFP8_BITS, mode="mxfp8").astype(mx.float32)
+    )
+    _assert_bit_exact(deq, ref, "mxfp8", name)
+    return codes, scales
+
+
+def quantize_mxfp4_exact(values_f32: np.ndarray, name: str = "", *, group_size: int = NATIVE_GROUP_SIZE):
+    """Exact ``mxfp4`` gs32 repack of ``values_f32`` (FP4/E2M1 source).
+
+    Returns ``(codes_u32, scales_u8)``; raises unless the mxfp4 round-trip is
+    byte-for-byte equal to ``values_f32`` (``np.array_equal``).
+    """
+    mx = _cpu_mx()
+    ref = np.ascontiguousarray(values_f32, dtype=np.float32)
+    w = mx.array(ref)
+    codes, scales = mx.quantize(w, group_size=group_size, bits=MXFP4_BITS, mode="mxfp4")
+    mx.eval(codes, scales)
+    deq = np.array(
+        mx.dequantize(codes, scales, group_size=group_size, bits=MXFP4_BITS, mode="mxfp4").astype(mx.float32)
+    )
+    _assert_bit_exact(deq, ref, "mxfp4", name)
+    return codes, scales
+
+
+def repack_fp8_block_to_mxfp8(weight_u8: np.ndarray, scale_u8: np.ndarray, name: str = ""):
+    """Dequant a source ``F8_E4M3`` weight + ``F8_E8M0`` block scale and exact-repack
+    to mxfp8.  Returns ``(codes_u32, scales_u8, ref_f32)`` (``ref_f32`` is the
+    reference dequant, handy for a caller-side golden)."""
+    ref = dequant_fp8_block(weight_u8, scale_u8)
+    codes, scales = quantize_mxfp8_exact(ref, name)
+    return codes, scales, ref
+
+
+def repack_fp4_to_mxfp4(packed_u8: np.ndarray, scale_u8: np.ndarray, name: str = ""):
+    """Dequant a source FP4 (E2M1) weight + ``F8_E8M0`` scale and exact-repack to
+    mxfp4.  Returns ``(codes_u32, scales_u8, ref_f32)``."""
+    ref = dequant_fp4(packed_u8, scale_u8)
+    codes, scales = quantize_mxfp4_exact(ref, name)
+    return codes, scales, ref
+
+
+def native_resident_disposition(entry: TensorEntry) -> str:
+    """Native-codec disposition for one source tensor.
+
+    One of: ``'mxfp8'`` (dense F8_E4M3 -> exact mxfp8 gs32), ``'mxfp4'`` (MTP FP4
+    experts -> exact mxfp4 gs32), ``'keep'`` (BF16/F32 verbatim, incl. embed/head
+    which are BF16 at source), or ``'drop'`` (scale siblings, engram sidecar
+    tensors, and backbone routed experts that stream from experts.bin).
+    """
+    name = entry.name
+    if is_source_scale(name):
+        return "drop"
+    if is_engram(name):
+        return "drop"  # engram embed/wkv/q/k -> engram/ sidecar (W19)
+    if is_bank_expert(name):
+        return "drop"  # backbone routed experts -> experts.bin (W16)
+    if is_mtp_expert(name):
+        return "mxfp4"
+    if entry.dtype == "F8_E4M3":
+        return "mxfp8"
+    return "keep"
