@@ -31,6 +31,7 @@ this loader with NO ``runtime.py`` edit, exactly like the hy3 lane.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,6 +115,61 @@ def _skip_reason(name: str) -> str:
     return "text"
 
 
+def manifest_has_mtp_residents(manifest: ExpertManifest) -> bool:
+    """Whether the artifact ships DSpark MTP residents (``mtp.*``)."""
+
+    return any(t.tensor.startswith("mtp.") for t in manifest.resident_tensors)
+
+
+def _config_declares_mtp(config: dict[str, Any]) -> bool:
+    def _stages(d):
+        d = d or {}
+        return int(d.get("n_mtp_layers") or d.get("num_nextn_predict_layers") or 0)
+
+    return max(_stages(config), _stages((config or {}).get("text_config"))) > 0
+
+
+def resolve_with_mtp(
+    config: dict[str, Any], manifest: ExpertManifest, with_mtp: bool | None
+) -> bool:
+    """Decide whether to build + load the DSpark head (worker W23).
+
+    Opt-in, so the default stays phase-1 text-only AR (the MTP head's 3x128
+    resident mxfp4 experts are ~6.7 GiB, not wanted for AR serving): explicit
+    ``with_mtp`` (True/False) wins, then the ``MTPLX_DSV41_MTP`` env flag
+    (``1``/``true``/... builds the head), else False.  Building it additionally
+    requires the config to declare MTP stages and the artifact to ship ``mtp.*``
+    residents -- opting in against an artifact that ships none is a load error the
+    operator should see, not a silent AR fallback.
+
+    The served ``--generation-mode mtp`` reaches this via ``MTPLX_DSV41_MTP=1``
+    (the serve-path glue that maps the flag to the env lives in cli.py /
+    resident_loader.py, outside W23's allowlist -- see W23_REPORT / PORT_CONTRACT).
+    The head is then published by ``inject_deepseek_v41_mtp_support`` at the
+    runtime's MTP dispatch."""
+
+    if with_mtp is not None:
+        want = bool(with_mtp)
+    else:
+        env = os.environ.get("MTPLX_DSV41_MTP")
+        want = (
+            env.strip().lower() in {"1", "true", "yes", "on"}
+            if env is not None and env.strip() != ""
+            else False
+        )
+    if not want:
+        return False
+    if not _config_declares_mtp(config):
+        raise ResidentLoadError(
+            "DSpark MTP requested (with_mtp) but the config declares no MTP stages"
+        )
+    if not manifest_has_mtp_residents(manifest):
+        raise ResidentLoadError(
+            "DSpark MTP requested (with_mtp) but the artifact ships no mtp.* residents"
+        )
+    return True
+
+
 @dataclass(frozen=True)
 class TextResidentPartition:
     """Text-only vs skipped split of a manifest's resident tensors."""
@@ -130,12 +186,17 @@ class TextResidentPartition:
     skipped_vision_count: int
 
 
-def partition_text_residents(manifest: ExpertManifest) -> TextResidentPartition:
-    """Split ``manifest.resident_tensors`` into text-only kept vs skipped.
+def partition_text_residents(
+    manifest: ExpertManifest, *, with_mtp: bool = False
+) -> TextResidentPartition:
+    """Split ``manifest.resident_tensors`` into kept vs skipped.
 
-    Skips ``vision.*``/``aligner.*``/``image_*`` and, for phase-1 AR,
-    ``mtp.*``.  The returned byte/count fields are the exact figures the W3
-    report and the text-only-filter test assert against the real artifact.
+    Always skips ``vision.*``/``aligner.*``/``image_*``.  ``mtp.*`` residents are
+    skipped on the text-only AR path (``with_mtp=False``) and KEPT on the opt-in
+    DSpark MTP path (``with_mtp=True``, worker W23) so the DSpark head's resident
+    mxfp8/mxfp4 tensors load.  The returned byte/count fields are the exact
+    figures the W3 report and the text-only-filter test assert against the real
+    artifact (unchanged for ``with_mtp=False``).
     """
 
     kept: list[ResidentTensor] = []
@@ -143,7 +204,9 @@ def partition_text_residents(manifest: ExpertManifest) -> TextResidentPartition:
     skipped_mtp_bytes = skipped_mtp_count = 0
     skipped_vision_bytes = skipped_vision_count = 0
     for tensor in manifest.resident_tensors:
-        if is_text_resident(tensor.tensor):
+        if is_text_resident(tensor.tensor) or (
+            with_mtp and tensor.tensor.startswith("mtp.")
+        ):
             kept.append(tensor)
             continue
         skipped.append(tensor)
@@ -430,15 +493,24 @@ def construct_deepseek_v41_resident_model(
     model_class_resolver: Callable[[], tuple[type, type]] | None = None,
     switch_binder: Callable[[Any, Any], int] | None = None,
     strict: bool = True,
+    with_mtp: bool | None = None,
 ) -> ResidentModel:
-    """Instantiate, bind, and text-only load the DeepSeek-V4.1 model.
+    """Instantiate, bind, and load the DeepSeek-V4.1 model.
 
     The DeepSeek-V4.1 analogue of
     :func:`mtplx.resident_loader.construct_resident_model`, with two additions:
-    the model constructor receives the engram bank path, and only the text-only
+    the model constructor receives the engram bank path, and only the kept
     residents are materialized.  ``mtplx/resident_loader.py`` delegates here for
     ``model_type == "deepseek_v41"``.
-    """
+
+    ``with_mtp`` (worker W23) selects the opt-in DSpark head build: ``None`` auto-
+    detects (:func:`resolve_with_mtp` -- config declares MTP stages and the
+    manifest ships ``mtp.*`` residents, ``MTPLX_DSV41_MTP`` overriding), so the MTP
+    artifact loads its head (mtp.* residents kept + mapped, backbone experts still
+    streamed) ready for ``--generation-mode mtp``, while phase-1 AR artifacts are
+    unchanged.  The backbone switch binder (``bind_streamed_switches``) walks only
+    ``model.model.layers``, so the DSpark head's 128 resident mxfp4 experts stay
+    resident."""
 
     artifact_root = Path(root).resolve()
     if config is None:
@@ -459,6 +531,7 @@ def construct_deepseek_v41_resident_model(
     model_class, args_class = resolver()
     if engram_bank_path is None:
         engram_bank_path = engram_bank_path_for(artifact_root)
+    resolved_with_mtp = resolve_with_mtp(config, runtime.manifest, with_mtp)
     try:
         model_args = args_class.from_dict(config)
         # The artifact's config ``quantization`` block selects the resident codec
@@ -469,6 +542,7 @@ def construct_deepseek_v41_resident_model(
             model_args,
             engram_bank_path=engram_bank_path,
             quantization=config.get("quantization"),
+            mtp=resolved_with_mtp,
         )
     except Exception as exc:
         raise ResidentLoadError(f"could not construct deepseek_v41 model: {exc}") from exc
@@ -486,7 +560,7 @@ def construct_deepseek_v41_resident_model(
             f"bound {bound} sparse layers; expected {runtime.spec.routed_layer_count}"
         )
 
-    partition = partition_text_residents(runtime.manifest)
+    partition = partition_text_residents(runtime.manifest, with_mtp=resolved_with_mtp)
     weights = load_text_only_resident_arrays(
         artifact_root, runtime.manifest, mx_module=mx_module, partition=partition
     )
@@ -572,6 +646,7 @@ def load_deepseek_v41_streaming(
     apply_memory_cap: bool = True,
     mx_module: Any | None = None,
     strict: bool = True,
+    with_mtp: bool | None = None,
     **config_overrides: Any,
 ) -> ResidentModel:
     """End-to-end serve entry: admit, open the runtime, construct the model.
@@ -614,6 +689,7 @@ def load_deepseek_v41_streaming(
             runtime,
             mx_module=mx_module,
             strict=strict,
+            with_mtp=with_mtp,
         )
     except Exception:
         runtime.close()

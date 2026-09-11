@@ -150,3 +150,40 @@ def make_cache(self):
 int. `runtime.py`'s `configure_owned_recurrent_state_cache` /
 `configure_tail_owned_attention_kv_cache` are pass-throughs unless their env
 flags are set, so the single-object cache flows through unchanged.
+
+## W23 — DSpark MTP draft head (`mtplx/models/deepseek_v41_dspark.py` + the MTP surface on `mtplx/models/deepseek_v41.py`), read by the runtime MTP path (`mtplx/generation.py`) and the loader
+
+The DSpark 3-stage speculative draft head and the model-side surface the native
+MTP lane drives. Builds on **W13**'s rollback seam and **W22**'s mlx_lm per-layer
+cache conformance (merged into `feat/deepseek-v41-w23`); no cache file was changed
+by W23.
+
+### Exports
+
+| symbol | shape / contract |
+|---|---|
+| `DSparkHead` (`deepseek_v41_dspark`) | `layers` = 3 `DSparkBlock` stages; `draft_block(main_hidden, input_ids, caches, embed, head) -> (output_ids [b, block_size+1], logits [b, block_size, vocab], confidence [b, block_size])`; `seed_main(main_hidden, caches)` appends committed main KV |
+| `DSparkStageCache` | per-stage sliding-window KV of the *main* hiddens; answers the W13 rollback seam (`trim(n)->int`, `mark()`, `rollback(mark)`, `is_trimmable()`, `offset`). W23 owns it — no MTP-stage cache was contracted before. |
+| `Model.mtp_forward / mtp_update_cache / make_mtp_cache / mtp_blocks / has_mtp / hc_hidden` | the uniform `MTPLXRuntime.draft_mtp/update_mtp_cache/make_mtp_cache` surface (mirrors `deepseek_v4`); `__call__(return_hidden=True)` returns `main_hidden` = concat of the `dspark_target_layer_ids` hiddens |
+| `is_deepseek_v41_mtp_config` / `inject_deepseek_v41_mtp_support` | runtime MTP dispatch (a dedicated arm in `runtime.py`; the v4 predicate/injector are not reusable) |
+| `Model(mtp=True)` / loader `resolve_with_mtp` / `partition_text_residents(with_mtp=)` | opt-in head build + `mtp.*` resident keep/map; default OFF (phase-1 AR unchanged) |
+
+### Forward / verify contract
+- **Lossless bar** = greedy verify == AR argmax (NOT bit-exactness). The runtime's
+  batched target verify is authoritative; the draft (block-draft served per-depth
+  via a stash) only sets the acceptance rate. Proven: `generate_mtpk` == `generate_ar`
+  at K=1,2,3 over 64 tokens (`tests/models/test_deepseek_v41_dspark.py`).
+- **Streaming verify (R2).** The batched verify hands all K+1 rows to each backbone
+  MoE layer in ONE `switch_mlp(xf, indices)` call — the precondition for record
+  dedup across the routed-expert union. K>3 / tree verify are DEAD (wider union).
+  Gate 0: median union u ≤ 10 at K=3 (measure on the real bank).
+
+### Consumers must know
+- The DSpark MoE experts are RESIDENT mxfp4, run through the mlx-lm SwitchGLU
+  quantised path (the task's `resident SwitchGLU with the ±10 clamp`; `mx.gather_qmm`
+  in mlx 0.32.2 does take `mode=`, the other option). The backbone switch binder
+  walks only `model.model.layers`, so it leaves the head's experts resident.
+- **Serve-path glue gap:** `--generation-mode mtp` reaches the loader today via
+  `MTPLX_DSV41_MTP=1`. The one-line map from the CLI flag to `with_mtp=True` lives in
+  `cli.py` / `resident_loader.py` (outside W23's allowlist) — a follow-up for whoever
+  owns those.
