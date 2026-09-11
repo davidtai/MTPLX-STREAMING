@@ -310,6 +310,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--slot-layout", default="component-banks")
     p.add_argument("--memory-limit-gib", type=float, default=12.0)
     p.add_argument("--expert-cache-limit-gib", type=float, default=1.5)
+    # The runtime's fixed-footprint PLAN counts the full resident manifest
+    # (incl. the 15.3 GiB MTP experts) against memory_limit, so it rejects at 12
+    # GiB even though the AR path only touches ~9 GiB of text residents via lazy
+    # mmap.  On CPU the plan cap is a GPU-wired-budget guard, not RSS -- the CPU
+    # probes (decode_probe.py / dump_hidden_states.py --cpu) turn it off and rely
+    # on lazy mmap + a capped cache.  Real RSS safety here is the watchdog below.
+    p.add_argument("--apply-memory-cap", action=argparse.BooleanOptionalAction,
+                   default=False)
     p.add_argument("--max-kv", type=int, default=4096)
     p.add_argument("--rss-abort-gib", type=float, default=12.0)
     p.add_argument("--self-lock", action=argparse.BooleanOptionalAction, default=True)
@@ -478,6 +486,51 @@ def run_census(args, log) -> dict:
     finally:
         Gate.__call__ = orig_gate_call
 
+    # -- real runtime telemetry (shipped-path ACTUAL io + cache behaviour) -----
+    # Decisive for lever choice: snapshot()["slots"]["io"]["read_bytes"] is the
+    # true bytes pulled off SSD, ["cache"]["hit_rate"] the real hit rate, and
+    # ["slots"]["metrics"] whether reads batched/deduped.  cache_by_phase isolates
+    # the decode phase.
+    rt_tel: dict = {}
+    try:
+        snap = runtime.snapshot()
+        io = (snap.get("slots") or {}).get("io") or {}
+        cache = snap.get("cache") or {}
+        rt_tel = {
+            "cache_aggregate": {
+                "hit_rate": cache.get("hit_rate"),
+                "expert_hits": cache.get("expert_hits"),
+                "expert_misses": cache.get("expert_misses"),
+                "evictions": cache.get("evictions"),
+                "bytes_read_logical": cache.get("bytes_read"),
+            },
+            "cache_by_phase": snap.get("cache_by_phase"),
+            "io": {
+                "read_bytes_ssd": io.get("read_bytes"),
+                "requested_bytes": io.get("requested_bytes"),
+                "read_mib_per_second": io.get("read_mib_per_second"),
+                "python_preadv_invocations": io.get("python_preadv_invocations"),
+                "native_positional_calls": io.get("native_positional_calls"),
+                "preadv_bytes_returned": io.get("preadv_bytes_returned"),
+                "bytes_read_saved": io.get("bytes_read_saved"),
+                "short_reads": io.get("short_reads"),
+            },
+            "slot_metrics": (snap.get("slots") or {}).get("metrics"),
+            "config_echo": {
+                "cache_policy": getattr(getattr(runtime, "config", None), "cache_policy", None),
+                "cache_scope": getattr(getattr(runtime, "config", None), "cache_scope", None),
+                "frequency_decay": getattr(getattr(runtime, "config", None), "frequency_decay", None),
+                "overlap_miss_reads": getattr(getattr(runtime, "config", None), "overlap_miss_reads", None),
+                "prefetch_slots": getattr(getattr(runtime, "config", None), "prefetch_slots", None),
+                "max_inflight_io_bytes": getattr(getattr(runtime, "config", None), "max_inflight_io_bytes", None),
+                "max_read_chunk_bytes": getattr(getattr(runtime, "config", None), "max_read_chunk_bytes", None),
+                "slots_per_layer": getattr(getattr(runtime, "plan", None), "slots_per_layer", None),
+                "transient_slots": getattr(getattr(runtime, "plan", None), "transient_slots", None),
+            },
+        }
+    except Exception as exc:
+        rt_tel = {"error": repr(exc)}
+
     # -- analysis -------------------------------------------------------------
     layers = sorted(decode_steps)
     decode_flat = _flatten_layer_seq(decode_steps)
@@ -599,6 +652,7 @@ def run_census(args, log) -> dict:
             "ttft_s_cpu": ttft_s,
             "peak_rss_gib": _rss_gib(),
         },
+        "runtime_telemetry": rt_tel,
         "per_token_geometry": {
             "routed_records_per_token": top_k * len(layers),
             "bytes_per_token_all_miss": top_k * len(layers) * record_bytes,
