@@ -115,7 +115,8 @@
       },
       "child_env": {
         "MTPLX_ENGRAM_CACHE_LIMIT": "2GiB",
-        "MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS": "0"
+        "MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS": "0",
+        "MTPLX_SESSION_BANK_MAX_BYTES": "2GiB"
       }
     }
   ]

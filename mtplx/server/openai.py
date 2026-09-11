@@ -3120,20 +3120,37 @@ class ServerState:
             args, args.model
         )
         if self.expert_streaming_load_kwargs:
-            args.load_mtp = False
-            args.generation_mode = "ar"
+            # The DeepSeek-V4.1 DSpark native MTP head (worker W23) is served when
+            # the resolved streamed kwargs carry mtp=True (--generation-mode mtp on
+            # the native artifact); every other streamed profile is AR-only, so
+            # force AR. This is the daemon-side half of the serve glue.
+            streamed_mtp = bool(self.expert_streaming_load_kwargs.get("mtp"))
+            args.load_mtp = streamed_mtp
+            args.generation_mode = "mtp" if streamed_mtp else "ar"
             stream_config = self.expert_streaming_load_kwargs[
                 "expert_streaming_config"
             ]
+            from dataclasses import replace as _dc_replace
+
             from mtplx.expert_runtime import reconcile_mlx_memory_cap
             from mtplx.expert_streaming_models import get_model_spec
 
-            stream_plan = stream_config.memory_plan(
-                get_model_spec(stream_config.model_key)
-            )
+            plan_spec = get_model_spec(stream_config.model_key)
+            if streamed_mtp:
+                # MTP wires the mtp.* residents; price them in the MLX cap too.
+                plan_spec = _dc_replace(plan_spec, mtp_included=True)
+            stream_plan = stream_config.memory_plan(plan_spec)
             os.environ["MTPLX_MEMORY_LIMIT_BYTES"] = str(
                 reconcile_mlx_memory_cap(stream_plan)
             )
+            # Cap the served context at the profile's KV plan
+            # (max_live_kv_tokens; 16,384 for deepseek-v41-mxfp4-75) unless the
+            # operator set one explicitly, so the outer memory plan does not
+            # default to the machine-bound window (a 696K context + 48G session
+            # bank blew the allocator past 1.0). The expert cache is the priority
+            # tier; the session bank is capped via the profile child_env.
+            if not int(getattr(args, "context_window", 0) or 0):
+                args.context_window = int(stream_config.max_live_kv_tokens)
         try:
             args.paged_kv_quantization = normalize_paged_kv_quantization(
                 getattr(args, "paged_kv_quantization", "off")
