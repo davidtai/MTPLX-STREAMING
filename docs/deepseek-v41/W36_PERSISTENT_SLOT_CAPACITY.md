@@ -148,4 +148,4 @@ rerun to a new window's receipt path per `never-overwrite-a-measurement`.)
 
 ## SHA
 
-Fix + test + this doc committed on `feat/deepseek-v41-w36` as `__COMMIT_SHA__`.
+Fix + test + this doc committed on `feat/deepseek-v41-w36` as `319eb1d43465e96768361779d36e50c6b243fad8`.
