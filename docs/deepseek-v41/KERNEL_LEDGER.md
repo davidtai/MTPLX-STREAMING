@@ -314,6 +314,36 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 - **Precedent:** hy3-oq2e profiles ship this exact pair in production (`expert_profiles.json`);
   W28's shared-overlap uses the same env-isolation pattern.
 
+### K24 — Barrier-free all-hit device route (W44) — **Rank 1a (removes the routing barrier itself; subsumes K23 on all-hit layers)**
+- **Mechanism:** the per-layer `mx.eval(indices)` routing barrier exists only because the
+  **host** needs the routed ids to (1) check residency and (2) build the gather's slot indices.
+  Put the expert→slot map **on the device** — a per-layer LUT `lut[layer]` (int32 `[n_experts]`,
+  slot for resident / −1 for miss, snapshot of `LayerExpertSlotBank._expert_to_slot`, rebuilt on the
+  host **only when residency changes**) — and issue `gather_qmm` over `lut[indices]` **without
+  evaluating `indices` on the host**. Residency verification is deferred: `async_eval(indices)` +
+  an enqueued probe read back at the next flush / token end (covered by the sampler's eval). **0
+  host syncs on an all-hit layer.**
+- **Where:** decode (all-hit). **Now:** exposed today (the barrier is the top decode-stage cost,
+  W44 §0). **After:** **40 → m** routing barriers/token, `m` = miss layers (target: barriers only on
+  miss layers). All-hit token → **0**; window-12 cold (≈16 miss layers/tok) → ≈16; warm → →0.
+- **Exactness:** all-hit layer is byte-identical (LUT slot == fenced `bank_index`, same kernel, same
+  rows). A miss reads a void row (clamped) and is caught by the deferred probe; recovery admits the
+  miss experts and re-runs the fenced path → **final token byte-identical** (W44_DEVICE_ROUTE.md §2–3).
+  Proven on the fake bank: all-hit/mixed/all-miss reconcile to fenced at M=1 & M=4; 0-sync-on-all-hit
+  census; LUT-refresh-only-on-change (`tests/test_deepseek_v41_device_route.py`).
+- **⚠ Effort/risk:** medium. **W44 lands the switch/runtime primitives** (LUT, barrier-free issue,
+  async probe queue, fenced-re-gather recovery) proven at the switch level; **end-to-end byte-identity
+  needs the token-end verify/recompute wired into `mtplx/generation.py` — the follow-up, outside the
+  W44 allowlist.** So the `device_route` arm is byte-identical only on **warm/all-hit** windows until
+  that lands; cold-token misses without the recompute void the token (flagged by the receipt sha).
+  Real-artifact slot-numbering (`_expert_to_slot` row == `bank_index`) is validated by the GPU A/B sha.
+- **Cost when misses frequent (honest):** token-level naive recovery recomputes the whole token on
+  ANY miss; `P(all-hit token) = 0.61^40 ≈ 4e-9` at cold window-12 rates → near-100% recompute → pure
+  overhead. The **per-layer** recovery (pay `m`, monotonic) is the form to wire in. Warm/cross-prompt
+  is the win. **Default off; GPU A/B prices it.**
+- **Composes with / subsumes K23:** K23 deferred the second per-layer sync (the wave fence); K24
+  removes the first (the barrier) on all-hit layers — no barrier means no fence to defer.
+
 ### K2 — MTP verify amortizes barrier + resident read (Factor A, GPU side) — **Rank (owned by R1)**
 - **Mechanism:** one K+1 forward runs the 40 barriers and the 10.65 GB resident read **once** for
   ~2.85 accepted tokens (§2.2). **Where:** decode. **After:** barrier 40→14 ms/acc-tok, resident
