@@ -54,7 +54,7 @@ entry's KV lanes / compressor frontier / offset and parks any engram leaf on
 `window_size`, `compress_ratio`, `is_kv_source`): the history rides `state`, so
 no meta change is needed.
 
-## Evidence (`tests/test_deepseek_v41_engram_state.py`, 5 tests, all pass)
+## Evidence (`tests/test_deepseek_v41_engram_state.py`, 6 tests, all pass)
 
 CPU-pinned, tiny random-config 2-layer model, a real `EngramV41` hook attached to
 layer 1 over a synthetic affine-q8 bank (so decode logits genuinely depend on the
@@ -71,13 +71,17 @@ file: **0.11 GB** (`/usr/bin/time -l` `maximum resident set size` 114,999,296 B)
    fresh cache's engram length goes 0 → `len(prompt)` on restore; **decode logits
    are identical, token after token**, to the uninterrupted path. This is the
    session-bank warm-turn path made correct.
-3. **KV-only restore desync control (proves the fix matters)** — dropping the
+3. **Production store path (`snapshot_cache_lazy_hybrid`)** — the session bank
+   stores with the zero-copy-view snapshot; the engram leaf round-trips
+   bit-exactly through it too, even when the live cache is mutated after the
+   snapshot (the retained view is not aliased to the live buffer).
+4. **KV-only restore desync control (proves the fix matters)** — dropping the
    engram leaf (the pre-W26 5-tuple) leaves the engram fresh and makes decode
    logits **differ**; the full 6-tuple restore makes them identical. This is the
    exact W22 bug and its cure, side by side.
-4. **No-engram path unchanged** — a no-engram cache has a 5-tuple `state` on every
+5. **No-engram path unchanged** — a no-engram cache has a 5-tuple `state` on every
    entry, and KV snapshot/restore + decode stays bit-exact.
-5. **SSD save/load round-trip** — on an engram-owning entry whose KV lanes are all
+6. **SSD save/load round-trip** — on an engram-owning entry whose KV lanes are all
    real arrays, `mlx_lm.save_prompt_cache` **succeeds** (where the pre-W26 numpy
    `_buf` raised `std::bad_cast`), and `mlx_lm.load_prompt_cache` reconstructs the
    entry; rehydrating the loaded engram buffer into a `NgramHashState` with the

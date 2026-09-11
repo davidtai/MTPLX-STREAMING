@@ -241,6 +241,34 @@ def test_near_prefix_restore_then_decode_is_bit_exact_with_engram():
     )
 
 
+def test_lazy_hybrid_store_is_the_production_session_bank_path():
+    """The session bank stores with ``snapshot_cache_lazy_hybrid`` (zero-copy
+    views for trimmable KV).  The engram leaf rides that path too: it round-trips
+    bit-exactly even when the live cache is mutated after the snapshot (proving
+    the retained view is not aliased to the live buffer)."""
+    from mtplx.cache_state import snapshot_cache_lazy_hybrid
+
+    args = _swa_args()
+    rt = _runtime(args, seed=5, engram=True)
+    prompt = _prompt(14)
+    dec = _prompt(6, seed=21)
+
+    ref = rt.make_cache()
+    rt.forward_ar(mx.array([prompt]), cache=ref)
+    ref_logits = _decode_logits(rt, ref, dec)
+
+    live = rt.make_cache()
+    rt.forward_ar(mx.array([prompt]), cache=live)
+    snap = snapshot_cache_lazy_hybrid(live)
+    rt.forward_ar(mx.array([[1, 2, 3]]), cache=live)   # mutate after snapshot
+
+    warm = rt.make_cache()
+    restore_cache(warm, snap)
+    assert warm.engram_state.length == len(prompt)
+    warm_logits = _decode_logits(rt, warm, dec)
+    assert all(np.array_equal(a, b) for a, b in zip(ref_logits, warm_logits))
+
+
 def test_kv_only_restore_desyncs_engram_proving_the_fix_matters():
     """Control: dropping the engram leaf from the snapshot (the pre-W26 KV-only
     5-tuple) desyncs the engram, so decode logits DIFFER; the full 6-tuple
