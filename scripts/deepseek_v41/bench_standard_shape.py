@@ -291,7 +291,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="max_live_kv_tokens for the loader (default: auto = max cell "
         "context + steps + 64). Must cover the largest cell.",
     )
-    parser.add_argument("--memory-limit-gib", type=float, default=100.0)
+    # W62: the plan DERIVES from David's TOTAL box budget
+    # (MTPLX_DSV41_BOX_BUDGET_GB, default 100) minus the macOS floor, host
+    # overhead, and allocator cache limit -- no more hand-picked ceilings.
+    # --memory-limit-gib stays as the explicit override.
+    parser.add_argument(
+        "--memory-limit-gib",
+        type=float,
+        default=None,
+        help="explicit plan ceiling GiB (override); default: derive from "
+        "--box-budget-gib.",
+    )
+    parser.add_argument(
+        "--box-budget-gib",
+        type=float,
+        default=None,
+        help="TOTAL box-use budget GiB the plan is derived from (default: "
+        "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
+    )
+    parser.add_argument(
+        "--memory-profile",
+        action="store_true",
+        default=False,
+        help="capture the W62 memory profile (mlx/process/box/plan) at load "
+        "end, after prefill, and every --memory-profile-every decode tokens; "
+        "writes memory_profile onto each cell + a rendered table.",
+    )
+    parser.add_argument(
+        "--memory-profile-every",
+        type=int,
+        default=64,
+        metavar="N",
+        help="decode-token interval for per-token memory snapshots (default 64).",
+    )
     parser.add_argument("--expert-cache-limit-gib", type=float, default=None)
     parser.add_argument(
         "--verify-record-hashes",
@@ -553,16 +585,40 @@ def bench_one_cell(
     steps: int,
     decode_mode: str = "ar",
     dspark_depth: int = 3,
+    memory_profile: bool = False,
+    memory_profile_every: int = 64,
+    mx=None,
 ) -> dict:
     """Greedy prefill + decode of one cell; returns the measured metrics.
 
     ``decode_mode == "dspark"`` additionally runs the DSpark-DIRECT speculative
     loop (W57) after the AR decode, asserts the greedy ids are byte-identical, and
-    attaches its tokens/cycle + accept-by-depth under the ``dspark`` key."""
+    attaches its tokens/cycle + accept-by-depth under the ``dspark`` key.
+
+    ``memory_profile`` captures the W62 profile (``after_prefill`` + every
+    ``memory_profile_every`` decode tokens) into ``metrics['memory_profile']``."""
 
     prompt_len = len(prompt_ids)
     mem_probe.reset_peak()
     baseline = gather_probe.baseline()
+
+    runtime = getattr(model, "_mtplx_expert_runtime", None)
+    profile_snaps: list = [] if memory_profile else None
+
+    def _profile(phase, token=None):
+        if profile_snaps is None:
+            return
+        from mtplx.deepseek_v41_memory_profile import memory_profile_snapshot
+
+        profile_snaps.append(
+            memory_profile_snapshot(
+                phase=phase,
+                token=token,
+                plan=getattr(runtime, "plan", None),
+                runtime=runtime,
+                mx_module=mx,
+            )
+        )
 
     cell_start = time.perf_counter()
 
@@ -574,15 +630,21 @@ def bench_one_cell(
     ttft_s = time.perf_counter() - t0
     token = ops.argmax_last(logits)
     generated = [token]
+    _profile("after_prefill")
 
     # -- decode (steps autoregressive forwards) --------------------------------
+    every = max(1, int(memory_profile_every))
     decode_start = time.perf_counter()
-    for _ in range(int(steps)):
+    for step in range(int(steps)):
         logits = model(ops.input([[token]]), cache=cache)
         ops.sync(logits)
         token = ops.argmax_last(logits)
         generated.append(token)
+        if profile_snaps is not None and (step + 1) % every == 0:
+            _profile("decode", token=step + 1)
     decode_wall_s = time.perf_counter() - decode_start
+    if profile_snaps is not None and int(steps) % every != 0:
+        _profile("decode", token=int(steps))
 
     wall_s = time.perf_counter() - cell_start
 
@@ -664,6 +726,7 @@ def bench_one_cell(
         "engram_rows_gathered": gathered.get("engram_rows_gathered"),
         "generated_token_count": len(generated),
         "text_preview": text[:_TEXT_PREVIEW_CHARS],
+        "memory_profile": profile_snaps,
     }
 
 
@@ -858,7 +921,12 @@ def _base_receipt(args, *, dry_run: bool, worktree: Path) -> dict:
         "bos_id": int(args.bos_id) if args.bos else None,
         "prompt_ids_file": getattr(args, "prompt_ids_file", None),
         "prompt_seed": getattr(args, "prompt_seed", None),
-        "memory_limit_gib": float(args.memory_limit_gib),
+        "memory_limit_gib": (
+            float(args.memory_limit_gib)
+            if getattr(args, "memory_limit_gib", None) is not None
+            else None
+        ),
+        "box_budget_gib": getattr(args, "box_budget_gib", None),
         "verify_record_hashes": bool(args.verify_record_hashes),
         "greedy": True,
         "cells": [],
@@ -919,11 +987,21 @@ def run_real(args) -> int:
     worktree = Path(__file__).resolve().parents[2]
 
     from mlx_lm.utils import load_tokenizer
+    from mtplx.deepseek_v41_memory_profile import (
+        apply_allocator_cache_limit,
+        derive_plan_from_budget,
+    )
     from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming
 
     admission_receipt = None
     if args.admission_receipt is not None:
         admission_receipt = json.loads(Path(args.admission_receipt).read_text())
+
+    derivation = derive_plan_from_budget(
+        box_budget_gib=args.box_budget_gib,
+        override_memory_limit_gib=args.memory_limit_gib,
+    )
+    print(f"[bench] memory derivation: {derivation.formula()}", flush=True)
 
     max_kv = resolve_max_kv(args.context_tokens, args.steps, args.max_kv)
     cache_limit = (
@@ -941,7 +1019,7 @@ def run_real(args) -> int:
     )
     with_mtp, memory_limit_bytes, cache_limit = dspark_bench_loader_overrides(
         want_dspark=want_head,
-        memory_limit_bytes=int(args.memory_limit_gib * GIB),
+        memory_limit_bytes=derivation.memory_limit_bytes,
         expert_cache_limit_bytes=cache_limit,
         reprice=bool(getattr(args, "reprice", True)),
     )
@@ -950,6 +1028,7 @@ def run_real(args) -> int:
         args.model,
         memory_limit_bytes=memory_limit_bytes,
         max_live_kv_tokens=int(max_kv),
+        runtime_reserve_bytes=derivation.runtime_reserve_bytes,
         admit=args.admit,
         admission_receipt=admission_receipt,
         expert_cache_limit_bytes=cache_limit,
@@ -960,6 +1039,17 @@ def run_real(args) -> int:
         verify_record_hashes=args.verify_record_hashes,
         with_mtp=with_mtp,
     )
+    # W62 (2): bound the MLX allocator's freed-buffer cache from the plan so
+    # freed prefill/decode transients do not accumulate past the reserve.
+    cache_limit_report = None
+    if args.apply_memory_cap:
+        cache_limit_report = apply_allocator_cache_limit(
+            derivation.cache_limit_bytes, mx_module=mx
+        )
+        print(
+            "[bench] allocator cache limit: " + json.dumps(cache_limit_report),
+            flush=True,
+        )
     model = resident.model
     if with_mtp and getattr(model, "mtp", None) is None:
         raise RuntimeError(
@@ -977,9 +1067,31 @@ def run_real(args) -> int:
     receipt["manifest_sha256"] = getattr(runtime.manifest, "manifest_sha256", None)
     receipt["memory_limit_bytes"] = runtime.config.memory_limit_bytes
     receipt["expert_cache_limit_bytes"] = runtime.config.expert_cache_limit_bytes
+    receipt["memory_derivation"] = derivation.as_dict()
+    receipt["allocator_cache_limit"] = cache_limit_report
     receipt["engram_layer_ids"] = list(
         getattr(model, "_mtplx_engram_layer_ids", ()) or ()
     )
+
+    if args.memory_profile:
+        from mtplx.deepseek_v41_memory_profile import (
+            format_memory_profile_table,
+            memory_profile_snapshot,
+        )
+
+        load_end = memory_profile_snapshot(
+            phase="load_end",
+            plan=getattr(runtime, "plan", None),
+            runtime=runtime,
+            mx_module=mx,
+            derivation=derivation,
+        )
+        receipt["memory_profile_load_end"] = load_end
+        print(
+            "[bench] memory profile (load end):\n"
+            + format_memory_profile_table([load_end]),
+            flush=True,
+        )
 
     try:
         tokenizer = load_tokenizer(Path(args.model))
@@ -1008,6 +1120,9 @@ def run_real(args) -> int:
                     steps=args.steps,
                     decode_mode=getattr(args, "decode_mode", "ar"),
                     dspark_depth=getattr(args, "dspark_depth", 3),
+                    memory_profile=bool(args.memory_profile),
+                    memory_profile_every=int(args.memory_profile_every),
+                    mx=mx,
                 )
                 repeats.append(metrics)
                 print(

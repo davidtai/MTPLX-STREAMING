@@ -526,8 +526,41 @@ def build_parser() -> argparse.ArgumentParser:
         "and the chunk from MTPLX_DSV41_PREFILL_CHUNK.  Fences inflate absolute "
         "time; ratios are the signal.  Use with --context-tokens 16384.",
     )
-    # GPU-window defaults (agent booted out -> ~82 GiB planner budget).
-    p.add_argument("--memory-limit-gib", type=float, default=82.0)
+    # W62: the plan DERIVES from David's TOTAL box budget
+    # (MTPLX_DSV41_BOX_BUDGET_GB, default 100) minus the macOS floor, the measured
+    # host overhead, and the allocator cache limit
+    # (mtplx.deepseek_v41_memory_profile.derive_plan_from_budget) -- no more
+    # hand-picked 82/92 that drove the box into the panic zone (window 28).
+    # --memory-limit-gib stays as the explicit override.
+    p.add_argument(
+        "--memory-limit-gib",
+        type=float,
+        default=None,
+        help="explicit plan ceiling GiB (override); default: derive from "
+        "--box-budget-gib.",
+    )
+    p.add_argument(
+        "--box-budget-gib",
+        type=float,
+        default=None,
+        help="TOTAL box-use budget GiB the plan is derived from (default: "
+        "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
+    )
+    p.add_argument(
+        "--memory-profile",
+        action="store_true",
+        default=False,
+        help="capture the W62 memory profile (mlx/process/box/plan snapshots) at "
+        "load end, after prefill, and every --memory-profile-every decode "
+        "tokens; writes receipt['memory_profile'] + a rendered table.",
+    )
+    p.add_argument(
+        "--memory-profile-every",
+        type=int,
+        default=64,
+        metavar="N",
+        help="decode-token interval for per-token memory snapshots (default 64).",
+    )
     p.add_argument("--expert-cache-limit-gib", type=float, default=None)
     p.add_argument(
         "--apply-memory-cap", action=argparse.BooleanOptionalAction, default=True
@@ -594,7 +627,19 @@ def _dry_run_arm(args, arm, bench) -> dict:
     }
 
 
+def _resolve_derivation(args):
+    """The W62 budget->plan derivation for this run (override or budget)."""
+
+    from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
+
+    return derive_plan_from_budget(
+        box_budget_gib=args.box_budget_gib,
+        override_memory_limit_gib=args.memory_limit_gib,
+    )
+
+
 def _load_model(args, bench, mx):
+    from mtplx.deepseek_v41_memory_profile import apply_allocator_cache_limit
     from mtplx.models.deepseek_v41_dspark_decode import dspark_bench_loader_overrides
     from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming
 
@@ -607,6 +652,8 @@ def _load_model(args, bench, mx):
         if args.expert_cache_limit_gib is None
         else int(args.expert_cache_limit_gib * GIB)
     )
+    derivation = _resolve_derivation(args)
+    print("[ab] memory derivation: " + derivation.formula(), flush=True)
     # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
     # (with_mtp=True) and reprices the MTP residents against the expert cache so
     # the plan still fits.
@@ -615,7 +662,7 @@ def _load_model(args, bench, mx):
     )
     with_mtp, memory_limit_bytes, cache_limit = dspark_bench_loader_overrides(
         want_dspark=want_head,
-        memory_limit_bytes=int(args.memory_limit_gib * GIB),
+        memory_limit_bytes=derivation.memory_limit_bytes,
         expert_cache_limit_bytes=cache_limit,
         reprice=bool(getattr(args, "reprice", True)),
     )
@@ -623,6 +670,7 @@ def _load_model(args, bench, mx):
         args.model,
         memory_limit_bytes=memory_limit_bytes,
         max_live_kv_tokens=int(max_kv),
+        runtime_reserve_bytes=derivation.runtime_reserve_bytes,
         admit=args.admit,
         admission_receipt=admission_receipt,
         expert_cache_limit_bytes=cache_limit,
@@ -633,6 +681,20 @@ def _load_model(args, bench, mx):
         verify_record_hashes=args.verify_record_hashes,
         with_mtp=with_mtp,
     )
+    # W62 (2): bound the MLX allocator's freed-buffer cache from the plan so
+    # decode/prefill transients that are freed do not accumulate past the reserve
+    # (the served path's _configure_mlx_cache_limit machinery, applied to this
+    # CLI lane which set only the active-allocation memory limit).
+    # ResidentModel is a frozen dataclass, so carry the derivation/cache report
+    # on the (mutable) args namespace rather than on the model.
+    args._dsv41_derivation = derivation
+    args._dsv41_cache_report = None
+    if args.apply_memory_cap:
+        cache_report = apply_allocator_cache_limit(
+            derivation.cache_limit_bytes, mx_module=mx
+        )
+        print("[ab] allocator cache limit: " + json.dumps(cache_report), flush=True)
+        args._dsv41_cache_report = cache_report
     if with_mtp and getattr(resident.model, "mtp", None) is None:
         raise RuntimeError(
             "--decode-mode dspark needs the DSpark MTP head, but the loaded model "
@@ -643,8 +705,44 @@ def _load_model(args, bench, mx):
     return resident
 
 
-def _generate(*, model, ops, mem_probe, prompt_ids, steps):
-    """Greedy prefill + ``steps`` decode; captures the decoded token ids."""
+def _memory_profile_collector(args, mx, runtime, resident):
+    """(callback, snapshots) for the W62 profile, or (None, None) when off.
+
+    The callback captures a snapshot at ``load_end`` immediately, then is handed
+    to ``_generate`` for the ``after_prefill`` and per-N-decode captures.  Only
+    the load-end snapshot carries the derivation (all share one plan)."""
+
+    if not getattr(args, "memory_profile", False):
+        return None, None
+    from mtplx.deepseek_v41_memory_profile import memory_profile_snapshot
+
+    plan = getattr(runtime, "plan", None)
+    derivation = getattr(args, "_dsv41_derivation", None)
+    snaps: list = []
+
+    def _cb(phase, token=None):
+        snaps.append(
+            memory_profile_snapshot(
+                phase=phase,
+                token=token,
+                plan=plan,
+                runtime=runtime,
+                mx_module=mx,
+                derivation=derivation if phase == "load_end" else None,
+            )
+        )
+
+    _cb("load_end")
+    return _cb, snaps
+
+
+def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
+              mem_profile_every=64):
+    """Greedy prefill + ``steps`` decode; captures the decoded token ids.
+
+    ``mem_profile`` (optional) is a ``callable(phase, token=None)`` that captures
+    a W62 memory snapshot; it is called ``after_prefill`` and every
+    ``mem_profile_every`` decode tokens.  ``None`` leaves the loop unchanged."""
     mem_probe.reset_peak()
     t0 = time.perf_counter()
     cache = model.make_cache()
@@ -653,13 +751,18 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps):
     ttft_s = time.perf_counter() - t0
     token = ops.argmax_last(logits)
     generated = [token]
+    if mem_profile is not None:
+        mem_profile("after_prefill")
 
     decode_start = time.perf_counter()
-    for _ in range(int(steps)):
+    every = max(1, int(mem_profile_every))
+    for step in range(int(steps)):
         logits = model(ops.input([[token]]), cache=cache)
         ops.sync(logits)
         token = ops.argmax_last(logits)
         generated.append(token)
+        if mem_profile is not None and (step + 1) % every == 0:
+            mem_profile("decode", token=step + 1)
     decode_wall_s = time.perf_counter() - decode_start
     return {
         "generated": [int(t) for t in generated],
@@ -790,12 +893,17 @@ def _run_arm(args, arm, bench, mx) -> dict:
     try:
         ops = bench._MLXOps(mx)
         mem_probe = bench._MLXMemProbe(mx)
+        mem_profile_cb, mem_profile_snaps = _memory_profile_collector(
+            args, mx, runtime, resident
+        )
         run = _generate(
             model=model,
             ops=ops,
             mem_probe=mem_probe,
             prompt_ids=prompt_ids,
             steps=args.decode_tokens,
+            mem_profile=mem_profile_cb,
+            mem_profile_every=int(getattr(args, "memory_profile_every", 64)),
         )
         ids = run["generated"]
         receipt = {
@@ -828,6 +936,21 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 _k29.engagement() if _k29 is not None else None
             ),
         }
+        if mem_profile_snaps is not None:
+            from mtplx.deepseek_v41_memory_profile import (
+                format_memory_profile_table,
+            )
+
+            mem_profile_cb("decode", token=int(args.decode_tokens))
+            _deriv = getattr(args, "_dsv41_derivation", None)
+            receipt["memory_profile"] = {
+                "cache_limit_report": getattr(args, "_dsv41_cache_report", None),
+                "derivation": _deriv.as_dict() if _deriv is not None else None,
+                "snapshots": mem_profile_snaps,
+                "table": format_memory_profile_table(mem_profile_snaps),
+            }
+            print("[ab] memory profile:\n" + receipt["memory_profile"]["table"],
+                  flush=True)
         if getattr(args, "decode_mode", "ar") == "dspark":
             # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR
             # ids byte-for-byte (verify is authoritative); assert it in the
