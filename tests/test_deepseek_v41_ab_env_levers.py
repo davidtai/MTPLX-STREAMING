@@ -10,10 +10,10 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
   * the ``--dry-run`` CPU double (no model, no MLX/Metal op, no server);
   * per-arm env application for every preset
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
-    switch_fastpath / attn_compile / both / all_levers / stack_a / head_bf16 /
-    head_mxfp8 / head_q8),
+    switch_fastpath / switch_fastpath_b / attn_compile / both / all_levers /
+    stack_a / head_bf16 / head_mxfp8 / head_q8),
     including arm independence (each arm force-unsets the keys it does not set,
-    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the six boolean
+    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the seven boolean
     per-forward levers never leak across each other);
   * prompt-build metadata parity with ``bench_standard_shape`` at 1024.
 
@@ -44,10 +44,11 @@ _LM = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
 _SK = "MTPLX_DSV41_SINKHORN_METAL"
 _HC = "MTPLX_DSV41_HC_COMPILE"
 _FP = "MTPLX_DSV41_SWITCH_FASTPATH"    # W42 / K23: switch all-hit fast-path
+_SB = "MTPLX_DSV41_SWITCH_SUBMIT"      # W42 / K23 var B: all-hit async submit
 _AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
 _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
-_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _AC)  # the six boolean per-forward levers
-_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all seven keys
+_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC)  # the seven boolean per-forward levers
+_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all eight keys
 
 ALL_ARMS = [
     "control",
@@ -56,6 +57,7 @@ ALL_ARMS = [
     "sinkhorn_metal",
     "hc_compile",
     "switch_fastpath",
+    "switch_fastpath_b",
     "attn_compile",
     "both",
     "all_levers",
@@ -73,10 +75,13 @@ EXPECTED_ON = {
     "sinkhorn_metal": {_SK},
     "hc_compile": {_HC},
     "switch_fastpath": {_FP},
+    "switch_fastpath_b": {_FP, _SB},
     "attn_compile": {_AC},
     "both": {_OV, _LM},
-    "all_levers": {_OV, _LM, _SK, _HC, _FP, _AC},
-    "stack_a": {_SK, _FP, _AC},
+    "all_levers": {_OV, _LM, _SK, _HC, _FP, _SB, _AC},
+    # W42 window-14: pure fast path measured -13.4%, so the fast path is LEFT OUT
+    # of stack_a until variant B (switch_fastpath_b) beats control.
+    "stack_a": {_SK, _AC},
     "head_bf16": set(),
     "head_mxfp8": set(),
     "head_q8": set(),
@@ -90,6 +95,7 @@ EXPECTED_HEAD = {
     "sinkhorn_metal": None,
     "hc_compile": None,
     "switch_fastpath": None,
+    "switch_fastpath_b": None,
     "attn_compile": None,
     "both": None,
     "all_levers": None,

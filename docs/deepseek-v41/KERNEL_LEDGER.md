@@ -260,6 +260,21 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   KILL (the ceiling, not a promise).
 
 ### K23 — DSV4.1 all-hit switch fence removal (deferred-release, W42) — **Rank 1b (companion to K1; the second per-layer sync K1 does not touch)**
+> **⚠ GPU window 14 result (integration 7770960a9, 1,024/256, 82 GiB):** pure defer
+> (`switch_fastpath`) decoded **3.48 vs control 4.02 tok/s = −13.4 %**, byte-identical
+> (same token sha), same 77.7 GB peak. The **a3b trap fired** (worse than a3b's
+> −3.27 %). Diagnosis (W42_SWITCH_HOT_PATH.md §8): the all-hit deferred branch
+> submitted **no** GPU work (unlike the split defer branch, which `async_eval`s its
+> wave — "the GPU still needs the part submitted now"), and DSV4.1's backbone has no
+> `MTPLX_HY3_SUBMIT_CADENCE` equivalent (hy3_mlx.py:1165, out of this allowlist), so
+> on all-hit layers the lazy graph accrued and the device idled until the next
+> barrier drained it in one lump. **Variant B** (`switch_fastpath_b` =
+> `MTPLX_DSV41_SWITCH_FASTPATH=1` + `MTPLX_DSV41_SWITCH_SUBMIT=1`) `async_eval`s each
+> all-hit wave output — a non-blocking per-layer submit that keeps the GPU fed
+> without the blocking round-trip, matching the split path. **A/B-pending; default
+> off.** If variant B also fails to win, K23 is dead-on-this-lane (the barrier
+> already drains every layer, leaving no accumulated-graph window a within-switch
+> submit can fill — the real cadence lever is in the backbone, W41's allowlist).
 - **Mechanism:** the DSV4.1 lane pays a **second** per-layer device→host sync besides the K1 routing
   barrier — the all-hit **wave fence** `synchronous_fence` → `mx.eval(wave_output)` in
   `HotExpertSwitchGLU._run` (route bracket `hot.allhit_fence_eval`). W37 window-13 measured it at

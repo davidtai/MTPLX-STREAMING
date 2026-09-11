@@ -135,10 +135,10 @@ layer in every mode**, before and after — the lever never adds or deletes it.
   (they pay one sync per layer for the same switch). Split layers additionally shed
   their per-part fences.
 - **Net decode delta is the GPU A/B's call** (per the a3b caution, async-submission
-  backpressure may conserve part of a removed sync's block): mechanically ~26 ms/token
-  of exposed fence is gone and no blocking sync is added, so the floor moves from
-  268 ms/token toward ~242 ms/token before counting overlap recovery. Default off
-  until the window prices it.
+  backpressure may conserve part of a removed sync's block). This a-priori estimate
+  was **refuted** by GPU window 14: pure defer measured **−13.4 %**, not a gain — see
+  §8 for the root cause (the removed fence left the all-hit path submitting no GPU
+  work) and variant B. Default off; nothing ships until an arm beats control.
 
 ## 5. Byte-identity proof (`tests/test_deepseek_v41_switch_fastpath.py`, green)
 
@@ -164,14 +164,16 @@ Regression: `test_streamed_models.py` (80), `test_deepseek_v41_sync_overlap.py`,
 `tests/models/test_deepseek_v41_{moe,stage_timing}.py`, and
 `test_deepseek_v41_served_generation.py` all green (flag off ⇒ shipped path verbatim).
 
-## 6. GPU A/B arm
+## 6. GPU A/B arms
 
-`scripts/deepseek_v41/ab_decode_env_levers.py` gains the `switch_fastpath` preset
-(`MTPLX_DSV41_SWITCH_FASTPATH=1`; every preset pins all five lever keys, `all_levers`
-includes it). Inside `scripts/deepseek_v41/gpu_window.sh`:
+`scripts/deepseek_v41/ab_decode_env_levers.py` gains two presets:
+`switch_fastpath` (`MTPLX_DSV41_SWITCH_FASTPATH=1`, pure defer) and
+`switch_fastpath_b` (`+ MTPLX_DSV41_SWITCH_SUBMIT=1`, defer + async submit — §8).
+Every preset pins all six lever keys; `all_levers` runs variant B. Inside
+`scripts/deepseek_v41/gpu_window.sh`:
 
 ```
-ab_decode_env_levers.py --arms control switch_fastpath \
+ab_decode_env_levers.py --arms control switch_fastpath switch_fastpath_b \
   --context-tokens 1024 --decode-tokens 256 --syncs 16 \
   --stage-timing --warm-repeat --out <receipt.jsonl>
 ```
@@ -180,6 +182,13 @@ ab_decode_env_levers.py --arms control switch_fastpath \
 route brackets; `--stage-timing` re-reads `hot.allhit_fence_eval` (expected → ~0
 under the fast-path); byte-identity is the recorded token-id sha256 (a differing sha
 FAILS the arm).
+
+**Census-probe caveat (window-14):** `--syncs`'s route-stage counters are **not**
+reset between arms in that harness, so the per-arm `stages` totals/counts are
+**cumulative across arms** (arm _k_ ≈ _k_× the first arm) and are **not**
+per-arm-comparable. The reliable per-arm fields are the clean `sync_census`
+scalars (`routing_barriers_per_token`, `sinkhorn_*`) and the top-level tok/s / peak
+/ sha. This does not affect the decode measurement; note it when reading the census.
 
 ## 7. Scope / caveats
 
@@ -191,3 +200,80 @@ FAILS the arm).
 - **Not gated by model key** (W28 convention): the env name provides the isolation —
   an hy3/glm run simply does not set `MTPLX_DSV41_SWITCH_FASTPATH`, and those lanes
   already defer via their profiles anyway.
+
+## 8. GPU window 14 result + diagnosis + variant B
+
+**Measured (integration 7770960a9, 1,024-token prompt, 256 greedy decode, 82 GiB
+plan; receipt `docs/deepseek-v41/receipts/gpu-windows/window-14/ab-1024-head-
+switch.json`):**
+
+| arm | decode tok/s | Δ vs control | tokens | peak GB |
+|---|---:|---:|:---:|---:|
+| control | 4.02 | — | sha 033bfcdf… | 77.68 |
+| `switch_fastpath` (pure defer) | **3.48** | **−13.4 %** | **identical** | 77.68 |
+| head_bf16 (other worker) | 5.28 | +31 % | identical | 75.94 |
+| sinkhorn_metal | 4.01 | −0.4 % | identical | 77.68 |
+
+So the fast-path is **byte-identical but −13.4 % slower** — the a3b backpressure
+trap ([[a3b-decode-roundtrip-is-the-lever]]), worse than a3b's −3.27 %.
+
+**Why pure defer lost (root cause).** The clean per-arm signal in the receipt:
+`routing_barriers_per_token = 40.0` for **both** arms (the fast-path preserved the
+one-barrier-per-layer invariant, as designed), and the `--syncs` census confirmed
+the all-hit fence became a deferred release (`hot.allhit_defer` counted, 0
+`hot.allhit_fence_eval` in the fast-path's own pass). So the mechanism worked. The
+regression is **submission**, not sync count:
+
+- The all-hit **deferred** branch (`_run`) submitted **no GPU work** — it appended
+  the wave output to `outputs`, called `defer_slot_release`, and moved on. The
+  **split** deferred branch does the opposite: `evaluate_component_bindings(defer=
+  True)` calls `async_eval(wave_outputs)` — its comment: *"the GPU still needs the
+  part submitted now — without it the device idles."* The all-hit path never got
+  that treatment.
+- DSV4.1's backbone (`deepseek_v41.py`, W41 — **out of this worker's allowlist**)
+  has **no submit cadence**. hy3 pairs `deferred_pin_release=True` with
+  **`MTPLX_HY3_SUBMIT_CADENCE=8`** (`mtplx/data/expert_profiles.json`), applied in
+  `hy3_mlx.py:1165` as `async_eval(hidden)` every 8 decode layers, with the exact
+  comment describing this failure: *"without checkpoints the … segments accumulate
+  as unsubmitted lazy graph while Python walks the layers, and the GPU idles until
+  the next … eval drains the whole backlog at once."*
+- Net: on all-hit layers the fast-path removed the fence but replaced it with
+  **nothing**, so the lazy graph accrued and the GPU idled until the next barrier
+  drained it in a lump — exactly the mechanism hy3's cadence exists to prevent.
+
+**hy3's companion settings (checked against DSV4.1's config):**
+
+| hy3-oq2e profile setting | DSV4.1 `build_streaming_config` | gap |
+|---|---|---|
+| `deferred_pin_release: true` | `False` (default) | promoted by the fast-path |
+| `split_route_release: "deferred"` | `"fenced"` (default) | promoted by the fast-path |
+| **`MTPLX_HY3_SUBMIT_CADENCE: 8`** | **none (no DSV4.1 equivalent)** | **the missing companion — variant B** |
+| `MTPLX_SUSTAINED_PREFILL: 1` | n/a (decode) | prefill only |
+| `cache_policy: frequency`, `cache_scope: layer`, `slot_layout: component-banks` | same (component-banks confirmed by all-hit path) | matched |
+
+The load-bearing missing companion is the **submit cadence**. Its real home is the
+backbone decode loop (W41's allowlist), which this worker cannot touch — so variant
+B puts the equivalent submit **inside the switch**.
+
+**Variant B — `switch_fastpath_b` (`MTPLX_DSV41_SWITCH_SUBMIT=1`, default off).**
+The all-hit deferred branch now `async_eval`s its wave output (non-blocking
+per-layer submit) before deferring the release — keeping the GPU fed during the
+host graph-build of the following layers, without the blocking round-trip and
+without releasing the pin early. This makes the all-hit path behave exactly like
+the already-correct split defer path. Scheduling only → **byte-identical**
+(asserted in the test's byte-identity matrix for both variants, and the census:
+variant B adds exactly one `async_eval` and still 0 blocking wave fences, barrier
+still 1). Host syncs/all-hit layer stay **1** (barrier only); the difference from
+pure defer is one **non-blocking** submit per all-hit layer.
+
+**Honest read on whether it can win.** Variant B is the principled fix (it closes
+the all-hit vs split submission asymmetry the diagnosis found) and is the natural
+next A/B. But there is a real chance the lane **cannot** win within the switch:
+DSV4.1 already forces `mx.eval(indices)` **every layer**, so unlike hy3's islands
+there is only ever ~one layer of unsubmitted graph between barriers — the window a
+within-switch submit can fill is small, and MLX's async backpressure may conserve
+the block regardless (the a3b result). If `switch_fastpath_b` does not clear
+control in window 15, K23 is **dead on this lane**: the fence is genuinely load-
+bearing as a per-layer command-buffer boundary here, and the only real cadence
+lever lives in the backbone (W41), not this switch. Either way the fast-path stays
+**default off**; nothing ships until an arm beats control.
