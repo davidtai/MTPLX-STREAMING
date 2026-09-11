@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/cli.py", line 5262, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/cli.py", line 5224, in main
+    return int(args.func(args))
+               ^^^^^^^^^^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/cli.py", line 1013, in cmd_serve_public
+    return handler(args)
+           ^^^^^^^^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/commands/public.py", line 9444, in cmd_serve_public
+    generation_mode = _generation_mode_from_args(args)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/commands/public.py", line 756, in _generation_mode_from_args
+    return _normalize_generation_mode(explicit)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/commands/public.py", line 742, in _normalize_generation_mode
+    raise ValueError("generation mode must be 'mtp' or 'ar'")
+ValueError: generation mode must be 'mtp' or 'ar'

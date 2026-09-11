@@ -75,6 +75,20 @@ TOP_K="${DSV41_TOP_K:-20}"
 # Never above the 16K sanity gate unless deliberately raised.
 STOP_AFTER_CONTEXT="${DSV41_STOP_AFTER_CONTEXT:-16384}"
 
+# W83: a timed sweep cell MUST be a cold prefill -- the whole prompt prefilled
+# fresh (new_prefill_tokens == prompt_tokens). The RAM/SSD session bank's near-
+# and block-prefix restore reuses a shared prompt prefix ACROSS cells and ACROSS
+# server launches (the SSD cold tier persists on disk and reloads on the next
+# start), so a reused cell's prefill tok/s no longer measures the full prompt --
+# and a stale cross-launch block-prefix reuse produced GARBAGE output on the 16K
+# cell (docs/deepseek-v41/W83_SERVED_PREFIX_GARBAGE.md). The Qwen-PR harness ran
+# the timed cells with the prefix cache OFF; match that. Default off: disable
+# every reuse path AND isolate the SSD cache to a throwaway per-run dir so no
+# prior launch can serve any prefix. Set DSV41_PREFIX_REUSE=on to measure the
+# warm-reuse path deliberately; either way each receipt records a prefix_reuse
+# field and server_cell_bench flags any cell whose new_prefill < prompt_tokens.
+PREFIX_REUSE="${DSV41_PREFIX_REUSE:-off}"
+
 # Served context window must admit the LARGEST cell's prompt PLUS its output:
 # the profile default (deepseek-v41-mxfp4-75) caps max_live_kv_tokens at 16,384,
 # so a 16,384-token prompt + max_tokens=1,024 output = 17,408 > 16,384 and the
@@ -212,16 +226,39 @@ if [[ -n "${DSV41_MEMORY_LIMIT_GIB:-}" ]]; then
   MEM_ARGS=(--expert-memory-limit "${DSV41_MEMORY_LIMIT_GIB}GiB")
   log "expert memory ceiling override: --expert-memory-limit ${DSV41_MEMORY_LIMIT_GIB}GiB"
 fi
+
+# W83: prefix/session-bank reuse control (see the DSV41_PREFIX_REUSE note above).
+# The three restore/store env flags default ON in the engine; setting them to 0
+# turns off the near-prefix restore, block-prefix restore, and store-on-prefill
+# paths so nothing is banked or reused during the timed run. Isolating the SSD
+# cache dir to a fresh throwaway directory additionally guarantees no PRIOR
+# launch's persisted entry (exact- or block-prefix) can be served. Both are
+# gated on DSV41_PREFIX_REUSE=off (the default).
+SESSION_ENV=()
+SSD_ARGS=()
+if [[ "${PREFIX_REUSE}" == "off" ]]; then
+  SESSION_ENV=(
+    MTPLX_SESSION_NEAR_PREFIX_RESTORE=0
+    MTPLX_SESSION_BLOCK_PREFIX_RESTORE=0
+    MTPLX_SESSION_STORE_ON_PREFILL=0
+  )
+  SSD_CACHE_DIR="${LOG_DIR}/ssd-session-cache-${STAMP}"
+  mkdir -p "${SSD_CACHE_DIR}"
+  SSD_ARGS=(--ssd-session-cache-dir "${SSD_CACHE_DIR}")
+  log "prefix/session-bank reuse DISABLED for timed cells (cold prefill): ${SESSION_ENV[*]}; isolated SSD cache dir ${SSD_CACHE_DIR}"
+else
+  log "WARNING: prefix/session-bank reuse ENABLED (DSV41_PREFIX_REUSE=on); cells MAY reuse a banked prefix -- prefill tok/s will not measure the full prompt and receipts will be flagged"
+fi
 log "context window: --expert-max-live-kv-tokens ${MAX_LIVE_KV_TOKENS} (max ctx ${MAX_CTX} + max_tokens ${MAX_TOKENS} + margin ${KV_MARGIN})"
 log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} --no-auth --expert-max-live-kv-tokens ${MAX_LIVE_KV_TOKENS} ${MEM_ARGS[*]:-} ${DSV41_SERVE_EXTRA_ARGS:-}"
 (
   cd "${WORKTREE}" || exit 97
-  exec env PYTHONPATH="${WORKTREE}" "${VENV_PY}" -m mtplx.cli serve \
+  exec env PYTHONPATH="${WORKTREE}" "${SESSION_ENV[@]}" "${VENV_PY}" -m mtplx.cli serve \
     --model "${MODEL}" \
     --host "${HOST}" \
     --port "${PORT}" \
     --expert-max-live-kv-tokens "${MAX_LIVE_KV_TOKENS}" \
-    --no-auth "${MEM_ARGS[@]}" ${DSV41_SERVE_EXTRA_ARGS:-}
+    --no-auth "${MEM_ARGS[@]}" "${SSD_ARGS[@]}" ${DSV41_SERVE_EXTRA_ARGS:-}
 ) >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 log "server pid=${SERVER_PID}"

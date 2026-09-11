@@ -1,0 +1,26 @@
+  ███╗   ███╗ ████████╗ ██████╗  ██╗      ██╗  ██╗
+  ████╗ ████║ ╚══██╔══╝ ██╔══██╗ ██║      ╚██╗██╔╝
+  ██╔████╔██║    ██║    ██████╔╝ ██║       ╚███╔╝ 
+  ██║╚██╔╝██║    ██║    ██╔═══╝  ██║       ██╔██╗ 
+  ██║ ╚═╝ ██║    ██║    ██║      ███████╗ ██╔╝ ██╗
+  ╚═╝     ╚═╝    ╚═╝    ╚═╝      ╚══════╝ ╚═╝  ╚═╝
+
+  Native MTP speculative decoding · Apple Silicon
+
+╭─ MTPLX 2.11.2 ───────────────────────────────────────────────────────────────╮
+│                                                                              │
+│      Model  deepseek-v4.1-flash-mtplx-streaming-mxfp4                        │
+│    Profile  sustained (Sustained: long-context native-MTP path with bounded  │
+│             memory)                                                          │
+│        API  http://127.0.0.1:18080/v1                                        │
+│       Mode  Sustained MTP                                                    │
+│    Browser  http://127.0.0.1:18080/                                          │
+│  Listening  127.0.0.1:18080                                                  │
+│    Loading  /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxf…  │
+│     Warmup  16 tokens                                                        │
+│       Auth  API key: leave blank for localhost                               │
+│       Stop  Ctrl-C                                                           │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+error: completed config memory_limit_bytes 92341796864 exceeds the admitted expert profile process ceiling 88046829568

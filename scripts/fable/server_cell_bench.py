@@ -1501,6 +1501,32 @@ def _mtp_accept_rate(raw: Mapping[str, Any]) -> float | None:
 TEXT_EXCERPT_CHARS = 240
 
 
+def warn_if_prefix_reused(record: Mapping[str, Any]) -> None:
+    """Flag a timed cell that was NOT a cold prefill (W83).
+
+    A reused banked prefix (new_prefill_tokens < prompt_tokens) means the
+    prefill tok/s no longer measures the full prompt, and a stale cross-launch
+    block-prefix reuse also corrupted the served output. Print a loud stderr
+    warning so a reused cell is never mistaken for a clean measurement; the row
+    itself carries ``record["prefix_reuse"]["flagged"]`` for downstream
+    filtering / chart exclusion."""
+    pr = record.get("prefix_reuse") or {}
+    if not pr.get("flagged"):
+        return
+    kind = pr.get("restore_kind")
+    print(
+        "    WARNING [W83 prefix reuse]: new_prefill_tokens="
+        f"{pr.get('new_prefill_tokens')} < prompt_tokens={pr.get('prompt_tokens')} "
+        f"({pr.get('reused_prefix_tokens')} tokens reused"
+        + (f", restore_kind={kind}" if kind else "")
+        + ") -- NOT a cold prefill; disable reuse (DSV41_PREFIX_REUSE=off / "
+        "MTPLX_SESSION_NEAR_PREFIX_RESTORE=0 MTPLX_SESSION_BLOCK_PREFIX_RESTORE=0 "
+        "MTPLX_SESSION_STORE_ON_PREFILL=0) or exclude this row.",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def build_record(
     *,
     server: str,
@@ -1537,6 +1563,35 @@ def build_record(
     if new_prefill is None:
         new_prefill = call.get("prompt_tokens") or target_tokens
 
+    # W83: a timed sweep cell must be a COLD prefill -- the whole prompt is
+    # prefilled fresh, so new_prefill_tokens == prompt_tokens. When the RAM/SSD
+    # session bank serves part of the prompt (near/block/exact prefix restore),
+    # new_prefill drops below prompt_tokens: the prefill tok/s then measures only
+    # the un-reused suffix, not the full prompt, and a stale cross-launch block-
+    # prefix reuse also produced garbage output (docs/deepseek-v41/W83_...md).
+    # Record the reuse explicitly and FLAG any row where reuse happened so it is
+    # never charted as a clean full-prompt measurement.
+    _prompt_tokens = call.get("prompt_tokens")
+    _new_prefill_i = int(new_prefill or 0)
+    _reused_prefix = (
+        max(0, int(_prompt_tokens) - _new_prefill_i)
+        if isinstance(_prompt_tokens, int) and _prompt_tokens
+        else 0
+    )
+    prefix_reuse = {
+        "prompt_tokens": _prompt_tokens,
+        "new_prefill_tokens": _new_prefill_i,
+        "reused_prefix_tokens": _reused_prefix,
+        "cached_tokens": stats.get("cached_tokens"),
+        "restore_kind": stats.get("restore_kind"),
+        # True iff the server reused a banked prefix (new_prefill < prompt_tokens).
+        "flagged": bool(
+            isinstance(_prompt_tokens, int)
+            and _prompt_tokens
+            and _new_prefill_i < int(_prompt_tokens)
+        ),
+    }
+
     server_memory = stats.get("peak_memory_bytes")
     if server_memory:
         peak_bytes: int | None = int(server_memory)
@@ -1558,6 +1613,7 @@ def build_record(
         "ok": bool(call.get("ok")),
         "prompt_tokens": call.get("prompt_tokens"),
         "new_prefill_tokens": int(new_prefill or 0),
+        "prefix_reuse": prefix_reuse,
         "completion_tokens": call.get("completion_tokens"),
         "finish_reason": call.get("finish_reason"),
         "prefill_time_s": prefill_s,
@@ -5070,6 +5126,7 @@ def run_battery(args: argparse.Namespace) -> int:
             record["memory_pressure_events"] = pressure_events
             record["memory_pressure"] = memory_pressure_level()
             records.append(record)
+            warn_if_prefix_reused(record)
             if record["ok"]:
                 print(
                     f"    prefill {_fmt(record['prefill_time_s'])}s "
@@ -5363,6 +5420,7 @@ def run_cells_remote(
         if not record["ok"] and getattr(args, "server_log", None):
             record["server_log_tail"] = _server_log_error_tail(args.server_log)
         records.append(record)
+        warn_if_prefix_reused(record)
         if record["ok"]:
             reasoning_tokens = record["response_parity"].get("reasoning_tokens")
             reasoning_chars = record.get("reasoning_chars") or 0
