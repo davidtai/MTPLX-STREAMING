@@ -865,13 +865,18 @@ class DeepseekV41Backbone(nn.Module):
         for the memory bound: MLX is lazy, so an unevaluated chain of appends keeps
         every span's score alive at once."""
         arrays = [a for a in extra if a is not None]
+        # getattr with a default keeps this robust to W22's cache-container
+        # reshaping (mlx_lm per-layer protocol): it forces whatever stored arrays
+        # are present, and simply skips any renamed field.
         for lc in cache.layers:
-            for a in (lc.window, lc.compress_kv, lc.index_k):
+            for name in ("window", "compress_kv", "index_k"):
+                a = getattr(lc, name, None)
                 if a is not None:
                     arrays.append(a)
             cs = getattr(lc, "comp_state", None)
             if cs is not None:
-                for a in (cs.raw_kv, cs.raw_score):
+                for name in ("raw_kv", "raw_score"):
+                    a = getattr(cs, name, None)
                     if a is not None:
                         arrays.append(a)
         if arrays:
