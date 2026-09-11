@@ -2850,9 +2850,14 @@ class HotExpertSwitchGLU(nn.Module):
         # ``gather_qmm`` is row-independent, so the single gather is bit-for-bit the
         # split+concat the loop below would produce (same token, same expert
         # weights per assignment); this is the existing all-hit branch applied to
-        # one full wave.  A miss falls through to the bounded ``route_waves`` loop
-        # (unchanged): a wide verify's misses can exceed transient capacity and must
-        # still be admitted in batches.  M=1 is excluded (kept byte-for-byte).
+        # one full wave.  A miss declines the all-hit probe and takes the W66 split
+        # single-barrier path (below): when the whole route -- hits AND misses --
+        # fits transient capacity in one transaction it is admitted in ONE
+        # ``begin_split_route`` submission and gathered deferred, still exactly ONE
+        # routing barrier.  A route whose unique experts exceed transient capacity
+        # falls through to the bounded ``route_waves`` loop (unchanged), which
+        # admits it in fenced capacity-bounded waves.  M=1 is excluded (kept
+        # byte-for-byte).
         _verify_single_barrier = (
             os.environ.get("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "1") == "1"
             and phase is RoutingPhase.DECODE
@@ -2932,7 +2937,107 @@ class HotExpertSwitchGLU(nn.Module):
                 if shared_work is not None and shared is None:
                     shared = shared_work()
                 return output, shared
-            # Not all-hit: fall through to the bounded route_waves loop below.
+            # W66 split single-barrier: this small-M DECODE verify has misses, so
+            # W61's all-hit probe declined.  When the WHOLE route (hits + misses)
+            # fits transient capacity in one transaction, admit it in ONE
+            # ``begin_split_route`` submission -- hits pinned in persistent slots,
+            # the missing experts streamed into transient together (one preadv /
+            # admission call) -- then gather every rows*top_k assignment through the
+            # shared component-bank helper (deferred / async-submitted) and defer
+            # the single route's release to the next routing barrier.  That is the
+            # W42/W61 deferred-pin proof: the pins stay held until a covering eval,
+            # so unlike the W44 device route there is no unpinned recycle.  Net:
+            # exactly ONE routing barrier (the ``mx.eval(indices)`` above) per
+            # layer, no per-wave synchronous fence.  This is the bounded loop's
+            # single-wave split branch, run once over the full route and always
+            # deferred, so it is byte-identical to that loop (same tokens x same
+            # per-assignment expert weights, recombined by output position; the
+            # gather is row-independent) -- verified flag on vs off at M=2/4/8 for
+            # 1-miss, multi-miss and all-miss layers.  Hits and misses share ONE
+            # pinned set here, so a decode miss can never be promoted into (and
+            # recycle) a slot whose gather is still pending.  A route whose UNIQUE
+            # experts exceed transient capacity cannot be one transaction
+            # (``begin_split_route`` validates unique <= transient_slots) and its
+            # waves cannot all hold their pins at once (the layer lock is not
+            # reentrant, issue #120), so it falls through to the bounded route_waves
+            # loop unchanged.  M=1 never reaches here.
+            _verify_can_defer = callable(
+                getattr(self.runtime, "defer_slot_release", None)
+            ) and callable(
+                getattr(self.runtime, "flush_deferred_slot_releases", None)
+            )
+            _capacity = int(
+                getattr(getattr(self.runtime, "plan", None), "transient_slots", 0) or 0
+            )
+            _unique_experts = tuple(dict.fromkeys(expert_ids))
+            if (
+                _verify_can_defer
+                and _capacity >= 1
+                and len(_unique_experts) <= _capacity
+            ):
+                with _stime.stage_nested("switch.miss_submit"), \
+                        _route_probe.bracket("hot.begin_split_route"):
+                    _pending = self.runtime.begin_split_route(
+                        self.layer_index,
+                        tuple(expert_ids),
+                        phase=phase,
+                    )
+                _route_probe.count("hot.verify_single_barrier_split")
+                _wave_start = len(outputs)
+                _deferred_parts: list[ReadyRoute] = []
+                _completed = False
+                try:
+                    _hit_set = set(_pending.plan.hits)
+                    if _pending.hit_ready is not None:
+                        _hit_positions = tuple(
+                            i for i, e in enumerate(expert_ids) if e in _hit_set
+                        )
+                        evaluate_component_bindings(
+                            _hit_positions,
+                            _pending.hit_ready.bindings,
+                            _pending.hit_ready,
+                            force_sync=True,
+                            defer=True,
+                        )
+                    for _miss_ready in _pending.iter_ready_misses():
+                        _ready_experts = set(_miss_ready.plan.experts)
+                        _miss_positions = tuple(
+                            i
+                            for i, e in enumerate(expert_ids)
+                            if e not in _hit_set and e in _ready_experts
+                        )
+                        evaluate_component_bindings(
+                            _miss_positions,
+                            _miss_ready.bindings,
+                            _miss_ready,
+                            force_sync=True,
+                            defer=True,
+                        )
+                        _deferred_parts.append(_miss_ready)
+                    _completed = True
+                except BaseException as exc:
+                    _pending.abort(exc)
+                    raise
+                finally:
+                    if _completed:
+                        # One deferred release covers the whole route: the
+                        # adapter replays release_miss + close (hit pins, miss
+                        # leases, and the layer lock) one covering eval later.
+                        self.runtime.defer_slot_release(
+                            _DeferredSplitClose(_pending, tuple(_deferred_parts)),
+                            tuple(outputs[_wave_start:]),
+                        )
+                    else:
+                        _pending.close()
+                joined = mx.concatenate(outputs, axis=0)
+                order = mx.argsort(mx.array(output_positions, dtype=mx.int32))
+                joined = mx.take(joined, order, axis=0)
+                output = joined.reshape((*indices.shape, hidden_size))
+                if shared_work is not None and shared is None:
+                    shared = shared_work()
+                return output, shared
+            # Route too wide for one transient transaction (unique experts exceed
+            # capacity): fall through to the bounded route_waves loop below.
 
         try:
             # W47 switch breakdown (prefill only; no-op otherwise): the host-side
