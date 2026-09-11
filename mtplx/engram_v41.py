@@ -341,6 +341,62 @@ class NgramHashState:
             raise RuntimeError("no positions advanced yet")
         return self._current[:, :, layer_hash_index, :]
 
+    # -- serialisation (mlx_lm session-state contract) ----------------------
+    @property
+    def state(self) -> mx.array:
+        """The streaming n-gram history as one ``mx.array`` for save/restore.
+
+        Returns the ``[B, T]`` compressed-id history buffer (``int32``; ``DEAD``
+        ``== -1``) that :meth:`advance` / :meth:`trim` maintain -- exactly the
+        per-sequence state a warm-turn (session-bank / SSD) restore must
+        reinstate so n-gram lookbacks cross the restore seam.  A never-advanced
+        state serialises to the canonical empty ``[1, 0]`` buffer.
+
+        Only the *history* travels: the immutable hash config (compressed token
+        map, multipliers, primes, flat offsets) is shared across sequences and is
+        rebuilt by :meth:`fresh`, so it is deliberately NOT serialised.  Being a
+        single ``mx.array`` leaf (no numpy, no ``None``), this round-trips through
+        both ``mtplx.cache_state.snapshot_cache`` / ``restore_cache`` and
+        ``mlx_lm.save_prompt_cache`` / ``load_prompt_cache`` (whose ``tree_flatten``
+        + ``mx.save_safetensors`` reject the raw numpy ``_buf`` with
+        ``std::bad_cast``).
+        """
+        if self._buf is None:
+            return mx.zeros((1, 0), dtype=mx.int32)
+        return mx.array(self._buf.astype(np.int32))
+
+    @state.setter
+    def state(self, value) -> None:
+        self.replace_state(value)
+
+    def replace_state(self, value) -> None:
+        """Reinstate the streaming history from :attr:`state` (mlx_lm contract).
+
+        Accepts the ``mx.array`` (or any ``[B, T]`` array-like) produced by
+        :attr:`state`; ``None`` resets to a fresh history.  :meth:`fresh` /
+        :meth:`advance` / :meth:`trim` semantics are preserved -- the internal
+        ``_buf`` is restored to its exact contents (as ``int64``, the working
+        dtype) and ``_len`` is derived from it, while the transient last-advance
+        cache ``_current`` is cleared (the next :meth:`advance` recomputes it
+        before any :meth:`current_row_ids` read, exactly as :meth:`trim` does).
+        """
+        if value is None:
+            self.reset()
+            return
+        arr = np.asarray(value)
+        if arr.ndim != 2:
+            raise ValueError(f"engram state must be [B, T]; got shape {tuple(arr.shape)}")
+        if arr.shape[1] == 0:
+            # empty history (never advanced, or fully trimmed): a fresh buffer is
+            # equivalent -- the next advance rebuilds from scratch for whatever
+            # batch it is fed.
+            self._buf = None
+            self._len = 0
+        else:
+            self._buf = np.ascontiguousarray(arr.astype(np.int64))
+            self._len = int(arr.shape[1])
+        self._current = None
+
 
 # --------------------------------------------------------------------------
 # engram layer module

@@ -422,15 +422,28 @@ class LayerAttentionCache:
     @property
     def state(self):
         """The append-only KV lanes as a tuple of arrays (mlx_lm ``cache.state``)
-        for :func:`mtplx.cache_state.snapshot_cache` / :func:`restore_cache`.  The
-        compressor frontier rows travel with it so a snapshot restore rebuilds the
-        exact frontier.  The engram history is deliberately NOT in ``state`` -- it
-        rewinds through :meth:`trim`, the only rollback the served trunk cache
-        drives (session/SSD save-restore is disabled for this model; see
-        docs/deepseek-v41/W22_REPORT.md)."""
+        for :func:`mtplx.cache_state.snapshot_cache` / :func:`restore_cache` and
+        ``mlx_lm.save_prompt_cache``.  The compressor frontier rows travel with it
+        so a snapshot restore rebuilds the exact frontier.
+
+        **W26:** the entry that owns the per-sequence engram history (only the
+        first entry of a sequence -- see :class:`DeepseekV41Cache`) also carries
+        it here, as a trailing ``mx.array`` leaf
+        (:attr:`~mtplx.engram_v41.NgramHashState.state`).  Without it a KV-only
+        snapshot restore desyncs the engram n-gram hashing on the engram layers
+        (1 and 14) across a warm-turn near-prefix restore -- the exact reason the
+        session bank's near-prefix restore / store-on-prefill were held off for
+        this backend (docs/deepseek-v41/W22_REPORT.md).  The engram's immutable
+        hash config is shared and does NOT travel; only its streaming history
+        does.  Non-owning entries (``engram_state is None``, i.e. every entry but
+        the first, and every entry of a no-engram model) return the plain 5-tuple
+        unchanged."""
         comp_kv = None if self.comp_state is None else self.comp_state.raw_kv
         comp_sc = None if self.comp_state is None else self.comp_state.raw_score
-        return (self.window, self.compress_kv, self.index_k, comp_kv, comp_sc)
+        kv = (self.window, self.compress_kv, self.index_k, comp_kv, comp_sc)
+        if self.engram_state is not None:
+            return kv + (self.engram_state.state,)
+        return kv
 
     @state.setter
     def state(self, value) -> None:
@@ -441,14 +454,35 @@ class LayerAttentionCache:
             if self.comp_state is not None:
                 self.comp_state.raw_kv = None
                 self.comp_state.raw_score = None
+            # A whole-state clear does not touch the engram history: the engram
+            # rewinds via trim only, and no restore flow that owns an engram ever
+            # passes ``None`` (snapshot_untrimmable stores ``None`` for trimmable
+            # entries and restore_cache then skips them).  Leaving it keeps the
+            # no-engram path byte-identical to before W26.
             return
-        window, compress_kv, index_k, comp_kv, comp_sc = value
+        values = tuple(value)
+        engram_blob = None
+        if len(values) == 6:
+            window, compress_kv, index_k, comp_kv, comp_sc, engram_blob = values
+        elif len(values) == 5:
+            # a 5-tuple (no engram, or an older KV-only snapshot) leaves the
+            # engram history untouched -- backward compatible with pre-W26 state.
+            window, compress_kv, index_k, comp_kv, comp_sc = values
+        else:
+            raise ValueError(
+                f"unexpected DeepSeek-V4.1 layer state arity {len(values)} (want 5 or 6)"
+            )
         self.window = window
         self.compress_kv = compress_kv
         self.index_k = index_k
         if self.comp_state is not None:
             self.comp_state.raw_kv = comp_kv
             self.comp_state.raw_score = comp_sc
+        # restore the engram history into the owning entry's live state object
+        # (kept by make_cache with the shared hash config); if this entry carries
+        # no engram, the blob has nowhere to go and the KV restore still stands.
+        if engram_blob is not None and self.engram_state is not None:
+            self.engram_state.replace_state(engram_blob)
 
     def replace_state(self, value) -> None:
         self.state = value
