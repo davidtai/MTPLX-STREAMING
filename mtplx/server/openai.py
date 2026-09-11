@@ -18622,7 +18622,9 @@ def _prefill_admission_shed(
         return None
 
 
-def _allocator_pressure_level(state: "ServerState") -> tuple[int, float]:
+def _allocator_pressure_level(
+    state: "ServerState", *, extra_limit_bytes: int = 0
+) -> tuple[int, float]:
     """Engine-relative pressure: allocator footprint vs the Metal limit.
 
     macOS's kern.memorystatus level fires only once the system is already
@@ -18631,6 +18633,19 @@ def _allocator_pressure_level(state: "ServerState") -> tuple[int, float]:
     knows its allocation envelope earlier: active+cache at >=97% of the
     configured Metal memory limit is treated as WARNING (2);
     past the limit is CRITICAL-equivalent (4). Returns (level, fraction).
+
+    ``extra_limit_bytes`` (W75) widens the limit the footprint is measured
+    against. The SSD-streamed expert lane sets the Metal limit to its ENGINE
+    BUDGET — a soft allocation target deliberately below physical RAM so the
+    reclaimable expert cache and the bounded, admission-reserved per-chunk
+    prefill transient can use real machine headroom without swapping. A 16K
+    prefill legitimately peaks above that soft budget (measured 85 GB at an
+    80 GiB cap whose engine budget is 73 GiB), so active+cache/limit read 1.16
+    and the guard called it CRITICAL, firing the trim + clear_cache and the
+    sustained-pressure abort on a healthy request. The caller passes the
+    busy-prefill headroom (up to the machine's safe working ceiling) so only a
+    genuine approach to physical RAM — or the independent macOS pressure
+    signal — escalates. 0 (idle / non-streaming lane) keeps prior behaviour.
     """
     caps = getattr(state, "metal_memory_caps", None)
     limit = 0
@@ -18640,17 +18655,57 @@ def _allocator_pressure_level(state: "ServerState") -> tuple[int, float]:
             limit = value
     if limit <= 0:
         return 1, 0.0
+    effective_limit = limit + max(0, int(extra_limit_bytes))
     stats = _mlx_memory_stats_live()
     active = stats.get("active_memory_bytes") or 0
     cache = stats.get("cache_memory_bytes") or 0
     if not active:
         return 1, 0.0
-    fraction = float(int(active) + int(cache)) / float(limit)
+    fraction = float(int(active) + int(cache)) / float(effective_limit)
     if fraction >= 1.02:
         return 4, fraction
     if fraction >= 0.97:
         return 2, fraction
     return 1, fraction
+
+
+def _streaming_prefill_pressure_headroom_bytes(state: "ServerState") -> int:
+    """Extra allocator headroom above the soft engine budget for the busy
+    SSD-streamed expert lane (W75).
+
+    The expert-streaming lane's Metal limit is its engine budget, which sits
+    far below physical RAM on purpose (the reclaimable expert cache and the
+    bounded prefill transient the admission gate reserves are meant to use real
+    machine headroom). While a foreground request is in flight on this lane the
+    guard should measure CRITICAL against the machine's safe working ceiling —
+    total RAM minus the macOS system reserve — not the soft budget, so a
+    legitimately-admitted 16K prefill (measured 85 GB peak against a 73 GiB
+    budget) is not read as CRITICAL. Returns the bytes to add to the limit:
+    ``safe_ceiling - limit`` when both are known, else the bounded per-chunk
+    prefill transient (~8 GB) as a floor, else 0. 0 for any non-streaming lane;
+    the caller only applies it while a foreground request is in flight.
+    """
+    runtime = getattr(state, "runtime", None)
+    if getattr(runtime, "expert_streaming", None) is None:
+        return 0
+    caps = getattr(state, "metal_memory_caps", None)
+    if not isinstance(caps, dict):
+        return 0
+    limit = caps.get("memory_limit_bytes")
+    if not isinstance(limit, int) or limit <= 0:
+        return 0
+    total_ram = caps.get("total_ram_bytes")
+    if isinstance(total_ram, int) and total_ram > 0:
+        safe_ceiling = int(total_ram) - _metal_system_reserve_bytes(int(total_ram))
+        if safe_ceiling > limit:
+            return int(safe_ceiling - limit)
+        return 0
+    # No RAM reading on the caps: fall back to the bounded per-chunk prefill
+    # transient budget the admission gate already reserves.
+    try:
+        return int(_dsv41_prefill_transient_bytes())
+    except Exception:
+        return 0
 
 
 def _engine_busy_signal(state: "ServerState") -> bool:
@@ -18853,7 +18908,20 @@ async def _memory_pressure_loop(
         try:
             level = await asyncio.to_thread(_memory_pressure_level)
             level_source = "macos"
-            allocator_level, allocator_fraction = _allocator_pressure_level(state)
+            # W75: one busy read per tick, reused below. While a foreground
+            # request is in flight on the SSD-streamed expert lane, the soft
+            # engine budget is not the CRITICAL line — widen the allocator
+            # limit to the machine's safe working ceiling so a legitimate 16K
+            # prefill's bounded transient does not trip the trim + abort.
+            foreground_busy = await asyncio.to_thread(_engine_busy_signal, state)
+            prefill_headroom = (
+                _streaming_prefill_pressure_headroom_bytes(state)
+                if foreground_busy
+                else 0
+            )
+            allocator_level, allocator_fraction = _allocator_pressure_level(
+                state, extra_limit_bytes=prefill_headroom
+            )
             if allocator_level >= 2 and allocator_level >= level:
                 # The allocator sees the wall minutes before macOS does
                 # (see _allocator_pressure_level); the guard acts on
@@ -18916,16 +18984,11 @@ async def _memory_pressure_loop(
                             )
                 except Exception:
                     pass
-            busy = False
-            if 2 <= level < 4:
-                busy = await asyncio.to_thread(_engine_busy_signal, state)
-            # The guard's own busy is deliberately not computed at CRITICAL
-            # (CRITICAL trims never defer); the abort tracker needs it there.
-            critical_busy = (
-                await asyncio.to_thread(_engine_busy_signal, state)
-                if level >= 4
-                else False
-            )
+            # busy at WARNING defers the trim; critical_busy feeds the abort
+            # tracker AND (W75) gates the clear_cache below. Both reuse the
+            # single foreground_busy read taken above.
+            busy = foreground_busy if 2 <= level < 4 else False
+            critical_busy = foreground_busy if level >= 4 else False
             abort_streak = _note_critical_pressure_tick(
                 state, level, critical_busy, abort_streak
             )
@@ -18961,7 +19024,16 @@ async def _memory_pressure_loop(
                                 )
                         except Exception as exc:
                             LOGGER.warning("retrieval pressure release: %s", exc)
-                if evicted or level >= 4:
+                # W75: clear_cache tears the reclaimable buffer pool out from
+                # under the allocator. Mid-prefill the growing working set is
+                # actively reusing those buffers (the dynamic_ceiling branch
+                # above already refuses clear_cache while busy for this reason),
+                # so a CRITICAL tick with a request in flight (bank empty ->
+                # evicted 0) must NOT clear: it frees nothing the owner is not
+                # about to re-allocate and re-faults the expert stream, the
+                # thrash that slowed the 16K prefill past the 300 s stall
+                # deadline. Idle CRITICAL still clears; an eviction always does.
+                if evicted or (level >= 4 and not critical_busy):
                     try:
                         import mlx.core as _mx
 
