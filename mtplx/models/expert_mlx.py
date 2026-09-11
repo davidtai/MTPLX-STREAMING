@@ -90,6 +90,152 @@ def _positive_env_int(name: str, default: int) -> int:
         return default
     return value if value >= 1 else default
 
+
+# W56 / KERNEL_LEDGER K27 -- shape/tiling layout fix.  The routed-expert switch
+# calls ``mx.gather_qmm(x[rows,1,1,K], w, s, rhs_indices=slot, transpose=True)`` with
+# M==1 and the rows in router (token x top_k) order, i.e. NOT sorted by expert.  In
+# mlx 0.32.2 (quantized.cpp GatherQMM::eval_gpu) the fused ``gather_qmm_rhs`` kernel --
+# which streams each expert's weight ONCE over its contiguous block of rows -- fires
+# ONLY when ``M==1 && B>=16 && right_sorted_ && B/E>=4``, and ``right_sorted_ =
+# sorted_indices && lhs_indices is None`` (ops.cpp:5632).  With the flag unset the
+# unsorted call takes the per-row ``gather_qmv`` (each output row re-reads its expert's
+# full mxfp4 weight -- the W47 ~2.9 TFLOPS memory thrash / 105 s prefill switch).  When
+# ``MTPLX_DSV41_LAYOUT_FIX`` is armed AND the wave has at least
+# ``MTPLX_DSV41_LAYOUT_FIX_MIN_ROWS`` rows (prefill; decode/verify stay below it, so
+# the served M=1 path is the exact shipped call), the gather sorts rows by bank slot on
+# device (``mx.argsort``), runs the three projections with ``sorted_indices=True``, and
+# unsorts the output.  A permutation + its inverse with an M-independent per-row matmul
+# is BYTE-IDENTICAL on CPU (there is one gather_qmm impl); on Metal it swaps
+# gather_qmv -> gather_qmm_rhs_nax, a kernel reassociation in the same documented FP
+# class as K26 (measured in a GPU window, not bit-identical there).  Default OFF.
+_LAYOUT_FIX_ENV = "MTPLX_DSV41_LAYOUT_FIX"
+_LAYOUT_FIX_MIN_ROWS_ENV = "MTPLX_DSV41_LAYOUT_FIX_MIN_ROWS"
+# ``gather_qmm_rhs`` needs B/E>=4 (E == bank slot count, up to n_routed_experts 384),
+# so ~1536 rows minimum; default 2048 keeps decode (6) / verify (24) / small waves on
+# the exact shipped unsorted path and only sorts the many-row prefill waves.
+_LAYOUT_FIX_MIN_ROWS_DEFAULT = 2048
+# Optional per-call row cap for the routed gather (memory bound + microbench sweep).
+# 0 (default) = one call over the whole wave.  Only honoured on the sorted path; each
+# chunk is a contiguous sub-range of the sorted rows so ``sorted_indices`` stays valid,
+# and the per-row math is unchanged (byte-identical to a single call).
+_GATHER_ROWS_PER_CALL_ENV = "MTPLX_DSV41_GATHER_ROWS_PER_CALL"
+
+
+def _layout_fix_enabled() -> bool:
+    """Read at use (not import): the server stamps optimization keys after importing
+    modules ([[env-flags-read-at-use-not-import]])."""
+    return os.environ.get(_LAYOUT_FIX_ENV) == "1"
+
+
+def _layout_fix_min_rows() -> int:
+    return _positive_env_int(_LAYOUT_FIX_MIN_ROWS_ENV, _LAYOUT_FIX_MIN_ROWS_DEFAULT)
+
+
+def _gather_rows_per_call() -> int:
+    raw = os.environ.get(_GATHER_ROWS_PER_CALL_ENV)
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return value if value >= 1 else 0
+
+
+# W56 / KERNEL_LEDGER K27 (F2) -- expert down-projection K padding.  The expert
+# down-proj contracts over K = moe_intermediate_size = 2304, and 2304 % 512 = 256,
+# so the mxfp4 `gather_qmv` fast kernel (which needs K % qmv_fast_k_alignment(4)=512)
+# is DISABLED for the down gather (quantized.cpp:1337, 147-148) -- gate/up (K=hidden
+# 5120, %512==0) hit it.  Padding the down K to the next multiple of 512 (2560) with
+# ZERO columns re-enables the fast kernel; a zero column contributes exactly 0, so the
+# result is byte-identical (verified: a zeroed mxfp4 gs32 group dequantizes to exactly
+# 0.0 for any E8M0 scale byte except 0xFF/NaN, and a `mx.zeros` bank tail uses scale
+# byte 0 -> exact).  This requires the down bank slot to be laid out 2560-wide (its
+# weight/scales 256 columns / 8 scale groups wider, tail zeroed) AND the down-gather
+# activation zero-padded to 2560.  When `MTPLX_DSV41_DOWN_K_PAD` is set,
+# `_gather_component_bank` pads the SwiGLU activation to the bank's actual down-K
+# (a no-op when the bank is unpadded -> byte-identical; the fast kernel only engages
+# once the bank itself is padded).  Default OFF.  See `pad_mxfp4_down_component` for
+# the exact layout transform and `down_k_pad_slot_bytes` for the slot arithmetic.
+_DOWN_K_PAD_ENV = "MTPLX_DSV41_DOWN_K_PAD"
+_DOWN_K_FAST_ALIGN = 512  # mxfp4 (bits 4) qmv_fast_k_alignment == 512
+
+
+def _down_k_pad_enabled() -> bool:
+    """Read at use (not import) ([[env-flags-read-at-use-not-import]])."""
+    return os.environ.get(_DOWN_K_PAD_ENV) == "1"
+
+
+def _down_k_pad_width(k: int, *, align: int = _DOWN_K_FAST_ALIGN) -> int:
+    """The down-K rounded up to the next `align` multiple (the fast-qmv width)."""
+    k = int(k)
+    if k % align == 0:
+        return k
+    return ((k + align - 1) // align) * align
+
+
+def pad_mxfp4_down_component(
+    weight: mx.array,
+    scales: mx.array,
+    *,
+    group_size: int = 32,
+    bits: int = 4,
+    align: int = _DOWN_K_FAST_ALIGN,
+) -> tuple[mx.array, mx.array]:
+    """Lay one expert's mxfp4 down-proj ``[out, K]`` out with a zero K-tail so the
+    stored K is a multiple of ``align`` (the fast-qmv width).
+
+    ``weight`` is the packed uint32 ``[out, K/8]`` FP4-code tensor, ``scales`` the
+    E8M0 uint8 ``[out, K/group_size]`` exponents (no bias -- mxfp4).  The returned
+    tensors have the real data in the leading columns and **zero** packed nibbles +
+    **zero** E8M0 scale bytes in the tail.  A zeroed FP4 group dequantizes to
+    EXACTLY 0.0 for scale byte 0 (2^-127 * 0 == 0; only 0xFF/NaN is unsafe), so a
+    ``gather_qmm`` over the padded weight with a zero-padded activation is
+    byte-identical to the unpadded gather.  Used by the admission/offline bank
+    builder and the F2 byte-identity tests."""
+    packs_per_word = 32 // int(bits)  # mxfp4 -> 8 nibbles / uint32
+    k_packed = int(weight.shape[-1])
+    k_logical = k_packed * packs_per_word
+    k_pad = _down_k_pad_width(k_logical, align=align)
+    if k_pad == k_logical:
+        return weight, scales
+    w_pad_cols = (k_pad - k_logical) // packs_per_word     # extra uint32 columns
+    s_pad_cols = (k_pad - k_logical) // int(group_size)    # extra E8M0 scale bytes
+    weight_out = mx.pad(weight, [(0, 0)] * (weight.ndim - 1) + [(0, w_pad_cols)])
+    scales_out = mx.pad(scales, [(0, 0)] * (scales.ndim - 1) + [(0, s_pad_cols)])
+    return weight_out, scales_out
+
+
+def down_k_pad_slot_bytes(
+    *,
+    hidden: int,
+    inter: int,
+    bits: int = 4,
+    group_size: int = 32,
+    align: int = _DOWN_K_FAST_ALIGN,
+) -> dict[str, int]:
+    """Byte accounting for padding one expert's mxfp4 down-proj K to ``align``.
+
+    Down-proj is ``[out=hidden, K=inter]``: packed weight ``hidden * K / (32/bits) * 4``
+    bytes + E8M0 scales ``hidden * K / group_size`` bytes (no bias).  Returns the
+    unpadded / padded down-component bytes and the delta so the memory planner can
+    price the slot growth."""
+    k_pad = _down_k_pad_width(inter, align=align)
+    def _bytes(k: int) -> int:
+        w = hidden * (k // (32 // bits)) * 4   # packed uint32 bytes
+        s = hidden * (k // group_size)         # 1 E8M0 byte per group
+        return w + s
+    unpadded = _bytes(inter)
+    padded = _bytes(k_pad)
+    return {
+        "k_real": int(inter),
+        "k_pad": int(k_pad),
+        "down_unpadded_bytes": int(unpadded),
+        "down_padded_bytes": int(padded),
+        "down_delta_bytes": int(padded - unpadded),
+    }
+
+
 _ROUTING_PHASE: ContextVar[RoutingPhase | None] = ContextVar(
     "mtplx_expert_routing_phase",
     default=None,
@@ -1764,38 +1910,81 @@ def _gather_component_bank(
     """
 
     rows = int(x.shape[0])
-    selected = x.reshape((rows, 1, 1, int(x.shape[-1])))
+    width = int(x.shape[-1])
 
-    if codec == "mxfp4":
-        def qmm(values: mx.array, projection: str) -> mx.array:
-            return mx.gather_qmm(
-                values,
-                bank.arrays[f"{projection}.weight"],
-                bank.arrays[f"{projection}.scales"],
-                rhs_indices=slot_indices,
-                transpose=True,
-                group_size=group_size,
-                bits=bits,
-                mode="mxfp4",
-            )
+    # W56/K27 layout fix: sort rows by bank slot so gather_qmm takes the fused
+    # weight-streamed-once kernel (see the _LAYOUT_FIX_* env docs above).  Gated to
+    # many-row prefill waves; decode/verify stay on the exact shipped unsorted call.
+    use_sorted = _layout_fix_enabled() and rows >= _layout_fix_min_rows()
+    if use_sorted:
+        perm = mx.argsort(slot_indices.reshape(-1))
+        inv_perm = mx.argsort(perm)
+        x = mx.take(x, perm, axis=0)
+        slot_indices = mx.take(slot_indices, perm, axis=0)
+
+    def _wave(values_x: mx.array, slot_col: mx.array) -> mx.array:
+        """Three-projection expert MLP over one (already-oriented) row block."""
+        n = int(values_x.shape[0])
+        selected = values_x.reshape((n, 1, 1, width))
+        if codec == "mxfp4":
+            def qmm(values: mx.array, projection: str) -> mx.array:
+                return mx.gather_qmm(
+                    values,
+                    bank.arrays[f"{projection}.weight"],
+                    bank.arrays[f"{projection}.scales"],
+                    rhs_indices=slot_col,
+                    transpose=True,
+                    group_size=group_size,
+                    bits=bits,
+                    mode="mxfp4",
+                    sorted_indices=use_sorted,
+                )
+        else:
+            def qmm(values: mx.array, projection: str) -> mx.array:
+                return mx.gather_qmm(
+                    values,
+                    bank.arrays[f"{projection}.weight"],
+                    bank.arrays[f"{projection}.scales"],
+                    bank.arrays[f"{projection}.biases"],
+                    rhs_indices=slot_col,
+                    transpose=True,
+                    group_size=group_size,
+                    bits=bits,
+                    mode="affine",
+                    sorted_indices=use_sorted,
+                )
+
+        gate = qmm(selected, "gate_proj")
+        up = qmm(selected, "up_proj")
+        swig = _clamped_swiglu(gate, up, swiglu_limit)
+        # F2 down-K pad: match the SwiGLU activation width to the bank's down-proj K.
+        # When the bank is padded (down weight 2560-wide) this zero-pads the activation
+        # so gather_qmm sees K%512==0 and takes the fast mxfp4 qmv; a zero activation
+        # tail against the zero weight tail contributes exactly 0 -> byte-identical.
+        # No-op when off or when the bank is unpadded (k_wt == k_act).
+        if _down_k_pad_enabled():
+            dw = bank.arrays["down_proj.weight"]
+            k_wt = int(dw.shape[-1]) * (32 // int(bits))  # packed uint32 -> logical K
+            k_act = int(swig.shape[-1])
+            if k_wt > k_act:
+                pad = [(0, 0)] * (swig.ndim - 1) + [(0, k_wt - k_act)]
+                swig = mx.pad(swig, pad)
+        out = qmm(swig, "down_proj")
+        return out.reshape((n, int(out.shape[-1])))
+
+    per_call = _gather_rows_per_call() if use_sorted else 0
+    if per_call and per_call < rows:
+        parts = [
+            _wave(x[c0:c0 + per_call], slot_indices[c0:c0 + per_call])
+            for c0 in range(0, rows, per_call)
+        ]
+        output = mx.concatenate(parts, axis=0)
     else:
-        def qmm(values: mx.array, projection: str) -> mx.array:
-            return mx.gather_qmm(
-                values,
-                bank.arrays[f"{projection}.weight"],
-                bank.arrays[f"{projection}.scales"],
-                bank.arrays[f"{projection}.biases"],
-                rhs_indices=slot_indices,
-                transpose=True,
-                group_size=group_size,
-                bits=bits,
-                mode="affine",
-            )
+        output = _wave(x, slot_indices)
 
-    gate = qmm(selected, "gate_proj")
-    up = qmm(selected, "up_proj")
-    output = qmm(_clamped_swiglu(gate, up, swiglu_limit), "down_proj")
-    return output.reshape((rows, int(output.shape[-1])))
+    if use_sorted:
+        output = mx.take(output, inv_perm, axis=0)
+    return output
 
 
 def _run_component_bank_shadow(

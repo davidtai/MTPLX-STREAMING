@@ -96,6 +96,8 @@ SCORE_KEY_CHUNK_ENV = "MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK"  # W50 / K25: split-
 # [rows,H,chunk]).  f32-exact up to reassociation; window-20 measured it -16% but
 # -11 GB peak -- a PEAK-GB lever (the per-chunk O(rows*64*512) output rescale costs
 # time), not a throughput lever.
+LAYOUT_FIX_ENV = "MTPLX_DSV41_LAYOUT_FIX"          # W56 / K27 F1: sorted routed gather
+DOWN_K_PAD_ENV = "MTPLX_DSV41_DOWN_K_PAD"          # W56 / K27 F2: down-proj K pad to 2560
 SCORE_PATH_ENV = "MTPLX_DSV41_PREFILL_SCORE_PATH"          # W50: prefill score
 # implementation -- "lean" is the f32 pass-cut one-shot (scale q once instead of the
 # T-wide scores; fold the value-0 sink into the denom, no concat/slice), cutting
@@ -131,6 +133,8 @@ ALL_LEVER_ENVS = (
     SCORE_DTYPE_ENV,
     SCORE_KEY_CHUNK_ENV,
     SCORE_PATH_ENV,
+    LAYOUT_FIX_ENV,
+    DOWN_K_PAD_ENV,
 )
 
 
@@ -140,6 +144,7 @@ def _preset(
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
+    layout_fix=None, down_k_pad=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -166,6 +171,8 @@ def _preset(
         SCORE_DTYPE_ENV: score_dtype,
         SCORE_KEY_CHUNK_ENV: score_key_chunk,
         SCORE_PATH_ENV: score_path,
+        LAYOUT_FIX_ENV: layout_fix,
+        DOWN_K_PAD_ENV: down_k_pad,
     }
 
 
@@ -196,6 +203,19 @@ ARM_PRESETS = {
     "dense_f32": _preset(
         layer_major="1", prefill_dense="1", prefill_dense_matmul_dtype="f32"
     ),
+    # W56 K27 F1: sorted routed gather -> fused gather_qmm_rhs (prefill switch).
+    # Byte-identical on CPU; on Metal it swaps gather_qmv -> gather_qmm_rhs_nax
+    # (K26 FP class). Armed on the 16K layer-major schedule where the switch cost is.
+    "layout_fix": _preset(layer_major="1", layout_fix="1"),
+    # W56 K27 F2: down-proj K padded 2304->2560 so the mxfp4 fast gather_qmv engages
+    # (needs K%512==0). Byte-identical (zero-column pad). Helps the per-row gather
+    # (decode + sub-threshold prefill waves). NOTE: the fast kernel engages only once
+    # the streamed down bank is actually laid out 2560-wide at admission (the
+    # expert_io admission-contract change flagged in W56); with today's unpadded
+    # bank this arm is a byte-identical no-op that confirms parity.
+    "down_k_pad": _preset(down_k_pad="1"),
+    # Both K27 levers together on the 16K layer-major schedule.
+    "k27_stack": _preset(layer_major="1", layout_fix="1", down_k_pad="1"),
     "both": _preset(overlap="1", layer_major="1"),          # shared_overlap + layer_major
     "all_levers": _preset(
         overlap="1", layer_major="1", sinkhorn="1", hc="1",
