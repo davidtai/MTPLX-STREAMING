@@ -45,9 +45,13 @@ OVERLAP_ENV = "MTPLX_DSV41_SHARED_OVERLAP"
 PROBE_ENV = "MTPLX_ROUTE_STAGE_PROBE"
 BARRIER_STAGE = "hot.eval_indices"
 
+LAYER_MAJOR_ENV = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
+
 ARM_PRESETS = {
-    "control": {OVERLAP_ENV: None},          # shipped: lever OFF
-    "shared_overlap": {OVERLAP_ENV: "1"},    # W28 lever ON
+    "control": {OVERLAP_ENV: None, LAYER_MAJOR_ENV: None},   # shipped: levers OFF
+    "shared_overlap": {OVERLAP_ENV: "1", LAYER_MAJOR_ENV: None},  # W28 K1 lever ON
+    "layer_major": {OVERLAP_ENV: None, LAYER_MAJOR_ENV: "1"},     # W30 K16 lever ON
+    "both": {OVERLAP_ENV: "1", LAYER_MAJOR_ENV: "1"},
 }
 
 
@@ -76,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--arms",
         nargs="+",
         default=["control", "shared_overlap"],
-        help="preset names from ARM_PRESETS (control, shared_overlap)",
+        help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, both)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     p.add_argument(

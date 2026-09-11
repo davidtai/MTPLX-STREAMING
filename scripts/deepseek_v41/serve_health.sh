@@ -31,6 +31,7 @@ HOST="${DSV41_HOST:-127.0.0.1}"
 HEALTH_TIMEOUT="${DSV41_HEALTH_TIMEOUT:-600}"   # server load = 8.67 GB residents + admit
 STOP_TIMEOUT="${DSV41_STOP_TIMEOUT:-60}"
 MAX_TOKENS="${DSV41_MAX_TOKENS:-16}"
+# Optional extra `mtplx serve` flags, e.g. DSV41_SERVE_EXTRA_ARGS="--generation-mode mtp".
 LOG_DIR="${DSV41_LOG_DIR:-${TMPDIR:-/tmp}/dsv41-serve-health}"
 
 ts()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -120,7 +121,7 @@ log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT}"
     --model "${MODEL}" \
     --host "${HOST}" \
     --port "${PORT}" \
-    --no-auth
+    --no-auth ${DSV41_SERVE_EXTRA_ARGS:-}
 ) >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 log "server pid=${SERVER_PID}"
