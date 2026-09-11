@@ -442,6 +442,45 @@ def test_mxfp8_manifest_fields(tmp_path):
     assert m["hashing"]["n_hash_cols"] == 24
 
 
+def test_mxfp8_flip_preserves_residents(tmp_path):
+    """Rewriting the manifest for the mxfp8 flip must NOT drop a pre-existing residents entry."""
+    layer, rows = 1, 128
+    src, index, _, _ = _make_synthetic_shard(tmp_path, layer, rows, seed=7)
+    out = tmp_path / "engram"
+    weight_map = json.loads(index.read_text())["weight_map"]
+
+    # pre-existing affine manifest carrying a W4 residents entry (as the real artifact has)
+    e_aff = conv.convert_layer(layer, src, out, weight_map, state_dir=tmp_path / "sa",
+                               chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                               expected_rows=rows, row_codec="affine")
+    fake_res = {"file": "engram-residents.safetensors", "total_bytes": 123,
+                "sha256": "d" * 64, "tensors": [{"name": "x", "dtype": "U32", "shape": [1]}],
+                "layers": [{"layer_id": 1}]}
+    conv.write_manifest(out, [e_aff], row_codec="affine", residents=fake_res)
+    assert json.loads((out / "engram-manifest.json").read_text())["residents"] == fake_res
+
+    # mxfp8 flip: capture residents pre-flip (as main() does), convert, finalize, rewrite manifest
+    residents = conv.read_existing_residents(out)
+    assert residents == fake_res
+    e_mx = conv.convert_layer(layer, src, out, weight_map, state_dir=tmp_path / "sm",
+                              chunk_rows=64, max_rows=0, wait=False, poll=0.0,
+                              expected_rows=rows, row_codec="mxfp8", finalize=False)
+    conv.finalize_mxfp8(out, [layer])
+    conv.write_manifest(out, [e_mx], row_codec="mxfp8", residents=residents)
+
+    m = json.loads((out / "engram-manifest.json").read_text())
+    assert m["quant"]["mode"] == "mxfp8"
+    assert m["residents"] == fake_res                 # preserved verbatim
+    keys = list(m.keys())
+    assert keys[keys.index("layers") + 1] == "residents"   # canonical position
+    assert keys[keys.index("residents") + 1] == "hashing"
+    # manifest_sha256 recomputed over the residents-carrying manifest
+    import hashlib
+    payload = {k: v for k, v in m.items() if k != "manifest_sha256"}
+    assert m["manifest_sha256"] == hashlib.sha256(
+        json.dumps(payload, indent=2).encode()).hexdigest()
+
+
 def test_mxfp8_resume_idempotence_and_staging(tmp_path, monkeypatch):
     layer, rows = 1, 320
     src, index, wu8, su8 = _make_synthetic_shard(tmp_path, layer, rows, seed=23)
