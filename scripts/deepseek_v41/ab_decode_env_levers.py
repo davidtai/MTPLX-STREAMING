@@ -132,16 +132,15 @@ ARM_PRESETS = {
         overlap="1", layer_major="1", sinkhorn="1", hc="1",
         fastpath="1", submit="1", attn="1", win_memo="1",
     ),  # everything on -> the fast-path here is variant B (defer + async submit)
-    # W41/W45/W44: the measured-positive / byte-identical levers stacked -- head
-    # bf16 (fixes the fp32-cast trap) + Sinkhorn kernel + attention-chain compile +
-    # the W45 window-mask memo + the W44 device route (barrier-free all-hit, now
-    # byte-identical to fenced incl. cold-token per-layer recovery, so it stacks;
-    # it also subsumes the K23 switch fast-path on all-hit -- no barrier means no
-    # wave fence to defer).  The K23 fast-path itself stays OUT (W42 window-14 pure
-    # defer -13.4%).  overlap / layer_major / hc also OFF.
-    "stack_a": _preset(
-        head="bf16", sinkhorn="1", attn="1", win_memo="1", device_route="1"
-    ),
+    # W41/W45: the measured-positive / byte-identical levers stacked -- head bf16
+    # (fixes the fp32-cast trap) + Sinkhorn kernel + attention-chain compile + the
+    # W45 window-mask memo.  device_route is LEFT OUT (W44/window-19: NOT exact on
+    # the real model -- the barrier-free gather reads an unpinned slot that a
+    # mid-decode admission recycles in place before the deferred gather runs;
+    # KERNEL_LEDGER K24). Re-add only once the MTPLX_GPU_PARITY window is clean.
+    # The K23 fast-path also stays OUT (W42 window-14 pure defer -13.4%). overlap /
+    # layer_major / hc also OFF.
+    "stack_a": _preset(head="bf16", sinkhorn="1", attn="1", win_memo="1"),
     "head_bf16": _preset(head="bf16"),                      # W40 K21: fix fp32-cast trap
     "head_mxfp8": _preset(head="mxfp8"),                    # W40 K21: native mxfp8 gs32 head
     "head_q8": _preset(head="q8"),                          # W40 K21: affine q8 gs64 head

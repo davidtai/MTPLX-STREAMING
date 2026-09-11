@@ -314,7 +314,32 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 - **Precedent:** hy3-oq2e profiles ship this exact pair in production (`expert_profiles.json`);
   W28's shared-overlap uses the same env-isolation pattern.
 
-### K24 — Barrier-free all-hit device route (W44) — **Rank 1a (removes the routing barrier itself; subsumes K23 on all-hit layers)**
+### K24 — Barrier-free all-hit device route (W44) — **SHELVED (window-19: NOT exact on the real model; default off, out of stack_a)**
+> **⚠ GPU window 19 (integration 0b35a8bc2, 1,024/256):** `device_route` decoded
+> 3.19 tok/s vs control 4.05 (**−21%**) and was **NOT byte-identical** (tokens
+> collapsed to 0 from the first decode step; sha `c0a892a0…`). `stack_a`+device_route
+> 3.77 (−7%, also non-identical) vs 6.24 without it (window 15). So on the real model
+> it costs more than it saves **and** is inexact.
+> **Root cause (proven on CPU, `test_deepseek_v41_device_route_parity.py`):** the
+> barrier-free gather reads a component-bank slot via the LUT **without pinning it**
+> and **defers** execution (async; forced only at the token-end flush), while
+> `gather_qmm` reads the bank at **eval time**. Any admission that recycles that slot
+> **in place** — the cold-recovery pass's fenced admissions, or the next token's LRU
+> eviction/admission over a 256-token decode — overwrites the slot's bytes before the
+> pending gather runs, so it reads the wrong expert's weights → catastrophic garbage
+> → all-zero logits. The snapshot-based miss check cannot catch it (it verifies
+> expert *membership* at LUT-build, not slot *stability* through eval). The fenced
+> path is safe precisely because it **pins** the route's slots and **fences** the
+> gather immediately (the wave fence) before the slot can be reused. CPU proof:
+> a deferred gather over a real component bank reflects an in-place slot mutation
+> applied after issue (max|Δ| 3e4), i.e. it is not isolated from recycling.
+> **No barrier-free-and-exact fix exists for this LRU bank:** safety needs either a
+> per-layer fence or pinning the read slots, and both require the host-side slot ids
+> the lever removed (= the barrier). device_route is exact **only** when the resident
+> set is static for the whole decode (no miss, no eviction) — not the window-12 rate.
+> **Kept as a standalone arm (default off); removed from stack_a** until a redesign
+> (e.g. persistently pinning each layer's resident set for the decode, at a memory
+> cost W24 already priced against) clears the `MTPLX_GPU_PARITY` window.
 - **Mechanism:** the per-layer `mx.eval(indices)` routing barrier exists only because the
   **host** needs the routed ids to (1) check residency and (2) build the gather's slot indices.
   Put the expert→slot map **on the device** — a per-layer LUT `lut[layer]` (int32 `[n_experts]`,
