@@ -48,6 +48,13 @@ HEAD_DIM, N_HASH_COLS = 256, 24
 COLS_HEAD = N_HASH_COLS * HEAD_DIM     # 6144
 
 
+def _wkv_mode() -> str:
+    """wkv codec of the live sidecar per the manifest (affine or mxfp8)."""
+    m = json.loads(MANIFEST.read_text())
+    wkv_q = m.get("residents", {}).get("quant", {}).get("wkv", {})
+    return str(wkv_q.get("mode", "affine")) if isinstance(wkv_q, dict) else "affine"
+
+
 def test_manifest_residents_entry():
     m = json.loads(MANIFEST.read_text())
     assert "residents" in m, "manifest has no residents entry"
@@ -55,6 +62,7 @@ def test_manifest_residents_entry():
     assert r["file"] == "engram-residents.safetensors"
     assert r["total_bytes"] == SIDECAR.stat().st_size
     assert len(r["sha256"]) == 64
+    mode = _wkv_mode()
 
     names = {t["name"] for t in r["tensors"]}
     dtype_by_name = {t["name"]: t["dtype"] for t in r["tensors"]}
@@ -62,15 +70,21 @@ def test_manifest_residents_entry():
     for L in LAYERS:
         base = f"layers.{L}.engram"
         assert dtype_by_name[f"{base}.wkv.weight"] == "U32"
-        assert dtype_by_name[f"{base}.wkv.scales"] == "BF16"
-        assert dtype_by_name[f"{base}.wkv.biases"] == "BF16"
         assert dtype_by_name[f"{base}.q_weight"] == "F32"
         assert dtype_by_name[f"{base}.k_weight"] == "F32"
         assert shape_by_name[f"{base}.q_weight"] == [HC_MULT, DIM]
         assert shape_by_name[f"{base}.k_weight"] == [HC_MULT, DIM]
         assert shape_by_name[f"{base}.wkv.weight"] == [WKV_OUT, COLS_HEAD * 8 // 32]
-        assert shape_by_name[f"{base}.wkv.scales"] == [WKV_OUT, COLS_HEAD // 64]
-        assert f"{base}.wkv.biases" in names
+        if mode == "mxfp8":
+            assert r["quant"]["wkv"] == {"bits": 8, "group_size": 32, "mode": "mxfp8"}
+            assert dtype_by_name[f"{base}.wkv.scales"] == "U8"
+            assert shape_by_name[f"{base}.wkv.scales"] == [WKV_OUT, COLS_HEAD // 32]
+            assert f"{base}.wkv.biases" not in names       # mxfp8 has no bias
+        else:
+            assert dtype_by_name[f"{base}.wkv.scales"] == "BF16"
+            assert dtype_by_name[f"{base}.wkv.biases"] == "BF16"
+            assert shape_by_name[f"{base}.wkv.scales"] == [WKV_OUT, COLS_HEAD // 64]
+            assert f"{base}.wkv.biases" in names
 
     # manifest_sha256 re-derives with write_manifest's recipe (dict w/o the field, indent=2)
     payload = {k: v for k, v in m.items() if k != "manifest_sha256"}
@@ -97,10 +111,17 @@ def test_load_residents_shapes_dtypes(layer):
     assert tuple(res.k_weight.shape) == (HC_MULT, DIM)
     assert res.dim == DIM and res.hc_mult == HC_MULT
     assert res.wkv_packed.dtype == mx.uint32
-    assert res.wkv_scales.dtype == mx.bfloat16
-    assert res.wkv_biases.dtype == mx.bfloat16
     assert tuple(res.wkv_packed.shape) == (WKV_OUT, COLS_HEAD * 8 // 32)
-    assert tuple(res.wkv_scales.shape) == (WKV_OUT, COLS_HEAD // 64)
+    if _wkv_mode() == "mxfp8":
+        assert res.mode == "mxfp8" and res.group_size == 32
+        assert res.wkv_scales.dtype == mx.uint8
+        assert res.wkv_biases is None
+        assert tuple(res.wkv_scales.shape) == (WKV_OUT, COLS_HEAD // 32)
+    else:
+        assert res.mode == "affine" and res.group_size == 64
+        assert res.wkv_scales.dtype == mx.bfloat16
+        assert res.wkv_biases.dtype == mx.bfloat16
+        assert tuple(res.wkv_scales.shape) == (WKV_OUT, COLS_HEAD // 64)
 
 
 @pytest.mark.parametrize("layer", LAYERS)
@@ -113,8 +134,12 @@ def test_wkv_callable_matches_dequant(layer):
     assert bool(mx.all(mx.isfinite(kv)).item())
     # quantized_matmul == dequantize-then-matmul up to bf16 accumulation; cosine is the
     # robust wiring check (a transposed/misindexed wkv would collapse it toward 0).
-    w = mx.dequantize(res.wkv_packed, res.wkv_scales, res.wkv_biases,
-                      group_size=res.group_size, bits=res.bits, mode="affine")
+    if res.mode == "mxfp8":
+        w = mx.dequantize(res.wkv_packed, res.wkv_scales,
+                          group_size=res.group_size, bits=res.bits, mode="mxfp8")
+    else:
+        w = mx.dequantize(res.wkv_packed, res.wkv_scales, res.wkv_biases,
+                          group_size=res.group_size, bits=res.bits, mode="affine")
     ref = x @ w.T
     a, b = np.array(kv).reshape(-1), np.array(ref).reshape(-1)
     cos = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
