@@ -274,7 +274,8 @@ def _moe_output(monkeypatch, x: mx.array, *, overlap: bool) -> mx.array:
 def test_moe_call_order_bitwise_identical_off_vs_on(monkeypatch, n_tokens) -> None:
     """The resident ``SwitchGLU`` has no ``run_with_shared_overlap``, so the
     lever falls back to the shipped ordering: the refactored combine must be
-    bitwise-identical for AR (n=1) and verify (n=4) shapes."""
+    bitwise-identical for AR (n=1) and verify (n=4) shapes.  ``n=4`` is the
+    K=3 MTP verify row-batch shape one forward feeds each layer's MoE."""
     mx.random.seed(7)
     x = 0.5 * mx.random.normal((n_tokens, 8)).astype(mx.bfloat16)
     mx.eval(x)
@@ -282,3 +283,57 @@ def test_moe_call_order_bitwise_identical_off_vs_on(monkeypatch, n_tokens) -> No
     out_on = _moe_output(monkeypatch, x, overlap=True)
     assert out_off.shape == out_on.shape == (n_tokens, 8)
     assert mx.array_equal(out_off, out_on), "MoE output changed under the lever"
+
+
+# ---------------------------------------------------------------------------
+# 4. end-to-end tiny model (served AR path): tokens + logits bit-identical
+# ---------------------------------------------------------------------------
+def _served_decode(monkeypatch, *, overlap: bool, seed: int, prompt, steps: int):
+    """Prefill + ``steps`` greedy decode of the tiny real DSV4.1 model through
+    the served runtime path, returning (token ids, per-step logits).  Every
+    DecoderLayer is a W11 ``MoE`` (deepseek_v41.py L633), so this drives the
+    lever at every layer, end to end."""
+    for key in (HOIST_FLAG, OVERLAP_FLAG):
+        monkeypatch.delenv(key, raising=False)
+    if overlap:
+        monkeypatch.setenv(OVERLAP_FLAG, "1")
+
+    from mtplx.generation import restore_or_prefill_prompt_state
+    from tests.test_deepseek_v41_served_generation import _runtime, _swa_args
+
+    rt = _runtime(_swa_args(), seed=seed)
+    ps = restore_or_prefill_prompt_state(rt, prompt)
+    cache = ps.trunk_cache
+    logits_seq = [ps.logits]
+
+    def _last_row(logits):
+        row = logits if logits.ndim == 2 else logits[:, -1, :]
+        return int(mx.argmax(row.astype(mx.float32), axis=-1)[0])
+
+    tokens = []
+    logits = ps.logits
+    for _ in range(steps):
+        tok = _last_row(logits)
+        tokens.append(tok)
+        logits = rt.forward_ar(mx.array([[tok]]), cache=cache)
+        logits_seq.append(logits)
+    mx.eval([mx.array(0)] + logits_seq)
+    return tokens, logits_seq
+
+
+def test_served_ar_tokens_and_logits_bitwise_identical(monkeypatch) -> None:
+    """End-to-end: greedy tokens AND logits identical, lever off vs on, over the
+    real tiny model's prefill + AR decode."""
+    from tests.test_deepseek_v41_served_generation import _prompt
+
+    prompt = _prompt(19)
+    tok_off, log_off = _served_decode(
+        monkeypatch, overlap=False, seed=5, prompt=prompt, steps=8
+    )
+    tok_on, log_on = _served_decode(
+        monkeypatch, overlap=True, seed=5, prompt=prompt, steps=8
+    )
+    assert tok_off == tok_on, f"tokens diverged: {tok_off} != {tok_on}"
+    assert len(log_off) == len(log_on)
+    for i, (a, b) in enumerate(zip(log_off, log_on)):
+        assert mx.array_equal(a, b), f"logits diverged at step {i}"
