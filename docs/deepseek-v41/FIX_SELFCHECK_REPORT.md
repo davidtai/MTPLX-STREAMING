@@ -82,11 +82,51 @@ FAILED ...::test_streamed_serve_load_without_spec_matches_dense_selfcheck
      (raised through the served load path at the real call site)
 ```
 
-With the fix: `16 passed`. The file also carries unit coverage for
+With the fix: `17 passed`. The file also carries unit coverage for
 `_expert_quant_signature` (affine specs, `None`, shadow codec), the `expert_gather` lane
 (pass, corrupt-kernel fallback, non-dividing group_size fallback, mismatched-group-size
-raise), and `maybe_run_model_selfcheck` with/without a spec and when disabled. MLX pinned
-to CPU throughout.
+raise), and `maybe_run_model_selfcheck` with/without a spec and when disabled.
+
+### CPU pin is scoped to this module (cross-module leak fixed)
+
+The CPU pin is applied by a **function-scoped fixture** that records the process default
+device, pins CPU for the test, and restores it in teardown — **never at import time**. An
+earlier revision pinned `mx.set_default_device(mx.cpu)` at module import; because pytest
+imports every test module before running any test, that leaked the pin into sibling
+modules and forced `tests/test_kernel_selfcheck.py`'s Metal kernel lanes onto their CPU
+fallbacks (`qmm_m4`/`qmm_m4_wide` fallback, gdn dmax `7e-4 > 1e-6`), failing
+`test_gdn_postconv_selfcheck_invokes_m1_and_m2` when the two files ran together in either
+order. A module-scoped `_default_device_guard` fixture asserts the process default device
+is unchanged after this module's tests (the leak invariant), and
+`test_cpu_pin_is_scoped_and_restores` asserts the pin/restore round-trip.
+
+Proof the pair no longer cross-pollutes, **without executing any Metal** (no GPU lock held;
+a window is live): both files run together in **both orders** →
+`20 passed, 15 deselected`. The 15 deselected are `test_kernel_selfcheck.py`'s
+Metal-executing cases (kept out because they need the GPU): `test_selfcheck_passes_on_this_machine`
+(×4), `test_nax_attention_selfcheck_failure_is_local_to_its_lane`,
+`test_selfcheck_mismatch_disables_lane_and_surfaces_in_health`,
+`test_disabled_lane_routes_stock_through_the_qlinear_patch`,
+`test_selfcheck_kernel_exception_falls_back_instead_of_raising`,
+`test_force_gpu_family_fallback_disables_nax_lane`,
+`test_gdn_postconv_selfcheck_invokes_m1_and_m2`,
+`test_postconv_selfcheck_rejects_output_or_captured_state_corruption` (×4),
+`test_gdn_postconv_m2_primary_state_continues_exactly_through_m1`. The 3 CPU-safe
+`test_kernel_selfcheck` cases kept in the run (`test_selfcheck_enabled_gating`,
+`test_postconv_fusion_has_a_fail_closed_selfcheck_lane`,
+`test_health_payload_before_any_run_is_safe`) plus all 17 of this module's tests pass in
+both orders. **The full `test_kernel_selfcheck.py` (Metal lanes included) must be
+re-verified inside a GPU window** — not run here.
+
+### Repo hygiene finding (not this brief's to fix)
+
+`tests/test_kernel_selfcheck.py` **executes real Metal kernels with no GPU lock and no
+skip/gate** — e.g. `test_selfcheck_passes_on_this_machine`, the `gdn_postconv` cases, and
+the nax/gqa lane cases call `run_kernel_selfcheck` / `_check_*` on the default (Metal)
+device unconditionally. Any CI or worker running that file contends with a live GPU window
+(the exact hazard the `gpu-work-always-through-flock` lesson warns about) and can only pass
+where Metal is available. It should gate its Metal cases behind the exclusive GPU lock (or
+a `requires_metal`/`requires_lock` marker). Flagged, not changed here.
 
 ## Existing tests (CPU, `nice -n 19`, no `-n auto`)
 
