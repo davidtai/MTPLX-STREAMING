@@ -19,8 +19,12 @@
 # engagement guard / clean stop. MTPLX_IGNORE_STOP_TOKENS is deliberately NOT
 # set: cells stop naturally, like the PRs.
 #
-#   # AR (default profile: HEAD_MODE=bf16 + SINKHORN_METAL + ATTN_COMPILE ship
-#   #     as served defaults via the profile child_env)
+#   # AR (default profile: the full cell16k lever stack ships as served defaults
+#   #     via the profile child_env -- decode lane HEAD_MODE=bf16 + SINKHORN_METAL
+#   #     + ATTN_COMPILE + ATTN_WIN_MEMO, prefill lane PREFILL_LAYER_MAJOR +
+#   #     PREFILL_DENSE_EXPERTS + PREFILL_SCORE_PATH=lean + SELECTED_KEYS +
+#   #     KV_CHUNK_GROW + LAYOUT_FIX. The daemon "[4/6] ... decode levers
+#   #     (resolved env)" startup line prints all of them; this script greps it.)
 #   DSV41_RECEIPT_DIR=docs/deepseek-v41/receipts/w49-served-cells \
 #   bash scripts/deepseek_v41/gpu_window.sh \
 #        bash scripts/deepseek_v41/served_cell_bench.sh
@@ -32,15 +36,17 @@
 #        bash scripts/deepseek_v41/served_cell_bench.sh
 #
 # The 16K cell must keep the box under the 100 GiB knob. The served plan is set
-# by the expert profile's planner (--expert-profile deepseek-v41-mxfp4-75). To
-# cap it explicitly, set DSV41_MEMORY_LIMIT_GIB=<N> and it is passed through as
-# `mtplx serve --expert-memory-limit <N>GiB` (the process memory ceiling the
-# planner sizes weights + KV + caches under; NOT --memory-budget, which the
-# serve parser does not accept). The bench harness's 60 GiB plan peaked at
-# 76.6 GB with a 16,384-token prefill, so DSV41_MEMORY_LIMIT_GIB=60 keeps the
-# box well under 100 GiB for the 16K cell; the companion knobs
-# --expert-max-live-kv-tokens / --expert-runtime-reserve are available via
-# DSV41_SERVE_EXTRA_ARGS if finer control is needed.
+# by the expert profile's planner (--expert-profile deepseek-v41-mxfp4-75), which
+# now DEFAULTS to a 60 GiB engine plan (W79): window 30 measured the 16K cell at
+# a 60 GiB plan as fast as an 80 GiB one (2.24 vs 2.21 tok/s) at a far lower peak
+# (67.5 vs 87.8 GB), so 60 GiB is the shipped default and no flag is needed to
+# stay well under 100 GiB. To raise or lower it, set DSV41_MEMORY_LIMIT_GIB=<N>
+# and it is passed through as `mtplx serve --expert-memory-limit <N>GiB` (the
+# engine plan the planner sizes weights + KV + caches under; overridable UP TO
+# the profile's 82 GiB process ceiling; NOT --memory-budget, which the serve
+# parser does not accept). The companion knobs --expert-max-live-kv-tokens /
+# --expert-runtime-reserve are available via DSV41_SERVE_EXTRA_ARGS if finer
+# control is needed.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

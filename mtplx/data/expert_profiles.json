@@ -98,7 +98,7 @@
         "docs/deepseek-v41/W3_REPORT.md"
       ],
       "config": {
-        "memory_limit_bytes": 88046829568,
+        "memory_limit_bytes": 64424509440,
         "runtime_reserve_bytes": 7516192768,
         "max_live_kv_tokens": 16384,
         "cache_policy": "lru",
@@ -120,7 +120,13 @@
         "MTPLX_DSV41_HEAD_MODE": "bf16",
         "MTPLX_DSV41_SINKHORN_METAL": "1",
         "MTPLX_DSV41_ATTN_COMPILE": "1",
-        "MTPLX_DSV41_ATTN_WIN_MEMO": "1"
+        "MTPLX_DSV41_ATTN_WIN_MEMO": "1",
+        "MTPLX_DSV41_PREFILL_LAYER_MAJOR": "1",
+        "MTPLX_DSV41_PREFILL_DENSE_EXPERTS": "1",
+        "MTPLX_DSV41_PREFILL_SCORE_PATH": "lean",
+        "MTPLX_DSV41_SELECTED_KEYS": "1",
+        "MTPLX_DSV41_KV_CHUNK_GROW": "1",
+        "MTPLX_DSV41_LAYOUT_FIX": "1"
       }
     }
   ]

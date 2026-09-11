@@ -3165,6 +3165,11 @@ def _expert_runtime_io_backend(runtime: Any) -> str | None:
 #: spawn boundary (profile default OR an operator's parent-shell export) vs. an
 #: env that never reached the child.  ``DEVICE_ROUTE`` is reported for operator
 #: intent even though no code reads it yet (it stays ``<unset>``).
+#: W79: the six prefill-lane levers (layer-major schedule, dense experts, lean
+#: score path, selected-key gather, chunk-grown KV, sorted-routed layout fix) now
+#: ship as served defaults via the deepseek-v41-mxfp4-75 profile child_env
+#: (== the cell16k A/B preset), so they are surfaced here too -- a served 16K
+#: window log now proves the whole cell16k stack armed, not just the decode lane.
 _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_HEAD_MODE",
     "MTPLX_DSV41_SINKHORN_METAL",
@@ -3176,6 +3181,11 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_HC_COMPILE",
     "MTPLX_DSV41_SHARED_OVERLAP",
     "MTPLX_DSV41_PREFILL_LAYER_MAJOR",
+    "MTPLX_DSV41_PREFILL_DENSE_EXPERTS",
+    "MTPLX_DSV41_PREFILL_SCORE_PATH",
+    "MTPLX_DSV41_SELECTED_KEYS",
+    "MTPLX_DSV41_KV_CHUNK_GROW",
+    "MTPLX_DSV41_LAYOUT_FIX",
 )
 
 

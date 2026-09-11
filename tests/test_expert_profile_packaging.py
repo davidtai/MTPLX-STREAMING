@@ -101,6 +101,7 @@ def test_built_release_is_reproducible_and_contains_expert_profiles(tmp_path):
         "hy3-oq2e-64",
         "hy3-oq2e-88",
         "hy3-oq2e-96",
+        "deepseek-v41-mxfp4-75",
     ]
 
 

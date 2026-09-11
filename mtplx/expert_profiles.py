@@ -138,10 +138,21 @@ def _parse_profile(row: object) -> ExpertServeProfile:
             f"expert profile {name!r} config.runtime_reserve_bytes must be "
             "a non-negative integer"
         )
-    if config_ceiling != process_ceiling_bytes:
+    # config.memory_limit_bytes is the profile's DEFAULT engine plan (what the
+    # streaming planner sizes the resident bank under; build_expert_streaming_config
+    # feeds it to memory_plan()).  It may sit AT or BELOW process_ceiling_bytes,
+    # which is BOTH the RAM the profile is admitted against (select_expert_profile)
+    # AND the cap an --expert-memory-limit override may raise the plan up to.  A
+    # default below the ceiling lets a profile ship a proven-lean plan while
+    # leaving operators headroom to A/B a larger cap without editing the profile
+    # (W79: deepseek-v41-mxfp4-75 defaults to a 60 GiB plan under its 82 GiB
+    # ceiling; the streaming weights + reserve still describe the 82 GiB envelope).
+    # Only a default ABOVE the ceiling is incoherent (the plan could not be
+    # admitted), so that alone is rejected.
+    if config_ceiling > process_ceiling_bytes:
         raise ValueError(
             f"expert profile {name!r} config.memory_limit_bytes "
-            f"{config_ceiling} does not equal process_ceiling_bytes "
+            f"{config_ceiling} exceeds process_ceiling_bytes "
             f"{process_ceiling_bytes}"
         )
     if weight_envelope_bytes + runtime_reserve != process_ceiling_bytes:
