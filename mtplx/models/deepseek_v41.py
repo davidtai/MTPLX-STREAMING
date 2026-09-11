@@ -712,7 +712,9 @@ class Attention(nn.Module):
         prefill window (no-op / byte-identical when not timing)."""
         b, s, H, _ = q.shape
         Tk = KV.shape[1]
-        mode = self.mode
+        # The DSpark draft head reuses this method via ``DSparkAttention`` (which
+        # has no CSA ``mode``); label its stage_attn sub-brackets ``attn.dspark.*``.
+        mode = getattr(self, "mode", "dspark")
         scale = self.softmax_scale
         with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
             qd = (q * scale) if fuse_scale else q
@@ -770,7 +772,8 @@ class Attention(nn.Module):
         exp(m-m) = 1`` and ``p = 0`` -- never a ``-inf − (−inf)`` NaN."""
         b, s, H, hd = q.shape
         T = KV.shape[1]
-        mode = self.mode
+        # DSparkAttention (draft head) reuses this method and has no CSA ``mode``.
+        mode = getattr(self, "mode", "dspark")
         qd = q.astype(score_dtype)
         KVd = KV.astype(score_dtype)
         m = mx.broadcast_to(

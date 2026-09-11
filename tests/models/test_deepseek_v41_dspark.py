@@ -445,3 +445,67 @@ def test_resolve_with_mtp_is_opt_in_and_fails_loud_when_unsatisfiable(monkeypatc
         L.resolve_with_mtp({"model_type": "deepseek_v41"}, man, True)
     with pytest.raises(L.ResidentLoadError, match="no mtp"):
         L.resolve_with_mtp(cfg, _fake_manifest(["layers.0.attn.wq_a.weight"]), True)
+
+
+# --------------------------------------------------------------------------- #
+# W54 regression: the DSpark draft attention reuses the backbone
+# ``Attention._sparse_attend`` (rows > 1 during drafting/verify), which W50's
+# stage_attn / lean-path work made read ``self.mode`` -- a CSA attribute
+# ``DSparkAttention`` does not have (its ``__init__`` sets ``compress_ratio = 0``
+# and no ``mode``).  The score path must tolerate a mode-less attention module
+# (label its sub-brackets ``attn.dspark.*``) both OFF and ON the prefill probe.
+# --------------------------------------------------------------------------- #
+
+
+def test_dspark_attention_sparse_attend_tolerates_missing_mode():
+    import mtplx.models.deepseek_v41_stage_timing as stime
+    from mtplx.models.deepseek_v41_dspark import DSparkAttention
+
+    att = DSparkAttention(_args())
+    assert not hasattr(att, "mode"), "premise: DSparkAttention has no CSA mode"
+    mx.random.seed(0)
+    b, T, H, hd, Tk = 1, 5, 4, 16, 12  # T > 1 -> the prefill/verify score branch
+    q = mx.random.normal((b, T, H, hd))
+    KV = mx.random.normal((b, Tk, hd))
+    attend = mx.ones((b, T, Tk), dtype=mx.bool_)
+
+    # OFF the probe: must not raise AttributeError('mode') and must be finite.
+    o_off = att._sparse_attend(q, KV, attend)
+    mx.eval(o_off)
+    assert bool(mx.all(mx.isfinite(o_off)))
+
+    # ON the prefill probe: byte-identical, and the sub-brackets carry the
+    # ``attn.dspark.score.*`` label (getattr(self, "mode", "dspark")).
+    stime.begin(kind="prefill")
+    try:
+        stime.active().enter_forward(T)
+        o_on = att._sparse_attend(q, KV, attend)
+        mx.eval(o_on)
+        rep = stime.report()
+    finally:
+        stime.end()
+    assert mx.array_equal(o_on, o_off), "the probe must not change the output"
+    dspark_subs = {k.split(".score.")[-1] for k in rep["attn_breakdown"] if ".dspark.score." in k}
+    assert {"qk_matmul", "scale_mask_sink", "softmax", "pv_matmul"} <= dspark_subs, sorted(
+        rep["attn_breakdown"]
+    )
+    # the session is torn down (no leaked global probe).
+    assert stime.active() is None
+
+
+def test_dspark_verify_runs_with_probe_off_and_on():
+    import mtplx.models.deepseek_v41_stage_timing as stime
+
+    prompt = _prompt(17)
+    off = _spec(_runtime(), prompt, 8, 2)  # off the probe (the shipped path)
+
+    stime.begin(kind="prefill")
+    try:
+        on = _spec(_runtime(), prompt, 8, 2)  # full verify machinery under the probe
+        rep = stime.report()
+    finally:
+        stime.end()
+    assert on.tokens == off.tokens, "the prefill probe must not change spec tokens"
+    # the DSpark draft attention was exercised under the probe (dspark-labelled).
+    assert any(".dspark.score." in k for k in rep["attn_breakdown"])
+    assert stime.active() is None
