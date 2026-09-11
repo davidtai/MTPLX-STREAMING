@@ -219,17 +219,52 @@ def test_mtp_affine_q8_gs32_near_exact():
     assert cos > 0.9999, cos  # near-exact requant of the FP4 draft-head grid
 
 
-def test_mxfp4_is_not_bit_exact_in_mlx_032():
-    """Documents why MTP experts use affine q8/gs32, not mxfp4: mlx 0.32.0's
-    mxfp4 re-derives group scales with headroom and is NOT a bit-exact repack."""
+def test_mxfp4_is_bit_exact_in_mlx_032():
+    """On mlx 0.32.2 ``mx.quantize(mode="mxfp4", group_size=32)`` re-encodes an
+    on-grid FP4 (E2M1 + per-32 E8M0) tensor BIT-FOR-BIT -- so the source routed
+    experts (which are exactly that format) repack losslessly (W9 candidate-bank
+    decision; docs/deepseek-v41/receipts/bank_mx_probe.json bit_exact_vs_source).
+    This supersedes the earlier 0.32.0 assertion that mxfp4 was not exact."""
     import mlx.core as mx
 
     mx.set_default_device(mx.cpu)
     rng = np.random.default_rng(21)
     ref = _fp4_grid(rng, 128, 256)
     q = mx.quantize(mx.array(ref), group_size=32, bits=4, mode="mxfp4")
+    # mxfp4 emits packed uint32 codes + uint8 E8M0 scales; NO bias leaf.
+    assert len(q) == 2
+    assert q[0].dtype == mx.uint32 and q[1].dtype == mx.uint8
     deq = np.array(mx.dequantize(*q, group_size=32, bits=4, mode="mxfp4").astype(mx.float32))
-    assert not np.array_equal(deq, ref)  # not exact -> affine q8 is the correct choice
+    assert np.array_equal(deq, ref)  # lossless repack -> native mxfp4 is the correct choice
+
+
+def test_mxfp4_convert_primitives_bit_exact_and_bytes():
+    """The converter's mxfp4 primitives repack an FP4-source expert losslessly and
+    report the exact packed/scale byte layout (no bias)."""
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    rng = np.random.default_rng(7)
+    ref = _fp4_grid(rng, 256, 512)  # [out=256, in=512]
+    packed, scales = dc.quantize_mxfp4(ref)
+    assert packed.dtype == mx.uint32 and scales.dtype == mx.uint8
+    assert tuple(packed.shape) == (256, 512 * 4 // 32)  # (256, 64)
+    assert tuple(scales.shape) == (256, 512 // 32)      # (256, 16)
+    assert dc.mxfp4_dequant_equals_source(packed, scales, ref)
+    pbytes, sbytes = dc.mxfp4_component_bytes(packed, scales)
+    assert len(pbytes) == 256 * 64 * 4
+    assert len(sbytes) == 256 * 16
+
+
+def test_mxfp4_expert_record_bytes_matches_geometry():
+    """One mxfp4 record = packed FP4 codes + E8M0 scales, no bias, for the pinned
+    DeepSeek-V4.1-Flash geometry."""
+    params = 3 * dc.HIDDEN_SIZE * dc.MOE_INTERMEDIATE
+    packed = params * dc.MXFP4_BITS // 8
+    scales = params // dc.MXFP4_GROUP
+    assert dc.MXFP4_EXPERT_RECORD_BYTES == packed + scales == 18_800_640
+    # 40 layers x 384 experts = 268.99 GiB bank
+    assert dc.MXFP4_EXPERT_RECORD_BYTES * 40 * 384 == 288_777_830_400
 
 
 def test_raw_bf16_roundtrips_to_f32():
