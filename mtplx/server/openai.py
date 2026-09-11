@@ -3670,6 +3670,18 @@ class ServerState:
             "aux_bytes_per_token": _plan_aux_from_config(_plan_model_config),
             "prefill_transient_bytes_per_token": _plan_transient_per_token,
         }
+        # An explicit MTPLX_SESSION_BANK_MAX_BYTES (e.g. the deepseek-v41 expert
+        # profile's 2 GiB child_env, which yields the bank to the streamed expert
+        # cache) also governs the plan's advertised bank, so the memory-plan line
+        # matches the engine_session bank instead of the module's 48G cap.
+        from mtplx.engine_session import (
+            resolve_session_bank_max_bytes as _resolve_bank_max,
+        )
+
+        _bank_max, _bank_auto = _resolve_bank_max(_plan_weights_bytes)
+        _plan_inputs["session_bank_max_bytes"] = (
+            None if _bank_auto else int(_bank_max)
+        )
         _fit_plan = _plan_memory(**_plan_inputs)
         _machine_fit = (
             int(_fit_plan.context_window_fit)

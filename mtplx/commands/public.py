@@ -821,12 +821,14 @@ def _apply_runtime_compatibility_mode(
     return None
 
 
-def _streamed_generation_mode_error(args: Any, model_path: Any = None) -> str | None:
+def _streamed_mtp_flag_requested(args: Any) -> bool:
+    """Whether the operator asked for MTP on the streamed serve command line."""
+
     cli_flags = set(getattr(args, "_cli_flags", set()) or set())
     explicit_generation_mode = str(
         getattr(args, "generation_mode", "") or ""
     ).strip().lower()
-    mtp_requested = (
+    return (
         ("generation-mode" in cli_flags and explicit_generation_mode == "mtp")
         or "mtp" in cli_flags
         or (
@@ -834,23 +836,39 @@ def _streamed_generation_mode_error(args: Any, model_path: Any = None) -> str | 
             and getattr(args, "load_mtp", True) is True
         )
     )
-    if not mtp_requested:
-        return None
-    # The DeepSeek-V4.1 DSpark native MTP head is served with --generation-mode
-    # mtp (worker W23 glue); every external-MTP (hy3/glm) streamed profile stays
-    # AR-only. Same native-MTP predicate the expert_cli gate uses.
-    if model_path is not None:
-        try:
-            from mtplx.expert_cli import (
-                _authoritative_manifest_path,
-                _is_native_streamed_mtp,
-            )
 
-            root = Path(model_path).resolve()
-            if _is_native_streamed_mtp(root, _authoritative_manifest_path(root)):
-                return None
-        except Exception:
-            pass
+
+def _streamed_native_mtp_requested(args: Any, model_path: Any) -> bool:
+    """MTP requested AND the streamed artifact is a DSpark native-MTP head.
+
+    The one predicate that decides, on the serve path, whether
+    ``--generation-mode mtp`` is honoured (DeepSeek-V4.1 DSpark, worker W23) or
+    rejected/forced to AR (every external-MTP hy3/glm streamed profile).
+    """
+
+    if not _streamed_mtp_flag_requested(args):
+        return False
+    if model_path is None:
+        return False
+    try:
+        from mtplx.expert_cli import (
+            _authoritative_manifest_path,
+            _is_native_streamed_mtp,
+        )
+
+        root = Path(model_path).resolve()
+        return bool(
+            _is_native_streamed_mtp(root, _authoritative_manifest_path(root))
+        )
+    except Exception:
+        return False
+
+
+def _streamed_generation_mode_error(args: Any, model_path: Any = None) -> str | None:
+    if not _streamed_mtp_flag_requested(args):
+        return None
+    if _streamed_native_mtp_requested(args, model_path):
+        return None
     return "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1"
 
 
@@ -9692,9 +9710,17 @@ def cmd_serve_public(args: Any) -> int:
         except (OSError, RuntimeError, ValueError) as exc:
             _print_serve_start_line(f"error: {exc}")
             return 2
-        args.no_mtp = True
-        args.load_mtp = False
-        args.generation_mode = GENERATION_MODE_AR
+        if _streamed_native_mtp_requested(args, runtime_model):
+            # DeepSeek-V4.1 DSpark native MTP head (worker W23): keep MTP so the
+            # forwarded child serves it; the daemon prices the mtp.* residents.
+            args.no_mtp = False
+            args.load_mtp = True
+            args.generation_mode = GENERATION_MODE_MTP
+        else:
+            # Every external-MTP (hy3/glm) streamed profile is AR-only.
+            args.no_mtp = True
+            args.load_mtp = False
+            args.generation_mode = GENERATION_MODE_AR
         generation_mode = _generation_mode_from_args(args)
     inspection, gate_exit = _model_gate(
         runtime_model,
