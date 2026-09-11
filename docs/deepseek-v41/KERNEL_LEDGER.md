@@ -269,6 +269,17 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (1345) + `_install_sinkhorn_normaliser` (1312) from `deepseek_v4.py`; hc math identical (mult 4,
   iters 20, eps 1e-6). **Precedent:** measured +29.3 % AR on V4. `metal_kernel` composes with
   `mx.compile` in 0.31 ([[metal-kernel-compiles-in-031]]).
+- **Status (W32, `feat/deepseek-v41-w32`):** ported behind `MTPLX_DSV41_SINKHORN_METAL` (default OFF,
+  read-at-use, GPU-only). V4's `_sinkhorn_metal_kernel` / `_sinkhorn_kernel_apply` / `_sinkhorn_ops`
+  are **imported and reused** (shapes identical, no fork); `deepseek_v41._hc_split_sinkhorn` carries the
+  pre/post/comb split and routes the Sinkhorn tail through `_sinkhorn_normalise` (kernel on GPU+flag,
+  recurrence on CPU / flag-off). Composes with chunked-prefill (W20) and layer-major (W30) — rows = any
+  n. **Dispatch/token:** 80 Sinkhorn calls × 119 primitives (78 reduce+divide core) = **9,520 → 80**
+  (one Metal launch/call). CPU dispatch gates green (8 pass / 1 skip; 115 pass / 23 skip across the
+  V4.1 suites, 0 fail), flag-off bit-identical to the stock split. GPU numeric parity
+  (`tests/models/test_deepseek_v41_sinkhorn_metal.py::test_sinkhorn_kernel_parity_gpu`, fp32 1e-6 +
+  argmax, bf16 argmax) present, **skipped unless `MTPLX_GPU_PARITY=1`** — awaiting a GPU window. See
+  [W32_K3_SINKHORN_METAL.md](W32_K3_SINKHORN_METAL.md).
 
 ### K10 — Verify K+1 rows in one batched dispatch per layer — **Rank 3**
 - **Mechanism:** run the 4 verify rows through each layer's MoE as one M=4 `gather_qmm` over the

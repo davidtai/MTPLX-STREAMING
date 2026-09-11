@@ -39,13 +39,23 @@ from mlx_lm.models.base import BaseModelArgs
 # oracle (tests/models/test_deepseek_v41_parity.py):
 #   _yarn_inv_freq         <- precompute_freqs_cis YaRN ramp (model.py L367-395)
 #   _apply_interleaved_rope<- apply_rotary_emb adjacent-pair rotation (L399-414)
-#   hc_split_sinkhorn      <- kernel.py hc_split_sinkhorn (pre/post/comb + Sinkhorn)
+#   _sinkhorn_ops          <- the stock Sinkhorn alternating-normalisation loop
+#                             (kernel.py hc_split_sinkhorn's normalise body); the
+#                             CPU / flag-off route and the kernel's parity oracle.
+#   _sinkhorn_kernel_apply <- the whole Sinkhorn loop as one mx.fast.metal_kernel
+#                             dispatch (deepseek_v4._sinkhorn_metal_kernel, W32/K3);
+#                             the GPU flag-on route.  Shapes are identical between
+#                             V4 and V4.1 ([..., hc, hc]), so the kernel source is
+#                             REUSED here rather than copied; the pre/post/comb
+#                             split is carried in ``_hc_split_sinkhorn`` below with
+#                             this origin note.
 #   _hc_post_impl          <- Block.hc_post (post*x + sum_j comb[j,k]*residual[j])
 from mtplx.models.deepseek_v4 import (
     _apply_interleaved_rope,
     _hc_post_impl,
+    _sinkhorn_kernel_apply,
+    _sinkhorn_ops,
     _yarn_inv_freq,
-    hc_split_sinkhorn,
 )
 
 # The MoE (routed switch-streaming seam + shared expert) and the per-sequence KV
@@ -63,6 +73,98 @@ from mtplx.models.deepseek_v41_cache import (
     make_cache as _make_cache,
 )
 from mtplx.models.deepseek_v41_moe import MoE
+
+# ---------------------------------------------------------------------------
+# Hyper-Connection Sinkhorn normalisation (kernel-ledger K3, W32)
+# ---------------------------------------------------------------------------
+#: Env toggle for the one-dispatch Metal Sinkhorn on the V4.1 Hyper-Connection.
+#:
+#: Every backbone layer runs the Sinkhorn alternating-normalisation loop twice
+#: per token (the attention HC mix and the ffn HC mix, :meth:`DecoderLayer._mixes`
+#: -> :func:`_hc_split_sinkhorn`), so at 40 layers that is 80 Sinkhorn calls per
+#: token.  As stock MLX ops (:func:`_sinkhorn_ops`) each call is ~119 tiny graph
+#: primitives -- one row-softmax, then 39 alternating row/column normalisations of
+#: ``reduce_sum`` + ``add eps`` + ``divide`` -- on a ``[..., 4, 4]`` tensor that is
+#: 16 floats at decode, all of it host build/encode overhead the GPU never notices.
+#:
+#: Set truthy to route the whole loop through ``deepseek_v4``'s
+#: :func:`_sinkhorn_metal_kernel` instead (via :func:`_sinkhorn_kernel_apply`): one
+#: threadgroup thread per matrix carries the 16 floats in registers and runs all 40
+#: normalisation passes internally, collapsing each call to a single dispatch.  The
+#: arithmetic is the *identical* fp32 order as :func:`_sinkhorn_ops` (the V4 lane's
+#: parity gate is 1e-6 + argmax-exact), so this is a pure dispatch-count lever.
+#:
+#: Default OFF until the GPU parity window measures it (V4 measured AR +29.3% on
+#: the same kernel).  The kernel path is taken ONLY when the flag is truthy *and*
+#: Metal is available *and* the default device is the GPU; CPU (and any no-Metal
+#: build) always takes the stock recurrence, so the flag is inert off-GPU.  Read at
+#: use, never frozen at import, because the serving harness stamps optimization
+#: keys after this module is imported.
+_SINKHORN_METAL_ENV = "MTPLX_DSV41_SINKHORN_METAL"
+
+
+def _sinkhorn_metal_enabled() -> bool:
+    """Whether ``MTPLX_DSV41_SINKHORN_METAL`` requests the Metal Sinkhorn.
+
+    Evaluated on every call (not cached at import) so the serving harness's
+    late environment stamp is honoured.
+    """
+    return _env_truthy(_SINKHORN_METAL_ENV)
+
+
+def _sinkhorn_use_kernel() -> bool:
+    """The kernel path is live only when requested *and* on the GPU.
+
+    A truthy flag on a CPU default device (every worker test pins
+    ``mx.set_default_device(mx.cpu)``) or a no-Metal build stays on the stock
+    recurrence, so the flag can never change CPU numerics.
+    """
+    if not _sinkhorn_metal_enabled():
+        return False
+    if not mx.metal.is_available():
+        return False
+    return mx.default_device() == mx.gpu
+
+
+def _sinkhorn_normalise(comb: mx.array, hc: int, iters: int, eps: float) -> mx.array:
+    """Doubly-stochastic Sinkhorn normalise of the ``[..., hc, hc]`` comb tensor.
+
+    Dispatches to the one-launch Metal kernel when :func:`_sinkhorn_use_kernel`
+    (flag on + GPU), otherwise the stock alternating-normalisation recurrence.
+    Both accept any leading dims (``rows = b*s`` = any n): the kernel flattens the
+    leading axes to one matrix index and reshapes back, so decode, one-shot
+    prefill, chunked prefill and the layer-major path all compose unchanged.
+    """
+    if _sinkhorn_use_kernel():
+        return _sinkhorn_kernel_apply(comb, hc, iters, eps)
+    return _sinkhorn_ops(comb, iters, eps)
+
+
+def _hc_split_sinkhorn(
+    mixes: mx.array,
+    scale: mx.array,
+    base: mx.array,
+    hc: int,
+    iters: int,
+    eps: float,
+):
+    """V4.1 pre/post/comb split with the Sinkhorn route selected per device.
+
+    Byte-for-byte the split of ``deepseek_v4.hc_split_sinkhorn`` (origin:
+    ``inference/kernel.py`` ``hc_split_sinkhorn_kernel`` L371-427, transcribed in
+    ``deepseek_v4``); the only change is that the always-stock
+    ``_sinkhorn_ops(comb, iters, eps)`` tail is replaced by
+    :func:`_sinkhorn_normalise`, which takes the Metal kernel when it is armed on
+    the GPU and the identical stock recurrence otherwise.  Returns ``(pre, post,
+    comb)`` with shapes ``[..., hc]``, ``[..., hc]``, ``[..., hc, hc]``.
+    """
+    pre = mx.sigmoid(mixes[..., :hc] * scale[0] + base[:hc]) + eps
+    post = 2.0 * mx.sigmoid(mixes[..., hc : 2 * hc] * scale[1] + base[hc : 2 * hc])
+    comb = mixes[..., 2 * hc :] * scale[2] + base[2 * hc :]
+    comb = comb.reshape(*comb.shape[:-1], hc, hc)  # [..., j, k]
+    comb = _sinkhorn_normalise(comb, hc, iters, eps)
+    return pre, post, comb
+
 
 # ---------------------------------------------------------------------------
 # Per-layer CSA2 mode (§0 of docs/deepseek-v41/PORT_PLAN.md)
@@ -676,7 +778,7 @@ class DecoderLayer(nn.Module):
         flat = xf.reshape(*xf.shape[:-2], self.hc_mult * xf.shape[-1])
         rsqrt = mx.rsqrt(mx.mean(mx.square(flat), axis=-1, keepdims=True) + self.norm_eps)
         mixes = (flat @ fn.astype(mx.float32).T) * rsqrt
-        return hc_split_sinkhorn(mixes, scale, base, self.hc_mult, self.hc_iters, self.hc_eps)
+        return _hc_split_sinkhorn(mixes, scale, base, self.hc_mult, self.hc_iters, self.hc_eps)
 
     def _hc_pre(self, x, pre_mix):
         """Collapse the hc copies into one sublayer input with the threaded
