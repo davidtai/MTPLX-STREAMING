@@ -1736,6 +1736,11 @@ def mlx_memory_telemetry(mx_module: Any | None = None) -> dict[str, int | str]:
 # the optimization keys AFTER importing the runtime module.
 PIN_WORKING_SET_ENV = "MTPLX_DSV41_PIN_WORKING_SET"
 PIN_REFRESH_TOKENS_ENV = "MTPLX_DSV41_PIN_REFRESH_TOKENS"
+# W71 (K24 revived): the barrier-free device route guarded by the W64 pins. When
+# "1" the switch takes the pinned device path (gather over the pinned-only LUT,
+# defer the all-pinned check) and the backbone establishes pins out-of-band at the
+# prefill->decode boundary + arms the cold-recovery flush. Default off.
+DEVICE_ROUTE_PINNED_ENV = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"
 
 # Reusable no-op context for the "no per-layer lock" branch (global-lock banks
 # are already excluded from W64, so this only stands in for a missing lock).
@@ -1938,7 +1943,22 @@ class ExpertStreamingRuntime:
         self._device_route_lut_snapshot: dict[int, frozenset[int]] = {}
         self._device_route_lut_dirty: dict[int, bool] = {}
         self._device_route_bank: dict[int, Any] = {}
-        self._device_route_probes: list[tuple[int, Any, frozenset[int]]] = []
+        self._device_route_probes: list[tuple[int, Any, frozenset[int], bool]] = []
+        # W71 (K24 revived, env ``MTPLX_DSV41_DEVICE_ROUTE_PINNED``): a parallel
+        # PINNED-only LUT (expert -> slot for PINNED experts, -1 for everything
+        # else, so the device gather is exact only on an all-pinned route -- whose
+        # slots W64 guarantees cannot be recycled by normal decode admission). It
+        # is rebuilt on the host only when the layer's PIN set changes (a pin /
+        # refresh, or a memory-forced capacity eviction that unpins an expert),
+        # tracked by its own dirty flag so it never rebuilds off a mere LRU churn
+        # of the unpinned free tail. Telemetry counts the barrier-free (all-pinned,
+        # kept) vs recovered (not-all-pinned, refenced) layers per flush.
+        self._device_route_pinned_lut: dict[int, Any] = {}
+        self._device_route_pinned_snapshot: dict[int, frozenset[int]] = {}
+        self._device_route_pinned_lut_dirty: dict[int, bool] = {}
+        self._device_route_pinned_flushes = 0
+        self._device_route_pinned_barrier_free_layers = 0
+        self._device_route_pinned_recovered_layers = 0
         # Layers the backbone has forced back onto the fenced path for a W44 cold
         # recovery pass (the switch skips the device path for these). Empty in the
         # steady state; set/cleared around a recovery re-run by the decode forward.
@@ -2460,7 +2480,7 @@ class ExpertStreamingRuntime:
             # A KV-growth boundary lowers the cap: memory is the hard constraint,
             # so a W64 pinned expert may be evicted here as a last resort
             # (``respect_pins=False``). ``invalidate_expert`` unpins it, and the
-            # device-route dirty mark below rebuilds the layer's pinned/LUT view.
+            # device-route dirty marks below rebuild the layer's LUT views.
             victim = bank.peek_victim(excluded=skipped, respect_pins=False)
             if victim is None:
                 raise ExpertStreamingConfigurationError(
@@ -2470,6 +2490,7 @@ class ExpertStreamingRuntime:
                     "candidate is pinned or loading"
                 )
             expert, slot = victim
+            was_pinned = expert in bank.pinned_experts
             try:
                 self.slots.invalidate(layer, slot, expert=expert)
             except ExpertSlotError:
@@ -2477,6 +2498,11 @@ class ExpertStreamingRuntime:
                 continue
             bank.invalidate_expert(expert)
             self._mark_device_route_dirty(layer)  # W44: residency changed
+            if was_pinned:
+                # W71 (3): a pinned expert was force-evicted -> its pinned-only LUT
+                # is now stale (slot recycled); invalidate so the next pinned route
+                # touching it is recomputed on the fenced path.
+                self._mark_device_route_pinned_dirty(layer)
 
     def _evict_global_bank_to_capacity(self, capacity: int) -> None:
         """Synchronously evict the global bank's policy victims to a cap."""
@@ -2853,7 +2879,14 @@ class ExpertStreamingRuntime:
     def _invalidate_policy_expert(self, layer: int, expert: int) -> int | None:
         if self._global_bank is not None:
             return self._global_bank.invalidate_expert(layer, expert)
-        return self._banks[layer].invalidate_expert(expert)
+        bank = self._banks[layer]
+        was_pinned = int(expert) in bank.pinned_experts
+        slot = bank.invalidate_expert(expert)
+        if was_pinned:
+            # W71 (3): forgetting a pinned mapping unpins it -> its pinned-only LUT
+            # entry is stale; invalidate so a later pinned route recomputes fenced.
+            self._mark_device_route_pinned_dirty(layer)
+        return slot
 
     @staticmethod
     def _subset_route_plan(
@@ -3345,6 +3378,18 @@ class ExpertStreamingRuntime:
         if self._device_route_lut:
             self._device_route_lut_dirty[int(layer)] = True
 
+    def _mark_device_route_pinned_dirty(self, layer: int) -> None:
+        """The PINNED set for ``layer`` changed (a pin, a refresh re-rank, or a
+        force-eviction unpin) -> its pinned-only LUT must be rebuilt on the next
+        pinned device-route gather (W71 (1)/(3)). Kept SEPARATE from the residency
+        dirty mark: a pinned expert's slot never moves while it stays pinned (W64),
+        so a mere free-tail LRU churn -- an unpinned residency change -- leaves the
+        pinned LUT exact and must NOT trigger a rebuild. No-op until the pinned
+        device path has been used."""
+
+        if self._device_route_pinned_lut:
+            self._device_route_pinned_lut_dirty[int(layer)] = True
+
     def register_component_bank(self, layer: int, bank: Any) -> None:
         """Capture ``layer``'s component bank from a fenced binding (idempotent),
         so the device-route path can gather without a routed binding of its own."""
@@ -3406,6 +3451,64 @@ class ExpertStreamingRuntime:
 
         return self._device_route_lut_snapshot.get(int(layer), frozenset())
 
+    def device_route_pinned_lut(self, layer: int, *, mx_module: Any | None = None) -> Any:
+        """W71: device expert->slot LUT for ``layer`` built from PINNED experts
+        ONLY (int32 ``[expert_count]``; -1 for every non-pinned expert, resident or
+        not). Rebuilt on the host only when the layer's PIN set changes -- a pin /
+        refresh re-rank or a memory-forced capacity eviction that unpins an expert
+        (``_mark_device_route_pinned_dirty``); otherwise the cached mx.array is
+        returned unchanged. A pinned expert's slot is never recycled by normal
+        decode admission (W64), so an all-pinned route's deferred gather over this
+        table cannot race a recycle -- the safety property W44 §8 lacked. A route
+        touching any non-pinned expert reads -1 -> void row (clamped) and is caught
+        by the deferred flush, which recomputes that layer on the fenced path."""
+
+        layer = int(layer)
+        cached = self._device_route_pinned_lut.get(layer)
+        if cached is not None and not self._device_route_pinned_lut_dirty.get(
+            layer, False
+        ):
+            return cached
+        mx = mx_module
+        if mx is None:  # local import: keep this module MLX-free at import time
+            import mlx.core as mx
+        n = int(self.spec.expert_count)
+        table = [-1] * n
+        snapshot: set[int] = set()
+        bank = self._banks.get(layer) if self._banks else None
+        lock = self._layer_locks.get(layer)
+
+        def _fill(source_bank: Any) -> None:
+            slot_map = getattr(source_bank, "_expert_to_slot", None)
+            if not slot_map:
+                return
+            pinned = getattr(source_bank, "pinned_experts", frozenset())
+            for expert in pinned:
+                e = int(expert)
+                slot = slot_map.get(e)
+                if slot is not None and 0 <= e < n:
+                    table[e] = int(slot)
+                    snapshot.add(e)
+
+        if bank is not None:
+            if lock is not None:
+                with lock:
+                    _fill(bank)
+            else:
+                _fill(bank)
+        arr = mx.array(table, dtype=mx.int32)
+        mx.eval(arr)
+        self._device_route_pinned_lut[layer] = arr
+        self._device_route_pinned_snapshot[layer] = frozenset(snapshot)
+        self._device_route_pinned_lut_dirty[layer] = False
+        return arr
+
+    def device_route_pinned_snapshot(self, layer: int) -> frozenset[int]:
+        """The PINNED-expert set the current pinned LUT for ``layer`` was built
+        from (what an all-pinned device gather for ``layer`` is exact against)."""
+
+        return self._device_route_pinned_snapshot.get(int(layer), frozenset())
+
     def set_device_route_force_fenced(self, layers: Iterable[int]) -> None:
         """Force ``layers`` onto the fenced path (barrier + admit + gather) for a
         W44 cold-recovery re-run; pass ``()`` to clear. The switch reads this and
@@ -3415,12 +3518,21 @@ class ExpertStreamingRuntime:
         self._device_route_force_fenced = frozenset(int(x) for x in layers)
 
     def enqueue_device_route_probe(
-        self, layer: int, indices: Any, snapshot: frozenset[int]
+        self,
+        layer: int,
+        indices: Any,
+        snapshot: frozenset[int],
+        *,
+        pinned: bool = False,
     ) -> None:
         """Queue a routed ``indices`` array (already ``async_eval``'d by the
-        switch) for deferred residency verification against ``snapshot``."""
+        switch) for deferred verification. ``pinned`` (W71) selects the check the
+        flush applies: a pinned probe is kept only if every routed expert is
+        CURRENTLY pinned (so a mid-token force-eviction of a pinned expert flips it
+        to a recompute), a resident (W44) probe only if every expert is in the
+        build ``snapshot``."""
 
-        self._device_route_probes.append((int(layer), indices, snapshot))
+        self._device_route_probes.append((int(layer), indices, snapshot, bool(pinned)))
 
     def flush_device_route_probes(self) -> list[tuple[int, tuple[int, ...]]]:
         """Read back the queued route indices and return, per probed layer, the
@@ -3441,13 +3553,39 @@ class ExpertStreamingRuntime:
         # warm/all-hit token therefore costs this ONE verify sync, not 40.)
         import mlx.core as mx  # local: keep this module MLX-free at import
 
-        mx.eval(*[indices for _layer, indices, _snapshot in probes])
+        mx.eval(*[indices for _layer, indices, _snapshot, _pinned in probes])
         misses: list[tuple[int, tuple[int, ...]]] = []
-        for layer, indices, snapshot in probes:
+        pinned_probes = 0
+        pinned_recovered = 0
+        for layer, indices, snapshot, pinned in probes:
             ids = [int(v) for v in indices.reshape(-1).tolist()]
-            missed = tuple(sorted({e for e in ids if e not in snapshot}))
+            if pinned:
+                # W71: verify against the CURRENT pinned set, not the build
+                # snapshot -- so an expert that was pinned when the LUT was built
+                # but has since been force-evicted (unpinned) is flagged for a
+                # fenced recompute, closing the W44 §8 recycle race for the one
+                # case W64 allows a pinned slot to move (memory hard constraint).
+                bank = self._banks.get(layer) if self._banks else None
+                lock = self._layer_locks.get(layer)
+                if bank is not None and lock is not None:
+                    with lock:
+                        pinned_now = getattr(bank, "pinned_experts", frozenset())
+                else:
+                    pinned_now = getattr(bank, "pinned_experts", frozenset())
+                missed = tuple(sorted({e for e in ids if e not in pinned_now}))
+                pinned_probes += 1
+                if missed:
+                    pinned_recovered += 1
+            else:
+                missed = tuple(sorted({e for e in ids if e not in snapshot}))
             if missed:
                 misses.append((layer, missed))
+        if pinned_probes:
+            self._device_route_pinned_flushes += 1
+            self._device_route_pinned_barrier_free_layers += (
+                pinned_probes - pinned_recovered
+            )
+            self._device_route_pinned_recovered_layers += pinned_recovered
         return misses
 
     # ------------------------------------------------------------------
@@ -3516,6 +3654,8 @@ class ExpertStreamingRuntime:
         # Residency contract changed (pinned set is now this layer's static set);
         # a device-route LUT built before the pin must be rebuilt.
         self._mark_device_route_dirty(layer)
+        # W71: the pin set changed -> the pinned-only LUT must rebuild too.
+        self._mark_device_route_pinned_dirty(layer)
 
     def _observe_pin_route(self, layer: int, expert_ids: Iterable[int]) -> None:
         bank = self._banks.get(layer)
@@ -3561,6 +3701,7 @@ class ExpertStreamingRuntime:
             with lock if lock is not None else _NULL_CTX:
                 bank.clear_pins()
             self._mark_device_route_dirty(lyr)
+            self._mark_device_route_pinned_dirty(lyr)  # W71: pin set changed
         self._pin_last_epoch.clear()
 
     def layer_pinned_static(self, layer: int) -> bool:
@@ -3610,6 +3751,29 @@ class ExpertStreamingRuntime:
             "all_pinned_routes": all_pinned,
             "all_pinned_hit_rate": (
                 round(all_pinned / routes, 6) if routes else None
+            ),
+        }
+
+    def device_route_pinned_telemetry(self) -> dict[str, Any]:
+        """W71 barrier-free-layer telemetry for the pinned device route (env
+        ``MTPLX_DSV41_DEVICE_ROUTE_PINNED``). Counts, per probe flush (~= per
+        decode token in the steady no-recovery state), how many probed layers
+        were kept barrier-free (every routed expert pinned -> slot-stable, so the
+        deferred gather stands) vs recovered on the fenced path (a routed expert
+        was not pinned or was force-evicted). Cumulative counters, so the
+        served-event delta reports the window's barrier-free-layers-per-token."""
+
+        enabled = os.environ.get(DEVICE_ROUTE_PINNED_ENV) == "1"
+        flushes = self._device_route_pinned_flushes
+        return {
+            "enabled": enabled,
+            "flushes": flushes,
+            "barrier_free_layers": self._device_route_pinned_barrier_free_layers,
+            "recovered_layers": self._device_route_pinned_recovered_layers,
+            "barrier_free_layers_per_flush": (
+                round(self._device_route_pinned_barrier_free_layers / flushes, 6)
+                if flushes
+                else None
             ),
         }
 
@@ -3839,6 +4003,9 @@ class ExpertStreamingRuntime:
         self._device_route_lut.clear()
         self._device_route_lut_snapshot.clear()
         self._device_route_lut_dirty.clear()
+        self._device_route_pinned_lut.clear()
+        self._device_route_pinned_snapshot.clear()
+        self._device_route_pinned_lut_dirty.clear()
         self._device_route_probes = []
         # Straggler speculative loads hold pool lifecycle claims; without
         # this drain the pool reset below would reject them as active
@@ -3952,6 +4119,7 @@ class ExpertStreamingRuntime:
             "incremental_misses": incremental_misses,
             "slots": slots,
             "pin_working_set": self.pinned_working_set_telemetry(),
+            "device_route_pinned": self.device_route_pinned_telemetry(),
         }
         if self._belady_oracle is not None:
             # The clairvoyant fetch floor over the full decode window, at the
@@ -4033,6 +4201,7 @@ class ExpertStreamingRuntime:
             "cache_by_phase": cache_by_phase,
             "incremental_misses": incremental_misses,
             "pin_working_set": self.pinned_working_set_telemetry(),
+            "device_route_pinned": self.device_route_pinned_telemetry(),
             **slots,
         }
         if self._pipeline_ledger is not None:

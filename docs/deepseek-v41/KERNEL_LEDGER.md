@@ -314,7 +314,26 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 - **Precedent:** hy3-oq2e profiles ship this exact pair in production (`expert_profiles.json`);
   W28's shared-overlap uses the same env-isolation pattern.
 
-### K24 — Barrier-free all-hit device route (W44) — **SHELVED (window-19: NOT exact on the real model; default off, out of stack_a)**
+### K24 — Barrier-free all-hit device route (W44) — **REVIVED-PENDING-WINDOW (W71: pinned-guarded, exact on CPU behind `MTPLX_DSV41_DEVICE_ROUTE_PINNED`; default off, GPU parity window pending)**
+> **✅ W71 (K24 revived, pinned-guarded; `feat/deepseek-v41-w71`):** the barrier-free
+> device route is back behind `MTPLX_DSV41_DEVICE_ROUTE_PINNED=1` (default off),
+> guarded by the W64 pins. The LUT is built from PINNED experts only (unpinned → −1,
+> rebuilt only when the pin set changes); a layer takes the device path
+> speculatively and is KEPT only if the deferred flush confirms every routed expert
+> is CURRENTLY pinned — else it is recomputed on W44's fenced cold-recovery path. A
+> pinned slot is never recycled by normal decode admission (W64), so an all-pinned
+> route's deferred gather cannot race a recycle (the window-19 root cause below);
+> the one case W64 lets a pinned slot move — a memory-forced capacity eviction —
+> unpins the expert, which the flush sees (it checks the CURRENT pin set, not the
+> build snapshot) and recomputes. CPU byte-identical to fenced across
+> all-pinned/partial/miss/forced-eviction at M=1 & M=4 (output + KV/compress/index
+> cache + engram), barriers/token = NOT-all-pinned layers (+1 batched flush), and
+> the W44 race test adapted shows pinned slots survive churn
+> (`tests/test_deepseek_v41_device_route_pinned.py`, 24 tests). Arm
+> `device_route_pinned` (= `pin_ws` all + device route). **Pending: the GPU parity
+> window** (`MTPLX_GPU_PARITY`) that the shelved W44 version failed — re-run it under
+> the pin guard before promotion. W71_DEVICE_ROUTE_PINNED.md. The shelved W44
+> disposition (unpinned deferred gather) stands below unchanged.
 > **⚠ GPU window 19 (integration 0b35a8bc2, 1,024/256):** `device_route` decoded
 > 3.19 tok/s vs control 4.05 (**−21%**) and was **NOT byte-identical** (tokens
 > collapsed to 0 from the first decode step; sha `c0a892a0…`). `stack_a`+device_route

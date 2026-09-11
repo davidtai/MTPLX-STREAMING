@@ -2305,6 +2305,19 @@ class DeepseekV41Backbone(nn.Module):
         # re-run the whole span with the miss layers forced onto the fenced path --
         # final token, cache, and engram byte-identical to fenced.
         dr = self._device_route_active(cache, s)
+        if dr and os.environ.get("MTPLX_DSV41_DEVICE_ROUTE_PINNED") == "1":
+            # W71: establish the pinned working set out-of-band, ONCE, at the
+            # prefill->decode boundary -- a pure host ranking over the already-
+            # resident set (no gather, no routing barrier), so the pinned-only LUT
+            # is populated before this span's first device gather. The switch hook
+            # rides the fenced ``mx.eval(indices)`` the device route removes, so it
+            # cannot pin; this call does (W64_PINNED_WORKING_SET.md §6). Idempotent
+            # (epoch-gated per layer, refresh-aware) and a no-op unless
+            # MTPLX_DSV41_PIN_WORKING_SET is armed.
+            _dr_runtime = self._device_route_runtime()
+            _pin = getattr(_dr_runtime, "pin_working_set", None)
+            if callable(_pin):
+                _pin()
         dr_marks = [lc.mark() for lc in cache.layers] if dr else None
         dr_initial = (h, pre_mix) if dr else None
         for layer in self.layers:
@@ -2354,12 +2367,17 @@ class DeepseekV41Backbone(nn.Module):
         return None
 
     def _device_route_active(self, cache, s: int) -> bool:
-        """Arm the device-route recovery for this span iff the env flag is set, a
-        streamed runtime is present, and the routing phase is DECODE -- exactly the
-        condition under which the switch takes the barrier-free device path (so a
-        prefill span never arms it and never leaves orphan probes)."""
+        """Arm the device-route recovery for this span iff a device-route env flag
+        is set (W44 ``MTPLX_DSV41_DEVICE_ROUTE`` or W71
+        ``MTPLX_DSV41_DEVICE_ROUTE_PINNED``), a streamed runtime is present, and
+        the routing phase is DECODE -- exactly the condition under which the switch
+        takes the barrier-free device path (so a prefill span never arms it and
+        never leaves orphan probes)."""
 
-        if os.environ.get("MTPLX_DSV41_DEVICE_ROUTE") != "1":
+        if (
+            os.environ.get("MTPLX_DSV41_DEVICE_ROUTE") != "1"
+            and os.environ.get("MTPLX_DSV41_DEVICE_ROUTE_PINNED") != "1"
+        ):
             return False
         if self._device_route_runtime() is None:
             return False

@@ -103,6 +103,16 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
                 "pinned_total": int(pin.get("pinned_total", 0) or 0),
                 "static_layer_count": int(pin.get("static_layer_count", 0) or 0),
             }
+        # W71: pinned device-route barrier-free-layer counters (cumulative;
+        # the delta below reports the window's barrier-free layers per token).
+        drp = snap.get("device_route_pinned")
+        if isinstance(drp, dict):
+            out["device_route_pinned"] = {
+                "enabled": bool(drp.get("enabled", False)),
+                "flushes": int(drp.get("flushes", 0) or 0),
+                "barrier_free_layers": int(drp.get("barrier_free_layers", 0) or 0),
+                "recovered_layers": int(drp.get("recovered_layers", 0) or 0),
+            }
 
     # 2. Engram row cache (per-layer NGramRowCache stats, summed).
     engram = _engram_row_cache_totals(rt)
@@ -196,6 +206,24 @@ def stream_counters_delta(
             "all_pinned_hit_rate": round(all_pinned / routes, 6) if routes else None,
             "pinned_total": int(a_pin.get("pinned_total", 0)),
             "static_layer_count": int(a_pin.get("static_layer_count", 0)),
+        }
+
+    b_drp, a_drp = before.get("device_route_pinned"), after.get("device_route_pinned")
+    if isinstance(a_drp, dict):
+        b_drp = b_drp if isinstance(b_drp, dict) else {}
+        flushes = int(a_drp.get("flushes", 0)) - int(b_drp.get("flushes", 0))
+        bfree = int(a_drp.get("barrier_free_layers", 0)) - int(
+            b_drp.get("barrier_free_layers", 0)
+        )
+        recovered = int(a_drp.get("recovered_layers", 0)) - int(
+            b_drp.get("recovered_layers", 0)
+        )
+        out["device_route_pinned"] = {
+            "enabled": bool(a_drp.get("enabled", False)),
+            "flushes": flushes,
+            "barrier_free_layers": bfree,
+            "recovered_layers": recovered,
+            "barrier_free_layers_per_flush": round(bfree / flushes, 6) if flushes else None,
         }
 
     a_rc = after.get("route_probe_counts")

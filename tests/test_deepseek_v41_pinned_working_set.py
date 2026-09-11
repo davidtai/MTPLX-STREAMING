@@ -281,6 +281,9 @@ def _runtime_with_banks(layers, **bank_kw):
     # _mark_device_route_dirty consults these; empty -> it is a no-op.
     rt._device_route_lut = {}
     rt._device_route_lut_dirty = {}
+    # W71: the pinned-only device-route LUT the same dirty mark also invalidates.
+    rt._device_route_pinned_lut = {}
+    rt._device_route_pinned_lut_dirty = {}
     return rt
 
 
