@@ -1,0 +1,211 @@
+{
+  "worker": "W78",
+  "script": "scripts/deepseek_v41/metal_decode_attn_bisect.py",
+  "device": "gpu",
+  "tiny": false,
+  "dims": {
+    "head_dim": 512,
+    "n_heads": 64,
+    "window": 128,
+    "index_topk": 512,
+    "index_n_heads": 32,
+    "index_head_dim": 128,
+    "hidden": 5120
+  },
+  "mode_layer": {
+    "swa_only": 0,
+    "full": 2,
+    "reindex": 24,
+    "reuse": 3
+  },
+  "env": {
+    "MTPLX_DSV41_SELECTED_KEYS": "1",
+    "MTPLX_DSV41_ATTN_COMPILE": true,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": true,
+    "MTPLX_DSV41_KV_CHUNK_GROW": "1",
+    "MTPLX_DSV41_SELECT_FENCE": "1"
+  },
+  "path": "selected_keys",
+  "ballast_gib": 88.0,
+  "ballast_churn": true,
+  "memory": {
+    "ballast_gib": 88.0,
+    "n_ballast_chunks": 352,
+    "active_after_ballast_gib": 88.00000000745058,
+    "active_end_gib": 88.00000002607703,
+    "peak_gib": 89.50147425942123
+  },
+  "Ts": [
+    1024,
+    4096,
+    16384
+  ],
+  "iters": 30,
+  "warmup": 5,
+  "results": {
+    "swa_only": {
+      "1024": {
+        "whole": 1.9727750666666668,
+        "qkv_proj": 0.4619348,
+        "cache_append": 0.1556902666666667,
+        "mask_build": 0.0,
+        "compress_append": 0.0,
+        "select": 0.0,
+        "attend": 0.2733208333333333,
+        "out_proj": 1.5848097666666667,
+        "gather_iso": 0.17312366666666668,
+        "score": 0.10019716666666661,
+        "peeled_sum": 2.4757556666666667
+      },
+      "4096": {
+        "whole": 1.9376098,
+        "qkv_proj": 0.4552278,
+        "cache_append": 0.1553889,
+        "mask_build": 0.0,
+        "compress_append": 0.0,
+        "select": 0.0,
+        "attend": 0.2643472,
+        "out_proj": 1.5867986333333335,
+        "gather_iso": 0.17097093333333332,
+        "score": 0.09337626666666668,
+        "peeled_sum": 2.4617625333333333
+      },
+      "16384": {
+        "whole": 1.9351374333333333,
+        "qkv_proj": 0.45904866666666666,
+        "cache_append": 0.15806526666666668,
+        "mask_build": 0.0,
+        "compress_append": 0.0,
+        "select": 0.0,
+        "attend": 0.26192913333333334,
+        "out_proj": 1.6409041666666666,
+        "gather_iso": 0.17360693333333332,
+        "score": 0.08832220000000002,
+        "peeled_sum": 2.5199472333333333
+      }
+    },
+    "full": {
+      "1024": {
+        "whole": 2.2574000333333335,
+        "qkv_proj": 0.4534765,
+        "cache_append": 0.15265823333333334,
+        "mask_build": 0.0,
+        "compress_append": 0.3099167,
+        "select": 0.36250133333333334,
+        "attend": 0.30110423333333336,
+        "out_proj": 1.6406916333333332,
+        "gather_iso": 0.20303333333333334,
+        "score": 0.09807090000000002,
+        "peeled_sum": 3.2203486333333333
+      },
+      "4096": {
+        "whole": 2.3995361333333336,
+        "qkv_proj": 0.45918743333333334,
+        "cache_append": 0.15445003333333332,
+        "mask_build": 0.0,
+        "compress_append": 0.3589999,
+        "select": 0.38550123333333336,
+        "attend": 0.30202073333333335,
+        "out_proj": 1.6383139333333332,
+        "gather_iso": 0.1985264,
+        "score": 0.10349433333333335,
+        "peeled_sum": 3.2984732666666665
+      },
+      "16384": {
+        "whole": 2.7183584,
+        "qkv_proj": 0.4761318,
+        "cache_append": 0.1657266,
+        "mask_build": 0.0,
+        "compress_append": 0.5622181,
+        "select": 0.41985433333333333,
+        "attend": 0.30318043333333333,
+        "out_proj": 1.6557153,
+        "gather_iso": 0.22422783333333335,
+        "score": 0.07895259999999998,
+        "peeled_sum": 3.5828265666666668
+      }
+    },
+    "reindex": {
+      "1024": {
+        "whole": 2.0992221666666664,
+        "qkv_proj": 0.4828500333333333,
+        "cache_append": 0.17127653333333334,
+        "mask_build": 0.0,
+        "compress_append": 0.0018999333333333333,
+        "select": 0.3943917333333333,
+        "attend": 0.3262236,
+        "out_proj": 1.6737208333333333,
+        "gather_iso": 0.22129436666666666,
+        "score": 0.10492923333333334,
+        "peeled_sum": 3.0503626666666666
+      },
+      "4096": {
+        "whole": 2.149719533333333,
+        "qkv_proj": 0.46886116666666666,
+        "cache_append": 0.16756673333333336,
+        "mask_build": 0.0,
+        "compress_append": 0.0011416666666666667,
+        "select": 0.3762055666666667,
+        "attend": 0.3059403333333333,
+        "out_proj": 1.654743,
+        "gather_iso": 0.21271106666666664,
+        "score": 0.09322926666666667,
+        "peeled_sum": 2.974458466666667
+      },
+      "16384": {
+        "whole": 2.199223566666667,
+        "qkv_proj": 0.4616778,
+        "cache_append": 0.15657643333333335,
+        "mask_build": 0.0,
+        "compress_append": 0.0011098,
+        "select": 0.44322913333333336,
+        "attend": 0.30134720000000004,
+        "out_proj": 1.6608860666666667,
+        "gather_iso": 0.21625563333333334,
+        "score": 0.0850915666666667,
+        "peeled_sum": 3.0248264333333337
+      }
+    },
+    "reuse": {
+      "1024": {
+        "whole": 2.002362466666667,
+        "qkv_proj": 0.4647307,
+        "cache_append": 0.16182076666666667,
+        "mask_build": 0.0,
+        "compress_append": 0.0011083333333333333,
+        "select": 0.0009734666666666667,
+        "attend": 0.30883046666666664,
+        "out_proj": 1.6720694,
+        "gather_iso": 0.23029570000000002,
+        "score": 0.07853476666666662,
+        "peeled_sum": 2.609533133333333
+      },
+      "4096": {
+        "whole": 1.9624082333333335,
+        "qkv_proj": 0.4641165666666666,
+        "cache_append": 0.1641236,
+        "mask_build": 0.0,
+        "compress_append": 0.0010415666666666666,
+        "select": 0.0009167666666666667,
+        "attend": 0.3009194,
+        "out_proj": 1.6659903,
+        "gather_iso": 0.22922766666666666,
+        "score": 0.07169173333333334,
+        "peeled_sum": 2.5971082
+      },
+      "16384": {
+        "whole": 1.9596639333333334,
+        "qkv_proj": 0.46024993333333336,
+        "cache_append": 0.16502920000000001,
+        "mask_build": 0.0,
+        "compress_append": 0.0011680666666666665,
+        "select": 0.0010238,
+        "attend": 0.3040345666666667,
+        "out_proj": 1.6733638,
+        "gather_iso": 0.22690273333333336,
+        "score": 0.07713183333333332,
+        "peeled_sum": 2.6048693666666667
+      }
+    }
+  }
+}
