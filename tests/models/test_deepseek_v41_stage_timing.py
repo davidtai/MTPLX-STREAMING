@@ -347,3 +347,174 @@ def test_prefill_forward_not_recorded():
     # s > 1 forward booked nothing: no stages, zero tokens.
     assert report["tokens"] == 0
     assert report["stages"] == {}
+
+
+# ===========================================================================
+# W47 -- prefill stage timing (chunk-major + layer-major schedules)
+# ===========================================================================
+def _prefill_fwd(model, args, s, chunk, layer_major, *, record, seed=0):
+    ids = mx.array(np.random.RandomState(seed).randint(0, args.vocab_size, size=(1, s)))
+    cache = model.make_cache()
+    if record:
+        stime.begin(kind="prefill")
+    logits = model(
+        ids, cache=cache, prefill_chunk=chunk,
+        prefill_layer_major=(True if layer_major else None),
+    )
+    mx.eval(logits)
+    report = model.stage_timing_report() if record else None
+    if record:
+        stime.end()
+    return np.array(logits), report
+
+
+@contextlib.contextmanager
+def _no_attn_compile():
+    """Pin the K22 attention compile OFF so a stray env can't flip the eager/tape
+    path under the byte-identity gate (the probe forces eager anyway in prefill)."""
+    old = dv41._ATTN_COMPILE
+    dv41._ATTN_COMPILE = False
+    try:
+        yield
+    finally:
+        dv41._ATTN_COMPILE = old
+
+
+def test_prefill_probe_off_on_byte_identical_both_schedules():
+    for layer_major in (False, True):
+        with _hc(False), _no_attn_compile():
+            model_off, args = _new_model(seed=11)
+            off, _ = _prefill_fwd(model_off, args, s=12, chunk=4, layer_major=layer_major,
+                              record=False, seed=3)
+            model_on, _ = _new_model(seed=11)
+            on, rep = _prefill_fwd(model_on, args, s=12, chunk=4, layer_major=layer_major,
+                               record=True, seed=3)
+        assert np.array_equal(off, on), (
+            f"prefill layer_major={layer_major} not byte-identical "
+            f"(max {np.max(np.abs(off-on))})"
+        )
+        assert rep["kind"] == "prefill"
+        assert rep["schedule"] == ("layer_major" if layer_major else "chunk_major")
+
+
+def test_prefill_report_schema_and_chunks():
+    with _hc(False), _no_attn_compile():
+        model, args = _new_model(seed=12)
+        _off, rep = _prefill_fwd(model, args, s=12, chunk=4, layer_major=False,
+                             record=True, seed=4)
+    # 12 tokens / chunk 4 -> 3 chunks.
+    assert rep["chunks"] == 3
+    assert set(rep["by_chunk"]) == {"0", "1", "2"}
+    for c in ("0", "1", "2"):
+        entry = rep["by_chunk"][c]
+        assert set(entry) == {"wall_ms", "stage_sum_ms", "stages"}
+        assert entry["wall_ms"] > 0.0
+        # attention score fires for this chunk across every layer type.
+        assert any(k.endswith(".score") for k in entry["stages"])
+    # attention CSA split present, and the [rows,H,T] score stage exists per mode.
+    modes = set(args.layer_modes)
+    for m in modes:
+        assert f"attn.{m}.qkv_proj" in rep["stages"], m
+        assert f"attn.{m}.score" in rep["stages"], m
+        assert f"attn.{m}.cache_append" in rep["stages"], m
+    # compress_append only on kv_source (compress) layers; select on compress layers.
+    assert "attn.full.compress_append" in rep["stages"]
+    # switch_breakdown key exists (empty on the resident test path -- no streamed switch).
+    assert "switch_breakdown" in rep
+    assert rep["switch_breakdown"] == {}
+    # moe.routed_switch (outer total) present on the resident path.
+    assert "moe.routed_switch" in rep["stages"]
+
+
+def test_prefill_both_schedules_same_flat_stage_set():
+    with _hc(False), _no_attn_compile():
+        m1, args = _new_model(seed=13)
+        _o, cm = _prefill_fwd(m1, args, s=12, chunk=4, layer_major=False, record=True, seed=5)
+        m2, _ = _new_model(seed=13)
+        _o2, lm = _prefill_fwd(m2, args, s=12, chunk=4, layer_major=True, record=True, seed=5)
+    assert set(cm["stages"]) == set(lm["stages"]), (
+        set(cm["stages"]) ^ set(lm["stages"])
+    )
+    # both cover the whole layer stack: attention (sum over modes) is n_layers per chunk.
+    for rep in (cm, lm):
+        attn_score = sum(
+            v["count"] for k, v in rep["stages"].items() if k.endswith(".score")
+        )
+        assert attn_score == args.num_hidden_layers * rep["chunks"]
+
+
+def test_prefill_per_chunk_partition():
+    # Each chunk's stage sum tiles its wall (fences serialise every sub-stage).
+    with _hc(False), _no_attn_compile():
+        model, args = _new_model(seed=14)
+        _off, rep = _prefill_fwd(model, args, s=12, chunk=4, layer_major=False,
+                             record=True, seed=6)
+    for c, entry in rep["by_chunk"].items():
+        ratio = entry["stage_sum_ms"] / entry["wall_ms"]
+        assert 0.5 <= ratio <= 1.05, f"chunk {c} sum/wall = {ratio:.3f}"
+
+
+def test_prefill_does_not_break_decode():
+    # A prefill session then a decode session: the decode report is the W37 shape
+    # (kind decode, per-stage 4-key schema, no by_chunk) -- decode is untouched.
+    with _hc(False), _no_attn_compile():
+        model, args = _new_model(seed=15)
+        _off, _prep = _prefill_fwd(model, args, s=10, chunk=4, layer_major=False,
+                               record=True, seed=7)
+        cache, _ = _prefill_fwd(model, args, s=10, chunk=0, layer_major=False,
+                            record=False, seed=7)  # warm a fresh one-shot cache
+        # fresh decode session on a fresh cache
+        cache = model.make_cache()
+        logits = model(mx.array(np.random.RandomState(7).randint(0, args.vocab_size, size=(1, 10))),
+                       cache=cache)
+        mx.eval(logits)
+        token = int(mx.argmax(logits[0, -1]).item())
+        with _session():
+            stime.active().enter_forward(1)
+            for _ in range(3):
+                with stime.frame():
+                    lo = model(mx.array([[token]]), cache=cache)
+                    with stime.stage("sample"):
+                        token = int(mx.argmax(lo[0, -1]).item())
+            drep = model.stage_timing_report()
+    assert drep["kind"] == "decode"
+    assert "by_chunk" not in drep
+    assert drep["stages"]["embed"]["count"] == 3
+    for s in drep["stages"].values():
+        assert set(s) == {"total_ms", "count", "mean_ms", "mean_ms_per_token"}
+
+
+def test_stage_nested_and_chunk_tagging_mechanism():
+    # Directly exercise the probe surface the streamed-switch prefill brackets use.
+    # nested brackets land in switch_breakdown (NOT the flat partition sum); chunk()
+    # tags flat stages per index; both are prefill-only (no-op under decode / off).
+    with _session():  # decode session
+        stime.active().enter_forward(1)
+        with stime.stage_nested("switch.admission"):
+            pass
+        with stime.chunk(0):
+            with stime.stage("x"):
+                pass
+        drep = stime.report()
+    assert "switch_breakdown" not in drep          # decode report has no prefill views
+    assert drep["stages"]["x"]["count"] == 1        # chunk() is a no-op tag off-prefill
+
+    stime.begin(kind="prefill")
+    try:
+        stime.active().enter_forward(4)             # prefill forward armed
+        with stime.stage_nested("switch.admission"):
+            pass
+        with stime.stage_nested("switch.admission"):
+            pass
+        with stime.chunk(2):
+            with stime.stage("attn.full.score"):
+                pass
+        prep = stime.report()
+    finally:
+        stime.end()
+    # nested -> switch_breakdown, kept OUT of the flat stages / partition sum.
+    assert prep["switch_breakdown"]["switch.admission"]["count"] == 2
+    assert "switch.admission" not in prep["stages"]
+    # chunk tagging routed the flat stage under chunk index 2.
+    assert "2" in prep["by_chunk"]
+    assert prep["by_chunk"]["2"]["stages"]["attn.full.score"]["count"] == 1

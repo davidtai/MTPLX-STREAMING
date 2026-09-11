@@ -722,7 +722,12 @@ class Attention(nn.Module):
         for the concatenated-KV attention, running the CSA2 mode dispatch."""
         ratio = self.compress_ratio
         if self.is_kv_source:
-            self._publish_compressed(x, positions, layer_cache, shared, qcos, qsin)
+            # W47: compress/index KV build (pool + RoPE + indexer keys) + the
+            # compress/index cache appends -- the "cache append" work on kv_source
+            # layers, distinct from the window append in _attend.
+            with _stime.stage_prefill("attn." + self.mode + ".compress_append") as _st:
+                self._publish_compressed(x, positions, layer_cache, shared, qcos, qsin)
+                _st.add(shared.compress_kv, shared.index_k)
         compress_kv = shared.compress_kv
         index_k = shared.index_k
         if compress_kv is None:
@@ -738,25 +743,35 @@ class Attention(nn.Module):
         n_comp = compress_kv.shape[1]
         compress_lens = (positions + 1) // ratio  # [s] reachable compressed rows
 
-        if self.is_index_source:
-            set_c = self.is_candidate_source
-            cand = None if set_c else shared.candidates
-            mask, cand_out = self.indexer.select(
-                x, qr, index_k, qcos, qsin, compress_lens, n_comp,
-                candidates=cand, set_candidates=set_c,
-                cand_topk=self.candidate_topk_blocks, cand_block=self.candidate_block_size,
-            )
-            shared.topk_mask = mask
-            if set_c:
-                shared.candidates = cand_out
-        else:  # Reuse: read the source's selection
-            mask = shared.topk_mask
+        # W47 indexer/candidate selection: the data-dependent CSA row pick (top-k
+        # over the compressed rows).  Reuse layers read the source's mask (cheap).
+        with _stime.stage_prefill("attn." + self.mode + ".select") as _st:
+            if self.is_index_source:
+                set_c = self.is_candidate_source
+                cand = None if set_c else shared.candidates
+                mask, cand_out = self.indexer.select(
+                    x, qr, index_k, qcos, qsin, compress_lens, n_comp,
+                    candidates=cand, set_candidates=set_c,
+                    cand_topk=self.candidate_topk_blocks, cand_block=self.candidate_block_size,
+                )
+                shared.topk_mask = mask
+                if set_c:
+                    shared.candidates = cand_out
+            else:  # Reuse: read the source's selection
+                mask = shared.topk_mask
+            _st.add(mask)
         if self.capture_selection:
             self.last_selection = mask
             self.last_candidates = shared.candidates
         return compress_kv, mask
 
     def __call__(self, x, positions, layer_cache, shared):
+        # Decode: one ``attn.<mode>`` stage.  Prefill (W47): the finer sub-stages
+        # inside ``_attend`` fire instead (via ``stage_prefill``), so the outer
+        # bracket is skipped to avoid double-counting.  Off / decode: the sub-stage
+        # brackets are no-ops, so ``_attend`` runs inside this single bracket.
+        if _stime.is_prefill():
+            return self._attend(x, positions, layer_cache, shared)
         with _stime.stage("attn." + self.mode) as _st:
             out = self._attend(x, positions, layer_cache, shared)
             _st.add(out)
@@ -765,33 +780,40 @@ class Attention(nn.Module):
     def _attend(self, x, positions, layer_cache, shared):
         b, s, _ = x.shape
         H, hd, rd = self.n_heads, self.head_dim, self.rope_head_dim
+        mode = self.mode
         qcos, qsin = _cos_sin(self.inv_freq, positions)
 
         # K22 attention-chain compile: the pure projection/norm/rope prep that
         # produces (q, qr, kv_new) is one compiled tape at decode/verify row
         # counts (the KV-cache write, the window mask, the indexer's data-dependent
         # selection and the SDPA all stay OUTSIDE it).  Byte-for-byte the eager
-        # body with the flag off / above the row cap.
-        if _attn_use_compile(b * s):
-            q, qr, kv_new = _attn_qkv_prep(self)(
-                x, qcos, qsin, self.q_norm_weight, self.kv_norm_weight,
-                *_lin_arrays(self.wq_a), *_lin_arrays(self.wq_b), *_lin_arrays(self.wkv),
-            )
-        else:
-            qr = _rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
-            q = self.wq_b(qr).reshape(b, s, H, hd)
-            q = _rope_last(q, qcos, qsin)
+        # body with the flag off / above the row cap.  W47: prefill timing forces
+        # eager (``_attn_use_compile`` is False under ``is_prefill``) so this
+        # bracket fences the real projection chain, not a tape.
+        with _stime.stage_prefill("attn." + mode + ".qkv_proj") as _st:
+            if _attn_use_compile(b * s):
+                q, qr, kv_new = _attn_qkv_prep(self)(
+                    x, qcos, qsin, self.q_norm_weight, self.kv_norm_weight,
+                    *_lin_arrays(self.wq_a), *_lin_arrays(self.wq_b), *_lin_arrays(self.wkv),
+                )
+            else:
+                qr = _rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
+                q = self.wq_b(qr).reshape(b, s, H, hd)
+                q = _rope_last(q, qcos, qsin)
 
-            kv_new = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
-            kv_new = _rope_last(kv_new, qcos, qsin)  # window kv roped at its own token positions
+                kv_new = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
+                kv_new = _rope_last(kv_new, qcos, qsin)  # window kv roped at its own token positions
+            _st.add(q, qr, kv_new)
         # W13's window store keeps the post-RoPE rows append-only (row i == token i).
         # Phase 1 attends over the full history and realises the reference sliding
         # window (get_window_topk_idxs L409-426 / _window_kv L700-720) as a causal
         # window mask over absolute positions -- equivalent to the reference ring
         # for every query that can still reach a slot; ``ring()`` is the bounded
         # phase-2 view.
-        layer_cache.append_window(kv_new)
-        window_all = layer_cache.window
+        with _stime.stage_prefill("attn." + mode + ".cache_append") as _st:
+            layer_cache.append_window(kv_new)
+            window_all = layer_cache.window
+            _st.add(window_all)
         # K24 (W45): the sliding-window attend mask is identical across every layer
         # of this forward; memoize it on the per-forward shared runtime under
         # MTPLX_DSV41_ATTN_WIN_MEMO (byte-identical, a pure host-dispatch cut).
@@ -807,21 +829,27 @@ class Attention(nn.Module):
                 KV = mx.concatenate([window_all, compress_kv], axis=1)
                 attend = mx.concatenate([attend, comp_attend], axis=-1)
 
-        o = self._sparse_attend(q, KV, attend)
-        # K22: the post-attention output chain -- query-RoPE removal, the grouped
-        # o-LoRA down-projection and the ``wo_b`` up-projection -- is pure and
-        # fixed-shape (the SDPA output ``o`` is [b,s,H,hd]); one compiled tape at
-        # decode/verify.  ``w_ol`` (the dequantized grouped ``wo_a`` weight) is a
-        # per-forward constant, derived by the same path as eager and fed as an
-        # input, so the einsum inside the tape is bit-exact to :meth:`_o_lora_down`.
-        if _attn_use_compile(b * s):
-            return _attn_out_prep(self)(
-                o, qcos, qsin, self._o_lora_dense_weight(), *_lin_arrays(self.wo_b)
-            )
-        o = _rope_last(o, qcos, qsin, inverse=True)
-        o = o.reshape(b, s, self.n_groups, -1)
-        o = self._o_lora_down(o)
-        return self.wo_b(o.reshape(b, s, -1))
+        # W47 score+softmax+value + output projection: the [rows, H, T] score
+        # transient that grows with T is this stage.
+        with _stime.stage_prefill("attn." + mode + ".score") as _st:
+            o = self._sparse_attend(q, KV, attend)
+            # K22: the post-attention output chain -- query-RoPE removal, the grouped
+            # o-LoRA down-projection and the ``wo_b`` up-projection -- is pure and
+            # fixed-shape (the SDPA output ``o`` is [b,s,H,hd]); one compiled tape at
+            # decode/verify.  ``w_ol`` (the dequantized grouped ``wo_a`` weight) is a
+            # per-forward constant, derived by the same path as eager and fed as an
+            # input, so the einsum inside the tape is bit-exact to :meth:`_o_lora_down`.
+            if _attn_use_compile(b * s):
+                out = _attn_out_prep(self)(
+                    o, qcos, qsin, self._o_lora_dense_weight(), *_lin_arrays(self.wo_b)
+                )
+            else:
+                o = _rope_last(o, qcos, qsin, inverse=True)
+                o = o.reshape(b, s, self.n_groups, -1)
+                o = self._o_lora_down(o)
+                out = self.wo_b(o.reshape(b, s, -1))
+            _st.add(out)
+        return out
 
     def _o_lora_dense_weight(self):
         """The grouped ``wo_a`` weight as a dense ``[g, o_lora_rank, in_per_group]``
@@ -971,11 +999,14 @@ def _attn_use_compile(rows: int) -> bool:
     """Is this forward in the row regime the K22 attention tapes are kept for?
 
     Reads the module globals at call time so a test/operator can flip them after
-    import.  Unlike the K4 HC tapes this does NOT force-eager under the W37
-    stage-timing probe: ``_attend`` is a single ``attn.<mode>`` stage with no
-    sub-stage fences, so a compiled prep tape never splits a fenced bracket (the
-    stage still fences the whole attention output either way)."""
-    if not _ATTN_COMPILE:
+    import.  In *decode* stage timing this does NOT force-eager: ``_attend`` is a
+    single ``attn.<mode>`` stage with no sub-stage fences, so a compiled prep tape
+    never splits a fenced bracket.  In *prefill* stage timing (W47) it DOES force
+    eager (``_stime.is_prefill()``): the prefill path fences finer attention
+    sub-stages (qkv_proj / score / ...), which a compiled prep tape would swallow,
+    so timing always measures the eager attention chain -- the shipped prefill
+    path (chunk rows >> the row cap are eager anyway)."""
+    if not _ATTN_COMPILE or _stime.is_prefill():
         return False
     return int(rows) <= _ATTN_COMPILE_MAX_ROWS
 
@@ -1554,8 +1585,13 @@ class DeepseekV41Backbone(nn.Module):
         if chunk <= 0 or chunk >= s:
             # one-shot (decode, short prompts, or chunking disabled): byte-for-byte
             # the original single-pass forward.  Decode (s == 1) captures the DSpark
-            # main_hidden per step through this path.
-            return self._forward_span(input_ids, cache, return_main_hidden=return_main_hidden)
+            # main_hidden per step through this path.  W47: a one-shot prefill is a
+            # single chunk (index 0); tagging is a no-op for decode.
+            _stime.set_schedule("one_shot")
+            with _stime.chunk(0):
+                return self._forward_span(
+                    input_ids, cache, return_main_hidden=return_main_hidden
+                )
 
         if _resolve_prefill_layer_major(prefill_layer_major):
             # W30 / kernel-ledger K16: iterate every layer over all chunks before
@@ -1581,23 +1617,29 @@ class DeepseekV41Backbone(nn.Module):
         # position order. The DSpark DRAFT still reads only the FINAL hidden state
         # of the prompt -- `mtp_forward` slices `h[:, -1:, :]` -- so "drafts from
         # the last span" holds without dropping the earlier spans the history needs.
+        _stime.set_schedule("chunk_major")
         outputs: List[mx.array] = []
         main_parts: List[Optional[mx.array]] = []
         start = 0
+        chunk_idx = 0
         while start < s:
             end = min(start + chunk, s)
-            span = self._forward_span(
-                input_ids[:, start:end], cache, return_main_hidden=return_main_hidden
-            )
-            if return_main_hidden:
-                h_span, mh_span = span
-                main_parts.append(mh_span)
-            else:
-                h_span = span
-                mh_span = None
-            self._eval_cache_state(cache, h_span, mh_span)
+            # W47: time the whole chunk (all layers + the cache-state eval) under
+            # its index, so ``by_chunk`` shows cost vs chunk index (growing T).
+            with _stime.chunk(chunk_idx):
+                span = self._forward_span(
+                    input_ids[:, start:end], cache, return_main_hidden=return_main_hidden
+                )
+                if return_main_hidden:
+                    h_span, mh_span = span
+                    main_parts.append(mh_span)
+                else:
+                    h_span = span
+                    mh_span = None
+                self._eval_cache_state(cache, h_span, mh_span)
             outputs.append(h_span)
             start = end
+            chunk_idx += 1
         out = mx.concatenate(outputs, axis=1)
         if not return_main_hidden:
             return out
@@ -1722,6 +1764,7 @@ class DeepseekV41Backbone(nn.Module):
           rows.  ``main_hidden`` captures the target-layer input per chunk and
           concatenates in position order, so the DSpark draft seed spans the whole
           prompt (its ``[:, -1:, :]`` slice is still the final prompt token)."""
+        _stime.set_schedule("layer_major")
         b, s = input_ids.shape
         offset0 = int(cache.offset)
         spans = [(start, min(start + chunk, s)) for start in range(0, s, chunk)]
@@ -1740,24 +1783,32 @@ class DeepseekV41Backbone(nn.Module):
         engram_currents: List[Optional[np.ndarray]] = []
         shareds = [cache.new_shared_runtime() for _ in range(n_chunks)]
         main_hiddens: List[List[mx.array]] = [[] for _ in range(n_chunks)]
-        for start, end in spans:
+        for c, (start, end) in enumerate(spans):
             ids_c = input_ids[:, start:end]
             n_c = end - start
             positions_all.append(mx.arange(offset0 + start, offset0 + end))
-            h_c = self.embed_tokens(ids_c)
-            h_c = mx.broadcast_to(
-                h_c[:, :, None, :], (b, n_c, self.hc_mult, h_c.shape[-1])
-            )
-            hs.append(h_c)
-            pre_mixes.append(
-                mx.concatenate(
-                    [mx.ones((b, n_c, 1)), mx.zeros((b, n_c, self.hc_mult - 1))],
-                    axis=-1,
-                ).astype(mx.float32)
-            )
-            engram_currents.append(
-                engram_state.advance(ids_c) if engram_state is not None else None
-            )
+            # W47: embed + engram.advance per chunk (tagged by chunk index), so the
+            # layer-major flat stages match chunk-major.  ``stage``/``chunk`` are
+            # no-ops off / decode; this loop is layer-major-only regardless.
+            with _stime.chunk(c):
+                with _stime.stage("embed") as _st:
+                    h_c = self.embed_tokens(ids_c)
+                    h_c = mx.broadcast_to(
+                        h_c[:, :, None, :], (b, n_c, self.hc_mult, h_c.shape[-1])
+                    )
+                    _st.add(h_c)
+                hs.append(h_c)
+                pre_mixes.append(
+                    mx.concatenate(
+                        [mx.ones((b, n_c, 1)), mx.zeros((b, n_c, self.hc_mult - 1))],
+                        axis=-1,
+                    ).astype(mx.float32)
+                )
+                if engram_state is not None:
+                    with _stime.stage("engram.advance"):
+                        engram_currents.append(engram_state.advance(ids_c))
+                else:
+                    engram_currents.append(None)
 
         row_cap = _derive_moe_row_cap(self.args, _prefill_moe_row_target_bytes())
 
@@ -1767,25 +1818,29 @@ class DeepseekV41Backbone(nn.Module):
             moe_inputs: List[mx.array] = []
             carries: List[tuple] = []
             for c, (start, end) in enumerate(spans):
-                h_c = hs[c]
-                if layer.engram_hook is not None and engram_state is not None:
-                    h_c = layer.engram_hook(
-                        h_c, input_ids[:, start:end],
-                        _ChunkEngramView(engram_currents[c]),
+                # W47: tag this (layer, chunk) attention half with the chunk index
+                # so ``by_chunk`` accumulates attention/HC/engram per chunk across
+                # every layer (the MoE is batched below, outside any chunk tag).
+                with _stime.chunk(c):
+                    h_c = hs[c]
+                    if layer.engram_hook is not None and engram_state is not None:
+                        h_c = layer.engram_hook(
+                            h_c, input_ids[:, start:end],
+                            _ChunkEngramView(engram_currents[c]),
+                        )
+                    if is_target:
+                        main_hiddens[c].append(
+                            mx.mean(h_c.astype(mx.float32), axis=2).astype(h_c.dtype)
+                        )
+                    moe_in_c, carry_c, ffn_pre_c = layer.attn_and_moe_input(
+                        h_c, pre_mixes[c], positions_all[c], lc, shareds[c]
                     )
-                if is_target:
-                    main_hiddens[c].append(
-                        mx.mean(h_c.astype(mx.float32), axis=2).astype(h_c.dtype)
-                    )
-                moe_in_c, carry_c, ffn_pre_c = layer.attn_and_moe_input(
-                    h_c, pre_mixes[c], positions_all[c], lc, shareds[c]
-                )
-                moe_inputs.append(moe_in_c)
-                carries.append(carry_c)
-                pre_mixes[c] = ffn_pre_c
-                # Free this chunk's attention score before the next chunk's graph
-                # is built (only one [chunk, H, T] transient live at a time).
-                self._eval_layer_transients(lc, moe_in_c, ffn_pre_c)
+                    moe_inputs.append(moe_in_c)
+                    carries.append(carry_c)
+                    pre_mixes[c] = ffn_pre_c
+                    # Free this chunk's attention score before the next chunk's
+                    # graph is built (only one [chunk, H, T] transient live at once).
+                    self._eval_layer_transients(lc, moe_in_c, ffn_pre_c)
 
             # One routed-expert call per layer over every chunk's rows -> the bank
             # is streamed once.  Split only if the row cap (routed-output transient
@@ -1800,10 +1855,13 @@ class DeepseekV41Backbone(nn.Module):
         outputs: List[mx.array] = []
         main_parts: List[Optional[mx.array]] = []
         for c in range(n_chunks):
-            h = mx.sum(
-                pre_mixes[c][..., None] * hs[c].astype(mx.float32), axis=2
-            ).astype(hs[c].dtype)
-            outputs.append(_rmsnorm(h, self.norm_weight, self.args.rms_norm_eps))
+            with _stime.chunk(c), _stime.stage("final_norm") as _st:
+                h = mx.sum(
+                    pre_mixes[c][..., None] * hs[c].astype(mx.float32), axis=2
+                ).astype(hs[c].dtype)
+                out_c = _rmsnorm(h, self.norm_weight, self.args.rms_norm_eps)
+                _st.add(out_c)
+            outputs.append(out_c)
             main_parts.append(
                 mx.concatenate(main_hiddens[c], axis=-1) if main_hiddens[c] else None
             )
@@ -1844,7 +1902,9 @@ class DeepseekV41Backbone(nn.Module):
         indices: List[mx.array] = []
         for c in range(n_chunks):
             xf_c = moe_inputs[c].reshape(-1, dim)
-            w_c, idx_c = mlp.gate(xf_c)
+            with _stime.stage("moe.gate_topk") as _st:
+                w_c, idx_c = mlp.gate(xf_c)
+                _st.add(w_c, idx_c)
             xfs.append(xf_c)
             weights.append(w_c)
             indices.append(idx_c)
@@ -1873,7 +1933,9 @@ class DeepseekV41Backbone(nn.Module):
             else:
                 cat_xf = mx.concatenate([xfs[c] for c in grp], axis=0)
                 cat_idx = mx.concatenate([indices[c] for c in grp], axis=0)
-            routed = mlp.switch_mlp(cat_xf, cat_idx)  # [rows, top_k, dim]; bank once
+            with _stime.stage("moe.routed_switch") as _st:
+                routed = mlp.switch_mlp(cat_xf, cat_idx)  # [rows, top_k, dim]; bank once
+                _st.add(routed)
             pos = 0
             for c in grp:
                 n_c = int(xfs[c].shape[0])
