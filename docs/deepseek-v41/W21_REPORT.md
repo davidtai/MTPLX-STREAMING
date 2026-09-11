@@ -170,3 +170,60 @@ registry-derived `--expert-profile` choices. Regression: `test_expert_profiles.p
 - **Process ceiling vs a busy box.** `process_ceiling` 82 GiB (88 GB) must fit
   installed **and** launch-available RAM; with 5 workers resident, `auto` selection
   fails loud. Serve in a dedicated window (no CPU workers), as the memory rules require.
+
+---
+
+## W21 follow-up (rebased onto integration 106fdd48e = W21 + W23 + W26)
+
+Three coordinator-directed changes on top of the merged W23 (DSpark MTP) + W26
+(engram history rides the entry-0 cache state):
+
+### 1. Session bank re-enabled (W26)
+
+W26's `restore_cache` now rewinds the engram alongside the KV, so an in-memory
+near-prefix restore no longer desyncs the layer-1/14 engram hash. The profile
+therefore **drops** `MTPLX_SESSION_NEAR_PREFIX_RESTORE=0` and
+`MTPLX_SESSION_STORE_ON_PREFILL=0` from `child_env` (both return to the engine
+default = on); only `MTPLX_ENGRAM_CACHE_LIMIT=2GiB` remains. The SSD prompt-cache
+cold tier stays off **separately** (serve `--ssd-session-cache off`; None-KV lanes
++ LayerAttentionCache registration are still unsupported) — not via these knobs.
+
+### 2. `--generation-mode mtp` → `with_mtp=True` serve glue (no env)
+
+`mtplx serve --model <mxfp4> --generation-mode mtp` now serves the DSpark native
+MTP head with no `MTPLX_DSV41_MTP` step:
+
+- **expert_cli**: `--generation-mode mtp` is allowed **only** for the native-MTP
+  artifact (`is_deepseek_v41_mtp_config` + the manifest ships `mtp.*` residents);
+  every external-MTP (hy3/glm) streamed profile keeps the AR-only rule. The
+  streamed load kwargs return `mtp=native_mtp` instead of a forced `False`.
+- **runtime.py**: a native streamed-MTP load skips the external-MTP
+  (`_streamed_mtp_backend`, which needs `mtp_artifacts`) path, and threads
+  `with_mtp` to the loader via `construct_resident_model`. The head-injection
+  dispatch (`is_deepseek_v41_mtp_config` → `inject_deepseek_v41_mtp_support`)
+  publishes it.
+- **resident_loader**: `construct_resident_model(with_mtp=)` → the DeepSeek loader.
+
+`--generation-mode ar` (default) is unchanged: `mtp=False`, text-only load, no MTP
+residents. Every change is gated on the native-MTP predicate, so the AR and
+hy3/glm paths are byte-identical (149 CPU tests green, incl. the AR-only regression).
+
+### 3. MTP planner pricing
+
+When MTP is served the loader keeps **all** `mtp.*` residents
+(`partition_text_residents(with_mtp=True).kept` measured = 17,679,121,224 B), so
+runtime.py swaps the spec to `mtp_included=True` before the pre-flight and pool
+plans; `text_only_resident_discount` then discounts **vision only** (970,536,960 B)
+and prices the MTP residents. The swap is a valid, side-effect-free spec change
+(`mtp_included` gates only the discount; `plan_expert_memory` does not branch on it).
+
+| Serve mode | Resident priced (GiB) | Discount (B) | Slots/layer | Expert cache (GiB) | Fits (82 GiB) |
+|---|---:|---:|---:|---:|:--:|
+| AR (mtp off) | 9.066 | 8,920,505,736 (mtp+vision) | **92** | 64.435 | yes |
+| **MTP (mtp on)** | 16.470 | 970,536,960 (vision) | **82** | 57.431 | yes |
+
+MTP prices **+7.404 GiB (+7.95 GB)** of residents and costs **10 slots/layer**,
+still fitting the 82 GiB envelope. Note on the coordinator's "+6.7 GiB": that is
+the DSpark head's **active** 3×128 mxfp4 experts; the loader (and therefore the
+plan, to avoid under-reserving) keeps **every** `mtp.*` resident the artifact
+ships (7.95 GB), which is the number priced here.
