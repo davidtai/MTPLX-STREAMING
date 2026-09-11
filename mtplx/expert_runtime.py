@@ -157,7 +157,12 @@ class ExpertStreamingConfig:
     verify_artifact_headers: bool = True
     verify_sidecar_hash_at_open: bool = False
     prefill_admission: bool = False
-    slot_layout: str = "direct-slots"
+    # ``None`` (the default, i.e. the user set no --expert-slot-layout) derives the
+    # layout from the streamed record codec in __post_init__: a non-affine artifact
+    # (mxfp4/shadow/mixed-official) can only be read by the component-banks dispatch,
+    # every other dispatch assumes the affine triple; affine keeps the historical
+    # direct-slots default.  An explicit value is honoured verbatim.
+    slot_layout: str | None = None
     trace_routes: bool = False
     cache_policy: str = "frequency"
     cache_scope: str = "layer"
@@ -208,6 +213,26 @@ class ExpertStreamingConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.model_key, str) or not self.model_key:
             raise TypeError("model_key must be a non-empty string")
+        # Slot-layout default derives from the streamed record codec, in the one
+        # place both the loader (build_streaming_config) and the serve path pass
+        # through (this __post_init__).  When the user set no explicit layout, a
+        # non-affine artifact (mxfp4/shadow/mixed-official) defaults to the
+        # component-banks dispatch — the only one that carries the codec branch;
+        # the direct-slot / mapped / dense-island dispatches assume the affine
+        # triple and would misread the record.  An explicit direct-slots stays
+        # verbatim and ExpertStreamingRuntime.open rejects it loudly for a
+        # non-affine artifact.  Unregistered synthetic keys keep the affine
+        # default (their spec is carried into open() directly).
+        if self.slot_layout is None:
+            try:
+                codec = get_model_spec(self.model_key).expert_codec
+            except ValueError:
+                codec = "affine"
+            object.__setattr__(
+                self,
+                "slot_layout",
+                "component-banks" if codec != "affine" else "direct-slots",
+            )
         for name, minimum in (
             ("memory_limit_bytes", 1),
             ("max_live_kv_tokens", 0),

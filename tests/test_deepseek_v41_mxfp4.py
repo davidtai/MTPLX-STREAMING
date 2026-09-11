@@ -139,11 +139,15 @@ def test_mxfp4_wrong_group_size_is_rejected():
 
 
 def test_affine_q2_spec_unchanged_by_mxfp4_addition():
-    """The affine DeepSeek-V4.1 Q2 spec byte math is untouched."""
+    """The affine DeepSeek-V4.1 Q2 spec byte math is untouched, and the mxfp4 spec
+    carries the pinned 269 GiB routed bank.  (Residents diverged from Q2 when W16/W18
+    re-derived the mxfp4 total from the native residents, so only the routed-bank
+    geometry is asserted here.)"""
     q2 = get_model_spec("deepseek-v41-flash-expert-q2")
     assert q2.expert_codec == "affine"
     assert q2.expert_record_bytes == 11_059_200
     assert q2.routed_expert_bytes == 169_869_312_000
     mxfp4 = get_model_spec("deepseek-v41-flash-expert-mxfp4")
-    assert mxfp4.resident_bytes == q2.resident_bytes  # identical residents
+    assert mxfp4.expert_codec == "mxfp4"
     assert mxfp4.expert_record_bytes == RECORD_BYTES
+    assert mxfp4.routed_expert_bytes == 40 * 384 * RECORD_BYTES == 288_777_830_400
