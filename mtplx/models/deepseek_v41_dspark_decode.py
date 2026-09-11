@@ -91,6 +91,54 @@ def _frame():
     return _stime.frame() if _stime is not None else contextlib.nullcontext()
 
 
+#: K29 (fused decode/verify attention, b*s<=8) and K30 (selected-key gather) env
+#: flags. The DSpark verify is a small-M (K+1) forward -- exactly K29's decode/verify
+#: case and K30's selected-key case -- but both default OFF, so the streamed switch's
+#: rows>1 prefill attention path ran the verify (window-25: attn ~830 ms/verify vs
+#: ~50 ms at M=1). The lane arms both by default so the verify uses the decode
+#: attention branch; they are greedy-identical to the eager path (float
+#: reassociation, never bit-identical), so both the served verify and the offline
+#: AR-reference must share the setting -- the lane arms them for the WHOLE run.
+_DSPARK_DECODE_KERNEL_ENVS = (
+    "MTPLX_DSV41_DECODE_ATTN_KERNEL",
+    "MTPLX_DSV41_SELECTED_KEYS",
+)
+
+
+def _dspark_decode_kernels_disabled() -> bool:
+    return os.environ.get("MTPLX_DSV41_DSPARK_DECODE_KERNELS", "").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+@contextlib.contextmanager
+def arm_dspark_decode_kernels():
+    """Arm K29/K30 for the duration of a DSpark run (default ON): set each env flag
+    to "1" only where the operator has not already set it, restoring after. The
+    small-M verify then routes through the fused decode attention + selected-key
+    gather instead of the prefill path. ``MTPLX_DSV41_DSPARK_DECODE_KERNELS=0``
+    opts out (window A/B)."""
+    if _dspark_decode_kernels_disabled():
+        yield
+        return
+    saved = {}
+    try:
+        for key in _DSPARK_DECODE_KERNEL_ENVS:
+            if key not in os.environ:
+                saved[key] = None
+                os.environ[key] = "1"
+        yield
+    finally:
+        for key, prev in saved.items():
+            if prev is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev
+
+
 def _verify_decode_phase_enabled() -> bool:
     """Route the K+1-row verify forward through the DECODE expert-routing phase.
 
@@ -148,17 +196,26 @@ def dspark_bench_loader_overrides(
     memory_limit_bytes: int,
     expert_cache_limit_bytes: Optional[int],
     mtp_resident_bytes: int = DSPARK_MTP_RESIDENT_BYTES,
+    reprice: bool = True,
 ) -> tuple[Optional[bool], int, Optional[int]]:
-    """Loader kwargs for a DSpark-DIRECT bench load (W57).
+    """Loader kwargs for a DSpark-DIRECT (or ``--with-mtp``) bench load (W57).
 
-    Returns ``(with_mtp, memory_limit_bytes, expert_cache_limit_bytes)``. For a
-    DSpark run: ``with_mtp=True`` and both budgets reduced by the MTP residents so
-    the planner's default text-only discount does not over-commit expert slots.
-    For a non-DSpark run: ``with_mtp=None`` (loader auto-detect, text-only) and the
-    budgets unchanged.  Pure function, unit-tested on CPU with no model.
+    Returns ``(with_mtp, memory_limit_bytes, expert_cache_limit_bytes)``. When the
+    head is wanted: ``with_mtp=True`` and, if ``reprice``, both budgets reduced by
+    the MTP residents so the planner's default text-only discount does not
+    over-commit expert slots.  ``reprice=False`` (the ``--no-reprice`` A/B arm)
+    loads the head at the FULL budget so window 26 can separate the budget effect
+    (slots) from any head-load code-path effect: at the same budget the streamed
+    slot plan is identical (the head's 128 experts stay resident, the streamed
+    runtime keeps its 40 backbone layers -- deepseek_v41_loader.
+    construct_deepseek_v41_resident_model), so a no-reprice slowdown is a code path,
+    not slots.  For a non-head run: ``with_mtp=None`` and budgets unchanged.  Pure
+    function, unit-tested on CPU with no model.
     """
     if not want_dspark:
         return None, int(memory_limit_bytes), expert_cache_limit_bytes
+    if not reprice:
+        return True, int(memory_limit_bytes), expert_cache_limit_bytes
     gib = 1024 ** 3
     reserved_memory = max(gib, int(memory_limit_bytes) - int(mtp_resident_bytes))
     reserved_cache = (
@@ -687,28 +744,31 @@ def generate_dspark(
     decode_started = time.perf_counter()
     finish_reason = "stop"
     if not (_is_stop(primary, stop_ids) or max_tokens <= 1):
-        rest, finish_reason = _decode_cycles(
-            model=model,
-            forward=_fwd,
-            cache=cache,
-            mtp_caches=mtp_caches,
-            primary=primary,
-            main_h=main_h,
-            max_tokens=max_tokens - 1,
-            sampler=sampler,
-            rng=rng,
-            stop_ids=stop_ids,
-            k_request=requested,
-            confidence_threshold=confidence_threshold,
-            stats=stats,
-            token_callback=token_callback,
-            abort_check=abort_check,
-            verify_decode_phase=(
-                _verify_decode_phase_enabled()
-                if verify_decode_phase is None
-                else bool(verify_decode_phase)
-            ),
-        )
+        # Arm K29/K30 for the verify cycles so the small-M verify uses the fused
+        # decode attention + selected-key gather, not the prefill attention path.
+        with arm_dspark_decode_kernels():
+            rest, finish_reason = _decode_cycles(
+                model=model,
+                forward=_fwd,
+                cache=cache,
+                mtp_caches=mtp_caches,
+                primary=primary,
+                main_h=main_h,
+                max_tokens=max_tokens - 1,
+                sampler=sampler,
+                rng=rng,
+                stop_ids=stop_ids,
+                k_request=requested,
+                confidence_threshold=confidence_threshold,
+                stats=stats,
+                token_callback=token_callback,
+                abort_check=abort_check,
+                verify_decode_phase=(
+                    _verify_decode_phase_enabled()
+                    if verify_decode_phase is None
+                    else bool(verify_decode_phase)
+                ),
+            )
         tokens.extend(rest)
     else:
         tokens = tokens[:max_tokens]

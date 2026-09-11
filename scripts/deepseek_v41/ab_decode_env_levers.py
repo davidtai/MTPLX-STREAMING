@@ -395,6 +395,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--reprice",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "When the DSpark head is loaded, reprice its ~7.4 GiB residents out of "
+            "the memory budget (default). --no-reprice loads the head at the FULL "
+            "budget so window 26 can separate the budget/slots effect from a "
+            "head-load code-path effect: the streamed slot plan is identical at the "
+            "same budget, so a --no-reprice slowdown is a code path, not slots."
+        ),
+    )
+    p.add_argument(
         "--arms",
         nargs="+",
         default=["control", "shared_overlap"],
@@ -594,6 +606,7 @@ def _load_model(args, bench, mx):
         want_dspark=want_head,
         memory_limit_bytes=int(args.memory_limit_gib * GIB),
         expert_cache_limit_bytes=cache_limit,
+        reprice=bool(getattr(args, "reprice", True)),
     )
     resident = load_deepseek_v41_streaming(
         args.model,
@@ -718,6 +731,21 @@ def _overlap_telemetry(runtime) -> dict | None:
 
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
+    if getattr(args, "decode_mode", "ar") == "dspark":
+        # Arm K29 (fused decode/verify attention, b*s<=8) + K30 (selected keys) for
+        # the WHOLE arm so both the AR reference (_generate) and the dspark verify
+        # use the decode attention branch consistently -- they are greedy-identical
+        # to the eager path, so byte_identical_vs_ar holds only if both share the
+        # setting. setdefault respects an arm that set them explicitly;
+        # MTPLX_DSV41_DSPARK_DECODE_KERNELS=0 opts out.
+        from mtplx.models.deepseek_v41_dspark_decode import (
+            _DSPARK_DECODE_KERNEL_ENVS,
+            _dspark_decode_kernels_disabled,
+        )
+
+        if not _dspark_decode_kernels_disabled():
+            for _k in _DSPARK_DECODE_KERNEL_ENVS:
+                os.environ.setdefault(_k, "1")
     if getattr(args, "dry_run", False):
         return _dry_run_arm(args, arm, bench)
     build_prompt = bench._load_build_prompt()

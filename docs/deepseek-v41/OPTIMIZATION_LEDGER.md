@@ -164,6 +164,18 @@ decode). Do not confuse the two — that is the mistake the Qwen3.8 dispatch sto
   → far more per-miss SERVICE — this is the head's intrinsic cache cost (R2/R3 territory), quantified by the
   new `--with-mtp` AR A/B. Per-cycle cost table (draft/verify/accept/commit ms) + the W37 verify-internal
   switch census now land in the receipt (`--decode-mode dspark [--stage-timing]`).
+- **W57 window-25 (integration f622f91f6, 1K/256; W57_DSPARK_DIRECT.md §6c):** DECODE-phase verify still
+  1.68 s/cycle. **attn ~830 ms/verify** = the rows>1 verify took the prefill attention path because K29
+  (fused decode/verify attn, b·s≤8) + K30 (selected keys) were OFF — FIXED: the lane now arms both for the
+  whole dspark run (`arm_dspark_decode_kernels`; harness `setdefault`, served wraps its cycles; AR ref armed
+  too so the greedy-identical kernels stay consistent; `MTPLX_DSV41_DSPARK_DECODE_KERNELS=0` opts out).
+  **switch ~630 ms/verify** = `route_stage` census pins it to host-sync barriers (`hot.eval_indices` ~10 ms
+  each per-layer device→host routing-index sync, `hot.allhit_fence_eval` ~3.6 ms) — the M=4 all-hit/split
+  path evaluates indices per split not once per 4-row wave; PROPOSED (streamed-runtime, GPU-only, not shipped
+  from a CPU worker): keep verify routing indices on-device / batch the M=4 index eval to one barrier/layer.
+  **AR-with-head 2.8×**: main_hidden capture identical, MTP experts resident (not streamed) — so it is the
+  reprice shrinking the COLD expert cache ~7 GiB (peak 76.3≈75.9, i.e. slots traded for MTP residents);
+  `--with-mtp --no-reprice` added so window 26 separates budget/slots from a code path.
 
 ### R2 — Expert-record dedup across MTP verify rows — Factor B
 
