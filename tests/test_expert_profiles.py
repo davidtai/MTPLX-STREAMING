@@ -30,10 +30,13 @@ def _parse_profile_document(document):
 
 
 def test_only_promoted_oq2e_profiles_are_installed():
+    # hy3 oQ2e promoted profiles plus the DeepSeek-V4.1-Flash mxfp4 serve
+    # profile (W21), which auto-resolves the streamed config with no flags.
     assert set(load_expert_profiles()) == {
         "hy3-oq2e-64",
         "hy3-oq2e-88",
         "hy3-oq2e-96",
+        "deepseek-v41-mxfp4-75",
     }
 
 

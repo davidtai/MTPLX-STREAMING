@@ -179,9 +179,10 @@ by W23.
   Gate 0: median union u ≤ 10 at K=3 (measure on the real bank).
 
 ### Consumers must know
-- The DSpark MoE experts are RESIDENT mxfp4 (SwitchGLU quantised path — `mx.gather_qmm`
-  has no `mode=` in mlx 0.32.2). The backbone switch binder walks only
-  `model.model.layers`, so it leaves the head's experts resident.
+- The DSpark MoE experts are RESIDENT mxfp4, run through the mlx-lm SwitchGLU
+  quantised path (the task's `resident SwitchGLU with the ±10 clamp`; `mx.gather_qmm`
+  in mlx 0.32.2 does take `mode=`, the other option). The backbone switch binder
+  walks only `model.model.layers`, so it leaves the head's experts resident.
 - **Serve-path glue gap:** `--generation-mode mtp` reaches the loader today via
   `MTPLX_DSV41_MTP=1`. The one-line map from the CLI flag to `with_mtp=True` lives in
   `cli.py` / `resident_loader.py` (outside W23's allowlist) — a follow-up for whoever

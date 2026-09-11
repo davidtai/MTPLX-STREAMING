@@ -869,8 +869,14 @@ def _expert_quant_signature(spec: Any):
     independent of the resident trunk (``ExpertStreamingModelSpec.quant_bits`` /
     ``quant_group_size``). Scales and biases are stored as BF16 leaves
     (``quant_parameter_bytes == 2`` across the affine specs), so the gather
-    lane runs at BF16. Shadow-codec banks (the q1 lane) do not run the affine
-    ``gather_qmm`` path and yield no signature.
+    lane runs at BF16.
+
+    Only affine banks yield a signature. The selfcheck's ``expert_gather`` lane
+    (:func:`_check_expert_gather`) exercises ``mx.gather_qmm(mode="affine")``, so
+    a non-affine bank -- the q1 shadow codecs (``b1``/``t158``) and the native
+    float codecs (``mxfp4``, DeepSeek-V4.1-Flash) -- cannot be validated by it
+    and returns ``None`` cleanly (the lane is skipped; the probe never raises).
+    Their Metal gather kernels are covered by their own converter/bank tests.
     """
     import mlx.core as mx
 

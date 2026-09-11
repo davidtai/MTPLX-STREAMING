@@ -74,6 +74,26 @@ SWA_WINDOW_BYTES = NUM_TEXT_LAYERS * SLIDING_WINDOW * (KV_LATENT_DIM * 2)
 # is 16 GiB, so pass this explicitly.
 DEFAULT_RUNTIME_RESERVE_BYTES = 7 * 1024**3
 
+# Engram resident-row LRU budget. The engram banks (layers 1 and 14) stream
+# their affine-q8 rows from the 2x101 GB SSD row banks through a byte-budgeted
+# LRU (mtplx.ngram_row_cache); 2 GiB is the serve default here, raising the
+# module's bare 1 GiB env fallback. MTPLX_ENGRAM_CACHE_LIMIT still overrides it.
+DEFAULT_ENGRAM_CACHE_BYTES = 2 * 1024**3
+
+
+def resolve_engram_cache_bytes() -> int:
+    """Resident-row LRU byte budget for the engram banks.
+
+    Reads ``MTPLX_ENGRAM_CACHE_LIMIT`` (Pydantic ByteSize: "2GiB", raw bytes,
+    ...) when set, otherwise the 2 GiB serve default. The loader passes the
+    resolved value to :meth:`Model.attach_engram` so the engram row cache is a
+    resolved config value rather than the module's implicit 1 GiB fallback.
+    """
+
+    from ..ngram_row_cache import cache_bytes_from_env
+
+    return cache_bytes_from_env(default=DEFAULT_ENGRAM_CACHE_BYTES)
+
 # Resident tensors skipped for text-only autoregressive serving.  A tensor is
 # skipped when its dotted name starts with any of these prefixes.  Everything
 # else -- ``embed.*``, ``head.*``, ``layers.*`` (attention, router gate, shared
@@ -584,7 +604,11 @@ def construct_deepseek_v41_resident_model(
         has_sidecar = (engram_dir / "engram-residents.safetensors").is_file()
         if has_manifest and has_sidecar:
             try:
-                engram_layer_ids = tuple(model.attach_engram(engram_dir))
+                engram_layer_ids = tuple(
+                    model.attach_engram(
+                        engram_dir, cache_bytes=resolve_engram_cache_bytes()
+                    )
+                )
             except Exception as exc:
                 raise ResidentLoadError(
                     f"could not attach engram from {engram_dir}: {exc}"

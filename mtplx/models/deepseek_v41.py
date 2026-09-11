@@ -24,6 +24,7 @@ wherever it disagrees with the port plan.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -541,6 +542,16 @@ class Attention(nn.Module):
             self._publish_compressed(x, positions, layer_cache, shared, qcos, qsin)
         compress_kv = shared.compress_kv
         index_k = shared.index_k
+        if compress_kv is None:
+            # No compressed rows exist yet (a span shorter than one ``ratio`` group,
+            # e.g. the first token of a ratio-2 layer under fine chunking, or a
+            # prompt below ``ratio``).  Every query's reachable count is 0, so the
+            # compressed branch is entirely masked out -- attend over the window
+            # only, exactly as one-shot does when ``compress_lens == 0``.
+            if self.capture_selection:
+                self.last_selection = None
+                self.last_candidates = shared.candidates
+            return None
         n_comp = compress_kv.shape[1]
         compress_lens = (positions + 1) // ratio  # [s] reachable compressed rows
 
@@ -589,11 +600,13 @@ class Attention(nn.Module):
         KV = window_all
 
         if self.compress_ratio:
-            compress_kv, comp_attend = self._compressed(
+            comp = self._compressed(
                 x, qr, positions, layer_cache, shared, qcos, qsin
             )
-            KV = mx.concatenate([window_all, compress_kv], axis=1)
-            attend = mx.concatenate([attend, comp_attend], axis=-1)
+            if comp is not None:
+                compress_kv, comp_attend = comp
+                KV = mx.concatenate([window_all, compress_kv], axis=1)
+                attend = mx.concatenate([attend, comp_attend], axis=-1)
 
         o = self._sparse_attend(q, KV, attend)
         o = _rope_last(o, qcos, qsin, inverse=True)
@@ -693,6 +706,92 @@ class DecoderLayer(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Token-chunked prefill (W20)
+# ---------------------------------------------------------------------------
+# The whole 16,384-token prompt fed through one forward materialises, on a
+# ratio-2 CSA layer, the attention score `[b, s, H, T]` with T = window(s) +
+# compressed(s//2); at the standard shape that single fp32 buffer is
+# 16385 * 64 * 24577 * 4 = 103,089,701,120 bytes, over the 86.5 GiB Metal buffer
+# cap (see docs/deepseek-v41/W20_REPORT.md).  MLX is lazy, so the buffer is only
+# forced at the layer's MoE `mx.eval(indices)` -- which is why the crash surfaces
+# in the streamed switch (expert_mlx.py) even though the tensor is the attention
+# score.  Token-chunking the forward bounds every per-query prefill transient
+# (attention score, indexer score, routed MoE rows) to `chunk` query rows while
+# the KV / compressed / index caches accumulate across chunks EXACTLY (W13's
+# CompressorState pools group-locally, so pooling is independent of how the rows
+# were chunked; the window is a causal mask over absolute positions).
+#: Env override for the prefill query-chunk.  A positive int forces that chunk;
+#: "0" or a negative value disables chunking (one-shot); unset or "auto" picks
+#: the shape-aware size from :func:`_derive_prefill_chunk`.  A per-call
+#: ``prefill_chunk`` argument to the forward beats the env.
+_PREFILL_CHUNK_ENV = "MTPLX_DSV41_PREFILL_CHUNK"
+#: Env override (in GB) for the per-chunk transient budget the auto-derivation
+#: targets; the default keeps the dominant transient under ~8 GB.
+_PREFILL_CHUNK_TARGET_ENV = "MTPLX_DSV41_PREFILL_CHUNK_TARGET_GB"
+_PREFILL_CHUNK_TARGET_DEFAULT_GB = 8.0
+
+
+def _prefill_chunk_target_bytes() -> float:
+    raw = os.environ.get(_PREFILL_CHUNK_TARGET_ENV)
+    gb = _PREFILL_CHUNK_TARGET_DEFAULT_GB
+    if raw:
+        try:
+            gb = float(raw)
+        except ValueError:
+            gb = _PREFILL_CHUNK_TARGET_DEFAULT_GB
+    return max(1.0, gb) * 1e9
+
+
+def _prefill_score_bytes_per_row(args: "ModelArgs", s: int) -> int:
+    """Bytes of the dominant per-query prefill transient for a context of ``s``
+    tokens: one row ``[H, T]`` of the fp32 attention score.
+
+    ``T`` is the window store (all ``s`` tokens during phase-1 prefill) plus, on
+    the CSA layer with the smallest positive compress ratio ``r``, that layer's
+    ``s // r`` compressed rows -- the layer whose full ``[b, s, H, T]`` score
+    overflows the Metal buffer cap.  Per query row it is ``H * T * 4``.
+    """
+    H = int(args.num_attention_heads)
+    ratios = [int(r) for r in (args.compress_ratios or []) if int(r) > 0]
+    min_ratio = min(ratios) if ratios else 0
+    n_comp = (s // min_ratio) if min_ratio else 0
+    T = s + n_comp
+    return H * T * 4
+
+
+def _derive_prefill_chunk(args: "ModelArgs", s: int, target_bytes: float) -> int:
+    """The largest query-chunk whose dominant transient stays under
+    ``target_bytes`` (shape-aware: it shrinks as the context -- and thus ``T`` --
+    grows, so 16K, 64K and beyond stay bounded)."""
+    per_row = _prefill_score_bytes_per_row(args, s)
+    if per_row <= 0:
+        return s
+    chunk = int(target_bytes // per_row)
+    return max(1, min(chunk, s))
+
+
+def _resolve_prefill_chunk(args: "ModelArgs", s: int, override) -> int:
+    """The prefill query-chunk for a forward over ``s`` tokens.
+
+    Precedence: explicit ``override`` argument > ``MTPLX_DSV41_PREFILL_CHUNK`` env
+    > shape-aware auto-derivation.  The caller treats a value ``<= 0`` or ``>= s``
+    as one-shot, so decode (``s == 1``) and any prompt below one chunk keep the
+    original single-pass forward byte-for-byte.
+    """
+    if override is not None:
+        return int(override)
+    raw = os.environ.get(_PREFILL_CHUNK_ENV)
+    if raw is not None:
+        token = raw.strip().lower()
+        if token not in ("", "auto"):
+            try:
+                return int(token)
+            except ValueError:
+                pass
+    return _derive_prefill_chunk(args, s, _prefill_chunk_target_bytes())
+
+
+# ---------------------------------------------------------------------------
 # Backbone + top-level model
 # ---------------------------------------------------------------------------
 class DeepseekV41Backbone(nn.Module):
@@ -719,7 +818,8 @@ class DeepseekV41Backbone(nn.Module):
         #: per-sequence.  Mirrors the reference ``Transformer.engram_hash``.
         self.engram_hash = None
 
-    def __call__(self, input_ids, cache=None, *, return_main_hidden: bool = False):
+    def __call__(self, input_ids, cache=None, *, prefill_chunk=None,
+                 return_main_hidden: bool = False):
         b, s = input_ids.shape
         if cache is None:
             # a bare forward (no persistent cache) still needs a per-layer cache
@@ -727,6 +827,60 @@ class DeepseekV41Backbone(nn.Module):
             # and its own engram history when the hooks are attached
             engram_state = self.engram_hash.fresh() if self.engram_hash is not None else None
             cache = _make_cache(self.args, engram_state=engram_state)
+
+        chunk = _resolve_prefill_chunk(self.args, s, prefill_chunk)
+        if chunk <= 0 or chunk >= s:
+            # one-shot (decode, short prompts, or chunking disabled): byte-for-byte
+            # the original single-pass forward.  Decode (s == 1) captures the DSpark
+            # main_hidden per step through this path.
+            return self._forward_span(input_ids, cache, return_main_hidden=return_main_hidden)
+
+        # Token-chunked prefill: each span of at most ``chunk`` query tokens flows
+        # through all layers, appending to the SAME accumulating cache (window /
+        # compressed KV / index keys / compressor frontier) and advancing the
+        # offset, so span k attends over every earlier token via the causal window
+        # mask and the reachable compressed rows -- identical to one-shot, but the
+        # per-query transients are bounded to ``chunk`` rows.  Each span is
+        # evaluated before the next builds its graph (MLX is lazy; without the
+        # eval the score buffers would not free between spans).
+        #
+        # The DSpark head drafts from the FINAL hidden state of the prompt, so the
+        # main_hidden capture runs only on the LAST span (whose rows carry the last
+        # prompt token); earlier spans skip it (per-span capture would be wasted
+        # work and would return the wrong span's hiddens).
+        outputs: List[mx.array] = []
+        main_hidden = None
+        start = 0
+        while start < s:
+            end = min(start + chunk, s)
+            last = end >= s
+            span = self._forward_span(
+                input_ids[:, start:end], cache,
+                return_main_hidden=return_main_hidden and last,
+            )
+            if return_main_hidden and last:
+                h_span, main_hidden = span
+            else:
+                h_span = span
+            self._eval_cache_state(cache, h_span)
+            outputs.append(h_span)
+            start = end
+        out = mx.concatenate(outputs, axis=1)
+        if not return_main_hidden:
+            return out
+        return out, main_hidden
+
+    def _forward_span(self, input_ids, cache, *, return_main_hidden: bool = False):
+        """Run one contiguous span of query tokens through every layer, appending
+        to ``cache`` and advancing its offset.  This is the whole original forward
+        body; the one-shot path is exactly this over the full prompt.
+
+        When ``return_main_hidden`` it also returns the DSpark ``main_hidden`` for
+        this span -- the concatenated ``dspark_target_layer_ids`` hiddens (the
+        attention input, mean over the hc copies; reference L1265-1266).  The
+        chunked caller runs this only on the span carrying the position it drafts
+        from, so the returned tensor's last row is the final prompt token."""
+        b, s = input_ids.shape
         positions = mx.arange(cache.offset, cache.offset + s)
 
         h = self.embed_tokens(input_ids)  # [b, s, dim]
@@ -737,7 +891,9 @@ class DeepseekV41Backbone(nn.Module):
         ).astype(mx.float32)
 
         # Engram row-id state (owned by the engram worker) is advanced once per
-        # step before any engram layer reads it; text-only has no image mask.
+        # span before any engram layer reads it; the n-gram lookback reads the full
+        # accumulated history, so per-span advance == one-shot advance (text-only
+        # has no image mask).
         engram_state = getattr(cache, "engram_state", None)
         if engram_state is not None:
             engram_state.advance(input_ids)
@@ -762,6 +918,30 @@ class DeepseekV41Backbone(nn.Module):
             return out
         main_hidden = mx.concatenate(main_hiddens, axis=-1) if main_hiddens else None
         return out, main_hidden
+
+    @staticmethod
+    def _eval_cache_state(cache, *extra):
+        """Force the accumulated cache stores (and this span's output) so the
+        span's transient buffers free before the next span is built.  Load-bearing
+        for the memory bound: MLX is lazy, so an unevaluated chain of appends keeps
+        every span's score alive at once."""
+        arrays = [a for a in extra if a is not None]
+        # getattr with a default keeps this robust to W22's cache-container
+        # reshaping (mlx_lm per-layer protocol): it forces whatever stored arrays
+        # are present, and simply skips any renamed field.
+        for lc in cache.layers:
+            for name in ("window", "compress_kv", "index_k"):
+                a = getattr(lc, name, None)
+                if a is not None:
+                    arrays.append(a)
+            cs = getattr(lc, "comp_state", None)
+            if cs is not None:
+                for name in ("raw_kv", "raw_score"):
+                    a = getattr(cs, name, None)
+                    if a is not None:
+                        arrays.append(a)
+        if arrays:
+            mx.eval(arrays)
 
 
 def _sanitize_name(name: str) -> str:
@@ -940,18 +1120,19 @@ class Model(nn.Module):
 
     def _build_mtp_head(self, *, quantize: bool, quantization) -> None:
         """Construct the DSpark draft head after the backbone quantise (so the
-        backbone predicate never touches the MTP tensors) and wire the shared
-        token embedding + output head onto its stages.
+        backbone predicate never touches the MTP tensors).
 
         When ``quantize`` and the artifact carries a native float codec, the MTP
         stages' resident tensors are quantised in place: the dense projections
         (``main_proj`` / ``attn.*`` / ``ffn.shared_experts.*``) and the 128 routed
         experts (``switch_mlp``, mxfp4 gs32) -- unlike the backbone, whose routed
         experts stream from the bank, the DSpark experts are RESIDENT, so they are
-        quantised here through mlx-lm's :class:`SwitchGLU` (``mx.gather_qmm`` has no
-        ``mode=`` in mlx 0.32.2; the resident mxfp4 path is the SwitchGLU quantised
-        matmul carrying the reference clamped SwiGLU).  See W23_REPORT for the
-        artifact-verification gap (the 12 GiB CPU cap forbids loading the bank).
+        quantised here through mlx-lm's :class:`SwitchGLU` carrying the reference
+        clamped SwiGLU -- the task's ``resident SwitchGLU with the +/-10 clamp``
+        alternative to ``mx.gather_qmm(mode="mxfp4")`` (both exist in mlx 0.32.2;
+        SwitchGLU's quantised matmul is the resident-expert path here).  See
+        W23_REPORT for the artifact-verification gap (the 12 GiB CPU cap forbids
+        loading the bank).
         """
         from .deepseek_v41_dspark import DSparkHead
 
@@ -979,7 +1160,7 @@ class Model(nn.Module):
 
     def __call__(self, input_ids, cache=None, *, return_hidden: bool = False,
                  emit_logits: bool = True, logits_keep=None, input_embeddings=None,
-                 hidden_variant=None, **kwargs):
+                 hidden_variant=None, prefill_chunk=None, **kwargs):
         """Target forward and the MTPLX runtime's ``forward_ar`` surface.
 
         Plain ``model(ids)`` / ``model(ids, cache=cache)`` is unchanged (returns
@@ -988,15 +1169,19 @@ class Model(nn.Module):
         through: ``return_hidden`` also returns the DSpark ``main_hidden`` (the
         concatenated target-layer hiddens the draft head consumes); ``emit_logits``
         / ``logits_keep`` skip or restrict the ``lm_head`` matmul; ``hidden_variant``
-        is accepted and ignored (V4.1's draft input is one defined tensor).
-        ``input_embeddings`` (a vision splice) is rejected -- the text path has none.
+        is accepted and ignored (V4.1's draft input is one defined tensor);
+        ``prefill_chunk`` is W20's token-chunked-prefill knob threaded to the
+        backbone.  ``input_embeddings`` (a vision splice) is rejected -- the text
+        path has none.
         """
         if input_embeddings is not None:
             raise ValueError(
                 "the DeepSeek-V4.1 text backend does not support input_embeddings "
                 "(no vision splice path)"
             )
-        h, main_hidden = self.model(input_ids, cache, return_main_hidden=True)
+        h, main_hidden = self.model(
+            input_ids, cache, prefill_chunk=prefill_chunk, return_main_hidden=True
+        )
         logits = None
         if emit_logits:
             source = h if logits_keep is None else h[:, -max(1, int(logits_keep)):, :]

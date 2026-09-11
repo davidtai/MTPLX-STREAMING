@@ -73,12 +73,27 @@ _CONTEXT_WINDOW_CONFIG_KEYS = (
 # Users who need more context can pass --expert-max-live-kv-tokens explicitly
 # (which reserves more KV and yields slower decode).
 _DEFAULT_KV_TOKENS = 32768
-EXPERT_PROFILE_CHOICES = (
-    "auto",
-    "hy3-oq2e-64",
-    "hy3-oq2e-88",
-    "hy3-oq2e-96",
-)
+def expert_profile_choices() -> tuple[str, ...]:
+    """``--expert-profile`` choices: ``auto`` plus every registered profile.
+
+    Derived from the profile registry (``mtplx/data/expert_profiles.json``)
+    rather than hard-coded, so a newly promoted profile is selectable by name.
+    Critically, ``mtplx serve --model <artifact>`` (no flags) resolves
+    ``--expert-profile auto`` to the profile's name and FORWARDS that name to the
+    daemon child; the child re-parses it against these choices, so a static list
+    that omits the resolved profile fails the no-flags serve for any model whose
+    auto-selected profile is not in the old hard-coded set.
+    """
+
+    from .expert_profiles import load_expert_profiles
+
+    return ("auto", *sorted(load_expert_profiles()))
+
+
+# Back-compat module constant (evaluated once at import). Prefer
+# ``expert_profile_choices()`` at parser-build time so a profile added after
+# import is still selectable.
+EXPERT_PROFILE_CHOICES = expert_profile_choices()
 _PROFILE_EFFECTIVE_FIELDS = (
     "memory_limit_bytes",
     "max_live_kv_tokens",
@@ -157,7 +172,7 @@ def add_expert_streaming_args(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("SSD expert streaming")
     group.add_argument(
         "--expert-profile",
-        choices=EXPERT_PROFILE_CHOICES,
+        choices=expert_profile_choices(),
         default="auto",
         help="Promoted SSD expert memory profile (default: auto).",
     )

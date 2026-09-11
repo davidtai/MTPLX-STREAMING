@@ -964,26 +964,34 @@ def _load_impl(
                     expert_streaming_config, Path(expert_manifest).parent
                 )
             preflight_plan_kwargs = dict(plan_kwargs)
-            if expert_streaming_config.proj_quant or getattr(
-                expert_streaming_config, "proj_requant", None
-            ):
-                from .expert_manifest import load_expert_manifest
-                from .expert_runtime import (
-                    proj_quant_plan_discount,
-                    proj_requant_plan_discount,
-                )
+            # The pre-flight plan sizes the component-bank slot allocator below,
+            # so its resident discount must equal the one ExpertStreamingRuntime.open
+            # applies to its own pool plan (proj_quant + proj_requant + the
+            # text-only skip); otherwise the allocator's per-layer bank capacity
+            # and the runtime slot pool disagree. The text-only term is 0 for any
+            # manifest with no MTP/vision residents (hy3/glm), so their plans are
+            # unchanged.
+            from .expert_manifest import load_expert_manifest
+            from .expert_runtime import (
+                proj_quant_plan_discount,
+                proj_requant_plan_discount,
+                text_only_resident_discount,
+            )
 
-                _preflight_manifest = load_expert_manifest(expert_manifest)
-                preflight_plan_kwargs["resident_discount_bytes"] = (
-                    proj_quant_plan_discount(
-                        _preflight_manifest,
-                        expert_streaming_config.proj_quant,
-                    )
-                    + proj_requant_plan_discount(
-                        _preflight_manifest,
-                        getattr(expert_streaming_config, "proj_requant", None),
-                    )
+            _preflight_manifest = load_expert_manifest(expert_manifest)
+            _resident_discount = (
+                proj_quant_plan_discount(
+                    _preflight_manifest,
+                    expert_streaming_config.proj_quant,
                 )
+                + proj_requant_plan_discount(
+                    _preflight_manifest,
+                    getattr(expert_streaming_config, "proj_requant", None),
+                )
+                + text_only_resident_discount(_preflight_manifest, streaming_spec)
+            )
+            if _resident_discount:
+                preflight_plan_kwargs["resident_discount_bytes"] = _resident_discount
             if bool(getattr(streaming_spec, "is_mixed_official", False)):
                 # Mixed-official has no uniform record size; the preflight gate
                 # must see the same manifest-derived per-layer sizes as open()

@@ -42,10 +42,12 @@ Reuse: the entire V4.1 backbone (`Attention` projections, `_sparse_attend`,
 `mtplx.models.deepseek_v41`; only the DSpark-specific leaves are new.
 
 **Resident expert execution.** The 3 stages' 128 routed experts are RESIDENT
-mxfp4 gs32 (W18_REPORT). `mx.gather_qmm` in **mlx 0.32.2 has no `mode=` argument**
-(verified), so the resident mxfp4 path is the mlx-lm quantised `SwitchGLU` carrying
-the reference clamped SwiGLU (the `MoE` seam this module reuses), **not**
-`gather_qmm(mode="mxfp4")`. The DSpark experts are quantised in place
+mxfp4 gs32 (W18_REPORT). Both mechanisms exist in **mlx 0.32.2** — `mx.gather_qmm`
+does take `mode` (signature `…, bits=None, mode: str = 'affine', …`) and mlx-lm's
+quantised `SwitchGLU` wraps it — and W23 uses the **`SwitchGLU`** path carrying the
+reference clamped SwiGLU (the task's "resident SwitchGLU with the ±10 clamp"
+alternative to `gather_qmm(mode="mxfp4")`, and the `MoE` seam this module reuses).
+The DSpark experts are quantised in place
 (`Model._build_mtp_head`: mxfp8 dense + mxfp4 experts) and, because the backbone
 switch binder walks only `model.model.layers`, they stay resident (never rebound
 to the stream bank).
