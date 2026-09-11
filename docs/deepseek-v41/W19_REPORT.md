@@ -6,9 +6,10 @@ from the affine-q8/gs64 record format to MLX's native **mxfp8** format, as an EX
 repack of the Hub source. The affine codec stays intact; the runtime picks the codec from the
 manifest.
 
-**Status:** converter mode + runtime codec committed with tests green for both codecs; the
-2,000,000-row layer-1 pilot is bit-exact through the real `NGramRowCache` path. Ready for the
-full 768,022,850-row rewrite (one command below).
+**Status:** DONE. Converter mode + runtime codec committed with tests green for both codecs; the
+2,000,000-row layer-1 pilot was bit-exact through the real `NGramRowCache` path; and the full
+768,022,850-row rewrite of both layers has run and verified on the mxfp4 artifact (§6). The
+command that produced it is §5.
 
 ---
 
@@ -166,3 +167,34 @@ then atomically renames both over `engram-L{1,14}.bin` and rewrites `engram-mani
 (`mode:"mxfp8"`) in one step. Re-running after an interrupt resumes from the journal; re-running
 after completion early-skips. To roll back before the flip, delete the `.bin.new` files — the
 affine banks and manifest are untouched until the final step.
+
+---
+
+## 6. Full run — DONE (2026-09-10, on David's go-ahead)
+
+The full 768,022,850-row rewrite of both layers ran on the mxfp4 artifact:
+
+| phase | wall |
+|---|---|
+| L1 write (384,006,168 rows) | 43 s (~2,843 MB/s at the 10M-row mark) |
+| L1 sha256 (101.38 GB) | ~40 s |
+| L14 write (384,016,682 rows) | 63 s (~2,510 MB/s at 10M — more SSD contention from the concurrent expert write) |
+| L14 sha256 (101.38 GB) | ~41 s |
+| atomic flip (2× `os.replace`) + manifest | < 1 s |
+| **total** | **~3 min 07 s**, peak RSS ~200 MB, `nice -n 19` |
+
+Verified on the live artifact `~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/engram/`:
+
+- `engram-L1.bin` 101,377,628,352 B, `engram-L14.bin` 101,380,404,048 B; no `.bin.new` left.
+- `engram-manifest.json`: `quant.mode="mxfp8"`, `record_bytes 264`, per-bank `sha256`
+  (L1 `a4494922…`, L14 `b72464ba…`), plus the preserved `residents` block and the `hashing` block.
+- Post-flip **bit-exact vs the source FP32 dequant** through the real `NGramRowCache` path — 4,200
+  sampled rows per layer, `np.array_equal` — for **both** L1 and L14.
+- `39 passed` (both codecs) against the live mxfp8 artifact.
+- Disk after: mxfp8 banks 202.76 GB (6.14 GB less than the affine banks they replaced).
+
+**Residents note.** The manifest flip must not drop the W4 `residents` block. The first full run
+did (the sidecar file was untouched, but the manifest stopped referencing it); this is fixed —
+`write_manifest` now preserves an existing `residents` entry (`read_existing_residents` captures it
+pre-flip), and the live manifest's block was restored via `--mode residents` (sidecar rebuilt
+identically: q/k exact, wkv q8 `cos_row_min` ≥ 0.99996).
