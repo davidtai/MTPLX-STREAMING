@@ -786,7 +786,7 @@ DEEPSEEK_V41_FLASH_EXPERT_MXFP4 = replace(
     key="deepseek-v41-flash-expert-mxfp4",
     display_name=(
         "DeepSeek-V4.1-Flash expert-only native mxfp4 "
-        "(gs32 FP4 lossless-repack experts, q8 residents)"
+        "(gs32 FP4 lossless-repack experts, mxfp8 residents)"
     ),
     # The mxfp4 streaming artifact repo (upload + pin is David's call once W16
     # builds the full 269 GiB bank).  The converter stamps these into the
@@ -794,7 +794,11 @@ DEEPSEEK_V41_FLASH_EXPERT_MXFP4 = replace(
     # freshly converted artifact matches by construction; re-pin on upload.
     quant_model="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
     quant_revision="unpublished-mxfp4-repack",
-    total_tensor_bytes=313_941_753_752,
+    # W16: re-derived from the SHIPPED native residents (W18 mxfp8 gs32 dense +
+    # mxfp4 gs32 MTP + bf16 embed/head), scanned from the 49 model-*.safetensors
+    # (3,913 tensors) = 18_649_658_184 resident bytes + 288_777_830_400 mxfp4
+    # routed. Was the q8-era 313_941_753_752 (resident 25_163_923_352).
+    total_tensor_bytes=307_427_488_584,
     quant_bits=MXFP4_BITS,
     quant_group_size=MXFP4_GROUP,
     quant_parameter_bytes=1,  # E8M0 scale is one byte; no bias (not used by mxfp4 sizing)
