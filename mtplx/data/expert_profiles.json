@@ -114,7 +114,8 @@
         "verify_sidecar_hash_at_open": false
       },
       "child_env": {
-        "MTPLX_ENGRAM_CACHE_LIMIT": "2GiB"
+        "MTPLX_ENGRAM_CACHE_LIMIT": "2GiB",
+        "MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS": "0"
       }
     }
   ]

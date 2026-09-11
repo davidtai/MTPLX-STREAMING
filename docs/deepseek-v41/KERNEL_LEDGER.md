@@ -377,6 +377,37 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   cache-continuation path). **Precedent:** standard prefill last-token head; W20 §7 identifies the
   8.47 GB transient explicitly.
 
+- **W29 — LANDED (CPU-only; magnitude is a KG-g GPU window, not measured here).** Report:
+  [`W29_K19_HEAD_LAST_ROW.md`](W29_K19_HEAD_LAST_ROW.md). The last-row head already existed as the
+  runtime `forward_ar` contract `logits_keep` (W23) — `logits_keep=1` slices `h[:, -1:]` before the
+  head; W29 adds the explicit alias `logits_rows="last"` (same single slice path) and, crucially,
+  **wires the mxfp4 lane to use it** by setting `MTPLX_TARGET_EMIT_FULL_PREFILL_LOGITS=0` in the
+  `deepseek-v41-mxfp4-75` profile `child_env`. Until W29 the lane ran W20 chunking (which bounds the
+  *attention/score* transient) but the head still built the full-row logits — the 8.47 GB was live at
+  16K. The generic prefill runner (`generation._prefill*`) already emits **no** logits for the prompt
+  body (`emit_logits=False`) and `logits_keep=1` for the last token when the gate is on, so no
+  `generation.py` change was needed. **Verify (K+1 rows during MTP decode-verify) is not prefill and
+  is untouched.**
+
+  *Analytical transient reduction* (released config: `vocab=129,280`, `hidden=5,120`, f32 logits;
+  head input narrows `[1, s, 5120] → [1, 1, 5120]`):
+
+  | prefill tokens *s* | all-rows logits `[1,s,129280]` f32 | last-row `[1,1,129280]` f32 | transient saved | head-GEMM rows |
+  |---|---|---|---|---|
+  | 1,024  | 529,530,880 B = **0.530 GB** | 517,120 B = 0.49 MB | 0.529 GB (99.90 %) | 1,024 → 1 (1,024×) |
+  | 16,384 | 8,472,494,080 B = **8.472 GB** | 517,120 B = 0.49 MB | 8.472 GB (99.99 %) | 16,384 → 1 (16,384×) |
+
+  The head GEMM drops from `s·5120·129280` MACs (≈21.7 TFLOP at 16,384) to `5120·129280` (≈1.36 GFLOP),
+  a factor-*s* cut. **Exactness:** `logits_rows="last"` is bit-identical to `logits_keep=1` (same M=1
+  head); the surviving row matches the all-rows tail to ~1.8e-7 (measured) — the lm head is a matmul
+  whose rounding depends on its row count M, so heading M=1 vs M=s differs sub-ULP-scale; **argmax is
+  identical**, so AR decode is unchanged. **Call-site audit:** every DSV4.1 prefill consumer reads only
+  the last row *except* `generation.score_prompt_logprobs` (prompt-logprobs / echo), which is
+  independently chunked (`chunk_size=256`) and passes `emit_logits=True` unconditionally — it is
+  unaffected by the gate and correctly keeps all rows. Session-cache prefill is off for this lane
+  (`MTPLX_SESSION_STORE_ON_PREFILL=0`, W22); DSpark reads `main_hidden`, never the lm head. Full audit
+  table in the W29 report.
+
 ### K17 — Prefill GEMM tiling for M=chunk — **Rank 13**
 - **Mechanism:** at M=1271 the expert gather is compute-bound; tile to keep it so (avoid the M=1
   ALU-stall regime). **Where:** prefill. **After/now:** shaves the ~5–7 s of non-hidden prefill
