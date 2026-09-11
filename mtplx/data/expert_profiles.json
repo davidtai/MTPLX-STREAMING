@@ -85,6 +85,37 @@
         "MTPLX_SUSTAINED_PREFILL": "1",
         "MTPLX_HY3_SUBMIT_CADENCE": "8"
       }
+    },
+    {
+      "name": "deepseek-v41-mxfp4-75",
+      "model_key": "deepseek-v41-flash-expert-mxfp4",
+      "process_ceiling_bytes": 88046829568,
+      "weight_envelope_bytes": 80530636800,
+      "generation_mode": "ar",
+      "evidence_commit": "5d6dd8ad5027213976782ff222170d68fc181055",
+      "evidence_receipts": [
+        "docs/deepseek-v41/W21_REPORT.md",
+        "docs/deepseek-v41/W3_REPORT.md"
+      ],
+      "config": {
+        "memory_limit_bytes": 88046829568,
+        "runtime_reserve_bytes": 7516192768,
+        "max_live_kv_tokens": 16384,
+        "cache_policy": "lru",
+        "cache_scope": "layer",
+        "slot_layout": "component-banks",
+        "transient_slots": 48,
+        "max_read_chunk_bytes": 8388608,
+        "bypass_page_cache": true,
+        "split_route_release": "deferred",
+        "prefetch_slots": 0,
+        "streamed_codec": "none",
+        "verify_record_hashes": false,
+        "verify_sidecar_hash_at_open": false
+      },
+      "child_env": {
+        "MTPLX_ENGRAM_CACHE_LIMIT": "2GiB"
+      }
     }
   ]
 }
