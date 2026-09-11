@@ -52,6 +52,7 @@ _DR = "MTPLX_DSV41_DEVICE_ROUTE"       # W44 / K24: barrier-free all-hit device 
 _PD = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"     # W51 / K26: prefill dense experts
 _PDMR = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"  # W51 / K26: per-expert row threshold
 _PDB = "MTPLX_DSV41_PREFILL_DENSE_BATCH"      # W51 / K26: dequant batch size
+_PDD = "MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE"  # W51 / K26: dense matmul dtype
 _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
 # The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
 # PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
@@ -60,7 +61,7 @@ _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
 # value knobs (min_rows, batch) take an integer string and are left unset by every
 # arm (the code default applies), so they are always recorded None.
 _ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight booleans all_levers sets
-_BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _HM)  # every key a preset pins
+_BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every key a preset pins
 
 ALL_ARMS = [
     "control",
@@ -74,6 +75,9 @@ ALL_ARMS = [
     "attn_win_memo",
     "device_route",
     "prefill_dense_experts",
+    "dense_min32",
+    "dense_batch16",
+    "dense_f32",
     "both",
     "all_levers",
     "stack_a",
@@ -94,9 +98,12 @@ EXPECTED_ON = {
     "attn_compile": {_AC},
     "attn_win_memo": {_WM},
     "device_route": set(),   # its only key is _DR, tracked in EXPECTED_DEVICE
-    # W51: the dense-experts arm rides the layer-major schedule; its own boolean
-    # (_PD) is tracked in EXPECTED_DENSE, so _LM is the only _ALL_KEYS member here.
+    # W51: the dense-experts arms all ride layer-major; the dense boolean (_PD) and
+    # the value knobs are tracked separately, so _LM is the only _ALL_KEYS member.
     "prefill_dense_experts": {_LM},
+    "dense_min32": {_LM},
+    "dense_batch16": {_LM},
+    "dense_f32": {_LM},
     "both": {_OV, _LM},
     "all_levers": {_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM},
     # W42 window-14: pure fast path measured -13.4%, so the fast path is LEFT OUT
@@ -113,8 +120,17 @@ EXPECTED_ON = {
 EXPECTED_DEVICE = {arm: (arm in ("device_route", "stack_a")) for arm in ALL_ARMS}
 
 # The prefill-dense-experts boolean each arm pins (W51 K26; separate from
-# _ALL_KEYS, not part of all_levers). Only its own arm sets it.
-EXPECTED_DENSE = {arm: (arm == "prefill_dense_experts") for arm in ALL_ARMS}
+# _ALL_KEYS, not part of all_levers). Every dense arm sets it.
+_DENSE_ARMS = ("prefill_dense_experts", "dense_min32", "dense_batch16", "dense_f32")
+EXPECTED_DENSE = {arm: (arm in _DENSE_ARMS) for arm in ALL_ARMS}
+# The dense value knobs each arm pins (None = force-unset / code default). Only the
+# sweep arms set them; the plain dense arm leaves all three at the code default.
+EXPECTED_MIN_ROWS = {arm: None for arm in ALL_ARMS}
+EXPECTED_MIN_ROWS["dense_min32"] = "32"
+EXPECTED_BATCH = {arm: None for arm in ALL_ARMS}
+EXPECTED_BATCH["dense_batch16"] = "16"
+EXPECTED_MATMUL_DTYPE = {arm: None for arm in ALL_ARMS}
+EXPECTED_MATMUL_DTYPE["dense_f32"] = "f32"
 
 # The head-codec value each arm pins on MTPLX_DSV41_HEAD_MODE (None = force-unset).
 EXPECTED_HEAD = {
@@ -129,6 +145,9 @@ EXPECTED_HEAD = {
     "attn_win_memo": None,
     "device_route": None,
     "prefill_dense_experts": None,
+    "dense_min32": None,
+    "dense_batch16": None,
+    "dense_f32": None,
     "both": None,
     "all_levers": None,
     "stack_a": "bf16",
@@ -227,14 +246,15 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert os.environ.get(_DR) == "1", f"{arm}: {_DR} should be '1'"
     else:
         assert _DR not in os.environ, f"{arm}: {_DR} should be force-unset"
-    # the prefill-dense-experts boolean is set for exactly its own arm.
+    # the prefill-dense-experts boolean is set for exactly the dense arms.
     if EXPECTED_DENSE[arm]:
         assert os.environ.get(_PD) == "1", f"{arm}: {_PD} should be '1'"
     else:
         assert _PD not in os.environ, f"{arm}: {_PD} should be force-unset"
-    # the dense value knobs are never pinned by an arm (code default applies).
-    assert _PDMR not in os.environ, f"{arm}: {_PDMR} should be force-unset"
-    assert _PDB not in os.environ, f"{arm}: {_PDB} should be force-unset"
+    # the dense value knobs pin their sweep value or are force-unset (code default).
+    assert os.environ.get(_PDMR) == EXPECTED_MIN_ROWS[arm], f"{arm}: {_PDMR}"
+    assert os.environ.get(_PDB) == EXPECTED_BATCH[arm], f"{arm}: {_PDB}"
+    assert os.environ.get(_PDD) == EXPECTED_MATMUL_DTYPE[arm], f"{arm}: {_PDD}"
     # the head codec pins its value (a string), or is force-unset when None.
     if EXPECTED_HEAD[arm] is None:
         assert _HM not in os.environ, f"{arm}: {_HM} should be force-unset"
@@ -285,11 +305,16 @@ def test_prefill_dense_arm_sets_only_its_keys_and_clears(env_levers):
     assert os.environ.get(_LM) == "1"
     assert all(k not in os.environ for k in set(_ALL_KEYS) - {_LM})
     assert _DR not in os.environ and _HM not in os.environ
-    # the value knobs stay unset (code default), even for the dense arm.
-    assert _PDMR not in os.environ and _PDB not in os.environ
-    # a later arm clears the dense boolean (arms are independent).
+    # the plain dense arm leaves all value knobs unset (code default applies).
+    assert _PDMR not in os.environ and _PDB not in os.environ and _PDD not in os.environ
+    # the sweep arms each pin exactly one value knob.
+    env_levers._apply_arm_env("dense_min32")
+    assert os.environ.get(_PDMR) == "32" and _PDB not in os.environ and _PDD not in os.environ
+    env_levers._apply_arm_env("dense_f32")
+    assert os.environ.get(_PDD) == "f32" and _PDMR not in os.environ
+    # a later arm clears the dense boolean + knobs (arms are independent).
     env_levers._apply_arm_env("control")
-    assert _PD not in os.environ
+    assert _PD not in os.environ and _PDD not in os.environ
 
 
 def test_apply_arm_env_rejects_unknown_arm(env_levers):
@@ -327,6 +352,8 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_HM] = "bogus"
     os.environ[_PD] = "bogus"
     os.environ[_PDMR] = "bogus"
+    os.environ[_PDB] = "bogus"
+    os.environ[_PDD] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -340,10 +367,11 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         # the device-route boolean and the head codec are recorded per arm.
         assert (r["arm_env"].get(_DR) == "1") == EXPECTED_DEVICE[r["arm"]], r["arm"]
         assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]
-        # the prefill-dense boolean is recorded per arm; its value knobs stay None.
+        # the prefill-dense boolean + value knobs are recorded per arm.
         assert (r["arm_env"].get(_PD) == "1") == EXPECTED_DENSE[r["arm"]], r["arm"]
-        assert r["arm_env"].get(_PDMR) is None, r["arm"]
-        assert r["arm_env"].get(_PDB) is None, r["arm"]
+        assert r["arm_env"].get(_PDMR) == EXPECTED_MIN_ROWS[r["arm"]], r["arm"]
+        assert r["arm_env"].get(_PDB) == EXPECTED_BATCH[r["arm"]], r["arm"]
+        assert r["arm_env"].get(_PDD) == EXPECTED_MATMUL_DTYPE[r["arm"]], r["arm"]
 
 
 def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path):
