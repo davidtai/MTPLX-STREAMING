@@ -844,30 +844,38 @@ class DeepseekV41Backbone(nn.Module):
         # evaluated before the next builds its graph (MLX is lazy; without the
         # eval the score buffers would not free between spans).
         #
-        # The DSpark head drafts from the FINAL hidden state of the prompt, so the
-        # main_hidden capture runs only on the LAST span (whose rows carry the last
-        # prompt token); earlier spans skip it (per-span capture would be wasted
-        # work and would return the wrong span's hiddens).
+        # main_hidden must span the WHOLE prompt: the spec engine seeds the draft
+        # history with `prompt_hidden[:, :-1, :]` against `prompt_ids[1:]`
+        # (generation._append_mtp_history asserts equal lengths), so each span
+        # captures its own target-layer hiddens and they are concatenated in
+        # position order. The DSpark DRAFT still reads only the FINAL hidden state
+        # of the prompt -- `mtp_forward` slices `h[:, -1:, :]` -- so "drafts from
+        # the last span" holds without dropping the earlier spans the history needs.
         outputs: List[mx.array] = []
-        main_hidden = None
+        main_parts: List[Optional[mx.array]] = []
         start = 0
         while start < s:
             end = min(start + chunk, s)
-            last = end >= s
             span = self._forward_span(
-                input_ids[:, start:end], cache,
-                return_main_hidden=return_main_hidden and last,
+                input_ids[:, start:end], cache, return_main_hidden=return_main_hidden
             )
-            if return_main_hidden and last:
-                h_span, main_hidden = span
+            if return_main_hidden:
+                h_span, mh_span = span
+                main_parts.append(mh_span)
             else:
                 h_span = span
-            self._eval_cache_state(cache, h_span)
+                mh_span = None
+            self._eval_cache_state(cache, h_span, mh_span)
             outputs.append(h_span)
             start = end
         out = mx.concatenate(outputs, axis=1)
         if not return_main_hidden:
             return out
+        main_hidden = (
+            None
+            if any(p is None for p in main_parts)
+            else mx.concatenate(main_parts, axis=1)
+        )
         return out, main_hidden
 
     def _forward_span(self, input_ids, cache, *, return_main_hidden: bool = False):

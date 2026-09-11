@@ -201,6 +201,20 @@ def test_dspark_greedy_verify_reproduces_ar_over_64_tokens(depth):
 _MIXED_SEED = 3
 
 
+def test_dspark_lossless_under_chunked_prefill(monkeypatch):
+    """W20's token-chunked prefill splits the prompt into spans; the DSpark head
+    must still draft from the final prompt hidden and the spec engine must still
+    seed its history over the whole prompt (main_hidden spans every span, sliced
+    `[:, :-1, :]` by `_append_mtp_history`). Force a small chunk and require
+    spec == AR — the guard against a last-span-only capture regressing the
+    prompt-history seed."""
+    monkeypatch.setenv("MTPLX_DSV41_PREFILL_CHUNK", "4")
+    prompt = _prompt(17)
+    baseline = _ar(_runtime(), prompt, 48)
+    out = _spec(_runtime(), prompt, 48, 3)
+    assert out.tokens == baseline.tokens, "chunked prefill broke DSpark spec==AR"
+
+
 def test_dspark_exercises_both_accept_and_reject():
     prompt = _prompt(17, vocab=8)
     baseline = _ar(_runtime(seed=_MIXED_SEED, vocab=8), prompt, 48)
