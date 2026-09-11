@@ -511,6 +511,39 @@ class LayerAttentionCache:
             )
         self.offset = int(value[1])
 
+    #: set on entries reconstructed by :meth:`from_state` when the saved ``state``
+    #: carried an engram history (the 6th leaf).  The reconstruction cannot rebuild
+    #: the shared, unserialised hash config, so the raw ``mx.array`` history buffer
+    #: is parked here for the caller to rehydrate into a live
+    #: :class:`~mtplx.engram_v41.NgramHashState` (``fresh().replace_state(...)``).
+    loaded_engram_state = None
+
+    @classmethod
+    def from_state(cls, state, meta_state):
+        """Reconstruct an entry from a saved ``(state, meta_state)`` --
+        ``mlx_lm.load_prompt_cache``'s contract (``globals()[cls].from_state``).
+
+        Rebuilds the window / compressed-KV / index-key lanes, the compressor
+        frontier and the offset.  When ``state`` carries the engram history as
+        its 6th leaf (the owning entry), the raw buffer is parked on
+        :attr:`loaded_engram_state`; the immutable hash config is shared and
+        unserialised, so the caller rehydrates it into a fresh
+        :class:`~mtplx.engram_v41.NgramHashState` (see W26_REPORT)."""
+        version, offset, window_size, compress_ratio, is_kv_source = meta_state
+        if version != _LAYER_META_VERSION:
+            raise ValueError(f"unsupported DeepSeek-V4.1 layer meta version: {version!r}")
+        entry = cls(
+            window_size=int(window_size),
+            compress_ratio=int(compress_ratio),
+            is_kv_source=(str(is_kv_source) == "1"),
+            engram_state=None,
+        )
+        values = tuple(state)
+        entry.loaded_engram_state = values[5] if len(values) == 6 else None
+        entry.state = values[:5]          # KV lanes only (this entry owns no engram)
+        entry.offset = int(offset)
+        return entry
+
 
 # Inline-name aliases (the names W10's in-progress code and the serve path use).
 _LayerCache = LayerAttentionCache
