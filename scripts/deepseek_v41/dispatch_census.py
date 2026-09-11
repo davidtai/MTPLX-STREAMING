@@ -159,15 +159,18 @@ def _build(seed=1, engram=True):
 
 
 @contextmanager
-def _attn_flag(flag, cap):
+def _attn_flag(flag, cap, win_memo=False):
     of, orr = dv41._ATTN_COMPILE, dv41._ATTN_COMPILE_MAX_ROWS
+    om = dv41._ATTN_WIN_MEMO
     dv41._ATTN_COMPILE = flag
     dv41._ATTN_COMPILE_MAX_ROWS = cap
+    dv41._ATTN_WIN_MEMO = win_memo
     dv41._ATTN_COMPILED.clear()
     try:
         yield
     finally:
         dv41._ATTN_COMPILE, dv41._ATTN_COMPILE_MAX_ROWS = of, orr
+        dv41._ATTN_WIN_MEMO = om
         dv41._ATTN_COMPILED.clear()
 
 
@@ -253,13 +256,15 @@ def _census_session():
         _stime._ACTIVE = old
 
 
-def _run_full_census(flag, cap, seed=1, decode_tokens=(3, 17, 5), prefill_s=12):
+def _run_full_census(flag, cap, seed=1, decode_tokens=(3, 17, 5), prefill_s=12,
+                     win_memo=False):
     """Decode a few tokens under the census probe; return the snapshot.
 
+    ``flag`` = K22 attention-tape compile; ``win_memo`` = K24 window-mask memo.
     Prefill is one-shot at ``s = prefill_s > cap`` so it is eager (and not
     censused -- ``_recording_now`` gates on s==1), matching the W37 probe."""
     model, args = _build(seed=seed)
-    with _attn_flag(flag, cap):
+    with _attn_flag(flag, cap, win_memo=win_memo):
         ids = mx.array(np.random.RandomState(0).randint(0, args.vocab_size, size=(1, prefill_s)))
         cache = model.make_cache()
         mx.eval(model(ids, cache=cache, prefill_chunk=0))
@@ -416,32 +421,44 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     args = ap.parse_args()
 
+    # before = all off (eager); k22 = attention-tape compile only; after = K22 +
+    # K24 window-mask memo (the full W45 attention-compile mode).
     before = _run_full_census(False, args.cap, seed=args.seed)
-    after = _run_full_census(True, args.cap, seed=args.seed)
+    k22 = _run_full_census(True, args.cap, seed=args.seed)
+    after = _run_full_census(True, args.cap, seed=args.seed, win_memo=True)
     micro = _micro_census(seed=args.seed)
 
     table = _render_table(before, after)
     micro_table = _render_micro(micro)
 
-    print("=" * 78)
-    print("K22 dispatch census -- primitives/token per decode stage (tiny real-structure)")
-    print("MTPLX_DSV41_ATTN_COMPILE: before=OFF (eager)  after=ON (K22)")
-    print("=" * 78)
+    print("=" * 82)
+    print("W45 dispatch census -- primitives/token per decode stage (tiny real-structure)")
+    print("before=OFF (eager)  after=ON (K22 attn-tape compile + K24 window-mask memo)")
+    print("=" * 82)
     print(table)
     print()
     print("Per-chain micro-census (rows=1, eager vs compiled, isolated):")
     print(micro_table)
     print()
-    print(f"total primitives/token: before {before['total_primitives_per_token']:.1f} "
-          f"-> after {after['total_primitives_per_token']:.1f}")
+    attn = lambda r: sum(v["primitives_per_token"] for k, v in r["stages"].items()
+                         if k.startswith("attn."))
+    print(f"attention primitives/token:  eager {attn(before):.1f}  ->  K22 {attn(k22):.1f}"
+          f"  ->  K22+K24 {attn(after):.1f}")
+    print(f"total primitives/token:      eager {before['total_primitives_per_token']:.1f}"
+          f"  ->  K22 {k22['total_primitives_per_token']:.1f}"
+          f"  ->  K22+K24 {after['total_primitives_per_token']:.1f}")
+    print(f"(K24 memoizes the ~11-node window mask, computing it once/forward instead of"
+          f" once/layer: -{attn(k22) - attn(after):.0f} attn prim/tok on 8 layers,"
+          f" ~11 x (n_layers-1) at scale)")
 
     receipt = {
-        "flag": "MTPLX_DSV41_ATTN_COMPILE",
+        "flags": {"K22": "MTPLX_DSV41_ATTN_COMPILE", "K24": "MTPLX_DSV41_ATTN_WIN_MEMO"},
         "row_cap": args.cap,
         "seed": args.seed,
         "mlx_version": mx.__version__,
         "before_off": before,
-        "after_on": after,
+        "k22_compile_only": k22,
+        "after_k22_k24": after,
         "micro_census": micro,
     }
     if args.out:

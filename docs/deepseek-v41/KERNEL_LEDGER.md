@@ -666,6 +666,34 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (`tests/models/test_deepseek_v41_attn_compile.py`, 11 CPU tests). Realized GPU decode/dispatch delta
   is **KG-i** (unmeasured). See `W41_DISPATCH_CENSUS_ATTN_COMPILE.md`.
 
+### K24 — Sliding-window attend-mask memo (`MTPLX_DSV41_ATTN_WIN_MEMO`) — **Rank (W45, further attn dispatch cut)**
+- **Mechanism:** after K22 the census puts the biggest *remaining* mode-invariant per-layer attention
+  dispatch chunk in the causal sliding-window mask `broadcast((wp<=qp)&(wp>qp-window_size),[b,s,T])`
+  (~11 graph nodes: `Arange`, 2 compares, `Subtract`, `BitwiseAnd`, broadcasts). It is a pure function
+  of `(positions, window length T, window_size)`, all **invariant across the 40 backbone layers of one
+  `_forward_span`** (positions and the per-forward `shared` runtime are made once and handed to every
+  layer; every layer's window grows in lockstep to the same `T`) — yet each layer rebuilds it. K24
+  memoizes it on the per-forward `shared` runtime (`Attention._window_attend`), computing it ONCE and
+  reusing the identical array for the other `n_layers-1` layers. **Where:** decode + verify + prefill.
+  **Exactness:** byte-identical (the reused array is the same object; reuse fires only when `positions`
+  **is** the same object and `(T, window_size, b, s)` match, else per-layer recompute — never wrong),
+  independent of and composing with K22. `shared` has no `__slots__`, so it is a plain attribute set
+  from `deepseek_v41.py` (no edit to the W13 cache module).
+- **STATUS (W45, `feat/deepseek-v41-w45`):** IMPLEMENTED + CPU-proven, default OFF. **Census (tiny
+  8-layer):** attention primitives/token eager 1698.7 → K22 1378.7 → **K22+K24 1301.7** (−77/tok here =
+  ~11 × 7 reusing layers; **~11 × 39 ≈ 429/tok at 40 layers**, larger than K22's 368); whole token
+  6631 → 6186. Flag on/off `mx.array_equal` over decode / K+1 verify / chunked + layer-major prefill,
+  with the K22 tapes on **and** off; reduction asserted from the census
+  (`tests/models/test_deepseek_v41_attn_win_memo.py`, 13 CPU tests). **Options ruled out (measured):**
+  (a) a shapeless SDPA tape is dead — shapeless fails on the sink-drop dynamic slice + the value-einsum
+  reshape (T≥20), and even where a padded-KV rewrite traces it does NOT reduce dispatches (the SDPA is
+  2 einsums + softmax + masked where — reductions/matmuls compile can't fuse: 22→24); a sink-in-denom
+  rewrite diverges even eager. (b) functional-KV append reduces no dispatch alone (only enables the dead
+  a). (c) wq_a⊕wkv weight-concat is bit-exact for **quantized** residents (−1 matmul/layer, serving) but
+  NOT dense (GEMM output-tiling ~1 ULP) — recorded for a quantized-gated add-on, not bundled. (d) the
+  identical-shape shared compiled callable is **already** K22 (one qkv + one out tape across all layers).
+  Realized GPU decode delta is **KG-j** (unmeasured). See `W45_ATTN_DISPATCH_REDUCTION.md`.
+
 ---
 
 ## 6. Dead-here (GPU-side; do not re-propose)
@@ -701,6 +729,7 @@ two microbenches (K7/K8), which are CPU/queued and can run now.
 | **KG-e** | K10 verify batched M=4 (needs W23) + K11/R2 dedup | MTP+dedup with per-layer M=4 dispatch vs per-position M=1. **Pass if outputs byte-identical AND barrier count 40 (not 160)/cycle AND decode ≥ 2.0× AR.** | after W23 + OPT Gate 2 | 1 window |
 | **KG-f** | K4 HC-compile + fused CSA attn | carry from V4; **argmax parity + decode +** (expect the smaller residual after K3). | after KG-c | folded |
 | **KG-i** | K22 attention-chain compile (+ gate-prefix / combine folds) | `attn_compile` vs control (and folded into the K4 `all_levers` stack): **argmax parity (byte-identical decode/verify) + decode +**. CPU census −368 prim/tok (−40/attention call every mode); realized GPU decode delta is the open question. | after KG-c/KG-f | folded |
+| **KG-j** | K24 window-mask memo | `attn_win_memo` vs control, and `stack_a` (head_bf16 + sinkhorn_metal + attn_compile + win_memo) vs stack without it: **byte-identical decode/verify + decode +**. CPU census −77 attn prim/tok on 8 layers (~11 × (n_layers−1); ~429/tok at 40 layers). | after KG-i | folded |
 | **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk + K19 head-last-row | 16K prefill ± two-pass split-K + tiling + head-last-row on the K16 base. **Pass if TTFT −≥15 % beyond K16 AND peak −≥8 GB (K19 drops the 8.47 GB logits), parity on long-prompt A/B.** | after KG-b | 1 window |
 | **KG-h** | K9 head byte cut + K13 in-place verify-KV | q8/mxfp8 head vs bf16 head: **ship only if argmax parity + HumanEval(164) ≥ exact−noise**; K13 footprint-guard folded into first MTP window. | after KG-e | folded |
 

@@ -10,10 +10,10 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
   * the ``--dry-run`` CPU double (no model, no MLX/Metal op, no server);
   * per-arm env application for every preset
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
-    switch_fastpath / switch_fastpath_b / attn_compile / both / all_levers /
-    stack_a / head_bf16 / head_mxfp8 / head_q8),
+    switch_fastpath / switch_fastpath_b / attn_compile / attn_win_memo / both /
+    all_levers / stack_a / head_bf16 / head_mxfp8 / head_q8),
     including arm independence (each arm force-unsets the keys it does not set,
-    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the seven boolean
+    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the eight boolean
     per-forward levers never leak across each other);
   * prompt-build metadata parity with ``bench_standard_shape`` at 1024.
 
@@ -46,9 +46,10 @@ _HC = "MTPLX_DSV41_HC_COMPILE"
 _FP = "MTPLX_DSV41_SWITCH_FASTPATH"    # W42 / K23: switch all-hit fast-path
 _SB = "MTPLX_DSV41_SWITCH_SUBMIT"      # W42 / K23 var B: all-hit async submit
 _AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
+_WM = "MTPLX_DSV41_ATTN_WIN_MEMO"      # W45 / K24: sliding-window mask memo
 _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
-_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC)  # the seven boolean per-forward levers
-_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all eight keys
+_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight boolean per-forward levers
+_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all nine keys
 
 ALL_ARMS = [
     "control",
@@ -59,6 +60,7 @@ ALL_ARMS = [
     "switch_fastpath",
     "switch_fastpath_b",
     "attn_compile",
+    "attn_win_memo",
     "both",
     "all_levers",
     "stack_a",
@@ -77,11 +79,13 @@ EXPECTED_ON = {
     "switch_fastpath": {_FP},
     "switch_fastpath_b": {_FP, _SB},
     "attn_compile": {_AC},
+    "attn_win_memo": {_WM},
     "both": {_OV, _LM},
-    "all_levers": {_OV, _LM, _SK, _HC, _FP, _SB, _AC},
+    "all_levers": {_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM},
     # W42 window-14: pure fast path measured -13.4%, so the fast path is LEFT OUT
-    # of stack_a until variant B (switch_fastpath_b) beats control.
-    "stack_a": {_SK, _AC},
+    # of stack_a until variant B (switch_fastpath_b) beats control.  W45: the K24
+    # window-mask memo (byte-identical) joins the winning stack.
+    "stack_a": {_SK, _AC, _WM},
     "head_bf16": set(),
     "head_mxfp8": set(),
     "head_q8": set(),
@@ -97,6 +101,7 @@ EXPECTED_HEAD = {
     "switch_fastpath": None,
     "switch_fastpath_b": None,
     "attn_compile": None,
+    "attn_win_memo": None,
     "both": None,
     "all_levers": None,
     "stack_a": "bf16",
@@ -225,6 +230,11 @@ def test_apply_arm_env_independent_across_arms(env_levers):
     env_levers._apply_arm_env("attn_compile")
     assert os.environ.get(_AC) == "1"
     assert all(k not in os.environ for k in set(_ALL_KEYS) - {_AC})
+    # the K24 attn_win_memo arm leaves exactly its own key set.
+    env_levers._apply_arm_env("all_levers")
+    env_levers._apply_arm_env("attn_win_memo")
+    assert os.environ.get(_WM) == "1"
+    assert all(k not in os.environ for k in set(_ALL_KEYS) - {_WM})
 
 
 def test_apply_arm_env_rejects_unknown_arm(env_levers):
