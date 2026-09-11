@@ -140,6 +140,48 @@ def test_layer_major_matches_one_shot():
             assert cdiff <= 1e-5, f"chunk={chunk} cache[{k}] max abs diff {cdiff}"
 
 
+def test_layer_major_is_byte_identical_to_chunk_major():
+    """The strict gate (W30 addendum): layer-major must be **byte-for-byte** equal
+    to chunk-major (the GPU control) at the same chunk size -- logits, greedy
+    argmax at every position, and the full cache state -- not merely allclose.
+
+    The GPU window found a single greedy-token flip because the MoE's *resident*
+    router gate (`xf @ weight.T`) and shared expert are not invariant to the row
+    (M) batch size; batching them across chunks reassociated their fp32 reductions
+    and flipped a top-k near-tie. Computing the gate + shared per chunk (only the
+    streamed `switch_mlp` batched) restores exact equality."""
+    args = _csa_args()
+    for seed, scale in ((1, 0.1), (11, 0.3)):
+        model = Model(args)
+        _randomize(model, seed=seed, scale=scale)
+        for s in (25, 40):
+            ids = mx.array(
+                np.random.RandomState(s).randint(0, args.vocab_size, size=(1, s))
+            )
+            for chunk in (1, 3, 7, 8, 13, 16):
+                cm_cache = model.make_cache()
+                lm_cache = model.make_cache()
+                cm = model(ids, cache=cm_cache, prefill_chunk=chunk)
+                lm = model(ids, cache=lm_cache, prefill_chunk=chunk,
+                           prefill_layer_major=True)
+                mx.eval(cm, lm)
+                assert bool(mx.array_equal(cm, lm).item()), (
+                    f"seed={seed} s={s} chunk={chunk}: layer-major logits differ "
+                    f"from chunk-major by {float(mx.max(mx.abs(cm - lm)).item()):.2e}"
+                )
+                # greedy argmax identical at every position (the token-flip gate)
+                assert np.array_equal(
+                    np.array(cm[0]).argmax(-1), np.array(lm[0]).argmax(-1)
+                )
+                # full cache state byte-identical (window / compress / index / frontier)
+                cm_snap, cm_off = _cache_snapshot(cm_cache)
+                lm_snap, lm_off = _cache_snapshot(lm_cache)
+                assert cm_off == lm_off == s
+                assert set(cm_snap) == set(lm_snap)
+                for k, v in cm_snap.items():
+                    assert np.array_equal(lm_snap[k], v), f"cache[{k}] differs"
+
+
 def test_layer_major_matches_one_shot_swa_only():
     """A pure sliding-window model (no CSA) must also layer-major exactly."""
     args = _csa_args(
@@ -386,10 +428,11 @@ def test_resident_hc_state_is_well_under_1gb_at_16k():
 
 
 def test_layer_major_moe_row_cap_splits_and_reassembles_exactly():
-    """The layer-major MoE (``_layer_major_moe``) reads the bank once by default
-    (one ``switch_mlp`` call over the whole concat) but, when the routed-output
-    row cap would overflow, splits into >1 call each within the cap -- and either
-    way the per-chunk outputs are the same rows as the single-call result.
+    """The layer-major MoE (``_layer_major_moe``) computes the resident gate +
+    shared expert **per chunk** and reads the streamed bank once (one row-capped
+    ``switch_mlp`` call over the concatenated rows).  Its per-chunk output must be
+    **byte-identical** to a per-chunk ``mlp(chunk)`` (chunk-major), whether the
+    switch runs in one call or, under a tiny cap, splits into several.
 
     Exercised directly so a sub-1 GB cap can be forced (the env budget floors at
     1 GB, so an end-to-end tiny split is not reachable through the flag)."""
@@ -407,32 +450,31 @@ def test_layer_major_moe_row_cap_splits_and_reassembles_exactly():
         mx.array(rng.randn(1, e - s, hidden).astype(np.float32)) for s, e in spans
     ]
 
-    # oracle: the real switch over the full concat in ONE call.
-    cat = mx.concatenate(moe_inputs, axis=1)
-    oracle = layer.mlp(cat)
+    # oracle: chunk-major -- the MoE run per chunk (gate/switch/shared per chunk).
+    oracle = mx.concatenate([layer.mlp(mi) for mi in moe_inputs], axis=1)
     mx.eval(oracle)
 
-    # huge cap -> a single call over every row (the read-once default).
+    # huge cap -> a single switch call over every row (the read-once default);
+    # byte-identical to the per-chunk oracle (gate/shared already per chunk, and
+    # SwitchGLU is M-invariant on CPU).
     big = backbone._layer_major_moe(layer, moe_inputs, spans, row_cap=10 ** 18)
     got_big = mx.concatenate(big, axis=1)
     mx.eval(got_big)
     assert got_big.shape == oracle.shape == (1, total, hidden)
-    assert float(mx.max(mx.abs(got_big - oracle)).item()) <= 1e-5
+    assert bool(mx.array_equal(got_big, oracle).item())
 
-    # cap 7 rows -> packs at most two 3-row chunks per call; still exact.
+    # cap 7 rows -> packs at most two 3-row chunks per switch call; still exact.
     capped = backbone._layer_major_moe(layer, moe_inputs, spans, row_cap=7)
     got_cap = mx.concatenate(capped, axis=1)
     mx.eval(got_cap)
-    assert got_cap.shape == oracle.shape
-    assert float(mx.max(mx.abs(got_cap - oracle)).item()) <= 1e-5
+    assert bool(mx.array_equal(got_cap, oracle).item())
 
-    # the cap actually forced a split, and no call exceeded it.
+    # the cap actually forced a split of the SWITCH call, and none exceeded it.
     rec: dict = {}
     layer.mlp.switch_mlp = _CountingSwitch(
         hidden, args.num_experts_per_tok, layer.layer_id, rec,
     )
-    out = backbone._layer_major_moe(layer, moe_inputs, spans, row_cap=7)
-    mx.eval(out)
+    backbone._layer_major_moe(layer, moe_inputs, spans, row_cap=7)
     assert 1 < rec["calls"] < len(spans)   # split, but multiple chunks per call
-    assert rec["max_rows"] <= 7            # every call within the transient cap
+    assert rec["max_rows"] <= 7            # every switch call within the transient cap
     assert rec["max_rows"] > 3            # and at least one call packed >1 chunk

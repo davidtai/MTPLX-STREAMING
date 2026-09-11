@@ -308,6 +308,31 @@ class MoE(nn.Module):
             args.hidden_size, args.moe_intermediate_size, swiglu_limit=args.swiglu_limit
         )
 
+    def combine_routed(
+        self, routed: mx.array, weights: mx.array, xf: mx.array
+    ) -> mx.array:
+        """Reference weighted routed-sum + shared expert (MoE.forward L893-903),
+        given a precomputed ``routed = switch_mlp(xf, indices)`` and its routing
+        ``weights``.  Returns the flat ``[n, dim]`` f32 result (the caller
+        reshapes / casts).
+
+        Split out of :meth:`__call__` so W30's layer-major prefill can keep the
+        **resident** gate and shared expert per chunk (matmul batch size == the
+        chunk, byte-identical to chunk-major) while batching only the *streamed*
+        ``switch_mlp`` across chunks (the read-the-bank-once part).  The gate's
+        ``xf @ weight.T`` and this shared ``Expert`` are NOT invariant to the row
+        (M) batch size, so batching them across chunks reassociates their fp32
+        reductions and flips greedy argmax on the real model (W30 addendum); the
+        streamed per-expert gather is M-invariant, so only it is batched."""
+        # L893-901: the streamed switch returns the *unweighted* per-expert
+        # outputs [n, top_k, dim]; the reference multiplies each expert output by
+        # its weight inside the loop (L900) -- done here in one weighted sum, in
+        # f32 to match the reference's f32 accumulator (L893).
+        # Routed through the same compiled/eager combine dispatch as __call__ so
+        # the layer-major path stays byte-identical to chunk-major under K4/K22.
+        shared = self.shared_experts(xf).astype(mx.float32)
+        return _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
+
     def __call__(self, x: mx.array, image_mask: Optional[mx.array] = None) -> mx.array:
         # reference MoE.forward, L889-904.
         shape = x.shape                                              # L890

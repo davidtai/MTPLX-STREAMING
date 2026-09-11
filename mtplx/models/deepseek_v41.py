@@ -1771,38 +1771,73 @@ class DeepseekV41Backbone(nn.Module):
         return out, main_hidden
 
     def _layer_major_moe(self, layer, moe_inputs, spans, row_cap):
-        """Run this layer's MoE over all chunks with the bank read once: one
-        ``switch_mlp`` call over the concatenated rows (split only when the row cap
-        would overflow the routed-output transient), returned split back per
-        chunk."""
+        """Run this layer's MoE over all chunks, reading the streamed bank once.
+
+        Byte-identity vs chunk-major requires care: the MoE's **resident** parts —
+        the router ``gate`` (``xf @ weight.T``) and the shared ``Expert`` — are NOT
+        invariant to the row (M) batch size (their fp32 reductions reassociate when
+        rows are batched, and a batched gate flips a greedy near-tie in the top-k
+        selection on the real model, W30 addendum).  Only the **streamed**
+        ``switch_mlp`` per-expert gather is M-invariant.  So this computes the gate
+        and shared expert **per chunk** (M == the chunk, exactly as chunk-major)
+        and batches **only** the ``switch_mlp`` call across chunks (the read-once
+        part) — row-capped so the routed-output transient stays bounded.
+
+        Returns the per-chunk MoE outputs ``[b, chunk, hidden]`` (the input to the
+        ffn Hyper-Connection ``moe_combine``)."""
+        mlp = layer.mlp
+        dim = mlp.dim
         n_chunks = len(moe_inputs)
         lengths = [end - start for start, end in spans]
-        # Group consecutive chunks into MoE calls of at most `row_cap` rows.
+
+        # Per chunk (resident, batch == chunk): flatten, route, keep xf for the
+        # shared expert.  Byte-identical to chunk-major's per-chunk gate/shared.
+        xfs: List[mx.array] = []
+        weights: List[mx.array] = []
+        indices: List[mx.array] = []
+        for c in range(n_chunks):
+            xf_c = moe_inputs[c].reshape(-1, dim)
+            w_c, idx_c = mlp.gate(xf_c)
+            xfs.append(xf_c)
+            weights.append(w_c)
+            indices.append(idx_c)
+
+        # Group consecutive chunks into ``switch_mlp`` calls of at most `row_cap`
+        # rows (bank read once per group; one group at 16 K).  A chunk that alone
+        # exceeds the cap still forms its own group.
         groups: List[List[int]] = []
         cur: List[int] = []
         cur_rows = 0
         for c in range(n_chunks):
-            rows_c = lengths[c] * int(moe_inputs[c].shape[0])  # b * chunk rows
+            rows_c = int(xfs[c].shape[0])
             if cur and cur_rows + rows_c > row_cap:
                 groups.append(cur)
                 cur, cur_rows = [], 0
             cur.append(c)
             cur_rows += rows_c
+
         if cur:
             groups.append(cur)
 
-        outputs: List[Optional[mx.array]] = [None] * n_chunks
+        routed_parts: List[Optional[mx.array]] = [None] * n_chunks
         for grp in groups:
             if len(grp) == 1:
-                cat = moe_inputs[grp[0]]
+                cat_xf, cat_idx = xfs[grp[0]], indices[grp[0]]
             else:
-                cat = mx.concatenate([moe_inputs[c] for c in grp], axis=1)
-            routed = layer.mlp(cat)  # one switch_mlp call over the group's rows
+                cat_xf = mx.concatenate([xfs[c] for c in grp], axis=0)
+                cat_idx = mx.concatenate([indices[c] for c in grp], axis=0)
+            routed = mlp.switch_mlp(cat_xf, cat_idx)  # [rows, top_k, dim]; bank once
             pos = 0
             for c in grp:
-                n_c = lengths[c]
-                outputs[c] = routed[:, pos:pos + n_c]
+                n_c = int(xfs[c].shape[0])
+                routed_parts[c] = routed[pos:pos + n_c]
                 pos += n_c
+
+        outputs: List[mx.array] = []
+        for c in range(n_chunks):
+            b = int(moe_inputs[c].shape[0])
+            y_c = mlp.combine_routed(routed_parts[c], weights[c], xfs[c])
+            outputs.append(y_c.astype(moe_inputs[c].dtype).reshape(b, lengths[c], dim))
         return outputs
 
     @staticmethod

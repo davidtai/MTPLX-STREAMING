@@ -390,8 +390,22 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (layer-major) vs **C** (chunk-major) — the read-once claim. Resident hc state
   0.671 GB @ 16 K (< 1 GB); one-call routed transient 2.01 GB; MoE row cap 65,104
   rows @ 8 GB. Opt-in `MTPLX_DSV41_PREFILL_LAYER_MAJOR` (default OFF — chunk-major
-  stays the default so W20 tests are unchanged). The ~13× 16 K-TTFT win is
-  unmeasured on GPU — that is **KG-b**. See `W30_K16_LAYER_MAJOR_PREFILL.md`.
+  stays the default so W20 tests are unchanged).
+- **STATUS (W30, GPU window 14 follow-up, 2026-09-11):** window 14 confirmed the
+  **prefill win is real** — TTFT 494.88→**372.98 s** (−24.6 %), prefill
+  33.11→**43.93 tok/s** (+32.7 %) — but the first cut flipped **one greedy token**
+  (decode position 4: control 1449 vs 18) and ran +4.7 GB peak / −10 % decode.
+  ROOT CAUSE (CPU-localised): the *resident* router gate (`xf @ weight.T`) and
+  shared `Expert` are **not M-invariant**, so batching the whole MoE reassociated
+  the gate scores ~1e-6 and flipped a top-k near-tie (different expert selected);
+  `SwitchGLU`/the streamed gather IS M-invariant. FIX: compute the gate + shared
+  **per chunk** (byte-identical routing), batch **only** the streamed `switch_mlp`
+  (still bank-read-once). Now **byte-for-byte == chunk-major** on CPU
+  (`mx.array_equal` logits + greedy argmax + full cache state). Peak (2.01 GB
+  batched routed transient; row-cap is the knob) and decode-seed differences are
+  documented (decode census is decode-only, so no residency-policy regression).
+  Re-run **KG-b** on the fixed branch to confirm greedy tokens now match control.
+  The ~13× 16 K-TTFT win holds. See `W30_K16_LAYER_MAJOR_PREFILL.md` §8.
 
 ### K4 — HC-compile + fused CSA attention (V4 dispatch stack) — **Rank 5**
 - **Mechanism:** V4's HC-tape collapse + fused CSA attention: **AR +31.3 % (17.37→22.80), K3 +17.4 %,
