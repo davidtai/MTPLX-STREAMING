@@ -91,6 +91,18 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
                 "routes": int(inc.get("routes", 0)),
                 "parts": int(inc.get("parts", 0)),
             }
+        # W64 (R3-pin): pinned-working-set gauges + cumulative all-pinned-route
+        # counters (empty-ish when the lever is off). Cumulative so the delta
+        # below reports the window's all-pinned-hit rate.
+        pin = snap.get("pin_working_set")
+        if isinstance(pin, dict):
+            out["pin_working_set"] = {
+                "enabled": bool(pin.get("enabled", False)),
+                "decode_routes": int(pin.get("decode_routes", 0) or 0),
+                "all_pinned_routes": int(pin.get("all_pinned_routes", 0) or 0),
+                "pinned_total": int(pin.get("pinned_total", 0) or 0),
+                "static_layer_count": int(pin.get("static_layer_count", 0) or 0),
+            }
 
     # 2. Engram row cache (per-layer NGramRowCache stats, summed).
     engram = _engram_row_cache_totals(rt)
@@ -169,6 +181,22 @@ def stream_counters_delta(
         d["misses_per_token"] = round(r_misses / tok, 4)
         d["rows_read_per_token"] = round(d.get("rows_read", 0) / tok, 4)
         out["engram_row_cache"] = d
+
+    b_pin, a_pin = before.get("pin_working_set"), after.get("pin_working_set")
+    if isinstance(a_pin, dict):
+        b_pin = b_pin if isinstance(b_pin, dict) else {}
+        routes = int(a_pin.get("decode_routes", 0)) - int(b_pin.get("decode_routes", 0))
+        all_pinned = int(a_pin.get("all_pinned_routes", 0)) - int(
+            b_pin.get("all_pinned_routes", 0)
+        )
+        out["pin_working_set"] = {
+            "enabled": bool(a_pin.get("enabled", False)),
+            "decode_routes": routes,
+            "all_pinned_routes": all_pinned,
+            "all_pinned_hit_rate": round(all_pinned / routes, 6) if routes else None,
+            "pinned_total": int(a_pin.get("pinned_total", 0)),
+            "static_layer_count": int(a_pin.get("static_layer_count", 0)),
+        }
 
     a_rc = after.get("route_probe_counts")
     if isinstance(a_rc, dict):

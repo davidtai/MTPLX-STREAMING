@@ -264,6 +264,24 @@ class LayerExpertSlotBank:
         # decode epoch at eviction. Rapid ring turnover otherwise
         # re-reads the same hot experts token after token.
         self._prefetch_evicted: dict[int, int] = {}
+        # W64 (R3-pin): a post-prefill PINNED WORKING SET. Experts in
+        # ``_pinned`` are never chosen as a *decode-admission* eviction victim
+        # (``_victim_slot`` with ``respect_pins``), so a pinned expert's
+        # persistent slot is never recycled in place. That is the exact safety
+        # property the W44 barrier-free device route needs: its deferred,
+        # unpinned gather cannot race an LRU slot recycle for a pinned expert
+        # (W44_DEVICE_ROUTE.md §8). Empty until ``pin_working_set`` is called;
+        # while empty every path below is byte-identical to the pre-pin code
+        # (``_pinned`` widens no blocked set and touches no output). A memory-
+        # forced capacity eviction may still evict a pinned expert
+        # (``respect_pins=False``) -- memory is the hard constraint -- and
+        # ``invalidate_expert`` then drops it from the pinned set.
+        self._pinned: set[int] = set()
+        # Per-expert prefill routing frequency, accumulated in
+        # ``prepare_prefill_seed`` from the prompt's routed ids so
+        # ``pin_working_set`` can rank the resident set by prompt-frequent
+        # experts with no caller-supplied count. Decode ``_score`` breaks ties.
+        self._prefill_route_freq: Counter[int] = Counter()
 
     @property
     def resident_experts(self) -> tuple[int, ...]:
@@ -307,11 +325,16 @@ class LayerExpertSlotBank:
         return self._persistent_capacity
 
     def peek_victim(
-        self, *, excluded: Iterable[int] = ()
+        self, *, excluded: Iterable[int] = (), respect_pins: bool = True
     ) -> tuple[int, int] | None:
-        """Return the policy's next eviction candidate without mutating state."""
+        """Return the policy's next eviction candidate without mutating state.
 
-        slot = self._victim_slot(pinned=set(excluded))
+        ``respect_pins`` (default) skips the W64 pinned working set; a
+        memory-forced capacity eviction passes ``respect_pins=False`` so it can
+        evict a pinned expert as a last resort (memory is the hard constraint).
+        """
+
+        slot = self._victim_slot(pinned=set(excluded), respect_pins=respect_pins)
         if slot is None:
             return None
         expert = self._slot_to_expert[slot]
@@ -327,6 +350,8 @@ class LayerExpertSlotBank:
         slot = self._expert_to_slot.pop(expert, None)
         if slot is not None:
             self._slot_to_expert[slot] = None
+        # A forgotten mapping is no longer resident, so it cannot stay pinned.
+        self._pinned.discard(expert)
         return slot
 
     def reset(self) -> None:
@@ -342,6 +367,8 @@ class LayerExpertSlotBank:
         self._prefetch_inflight.clear()
         self._prefetch_cursor = 0
         self._prefetch_evicted.clear()
+        self._pinned.clear()
+        self._prefill_route_freq.clear()
 
     def plan_prefetch(self, expert_ids: Iterable[int]) -> tuple[SlotLoad, ...]:
         """Assign ring slots for predicted experts and return their loads.
@@ -501,11 +528,16 @@ class LayerExpertSlotBank:
     def prepare_prefill_seed(self, expert_ids: Iterable[int]) -> tuple[int, ...]:
         """Choose prompt-frequent experts for empty slots without eviction."""
 
+        # W64: accumulate the prompt's routing frequency BEFORE the capacity
+        # early-return, so ``pin_working_set`` can rank the resident set by
+        # prompt-frequent experts even when every persistent slot is already
+        # full (the return value/seed selection below is otherwise unchanged).
+        experts = self._validate_experts_for_seed(expert_ids)
+        self._prefill_route_freq.update(experts)
         empty = self._persistent_capacity - self.occupancy
         if empty <= 0:
             self._prefill_seed_candidates.clear()
             return ()
-        experts = self._validate_experts_for_seed(expert_ids)
         counts = Counter(experts)
         ranked = sorted(counts, key=lambda expert: (-counts[expert], expert))
         chosen = tuple(
@@ -513,6 +545,84 @@ class LayerExpertSlotBank:
         )[:empty]
         self._prefill_seed_candidates = set(chosen)
         return chosen
+
+    # ------------------------------------------------------------------
+    # W64 (R3-pin): post-prefill pinned working set.
+    # ------------------------------------------------------------------
+    def _pin_rank(self, expert: int) -> float:
+        """Ranking key for pinning: prefill routing frequency, then the decayed
+        decode score (so a refresh mid-decode tracks the live hot set)."""
+
+        return float(self._prefill_route_freq.get(expert, 0)) + self._score(expert)
+
+    def pin_working_set(
+        self,
+        *,
+        top_k: int | None = None,
+        free_tail: int = 0,
+        experts: Iterable[int] | None = None,
+    ) -> tuple[int, ...]:
+        """Pin a post-prefill working set: mark the top-ranked resident experts
+        never-recyclable so their persistent slot is stable for the whole decode.
+
+        ``experts`` pins exactly that resident subset (the ``pin_ws`` arm passes
+        the full resident set -> a fully static layer). Otherwise the currently
+        resident persistent experts are ranked by ``_pin_rank`` and the top
+        ``top_k`` are pinned, capped so at least ``free_tail`` persistent slots
+        stay unpinned for decode misses to admit into. Pinning never moves a slot
+        or changes any gather output -- only which experts a later eviction may
+        choose -- so decode stays byte-identical with pinning on or off. Replaces
+        any prior pin set for this layer. Returns the pinned expert ids (sorted).
+        """
+
+        resident = [expert for expert in self._slot_to_expert if expert is not None]
+        if experts is not None:
+            requested = {int(expert) for expert in experts}
+            chosen = [expert for expert in resident if expert in requested]
+        else:
+            ranked = sorted(resident, key=lambda expert: (-self._pin_rank(expert), expert))
+            limit = len(resident)
+            if free_tail > 0:
+                limit = min(limit, max(0, self.persistent_slots - int(free_tail)))
+            if top_k is not None:
+                limit = min(limit, max(0, int(top_k)))
+            chosen = ranked[:limit]
+        self._pinned = set(chosen)
+        return tuple(sorted(self._pinned))
+
+    def clear_pins(self) -> None:
+        """Drop the pinned working set (return to pure LRU/frequency eviction)."""
+
+        self._pinned.clear()
+
+    @property
+    def pinned_experts(self) -> frozenset[int]:
+        """The never-recycled working set (empty unless pinning is active)."""
+
+        return frozenset(self._pinned)
+
+    @property
+    def pinned_count(self) -> int:
+        return len(self._pinned)
+
+    @property
+    def pinned_static(self) -> bool:
+        """True when a non-empty pinned working set is active for this layer.
+
+        Its experts are never recycled on normal admission, so any all-hit route
+        whose experts are a subset of :attr:`pinned_experts` is slot-stable for
+        the whole decode -- the precondition the W44 barrier-free device route
+        needs to gather without a pin/fence (see :meth:`route_all_pinned`)."""
+
+        return bool(self._pinned)
+
+    def route_all_pinned(self, expert_ids: Iterable[int]) -> bool:
+        """True iff every routed expert is pinned (and thus slot-stable). A
+        device route may take the barrier-free path for exactly these routes."""
+
+        if not self._pinned:
+            return False
+        return all(int(expert) in self._pinned for expert in expert_ids)
 
     def _validate_experts_for_seed(self, expert_ids: Iterable[int]) -> tuple[int, ...]:
         try:
@@ -570,10 +680,19 @@ class LayerExpertSlotBank:
                 return slot
         return None
 
-    def _victim_slot(self, *, pinned: set[int]) -> int | None:
+    def _victim_slot(
+        self, *, pinned: set[int], respect_pins: bool = True
+    ) -> int | None:
+        # The route's own hits are always protected; the W64 pinned working set
+        # is additionally protected on normal decode admission (``respect_pins``)
+        # but NOT on a memory-forced capacity eviction. When ``_pinned`` is empty
+        # (the default / lever-off state) ``blocked`` is exactly ``pinned``, so
+        # victim selection -- and therefore every output and counter -- is
+        # bitwise-identical to the pre-W64 behaviour.
+        blocked = pinned | self._pinned if (respect_pins and self._pinned) else pinned
         candidates: list[tuple[float, int, int]] = []
         for slot, expert in enumerate(self._slot_to_expert):
-            if expert is None or expert in pinned:
+            if expert is None or expert in blocked:
                 continue
             history = self._history[expert]
             if self.cache_policy == "lru":
@@ -592,6 +711,10 @@ class LayerExpertSlotBank:
         previous = self._slot_to_expert[slot]
         if previous is not None:
             del self._expert_to_slot[previous]
+            # Normal admission never selects a pinned slot (``_victim_slot``
+            # excludes ``_pinned``); this discard only matters if a pinned slot
+            # is reused through some other path, keeping ``_pinned`` truthful.
+            self._pinned.discard(previous)
             evictions.append(
                 SlotEviction(
                     slot=slot,

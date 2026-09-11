@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from contextlib import nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
@@ -1730,6 +1731,65 @@ def mlx_memory_telemetry(mx_module: Any | None = None) -> dict[str, int | str]:
     return report
 
 
+# W64 (R3-pin) env flags. Read at USE (never frozen at import), matching every
+# other DSV4.1 lever ([[env-flags-read-at-use-not-import]]): the server stamps
+# the optimization keys AFTER importing the runtime module.
+PIN_WORKING_SET_ENV = "MTPLX_DSV41_PIN_WORKING_SET"
+PIN_REFRESH_TOKENS_ENV = "MTPLX_DSV41_PIN_REFRESH_TOKENS"
+
+# Reusable no-op context for the "no per-layer lock" branch (global-lock banks
+# are already excluded from W64, so this only stands in for a missing lock).
+_NULL_CTX = nullcontext()
+
+
+def parse_pin_working_set(value: str | None) -> tuple[str, float | None] | None:
+    """Parse ``MTPLX_DSV41_PIN_WORKING_SET`` into a pin spec, or None (off).
+
+    - unset / ``0`` / ``off`` / ``false`` / ``no`` / empty  -> None (default off)
+    - ``all`` / ``keys``                                    -> ``("all", None)``
+      (pin every resident expert -> a fully static layer; the ``pin_ws`` arm)
+    - a fraction in ``(0, 1]`` (``0.5``, ``50%``, ``1.0``)  -> ``("frac", f)``
+      (pin ``round(f * persistent_slots)`` experts)
+    - a positive integer ``K``                              -> ``("slots", K)``
+      (pin the top ``K`` resident experts)
+
+    Ambiguity rule: a bare integer is a slot COUNT; write ``1.0`` / ``100%`` /
+    ``all`` for "the whole set". Anything unparseable is treated as off.
+    """
+
+    if value is None:
+        return None
+    raw = value.strip().lower()
+    if not raw or raw in {"0", "off", "false", "no"}:
+        return None
+    if raw in {"all", "keys", "1.0", "100%"}:
+        return ("all", None)
+    try:
+        if raw.endswith("%"):
+            frac = float(raw[:-1]) / 100.0
+            return ("frac", frac) if 0.0 < frac <= 1.0 else None
+        if "." in raw:
+            frac = float(raw)
+            return ("frac", frac) if 0.0 < frac <= 1.0 else None
+        count = int(raw)
+        return ("slots", float(count)) if count >= 1 else None
+    except ValueError:
+        return None
+
+
+def parse_pin_refresh_tokens(value: str | None) -> int:
+    """Decode ``MTPLX_DSV41_PIN_REFRESH_TOKENS`` (>=1 re-ranks every N decode
+    epochs; 0 / unset / bad = pin once after prefill and never refresh)."""
+
+    if not value:
+        return 0
+    try:
+        n = int(value.strip())
+    except ValueError:
+        return 0
+    return n if n >= 1 else 0
+
+
 class ExpertStreamingRuntime:
     """Connect cache policy, checked I/O, fixed slots, and KV admission."""
 
@@ -1883,6 +1943,17 @@ class ExpertStreamingRuntime:
         # recovery pass (the switch skips the device path for these). Empty in the
         # steady state; set/cleared around a recovery re-run by the decode forward.
         self._device_route_force_fenced: frozenset[int] = frozenset()
+        # W64 (R3-pin): post-prefill pinned working set (env
+        # ``MTPLX_DSV41_PIN_WORKING_SET``; default off -> every path below is a
+        # byte-identical no-op). Per-layer banks only. ``_pin_last_epoch`` gates
+        # the pin trigger to the first decode route after prefill (and to every
+        # ``MTPLX_DSV41_PIN_REFRESH_TOKENS`` decode epochs when set); the two
+        # counters feed the all-pinned-hit-rate telemetry surfaced in the
+        # snapshot / A/B receipt / served event.
+        self._pin_last_epoch: dict[int, int] = {}
+        self._pin_telemetry_lock = threading.Lock()
+        self._pin_decode_routes = 0
+        self._pin_all_pinned_routes = 0
         self._shadow_serve_routes = 0
         self._shadow_serve_assignments = 0
         self._shadow_serve_experts = 0
@@ -2386,7 +2457,11 @@ class ExpertStreamingRuntime:
         bank.set_persistent_capacity(capacity)
         skipped: set[int] = set()
         while bank.occupancy > capacity:
-            victim = bank.peek_victim(excluded=skipped)
+            # A KV-growth boundary lowers the cap: memory is the hard constraint,
+            # so a W64 pinned expert may be evicted here as a last resort
+            # (``respect_pins=False``). ``invalidate_expert`` unpins it, and the
+            # device-route dirty mark below rebuilds the layer's pinned/LUT view.
+            victim = bank.peek_victim(excluded=skipped, respect_pins=False)
             if victim is None:
                 raise ExpertStreamingConfigurationError(
                     f"cannot evict streamed experts on layer {layer} below "
@@ -3375,6 +3450,169 @@ class ExpertStreamingRuntime:
                 misses.append((layer, missed))
         return misses
 
+    # ------------------------------------------------------------------
+    # W64 (R3-pin): post-prefill pinned working set + all-pinned telemetry.
+    # See docs/deepseek-v41/W64_PINNED_WORKING_SET.md.
+    # ------------------------------------------------------------------
+    def pin_working_set_hook(
+        self,
+        layer: int,
+        expert_ids: Iterable[int],
+        phase: RoutingPhase | str,
+    ) -> None:
+        """Switch-side per-route hook (env ``MTPLX_DSV41_PIN_WORKING_SET``).
+
+        Default off -> immediate no-op (one env read), so decode is byte-identical
+        to the pre-W64 path. When armed and ``phase`` is DECODE it (1) pins the
+        layer's working set on the first decode route after prefill -- and every
+        ``MTPLX_DSV41_PIN_REFRESH_TOKENS`` decode epochs when set -- and (2)
+        records whether every routed expert was pinned (the all-pinned-hit rate a
+        later device route can turn barrier-free). Never raises: a pin failure
+        disables W64 for the session rather than perturbing decode."""
+
+        spec = parse_pin_working_set(os.environ.get(PIN_WORKING_SET_ENV))
+        if spec is None:
+            return
+        if RoutingPhase(phase) is not RoutingPhase.DECODE:
+            return
+        if self._global_bank is not None:
+            return  # per-layer banks only; global scope is out of W64 scope
+        try:
+            self._maybe_pin_layer(int(layer), spec)
+            self._observe_pin_route(int(layer), expert_ids)
+        except Exception:  # pragma: no cover - defensive; never perturb decode
+            _LOGGER.warning(
+                "W64 pin_working_set hook failed; pinning left as-is for the "
+                "remaining decode",
+                exc_info=True,
+            )
+
+    def _maybe_pin_layer(
+        self, layer: int, spec: tuple[str, float | None]
+    ) -> None:
+        bank = self._banks.get(layer)
+        if bank is None:
+            return
+        lock = self._layer_locks.get(layer)
+        refresh = parse_pin_refresh_tokens(os.environ.get(PIN_REFRESH_TOKENS_ENV))
+        with lock if lock is not None else _NULL_CTX:
+            epoch = bank._decode_epoch
+            last = self._pin_last_epoch.get(layer)
+            if last is not None and (refresh <= 0 or epoch - last < refresh):
+                return
+            mode, value = spec
+            if mode == "all":
+                bank.pin_working_set(experts=bank.resident_experts)
+            else:
+                slots = bank.persistent_slots
+                if mode == "frac":
+                    assert value is not None
+                    k = max(1, int(round(value * slots)))
+                else:
+                    k = int(value or 0)
+                free_tail = max(0, slots - k)
+                bank.pin_working_set(top_k=k, free_tail=free_tail)
+            self._pin_last_epoch[layer] = epoch
+        # Residency contract changed (pinned set is now this layer's static set);
+        # a device-route LUT built before the pin must be rebuilt.
+        self._mark_device_route_dirty(layer)
+
+    def _observe_pin_route(self, layer: int, expert_ids: Iterable[int]) -> None:
+        bank = self._banks.get(layer)
+        if bank is None:
+            return
+        all_pinned = bank.route_all_pinned(expert_ids)
+        with self._pin_telemetry_lock:
+            self._pin_decode_routes += 1
+            if all_pinned:
+                self._pin_all_pinned_routes += 1
+
+    def pin_working_set(self, layer: int | None = None) -> dict[int, tuple[int, ...]]:
+        """Force-pin the working set now (out-of-band from the switch hook).
+
+        Ranks each per-layer bank's resident experts by prefill frequency and
+        pins the top set per the env spec. Returns ``{layer: pinned ids}``. A
+        no-op (``{}``) when the lever is off or the runtime uses a global bank.
+        Exposed for a backbone that prefers to pin explicitly at the prefill ->
+        decode boundary rather than lazily on the first decode route."""
+
+        spec = parse_pin_working_set(os.environ.get(PIN_WORKING_SET_ENV))
+        if spec is None or self._global_bank is not None:
+            return {}
+        layers = (
+            [int(layer)] if layer is not None else sorted(self._banks)
+        )
+        pinned: dict[int, tuple[int, ...]] = {}
+        for lyr in layers:
+            bank = self._banks.get(lyr)
+            if bank is None:
+                continue
+            self._maybe_pin_layer(lyr, spec)
+            pinned[lyr] = tuple(sorted(bank.pinned_experts))
+        return pinned
+
+    def clear_working_set_pins(self) -> None:
+        """Drop every layer's pinned working set (and the pin-epoch gates)."""
+
+        if self._global_bank is not None:
+            return
+        for lyr, bank in self._banks.items():
+            lock = self._layer_locks.get(lyr)
+            with lock if lock is not None else _NULL_CTX:
+                bank.clear_pins()
+            self._mark_device_route_dirty(lyr)
+        self._pin_last_epoch.clear()
+
+    def layer_pinned_static(self, layer: int) -> bool:
+        """True iff ``layer`` has an active pinned working set (its pinned
+        experts are never recycled on normal admission). A device route may take
+        the barrier-free path for a route only when this holds AND every routed
+        expert is pinned -- see :meth:`route_all_pinned`."""
+
+        bank = self._banks.get(int(layer))
+        return bool(bank is not None and bank.pinned_static)
+
+    def route_all_pinned(self, layer: int, expert_ids: Iterable[int]) -> bool:
+        """True iff every routed expert on ``layer`` is pinned (slot-stable).
+        The per-token gate a barrier-free device route consults (W44 §8)."""
+
+        bank = self._banks.get(int(layer))
+        return bool(bank is not None and bank.route_all_pinned(expert_ids))
+
+    def pinned_working_set_telemetry(self) -> dict[str, Any]:
+        """Snapshot of the W64 pin state (pinned count per layer + the
+        all-pinned-hit rate per decode route). Surfaced in the runtime snapshot,
+        the A/B receipt, and the served event; empty-ish when the lever is off."""
+
+        enabled = parse_pin_working_set(os.environ.get(PIN_WORKING_SET_ENV)) is not None
+        pinned_by_layer: dict[str, int] = {}
+        static_layers: list[int] = []
+        if self._global_bank is None:
+            for lyr in sorted(self._banks):
+                bank = self._banks[lyr]
+                count = bank.pinned_count
+                if count:
+                    pinned_by_layer[str(lyr)] = count
+                    static_layers.append(lyr)
+        with self._pin_telemetry_lock:
+            routes = self._pin_decode_routes
+            all_pinned = self._pin_all_pinned_routes
+        return {
+            "enabled": enabled,
+            "spec": os.environ.get(PIN_WORKING_SET_ENV),
+            "refresh_tokens": parse_pin_refresh_tokens(
+                os.environ.get(PIN_REFRESH_TOKENS_ENV)
+            ),
+            "pinned_by_layer": pinned_by_layer,
+            "pinned_total": sum(pinned_by_layer.values()),
+            "static_layer_count": len(static_layers),
+            "decode_routes": routes,
+            "all_pinned_routes": all_pinned,
+            "all_pinned_hit_rate": (
+                round(all_pinned / routes, 6) if routes else None
+            ),
+        }
+
     def note_shadow_serve(
         self, layer: int, *, assignments: int, experts: int
     ) -> None:
@@ -3713,6 +3951,7 @@ class ExpertStreamingRuntime:
             "cache_by_phase": cache_by_phase,
             "incremental_misses": incremental_misses,
             "slots": slots,
+            "pin_working_set": self.pinned_working_set_telemetry(),
         }
         if self._belady_oracle is not None:
             # The clairvoyant fetch floor over the full decode window, at the
@@ -3793,6 +4032,7 @@ class ExpertStreamingRuntime:
             "cache_by_layer": cache_by_layer,
             "cache_by_phase": cache_by_phase,
             "incremental_misses": incremental_misses,
+            "pin_working_set": self.pinned_working_set_telemetry(),
             **slots,
         }
         if self._pipeline_ledger is not None:
