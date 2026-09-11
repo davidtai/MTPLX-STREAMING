@@ -336,6 +336,37 @@ def test_served_dspark_requires_mtp_runtime():
 # --------------------------------------------------------------------------- #
 # 6. confidence early-stop is a pure latency lever (output unchanged)
 # --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("verify_decode_phase", [True, False])
+def test_dspark_verify_routing_phase_is_byte_identical(verify_decode_phase):
+    """Routing the K+1-row verify through DECODE vs PREFILL phase changes only the
+    streamed-switch machinery, never the gathered experts or the math, so greedy
+    output is byte-identical either way (the tiny double has no streamed switch,
+    so this pins that the phase context is a safe no-op on output)."""
+    _args_, model = _seeded_model(seed=0)
+    prompt = _prompt(17)
+    ref = _ar_reference(model, prompt, 48)
+    out = dspark_generate(
+        model, prompt, max_tokens=48, sampler=GREEDY, seed=0,
+        speculative_depth=3, verify_decode_phase=verify_decode_phase,
+    )
+    assert out == ref
+
+
+def test_dspark_per_cycle_timing_populates():
+    _args_, model = _seeded_model(seed=3, vocab=8)
+    prompt = _prompt(17, vocab=8)
+    stats = DSparkDecodeStats()
+    dspark_generate(model, prompt, max_tokens=48, sampler=GREEDY, seed=0,
+                    speculative_depth=3, stats=stats)
+    d = stats.to_dict()
+    assert set(d["per_cycle"]) == {"draft_ms", "verify_ms", "accept_ms", "commit_ms"}
+    # draft (3 stage forwards) and verify (K+1-row forward) are the real work;
+    # both must register positive per-cycle wall.
+    assert d["per_cycle"]["draft_ms"] > 0
+    assert d["per_cycle"]["verify_ms"] > 0
+    assert sum(d["phase_time_s"].values()) > 0
+
+
 def test_dspark_direct_confidence_early_stop_is_lossless():
     _args_, model = _seeded_model(seed=3, vocab=8)
     prompt = _prompt(17, vocab=8)
@@ -462,7 +493,7 @@ def test_ab_decode_load_model_passes_with_mtp_for_dspark(monkeypatch, tmp_path):
         model=str(tmp_path), context_tokens=1024, decode_tokens=256, max_kv=None,
         admission_receipt=None, admit=False, apply_memory_cap=True,
         slot_layout="component-banks", verify_record_hashes=False,
-        memory_limit_gib=82.0, expert_cache_limit_gib=None,
+        memory_limit_gib=82.0, expert_cache_limit_gib=None, with_mtp=None,
     )
 
     # AR (default): with_mtp None, full budget
@@ -477,6 +508,14 @@ def test_ab_decode_load_model_passes_with_mtp_for_dspark(monkeypatch, tmp_path):
     assert captured["with_mtp"] is True
     assert captured["memory_limit_bytes"] == int(82.0 * GIB) - DSPARK_MTP_RESIDENT_BYTES
     assert resident.model.mtp is not None
+
+    # AR + --with-mtp: the window-25 "AR + head loaded" A/B arm also loads the
+    # head and reprices, so the plain forward can be measured against plain AR.
+    args.decode_mode = "ar"
+    args.with_mtp = True
+    resident = mod._load_model(args, bench, mx=None)
+    assert captured["with_mtp"] is True
+    assert captured["memory_limit_bytes"] == int(82.0 * GIB) - DSPARK_MTP_RESIDENT_BYTES
 
 
 def test_serve_argv_parses_dspark_and_resolves_lane(tmp_path, monkeypatch):
