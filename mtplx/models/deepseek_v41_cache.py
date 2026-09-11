@@ -255,6 +255,293 @@ class _GrowBuffer:
     def rows(self) -> int:
         return 0 if self._buf is None else self._len
 
+    def raw_backing(self) -> Optional[mx.array]:
+        """The whole preallocated buffer (NOT the logical ``view()`` slice).
+
+        :meth:`_eval_cache_state` forces this instead of ``view()`` so a settle
+        fence does not materialise a fresh ``[b, length]`` slice per token (W80
+        item 4): the buffer already holds the in-place-written bytes, so forcing it
+        realises only this step's ``slice_update`` writes, not an O(length) copy."""
+        return self._buf
+
+
+# ---------------------------------------------------------------------------
+# W80 / K34: bounded sliding-window RING + preallocated compress/index stores
+# ---------------------------------------------------------------------------
+#: W80: the window store is a genuine sliding window of ``window_size`` (128); the
+#: decode gather / SWA mask only ever read the last ``window_size`` rows.  The
+#: phase-1 store keeps FULL history append-only (row j == token j) so at T=16384 the
+#: resident window is ~40x16384x512x2 = ~0.7 GB, and W76/W78 pinned that resident
+#: churn as the memory-pressure amplifier that inflates the whole 16K decode step
+#: (attention-proper 1.7->6.6 ms/layer, uniform across CSA modes).  Under
+#: ``MTPLX_DSV41_WINDOW_RING`` the window store is a BOUNDED ring of
+#: ``window_size + max_verify + slack`` rows (~136) in a fixed pair of ping-pong
+#: buffers allocated once at construction (~5.5 MB total across 40 layers, a ~128x
+#: cut), and the compress_kv / index_k stores (which the indexer needs in FULL, so
+#: they cannot be bounded) are preallocated to ``max_kv`` and written in place --
+#: removing the per-token full-store realloc for all three lanes.  A logical
+#: ``drop_offset`` (== the number of dropped front rows) is threaded through
+#: ``_window_selected_idx`` / ``_window_attend`` / the SWA mask so they address the
+#: SAME absolute positions as the full store; dropped rows are always >= window_size
+#: behind the newest query, hence always masked to -inf / never gathered, so every
+#: reachable read is BYTE-IDENTICAL to the full store by construction.  Default OFF.
+#: Read at construction (per request, after the harness stamps the key; NOT frozen
+#: at import -- [[env-flags-read-at-use-not-import]]).
+_WINDOW_RING_ENV = "MTPLX_DSV41_WINDOW_RING"
+#: Tuning knobs (env, read at construction).  ``max_verify`` sizes the ring for the
+#: widest speculative-verify block appended in ONE decode forward (DSpark depth 3 ->
+#: K+1 = 4 rows); ``slack`` a safety margin; ``headroom`` the number of in-place
+#: appends between compactions (bigger => fewer compaction copies, more resident
+#: rows); ``maxkv`` the preallocated capacity of the compress/index lanes (0/unset
+#: => fall back to the geometric _GrowBuffer, still byte-identical).
+_WINDOW_RING_MAX_VERIFY_ENV = "MTPLX_DSV41_WINDOW_RING_MAX_VERIFY"
+_WINDOW_RING_SLACK_ENV = "MTPLX_DSV41_WINDOW_RING_SLACK"
+_WINDOW_RING_HEADROOM_ENV = "MTPLX_DSV41_WINDOW_RING_HEADROOM"
+_WINDOW_RING_MAXKV_ENV = "MTPLX_DSV41_WINDOW_RING_MAXKV"
+
+
+def _window_ring_enabled() -> bool:
+    """Whether ``MTPLX_DSV41_WINDOW_RING`` arms the bounded-ring window store and
+    the preallocated compress/index stores.  Read at call time (never frozen at
+    import): the serving harness stamps the key after importing this module, and
+    each request builds a fresh cache."""
+    return (os.environ.get(_WINDOW_RING_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _ring_env_int(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
+    if v < 0:
+        raise ValueError(f"{name} must be >= 0, got {v}")
+    return v
+
+
+def _window_ring_config() -> tuple:
+    """(max_verify, slack, headroom, maxkv) from the env, with defaults."""
+    return (
+        _ring_env_int(_WINDOW_RING_MAX_VERIFY_ENV, 8),
+        _ring_env_int(_WINDOW_RING_SLACK_ENV, 8),
+        _ring_env_int(_WINDOW_RING_HEADROOM_ENV, 64),
+        _ring_env_int(_WINDOW_RING_MAXKV_ENV, 0) or None,
+    )
+
+
+#: W80 engagement + drop/copy telemetry.  ``layers_ring`` proves engagement (how
+#: many layer caches chose the ring); ``capacity`` is the steady-state logical keep
+#: (window_size + max_verify + slack), ``phys_capacity`` the physical ping-pong
+#: buffer rows; ``drops`` counts compactions that advanced the drop_offset,
+#: ``rows_dropped`` the total logical rows dropped, ``rows_copied`` the rows
+#: physically written (appends + compaction carries).  Process-global + cumulative
+#: (like the Sinkhorn / chunk-grow counters); the ab harness resets after model load
+#: and snapshots after the run.
+_RING_STATS = {
+    "layers_ring": 0,
+    "capacity": 0,
+    "phys_capacity": 0,
+    "drops": 0,
+    "rows_dropped": 0,
+    "rows_copied": 0,
+    "appends": 0,
+    "reallocs": 0,
+}
+
+
+def reset_window_ring_stats() -> None:
+    """Zero the W80 window-ring telemetry (call after model load to scope a run)."""
+    for k in _RING_STATS:
+        _RING_STATS[k] = 0
+
+
+def window_ring_stats() -> dict:
+    """Snapshot the W80 telemetry: ``enabled`` (any layer cache chose the ring),
+    ring capacities, drop/copy counts."""
+    s = dict(_RING_STATS)
+    s["enabled"] = bool(_RING_STATS["layers_ring"] > 0)
+    return s
+
+
+class _WindowRing:
+    """Bounded sliding-window store for one layer (W80 / K34).
+
+    Keeps at most a contiguous SUFFIX of the append-only window history in a fixed
+    pair of ping-pong buffers (``phys_cap`` rows each), allocated once at
+    construction (grown transiently only for a prefill chunk wider than
+    ``phys_cap``).  ``_drop`` is the absolute position of physical slot 0 (rows
+    ``[_drop, _drop + _len)`` are resident); the logical length is
+    ``_drop + _len``.  :meth:`view` returns the resident rows as a CONTIGUOUS array
+    whose row j is absolute position ``_drop + j`` -- so a reader translates an
+    absolute index by subtracting ``_drop`` (:attr:`drop_offset`), addressing the
+    same positions the full store would.
+
+    Append writes the new rows in place with a donated ``mx.slice_update`` while the
+    buffer has room (``_len + n <= phys_cap``), advancing nothing; when it would
+    overflow, one COMPACTION copies the last ``keep`` rows into the OTHER ping-pong
+    buffer (never the same buffer -- no aliasing) and advances ``_drop``, dropping
+    the older rows.  ``keep = max(cap_keep, n + window_size - 1)`` so the current
+    forward's oldest query (at the append's first position) always retains its full
+    causal window; dropped rows are strictly older than that window, so they are
+    never read again and dropping them is exact.  No per-token allocation on the
+    decode path (ping-pong reuse); no T-sized array is ever built during decode.
+
+    Correctness never depends on ``slice_update`` donating: if a live view keeps a
+    buffer referenced MLX copies instead of donating -- slower, same bytes.
+    """
+
+    __slots__ = (
+        "window_size", "cap_keep", "phys_cap",
+        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail",
+    )
+
+    def __init__(self, window_size: int, max_verify: int, slack: int, headroom: int):
+        self.window_size = int(window_size)
+        self.cap_keep = int(window_size) + int(max_verify) + int(slack)
+        self.phys_cap = self.cap_keep + int(headroom)
+        self._bufs = [None, None]
+        self._cur = 0
+        self._len = 0
+        self._drop = 0
+        self._b: Optional[int] = None
+        self._dtype = None
+        self._tail: tuple = ()
+
+    # -- absolute-position accessors ---------------------------------------
+    @property
+    def drop_offset(self) -> int:
+        return self._drop
+
+    def logical_len(self) -> int:
+        return self._drop + self._len
+
+    def rows(self) -> int:
+        """Resident physical rows (what ``view().shape[1]`` reports)."""
+        return self._len
+
+    # -- internals ---------------------------------------------------------
+    @staticmethod
+    def _write(buf: mx.array, new: mx.array, row: int) -> mx.array:
+        n = new.ndim
+        starts = mx.array([0, int(row)] + [0] * (n - 2), dtype=mx.int32)
+        return mx.slice_update(buf, new, starts, axes=tuple(range(n)))
+
+    def _alloc(self, cap: int) -> mx.array:
+        return mx.zeros((self._b, cap) + self._tail, dtype=self._dtype)
+
+    def _init_from(self, new: mx.array) -> None:
+        self._b = int(new.shape[0])
+        self._dtype = new.dtype
+        self._tail = tuple(new.shape[2:])
+        n = int(new.shape[1])
+        cap = max(self.phys_cap, n)
+        self.phys_cap = cap
+        self._bufs[0] = self._alloc(cap)
+        self._bufs[1] = self._alloc(cap)
+        self._bufs[self._cur] = self._write(self._bufs[self._cur], new, 0)
+        self._len = n
+        self._drop = 0
+        _RING_STATS["rows_copied"] += n
+        _RING_STATS["capacity"] = self.cap_keep
+        _RING_STATS["phys_capacity"] = self.phys_cap
+
+    def append(self, new: Optional[mx.array]) -> None:
+        if new is None or (new.ndim >= 2 and new.shape[1] == 0):
+            return
+        n = int(new.shape[1])
+        _RING_STATS["appends"] += 1
+        if self._bufs[self._cur] is None:
+            self._init_from(new)
+            return
+        if self._len + n <= self.phys_cap:
+            # in-place donated write of just the new rows; drop_offset unchanged
+            self._bufs[self._cur] = self._write(self._bufs[self._cur], new, self._len)
+            self._len += n
+            _RING_STATS["rows_copied"] += n
+            return
+        # Compaction: keep the last ``keep`` rows, drop the older ones.  ``keep``
+        # covers the current forward's oldest query's full causal window
+        # (``n + window_size - 1``, the append's first position looking back
+        # ``window_size - 1``), never less than the steady ``cap_keep``.
+        L = self._drop + self._len
+        L_new = L + n
+        keep = min(L_new, max(self.cap_keep, n + (self.window_size - 1)))
+        old_drop = self._drop
+        new_drop = L_new - keep
+        retained = L - new_drop            # old rows carried over (>= 0)
+        src = self._bufs[self._cur]        # read the retained suffix from OLD buffer
+        target_cap = self.phys_cap
+        if keep > target_cap:
+            # transient grow for a prefill chunk wider than the ping-pong buffers
+            # (allowed off the decode path; decode/verify appends never trip this)
+            target_cap = keep
+            _RING_STATS["reallocs"] += 1
+        dst_idx = 1 - self._cur
+        dst = self._bufs[dst_idx]
+        if dst is None or int(dst.shape[1]) != target_cap:
+            dst = self._alloc(target_cap)  # only when growing (else reuse ping-pong)
+        if retained > 0:
+            head = src[:, self._len - retained: self._len]   # OLD buffer != dst
+            dst = self._write(dst, head, 0)
+        dst = self._write(dst, new, retained)
+        if target_cap != self.phys_cap:
+            self.phys_cap = target_cap
+            self._bufs = [None, None]      # other slot re-allocated at next compaction
+            _RING_STATS["phys_capacity"] = self.phys_cap
+        self._bufs[dst_idx] = dst
+        self._cur = dst_idx
+        self._len = retained + n
+        self._drop = new_drop
+        _RING_STATS["drops"] += 1
+        _RING_STATS["rows_dropped"] += max(0, new_drop - old_drop)
+        _RING_STATS["rows_copied"] += retained + n
+
+    def view(self) -> Optional[mx.array]:
+        buf = self._bufs[self._cur]
+        if buf is None or self._len == 0:
+            return None
+        if self._len == buf.shape[1]:
+            return buf
+        return buf[:, : self._len]
+
+    def raw_backing(self) -> Optional[mx.array]:
+        """The whole current ping-pong buffer (see :meth:`_GrowBuffer.raw_backing`)."""
+        return self._bufs[self._cur]
+
+    def set(self, arr: Optional[mx.array]) -> None:
+        """Replace the resident rows from a full array (state restore).  ``_drop``
+        is reset to 0 here and re-seated by :meth:`reseat` once the logical length
+        (the entry offset) is known."""
+        self._bufs = [None, None]
+        self._cur = 0
+        self._len = 0
+        self._drop = 0
+        if arr is not None:
+            self.append(arr)
+
+    def reseat(self, logical_len: int) -> None:
+        """Set ``_drop`` so the resident rows end at ``logical_len`` -- restoring
+        the absolute frame after a state/offset restore (the ring always holds a
+        contiguous suffix, so ``drop == logical_len - resident``)."""
+        self._drop = max(0, int(logical_len) - self._len)
+
+    def truncate_to_length(self, logical_len: int) -> None:
+        """Drop back to logical length ``logical_len`` (trim/rollback).  ``_drop``
+        stays where it is (advanced by any compaction since the mark -- those rows
+        are unrecoverable but always beyond the window, so the reachable state is
+        exact); only the resident count shrinks."""
+        logical_len = max(0, int(logical_len))
+        if logical_len <= self._drop:
+            # trimming at/under the drop frontier: nothing resident remains reachable
+            self._len = 0
+            self._drop = logical_len
+            return
+        self._len = min(self._len, logical_len - self._drop)
+
 
 # ---------------------------------------------------------------------------
 # Sliding-window ring (reference get_window_topk_idxs L409-426, _window_kv L700-720)
@@ -468,20 +755,37 @@ class LayerAttentionCache:
         #: rewind rides this entry's :meth:`trim`/:meth:`rollback` so a per-entry
         #: trim moves the shared history exactly once.  ``None`` otherwise.
         self.engram_state = engram_state
+        #: W80 / K34: the bounded window ring + preallocated compress/index stores
+        #: (master switch; takes precedence over W73 chunk-grow for all three lanes).
+        #: Picked once at construction (per request, after the harness stamps the
+        #: env key).  See :class:`_WindowRing` and :data:`_WINDOW_RING_ENV`.
+        self._window_ring = _window_ring_enabled()
         #: W73 / K32: pick the append backing once, at construction (per request,
         #: after the harness stamps the env key).  OFF -> the three store lanes are
         #: plain ``mx.array`` attributes grown by :func:`_grow` (byte-for-byte the
         #: shipped cache); ON -> :class:`_GrowBuffer` lanes (chunk-grown append).
         self._chunk_grow = _kv_chunk_grow_enabled()
-        _KV_STATS["layers_chunk_grown" if self._chunk_grow else "layers_plain"] += 1
-        #: post-RoPE window KV rows, one per token (reference window_kv_cache seed);
-        #: pooled+RoPE'd compressed KV / index keys, one per completed group.  Held
-        #: in ``_window`` / ``_compress_kv`` / ``_index_k`` (plain array or
-        #: :class:`_GrowBuffer`) and read/written through the same-named properties,
-        #: so every existing reader/writer of ``.window`` etc. is unchanged.
-        self._window = _GrowBuffer() if self._chunk_grow else None
-        self._compress_kv = _GrowBuffer() if self._chunk_grow else None
-        self._index_k = _GrowBuffer() if self._chunk_grow else None
+        if self._window_ring:
+            _mv, _slk, _hr, _maxkv = _window_ring_config()
+            _RING_STATS["layers_ring"] += 1
+            #: bounded ring for the window lane (window_size + max_verify + slack);
+            #: compress/index are preallocated to ``maxkv`` (indexer needs them in
+            #: full -> cannot be bounded), or geometric when ``maxkv`` is unset.
+            self._window = _WindowRing(self.window_size, _mv, _slk, _hr)
+            _icap = int(_maxkv) if _maxkv else 256
+            self._compress_kv = _GrowBuffer(init_cap=_icap)
+            self._index_k = _GrowBuffer(init_cap=_icap)
+        else:
+            _KV_STATS["layers_chunk_grown" if self._chunk_grow else "layers_plain"] += 1
+            #: post-RoPE window KV rows, one per token (reference window_kv_cache
+            #: seed); pooled+RoPE'd compressed KV / index keys, one per completed
+            #: group.  Held in ``_window`` / ``_compress_kv`` / ``_index_k`` (plain
+            #: array, :class:`_GrowBuffer`, or :class:`_WindowRing`) and read/written
+            #: through the same-named properties, so every existing reader/writer of
+            #: ``.window`` etc. is unchanged.
+            self._window = _GrowBuffer() if self._chunk_grow else None
+            self._compress_kv = _GrowBuffer() if self._chunk_grow else None
+            self._index_k = _GrowBuffer() if self._chunk_grow else None
         #: compressor frontier (CompressorState for ratio>1, else None)
         self.comp_state: Optional[CompressorState] = (
             CompressorState(self.compress_ratio)
@@ -496,11 +800,11 @@ class LayerAttentionCache:
     # _GrowBuffer view is byte-identical to the concatenated store.
     @staticmethod
     def _lane_get(lane):
-        return lane.view() if isinstance(lane, _GrowBuffer) else lane
+        return lane.view() if isinstance(lane, (_GrowBuffer, _WindowRing)) else lane
 
     @staticmethod
     def _lane_set(lane, value):
-        if isinstance(lane, _GrowBuffer):
+        if isinstance(lane, (_GrowBuffer, _WindowRing)):
             lane.set(value)
             return lane
         return value
@@ -512,6 +816,15 @@ class LayerAttentionCache:
     @window.setter
     def window(self, value: Optional[mx.array]) -> None:
         self._window = self._lane_set(self._window, value)
+
+    @property
+    def window_drop_offset(self) -> int:
+        """W80: the number of logically-dropped front rows of the window store
+        (== absolute position of physical row 0 of :attr:`window`).  0 for the
+        plain / chunk-grow backing (full history retained); the ring's ``_drop``
+        otherwise.  A reader translates an absolute window index to a physical one
+        by subtracting this."""
+        return self._window.drop_offset if isinstance(self._window, _WindowRing) else 0
 
     @property
     def compress_kv(self) -> Optional[mx.array]:
@@ -534,11 +847,30 @@ class LayerAttentionCache:
         """Seed the ring with this call's post-RoPE window KV (reference
         L708-719).  History is kept append-only; the reference's fixed ring is
         :meth:`ring`."""
-        if isinstance(self._window, _GrowBuffer):
+        if isinstance(self._window, (_GrowBuffer, _WindowRing)):
             self._window.append(kv_new)
         else:
             self._window = _grow(self._window, kv_new)
             _note_rows_copied(_rows(self._window))
+
+    def eval_backing(self):
+        """W80 (item 4) / W73: the arrays a settle fence should force to free a
+        span's transients.  For a ring / :class:`_GrowBuffer` lane this is the RAW
+        preallocated backing buffer (:meth:`_WindowRing.raw_backing`), NOT the
+        logical ``view()`` slice: forcing the buffer realises this step's in-place
+        ``slice_update`` writes without materialising a fresh ``[b, length]`` slice
+        (an O(length)/O(n_comp) copy) per token.  For the plain backing it is the
+        stored array (unchanged).  Plus the compressor frontier."""
+        out = []
+        for lane in (self._window, self._compress_kv, self._index_k):
+            a = lane.raw_backing() if isinstance(lane, (_GrowBuffer, _WindowRing)) else lane
+            if a is not None:
+                out.append(a)
+        if self.comp_state is not None:
+            for a in (self.comp_state.raw_kv, self.comp_state.raw_score):
+                if a is not None:
+                    out.append(a)
+        return out
 
     def ring(self, length: int) -> Optional[mx.array]:
         """The reference ``window_kv_cache`` view after ``length`` tokens
@@ -608,7 +940,12 @@ class LayerAttentionCache:
         new_len = cur - n
         if new_len < 0:
             raise ValueError(f"cannot trim {n} of {cur} tokens")
-        self.window = _truncate(self.window, new_len)
+        if isinstance(self._window, _WindowRing):
+            # W80 drop-aware: the ring restores its LOGICAL length; _drop stays
+            # advanced (dropped rows are always beyond the window -> exact).
+            self._window.truncate_to_length(new_len)
+        else:
+            self.window = _truncate(self.window, new_len)
         if self.is_kv_source and self.compress_ratio >= 1:
             groups = new_len // self.compress_ratio
             self.compress_kv = _truncate(self.compress_kv, groups)
@@ -639,7 +976,12 @@ class LayerAttentionCache:
             back = int(self.offset) - int(offset)
             if back > 0:
                 self.engram_state.trim(back)
-        self.window = _truncate(self.window, nw)
+        if isinstance(self._window, _WindowRing):
+            # W80 drop-aware: restore to the marked LOGICAL length (== offset, the
+            # window advances one row per token); _drop stays advanced.
+            self._window.truncate_to_length(int(offset))
+        else:
+            self.window = _truncate(self.window, nw)
         self.compress_kv = _truncate(self.compress_kv, nc)
         self.index_k = _truncate(self.index_k, ni)
         if self.comp_state is not None and comp_mark is not None:
@@ -738,6 +1080,12 @@ class LayerAttentionCache:
                 f"unsupported DeepSeek-V4.1 layer cache meta state: {value!r}"
             )
         self.offset = int(value[1])
+        # W80: re-seat the ring's drop_offset now the logical length (offset) is
+        # known -- the saved window ``state`` is a contiguous suffix, so
+        # ``_drop == offset - resident_rows`` (no-op for the plain / chunk-grow
+        # backing, which keeps full history with drop_offset 0).
+        if isinstance(self._window, _WindowRing):
+            self._window.reseat(self.offset)
 
     #: set on entries reconstructed by :meth:`from_state` when the saved ``state``
     #: carried an engram history (the 6th leaf).  The reconstruction cannot rebuild
@@ -770,6 +1118,8 @@ class LayerAttentionCache:
         entry.loaded_engram_state = values[5] if len(values) == 6 else None
         entry.state = values[:5]          # KV lanes only (this entry owns no engram)
         entry.offset = int(offset)
+        if isinstance(entry._window, _WindowRing):
+            entry._window.reseat(entry.offset)  # W80: re-seat drop_offset from length
         return entry
 
 
