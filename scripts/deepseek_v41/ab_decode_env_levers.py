@@ -65,6 +65,13 @@ SWITCH_SUBMIT_ENV = "MTPLX_DSV41_SWITCH_SUBMIT"  # K23 variant B (W42 window-14)
 HEAD_MODE_ENV = "MTPLX_DSV41_HEAD_MODE"             # W40 / K21, output-head codec
 ATTN_COMPILE_ENV = "MTPLX_DSV41_ATTN_COMPILE"       # K22, W41 landing
 ATTN_WIN_MEMO_ENV = "MTPLX_DSV41_ATTN_WIN_MEMO"     # K24, W45: window-mask memo
+VERIFY_SINGLE_BARRIER_ENV = "MTPLX_DSV41_VERIFY_SINGLE_BARRIER"  # K31 (W61):
+# small-M (2..8-row) DECODE verify -- pin the whole route all-hit and gather
+# rows*top_k in ONE wave (K27 sorted gather) with one deferred release, so a
+# K+1 verify pays ONE routing barrier per layer instead of one per split wave
+# (window 25: ~630 ms/verify). Byte-identical; DEFAULT ON in the code
+# (os.environ.get(..., "1")), so the census/window sees it live; this arm pins it
+# explicitly and a "0" baseline measures the delta.
 DEVICE_ROUTE_ENV = "MTPLX_DSV41_DEVICE_ROUTE"  # K24 (W44): barrier-free all-hit
 # route -- gather over a device expert->slot LUT WITHOUT mx.eval(indices); a cold
 # miss is repaired by a per-layer span re-run so the token stays byte-identical.
@@ -145,6 +152,7 @@ ALL_LEVER_ENVS = (
     ATTN_COMPILE_ENV,
     ATTN_WIN_MEMO_ENV,
     DEVICE_ROUTE_ENV,
+    VERIFY_SINGLE_BARRIER_ENV,
     PREFILL_DENSE_ENV,
     PREFILL_DENSE_MIN_ROWS_ENV,
     PREFILL_DENSE_BATCH_ENV,
@@ -164,6 +172,7 @@ ALL_LEVER_ENVS = (
 def _preset(
     *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None,
     submit=None, attn=None, win_memo=None, device_route=None,
+    verify_single=None,
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
@@ -189,6 +198,7 @@ def _preset(
         ATTN_COMPILE_ENV: attn,
         ATTN_WIN_MEMO_ENV: win_memo,
         DEVICE_ROUTE_ENV: device_route,
+        VERIFY_SINGLE_BARRIER_ENV: verify_single,
         PREFILL_DENSE_ENV: prefill_dense,
         PREFILL_DENSE_MIN_ROWS_ENV: prefill_dense_min_rows,
         PREFILL_DENSE_BATCH_ENV: prefill_dense_batch,
@@ -216,6 +226,7 @@ ARM_PRESETS = {
     "attn_compile": _preset(attn="1"),                      # K22 lever ON (W41 landing)
     "attn_win_memo": _preset(win_memo="1"),                 # K24 lever ON (W45): window-mask memo
     "device_route": _preset(device_route="1"),              # W44 K24: barrier-free all-hit
+    "verify_single_barrier": _preset(verify_single="1"),    # W61 K31: 1 barrier/layer for small-M verify (default ON)
     # W51 K26: prefill dense experts, armed on the 16K layer-major schedule it
     # targets (the read-once bank pass W47 measured the ALU-bound gather on).
     # Not byte-identical to control (fp32 matmul accumulation order), so the

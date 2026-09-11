@@ -2621,6 +2621,10 @@ def test_component_bank_all_hit_decode_keeps_router_order_without_split_route_op
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # W61: this test asserts the legacy split-wave all-hit route
+    # planning; the verify single-barrier fast path (default on) bypasses
+    # it for M>=2 all-hit -- pin it off so this exercises that path.
+    monkeypatch.setenv("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "0")
     root, _config, spec, manifest_path = _integrated_glm_artifact(tmp_path)
     transient_slots = 4
     fixed = spec.resident_bytes + transient_slots * spec.expert_record_bytes
@@ -2703,6 +2707,10 @@ def test_global_component_bank_all_hit_decode_binds_without_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # W61: this test asserts the legacy split-wave all-hit route
+    # planning; the verify single-barrier fast path (default on) bypasses
+    # it for M>=2 all-hit -- pin it off so this exercises that path.
+    monkeypatch.setenv("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "0")
     root, _config, spec, manifest_path = _integrated_glm_artifact(tmp_path)
     transient_slots = 4
     fixed = spec.resident_bytes + transient_slots * spec.expert_record_bytes
@@ -2790,6 +2798,10 @@ def test_component_bank_all_hit_decode_preserves_route_waves_counters_and_shared
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # W61: this test asserts the legacy split-wave all-hit route
+    # planning; the verify single-barrier fast path (default on) bypasses
+    # it for M>=2 all-hit -- pin it off so this exercises that path.
+    monkeypatch.setenv("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "0")
     root, _config, spec, manifest_path = _integrated_glm_artifact(tmp_path)
     fixed = spec.resident_bytes + spec.transient_scratch_bytes
     stream_config = ExpertStreamingConfig(
@@ -2919,6 +2931,10 @@ def test_component_bank_all_hit_decode_releases_pins_on_q4_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # W61: this test asserts the legacy split-wave all-hit route
+    # planning; the verify single-barrier fast path (default on) bypasses
+    # it for M>=2 all-hit -- pin it off so this exercises that path.
+    monkeypatch.setenv("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "0")
     root, _config, spec, manifest_path = _integrated_glm_artifact(tmp_path)
     fixed = spec.resident_bytes + spec.transient_scratch_bytes
     stream_config = ExpertStreamingConfig(
@@ -3005,6 +3021,10 @@ def test_slot_fence_all_hit_synchronous_eval_failure_blocks_replacement(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # W61: this test asserts the legacy split-wave all-hit route
+    # planning; the verify single-barrier fast path (default on) bypasses
+    # it for M>=2 all-hit -- pin it off so this exercises that path.
+    monkeypatch.setenv("MTPLX_DSV41_VERIFY_SINGLE_BARRIER", "0")
     root, _config, spec, manifest_path = _integrated_glm_artifact(tmp_path)
     fixed = spec.resident_bytes + spec.transient_scratch_bytes
     stream_config = ExpertStreamingConfig(

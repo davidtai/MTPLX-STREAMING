@@ -59,6 +59,7 @@ _SB = "MTPLX_DSV41_SWITCH_SUBMIT"      # W42 / K23 var B: all-hit async submit
 _AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
 _WM = "MTPLX_DSV41_ATTN_WIN_MEMO"      # W45 / K24: sliding-window mask memo
 _DR = "MTPLX_DSV41_DEVICE_ROUTE"       # W44 / K24: barrier-free all-hit device route
+_VSB = "MTPLX_DSV41_VERIFY_SINGLE_BARRIER"  # W61 / K31: small-M verify one barrier/layer (default ON)
 _PD = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"     # W51 / K26: prefill dense experts
 _PDMR = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"  # W51 / K26: per-expert row threshold
 _PDB = "MTPLX_DSV41_PREFILL_DENSE_BATCH"      # W51 / K26: dequant batch size
@@ -84,7 +85,7 @@ _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50
 # + the three W50 score-path keys + the W59 K30 selected-key gather boolean + the
 # W58 K28 fused-softmax-kernel boolean + the K27 layout_fix boolean (the W58
 # prefill_best* full-stack arms set it) + the W60 K29 decode-attention-kernel boolean.
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK)
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB)
 
 ALL_ARMS = [
     "control",
@@ -97,6 +98,7 @@ ALL_ARMS = [
     "attn_compile",
     "attn_win_memo",
     "device_route",
+    "verify_single_barrier",
     "prefill_dense_experts",
     "dense_min32",
     "dense_batch16",
@@ -135,6 +137,7 @@ EXPECTED_ON = {
     "attn_compile": {_AC},
     "attn_win_memo": {_WM},
     "device_route": set(),   # its only key is _DR, tracked in EXPECTED_DEVICE
+    "verify_single_barrier": set(),  # its only key is _VSB, tracked in EXPECTED_VERIFY
     # W51: the dense-experts arms all ride layer-major; the dense boolean (_PD) and
     # the value knobs are tracked separately, so _LM is the only _ALL_KEYS member.
     "prefill_dense_experts": {_LM},
@@ -184,6 +187,8 @@ EXPECTED_ON = {
 # W44/window-19 showed it is NOT exact on the real model (unpinned deferred gather
 # vs mid-decode slot recycling), so it is OUT of stack_a until parity is clean.
 EXPECTED_DEVICE = {arm: (arm == "device_route") for arm in ALL_ARMS}
+# W61 K31: verify single-barrier (default ON in code; the arm pins it explicitly).
+EXPECTED_VERIFY = {arm: (arm == "verify_single_barrier") for arm in ALL_ARMS}
 
 # The prefill-dense-experts boolean each arm pins (W51 K26; separate from
 # _ALL_KEYS, not part of all_levers). Every dense arm sets it -- W51's sweeps plus
@@ -216,6 +221,7 @@ EXPECTED_HEAD = {
     "attn_compile": None,
     "attn_win_memo": None,
     "device_route": None,
+    "verify_single_barrier": None,
     "prefill_dense_experts": None,
     "dense_min32": None,
     "dense_batch16": None,
@@ -378,6 +384,12 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert os.environ.get(_DR) == "1", f"{arm}: {_DR} should be '1'"
     else:
         assert _DR not in os.environ, f"{arm}: {_DR} should be force-unset"
+    # the verify single-barrier boolean is set for exactly its arm (default ON in
+    # the code; the preset pins it explicitly so a "0" baseline can A/B the delta).
+    if EXPECTED_VERIFY[arm]:
+        assert os.environ.get(_VSB) == "1", f"{arm}: {_VSB} should be '1'"
+    else:
+        assert _VSB not in os.environ, f"{arm}: {_VSB} should be force-unset"
     # the prefill-dense-experts boolean is set for exactly the dense arms.
     if EXPECTED_DENSE[arm]:
         assert os.environ.get(_PD) == "1", f"{arm}: {_PD} should be '1'"
@@ -523,6 +535,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
                 assert r["arm_env"][k] is None, (r["arm"], k)
         # the device-route boolean and the head codec are recorded per arm.
         assert (r["arm_env"].get(_DR) == "1") == EXPECTED_DEVICE[r["arm"]], r["arm"]
+        assert (r["arm_env"].get(_VSB) == "1") == EXPECTED_VERIFY[r["arm"]], r["arm"]
         assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]
         # the prefill-dense boolean + value knobs are recorded per arm.
         assert (r["arm_env"].get(_PD) == "1") == EXPECTED_DENSE[r["arm"]], r["arm"]

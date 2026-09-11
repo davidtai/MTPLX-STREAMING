@@ -1166,6 +1166,28 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (masked-full). Peak RSS of the exactness suite <3 GB. **GPU gate remains KG-g** (the 144–184 s → ~7 s
   prefill and the −20 % 16K decode DRAM are window estimates). See `W59_SELECTED_KEYS.md`.
 
+### K31 — Verify single-barrier switch (`MTPLX_DSV41_VERIFY_SINGLE_BARRIER`, W61) — **DEFAULT ON (byte-identical)**
+- **Mechanism:** the DSpark K+1 verify forward runs the switch at small M (2..8 rows). Its rows*top_k
+  assignments otherwise split across several transient-bounded `route_waves`, each paying its own
+  device->host fence (`hot.allhit_fence_eval`, ~3.6 ms) on top of the one `mx.eval(indices)` barrier
+  (~10 ms) — window 25 measured a 4-row verify at **~630 ms** in `moe.routed_switch` (M=1: ~74 ms),
+  the census attributing it to **several barriers per layer** (per split wave). But an ALL-HIT route
+  lives in **persistent** slots (no transient bound), so `HotExpertSwitchGLU._run` now pins the whole
+  route with ONE `try_all_hit_route`, gathers rows*top_k in ONE wave via the K27 sorted `gather_qmm`,
+  and defers the release once (variant-B) — exactly **ONE routing barrier per layer**.
+- **Exactness:** byte-identical. `gather_qmm` is row-independent, so the single gather is bit-for-bit the
+  split+concat the loop produces (same token, same expert weights per assignment); the deferred release
+  is the W42-proven-safe pinned mechanism (unlike W44's device route, `try_all_hit_route` PINS the slots,
+  so there is no unpinned-recycle race). A miss falls through to the bounded `route_waves` loop
+  (unchanged); M=1 is untouched. Proven on a real component-bank runtime: flag on vs off byte-identical
+  at M=2/4/8 (all-hit) and split/all-miss (fall-through), and exactly 1 blocking host sync/layer at M=4
+  all-hit vs the split-wave path's several (`tests/test_deepseek_v41_verify_single_barrier.py`).
+- **Syncs/layer (all-hit small-M verify): several -> 1.** **Default ON** in the code; the arm
+  `verify_single_barrier` pins it and a "0" baseline A/Bs the decode/verify delta on GPU.
+- **Scope:** the all-hit path is the window-25 cost (an all-hit verify paying per-split all-hit fences).
+  A split verify whose unique misses exceed transient capacity still batches (the single-submission split
+  is the follow-up if the A/B shows a miss-heavy verify).
+
 ---
 
 ## 6. Dead-here (GPU-side; do not re-propose)
