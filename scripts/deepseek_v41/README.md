@@ -156,3 +156,80 @@ Bench/HumanEval knobs: `bench_standard_shape.py --context-tokens/--steps/--repea
 (default the canonical `benchmark-archive/datasets/HumanEval.jsonl`, 164 tasks),
 `HUMANEVAL_LIMIT` (empty = all 164), `DSV41_OUT_DIR`, and the `serve_health.sh`
 serve knobs (`DSV41_MODEL`, `DSV41_HOST`, `DSV41_HEALTH_TIMEOUT`).
+
+---
+
+# W21 — mxfp4 served profile, measured with NO flags
+
+The mxfp4 artifact (`~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4`,
+`model_key deepseek-v41-flash-expert-mxfp4`) now has a promoted serve profile,
+`deepseek-v41-mxfp4-75`, auto-selected by model key. **`mtplx serve --model
+<mxfp4>` with no expert flags** resolves the full tuned config:
+82 GiB memory limit / 7 GiB runtime reserve / 75 GiB weight envelope, LRU+layer
+cache (no W24 routing census yet), `component-banks` slot layout (mxfp4 codec),
+48 transient service slots, `bypass_page_cache` (F_NOCACHE) on, 8 MiB read chunk,
+deferred split-route release, derived remainder expert cache (≈64.4 GiB, 92
+resident slots/layer of 384), engram row cache 2 GiB, and the session bank's
+near-prefix restore + store-on-prefill **off** (W22: they desync the engram hash
+at layers 1/14 on warm turns). `--expert-profile` choices are now registry-derived
+so the auto-resolved profile name forwards to the daemon child cleanly.
+
+All three commands below run inside `gpu_window.sh` exactly like steps 2–4 above;
+they already default to the mxfp4 artifact. `$WT`/`$PY` as at the top of this file.
+
+    # A. serve health + one completion (HTTP; exercises the auto-resolved profile)
+    cd $WT && bash scripts/deepseek_v41/gpu_window.sh bash scripts/deepseek_v41/serve_health.sh
+    # standard-tool health smoke against a server already up on a free high port:
+    #   $PY -m mtplx.cli bench serve --host 127.0.0.1 --port <PORT>
+
+    # B. David's shape, greedy — 1,024-token prefill_bench prompt + 16,384 cell.
+    #    Reports prefill_tok_s, ttft_s, decode_tok_s, peak GB (peak_mlx_gb +
+    #    process_rss_gb) and wall_s per cell. Pin the memory limit to the profile
+    #    envelope (82 GiB) so the plan matches the served profile's slot count.
+    cd $WT && bash scripts/deepseek_v41/gpu_window.sh env PYTHONPATH=$WT $PY scripts/deepseek_v41/bench_standard_shape.py --context-tokens 1024 16384 --steps 256 --memory-limit-gib 82 --out-dir $WT/.benchmark-artifacts/deepseek-v41
+
+    # C. one HumanEval(164) pass@1 cell at David's sampler (HTTP; profile-resolved)
+    #    temperature 1, top-p 0.95, top-k 20, non-binding cap.
+    cd $WT && bash scripts/deepseek_v41/gpu_window.sh bash scripts/deepseek_v41/humaneval_cell.sh
+
+## Why the generic `mtplx bench` cannot express this shape (standard-tooling check)
+
+The task asks for `mtplx bench --suite … --profile …` / `mtplx bench
+prefill-ladder` where they fit. They do **not** fit David's DSV4.1 shape, and the
+gap is structural — do not build a new runner:
+
+- `mtplx bench run` (bare) is the **manifest-backend scaffold** only
+  (`cli.py`: "Only backend=manifest is implemented in this scaffold gate"); it
+  does not load a streamed MoE artifact at a fixed prefill shape.
+- The promoted `mtplx bench` battery (`docs/perf/qwen38-475-battery`,
+  `_cmd_bench_profile` → `performance-cold`) is an **MTP depth-sweep** over a
+  native model with typical-acceptance arms. DSV4.1 streamed is **AR-only** (the
+  serve path forces `generation_mode=ar` and rejects `--mtp`), so the depth
+  sweep and the acceptance arms are inapplicable, and there is no `--suite`/
+  `--profile` combination that produces the 1,024/16,384 greedy prefill cell with
+  the DSV4.1 `prefill_bench` prompt build **and** the per-cell expert/engram
+  gather counters.
+- `mtplx bench prefill-ladder` measures prompt-processing speed across context
+  sizes but not the decode tok/s + TTFT + peak-GB + wall of a single greedy cell,
+  and again has no streamed-AR MoE serve harness.
+
+`mtplx bench serve` (command A's second line) **is** the standard tool for the
+health/metrics smoke of a running server, so it is used as-is. Everything else is
+covered by the DSV4.1 drivers, which exist precisely because the generic bench
+cannot express this shape (streamed AR MoE, DSV4.1 prompt build, expert/engram
+counters, append-only DSV4.1 receipts).
+
+## One flagged config delta (command B)
+
+`bench_standard_shape.py` measures the shape through the **serve-path loader**
+(`load_deepseek_v41_streaming`) at `--memory-limit-gib`, not through the promoted
+serve profile object: it applies the loader's config defaults (frequency cache,
+`top_k` transient slots, page cache on) rather than the profile's LRU / 48
+transient slots / F_NOCACHE. `--memory-limit-gib 82` aligns the **envelope and the
+resident-slot count** (92 slots/layer) with the served profile, so it is a faithful
+proxy for the profile's *memory shape*; the cache-policy / transient / F_NOCACHE
+deltas are second-order for a single greedy cell. The only shape number that would
+require the exact profile config is a true HTTP decode-through-`mtplx serve` cell —
+there is no standard streamed-AR served-decode-at-fixed-shape harness for that, and
+per the task none is written here. serve_health.sh and humaneval_cell.sh already
+exercise the full profile over HTTP for the health and quality cells.
