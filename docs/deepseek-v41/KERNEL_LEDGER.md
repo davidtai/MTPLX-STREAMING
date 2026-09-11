@@ -215,8 +215,16 @@ tune the compute.**
   `hc_split_sinkhorn` via `_mixes`), ~80 dispatches each without the V4 `_sinkhorn_metal_kernel` →
   ~6.4 k dispatch just for HC-mix normalization (matches V4's 6,794 → 86 with the kernel). This is the
   compute-floor lever that becomes visible post-streaming (K3).
+- **A second per-layer sync on the DSV4.1 lane (K23):** besides the barrier, the *fenced* default
+  (`deferred_pin_release=False`, `split_route_release="fenced"` — DSV4.1's `build_streaming_config`
+  leaves both at their dataclass defaults) forces one blocking `mx.eval(wave_output)` per all-hit
+  layer (`synchronous_fence`; W37 route bracket `hot.allhit_fence_eval` = 0.65 ms × 1558 all-hit
+  layer-calls ≈ 15.9 ms/token) plus one per wave part on split routes. hy3/glm defer both, so their
+  profiles pay **only** the barrier per layer. K23 (`MTPLX_DSV41_SWITCH_FASTPATH`) removes this second
+  sync for DSV4.1 by promoting the same deferred release.
 - **No whole-forward `mx.eval`** in `_forward_span` (decode path); the only forced evals are the
-  per-layer streamed-switch barrier and (in chunked prefill) `_eval_cache_state` per chunk.
+  per-layer streamed-switch barrier, the (fenced-default) all-hit/split wave fence above, and (in
+  chunked prefill) `_eval_cache_state` per chunk.
 
 ---
 
@@ -250,6 +258,46 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   the backpressure floor.
 - **Precedent:** shared-hoist ~0.44 ms already coded (`expert_mlx.py:1956`); a3b one-sync-per-cycle
   KILL (the ceiling, not a promise).
+
+### K23 — DSV4.1 all-hit switch fence removal (deferred-release, W42) — **Rank 1b (companion to K1; the second per-layer sync K1 does not touch)**
+- **Mechanism:** the DSV4.1 lane pays a **second** per-layer device→host sync besides the K1 routing
+  barrier — the all-hit **wave fence** `synchronous_fence` → `mx.eval(wave_output)` in
+  `HotExpertSwitchGLU._run` (route bracket `hot.allhit_fence_eval`). W37 window-13 measured it at
+  **1016.9 ms / 1558 all-hit layer-calls = 0.65 ms each ≈ 15.9 ms/token**; split routes add one
+  blocking fence per wave part (1 hit + N miss). **hy3/glm never pay it:** their profiles ship
+  `deferred_pin_release=True` + `split_route_release="deferred"` (`mtplx/data/expert_profiles.json`),
+  so the slot release **defers to the next layer's barrier** — the wave output is an ancestor of the
+  next `mx.eval(indices)`, which materializes it for free — and split waves dispatch via `async_eval`.
+  DSV4.1's `build_streaming_config` (`deepseek_v41_loader.py:284`) leaves **both at the dataclass
+  default (`False` / `"fenced"`, `expert_runtime.py:180,205`)**, so this lane — and only this lane —
+  eats the extra sync. **W37 proof this is the cost, not miss I/O:** warm-repeat decode == cold
+  (3.80 vs 3.73 tok/s), so every-expert-resident does not speed decode; the exposed per-layer host
+  round-trips do. The all-hit gather itself reads 6 × **18,800,640 B** (manifest, W24-consistent) =
+  ~113 MB/layer from the resident bank ≈ ~0.19 ms @ 600 GB/s — **not** the 2.5 ms.
+- **Lever:** env `MTPLX_DSV41_SWITCH_FASTPATH` (default off) promotes the identical, already-shipped
+  deferred mechanism for the DSV4.1 lane **without mutating the config** (other lanes/callers
+  untouched; A/Bs cleanly, W28 env-isolation convention). It **removes** the second sync (not fill —
+  the next barrier is the covering eval, so **no blocking sync is added**), and stops serialising the
+  decode so layer N+1's dispatch overlaps layer N's gather. **Distinct from K1:** K1 *fills* the
+  barrier's idle window (barrier stays); K23 *removes* the separate wave/slot fence. They compose.
+- **Where:** decode + verify (all-hit + split). **Now:** exposed **today** (window-13 measured), not
+  behind the SSD wall — the fence fires every all-hit layer regardless of residency. **After:**
+  removes ~40 × 0.65 ms ≈ **26 ms/token** of exposed all-hit fence plus the split per-part fences;
+  expected all-hit switch **~2.5 → ~1 ms/layer** (toward hy3's barrier-only floor). GPU A/B prices
+  the net decode delta.
+- **Exactness:** none — pure fence/release-timing reorder; gather math unchanged, output byte-identical.
+  Proven: fake-bank all-hit/split/all-miss at M=1 and M=4 + a real streamed runtime whose logits equal
+  the fenced default with pins held until the covering flush (`tests/test_deepseek_v41_switch_
+  fastpath.py`); the underlying deferred mechanism's slot-safety is
+  `test_streamed_models.py::test_deferred_split_route_release_matches_fenced_bitwise`.
+- **⚠ Effort/risk:** low; guarded — engages only when the runtime implements `defer_slot_release` /
+  `flush_deferred_slot_releases` (real `ExpertStreamingRuntime` does; a fake without it falls back to
+  the shipped fence, never crashing). The a3b sync-conservation caution
+  ([[a3b-decode-roundtrip-is-the-lever]]) does **not** bite here: this is the pin/release **lifecycle**
+  fence, not the decision sync — it is genuinely redundant with the next barrier, so its removal adds
+  no blocking `mx.eval` (asserted per arm, [[moe-exec-fusion-25-26-27]] "COUNT mx.eval PER ARM").
+- **Precedent:** hy3-oq2e profiles ship this exact pair in production (`expert_profiles.json`);
+  W28's shared-overlap uses the same env-isolation pattern.
 
 ### K2 — MTP verify amortizes barrier + resident read (Factor A, GPU side) — **Rank (owned by R1)**
 - **Mechanism:** one K+1 forward runs the 40 barriers and the 10.65 GB resident read **once** for

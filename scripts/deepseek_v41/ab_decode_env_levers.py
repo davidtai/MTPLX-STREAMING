@@ -53,20 +53,33 @@ BARRIER_STAGE = "hot.eval_indices"
 LAYER_MAJOR_ENV = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
 SINKHORN_METAL_ENV = "MTPLX_DSV41_SINKHORN_METAL"   # K3, merged @ 8982b93c9
 HC_COMPILE_ENV = "MTPLX_DSV41_HC_COMPILE"           # K4, landing
+SWITCH_FASTPATH_ENV = "MTPLX_DSV41_SWITCH_FASTPATH"  # K23 (W42): defer the
+# per-all-hit-layer switch fence + async-dispatch split waves (hy3's shipped
+# deferred-release mechanism, promoted for the DSV4.1 lane whose config leaves it
+# fenced). Removes the second per-layer device->host sync; byte-identical.
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
-# force-unset) so applying an arm fully determines the four flags regardless of
+# force-unset) so applying an arm fully determines the flags regardless of
 # what a prior arm in the same process left set -- the arms are independent.
-ALL_LEVER_ENVS = (OVERLAP_ENV, LAYER_MAJOR_ENV, SINKHORN_METAL_ENV, HC_COMPILE_ENV)
+ALL_LEVER_ENVS = (
+    OVERLAP_ENV,
+    LAYER_MAJOR_ENV,
+    SINKHORN_METAL_ENV,
+    HC_COMPILE_ENV,
+    SWITCH_FASTPATH_ENV,
+)
 
 
-def _preset(*, overlap=None, layer_major=None, sinkhorn=None, hc=None) -> dict:
-    """A preset that pins ALL four lever keys (None = force-unset)."""
+def _preset(
+    *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None
+) -> dict:
+    """A preset that pins EVERY lever key (None = force-unset)."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
         SINKHORN_METAL_ENV: sinkhorn,
         HC_COMPILE_ENV: hc,
+        SWITCH_FASTPATH_ENV: fastpath,
     }
 
 
@@ -76,8 +89,11 @@ ARM_PRESETS = {
     "layer_major": _preset(layer_major="1"),                # W30 K16 lever ON
     "sinkhorn_metal": _preset(sinkhorn="1"),                # K3 lever ON (8982b93c9)
     "hc_compile": _preset(hc="1"),                          # K4 lever ON (landing)
+    "switch_fastpath": _preset(fastpath="1"),               # W42 K23 lever ON
     "both": _preset(overlap="1", layer_major="1"),          # shared_overlap + layer_major
-    "all_levers": _preset(overlap="1", layer_major="1", sinkhorn="1", hc="1"),
+    "all_levers": _preset(
+        overlap="1", layer_major="1", sinkhorn="1", hc="1", fastpath="1"
+    ),
 }
 
 
@@ -107,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=["control", "shared_overlap"],
         help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, "
-        "sinkhorn_metal, hc_compile, both, all_levers)",
+        "sinkhorn_metal, hc_compile, switch_fastpath, both, all_levers)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that

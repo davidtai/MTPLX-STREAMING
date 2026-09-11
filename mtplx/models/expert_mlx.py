@@ -1958,6 +1958,48 @@ class HotExpertSwitchGLU(nn.Module):
             )
         tokens = x.reshape(-1, hidden_size)
         top_k = int(indices.shape[-1])
+        # DSV4.1 switch fast-path (W42, KERNEL_LEDGER K23; env
+        # ``MTPLX_DSV41_SWITCH_FASTPATH``, default off).  W37 measured the
+        # streamed switch at ~2.5 ms/layer with warm-repeat decode == cold decode
+        # (3.80 vs 3.73 tok/s), so miss I/O is NOT the cost.  The route probe
+        # attributes the exposed all-hit cost to ``hot.allhit_fence_eval``: one
+        # BLOCKING ``mx.eval(wave_output)`` per all-hit layer (``synchronous_
+        # fence``) -- a SECOND device->host round-trip on top of the
+        # ``mx.eval(indices)`` routing barrier, serialising the decode so the next
+        # layer cannot overlap this layer's gather.  hy3/glm never pay it: their
+        # profiles ship ``deferred_pin_release=True`` (+ ``split_route_release=
+        # "deferred"``), so the all-hit release defers to the next barrier's
+        # covering eval and the split waves dispatch via ``async_eval``.  DSV4.1's
+        # ``build_streaming_config`` leaves both at the dataclass default
+        # (fenced/False), so this lane -- and only this lane -- eats the extra
+        # per-layer sync.  The fast-path promotes the identical, already-shipped
+        # deferred mechanism for DSV4.1 WITHOUT mutating the config (other lanes
+        # and callers are untouched; the flag A/Bs cleanly).  It is a pure
+        # fence/release-timing reorder -- the gather math is unchanged -- so the
+        # output is byte-identical (asserted for all-hit / split / all-miss at
+        # M=1 and M=4).  It engages only when the runtime actually implements the
+        # deferred-release machinery (the real ExpertStreamingRuntime does; a fake
+        # without it falls back to the shipped fence, never crashing).
+        _switch_fastpath = os.environ.get("MTPLX_DSV41_SWITCH_FASTPATH") == "1"
+        _fastpath_can_defer = (
+            _switch_fastpath
+            and callable(getattr(self.runtime, "defer_slot_release", None))
+            and callable(
+                getattr(self.runtime, "flush_deferred_slot_releases", None)
+            )
+        )
+        # OR the env promotion with the config field at every decision site. With
+        # the flag OFF, ``_fastpath_can_defer`` is False and these collapse to the
+        # exact shipped expressions -> byte-identical, zero behavioural change.
+        _deferred_pin_active = (
+            getattr(self.runtime.config, "deferred_pin_release", False)
+            or _fastpath_can_defer
+        )
+        _split_deferred_active = (
+            getattr(self.runtime.config, "split_route_release", "fenced")
+            == "deferred"
+            or _fastpath_can_defer
+        )
         # Shared-branch hoist (issue #51, flag-gated, exact-quality). Normally
         # the resident shared MLP is submitted AFTER begin_split_route so it
         # overlaps the miss reads (~0.44 ms). But the router host-sync below
@@ -2407,12 +2449,12 @@ class HotExpertSwitchGLU(nn.Module):
                             deferred_release = False
                             # Promoted default via ExpertStreamingConfig after
                             # the C3 matrix; fakes without the field keep the
-                            # fence path.
-                            if wave_index == final_wave and getattr(
-                                self.runtime.config,
-                                "deferred_pin_release",
-                                False,
-                            ):
+                            # fence path.  ``_deferred_pin_active`` also fires when
+                            # the W42 fast-path (``MTPLX_DSV41_SWITCH_FASTPATH``)
+                            # is armed on a runtime that can defer -- removing this
+                            # per-all-hit-layer blocking ``mx.eval`` is the whole
+                            # point of the fast-path.
+                            if wave_index == final_wave and _deferred_pin_active:
                                 self.runtime.defer_slot_release(ready, wave_output)
                                 deferred_release = True
                                 _route_probe.count("hot.allhit_defer")
@@ -2448,14 +2490,17 @@ class HotExpertSwitchGLU(nn.Module):
                 # (the same coverage proof deferred pins already rely on).
                 # A deferred split also keeps the layer lock until that
                 # flush, so only the final wave may take this path.
+                # ``_split_deferred_active`` / ``_deferred_pin_active`` fold in the
+                # W42 fast-path promotion (``MTPLX_DSV41_SWITCH_FASTPATH``) so a
+                # split layer's hit + miss waves dispatch via ``async_eval`` and
+                # release at the next barrier, instead of one blocking
+                # ``synchronous_fence`` per wave part.  Only the final wave may
+                # defer (issue #120: the layer lock is not reentrant).
                 deferred_split = (
                     wave_index == final_wave
                     and phase is RoutingPhase.DECODE
-                    and getattr(
-                        self.runtime.config, "split_route_release", "fenced"
-                    )
-                    == "deferred"
-                    and getattr(self.runtime.config, "deferred_pin_release", False)
+                    and _split_deferred_active
+                    and _deferred_pin_active
                 )
                 deferred_parts: list[ReadyRoute] = []
                 split_completed = False
@@ -2560,14 +2605,7 @@ class HotExpertSwitchGLU(nn.Module):
                             # coverage, so the blocking barrier serves no
                             # release obligation there; strict mode keeps it.
                             async_eval = getattr(mx, "async_eval", None)
-                            if (
-                                getattr(
-                                    self.runtime.config,
-                                    "deferred_pin_release",
-                                    False,
-                                )
-                                and callable(async_eval)
-                            ):
+                            if _deferred_pin_active and callable(async_eval):
                                 async_eval(shared)
                             else:
                                 mx.eval(shared)

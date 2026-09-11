@@ -10,8 +10,8 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
   * the ``--dry-run`` CPU double (no model, no MLX/Metal op, no server);
   * per-arm env application for every preset
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
-    both / all_levers), including arm independence (each arm force-unsets the
-    keys it does not set);
+    switch_fastpath / both / all_levers), including arm independence (each arm
+    force-unsets the keys it does not set);
   * prompt-build metadata parity with ``bench_standard_shape`` at 1024.
 
 No GPU, no Metal, no model, no server, no network. The scripts are not a package
@@ -40,7 +40,8 @@ _OV = "MTPLX_DSV41_SHARED_OVERLAP"
 _LM = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
 _SK = "MTPLX_DSV41_SINKHORN_METAL"
 _HC = "MTPLX_DSV41_HC_COMPILE"
-_ALL_KEYS = (_OV, _LM, _SK, _HC)
+_FP = "MTPLX_DSV41_SWITCH_FASTPATH"
+_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP)
 
 ALL_ARMS = [
     "control",
@@ -48,6 +49,7 @@ ALL_ARMS = [
     "layer_major",
     "sinkhorn_metal",
     "hc_compile",
+    "switch_fastpath",
     "both",
     "all_levers",
 ]
@@ -59,8 +61,9 @@ EXPECTED_ON = {
     "layer_major": {_LM},
     "sinkhorn_metal": {_SK},
     "hc_compile": {_HC},
+    "switch_fastpath": {_FP},
     "both": {_OV, _LM},
-    "all_levers": {_OV, _LM, _SK, _HC},
+    "all_levers": {_OV, _LM, _SK, _HC, _FP},
 }
 
 
