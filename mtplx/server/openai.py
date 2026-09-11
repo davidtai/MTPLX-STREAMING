@@ -19912,6 +19912,43 @@ def _mlx_allocator_public_stats() -> dict[str, int]:
     return stats
 
 
+#: Request-end MLX allocator footprint carried on every ``mtplx_openai_generation``
+#: event (W62): peak/active/cache bytes so a served window can attribute its
+#: box-total memory the same way the bench receipts do.
+_GENERATION_EVENT_MEMORY_KEYS = (
+    "peak_memory_bytes",
+    "active_memory_bytes",
+    "cache_memory_bytes",
+)
+
+
+def _generation_event_memory_fields(
+    stats: Mapping[str, Any] | None = None,
+) -> dict[str, int]:
+    """peak/active/cache bytes for the ``mtplx_openai_generation`` event.
+
+    Prefers the request-end allocator figures already merged into ``stats``
+    (every lane runs ``envelope.update(_mlx_allocator_public_stats())`` before
+    the event) so the event and the stats block cannot disagree; falls back to a
+    fresh :func:`_mlx_allocator_public_stats` read when they are absent.
+    """
+
+    src: dict[str, Any] = {}
+    if stats:
+        src = {
+            key: stats.get(key)
+            for key in _GENERATION_EVENT_MEMORY_KEYS
+            if stats.get(key) is not None
+        }
+    if not src:
+        src = _mlx_allocator_public_stats()
+    return {
+        key: int(src[key])
+        for key in _GENERATION_EVENT_MEMORY_KEYS
+        if src.get(key) is not None
+    }
+
+
 def _generation_truth_stats(
     state: "ServerState", effective_mode: str
 ) -> dict[str, Any]:
@@ -23292,6 +23329,7 @@ def _finalize_batched_ar_generation(
                     "seed": stats.get("server_seed"),
                     "mtp_disabled_reason": stats.get("mtp_disabled_reason"),
                     "text_preview": str(generated.get("text") or "")[:120],
+                    **_generation_event_memory_fields(stats),
                 },
                 ensure_ascii=False,
             )
@@ -23496,6 +23534,7 @@ def _finalize_mtp_batch_generation(
                     "seed": stats.get("server_seed"),
                     "mtp_batch_real_width": stats.get("mtp_batch_real_width"),
                     "text_preview": str(generated.get("text") or "")[:120],
+                    **_generation_event_memory_fields(stats),
                 },
                 ensure_ascii=False,
             )
@@ -25534,6 +25573,7 @@ def _run_generation(
             "attempts": last["stats"].get("server_attempts"),
             "blank_retries": last["stats"].get("server_blank_retries"),
             "text_preview": str(last["text"])[:120],
+            **_generation_event_memory_fields(last["stats"]),
         }
         if _stage_timing:
             _generation_event["serve_stage_timing"] = _stage_timing

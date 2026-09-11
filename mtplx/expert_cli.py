@@ -660,6 +660,16 @@ def apply_expert_profile_child_env(
             # Served default: keep the operator's explicit parent-shell value.
             continue
         environ[key] = value
+    # W62: propagate David's TOTAL box budget to the DeepSeek-V4.1 child so the
+    # served path shares the one knob the bench scripts derive their plan from
+    # (mtplx.deepseek_v41_memory_profile.derive_plan_from_budget). Advisory and
+    # operator-overridable: only stamped when unset, and never the load-bearing
+    # MTPLX_MEMORY_LIMIT_BYTES, so it cannot conflict with the served plan's cap.
+    if str(getattr(profile, "model_key", "")).startswith("deepseek-v41"):
+        from .deepseek_v41_memory_profile import budget_child_env
+
+        for key, value in budget_child_env(environ).items():
+            environ.setdefault(key, value)
 
 
 def _apply_diagnostic_hash_policy(
