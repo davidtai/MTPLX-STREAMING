@@ -246,6 +246,98 @@ def test_stream_chat_parses_canned_sse(monkeypatch):
     assert "enable_thinking" not in out["request_body"]
 
 
+def test_stream_chat_captures_http_400_status_and_body(monkeypatch):
+    # W23: a 16K prompt + 1,024 output exceeds the served 16,384 context window,
+    # so the server rejects with HTTP 400. urllib raises HTTPError at urlopen;
+    # the harness must record the STATUS and the response BODY, never a silent
+    # all-None row.
+    import io
+    import urllib.error
+
+    body = (
+        b'{"error":{"message":"requested context of 17408 tokens exceeds the '
+        b"model's context window of 16384 tokens\",\"type\":\"invalid_request\"}}"
+    )
+
+    def raise_400(request, timeout=None):
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:9/v1/chat/completions",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(body),
+        )
+
+    monkeypatch.setattr(scb.urllib.request, "urlopen", raise_400)
+    out = scb.stream_chat(
+        base_url="http://127.0.0.1:9",
+        model_id="dsv41-id",
+        prompt="x" * 10,
+        max_tokens=1024,
+        temperature=1.0,
+        top_p=0.95,
+        top_k=20,
+        seed=_SEEDS[0],
+        reasoning_effort=None,
+        enable_thinking=None,
+        timeout_s=5.0,
+    )
+    assert out["ok"] is False
+    assert out["http_status"] == 400
+    assert "16384" in out["http_body"] and "17408" in out["http_body"]
+    # the error string carries the status AND the body reason (not a bare
+    # "HTTP Error 400: Bad Request")
+    assert out["error"].startswith("HTTP 400")
+    assert "context window" in out["error"]
+    # the request body is still recorded so the receipt says what was asked
+    assert out["request_body"]["max_tokens"] == 1024
+
+
+def test_stream_chat_captures_urlerror(monkeypatch):
+    import urllib.error
+
+    def raise_conn(request, timeout=None):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(scb.urllib.request, "urlopen", raise_conn)
+    out = scb.stream_chat(
+        base_url="http://127.0.0.1:9",
+        model_id="dsv41-id",
+        prompt="hi",
+        max_tokens=8,
+        temperature=1.0,
+        top_p=0.95,
+        top_k=20,
+        seed=None,
+        reasoning_effort=None,
+        enable_thinking=None,
+        timeout_s=1.0,
+    )
+    assert out["ok"] is False
+    assert out["http_status"] is None
+    assert "URLError" in out["error"]
+
+
+def test_server_log_error_tail_prefers_error_lines(tmp_path):
+    log = tmp_path / "serve.log"
+    log.write_text(
+        "\n".join(
+            [
+                "[5/6] Context window: 16384 tokens",
+                "MTPLX is ready.",
+                "some benign line",
+                "ERROR request rejected: context window 16384 exceeded",
+                "another benign line",
+            ]
+        )
+    )
+    tail = scb._server_log_error_tail(str(log))
+    assert tail is not None
+    assert "context window 16384 exceeded" in tail
+    # a missing file returns None, never raises
+    assert scb._server_log_error_tail(str(tmp_path / "nope.log")) is None
+
+
 # ---------------------------------------------------------------------------
 # ids file round-trips into the A/B script's prompt resolution / dry-run
 # ---------------------------------------------------------------------------

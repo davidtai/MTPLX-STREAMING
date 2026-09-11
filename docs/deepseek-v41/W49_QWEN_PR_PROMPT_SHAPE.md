@@ -161,6 +161,20 @@ the 100 GiB knob for the 16K cell; the default 82 GiB ceiling is tighter.
 Companion knobs `--expert-max-live-kv-tokens` / `--expert-runtime-reserve` are
 available via `DSV41_SERVE_EXTRA_ARGS` if finer control is needed.
 
+**16K context window (W55/Window-23):** the profile's `max_live_kv_tokens` is
+also the served **context window** (`openai.py`: `args.context_window =
+stream_config.max_live_kv_tokens` when unset). At the default **16,384**, a
+16,384-token prompt **plus** `max_tokens=1,024` output = 17,408 tokens exceeds
+the window and the server rejects the request with **HTTP 400** in ~9 s (before
+prefill — not a timeout, not OOM). `served_cell_bench.sh` therefore sizes
+`--expert-max-live-kv-tokens` to `max(contexts) + max_tokens + margin` (default
+17,664 = 16,384 + 1,024 + 256; override with `DSV41_MAX_LIVE_KV_TOKENS` /
+`DSV41_KV_MARGIN`), which raises both the context-window admission and the KV
+memory plan so prompt + output fit. The extra ~1,024 KV over 16,384 is ~+6% and
+stays inside the 60 GiB plan. A failed cell now records `http_status`,
+`http_body`, and the server log's error tail (`--server-log`) — never a silent
+all-None row.
+
 The harness prints per cell: prefill s + prefill tok/s, TTFT, decode tok/s,
 wall, completion tokens, reasoning/answer split (0 for DSV4.1 — no thinking),
 finish_reason; then the **fastest-of-seeds** summary per cell (max decode tok/s,
