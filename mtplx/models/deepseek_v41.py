@@ -742,12 +742,23 @@ class Attention(nn.Module):
         H, hd, rd = self.n_heads, self.head_dim, self.rope_head_dim
         qcos, qsin = _cos_sin(self.inv_freq, positions)
 
-        qr = _rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
-        q = self.wq_b(qr).reshape(b, s, H, hd)
-        q = _rope_last(q, qcos, qsin)
+        # K22 attention-chain compile: the pure projection/norm/rope prep that
+        # produces (q, qr, kv_new) is one compiled tape at decode/verify row
+        # counts (the KV-cache write, the window mask, the indexer's data-dependent
+        # selection and the SDPA all stay OUTSIDE it).  Byte-for-byte the eager
+        # body with the flag off / above the row cap.
+        if _attn_use_compile(b * s):
+            q, qr, kv_new = _attn_qkv_prep(self)(
+                x, qcos, qsin, self.q_norm_weight, self.kv_norm_weight,
+                *_lin_arrays(self.wq_a), *_lin_arrays(self.wq_b), *_lin_arrays(self.wkv),
+            )
+        else:
+            qr = _rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
+            q = self.wq_b(qr).reshape(b, s, H, hd)
+            q = _rope_last(q, qcos, qsin)
 
-        kv_new = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
-        kv_new = _rope_last(kv_new, qcos, qsin)  # window kv roped at its own token positions
+            kv_new = _rmsnorm(self.wkv(x), self.kv_norm_weight, self.eps)
+            kv_new = _rope_last(kv_new, qcos, qsin)  # window kv roped at its own token positions
         # W13's window store keeps the post-RoPE rows append-only (row i == token i).
         # Phase 1 attends over the full history and realises the reference sliding
         # window (get_window_topk_idxs L409-426 / _window_kv L700-720) as a causal
@@ -773,15 +784,27 @@ class Attention(nn.Module):
                 attend = mx.concatenate([attend, comp_attend], axis=-1)
 
         o = self._sparse_attend(q, KV, attend)
+        # K22: the post-attention output chain -- query-RoPE removal, the grouped
+        # o-LoRA down-projection and the ``wo_b`` up-projection -- is pure and
+        # fixed-shape (the SDPA output ``o`` is [b,s,H,hd]); one compiled tape at
+        # decode/verify.  ``w_ol`` (the dequantized grouped ``wo_a`` weight) is a
+        # per-forward constant, derived by the same path as eager and fed as an
+        # input, so the einsum inside the tape is bit-exact to :meth:`_o_lora_down`.
+        if _attn_use_compile(b * s):
+            return _attn_out_prep(self)(
+                o, qcos, qsin, self._o_lora_dense_weight(), *_lin_arrays(self.wo_b)
+            )
         o = _rope_last(o, qcos, qsin, inverse=True)
         o = o.reshape(b, s, self.n_groups, -1)
         o = self._o_lora_down(o)
         return self.wo_b(o.reshape(b, s, -1))
 
-    def _o_lora_down(self, o):
-        """Grouped ``wo_a`` down-projection: reshape the [out=n_groups*o_lora_rank,
-        in_per_group] weight to [g, o_lora_rank, in] and einsum each group over its
-        own heads (reference model.py L785-787).  Dequantized when q8-resident."""
+    def _o_lora_dense_weight(self):
+        """The grouped ``wo_a`` weight as a dense ``[g, o_lora_rank, in_per_group]``
+        f32-castable array -- dequantized when q8/native-resident, else the raw
+        ``nn.Linear`` weight.  Extracted so :meth:`_o_lora_down` (eager) and the K22
+        compiled output tape derive the einsum weight through the *identical* path
+        (bit-exact either way): the dequant is weight-only, no dependence on ``o``."""
         wo = self.wo_a
         if isinstance(wo, nn.QuantizedLinear):
             # Mode-aware: affine q8 carries biases; the native float codecs
@@ -793,8 +816,183 @@ class Attention(nn.Module):
             )
         else:
             w = wo.weight
-        w = w.reshape(self.n_groups, self.o_lora_rank, -1)
+        return w.reshape(self.n_groups, self.o_lora_rank, -1)
+
+    def _o_lora_down(self, o):
+        """Grouped ``wo_a`` down-projection: reshape the [out=n_groups*o_lora_rank,
+        in_per_group] weight to [g, o_lora_rank, in] and einsum each group over its
+        own heads (reference model.py L785-787).  Dequantized when q8-resident."""
+        w = self._o_lora_dense_weight()
         return mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w.astype(mx.float32))
+
+
+# ---------------------------------------------------------------------------
+# Attention-chain tape collapse (kernel-ledger K22, W41)
+# ---------------------------------------------------------------------------
+# W37/window-13 stage timing put decode attention at attn.reuse 50.2 ms/tok (30
+# layers -> 1.7 ms/layer for an M=1 MLA step) + swa_only 9.8 (2 layers, 4.9
+# ms/layer!) + full 8.9 (4) + reindex 8.0 (4).  A single-row attention step
+# costing 1.7-4.9 ms is a dispatch-chain problem -- dozens of tiny projection /
+# RMSNorm / RoPE ops the GPU never notices -- the regime where whole-chain
+# ``mx.compile`` pays and single fusions do not ([[b1-decode-dispatch-removal-
+# hides]]).  K22 replays the two PURE attention chains from an ``mx.compile`` tape
+# instead of rebuilding the graph from Python each call, behind
+# ``MTPLX_DSV41_ATTN_COMPILE`` (default OFF -- the decode win is a GPU-window
+# measurement).  Following W33/K4's fixed-shape + row-cap design (shapeless is not
+# viable), the two chains are:
+#  1. QKV prep: q down/up projection + q-RMSNorm + RoPE and the kv down projection
+#     + kv-RMSNorm + RoPE -> (q, qr, kv_new).  PURE: the KV-cache write
+#     (``append_window``), the window mask, the indexer's data-dependent CSA
+#     selection and the SDPA all stay OUTSIDE the tape.
+#  2. Output prep: query-RoPE removal + grouped o-LoRA down-projection einsum +
+#     ``wo_b`` up-projection -> attention output.  PURE (the SDPA that mutates
+#     nothing runs between the two tapes).
+# Projection weights arrive as tape INPUTS (one tape shared across all 40 layers
+# -- they share every shape, differing only in values), and each projection is
+# applied by ``_apply_lin`` exactly as ``nn.Linear`` / ``nn.QuantizedLinear`` do,
+# so the tape is bit-identical to the eager module call whether the residents are
+# dense (tiny-config / native-BF16-kept projections) or quantized (q8 gs64 /
+# mxfp8 / mxfp4 / nvfp4 residents -- ``mx.quantized_matmul`` replays as one
+# primitive, so compile never reassociates it).  ``mx.unflatten``/``mx.flatten``
+# replace the ``.reshape(b,s,...)`` calls so the tape reads no dynamic ``.shape``.
+#: Env toggle for the K22 attention-chain tape collapse.  Default OFF (the win is
+#: a GPU-window measurement).  Read through the module global so tests/operators
+#: can flip it after import.
+_ATTN_COMPILE_ENV = "MTPLX_DSV41_ATTN_COMPILE"
+_ATTN_COMPILE = (os.environ.get(_ATTN_COMPILE_ENV) or "").strip().lower() not in (
+    "", "0", "false", "no", "off", "auto",
+)
+#: Row count (``b*s``) at or below which the compiled attention tapes fire; above
+#: it the eager body runs (byte-identical).  Confines compile to the tiny
+#: repeating decode (1) / verify (K+1) shapes, where it is ``mx.array_equal`` with
+#: eager and where the per-primitive host encode dominates.  Module global so
+#: tests can retarget it.
+_ATTN_COMPILE_MAX_ROWS = 32
+#: One compiled tape per ``(kind, structural-signature)``; the signature carries
+#: each projection's ``_lin_desc`` (dense vs the quant codec) plus the head/group
+#: geometry, so a quantized-resident model gets its own bit-exact tape.
+_ATTN_COMPILED: dict = {}
+
+
+def _lin_desc(linear):
+    """Structural descriptor of a projection linear (dense ``nn.Linear`` or
+    ``nn.QuantizedLinear``) -- the compile-cache discriminator; carries no arrays."""
+    if isinstance(linear, nn.QuantizedLinear):
+        has_b = linear.get("biases") is not None
+        return ("q", int(linear.group_size), int(linear.bits),
+                str(getattr(linear, "mode", "affine")), has_b)
+    return ("d",)
+
+
+def _lin_arrays(linear):
+    """The raw arrays a projection linear needs as tape inputs, in
+    :func:`_lin_desc` order: dense -> (weight,); quantized -> (weight, scales[,
+    biases])."""
+    if isinstance(linear, nn.QuantizedLinear):
+        arrs = [linear.weight, linear.scales]
+        biases = linear.get("biases")
+        if biases is not None:
+            arrs.append(biases)
+        return tuple(arrs)
+    return (linear.weight,)
+
+
+def _lin_n(desc) -> int:
+    """Number of arrays :func:`_lin_arrays` yields for ``desc``."""
+    if desc[0] == "q":
+        return 3 if desc[4] else 2
+    return 1
+
+
+def _apply_lin(desc, arrs, x):
+    """Apply the linear described by ``desc`` to ``x`` using ``arrs`` -- exactly
+    what ``nn.Linear.__call__`` (``x @ w.T``) / ``nn.QuantizedLinear.__call__``
+    (``mx.quantized_matmul``) do (bias=False throughout), so the tape is
+    bit-identical to the eager module call and compile never reassociates the
+    quantized matmul (one primitive)."""
+    if desc[0] == "q":
+        _, gs, bits, mode, has_b = desc
+        biases = arrs[2] if has_b else None
+        return mx.quantized_matmul(
+            x, arrs[0], scales=arrs[1], biases=biases,
+            transpose=True, group_size=gs, bits=bits, mode=mode,
+        )
+    return x @ arrs[0].T
+
+
+def _attn_use_compile(rows: int) -> bool:
+    """Is this forward in the row regime the K22 attention tapes are kept for?
+
+    Reads the module globals at call time so a test/operator can flip them after
+    import.  Unlike the K4 HC tapes this does NOT force-eager under the W37
+    stage-timing probe: ``_attend`` is a single ``attn.<mode>`` stage with no
+    sub-stage fences, so a compiled prep tape never splits a fenced bracket (the
+    stage still fences the whole attention output either way)."""
+    if not _ATTN_COMPILE:
+        return False
+    return int(rows) <= _ATTN_COMPILE_MAX_ROWS
+
+
+def _attn_qkv_prep_impl(x, qcos, qsin, q_norm_w, kv_norm_w, warrs,
+                        dq, db, dk, H, hd, eps):
+    """Pure pre-SDPA projection prep -> (q, qr, kv_new).  Byte-identical to the
+    eager body: ``mx.unflatten(.,-1,(H,hd))`` is the same contiguous split as
+    ``.reshape(b,s,H,hd)`` without reading b,s; ``qr`` is threaded out for the
+    indexer."""
+    nq, nb = _lin_n(dq), _lin_n(db)
+    aq = warrs[:nq]
+    ab = warrs[nq:nq + nb]
+    ak = warrs[nq + nb:]
+    qr = _rmsnorm(_apply_lin(dq, aq, x), q_norm_w, eps)
+    q = mx.unflatten(_apply_lin(db, ab, qr), -1, (H, hd))
+    q = _rope_last(q, qcos, qsin)
+    kv_new = _rmsnorm(_apply_lin(dk, ak, x), kv_norm_w, eps)
+    kv_new = _rope_last(kv_new, qcos, qsin)
+    return q, qr, kv_new
+
+
+def _attn_out_prep_impl(o, qcos, qsin, w_ol, wb_arrs, dwob, n_groups):
+    """Pure post-SDPA output chain: remove the query RoPE, grouped o-LoRA
+    down-projection einsum (dense ``w_ol`` fed as input, derived by the same path
+    as eager :meth:`Attention._o_lora_down`), then the ``wo_b`` up-projection.
+    Byte-identical to the eager tail."""
+    o = _rope_last(o, qcos, qsin, inverse=True)
+    o = mx.unflatten(mx.flatten(o, -2, -1), -1, (n_groups, -1))
+    o = mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w_ol.astype(mx.float32))
+    o = mx.flatten(o, -2, -1)
+    return _apply_lin(dwob, wb_arrs, o)
+
+
+def _attn_qkv_prep(attn: "Attention"):
+    """Build/fetch the compiled QKV-prep tape for ``attn`` (shared across every
+    layer with the same projection codec + head geometry)."""
+    dq, db, dk = _lin_desc(attn.wq_a), _lin_desc(attn.wq_b), _lin_desc(attn.wkv)
+    H, hd, eps = attn.n_heads, attn.head_dim, attn.eps
+    key = ("qkv", dq, db, dk, int(H), int(hd), float(eps))
+    fn = _ATTN_COMPILED.get(key)
+    if fn is None:
+        def impl(x, qcos, qsin, q_norm_w, kv_norm_w, *warrs):
+            return _attn_qkv_prep_impl(
+                x, qcos, qsin, q_norm_w, kv_norm_w, warrs, dq, db, dk, H, hd, eps
+            )
+        fn = mx.compile(impl)
+        _ATTN_COMPILED[key] = fn
+    return fn
+
+
+def _attn_out_prep(attn: "Attention"):
+    """Build/fetch the compiled output-prep tape for ``attn``."""
+    dwob = _lin_desc(attn.wo_b)
+    n_groups = attn.n_groups
+    key = ("out", dwob, int(n_groups), int(attn.o_lora_rank), int(attn.head_dim),
+           int(attn.n_heads))
+    fn = _ATTN_COMPILED.get(key)
+    if fn is None:
+        def impl(o, qcos, qsin, w_ol, *wb_arrs):
+            return _attn_out_prep_impl(o, qcos, qsin, w_ol, wb_arrs, dwob, n_groups)
+        fn = mx.compile(impl)
+        _ATTN_COMPILED[key] = fn
+    return fn
 
 
 # ---------------------------------------------------------------------------

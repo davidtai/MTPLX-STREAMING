@@ -72,6 +72,69 @@ from . import deepseek_v41_stage_timing as _stime
 from .expert_mlx import run_switch_with_shared_overlap
 
 
+# ---------------------------------------------------------------------------
+# K22 (W41): fold the MoE gate's PURE prefix and the MoE combine into compiled
+# tapes under the same ``MTPLX_DSV41_ATTN_COMPILE`` flag/row-cap as the attention
+# chains (deepseek_v41._attn_use_compile).  Both are pure and bit-exact to eager
+# in the decode/verify row regime (measured, W41): the gate prefix is the score
+# GEMM + sqrtsoftplus + correction bias (the argpartition/argsort/top-k selection
+# that produces the fenced routing barrier stays OUTSIDE), and the combine is the
+# weighted routed sum + shared add.  The deepseek_v41 <- deepseek_v41_moe import
+# is one-directional, so the flag/cap/cache are reached by a lazy import here (no
+# cycle at module load; cheap after the first call).
+def _attn_compile_gate(rows: int) -> bool:
+    from . import deepseek_v41 as _dv
+    return _dv._attn_use_compile(rows)
+
+
+def _compiled(key, builder):
+    """Fetch/build the compiled tape for ``key`` from deepseek_v41's shared
+    ``_ATTN_COMPILED`` cache, so a test that clears that cache resets these too."""
+    from . import deepseek_v41 as _dv
+    fn = _dv._ATTN_COMPILED.get(key)
+    if fn is None:
+        fn = mx.compile(builder())
+        _dv._ATTN_COMPILED[key] = fn
+    return fn
+
+
+def _gate_prefix_impl(x, weight, bias, temp, score_func):
+    """The MoE gate's pure prefix -> (scores, biased).  Byte-identical to
+    :meth:`Gate.__call__`'s L810-822 body."""
+    scores = (x.astype(mx.float32) @ weight.astype(mx.float32).T) / temp
+    if score_func == "softmax":
+        scores = mx.softmax(scores, axis=-1)
+    elif score_func == "sigmoid":
+        scores = mx.sigmoid(scores)
+    else:  # sqrtsoftplus
+        scores = mx.sqrt(nn.softplus(scores))
+    return scores, scores + bias
+
+
+def _gate_prefix(gate):
+    key = ("gate_prefix", str(gate.score_func), float(gate.gate_temp))
+    temp, sf = float(gate.gate_temp), str(gate.score_func)
+    return _compiled(key, lambda: (lambda x, weight, bias: _gate_prefix_impl(x, weight, bias, temp, sf)))
+
+
+def _moe_combine_impl(routed, weights, shared):
+    """The MoE combine: weighted routed sum (f32 accumulator) + shared add.
+    Byte-identical to the eager ``(routed*weights).sum(-2) + shared``."""
+    return (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2) + shared
+
+
+def _moe_combine(routed, weights, shared):
+    return _compiled(("moe_combine",), lambda: _moe_combine_impl)(routed, weights, shared)
+
+
+def _moe_combine_dispatch(routed, weights, shared, rows: int):
+    """Compiled combine at decode/verify row counts, eager otherwise (the eager
+    branch is byte-for-byte the original ``(routed*weights).sum(-2) + shared``)."""
+    if _attn_compile_gate(rows):
+        return _moe_combine(routed, weights, shared)
+    return (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2) + shared
+
+
 class ClampedSwiGLU(SwiGLU):
     """``SwitchGLU`` activation carrying the reference ``Expert``'s ``swiglu_limit``
     clamp (model.py L845-848).
@@ -137,18 +200,29 @@ class Gate(nn.Module):
     def __call__(
         self, x: mx.array, image_mask: Optional[mx.array] = None
     ) -> Tuple[mx.array, mx.array]:
-        # L810: scores = linear(x.float(), weight.float()) / gate_temp
-        scores = (x.astype(mx.float32) @ self.weight.astype(mx.float32).T) / self.gate_temp
-        # L811-817: scoring function
-        if self.score_func == "softmax":
-            scores = mx.softmax(scores, axis=-1)
-        elif self.score_func == "sigmoid":
-            scores = mx.sigmoid(scores)
-        else:  # sqrtsoftplus
-            scores = mx.sqrt(nn.softplus(scores))
-        # L818-822: the correction bias steers selection only (bias_vl unused on
-        # the text path).
-        biased = scores + self.e_score_correction_bias
+        # L810-822 the PURE gate prefix: score GEMM / temp, scoring function,
+        # correction bias.  K22 folds it into one compiled tape at decode/verify
+        # (byte-identical to this eager body off / above the row cap); the
+        # data-dependent top-k selection below stays eager (it builds the fenced
+        # routing barrier).  ``x`` here is [n, dim], so ``x.shape[0]`` is the row
+        # count the row-cap gates on.
+        if _attn_compile_gate(int(x.shape[0])):
+            scores, biased = _gate_prefix(self)(
+                x, self.weight, self.e_score_correction_bias
+            )
+        else:
+            # L810: scores = linear(x.float(), weight.float()) / gate_temp
+            scores = (x.astype(mx.float32) @ self.weight.astype(mx.float32).T) / self.gate_temp
+            # L811-817: scoring function
+            if self.score_func == "softmax":
+                scores = mx.softmax(scores, axis=-1)
+            elif self.score_func == "sigmoid":
+                scores = mx.sigmoid(scores)
+            else:  # sqrtsoftplus
+                scores = mx.sqrt(nn.softplus(scores))
+            # L818-822: the correction bias steers selection only (bias_vl unused
+            # on the text path).
+            biased = scores + self.e_score_correction_bias
         # L823: indices = (scores + bias).topk(topk)[1] -- top-k, sorted desc.
         # mx has no index-returning top-k, so argpartition the top-k set then
         # argsort it by -biased to reproduce torch.topk's descending order.
@@ -280,8 +354,7 @@ class MoE(nn.Module):
                 )
                 _st.add(routed, shared)
             with _stime.stage("moe.combine") as _st:
-                y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
-                y = y + shared
+                y = _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
                 _st.add(y)
         else:
             with _stime.stage("moe.routed_switch") as _st:
@@ -291,8 +364,7 @@ class MoE(nn.Module):
                 shared = self.shared_experts(xf).astype(mx.float32)
                 _st.add(shared)
             with _stime.stage("moe.combine") as _st:
-                y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
-                y = y + shared
+                y = _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
                 _st.add(y)
         # L904: return y.type_as(x).view(shape)
         return y.astype(x.dtype).reshape(shape)

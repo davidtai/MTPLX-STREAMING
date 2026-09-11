@@ -58,36 +58,41 @@ SWITCH_FASTPATH_ENV = "MTPLX_DSV41_SWITCH_FASTPATH"  # K23 (W42): defer the
 # deferred-release mechanism, promoted for the DSV4.1 lane whose config leaves it
 # fenced). Removes the second per-layer device->host sync; byte-identical.
 HEAD_MODE_ENV = "MTPLX_DSV41_HEAD_MODE"             # W40 / K21, output-head codec
+ATTN_COMPILE_ENV = "MTPLX_DSV41_ATTN_COMPILE"       # K22, W41 landing
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
-# prior arm in the same process left set -- the arms are independent. The five
-# boolean levers (OVERLAP/LAYER_MAJOR/SINKHORN_METAL/HC_COMPILE/SWITCH_FASTPATH)
-# are per-forward, byte-identical execution reorders; HEAD_MODE is a LOAD-TIME
-# codec taking a value ("bf16"/"mxfp8"/"q8") whose arms are lossy-by-design (bf16
-# rounding / 8-bit weight), so the head-* arms are NOT byte-identical to control
-# -- the final byte-identity summary flags them (expected, cf. W40_HEAD_LEVER.md).
+# prior arm in the same process left set -- the arms are independent. The six
+# boolean levers (OVERLAP/LAYER_MAJOR/SINKHORN_METAL/HC_COMPILE/SWITCH_FASTPATH/
+# ATTN_COMPILE) are per-forward, byte-identical execution reorders; HEAD_MODE is a
+# LOAD-TIME codec taking a value ("bf16"/"mxfp8"/"q8") whose arms are lossy-by-
+# design (bf16 rounding / 8-bit weight), so the head-* arms are NOT byte-identical
+# to control -- the final byte-identity summary flags them (expected, cf.
+# W40_HEAD_LEVER.md).
 ALL_LEVER_ENVS = (
     OVERLAP_ENV,
     LAYER_MAJOR_ENV,
     SINKHORN_METAL_ENV,
     HC_COMPILE_ENV,
     SWITCH_FASTPATH_ENV,
+    ATTN_COMPILE_ENV,
     HEAD_MODE_ENV,
 )
 
 
 def _preset(
-    *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None, head=None
+    *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None,
+    attn=None, head=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
-    codec value ("bf16"/"mxfp8"/"q8"), the other five a "1"/None boolean."""
+    codec value ("bf16"/"mxfp8"/"q8"), the other six a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
         SINKHORN_METAL_ENV: sinkhorn,
         HC_COMPILE_ENV: hc,
         SWITCH_FASTPATH_ENV: fastpath,
+        ATTN_COMPILE_ENV: attn,
         HEAD_MODE_ENV: head,
     }
 
@@ -99,10 +104,15 @@ ARM_PRESETS = {
     "sinkhorn_metal": _preset(sinkhorn="1"),                # K3 lever ON (8982b93c9)
     "hc_compile": _preset(hc="1"),                          # K4 lever ON (landing)
     "switch_fastpath": _preset(fastpath="1"),               # W42 K23 lever ON
+    "attn_compile": _preset(attn="1"),                      # K22 lever ON (W41 landing)
     "both": _preset(overlap="1", layer_major="1"),          # shared_overlap + layer_major
     "all_levers": _preset(
-        overlap="1", layer_major="1", sinkhorn="1", hc="1", fastpath="1"
+        overlap="1", layer_major="1", sinkhorn="1", hc="1", fastpath="1", attn="1"
     ),
+    # W41: the measured-positive levers stacked (head bf16 fixes the fp32-cast trap
+    # + switch fast-path + Sinkhorn kernel + attention-chain compile); overlap /
+    # layer_major / hc left OFF.
+    "stack_a": _preset(head="bf16", fastpath="1", sinkhorn="1", attn="1"),
     "head_bf16": _preset(head="bf16"),                      # W40 K21: fix fp32-cast trap
     "head_mxfp8": _preset(head="mxfp8"),                    # W40 K21: native mxfp8 gs32 head
     "head_q8": _preset(head="q8"),                          # W40 K21: affine q8 gs64 head
@@ -135,8 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=["control", "shared_overlap"],
         help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, "
-        "sinkhorn_metal, hc_compile, switch_fastpath, both, all_levers, head_bf16, "
-        "head_mxfp8, head_q8)",
+        "sinkhorn_metal, hc_compile, switch_fastpath, attn_compile, both, all_levers, "
+        "stack_a, head_bf16, head_mxfp8, head_q8)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that

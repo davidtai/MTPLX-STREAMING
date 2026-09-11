@@ -603,6 +603,40 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   nothing). **⚠** slice the 48-row `preadv` under IOV_MAX ([[hy3-c5-dense-islands]]). **Effort:** low.
   **Rank 18** — include for completeness; ship only if a probe shows the engram reads serialize.
 
+### K22 — Attention-chain tape collapse (+ gate-prefix / MoE-combine folds) — **Rank (W41, sibling of K4)**
+- **Mechanism:** window-13 stage timing (W37) put decode attention at **attn.reuse 50.2 ms/tok (30
+  layers → 1.7 ms/layer for an M=1 MLA step) + swa_only 9.8 (2 layers → 4.9 ms/layer!) + full 8.9 (4)
+  + reindex 8.0 (4)** — a single-row attention step costing 1.7–4.9 ms is a **dispatch-chain** problem
+  (dozens of tiny projection/RMSNorm/RoPE ops), the regime where whole-chain `mx.compile` pays and
+  single fusions do not ([[b1-decode-dispatch-removal-hides]]; unfenced decode 246 ms/tok, warm-repeat
+  == cold ⇒ dispatch/compute-bound, not I/O). K22 replays the two **pure** attention chains from an
+  `mx.compile` tape (K4's fixed-shape + row-cap design, `MTPLX_DSV41_ATTN_COMPILE`, default OFF): the
+  pre-SDPA q/kv projection+norm+RoPE prep **up to (not incl.) the KV-cache write and the SDPA**, and
+  the post-SDPA output chain (query-RoPE removal + grouped o-LoRA einsum + `wo_b`). Also folds the pure
+  **MoE gate prefix** (score GEMM + sqrtsoftplus + correction bias; the argpartition/top-k routing
+  barrier stays eager) and the **MoE combine** (weighted routed sum + shared add) under the same flag.
+  **Where:** decode + verify (+ small prefill chunks ≤ cap). **Exactness:** projection weights are tape
+  INPUTS applied by `_apply_lin` exactly as `nn.Linear`/`nn.QuantizedLinear` (dense **or** quantized —
+  `mx.quantized_matmul` replays as one primitive, so compile never reassociates it), so byte-identical
+  to eager off / above the cap; on and rows ≤ cap it is `mx.array_equal` (matmul reassociates at ≥ 8
+  rows exactly as K4 — cap confines the tape to decode/verify).
+- **STATUS (W41, `feat/deepseek-v41-w41`):** IMPLEMENTED + CPU-proven. Two shared tapes
+  (`_attn_qkv_prep` / `_attn_out_prep` in `deepseek_v41.py`, one each across all 40 layers — same
+  codec/geometry, weights as inputs) + `_gate_prefix` / `_moe_combine` in `deepseek_v41_moe.py`. The
+  KV-cache write, the window mask, the data-dependent CSA index selection (Indexer top-k) and the SDPA
+  stay OUTSIDE the tapes (pure). Unlike K4 it does **not** force-eager under the W37 probe (`_attend`
+  is one `attn.<mode>` stage, no sub-stage fence). **Not compiled:** the SDPA/`_sparse_attend` (score
+  materialisation, dynamic KV length; D512 ∉ fused-SDPA = K6), the Indexer score/top-k (dynamic n_comp
+  + data-dependent), the streamed routed switch (W42 / `expert_mlx.py`), the lm head (W40), and
+  `hc.premix_sinkhorn`/`hc.combine` (K4's `MTPLX_DSV41_HC_COMPILE` already folds them — the dominant
+  ~4.1k prim/tok Sinkhorn is K3/K4 territory). **Dispatch census** (CPU, `scripts/deepseek_v41/
+  dispatch_census.py`, `mx.export_to_dot` node count per W37 stage): per attention call **−40
+  primitives every CSA mode** (qkv-prep 81→48, out-prep 38→31), gate prefix 8→3, combine 6→5; whole
+  decode token **6,631 → 6,263 primitives/token**. Flag on/off `mx.array_equal` over decode / K+1
+  verify / chunked + layer-major prefill; cache-state identical; census reduction asserted
+  (`tests/models/test_deepseek_v41_attn_compile.py`, 11 CPU tests). Realized GPU decode/dispatch delta
+  is **KG-i** (unmeasured). See `W41_DISPATCH_CENSUS_ATTN_COMPILE.md`.
+
 ---
 
 ## 6. Dead-here (GPU-side; do not re-propose)
@@ -637,6 +671,7 @@ two microbenches (K7/K8), which are CPU/queued and can run now.
 | **KG-d** | K1 barrier overlap (+K14 buffer sweep) | K3-on baseline vs +overlap-fill; **`mx.eval` counted per arm** (a3b caution: sync-delete alone was −3.27 %). **Pass if decode +≥15 %.** | after KG-c | 1 window |
 | **KG-e** | K10 verify batched M=4 (needs W23) + K11/R2 dedup | MTP+dedup with per-layer M=4 dispatch vs per-position M=1. **Pass if outputs byte-identical AND barrier count 40 (not 160)/cycle AND decode ≥ 2.0× AR.** | after W23 + OPT Gate 2 | 1 window |
 | **KG-f** | K4 HC-compile + fused CSA attn | carry from V4; **argmax parity + decode +** (expect the smaller residual after K3). | after KG-c | folded |
+| **KG-i** | K22 attention-chain compile (+ gate-prefix / combine folds) | `attn_compile` vs control (and folded into the K4 `all_levers` stack): **argmax parity (byte-identical decode/verify) + decode +**. CPU census −368 prim/tok (−40/attention call every mode); realized GPU decode delta is the open question. | after KG-c/KG-f | folded |
 | **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk + K19 head-last-row | 16K prefill ± two-pass split-K + tiling + head-last-row on the K16 base. **Pass if TTFT −≥15 % beyond K16 AND peak −≥8 GB (K19 drops the 8.47 GB logits), parity on long-prompt A/B.** | after KG-b | 1 window |
 | **KG-h** | K9 head byte cut + K13 in-place verify-KV | q8/mxfp8 head vs bf16 head: **ship only if argmax parity + HumanEval(164) ≥ exact−noise**; K13 footprint-guard folded into first MTP window. | after KG-e | folded |
 

@@ -10,9 +10,10 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
   * the ``--dry-run`` CPU double (no model, no MLX/Metal op, no server);
   * per-arm env application for every preset
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
-    switch_fastpath / both / all_levers / head_bf16 / head_mxfp8 / head_q8),
+    switch_fastpath / attn_compile / both / all_levers / stack_a / head_bf16 /
+    head_mxfp8 / head_q8),
     including arm independence (each arm force-unsets the keys it does not set,
-    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the five boolean
+    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the six boolean
     per-forward levers never leak across each other);
   * prompt-build metadata parity with ``bench_standard_shape`` at 1024.
 
@@ -43,9 +44,10 @@ _LM = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
 _SK = "MTPLX_DSV41_SINKHORN_METAL"
 _HC = "MTPLX_DSV41_HC_COMPILE"
 _FP = "MTPLX_DSV41_SWITCH_FASTPATH"    # W42 / K23: switch all-hit fast-path
+_AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
 _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
-_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP)  # the five boolean per-forward levers
-_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all six keys
+_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _AC)  # the six boolean per-forward levers
+_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all seven keys
 
 ALL_ARMS = [
     "control",
@@ -54,8 +56,10 @@ ALL_ARMS = [
     "sinkhorn_metal",
     "hc_compile",
     "switch_fastpath",
+    "attn_compile",
     "both",
     "all_levers",
+    "stack_a",
     "head_bf16",
     "head_mxfp8",
     "head_q8",
@@ -69,8 +73,10 @@ EXPECTED_ON = {
     "sinkhorn_metal": {_SK},
     "hc_compile": {_HC},
     "switch_fastpath": {_FP},
+    "attn_compile": {_AC},
     "both": {_OV, _LM},
-    "all_levers": {_OV, _LM, _SK, _HC, _FP},
+    "all_levers": {_OV, _LM, _SK, _HC, _FP, _AC},
+    "stack_a": {_SK, _FP, _AC},
     "head_bf16": set(),
     "head_mxfp8": set(),
     "head_q8": set(),
@@ -84,8 +90,10 @@ EXPECTED_HEAD = {
     "sinkhorn_metal": None,
     "hc_compile": None,
     "switch_fastpath": None,
+    "attn_compile": None,
     "both": None,
     "all_levers": None,
+    "stack_a": "bf16",
     "head_bf16": "bf16",
     "head_mxfp8": "mxfp8",
     "head_q8": "q8",
@@ -196,7 +204,7 @@ def test_head_arms_do_not_touch_boolean_levers(env_levers):
 
 
 def test_apply_arm_env_independent_across_arms(env_levers):
-    # all_levers on -> control must clear all four (no leakage between arms).
+    # all_levers on -> control must clear all keys (no leakage between arms).
     env_levers._apply_arm_env("all_levers")
     assert all(os.environ.get(k) == "1" for k in _ALL_KEYS)
     env_levers._apply_arm_env("control")
@@ -205,7 +213,12 @@ def test_apply_arm_env_independent_across_arms(env_levers):
     env_levers._apply_arm_env("all_levers")
     env_levers._apply_arm_env("sinkhorn_metal")
     assert os.environ.get(_SK) == "1"
-    assert all(k not in os.environ for k in (_OV, _LM, _HC))
+    assert all(k not in os.environ for k in set(_ALL_KEYS) - {_SK})
+    # the K22 attn_compile arm leaves exactly its own key set.
+    env_levers._apply_arm_env("all_levers")
+    env_levers._apply_arm_env("attn_compile")
+    assert os.environ.get(_AC) == "1"
+    assert all(k not in os.environ for k in set(_ALL_KEYS) - {_AC})
 
 
 def test_apply_arm_env_rejects_unknown_arm(env_levers):
