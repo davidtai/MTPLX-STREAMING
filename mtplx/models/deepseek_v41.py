@@ -806,7 +806,7 @@ class Attention(nn.Module):
 #
 # What DSV4.1 carries vs V4:
 #  * The Sinkhorn stays an OPAQUE function boundary -- these tapes call the
-#    module ``_hc_split_sinkhorn`` (owned by the K3 worker, W32), whose
+#    module ``hc_split_sinkhorn`` (owned by the K3 worker, W32), whose
 #    ``_sinkhorn_normalise`` tail takes K3's Metal kernel when
 #    ``MTPLX_DSV41_SINKHORN_METAL`` is armed on the GPU and the identical stock
 #    recurrence otherwise (always on CPU) -- so K3's kernel drops in at the tail
@@ -819,7 +819,7 @@ class Attention(nn.Module):
 #    hc*dim)``: identical memory layout / values, but it reads no dynamic
 #    ``.shape`` (reshape-from-shape bakes the first trace's dims).
 #
-# Why NOT ``shapeless=True`` (measured, W33): (1) ``_hc_split_sinkhorn`` contains
+# Why NOT ``shapeless=True`` (measured, W33): (1) ``hc_split_sinkhorn`` contains
 # ``comb.reshape(*comb.shape[:-1], hc, hc)``; under a shapeless trace MLX raises
 # ``[Primitive::output_shapes] Slice cannot infer output shapes`` -- and that
 # function is the K3 worker's, not to be edited here.  (2) Even where a tape
@@ -857,7 +857,7 @@ def _hc_mixes_split(x, fn, base, scale, hc, iters, norm_eps, hc_eps):
 
     Byte-identical to :meth:`DecoderLayer._mixes` (``mx.flatten(x, -2, -1)`` is
     the same contiguous merge as its ``reshape(*x.shape[:-2], hc*dim)``, just
-    without the dynamic-shape read).  :func:`_hc_split_sinkhorn` is the opaque
+    without the dynamic-shape read).  :func:`hc_split_sinkhorn` is the opaque
     Sinkhorn boundary (W32/K3): its ``_sinkhorn_normalise`` tail dispatches to the
     Metal kernel when ``MTPLX_DSV41_SINKHORN_METAL`` is armed on the GPU and to the
     identical stock recurrence otherwise (always so on CPU), so the K3 kernel path
@@ -867,7 +867,7 @@ def _hc_mixes_split(x, fn, base, scale, hc, iters, norm_eps, hc_eps):
     flat = mx.flatten(xf, -2, -1)
     rsqrt = mx.rsqrt(mx.mean(mx.square(flat), axis=-1, keepdims=True) + norm_eps)
     mixes = (flat @ fn.astype(mx.float32).T) * rsqrt
-    return _hc_split_sinkhorn(mixes, scale, base, hc, iters, hc_eps)
+    return hc_split_sinkhorn(mixes, scale, base, hc, iters, hc_eps)
 
 
 def _hc_pre_collapse(x, pre_mix):
@@ -923,7 +923,7 @@ def _hc_compiled(kind: str, *consts):
     if fn is None:
         # ``consts`` for the mix tapes is ``(hc, iters, norm_eps, hc_eps,
         # sinkhorn_route)``; the trailing route bool is a CACHE-KEY discriminator
-        # only (it never enters the arithmetic -- ``_hc_split_sinkhorn`` reads the
+        # only (it never enters the arithmetic -- ``hc_split_sinkhorn`` reads the
         # route itself at trace time), so a runtime flip of
         # ``MTPLX_DSV41_SINKHORN_METAL`` on the GPU re-traces the tape with W32's
         # kernel instead of replaying a stale recurrence tape (V4 keys its ``pre``

@@ -281,7 +281,7 @@ def test_dispatch_collapse_and_once_per_layer():
     L = args.num_hidden_layers
 
     build = {"sinkhorn": 0}          # (A) graph construction
-    real_sinkhorn = dv41._hc_split_sinkhorn
+    real_sinkhorn = dv41.hc_split_sinkhorn
 
     def c_sinkhorn(*a, **k):
         build["sinkhorn"] += 1
@@ -299,7 +299,7 @@ def test_dispatch_collapse_and_once_per_layer():
 
         return wrapped
 
-    dv41._hc_split_sinkhorn = c_sinkhorn
+    dv41.hc_split_sinkhorn = c_sinkhorn
     dv41._hc_compiled = counting_hc_compiled
     try:
         # ---- eager: every decode token rebuilds the HC graph from Python ----
@@ -336,7 +336,7 @@ def test_dispatch_collapse_and_once_per_layer():
             assert build["sinkhorn"] == 0, build   # <-- the dispatch collapse
             assert inv == {"attn_prep": 3 * L, "ffn_prep": 3 * L, "moe_combine": 3 * L}, inv
     finally:
-        dv41._hc_split_sinkhorn = real_sinkhorn
+        dv41.hc_split_sinkhorn = real_sinkhorn
         dv41._hc_compiled = real_hc_compiled
 
 
