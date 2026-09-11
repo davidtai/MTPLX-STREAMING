@@ -50,6 +50,7 @@ import time — ``--help``, import, and ``--dry-run`` are CPU-safe.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -92,6 +93,74 @@ def _load_build_prompt():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.build_prompt
+
+
+def _prompt_ids_override(path, *, context_tokens: int, seed=None, cell: str = "sweep"):
+    """Load exact server token ids exported by server_cell_bench --prompt-ids-out.
+
+    Selects the entry for (cell, target_tokens==context_tokens, seed) and returns
+    ``(prompt_ids, prompt_meta)`` byte-identically to the served cell -- no
+    builder, no BOS prepend (the exported ids already ARE what the server saw).
+    Lets an in-process arm run on the SAME token ids as the served sweep cell.
+    """
+
+    data = json.loads(Path(path).read_text())
+    prompts = data.get("prompts", [])
+    matches = [
+        e
+        for e in prompts
+        if str(e.get("cell")) == str(cell)
+        and int(e.get("target_tokens") or 0) == int(context_tokens)
+        and (seed is None or e.get("seed") == int(seed))
+    ]
+    if not matches:
+        raise SystemExit(
+            f"--prompt-ids-file {path} has no entry for cell={cell} "
+            f"target_tokens={context_tokens} seed={seed}"
+        )
+    if len(matches) > 1:
+        raise SystemExit(
+            f"--prompt-ids-file {path} is ambiguous for cell={cell} "
+            f"target_tokens={context_tokens}: pass --prompt-seed "
+            f"(seeds present: {sorted(e.get('seed') for e in matches)})"
+        )
+    entry = matches[0]
+    ids = [int(t) for t in entry["token_ids"]]
+    ids_sha = entry.get("token_ids_sha256") or hashlib.sha256(
+        json.dumps(ids).encode("utf-8")
+    ).hexdigest()
+    meta = {
+        "prompt_source": "prompt-ids-file",
+        "prompt_ids_file": str(path),
+        "prompt_ids_schema": data.get("schema"),
+        "prompt_family": data.get("model_family"),
+        "served_model_id": data.get("served_model_id"),
+        "prompt_cell": entry.get("cell"),
+        "prompt_target_tokens": entry.get("target_tokens"),
+        "prompt_seed": entry.get("seed"),
+        "prompt_text_sha256": entry.get("text_sha256"),
+        "token_ids_sha256": ids_sha,
+        "templated_tokens": entry.get("templated_tokens"),
+        "input_tokens": len(ids),
+        "bos_prepended": ids[:1] == [0] if ids else False,
+        "bos_id": ids[0] if (ids and ids[:1] == [0]) else None,
+        "prompt_release_valid": True,
+    }
+    return ids, meta
+
+
+def _resolve_prompt(args, tokenizer, build_prompt, context_tokens: int):
+    """Either the exported served ids (``--prompt-ids-file``) or the default
+    prefill_bench builder. Default keeps old receipts comparable."""
+
+    ids_file = getattr(args, "prompt_ids_file", None)
+    if ids_file:
+        return _prompt_ids_override(
+            ids_file,
+            context_tokens=int(context_tokens),
+            seed=getattr(args, "prompt_seed", None),
+        )
+    return build_prompt(tokenizer, _prompt_args(args, int(context_tokens)))
 
 
 def _prompt_args(args, context_tokens: int) -> argparse.Namespace:
@@ -158,6 +227,23 @@ def build_parser() -> argparse.ArgumentParser:
         "tokenizer does not add it; the reference always does (W8_REPORT.md).",
     )
     parser.add_argument("--bos-id", type=int, default=DEFAULT_BOS_ID)
+    parser.add_argument(
+        "--prompt-ids-file",
+        default=None,
+        help="run on the EXACT server token ids exported by "
+        "scripts/fable/server_cell_bench.py --prompt-ids-out (the Qwen-PR sized "
+        "cells). Overrides the prefill_bench builder AND --bos (the exported ids "
+        "already are what the server saw; DSV4.1 served ids carry NO BOS). "
+        "Selects the entry for (cell=sweep, target_tokens==--context-tokens, "
+        "seed==--prompt-seed). Default None keeps the built prompt so old "
+        "receipts stay comparable.",
+    )
+    parser.add_argument(
+        "--prompt-seed",
+        type=int,
+        default=None,
+        help="which seed's ids to take from --prompt-ids-file (e.g. 20260829).",
+    )
     parser.add_argument("--slot-layout", default="component-banks")
     parser.add_argument(
         "--max-kv",
@@ -618,7 +704,9 @@ class _FakeModel:
 
 def _dry_run_cell(args, build_prompt, context_tokens: int, steps: int) -> tuple:
     tokenizer = _FakeTokenizer()
-    prompt_ids, prompt_meta = build_prompt(tokenizer, _prompt_args(args, context_tokens))
+    prompt_ids, prompt_meta = _resolve_prompt(
+        args, tokenizer, build_prompt, context_tokens
+    )
     model = _FakeModel()
     ops = _FakeOps()
     mem_probe = _DryMemProbe()
@@ -670,6 +758,8 @@ def _base_receipt(args, *, dry_run: bool, worktree: Path) -> dict:
         "prompt_format": args.prompt_format,
         "bos_prepended": bool(args.bos),
         "bos_id": int(args.bos_id) if args.bos else None,
+        "prompt_ids_file": getattr(args, "prompt_ids_file", None),
+        "prompt_seed": getattr(args, "prompt_seed", None),
         "memory_limit_gib": float(args.memory_limit_gib),
         "verify_record_hashes": bool(args.verify_record_hashes),
         "greedy": True,
@@ -777,8 +867,8 @@ def run_real(args) -> int:
         mem_probe = _MLXMemProbe(mx)
         gather_probe = _GatherProbe(model, mx=mx)
         for context_tokens in args.context_tokens:
-            prompt_ids, prompt_meta = build_prompt(
-                tokenizer, _prompt_args(args, context_tokens)
+            prompt_ids, prompt_meta = _resolve_prompt(
+                args, tokenizer, build_prompt, context_tokens
             )
             repeats = []
             for repeat_idx in range(int(args.repeats)):
