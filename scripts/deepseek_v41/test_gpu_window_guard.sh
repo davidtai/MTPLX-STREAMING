@@ -36,7 +36,7 @@ cat > "${FAKE_VMSTAT}" <<'EOF'
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
-Pages active:                               3500000.
+Anonymous pages:                            3500000.
 Pages inactive:                              200000.
 Pages speculative:                            10000.
 Pages throttled:                                  0.
@@ -50,7 +50,7 @@ chmod +x "${FAKE_VMSTAT}"
 run_vmstat() { GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" "$@"; }
 
 # used_mem_bytes = exactly 100 GiB in bytes
-eq "used_mem_bytes sums wired+active+occupied-compressor at the page size" \
+eq "used_mem_bytes sums wired+anonymous+occupied-compressor at the page size" \
    "107374182400" \
    "$(run_vmstat bash "${SCRIPT}" --selftest used-mem-bytes)"
 
@@ -77,7 +77,7 @@ cat > "${FAKE_NOCOMP}" <<'EOF'
 #!/bin/bash
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
-Pages active:                               3500000.
+Anonymous pages:                            3500000.
 Pages wired down:                           2500000.
 V
 EOF

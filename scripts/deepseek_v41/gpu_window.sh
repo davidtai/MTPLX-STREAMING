@@ -81,8 +81,10 @@ log() { printf '%s [gpu_window] %s\n' "$(ts)" "$*"; }
 err() { printf '%s [gpu_window] ERROR: %s\n' "$(ts)" "$*" >&2; }
 gib() { awk -v b="${1:-0}" 'BEGIN{printf "%.1f", b/1073741824}'; }
 
-# Total *used* physical memory in bytes = (wired down + active + occupied-by-
-# compressor) pages * page size, parsed from vm_stat.  This is the system-wide
+# Total *used* physical memory in bytes = (wired down + anonymous + occupied-by-
+# compressor) pages * page size, parsed from vm_stat.  Anonymous (not active):
+# active includes file-backed page cache, which a 269 GiB mmap'd expert bank
+# fills within seconds and macOS reclaims on demand (false abort 2026-09-11).  This is the system-wide
 # pressure signal the phase-4 guard aborts on: a runaway allocation ANYWHERE on
 # the box (not only the step child) is what panicked the machine on 2026-09-10.
 # "occupied by compressor" is the physical compressed footprint (NOT "stored in
@@ -91,11 +93,11 @@ used_mem_bytes() {
   "${VM_STAT_CMD}" 2>/dev/null | awk '
     /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
     /^Pages wired down/             { gsub(/\./, "", $NF); wired = $NF }
-    /^Pages active/                 { gsub(/\./, "", $NF); active = $NF }
+    /^Anonymous pages/              { gsub(/\./, "", $NF); anon = $NF }
     /^Pages occupied by compressor/ { gsub(/\./, "", $NF); comp = $NF }
     END {
       if (ps == "") ps = 16384
-      printf "%.0f", (wired + active + comp) * ps
+      printf "%.0f", (wired + anon + comp) * ps
     }
   '
 }
