@@ -38,6 +38,12 @@ STOP_TIMEOUT="${DSV41_STOP_TIMEOUT:-60}"
 MAX_TOKENS="${DSV41_MAX_TOKENS:-256}"
 CONTEXT_TOKENS="${DSV41_CONTEXT_TOKENS:-1024}"
 REQUEST_TIMEOUT="${DSV41_REQUEST_TIMEOUT:-600}"
+# Fixed-step decode-rate probe (W18/W46): the bench harness force-decodes 256
+# steps IGNORING EOS, and the raw prefill_bench prompt's greedy first token is
+# EOS -- so an EOS-honouring server stops at 1 blank token. Set (default on)
+# MTPLX_IGNORE_STOP_TOKENS so THIS dedicated benchmark server decodes the full
+# max_tokens, matching the harness. Never set on the shared :8080 serve.
+IGNORE_STOP_TOKENS="${DSV41_IGNORE_STOP_TOKENS:-1}"
 LOG_DIR="${DSV41_LOG_DIR:-${TMPDIR:-/tmp}/dsv41-serve-bench-1k}"
 BENCH="${HERE}/serve_bench_1k.py"
 
@@ -119,10 +125,11 @@ trap cleanup EXIT INT TERM
 # (or honour --generation-mode mtp via DSV41_SERVE_EXTRA_ARGS). --no-auth keeps
 # the localhost health check key-free. The profile child_env carries the lever
 # defaults; export MTPLX_DSV41_* in this shell to override one for an A/B.
-log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} ${DSV41_SERVE_EXTRA_ARGS:-}"
+log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} ${DSV41_SERVE_EXTRA_ARGS:-} (MTPLX_IGNORE_STOP_TOKENS=${IGNORE_STOP_TOKENS})"
 (
   cd "${WORKTREE}" || exit 97
-  exec env PYTHONPATH="${WORKTREE}" "${VENV_PY}" -m mtplx.cli serve \
+  exec env PYTHONPATH="${WORKTREE}" MTPLX_IGNORE_STOP_TOKENS="${IGNORE_STOP_TOKENS}" \
+    "${VENV_PY}" -m mtplx.cli serve \
     --model "${MODEL}" \
     --host "${HOST}" \
     --port "${PORT}" \

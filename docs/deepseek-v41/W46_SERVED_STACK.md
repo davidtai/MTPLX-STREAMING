@@ -234,3 +234,71 @@ engaged inside the daemon for each arm.
 - `tests/test_deepseek_v41_lever_child_env_w46.py`,
   `tests/test_deepseek_v41_serve_bench_1k.py` — CPU tests.
 - `docs/deepseek-v41/W46_SERVED_STACK.md` — this report.
+
+## W18 follow-up: served completion returned only 1 token (EOS) — root cause + fix
+
+Window 18 ran `serve_bench_1k.sh` twice (candidate + control). The daemon lever
+line proved engagement (candidate `HEAD_MODE=bf16 SINKHORN_METAL=1 ATTN_COMPILE=1
+ATTN_WIN_MEMO=1`; control `default/0/0/0`) and prefill was healthy (53.9 tok/s,
+TTFT 19.0 s, **1,025** prompt tokens — the list[int] prompt reached the model
+verbatim). But **both** arms returned `completion_tokens=1`, `finish_reason=stop`,
+empty completion (`sha256("") = e3b0c442…`) and a nonsense one-token decode rate.
+Server log: `"attempts": 4, "blank_retries": 3, "text_preview": ""`.
+
+### Root cause (not the prompt encoding)
+
+1. **The list[int] prompt is handled correctly.** `_encode_prompt` (openai.py)
+   returns a token-id list **verbatim** — no re-tokenization, no BOS re-add, no
+   chat template — which is exactly why prefill counted 1,025 tokens (1,024 +
+   BOS). A *string* prompt would instead hit `_encode_plain_text` →
+   `tokenizer.encode(text, add_special_tokens=True)`, gaining a BOS and re-
+   tokenizing (not token-exact). So list[int] was the right choice and is kept.
+   Covered by `test_real_encode_prompt_*` against the real handler.
+2. **The greedy first token of this prompt is EOS.** The raw prefill_bench
+   coding prompt (no chat template / assistant-turn opener) reads as a completed
+   document to the instruct model, so greedy argmax at the last prompt position
+   is `<｜end▁of▁sentence｜>`. It detokenizes to `""`.
+3. **The server honours EOS; the bench harness does not.** The server derives
+   stop tokens from the tokenizer (`_default_stop_tokens` → `eos_token_id` …) and
+   stops on the first stop token — here token #1 — yielding a blank completion.
+   Its blank-retry (`blank_retry_attempts`) retried 3× but greedy re-emits EOS
+   every time, so all 4 attempts were blank → `completion_tokens=1`,
+   `finish_reason=stop`. The bench harness (`ab_decode_env_levers._generate`)
+   force-decodes a fixed `for _ in range(steps)` loop with **no EOS check**, so
+   it emits the (invisible) EOS as token #1 and keeps going — that is why the
+   direct-model run yields 256 tokens starting "# file_0.py" (the visible code
+   is token #2 onward).
+
+So the 1-token result is not an env-delivery or prompt-encoding bug; it is the
+mismatch between a fixed-step decode-rate probe (ignore EOS) and an EOS-honouring
+completion server.
+
+### Fix
+
+- **`mtplx/generation.py` `_default_stop_tokens`**: opt-in `MTPLX_IGNORE_STOP_TOKENS`
+  (off by default) returns an empty stop set, so the served generation treats no
+  token as a stop and honours `max_tokens` in full. This is the single chokepoint
+  every server path falls back to (AR and MTP), and `_is_stop(token, stop_ids)`
+  is the ONLY EOS-stop mechanism in the loop, so one gate suffices. Off by
+  default → zero effect on the shared `:8080` serve; only the dedicated benchmark
+  server sets it.
+- **`serve_bench_1k.sh`**: exports `MTPLX_IGNORE_STOP_TOKENS=1` (override with
+  `DSV41_IGNORE_STOP_TOKENS=0`) on its own server process, so a greedy 256-token
+  fixed-step completion is produced — matching the harness. The prompt stays a
+  raw list[int] with BOS id 0 (identical to the harness).
+- **`serve_bench_1k.py`**: records `early_stop`/`warning` in the receipt and
+  exits non-zero on a REAL early-stop, so a window can never bank a 1-token
+  "rate" as a measurement.
+
+With the fix the served arms decode the full 256 tokens; the completion sha256 is
+then a real control-vs-candidate identity check (must match for a byte-identical
+lever under greedy). The window commands above are unchanged — `serve_bench_1k.sh`
+now sets the env itself.
+
+### CPU coverage of the real handlers
+
+`tests/test_deepseek_v41_serve_bench_1k.py` adds: the W18 empty-completion shape
+is flagged (`early_stop`); the real `_encode_prompt` uses a list[int] verbatim
+with no BOS and re-tokenizes a string with `add_special_tokens=True`; and the
+real `_default_stop_tokens` returns the EOS set normally and an empty set under
+`MTPLX_IGNORE_STOP_TOKENS=1`.

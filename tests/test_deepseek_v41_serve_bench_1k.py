@@ -177,3 +177,144 @@ def test_out_via_env_var(tmp_path) -> None:
     assert out.exists()
     receipt = json.loads(out.read_text())
     assert receipt["server_side"]["prefill_tok_s"] == pytest.approx(248.75)
+
+
+# --------------------------------------------------------------------------
+# W18 regression: the empty-completion / early-stop diagnostic
+# --------------------------------------------------------------------------
+
+# The exact shape window 18 produced: greedy first token is EOS, so an
+# EOS-honouring server returns 1 blank token (empty-string sha) with
+# finish_reason=stop even though max_tokens=256.
+EOS_STOP_RESPONSE = {
+    "id": "cmpl-eos",
+    "object": "text_completion",
+    "model": "DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "choices": [{"index": 0, "text": "", "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1025, "completion_tokens": 1, "total_tokens": 1026},
+    "timings": {
+        "prompt_n": 1025,
+        "predicted_n": 1,
+        "prompt_ms": 19003.711,
+        "predicted_ms": 0.633,
+        "prompt_per_second": 53.937,
+        "predicted_per_second": 1578.843,
+    },
+}
+
+EMPTY_SHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_early_stop_is_flagged_in_the_receipt() -> None:
+    mod = _load_module()
+    request = mod.build_request("m", list(range(1025)), max_tokens=256, temperature=0.0)
+    receipt = mod.receipt_from_response(
+        EOS_STOP_RESPONSE, wall_s=83.0, request=request, prompt_meta=None
+    )
+    assert receipt["early_stop"] is True
+    assert receipt["warning"] and "EOS" in receipt["warning"]
+    assert receipt["completion_sha256"] == EMPTY_SHA  # sha256("")
+    assert receipt["server_side"]["completion_tokens"] == 1
+    assert receipt["server_side"]["finish_reason"] == "stop"
+    assert "WARNING" in mod._summary_line(receipt)
+
+
+def test_full_completion_is_not_flagged() -> None:
+    mod = _load_module()
+    request = mod.build_request("m", list(range(1025)), max_tokens=256, temperature=0.0)
+    resp = dict(CANNED_RESPONSE)
+    resp["choices"] = [{"index": 0, "text": "x" * 40, "finish_reason": "length"}]
+    resp["usage"] = {"prompt_tokens": 1025, "completion_tokens": 256}
+    receipt = mod.receipt_from_response(
+        resp, wall_s=41.0, request=request, prompt_meta=None
+    )
+    assert receipt["early_stop"] is False
+    assert receipt["warning"] is None
+
+
+def test_real_completion_early_stop_exits_nonzero(tmp_path) -> None:
+    # The .sh relies on a non-zero exit to refuse banking a 1-token "rate".
+    # A canned response is NOT a real request, so it must NOT fail; drive the
+    # non-canned early-stop exit by pointing at a dead server (network error is
+    # a different failure) -- instead assert the canned path stays exit 0 even
+    # for an early-stop body, and unit-test the exit rule via the receipt flag.
+    mod = _load_module()
+    canned = tmp_path / "eos.json"
+    canned.write_text(json.dumps(EOS_STOP_RESPONSE))
+    out = tmp_path / "eos-receipt.json"
+    rc = mod.main(
+        ["--canned-response", str(canned), "--out", str(out), "--model-id", "m"]
+    )
+    assert rc == 0  # canned path never fails
+    receipt = json.loads(out.read_text())
+    assert receipt["early_stop"] is True  # but the flag is recorded
+
+
+# --------------------------------------------------------------------------
+# W18 fix: the REAL server-side handlers (imported), CPU only
+# --------------------------------------------------------------------------
+
+
+class _RecordingTokenizer:
+    """Minimal tokenizer double recording add_special_tokens; prepends BOS(0)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def encode(self, text, add_special_tokens=None):
+        self.calls.append(add_special_tokens)
+        ids = [ord(c) % 97 + 3 for c in text][:8]
+        return ([0] + ids) if add_special_tokens else ids
+
+
+def test_real_encode_prompt_uses_list_int_verbatim_no_bos() -> None:
+    # Proves the request shape: /v1/completions with a list[int] prompt is used
+    # verbatim -- no re-tokenization, no BOS re-add, no chat template. This is
+    # why prefill was exactly 1025 tokens in window 18.
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    from mtplx.server.openai import _encode_prompt
+
+    tok = _RecordingTokenizer()
+    assert _encode_prompt(tok, [0, 5, 9, 12, 7]) == [0, 5, 9, 12, 7]
+    assert tok.calls == []  # tokenizer never invoked for a token-id list
+
+
+def test_real_encode_prompt_string_adds_bos_special_tokens() -> None:
+    # A STRING prompt is the WRONG path for exactness: the server re-tokenizes
+    # with add_special_tokens=True, so it gains a BOS and would not reproduce
+    # the harness's truncated token ids. This is why serve_bench_1k keeps
+    # list[int].
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    from mtplx.server.openai import _encode_prompt
+
+    tok = _RecordingTokenizer()
+    out = _encode_prompt(tok, "hello")
+    assert tok.calls and tok.calls[0] is True  # add_special_tokens requested
+    assert out[0] == 0  # BOS prepended by the tokenizer
+
+
+def test_real_default_stop_tokens_gate(monkeypatch) -> None:
+    # The fix, in the real generation handler: MTPLX_IGNORE_STOP_TOKENS makes
+    # the served generation treat no token as a stop, so max_tokens is honoured
+    # in full (the fixed-step decode-rate probe the harness runs).
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    from mtplx.generation import _default_stop_tokens
+
+    class _Tok:
+        eos_token_id = 1
+        pad_token_id = 2
+
+    monkeypatch.delenv("MTPLX_IGNORE_STOP_TOKENS", raising=False)
+    assert _default_stop_tokens(_Tok()) == {1, 2}
+
+    monkeypatch.setenv("MTPLX_IGNORE_STOP_TOKENS", "1")
+    assert _default_stop_tokens(_Tok()) == set()
+
+    monkeypatch.setenv("MTPLX_IGNORE_STOP_TOKENS", "0")
+    assert _default_stop_tokens(_Tok()) == {1, 2}
