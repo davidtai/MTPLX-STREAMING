@@ -686,7 +686,7 @@ def test_runtime_load_accepts_admission_receipt_through_real_reader_boundary(
     class LaterResidentBoundary(RuntimeError):
         pass
 
-    def stop_after_reader_open(model_path, expert_runtime, *, config):
+    def stop_after_reader_open(model_path, expert_runtime, *, config, with_mtp=None):
         reached["model_path"] = model_path
         reached["backend"] = expert_runtime.reader.backend
         reached["pinned_banks"] = tuple(
