@@ -384,6 +384,180 @@ def _effective_draft_len(conf_row: mx.array, k: int, threshold: Optional[float])
     return max(1, keep)
 
 
+# ---------------------------------------------------------------------------
+# W63 / K32: device-side sampling AR decode (one-step-lag software pipeline)
+# ---------------------------------------------------------------------------
+# The plain AR / greedy decode loop ends every token on a device->host round
+# trip: logits -> argmax/sample on device -> the id is read to the host
+# (mx.eval / .item()) -> stop/detok check -> the id is fed back as the next
+# input embedding.  That read is a full GPU drain per token, and the next
+# step's graph cannot be encoded until it returns, so the decode is
+# dispatch-bound (~160 ms/token at 1K, [[dsv41-decode-lever-ledger]]).
+#
+# This lane keeps the sampled token ON DEVICE: it stays a lazy mx.array fed
+# straight into the next forward, whose embedding lookup is ``mx.take`` on that
+# id array (no host round trip to become the next input).  The host reads token
+# ids with a ONE-STEP LAG -- step t+1's forward is already submitted
+# (mx.async_eval on the step outputs) before token t's id is materialized -- so
+# the GPU never idles on the host read.
+#
+# GREEDY (the DSV4.1 benchmark shape) stays BYTE-IDENTICAL to the classic argmax
+# loop: argmax is deterministic, so the same integer id feeds the next forward
+# either way (proven on the CPU double, tests/models/
+# test_deepseek_v41_device_sample.py).
+#
+# SAMPLED reuses the shipped device shaped sampler ``_mx_lazy_sample``
+# (temp -> top-k -> top-p -> categorical) -- the same one the qwen4_exp
+# MTPLX_AR_PIPELINE lane uses, so no other model's sampler is touched.  It is NOT
+# token-for-token equal to the host numpy path, by two documented deviations
+# (W63_DEVICE_SAMPLE.md): (1) it draws from an ``mx.random`` device key, not the
+# numpy generator -- a seed-mapping change; (2) its top-p nucleus is taken over
+# the RENORMALIZED top-k softmax, so when top-k truncates tail mass it keeps a
+# NARROWER nucleus than the host's full-vocab-softmax nucleus.  Both are
+# conservative: the sampled support is a subset of the host top-k / host support
+# (verified on the CPU double), so the device never draws a token the host would
+# not.  Sampled callers that need the exact host distribution keep the default
+# (device sample off) and stay on the classic path.
+_DEVICE_SAMPLE_ENV = "MTPLX_DSV41_DEVICE_SAMPLE"
+
+
+def device_sample_enabled() -> bool:
+    """True when the W63 device-sample AR decode lane is armed
+    (``MTPLX_DSV41_DEVICE_SAMPLE=1``; default off)."""
+    return os.environ.get(_DEVICE_SAMPLE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _sampler_is_greedy(sampler) -> bool:
+    if sampler is None:
+        return True
+    return float(getattr(sampler, "temperature", 0.0) or 0.0) <= 0.0
+
+
+def device_sample_eligible(sampler) -> tuple[bool, str]:
+    """Return ``(eligible, reason)`` for the device-sample lane.
+
+    Greedy (``sampler is None`` or ``temperature <= 0``) is always eligible.
+    Sampled requires ``temperature > 0`` and ``top_k > 1`` (the device shaped
+    sampler ``mtplx.generation._mx_lazy_sample`` covers exactly
+    temp -> top-k -> top-p -> categorical); presence/frequency penalties are
+    host-only (they need the running token Counter), so a penalised request
+    stays on the classic path.
+    """
+    if _sampler_is_greedy(sampler):
+        return True, "greedy"
+    top_k = int(getattr(sampler, "top_k", 0) or 0)
+    if top_k <= 1:
+        return False, "sampled device lane requires top_k > 1"
+    if getattr(sampler, "presence_penalty", 0.0) or getattr(
+        sampler, "frequency_penalty", 0.0
+    ):
+        return False, "presence/frequency penalties are host-only"
+    return True, "sampled"
+
+
+def run_device_sample_decode(
+    *,
+    forward_row: Callable[[mx.array], mx.array],
+    first_token: int,
+    n_more: int,
+    sampler=None,
+    seed: int = 0,
+    key: Optional[mx.array] = None,
+    stop_ids: Optional[set] = None,
+    on_token: Optional[Callable[[int], None]] = None,
+    abort_check: Optional[Callable[[], bool]] = None,
+    timing: Optional[dict] = None,
+) -> tuple[List[int], str, int]:
+    """One-step-lag device-sample AR decode.
+
+    ``forward_row(ids_2d)`` runs one target forward over a ``[1, T]`` token-id
+    array (device-side; its embedding lookup is ``mx.take`` on the id array, so
+    the sampled token never round-trips to the host to become the next input)
+    and returns the last-position logits row ``[vocab]``.  ``first_token`` is the
+    already-emitted token whose forward has NOT run yet; this loop emits up to
+    ``n_more`` further tokens (excluding ``first_token``).
+
+    The sampled/greedy token stays a lazy device array fed straight into the
+    next ``forward_row``; the host reads token *t* with a ONE-STEP LAG (step
+    *t+1*'s forward is already submitted via ``mx.async_eval`` before *t*'s id is
+    materialized), so the GPU never idles on the host read.  At a stop token, at
+    ``n_more``, or on abort the loop has already submitted ONE extra forward (the
+    just-emitted token's step) whose sampled successor is discarded: **at most
+    one wasted forward per completion**, returned as the third tuple element (the
+    classic loop breaks before forwarding its final token, so the device lane
+    computes and drops exactly that one step -- greedy output is unaffected).
+
+    Returns ``(more_tokens, finish_reason, extra_forward_steps)``.
+    """
+    import time as _time
+
+    greedy = _sampler_is_greedy(sampler)
+    if not greedy and key is None:
+        key = mx.random.key(int(seed) & 0x7FFFFFFF)
+
+    def _next_from_row(row: mx.array) -> mx.array:
+        nonlocal key
+        if greedy:
+            return mx.argmax(row, axis=-1).reshape(1)
+        from mtplx.generation import _mx_lazy_sample
+
+        key, sub = mx.random.split(key)
+        return _mx_lazy_sample(row, sampler, sub).reshape(1)
+
+    more: List[int] = []
+    if n_more <= 0:
+        return more, "length", 0
+    if _is_stop(first_token, stop_ids):
+        return more, "stop", 0
+
+    def _step(tok_lazy: mx.array):
+        row = forward_row(tok_lazy.reshape(1, 1))
+        return row, _next_from_row(row)
+
+    finish_reason = "length"
+    extra = 0
+    # Prime the pipeline: forward first_token, sample its successor (lazy),
+    # submit without blocking.
+    _row_lazy, tok_lazy = _step(mx.array([int(first_token)]))
+    mx.async_eval(tok_lazy)
+    while True:
+        if abort_check is not None and abort_check():
+            finish_reason = "abort"
+            extra = 1  # the in-flight tok_lazy step is discarded unread
+            break
+        # Submit step t+1 BEFORE reading token t, so the GPU stays busy across
+        # the host materialization.
+        b = _time.perf_counter()
+        row_next, tok_next = _step(tok_lazy)
+        mx.async_eval(tok_next)
+        if timing is not None:
+            timing["build_s"] = timing.get("build_s", 0.0) + (
+                _time.perf_counter() - b
+            )
+        w = _time.perf_counter()
+        v = int(tok_lazy.item())  # lagged read of token t (already in flight)
+        if timing is not None:
+            timing["wait_s"] = timing.get("wait_s", 0.0) + (_time.perf_counter() - w)
+        more.append(v)
+        if on_token is not None:
+            on_token(v)
+        if _is_stop(v, stop_ids):
+            finish_reason = "stop"
+            extra = 1  # forward(v) already ran; its successor is discarded
+            break
+        if len(more) >= n_more:
+            finish_reason = "length"
+            extra = 1
+            break
+        _row_lazy, tok_lazy = row_next, tok_next
+    return more, finish_reason, extra
+
+
 def _target_forward(model):
     """Default target forward: ``(logits, main_hidden)`` over the given rows,
     threading the shared V4.1 cache."""

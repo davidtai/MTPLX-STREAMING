@@ -1240,6 +1240,50 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 
 ---
 
+### K32 — Device-side sampling AR decode (`MTPLX_DSV41_DEVICE_SAMPLE`, W63) — **default OFF; greedy byte-identical; the per-token host round-trip removal**
+- **Mechanism:** the plain AR/greedy decode ends every token on a device→host round trip — `logits ->
+  argmax/sample on device -> the id is read to the host (mx.eval/.item()) -> stop/detok -> the id feeds
+  the next input embedding`. That read is a **full GPU drain per token**, and the next step's graph
+  cannot be encoded until it returns, so the ~160 ms/token (6.0 tok/s stack @1K) lane idles on the read
+  on every token's critical path (§0 dispatch-bound reframe). The lane
+  (`deepseek_v41_dspark_decode.run_device_sample_decode`) keeps the sampled token **on device** as a lazy
+  `mx.array` fed straight into the next forward (whose embedding is `mx.take` on the id array — no host
+  round trip), and reads token ids with a **ONE-STEP LAG**: step t+1's forward + device sample are
+  submitted (`mx.async_eval`) *before* token t's id is materialized, so the GPU never idles on the read.
+  This is the mlx-lm double-buffer (the shipped `MTPLX_AR_PIPELINE` lane), applied to deepseek_v41 and
+  extended to greedy. **Where:** decode (AR/greedy). **Bounded discard:** at a stop/`max_tokens`/abort the
+  loop has already submitted **exactly one** extra forward (the just-emitted token's step) whose successor
+  is dropped; the classic loop breaks before forwarding its final token, so the lane computes and discards
+  that one step — greedy output is unaffected (`extra_forward_steps` ≤ 1, surfaced in the receipts).
+- **Exactness:** GREEDY is **byte-identical** to the classic argmax loop (argmax is deterministic; the same
+  integer id feeds the next forward either way) — proven on the CPU double at 256 tokens, both at the model
+  level and served (`generate_ar` env-on == env-off), and stop-lag correct (emitted == classic up-to-stop).
+  SAMPLED reuses the shipped `_mx_lazy_sample` (temp→top-k→top-p→categorical, the qwen4_exp lane's sampler —
+  **no other model's sampler touched or modified**) and is NOT token-for-token equal to the host numpy path:
+  (1) it draws from an `mx.random` device key, not the numpy stream — a seed-mapping change; (2) its top-p
+  nucleus is over the **renormalized top-k** softmax, so it keeps a **narrower** nucleus than the host's
+  full-vocab-softmax nucleus. Both are conservative — the sampled support is a **subset** of the host
+  top-k/support (verified on the CPU double), so the device never draws a token the host would not. Sampled
+  callers needing the exact host distribution keep the default (off). W63_DEVICE_SAMPLE.md.
+- **Gating (no other path touched):** served `generate_ar` engages the lane ONLY for
+  `model_type == "deepseek_v41"`, armed, no constraint/repetition-stop/loop-guard/thinking-guard/AR-hidden/
+  `capture_final_state`, `max_tokens>1`, eligible sampler (greedy always; sampled `top_k>1`, no penalties) —
+  else it falls through to the classic/pipeline path unchanged. Applied in the bench loops first
+  (`--device-sample` on `ab_decode_env_levers._generate` / `bench_standard_shape.bench_one_cell`).
+- **Expected:** removes the exposed per-token host read + graph re-encode from the critical path;
+  **~5–15 ms/token @1K (≈ +3–9% decode)**, ceiling above the a3b sync-removal +1.1%
+  ([[a3b-decode-roundtrip-is-the-lever]]) because the DSV4.1 read is a full drain. **Unmeasured on GPU**
+  (CPU-only window); confirm in a paired 1K decode A/B (KG-d family, `mx.eval` counted). **Sibling to K1**
+  (barrier overlap) — both target the exposed host/GPU serialization; K32 removes the read from the loop,
+  K1 fills the residual idle.
+
+**K14 update (W63):** `MLX_MAX_MB_PER_BUFFER` is now a pinned lever + receipt field (`mlx_max_mb_per_buffer`)
+with the `mlx_buffer_500` arm (500 MB — the Qwen lane's +1.6% point). MLX binds it at Metal init, so a real
+A/B runs the arm in its OWN process with the value exported before launch (as the a3b sweep did); the arm
+pins + records it for reproducibility. Still a cheap re-falsifier at ~0 expectation in the streaming regime.
+
+---
+
 ## 6. Dead-here (GPU-side; do not re-propose)
 
 | Lever | Why dead |
