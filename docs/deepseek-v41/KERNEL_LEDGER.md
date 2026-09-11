@@ -1050,12 +1050,14 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   scalars (one kernel for every length/batch/mode); `TG`/`HD=512` compile-time. Finite `NEG=-3e38f`
   sentinel → all-masked row is finite 0, never NaN. MLA: `k_cache`≡`v_cache` (one latent, RoPE
   pre-baked). MLX fused SDPA unusable (head_dim 512 unsupported; sink differs, W50 2.1e-3).
-- **Dispatch (per layer, per call):** eager SDPA **~22 primitives** (W45) → K29 **~2–4** (1 kernel +
-  bool→additive-mask `where` [+ q/KV contiguity, usually a decode no-op]). Mode-invariant (all four CSA
-  modes route through the identical `_sparse_attend`). At 40 layers ≈ **−760 primitives/token** on the
-  attention SDPA — larger than K22's whole-token −368 and K24's −429, and on the chain a tape can't
-  touch. Decode-only lever: the M=1 score row is `[1,64,T]` (~4 MB @16K), so **no material peak-GB
-  relief** (unlike K28's prefill ~6 GiB transient) — the win is dispatch count.
+- **Dispatch (per layer, per call):** eager SDPA **~22 primitives** (W45) → K29 **~3–5** (the fused
+  kernel — 1 dispatch at T≤256, or **split-K = 2 dispatches** (pass-1 partials + pass-2 sink combine,
+  W60 window-26 occupancy redesign) — plus the bool→additive-mask `where` [+ q/KV contiguity, usually a
+  decode no-op]). Mode-invariant (all four CSA modes route through the identical `_sparse_attend`). At 40
+  layers ≈ **−700 primitives/token** on the attention SDPA — larger than K22's whole-token −368 and
+  K24's −429, and on the chain a tape can't touch. Decode-only lever: the M=1 score row is `[1,64,T]`
+  (~4 MB @16K), so **no material peak-GB relief** (unlike K28's prefill ~6 GiB transient) — the win is
+  dispatch count + M=1 occupancy (split-K launches ≥512 threadgroups/layer vs the v1 64).
 - **Est. ms/token saved at 1K (GPU-window-gated, NOT measured):** SDPA ≈ 14% of the ~162-prim reuse
   attention call (W45 micro-census) → ~8 ms/token dispatch-uniform ceiling; central estimate
   **−6…−12 ms/token** (160 → ~148–154, ~4–8%), minus the kernel's own single dispatch + ~70M-MAC/layer
@@ -1072,14 +1074,37 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   the Metal kernel on random cache states at **T∈{1088,4096,16384} × each mode** (decode M=1 + verify
   M=4) + 32 real-model decode steps if the artifact is present: **pass if max|Δ| ≤ 1e-6 and argmax
   mismatch 0**.
-- **STATUS (W60, `feat/deepseek-v41-w60`):** IMPLEMENTED + CPU-proven (tiled-reference algorithm +
-  wrapper plumbing + model dispatch for decode & verify across all four modes + unsupported-mask
-  fallback + byte-identical CPU fallback), default OFF, GPU-only. Kernel + refs
-  `mtplx/models/deepseek_v41_attn_kernels.py`; integration `_sparse_attend` → `_decode_attn_kernel`;
-  tests `tests/models/test_deepseek_v41_decode_attn_kernel.py` (39 CPU + 1 GPU-gated), peak RSS < 0.2 GB.
-  Arm `decode_attn_kernel` in `ab_decode_env_levers.py` (pins all 21 keys); **LEFT OUT of `stack_a`
-  until the parity window is clean** (KG-m below). Report `W60_FUSED_DECODE_ATTENTION.md`.
-  Numeric-throughput A/B pending a GPU window.
+- **WINDOW-26 (parity FAIL + −45%) — root-caused + fixed (`feat/deepseek-v41-w60`, on the streaming tip):**
+  Window-26 ran the kernel on-GPU: `kernel_builder_ok`, decode arms finite + argmax-exact but
+  **max\|Δ\| 4e-4…2.1e-3** (verify: 1 argmax mismatch each), and the A/B decoded **3.25 tok/s vs
+  stack_a 5.98 (−45%)**, byte-identical tokens.
+  **(1) Parity root cause = fast-math `metal::exp`.** The ~1e-3 error is the fast-transcendental class,
+  not f32 reassociation (an f32 numpy sim of the naive-sequential 512-dim dot + online combine matches
+  MLX's blocked-matmul softmax to ~1e-7 — the reduction *order* is not the leak). `mx.fast.metal_kernel`
+  compiles with fast math; the bare `metal::exp` is the *fast* approx. **Fixed → `metal::precise::exp`**
+  everywhere (matching `fused_norm`/`laguna_*`); expected back to ~1e-6. Not GPU-verifiable on the worker
+  box — re-gated in-window.
+  **(2) −45% root cause = M=1 occupancy.** v1 launched one threadgroup per `(row,head)` = **64 TGs/layer**
+  at decode (latency-bound, ~20 GFLOP/s effective). **Redesign = split-K (flash-decoding):** T split
+  across `G` TGs/`(row,head)` (pass 1 partials) + a cheap pass-2 sink combine → **≥512 TGs/layer**
+  (`_choose_splits`: G=8 @1K/4K, 32 @16K; T≤256 keeps the single dispatch). Two dispatches, both
+  occupancy-filled; paper estimate recovers most of −45% (the eager SDPA it replaces is ~22 prim). The
+  realized delta is the next window.
+  **(3) Engagement counter** (`deepseek_v41_attn_kernels.{reset_engagement,engagement,note_fallback}`,
+  wired into the A/B receipt as `decode_attn_kernel_engagement`): `calls==0` ⇒ kernel never ran (all
+  eager); `calls>0` ⇒ ran (slowdown is real) — settles window-26's did-not-run-vs-slow question.
+  **(4) Loader import fix:** the real-model parity block imported the non-existent `..._loader.load` →
+  now `load_deepseek_v41_streaming` (the served 32-step comparison is the A/B arm).
+- **STATUS (W60, on `feat/deepseek-v41-streaming` tip):** IMPLEMENTED + CPU-proven (one-shot + tiled +
+  **split-K** pure-MLX references all == eager to ≤8.6e-7 argmax-exact; wrapper plumbing (single +
+  split/combine) via spy; model dispatch for decode & verify across all four modes; unsupported-mask
+  fallback + engagement counter; byte-identical CPU fallback), default OFF, GPU-only. Kernel + refs
+  `mtplx/models/deepseek_v41_attn_kernels.py` (single fused + split + combine, all `precise::exp`);
+  integration `_sparse_attend`→`_decode_attn_kernel` (also composed by K30's `_sparse_attend_selected`);
+  tests `tests/models/test_deepseek_v41_decode_attn_kernel.py` (60 CPU + 1 GPU-gated), peak RSS < 0.2 GB.
+  Arm `decode_attn_kernel` in `ab_decode_env_levers.py`; **LEFT OUT of `stack_a` until the re-gate window
+  is clean** (KG-m). Report `W60_FUSED_DECODE_ATTENTION.md` §6. Parity + throughput A/B pending the
+  re-gate GPU window.
 
 ---
 

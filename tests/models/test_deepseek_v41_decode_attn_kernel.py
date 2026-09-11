@@ -95,15 +95,15 @@ def _rand_state(b, s, H, hd, T, mode, *, seed=3):
 
 
 class _SpyKernel:
-    """A fake compiled kernel: records the dispatch kwargs and returns zeros of the
-    requested output shapes/dtypes (so the wrapper's reshape/return path runs on the
-    CPU with no Metal)."""
+    """A fake compiled kernel: records the dispatch kwargs into its log entry and
+    returns zeros of the requested output shapes/dtypes (so the wrapper's
+    reshape/return path runs on the CPU with no Metal)."""
 
-    def __init__(self, log):
-        self.log = log
+    def __init__(self, entry):
+        self.entry = entry
 
     def __call__(self, *, inputs, grid, threadgroup, output_shapes, output_dtypes):
-        self.log.update(
+        self.entry.update(
             inputs=inputs, grid=grid, threadgroup=threadgroup,
             output_shapes=output_shapes, output_dtypes=output_dtypes,
         )
@@ -111,14 +111,20 @@ class _SpyKernel:
 
 
 def _install_spy(monkeypatch):
-    """Replace the (lru-cached) kernel factory so no real Metal kernel is built."""
-    log = {}
+    """Spy all three (lru-cached) kernel factories so no real Metal kernel is built.
+    Returns a log with keys ``single`` / ``split`` / ``combine``; a key carries
+    ``factory_kw`` + the dispatch kwargs only if that path ran."""
+    log = {"single": {}, "split": {}, "combine": {}}
 
-    def fake_factory(**kw):
-        log["factory_kw"] = kw
-        return _SpyKernel(log)
+    def factory(key):
+        def make(**kw):
+            log[key]["factory_kw"] = kw
+            return _SpyKernel(log[key])
+        return make
 
-    monkeypatch.setattr(K29, "_k29_kernel", fake_factory)
+    monkeypatch.setattr(K29, "_k29_kernel", factory("single"))
+    monkeypatch.setattr(K29, "_k29_split_kernel", factory("split"))
+    monkeypatch.setattr(K29, "_k29_combine_kernel", factory("combine"))
     return log
 
 
@@ -273,7 +279,8 @@ def test_flag_on_cpu_is_byte_identical_eager_fallback(monkeypatch):
 # ---------------------------------------------------------------------------
 # (3) wrapper plumbing (spy: no real Metal build)
 # ---------------------------------------------------------------------------
-def test_wrapper_plumbing_bool_mask_and_sink(monkeypatch):
+def test_wrapper_single_plumbing_bool_mask_and_sink(monkeypatch):
+    # n_splits=1 forces the single-dispatch fused kernel (T here would auto-split).
     log = _install_spy(monkeypatch)
     b, s, H, hd, T, tg = 1, 4, 64, 512, 300, 128
     rows = b * s
@@ -282,15 +289,17 @@ def test_wrapper_plumbing_bool_mask_and_sink(monkeypatch):
     attend = mx.random.uniform(shape=(b, s, T)) > 0.3
     sink = 0.3 * mx.random.normal((H,))
     out = K29.fused_decode_attention(q, KV, KV, attend=attend, attn_sink=sink,
-                                     scale=0.5, T=T, tg=tg)
+                                     scale=0.5, T=T, tg=tg, n_splits=1)
     mx.eval(out)
     assert tuple(out.shape) == (b, s, H, hd) and out.dtype == mx.float32
-    assert log["factory_kw"] == dict(tg=tg, hd=hd, has_mask=True, sink_on=True)
-    assert log["grid"] == (tg * rows * H, 1, 1)
-    assert log["threadgroup"] == (tg, 1, 1)
-    assert log["output_shapes"] == [(rows, H, hd)]
-    assert log["output_dtypes"] == [mx.float32]
-    inp = log["inputs"]
+    single = log["single"]
+    assert not log["split"] and not log["combine"]  # split path untouched
+    assert single["factory_kw"] == dict(tg=tg, hd=hd, has_mask=True, sink_on=True)
+    assert single["grid"] == (tg * rows * H, 1, 1)
+    assert single["threadgroup"] == (tg, 1, 1)
+    assert single["output_shapes"] == [(rows, H, hd)]
+    assert single["output_dtypes"] == [mx.float32]
+    inp = single["inputs"]
     assert len(inp) == 9  # q,k,v,H,T,S,scale,mask,sink
     assert tuple(inp[0].shape) == (rows, H, hd) and inp[0].dtype == mx.float32  # q 3D
     assert tuple(inp[1].shape) == (b, T, hd) and inp[1].dtype == mx.float32     # k
@@ -301,14 +310,48 @@ def test_wrapper_plumbing_bool_mask_and_sink(monkeypatch):
     assert tuple(inp[8].shape) == (H,) and inp[8].dtype == mx.float32       # per-head sink
 
 
+def test_wrapper_splitk_plumbing(monkeypatch):
+    # split-K path: pass 1 grid = tg*(rows*H*G) with three partial outputs, pass 2
+    # combine grid = tg*(rows*H) reading the partials + sink.
+    log = _install_spy(monkeypatch)
+    b, s, H, hd, T, tg, G = 1, 1, 64, 512, 4096, 128, 8
+    rows = b * s
+    q = mx.random.normal((b, s, H, hd)).astype(mx.float32)
+    KV = mx.random.normal((b, T, hd)).astype(mx.float32)
+    attend = mx.random.uniform(shape=(b, s, T)) > 0.3
+    sink = 0.3 * mx.random.normal((H,))
+    out = K29.fused_decode_attention(q, KV, KV, attend=attend, attn_sink=sink,
+                                     scale=0.5, T=T, tg=tg, n_splits=G)
+    mx.eval(out)
+    assert tuple(out.shape) == (b, s, H, hd) and out.dtype == mx.float32
+    assert not log["single"]  # single path untouched
+    sp = log["split"]
+    n_part = rows * H * G
+    assert sp["factory_kw"] == dict(tg=tg, hd=hd, g=G, has_mask=True)
+    assert sp["grid"] == (tg * n_part, 1, 1)
+    assert sp["output_shapes"] == [(n_part,), (n_part,), (n_part, hd)]
+    assert sp["output_dtypes"] == [mx.float32, mx.float32, mx.float32]
+    assert len(sp["inputs"]) == 8  # q,k,v,H,T,S,scale,mask (NO sink in pass 1)
+    assert sp["inputs"][4] == T
+    cm = log["combine"]
+    assert cm["factory_kw"] == dict(tg=tg, hd=hd, g=G, sink_on=True)
+    assert cm["grid"] == (tg * rows * H, 1, 1)
+    assert cm["output_shapes"] == [(rows, H, hd)]
+    ci = cm["inputs"]
+    assert len(ci) == 5  # part_m, part_d, part_acc, H, sink
+    assert tuple(ci[0].shape) == (n_part,) and tuple(ci[1].shape) == (n_part,)
+    assert tuple(ci[2].shape) == (n_part, hd)
+    assert ci[3] == H and tuple(ci[4].shape) == (H,)
+
+
 def test_wrapper_bool_mask_becomes_additive_zero_neginf(monkeypatch):
     log = _install_spy(monkeypatch)
-    b, s, H, hd, T = 1, 1, 2, 512, 16
+    b, s, H, hd, T = 1, 1, 2, 512, 16  # T<=256 -> single path
     q = mx.zeros((b, s, H, hd), dtype=mx.float32)
     KV = mx.zeros((b, T, hd), dtype=mx.float32)
     attend = mx.array([[[True, False] * (T // 2)]], dtype=mx.bool_)  # [1,1,T]
     K29.fused_decode_attention(q, KV, KV, attend=attend, attn_sink=mx.zeros((H,)))
-    mask = log["inputs"][7]
+    mask = log["single"]["inputs"][7]
     mx.eval(mask)
     assert float(mask[0, 0]) == 0.0            # kept -> 0.0
     assert mask[0, 1].item() == float("-inf")  # masked -> -inf
@@ -317,11 +360,11 @@ def test_wrapper_bool_mask_becomes_additive_zero_neginf(monkeypatch):
 def test_wrapper_no_mask_and_no_sink(monkeypatch):
     log = _install_spy(monkeypatch)
     q = mx.random.normal((1, 1, 4, 512)).astype(mx.float32)
-    KV = mx.random.normal((1, 40, 512)).astype(mx.float32)
+    KV = mx.random.normal((1, 40, 512)).astype(mx.float32)  # T<=256 -> single
     K29.fused_decode_attention(q, KV, KV, attend=None, attn_sink=None)
-    assert log["factory_kw"]["has_mask"] is False
-    assert log["factory_kw"]["sink_on"] is False
-    assert len(log["inputs"]) == 7  # q,k,v,H,T,S,scale -- no mask, no sink
+    assert log["single"]["factory_kw"]["has_mask"] is False
+    assert log["single"]["factory_kw"]["sink_on"] is False
+    assert len(log["single"]["inputs"]) == 7  # q,k,v,H,T,S,scale -- no mask, no sink
 
 
 def test_wrapper_3d_q_returns_3d(monkeypatch):
@@ -339,8 +382,8 @@ def test_wrapper_T_smaller_than_cache(monkeypatch):
     KV = mx.random.normal((1, 100, 512)).astype(mx.float32)
     attend = mx.random.uniform(shape=(1, 1, 60)) > 0.3
     K29.fused_decode_attention(q, KV, KV, attend=attend, attn_sink=mx.zeros((4,)), T=60)
-    assert log["inputs"][4] == 60                       # T scalar clipped
-    assert tuple(log["inputs"][7].shape) == (1, 60)     # mask matches T
+    assert log["single"]["inputs"][4] == 60                   # T scalar clipped (<=256 single)
+    assert tuple(log["single"]["inputs"][7].shape) == (1, 60)  # mask matches T
 
 
 def test_wrapper_requires_metal(monkeypatch):
@@ -348,11 +391,33 @@ def test_wrapper_requires_metal(monkeypatch):
     # the caller (model) is forced to guard with _decode_attn_kernel_use.
     monkeypatch.setattr(mx.metal, "is_available", lambda: False)
     K29._k29_kernel.cache_clear()
+    K29._k29_split_kernel.cache_clear()
+    K29._k29_combine_kernel.cache_clear()
     q = mx.zeros((1, 1, 4, 512), dtype=mx.float32)
-    KV = mx.zeros((1, 8, 512), dtype=mx.float32)
+    KV = mx.zeros((1, 8, 512), dtype=mx.float32)  # single path
     with pytest.raises(RuntimeError):
         K29.fused_decode_attention(q, KV, KV, attn_sink=None)
+    # split path also raises off-Metal
+    KV2 = mx.zeros((1, 4096, 512), dtype=mx.float32)
+    with pytest.raises(RuntimeError):
+        K29.fused_decode_attention(q, KV2, KV2, attn_sink=None, n_splits=8)
     K29._k29_kernel.cache_clear()
+    K29._k29_split_kernel.cache_clear()
+    K29._k29_combine_kernel.cache_clear()
+
+
+def test_choose_splits_occupancy():
+    # tiny T stays single; decode M=1 (rows*H=64) picks G>=8 for occupancy; 16K
+    # scales up; a larger row count (verify) needs fewer splits.
+    assert K29._choose_splits(64, 64) == 1
+    assert K29._choose_splits(256, 64) == 1
+    assert K29._choose_splits(1088, 64) == 8      # 512/64 occupancy floor
+    assert K29._choose_splits(4096, 64) == 8
+    assert K29._choose_splits(16384, 64) == 32    # load-bound, capped at _SPLITS_MAX
+    assert K29._choose_splits(4096, 256) == 8     # verify M=4: g_occ=2, g_load=8
+    assert K29._choose_splits(1088, 256) == 3     # g_occ=2, g_load=ceil(1088/512)=3 -> 3
+    # rows*H*G threadgroups clears the occupancy target for M=1 decode
+    assert 64 * K29._choose_splits(1088, 64) >= K29._OCC_TARGET_TG
 
 
 # ---------------------------------------------------------------------------
@@ -361,16 +426,27 @@ def test_wrapper_requires_metal(monkeypatch):
 def test_source_builder_variants():
     full = K29._build_source(tg=128, hd=512, has_mask=True, sink_on=True)
     assert "constexpr uint TG = 128;" in full and "constexpr uint HD = 512;" in full
-    assert "mask[m_base + t]" in full and "exp(sink[head] - m_run)" in full
+    assert "mask[m_base + t]" in full and "precise::exp(sink[head] - m_run)" in full
     assert "threadgroup float q_sh[HD];" in full and "threadgroup float acc_sh[HD];" in full
-    # no unsubstituted placeholders
+    # precision fix: every exp is precise (no bare fast-math metal::exp)
+    assert "metal::precise::exp" in full
+    assert "metal::exp(" not in full and "fast::exp" not in full
     assert "%%" not in full
     bare = K29._build_source(tg=256, hd=576, has_mask=False, sink_on=False)
-    # the mask READ / sink fold are gone (a "mask[row,:]" comment stays in the fixed
-    # template regardless -- assert on the actual load, not the substring "mask[").
-    assert "mask[m_base + t]" not in bare and "exp(sink[head] - m_run)" not in bare
+    assert "mask[m_base + t]" not in bare and "precise::exp(sink[head] - m_run)" not in bare
     assert "constexpr uint TG = 256;" in bare and "constexpr uint HD = 576;" in bare
     assert "%%" not in bare
+    # split + combine sources assemble, carry G, and use precise::exp only
+    split = K29._build_split_source(tg=128, hd=512, g=8, has_mask=True)
+    assert "constexpr uint G  = 8;" in split and "mask[m_base + t]" in split
+    assert "part_m[gid]" in split and "part_acc[gid * HD + i]" in split
+    assert "metal::precise::exp" in split and "metal::exp(" not in split and "%%" not in split
+    comb = K29._build_combine_source(tg=128, hd=512, g=8, sink_on=True)
+    assert "constexpr uint G  = 8;" in comb and "part_m[pbase + lane]" in comb
+    assert "precise::exp(sink[head] - m)" in comb
+    assert "metal::precise::exp" in comb and "metal::exp(" not in comb and "%%" not in comb
+    comb_ns = K29._build_combine_source(tg=128, hd=512, g=4, sink_on=False)
+    assert "sink[head]" not in comb_ns and "%%" not in comb_ns
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +478,73 @@ def test_reference_matches_eager_reassoc(mode, b, s, H, T):
     assert _maxabs(tiled, eager) <= 1e-6, f"{mode} tiled ref maxΔ"
     assert _argmax_mismatch(ref, eager) == 0
     assert _argmax_mismatch(tiled, eager) == 0
+
+
+@pytest.mark.parametrize("mode", _MODES)
+@pytest.mark.parametrize("b,s,H,T,G", [(1, 1, 64, 1088, 8), (1, 1, 8, 4096, 8),
+                                       (1, 4, 8, 4096, 16), (1, 1, 8, 16384, 32)])
+def test_splitk_reference_matches_eager_reassoc(mode, b, s, H, T, G):
+    # the exact split-K partition+combine (the two-kernel algorithm) equals the
+    # eager softmax-with-sink to reassociation level -- the CPU proof the split-K
+    # reassociation is greedy-safe before any GPU run.
+    hd = 512
+    q, KV, attend, sink = _rand_state(b, s, H, hd, T, mode, seed=13)
+    shim = _AttnShim(hd, sink, mode=mode)
+    eager = shim._sparse_attend_oneshot(q, KV, attend, mx.float32)
+    sk = K29.decode_attention_reference_splitk(q, KV, KV, attend=attend, attn_sink=sink,
+                                               scale=hd ** -0.5, n_splits=G)
+    mx.eval(eager, sk)
+    assert bool(mx.all(mx.isfinite(sk)))
+    assert _maxabs(sk, eager) <= 1e-6, f"{mode} split-K(G={G}) maxΔ"
+    assert _argmax_mismatch(sk, eager) == 0
+
+
+def test_splitk_reference_equals_tiled_and_oneshot():
+    # partition invariance: split-K (any G), the contiguous tiled reference, and the
+    # one-shot reference are the SAME operation up to float reassociation (<=1e-6).
+    hd = 512
+    q, KV, attend, sink = _rand_state(1, 1, 16, hd, 4096, "reuse", seed=17)
+    one = K29.decode_attention_reference(q, KV, KV, attend=attend, attn_sink=sink, scale=hd ** -0.5)
+    for G in (1, 4, 8, 32):
+        sk = K29.decode_attention_reference_splitk(q, KV, KV, attend=attend, attn_sink=sink,
+                                                   scale=hd ** -0.5, n_splits=G)
+        mx.eval(one, sk)
+        assert _maxabs(sk, one) <= 1e-6, f"G={G}"
+        assert _argmax_mismatch(sk, one) == 0
+
+
+def test_engagement_counters(monkeypatch):
+    # the wrapper bumps calls/rows/split_calls on real dispatches; note_fallback
+    # bumps fallbacks. Proven with the spy (no Metal).
+    _install_spy(monkeypatch)
+    K29.reset_engagement()
+    assert K29.engagement() == {"calls": 0, "rows": 0, "split_calls": 0, "fallbacks": 0}
+    q = mx.random.normal((1, 1, 8, 512)).astype(mx.float32)
+    KV = mx.random.normal((1, 100, 512)).astype(mx.float32)  # <=256 -> single
+    K29.fused_decode_attention(q, KV, KV, attn_sink=mx.zeros((8,)))
+    e = K29.engagement()
+    assert e["calls"] == 1 and e["rows"] == 1 and e["split_calls"] == 0
+    # a split-K call (T>256) bumps split_calls; verify rows counts b*s
+    qv = mx.random.normal((1, 4, 8, 512)).astype(mx.float32)
+    KV2 = mx.random.normal((1, 4096, 512)).astype(mx.float32)
+    K29.fused_decode_attention(qv, KV2, KV2, attn_sink=mx.zeros((8,)))
+    e = K29.engagement()
+    assert e["calls"] == 2 and e["rows"] == 1 + 4 and e["split_calls"] == 1
+    K29.note_fallback()
+    assert K29.engagement()["fallbacks"] == 1
+    K29.reset_engagement()
+    assert K29.engagement()["calls"] == 0 and K29.engagement()["fallbacks"] == 0
+
+
+def test_model_fallback_bumps_counter(monkeypatch):
+    # an unsupported per-head mask through the model path records a fallback.
+    q, KV, _, sink = _rand_state(1, 1, 8, 512, 300, "reuse")
+    per_head = mx.random.uniform(shape=(1, 1, 8, 300)) > 0.3  # 4D, unsupported
+    shim = _AttnShim(512, sink)
+    K29.reset_engagement()
+    assert shim._decode_attn_kernel(q, KV, per_head) is None
+    assert K29.engagement()["fallbacks"] == 1
+    assert K29.engagement()["calls"] == 0
 
 
 def test_reference_fully_masked_is_zero_and_finite():
@@ -471,13 +614,18 @@ def _eager_ref(q, KV, attend, sink, scale):
     return K29.decode_attention_reference(q, KV, KV, attend=attend, attn_sink=sink, scale=scale)
 
 
-def _measure_parity(b, s, H, T, mode, *, scale, seed) -> dict:
-    d = {"shape": [b, s, H, T], "mode": mode, "scale": scale, "tol": 1e-6, "error": None}
+def _measure_parity(b, s, H, T, mode, *, scale, seed, n_splits=None) -> dict:
+    d = {"shape": [b, s, H, T], "mode": mode, "scale": scale, "tol": 1e-6,
+         "n_splits_req": n_splits, "n_splits_auto": K29._choose_splits(T, b * s * H),
+         "error": None}
     try:
         q, KV, attend, sink = _rand_state(b, s, H, 512, T, mode, seed=seed)
         ref = _eager_ref(q, KV, attend, sink, scale)
-        got = K29.fused_decode_attention(q, KV, KV, attend=attend, attn_sink=sink, scale=scale, T=T)
+        K29.reset_engagement()
+        got = K29.fused_decode_attention(q, KV, KV, attend=attend, attn_sink=sink,
+                                         scale=scale, T=T, n_splits=n_splits)
         mx.eval(ref, got)
+        d["engagement"] = K29.engagement()
         d["finite"] = bool(mx.all(mx.isfinite(got)))
         d["max_abs_d"] = _maxabs(got, ref)
         d["argmax_rows"] = int(b * s * H)
@@ -491,8 +639,11 @@ def _measure_parity(b, s, H, T, mode, *, scale, seed) -> dict:
 
 def _real_model_decode_parity(steps=32) -> dict:
     """Optional: 32 real-model decode steps, kernel-on argmax vs kernel-off, IF the
-    streaming artifact is present.  Skipped (recorded, not asserted) otherwise --
-    the worker box never loads the artifact; the orchestrator runs this in-window."""
+    streaming artifact is present.  Records artifact presence + loader importability;
+    the authoritative served comparison is the ``decode_attn_kernel`` A/B arm in
+    ``ab_decode_env_levers.py`` (proper streamed load + memory guards + the K29
+    engagement counter), so a heavy second load is not reproduced inside pytest --
+    the worker box never loads the artifact anyway."""
     d = {"ran": False, "reason": None}
     art = os.environ.get("MTPLX_DSV41_ARTIFACT") or os.path.expanduser(
         "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
@@ -501,13 +652,15 @@ def _real_model_decode_parity(steps=32) -> dict:
         d["reason"] = f"artifact absent ({art})"
         return d
     try:
-        from mtplx.models.deepseek_v41_loader import load as _load  # noqa
-        d["reason"] = "real-model harness present but left to the in-window driver"
-        # A full generate loop is heavy + shape-specific; the orchestrator's
-        # ab_decode_env_levers.py `decode_attn_kernel` arm covers the served path.
-        # This hook records artifact presence so the receipt is honest.
+        from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming  # noqa: F401
+        d["loader_importable"] = True
         d["artifact"] = art
+        d["reason"] = (
+            "artifact present; the 32-step served kernel-on-vs-off comparison + K29 "
+            "engagement counter is the ab_decode_env_levers.py `decode_attn_kernel` arm"
+        )
     except Exception as exc:  # pragma: no cover
+        d["loader_importable"] = False
         d["reason"] = f"loader import failed: {exc!r}"
     return d
 
@@ -544,6 +697,7 @@ def test_decode_attn_parity_gpu():
             diag["kernel_builder_error"] = repr(exc)
 
         seed = 100
+        # default (auto n_splits) path for each mode × T -- what the model ships.
         for T in (1088, 4096, 16384):
             for mode in _MODES:
                 diag["arms"][f"decode_{mode}_T{T}"] = _measure_parity(
@@ -554,6 +708,14 @@ def test_decode_attn_parity_gpu():
             diag["arms"][f"verify4_{mode}_T4096"] = _measure_parity(
                 1, 4, 64, 4096, mode, scale=scale, seed=seed)
             seed += 1
+        # explicitly exercise BOTH kernel paths at T=4096 (auto picks split-K there),
+        # so the single-dispatch fused kernel also gets GPU parity coverage.
+        diag["arms"]["single_g1_full_T4096"] = _measure_parity(
+            1, 1, 64, 4096, "full", scale=scale, seed=seed, n_splits=1)
+        seed += 1
+        diag["arms"]["split_g8_full_T4096"] = _measure_parity(
+            1, 1, 64, 4096, "full", scale=scale, seed=seed, n_splits=8)
+        seed += 1
 
         diag["real_model_decode"] = _real_model_decode_parity()
         diag["all_passed"] = bool(

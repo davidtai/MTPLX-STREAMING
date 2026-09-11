@@ -710,12 +710,13 @@ class Attention(nn.Module):
         both key and value.  A per-head mask (``ndim != 3``) or a shape mismatch is
         the sole eager-fallback path (returns ``None``); genuine kernel errors are
         left to propagate ([[dont-rationalize-broken-as-normal]])."""
+        from mtplx.models import deepseek_v41_attn_kernels as _k29
         if attend is not None:
             if attend.ndim != 3 or tuple(attend.shape) != (
                 int(q.shape[0]), int(q.shape[1]), int(KV.shape[1])
             ):
+                _k29.note_fallback()  # W60 telemetry: armed-but-eager (mask shape)
                 return None  # unsupported mask shape -> eager
-        from mtplx.models import deepseek_v41_attn_kernels as _k29
         return _k29.fused_decode_attention(
             q, KV, KV, attend=attend, attn_sink=self.attn_sink,
             scale=self.softmax_scale, T=int(KV.shape[1]),

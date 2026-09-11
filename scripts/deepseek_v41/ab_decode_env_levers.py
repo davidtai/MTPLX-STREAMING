@@ -779,6 +779,14 @@ def _run_arm(args, arm, bench, mx) -> dict:
         _dsv41._reset_sinkhorn_kernel_calls()
     except Exception:  # pragma: no cover - defensive
         _dsv41 = None
+    # W60/K29 engagement: zero the fused-decode-attention counters after model load
+    # so the receipt reports THIS arm's real kernel dispatches vs armed-but-eager
+    # fallbacks -- distinguishes "kernel did not run" (calls 0) from "ran (slowly)".
+    try:
+        from mtplx.models import deepseek_v41_attn_kernels as _k29
+        _k29.reset_engagement()
+    except Exception:  # pragma: no cover - defensive
+        _k29 = None
     try:
         ops = bench._MLXOps(mx)
         mem_probe = bench._MLXMemProbe(mx)
@@ -813,6 +821,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "overlap_telemetry": _overlap_telemetry(runtime)
             if runtime is not None
             else None,
+            # W60/K29 fused-decode-attention engagement (calls/rows/split_calls/
+            # fallbacks over the whole arm); calls 0 on a decode_attn_kernel arm
+            # means the kernel never ran (all eager) rather than ran-and-was-slow.
+            "decode_attn_kernel_engagement": (
+                _k29.engagement() if _k29 is not None else None
+            ),
         }
         if getattr(args, "decode_mode", "ar") == "dspark":
             # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR

@@ -233,8 +233,75 @@ sinkhorn_metal + attn_compile + win_memo`).
 
 ## 5. Status
 
-IMPLEMENTED + CPU-proven (kernel algorithm via the tiled pure-MLX reference,
-wrapper plumbing via a spy kernel, model dispatch for decode + verify across all
-four modes, unsupported-mask fallback, byte-identical CPU fallback), default OFF,
-GPU-only. Peak RSS < 0.2 GB in the CPU suite. Numeric-throughput A/B pending a GPU
-window (**KG-m**, see KERNEL_LEDGER K29).
+IMPLEMENTED + CPU-proven (kernel algorithm via the tiled + split-K pure-MLX
+references, wrapper plumbing via a spy kernel, model dispatch for decode + verify
+across all four modes, unsupported-mask fallback, byte-identical CPU fallback),
+default OFF, GPU-only. Peak RSS < 0.2 GB in the CPU suite. Numeric-throughput A/B
+pending a GPU window (**KG-m**, see KERNEL_LEDGER K29).
+
+---
+
+## 6. Window-26 findings + fix (parity FAIL root cause, occupancy redesign)
+
+Window 26 (`receipts/gpu-windows/window-26/k29-parity.{json,log}`) ran the kernel
+on the real GPU: `kernel_builder_ok`, every decode arm **finite, argmax mismatch
+0**, but **max|Δ| 4e-4 … 2.1e-3** (all modes/T) and **1 argmax mismatch on each
+verify-M4 arm** — and the `decode_attn_kernel` 1K/256 A/B decoded at **3.25 tok/s
+vs stack_a 5.98 (−45%)**, tokens byte-identical to stack_a.
+
+**(1) Parity FAIL root cause — fast-math `metal::exp`.** The error was
+~1e-3 (bf16/fast-transcendental class), NOT the ~1e-6 f32-reassociation class.
+An f32 numpy simulation of the exact reduction (naive sequential 512-dim dot +
+online combine) matches MLX's blocked matmul softmax to **~1e-7** — so the
+reduction *order* is not the leak. `mx.fast.metal_kernel` compiles with fast math,
+under which the bare `metal::exp` is the *fast* approximation (~1e-3 rel err); the
+rest of the codebase already uses `metal::precise::exp` / `metal::precise::rsqrt`
+for exactly this reason (`fused_norm.py`, `laguna_*`). **Fix:** every `exp` is now
+`metal::precise::exp` (3 sites in the fused/split kernels, 1 in combine). Expected
+to drop parity back to the f32-reassociation ~1e-6 bar (the naive-dot numpy proof
+bounds the residual). Not GPU-verifiable on the worker box — re-gated in-window.
+
+**(2) −45% root cause — M=1 occupancy (latency-bound).** The v1 kernel launched
+one threadgroup per `(row,head)` = **64 threadgroups per layer at decode** on a
+~40-core GPU: ~1.6 TGs/core, and the whole T-reduction (barrier-heavy) is serial
+per TG. ~3.5 ms/layer added / 70M MACs ≈ ~20 GFLOP/s effective → ~99% idle →
+latency-bound, not throughput. **Redesign — split-K (flash-decoding):** split the
+T keys across `G` threadgroups per `(row,head)` (pass 1 → per-split `(m, denom,
+acc)` partials), then a cheap pass-2 combine merges the `G` partials per
+`(row,head)` with the value-0 sink. `G` (`_choose_splits`) targets `_OCC_TARGET_TG`
+(512) threadgroups AND ~512 keys/split, capped at 32:
+
+| shape | v1 TGs/layer | split-K TGs/layer (pass 1) | G |
+|---|---:|---:|---:|
+| decode M=1, T=1088 | 64 | **512** | 8 |
+| decode M=1, T=4096 | 64 | **512** | 8 |
+| decode M=1, T=16384 | 64 | **2048** | 32 |
+| verify M=4, T=4096 | 256 | **2048** | 8 |
+
+**Paper pricing:** v1 was latency-bound at ~64 TGs; split-K's ≥512 TGs let the
+scheduler hide launch+barrier latency, and each pass-1 TG does only `T/G` keys
+(≈2 tiles at T=1088). Pass 2 is `rows·H` TGs of a tiny `G`-way combine. Two
+dispatches replace one, but both are occupancy-filled — expected to recover most
+of the −45% and, since the eager SDPA it replaces is ~22 primitives, ideally beat
+eager. `T ≤ 256` keeps the single-dispatch path (splitting a handful of keys is
+not worth the combine). The realized decode delta is the next window's A/B.
+
+**(3) Engagement counter.** `deepseek_v41_attn_kernels.{reset_engagement,
+engagement,note_fallback}` count real dispatches (`calls`/`rows`/`split_calls`)
+and armed-but-eager fallbacks; `ab_decode_env_levers.py` resets them after model
+load and records `decode_attn_kernel_engagement` per arm. **`calls == 0` on a
+`decode_attn_kernel` arm ⇒ the kernel never ran (all eager)**; `calls > 0` ⇒ it
+ran (so a slowdown is the kernel's cost, not a no-op) — settling window-26's
+"did-not-run vs slow" ambiguity next window.
+
+**(4) Loader import fix.** The parity test's optional real-model block imported the
+non-existent `deepseek_v41_loader.load`; it now imports `load_deepseek_v41_streaming`
+(the served comparison + engagement counter is the `decode_attn_kernel` A/B arm,
+which does the proper streamed load — a second heavy load is not reproduced in
+pytest).
+
+**Re-gate (KG-m):** parity `test_decode_attn_parity_gpu` now exercises the auto
+(split-K) path for every mode × T **and** explicit `single_g1` / `split_g8` arms at
+T=4096, each recording its `n_splits` + engagement. Pass = max|Δ| ≤ 1e-6 + argmax
+mismatch 0 on every arm; then the `decode_attn_kernel` A/B with `calls > 0` and
+decode +.
