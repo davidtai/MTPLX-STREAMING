@@ -55,3 +55,5 @@ context-snapshot.json
 
 
 .devspace/
+.benchmark-artifacts/
+scripts/deepseek_v41/decode_probe.log
