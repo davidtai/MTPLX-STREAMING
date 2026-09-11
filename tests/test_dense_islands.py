@@ -385,6 +385,10 @@ def test_island_switch_matches_component_bank_dispatch(tmp_path, mlx) -> None:
         switch.layer_index = island_layer
         switch.group_size = spec.quant_group_size
         switch.bits = spec.quant_bits
+        # __call__ reads swiglu_limit (W11 streaming clamp) and codec (W15
+        # native-mxfp4 codec); __new__ bypasses __init__.
+        switch.swiglu_limit = getattr(spec, "swiglu_limit", None)
+        switch.codec = getattr(spec, "expert_codec", "affine")
         switch._bank = bank
 
         rows = 3
@@ -625,6 +629,10 @@ def test_island_wave_call_matches_external_combine(mlx) -> None:
     switch.layer_index = 1
     switch.group_size = group
     switch.bits = 2
+    # __call__/wave_call read swiglu_limit (W11 streaming clamp) and codec
+    # (W15 native-mxfp4 codec); __new__ bypasses __init__.
+    switch.swiglu_limit = getattr(spec, "swiglu_limit", None)
+    switch.codec = getattr(spec, "expert_codec", "affine")
     switch._bank = SimpleNamespace(arrays=arrays, capacity=capacity)
 
     mx.random.seed(65)

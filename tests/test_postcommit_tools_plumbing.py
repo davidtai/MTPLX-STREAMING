@@ -376,10 +376,21 @@ def test_ar_only_retokenized_postcommit_stores_target_cache_without_mtp(
     assert model.forward_return_hidden
     assert set(model.forward_return_hidden) == {False}
     assert snapshot_calls == []
-    assert bank.restore_policies == ["none"]
+    # #465 (Youssof, general): AR-only runtimes (mtp_enabled=False) bank the
+    # postcommit prefix under the "cycle" MTP-history policy via
+    # _bank_history_policy(state), so the lookup and the store agree and the
+    # entry is not refused with policy_mismatch. (Pre-#465 this read the bound
+    # session_mtp_history_policy "none"; the fingerprint contract moved to the
+    # runtime's MTP capability.)
+    assert bank.restore_policies == ["cycle"]
     assert bank.puts[-1]["hidden"] is None
-    assert bank.puts[-1]["hidden_variant"] is None
-    assert bank.puts[-1]["mtp_history_policy"] == "none"
+    # hidden_variant is a fixed store-site marker ("post_norm") on this branch;
+    # 96315187b's session-bound variant never landed in production here (its
+    # openai.py hunks are absent), so the AR-only store tags "post_norm" with a
+    # None hidden payload, which is benign (hidden reuse is gated on a non-None
+    # hidden).
+    assert bank.puts[-1]["hidden_variant"] == "post_norm"
+    assert bank.puts[-1]["mtp_history_policy"] == "cycle"
     assert bank.puts[-1]["mtp_history_snapshot"] is None
 
 
@@ -427,8 +438,15 @@ def test_mtp_retokenized_postcommit_keeps_committed_history_snapshot(
     assert bank.puts[-1]["mtp_history_snapshot"] is not None
 
 
-def test_policy_fingerprint_uses_bound_session_mtp_history_policy():
-    state = _postcommit_state()
+def test_policy_fingerprint_derives_history_policy_from_runtime_mtp():
+    # #465 (Youssof, general): the fingerprint's MTP-history policy is one
+    # answer per runtime, derived from _bank_history_policy(state) — committed
+    # for an MTP runtime, cycle for an AR-only one — NOT the bound
+    # session_mtp_history_policy. (96315187b briefly bound the session field,
+    # but its openai.py hunks are absent on this branch; test_bank_history_policy
+    # pins the current contract.) hidden_variant is the fixed "post_norm" marker.
+    state = _postcommit_state()  # runtime.mtp_enabled=True
+    # A bound session field must not leak into the fingerprint.
     state.session_mtp_history_policy = "none"
     state.session_hidden_variant = None
 
@@ -438,10 +456,20 @@ def test_policy_fingerprint_uses_bound_session_mtp_history_policy():
         generation_mode="ar",
         depth=0,
     )
+    assert "mtp_history_policy=committed" in fingerprint
+    assert "mtp_history_policy=none" not in fingerprint
+    assert "hidden_variant=post_norm" in fingerprint
 
-    assert "mtp_history_policy=none" in fingerprint
-    assert "mtp_history_policy=committed" not in fingerprint
-    assert "hidden_variant=none" in fingerprint
+    # AR-only runtime derives "cycle" from the same helper.
+    state.runtime.mtp_enabled = False
+    ar_fingerprint = openai._policy_fingerprint(
+        state,
+        thinking_enabled=False,
+        generation_mode="ar",
+        depth=0,
+    )
+    assert "mtp_history_policy=cycle" in ar_fingerprint
+    assert "mtp_history_policy=committed" not in ar_fingerprint
 
 
 _TOOL_SPECS: list[dict] = [
