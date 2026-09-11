@@ -39,12 +39,23 @@ from mtplx.models.deepseek_v41 import DeepseekV41Cache, Model, ModelArgs
 from mtplx.mtp_patch import MTPContract
 from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
 
-mx.set_default_device(mx.cpu)
-
 # editable-install CWD-shadowing guard (memory: run the worktree's code)
 import mtplx.engram_v41 as _ev
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 assert Path(_ev.__file__).resolve().is_relative_to(_REPO_ROOT), (_ev.__file__, _REPO_ROOT)
+
+
+@pytest.fixture(autouse=True)
+def _cpu_default_device():
+    # Test-scoped CPU pin (not module-level): a module-level set_default_device
+    # would leak into the Metal bit-exactness suites collected later in the same
+    # process (see tests/test_deepseek_v41_served_generation.py).
+    previous = mx.default_device()
+    mx.set_default_device(mx.cpu)
+    try:
+        yield
+    finally:
+        mx.set_default_device(previous)
 
 
 # ---------------------------------------------------------------------------
