@@ -90,6 +90,58 @@ def _positive_env_int(name: str, default: int) -> int:
         return default
     return value if value >= 1 else default
 
+
+# W56 / KERNEL_LEDGER K27 -- shape/tiling layout fix.  The routed-expert switch
+# calls ``mx.gather_qmm(x[rows,1,1,K], w, s, rhs_indices=slot, transpose=True)`` with
+# M==1 and the rows in router (token x top_k) order, i.e. NOT sorted by expert.  In
+# mlx 0.32.2 (quantized.cpp GatherQMM::eval_gpu) the fused ``gather_qmm_rhs`` kernel --
+# which streams each expert's weight ONCE over its contiguous block of rows -- fires
+# ONLY when ``M==1 && B>=16 && right_sorted_ && B/E>=4``, and ``right_sorted_ =
+# sorted_indices && lhs_indices is None`` (ops.cpp:5632).  With the flag unset the
+# unsorted call takes the per-row ``gather_qmv`` (each output row re-reads its expert's
+# full mxfp4 weight -- the W47 ~2.9 TFLOPS memory thrash / 105 s prefill switch).  When
+# ``MTPLX_DSV41_LAYOUT_FIX`` is armed AND the wave has at least
+# ``MTPLX_DSV41_LAYOUT_FIX_MIN_ROWS`` rows (prefill; decode/verify stay below it, so
+# the served M=1 path is the exact shipped call), the gather sorts rows by bank slot on
+# device (``mx.argsort``), runs the three projections with ``sorted_indices=True``, and
+# unsorts the output.  A permutation + its inverse with an M-independent per-row matmul
+# is BYTE-IDENTICAL on CPU (there is one gather_qmm impl); on Metal it swaps
+# gather_qmv -> gather_qmm_rhs_nax, a kernel reassociation in the same documented FP
+# class as K26 (measured in a GPU window, not bit-identical there).  Default OFF.
+_LAYOUT_FIX_ENV = "MTPLX_DSV41_LAYOUT_FIX"
+_LAYOUT_FIX_MIN_ROWS_ENV = "MTPLX_DSV41_LAYOUT_FIX_MIN_ROWS"
+# ``gather_qmm_rhs`` needs B/E>=4 (E == bank slot count, up to n_routed_experts 384),
+# so ~1536 rows minimum; default 2048 keeps decode (6) / verify (24) / small waves on
+# the exact shipped unsorted path and only sorts the many-row prefill waves.
+_LAYOUT_FIX_MIN_ROWS_DEFAULT = 2048
+# Optional per-call row cap for the routed gather (memory bound + microbench sweep).
+# 0 (default) = one call over the whole wave.  Only honoured on the sorted path; each
+# chunk is a contiguous sub-range of the sorted rows so ``sorted_indices`` stays valid,
+# and the per-row math is unchanged (byte-identical to a single call).
+_GATHER_ROWS_PER_CALL_ENV = "MTPLX_DSV41_GATHER_ROWS_PER_CALL"
+
+
+def _layout_fix_enabled() -> bool:
+    """Read at use (not import): the server stamps optimization keys after importing
+    modules ([[env-flags-read-at-use-not-import]])."""
+    return os.environ.get(_LAYOUT_FIX_ENV) == "1"
+
+
+def _layout_fix_min_rows() -> int:
+    return _positive_env_int(_LAYOUT_FIX_MIN_ROWS_ENV, _LAYOUT_FIX_MIN_ROWS_DEFAULT)
+
+
+def _gather_rows_per_call() -> int:
+    raw = os.environ.get(_GATHER_ROWS_PER_CALL_ENV)
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return value if value >= 1 else 0
+
+
 _ROUTING_PHASE: ContextVar[RoutingPhase | None] = ContextVar(
     "mtplx_expert_routing_phase",
     default=None,
@@ -1764,38 +1816,68 @@ def _gather_component_bank(
     """
 
     rows = int(x.shape[0])
-    selected = x.reshape((rows, 1, 1, int(x.shape[-1])))
+    width = int(x.shape[-1])
 
-    if codec == "mxfp4":
-        def qmm(values: mx.array, projection: str) -> mx.array:
-            return mx.gather_qmm(
-                values,
-                bank.arrays[f"{projection}.weight"],
-                bank.arrays[f"{projection}.scales"],
-                rhs_indices=slot_indices,
-                transpose=True,
-                group_size=group_size,
-                bits=bits,
-                mode="mxfp4",
-            )
+    # W56/K27 layout fix: sort rows by bank slot so gather_qmm takes the fused
+    # weight-streamed-once kernel (see the _LAYOUT_FIX_* env docs above).  Gated to
+    # many-row prefill waves; decode/verify stay on the exact shipped unsorted call.
+    use_sorted = _layout_fix_enabled() and rows >= _layout_fix_min_rows()
+    if use_sorted:
+        perm = mx.argsort(slot_indices.reshape(-1))
+        inv_perm = mx.argsort(perm)
+        x = mx.take(x, perm, axis=0)
+        slot_indices = mx.take(slot_indices, perm, axis=0)
+
+    def _wave(values_x: mx.array, slot_col: mx.array) -> mx.array:
+        """Three-projection expert MLP over one (already-oriented) row block."""
+        n = int(values_x.shape[0])
+        selected = values_x.reshape((n, 1, 1, width))
+        if codec == "mxfp4":
+            def qmm(values: mx.array, projection: str) -> mx.array:
+                return mx.gather_qmm(
+                    values,
+                    bank.arrays[f"{projection}.weight"],
+                    bank.arrays[f"{projection}.scales"],
+                    rhs_indices=slot_col,
+                    transpose=True,
+                    group_size=group_size,
+                    bits=bits,
+                    mode="mxfp4",
+                    sorted_indices=use_sorted,
+                )
+        else:
+            def qmm(values: mx.array, projection: str) -> mx.array:
+                return mx.gather_qmm(
+                    values,
+                    bank.arrays[f"{projection}.weight"],
+                    bank.arrays[f"{projection}.scales"],
+                    bank.arrays[f"{projection}.biases"],
+                    rhs_indices=slot_col,
+                    transpose=True,
+                    group_size=group_size,
+                    bits=bits,
+                    mode="affine",
+                    sorted_indices=use_sorted,
+                )
+
+        gate = qmm(selected, "gate_proj")
+        up = qmm(selected, "up_proj")
+        out = qmm(_clamped_swiglu(gate, up, swiglu_limit), "down_proj")
+        return out.reshape((n, int(out.shape[-1])))
+
+    per_call = _gather_rows_per_call() if use_sorted else 0
+    if per_call and per_call < rows:
+        parts = [
+            _wave(x[c0:c0 + per_call], slot_indices[c0:c0 + per_call])
+            for c0 in range(0, rows, per_call)
+        ]
+        output = mx.concatenate(parts, axis=0)
     else:
-        def qmm(values: mx.array, projection: str) -> mx.array:
-            return mx.gather_qmm(
-                values,
-                bank.arrays[f"{projection}.weight"],
-                bank.arrays[f"{projection}.scales"],
-                bank.arrays[f"{projection}.biases"],
-                rhs_indices=slot_indices,
-                transpose=True,
-                group_size=group_size,
-                bits=bits,
-                mode="affine",
-            )
+        output = _wave(x, slot_indices)
 
-    gate = qmm(selected, "gate_proj")
-    up = qmm(selected, "up_proj")
-    output = qmm(_clamped_swiglu(gate, up, swiglu_limit), "down_proj")
-    return output.reshape((rows, int(output.shape[-1])))
+    if use_sorted:
+        output = mx.take(output, inv_perm, axis=0)
+    return output
 
 
 def _run_component_bank_shadow(

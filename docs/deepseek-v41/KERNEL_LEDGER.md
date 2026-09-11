@@ -905,6 +905,60 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   win, and do the counters confirm >90% dense coverage at threshold 128/32. See
   `W51_PREFILL_DENSE_EXPERTS.md`.
 
+### K27 — Routed-gather row-sort → fused `gather_qmm_rhs` + shape/tiling audit (`MTPLX_DSV41_LAYOUT_FIX`) — **W56 (the shape defect the switch cost hides)**
+- **Full audit:** `W56_SHAPE_TILING_AUDIT.md` (every hot op's operand shape/dtype/stride,
+  the kernel mlx 0.32.2 selects on **`applegpu_g17s`** — arch gen 17, size `s`, NAX
+  available — and whether N/K/M hit the aligned steel/gather/qmm tiles, all cited to
+  `backend/metal/{matmul,quantized}.cpp` @ v0.32.2). Companion to K25 (score precision)
+  and K26 (dense experts): those price precision/dequant; this prices **which kernel the
+  shape selects and whether its tiles are ragged**.
+- **The defect (F1):** `expert_mlx.py:_gather_component_bank` calls
+  `mx.gather_qmm(x[rows,1,1,5120], w, s, rhs_indices=slot, transpose=True)` with **rows in
+  router (token×top_k) order — unsorted by expert — and `sorted_indices` unset**. In
+  `GatherQMM::eval_gpu` the fused **`gather_qmm_rhs`** kernel (streams each expert weight
+  ONCE over its contiguous row block) fires ONLY when `M==1 && B≥16 && right_sorted_ &&
+  B/E≥4`, and `right_sorted_ = sorted_indices && lhs_indices is None`
+  (`quantized.cpp:1905`, `ops.cpp:5632`). With the flag unset, M=1 < the qmv batch limit 13
+  routes to per-row **`gather_qmv`** — each of ~98 304 rows re-reads its expert's full mxfp4
+  weight with no cross-row reuse. **This is the W47 "2.9 TFLOPS / 105 s" prefill switch.**
+- **The fix (implemented, default OFF):** when `MTPLX_DSV41_LAYOUT_FIX=1` AND the wave has
+  ≥ `MTPLX_DSV41_LAYOUT_FIX_MIN_ROWS` rows (default 2048 → decode 6 / verify 24 / small
+  waves keep the **exact shipped unsorted call**), the gather sorts rows by bank slot on
+  device (`mx.argsort`), runs gate/up/down with `sorted_indices=True` (→ `gather_qmm_rhs_nax`,
+  `bm 32/64, bn/bk 64`, aligned since N,K %64==0), and unsorts the output. Tunable
+  `MTPLX_DSV41_GATHER_ROWS_PER_CALL` (0=one call) chunks the sorted wave. A permutation +
+  its inverse over an M-independent per-row matmul is **BYTE-IDENTICAL on CPU** (one
+  gather_qmm impl); on Metal it swaps `gather_qmv → gather_qmm_rhs_nax`, a kernel
+  reassociation in the **same documented FP class as K26** (measured in a window, not
+  bit-identical there). CPU tests: `tests/models/test_deepseek_v41_w56_layout_fix.py`
+  (15 cases, decode/verify/chunk-major/layer-major × mxfp4+affine, flag on==off,
+  max|Δ|=0.0; rows-per-call 512/1000/4096 identical; default threshold leaves small waves
+  untouched).
+- **Estimate:** prefill switch **105 s → ~25–45 s** (fused streams the 269 GiB bank once
+  vs per-row thrash); the exact figure is the GPU-window A/B. Biggest K27 lever.
+- **Second-order shape facts (documented, microbench-armed, NOT implemented):**
+  - **F2** — the expert **down**-proj K=inter=**2304** misses the mxfp4 fast `gather_qmv`
+    (needs K%512==0; 2304%512=256), so ⅓ of the decode switch runs the slow ragged-K
+    kernel; gate/up (K=5120) hit fast. Fix = pad K→2560 (zeros exact) **at bank-build
+    time** — outside the mechanical-reorder allowlist; `down_align` microbench arm prices
+    it before any bank change.
+  - **F5** — verify M=4 dense projections want **bf16** (→ `gemv_wide`, weight streamed
+    once for the 4 rows); f32 re-streams 4× (gemv_wide is fp16/bf16-only, `matmul.cpp:1332`).
+    Keep verify acts bf16 (already K21).
+- **Refuted (proven byte-identical no-ops on CPU, `mx.array_equal` max|Δ|=0.0):** F3 score
+  QK^T/PV `mx.einsum` and F4 grouped o-LoRA einsum **already lower to the optimal,
+  fully-tile-aligned batched GEMM** — an explicit-matmul rewrite is a no-op. The score cost
+  is the 4.3 GB `[65536,T]` **output transient** (why bf16 *loses*: a cast pass, no FLOP
+  relief at K=512), addressed by the W50 `lean` pass-cut / K6, not by re-tiling. Do not
+  chase an einsum→matmul rewrite. F6: the K26 dense-prefill matmul is tile-aligned; its
+  W51 shortfall is the W50 bf16-slow-vs-f32 kernel, not raggedness.
+- **Microbench:** `scripts/deepseek_v41/shape_tiling_microbench.py` (CPU-safe
+  `--help`/`--dry-run`; GPU in-window). Window command in `W56_SHAPE_TILING_AUDIT.md §5`;
+  run it in window-22 with the flock held / qwen unloaded.
+- **STATUS (W56, `feat/deepseek-v41-w56`):** IMPLEMENTED + CPU-proven, default OFF.
+  Open GPU-window question (**KG-l**): does `MTPLX_DSV41_LAYOUT_FIX=1` route the 16K
+  layer-major switch to `gather_qmm_rhs_nax` and cut TTFT, decode byte-identical.
+
 ---
 
 ## 6. Dead-here (GPU-side; do not re-propose)
