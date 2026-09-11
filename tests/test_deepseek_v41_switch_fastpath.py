@@ -51,6 +51,7 @@ from mtplx.expert_runtime import RouteWave  # noqa: E402
 from mtplx.models.expert_mlx import HotExpertSwitchGLU  # noqa: E402
 
 FASTPATH_FLAG = "MTPLX_DSV41_SWITCH_FASTPATH"
+SUBMIT_FLAG = "MTPLX_DSV41_SWITCH_SUBMIT"  # variant B companion (W42 window-14)
 
 _REAL_EVAL = mx.eval
 _REAL_ASYNC = mx.async_eval
@@ -67,16 +68,18 @@ def _cpu_default_device_and_flag():
     mx.set_default_device(mx.cpu)
     import os
 
-    saved = os.environ.get(FASTPATH_FLAG)
-    os.environ.pop(FASTPATH_FLAG, None)
+    saved = {k: os.environ.get(k) for k in (FASTPATH_FLAG, SUBMIT_FLAG)}
+    for k in (FASTPATH_FLAG, SUBMIT_FLAG):
+        os.environ.pop(k, None)
     try:
         yield
     finally:
         mx.set_default_device(previous_device)
-        if saved is None:
-            os.environ.pop(FASTPATH_FLAG, None)
-        else:
-            os.environ[FASTPATH_FLAG] = saved
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 # ---------------------------------------------------------------------------
@@ -247,11 +250,19 @@ def _build_runtime(outcome: str, experts, events):
     raise ValueError(outcome)
 
 
-def _drive(outcome, experts, x, idx, *, fastpath, runtime_cls=None):
-    """Run one switch call; return (output, runtime, events).  Counting of host
-    syncs is done by the caller via _census; this helper just executes."""
+def _set_flags(fastpath: bool, submit: bool) -> None:
     import os
 
+    for flag, on in ((FASTPATH_FLAG, fastpath), (SUBMIT_FLAG, submit)):
+        if on:
+            os.environ[flag] = "1"
+        else:
+            os.environ.pop(flag, None)
+
+
+def _drive(outcome, experts, x, idx, *, fastpath, submit=False, runtime_cls=None):
+    """Run one switch call; return (output, runtime, events).  Counting of host
+    syncs is done by the caller via _census; this helper just executes."""
     events: list[str] = []
     if runtime_cls is _NoDeferRuntime:
         # all-hit only for the no-defer fallback probe.
@@ -260,10 +271,7 @@ def _drive(outcome, experts, x, idx, *, fastpath, runtime_cls=None):
         )
     else:
         runtime = _build_runtime(outcome, experts, events)
-    if fastpath:
-        os.environ[FASTPATH_FLAG] = "1"
-    else:
-        os.environ.pop(FASTPATH_FLAG, None)
+    _set_flags(fastpath, submit)
     prev = expert_mlx._run_component_bank_q4
     expert_mlx._run_component_bank_q4 = _fake_gather
     try:
@@ -278,11 +286,9 @@ def _drive(outcome, experts, x, idx, *, fastpath, runtime_cls=None):
     return output, runtime, events
 
 
-def _census(outcome, experts, x, idx, *, fastpath):
+def _census(outcome, experts, x, idx, *, fastpath, submit=False):
     """Drive one switch call counting blocking mx.eval / async_eval and the
     routing barrier (via the hot.eval_indices bracket).  Returns a dict."""
-    import os
-
     counts = {"eval": 0, "async_eval": 0, "barrier": 0}
 
     def c_eval(*a, **k):
@@ -302,10 +308,7 @@ def _census(outcome, experts, x, idx, *, fastpath):
 
     events: list[str] = []
     runtime = _build_runtime(outcome, experts, events)
-    if fastpath:
-        os.environ[FASTPATH_FLAG] = "1"
-    else:
-        os.environ.pop(FASTPATH_FLAG, None)
+    _set_flags(fastpath, submit)
     expert_mlx.mx.eval = c_eval
     expert_mlx.mx.async_eval = c_async
     expert_mlx._route_probe.bracket = c_bracket
@@ -372,25 +375,62 @@ def test_all_miss_removes_the_per_wave_fence() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1b. variant B (submit): the all-hit deferred branch async-submits its wave
+#     output (keeps the GPU fed) instead of submitting nothing -- W42 window-14
+#     diagnosis of the pure-defer -13.4% regression.
+# ---------------------------------------------------------------------------
+def test_variant_b_all_hit_submits_without_blocking() -> None:
+    """Variant B (fastpath + submit): all-hit still adds NO blocking sync (barrier
+    only) and still defers the release, but now issues ONE non-blocking
+    ``async_eval`` submit -- which pure defer (submit off) did not."""
+    experts = [0]
+    x, idx = _inputs(1, experts)
+    pure = _census("all_hit", experts, x, idx, fastpath=True, submit=False)[0]
+    varb = _census("all_hit", experts, x, idx, fastpath=True, submit=True)[0]
+
+    assert pure["barrier"] == varb["barrier"] == 1, (pure, varb)
+    assert pure["eval"] == varb["eval"] == 1, (pure, varb)      # barrier only, both
+    assert pure["deferred"] == varb["deferred"] == 1, (pure, varb)
+    # The whole point: pure defer submits nothing; variant B submits once.
+    assert pure["async_eval"] == 0, pure
+    assert varb["async_eval"] == 1, varb
+
+
+def test_variant_b_needs_the_fastpath_to_engage() -> None:
+    """``MTPLX_DSV41_SWITCH_SUBMIT`` alone (no fast-path) must be inert: no defer,
+    no async submit -- it is a companion, not a standalone lever."""
+    experts = [0]
+    x, idx = _inputs(1, experts)
+    only_submit = _census("all_hit", experts, x, idx, fastpath=False, submit=True)[0]
+    assert only_submit["eval"] == 2, only_submit          # fenced (barrier + fence)
+    assert only_submit["async_eval"] == 0, only_submit
+    assert only_submit["deferred"] == 0, only_submit
+
+
+# ---------------------------------------------------------------------------
 # 2. byte-identity: flag off vs on, every route outcome, M=1 and M=4
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("submit", [False, True], ids=["pure", "variant_b"])
 @pytest.mark.parametrize("m", [1, 4])
 @pytest.mark.parametrize("outcome", ["all_hit", "split", "all_miss"])
-def test_switch_output_bitwise_identical_off_vs_on(outcome, m) -> None:
-    """The fast-path is a pure fence/release-timing reorder, so the switch
-    output must be bitwise-identical off vs on -- for all-hit / split-route /
-    all-miss at M=1 (AR) and M=4 (the MTP verify row batch)."""
+def test_switch_output_bitwise_identical_off_vs_on(outcome, m, submit) -> None:
+    """Both fast-path variants are pure fence/release/submit-timing reorders, so
+    the switch output must be bitwise-identical to the fenced default -- for
+    all-hit / split-route / all-miss at M=1 (AR) and M=4 (the MTP verify row
+    batch), pure defer and variant B (async submit) alike."""
     if outcome == "split" and m == 1:
         pytest.skip("a mixed hit+miss split is undefined for a single assignment")
     experts = list(range(m))
     x, idx = _inputs(m, experts)
 
     out_off, _rt_off, _e_off = _drive(outcome, experts, x, idx, fastpath=False)
-    out_on, _rt_on, _e_on = _drive(outcome, experts, x, idx, fastpath=True)
+    out_on, _rt_on, _e_on = _drive(
+        outcome, experts, x, idx, fastpath=True, submit=submit
+    )
 
     assert out_off.shape == out_on.shape == (m, 1, 1, 2), (out_off.shape, m)
     assert mx.array_equal(out_off, out_on), (
-        f"{outcome} M={m}: switch output changed under the fast-path"
+        f"{outcome} M={m} submit={submit}: switch output changed under the fast-path"
     )
 
 

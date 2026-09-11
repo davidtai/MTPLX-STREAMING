@@ -1981,6 +1981,22 @@ class HotExpertSwitchGLU(nn.Module):
         # deferred-release machinery (the real ExpertStreamingRuntime does; a fake
         # without it falls back to the shipped fence, never crashing).
         _switch_fastpath = os.environ.get("MTPLX_DSV41_SWITCH_FASTPATH") == "1"
+        # Variant B (W42 window-14 diagnosis): pure defer measured -13.4% decode.
+        # Root cause -- the all-hit deferred branch below submitted NOTHING (no
+        # eval, no async_eval), unlike the split defer branch
+        # (``evaluate_component_bindings`` async_evals its wave outputs: "the GPU
+        # still needs the part submitted now -- without it the device idles").
+        # DSV4.1's backbone (deepseek_v41.py, W41, out of this allowlist) has no
+        # submit cadence either (hy3 pairs deferred_pin_release with
+        # ``MTPLX_HY3_SUBMIT_CADENCE=8``, hy3_mlx.py:1165), so on all-hit layers
+        # the lazy graph accrues and the device idles until the next routing
+        # barrier drains it in one lump (the a3b backpressure trap,
+        # [[a3b-decode-roundtrip-is-the-lever]]).  ``MTPLX_DSV41_SWITCH_SUBMIT``
+        # (companion to the fast-path, default off) makes the all-hit deferred
+        # branch async_eval its wave output -- a non-blocking per-layer submit
+        # that keeps the GPU fed WITHOUT the blocking host round-trip -- matching
+        # the split path.  Scheduling only; byte-identical.
+        _switch_submit = os.environ.get("MTPLX_DSV41_SWITCH_SUBMIT") == "1"
         _fastpath_can_defer = (
             _switch_fastpath
             and callable(getattr(self.runtime, "defer_slot_release", None))
@@ -2455,6 +2471,20 @@ class HotExpertSwitchGLU(nn.Module):
                             # per-all-hit-layer blocking ``mx.eval`` is the whole
                             # point of the fast-path.
                             if wave_index == final_wave and _deferred_pin_active:
+                                # Variant B: submit the gather now (non-blocking)
+                                # so the GPU is fed during the host graph-build of
+                                # the next layers, instead of idling until the
+                                # next barrier drains the backlog. Same array,
+                                # same value -> byte-identical; the deferred
+                                # release still waits for the barrier's covering
+                                # eval. Only under the fast-path env (never for
+                                # the hy3 config-deferred path, which pairs with
+                                # its own submit cadence).
+                                if _switch_submit and _fastpath_can_defer:
+                                    _async_eval = getattr(mx, "async_eval", None)
+                                    if callable(_async_eval):
+                                        _async_eval(wave_output)
+                                        _route_probe.count("hot.allhit_defer_submit")
                                 self.runtime.defer_slot_release(ready, wave_output)
                                 deferred_release = True
                                 _route_probe.count("hot.allhit_defer")
