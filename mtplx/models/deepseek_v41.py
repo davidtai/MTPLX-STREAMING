@@ -750,10 +750,13 @@ class Attention(nn.Module):
 # Python each call and fuses the elementwise triples into single kernels.
 #
 # What DSV4.1 carries vs V4:
-#  * The Sinkhorn stays an OPAQUE function boundary -- these tapes call
-#    ``hc_split_sinkhorn`` (owned by the K3 worker), so K3's Metal kernel drops
-#    in at the tail of the tape without touching this file (V4 note: the kernel
-#    is opaque to ``mx.compile`` but sits inside the traced tape).
+#  * The Sinkhorn stays an OPAQUE function boundary -- these tapes call the
+#    module ``_hc_split_sinkhorn`` (owned by the K3 worker, W32), whose
+#    ``_sinkhorn_normalise`` tail takes K3's Metal kernel when
+#    ``MTPLX_DSV41_SINKHORN_METAL`` is armed on the GPU and the identical stock
+#    recurrence otherwise (always on CPU) -- so K3's kernel drops in at the tail
+#    of the tape without touching this file (V4 note: the kernel is opaque to
+#    ``mx.compile`` but sits inside the traced tape).
 #  * Layer weights arrive as tape INPUTS (not captured), so one compiled tape is
 #    shared across all ``2 * n_layers`` Hyper-Connections -- they share every
 #    shape and differ only in weight values.
@@ -761,7 +764,7 @@ class Attention(nn.Module):
 #    hc*dim)``: identical memory layout / values, but it reads no dynamic
 #    ``.shape`` (reshape-from-shape bakes the first trace's dims).
 #
-# Why NOT ``shapeless=True`` (measured, W33): (1) ``hc_split_sinkhorn`` contains
+# Why NOT ``shapeless=True`` (measured, W33): (1) ``_hc_split_sinkhorn`` contains
 # ``comb.reshape(*comb.shape[:-1], hc, hc)``; under a shapeless trace MLX raises
 # ``[Primitive::output_shapes] Slice cannot infer output shapes`` -- and that
 # function is the K3 worker's, not to be edited here.  (2) Even where a tape
@@ -799,14 +802,17 @@ def _hc_mixes_split(x, fn, base, scale, hc, iters, norm_eps, hc_eps):
 
     Byte-identical to :meth:`DecoderLayer._mixes` (``mx.flatten(x, -2, -1)`` is
     the same contiguous merge as its ``reshape(*x.shape[:-2], hc*dim)``, just
-    without the dynamic-shape read).  ``hc_split_sinkhorn`` is the opaque Sinkhorn
-    boundary -- the K3 worker's Metal kernel replaces its body without any change
-    here.  ``fn``/``base``/``scale`` are the layer's raw HC weights (tape inputs)."""
+    without the dynamic-shape read).  :func:`_hc_split_sinkhorn` is the opaque
+    Sinkhorn boundary (W32/K3): its ``_sinkhorn_normalise`` tail dispatches to the
+    Metal kernel when ``MTPLX_DSV41_SINKHORN_METAL`` is armed on the GPU and to the
+    identical stock recurrence otherwise (always so on CPU), so the K3 kernel path
+    drops into this tape unchanged.  ``fn``/``base``/``scale`` are the layer's raw
+    HC weights (tape inputs)."""
     xf = x.astype(mx.float32)
     flat = mx.flatten(xf, -2, -1)
     rsqrt = mx.rsqrt(mx.mean(mx.square(flat), axis=-1, keepdims=True) + norm_eps)
     mixes = (flat @ fn.astype(mx.float32).T) * rsqrt
-    return hc_split_sinkhorn(mixes, scale, base, hc, iters, hc_eps)
+    return _hc_split_sinkhorn(mixes, scale, base, hc, iters, hc_eps)
 
 
 def _hc_pre_collapse(x, pre_mix):
@@ -860,8 +866,16 @@ def _hc_compiled(kind: str, *consts):
     key = (kind, consts)
     fn = _HC_COMPILED.get(key)
     if fn is None:
+        # ``consts`` for the mix tapes is ``(hc, iters, norm_eps, hc_eps,
+        # sinkhorn_route)``; the trailing route bool is a CACHE-KEY discriminator
+        # only (it never enters the arithmetic -- ``_hc_split_sinkhorn`` reads the
+        # route itself at trace time), so a runtime flip of
+        # ``MTPLX_DSV41_SINKHORN_METAL`` on the GPU re-traces the tape with W32's
+        # kernel instead of replaying a stale recurrence tape (V4 keys its ``pre``
+        # tape on the same bool).  On CPU the route is always the recurrence, so
+        # the key is stable and one tape serves every flag combination.
         if kind == "attn_prep":
-            hc, iters, norm_eps, hc_eps = consts
+            hc, iters, norm_eps, hc_eps = consts[:4]
 
             def impl(h, pre_mix, attn_fn, attn_base, attn_scale, attn_norm_w):
                 return _hc_attn_prep_impl(
@@ -869,7 +883,7 @@ def _hc_compiled(kind: str, *consts):
                     hc, iters, norm_eps, hc_eps,
                 )
         elif kind == "ffn_prep":
-            hc, iters, norm_eps, hc_eps = consts
+            hc, iters, norm_eps, hc_eps = consts[:4]
 
             def impl(attn_out, residual, attn_pre, attn_post, attn_comb,
                      ffn_fn, ffn_base, ffn_scale, ffn_norm_w):
@@ -972,7 +986,11 @@ class DecoderLayer(nn.Module):
         attention call itself -- which mutates the KV cache -- stays outside them.
         The eager branch below is byte-for-byte the original body."""
         if _hc_use_compile(h):
-            consts = (self.hc_mult, self.hc_iters, self.norm_eps, self.hc_eps)
+            # Trailing bool keys the mix tapes on the active Sinkhorn route (W32),
+            # so an armed GPU kernel drops in / a runtime flip re-traces; on CPU it
+            # is always False (recurrence), so it never perturbs the numerics.
+            consts = (self.hc_mult, self.hc_iters, self.norm_eps, self.hc_eps,
+                      _sinkhorn_use_kernel())
             x, attn_pre, attn_post, attn_comb = _hc_compiled("attn_prep", *consts)(
                 h, pre_mix,
                 self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale,

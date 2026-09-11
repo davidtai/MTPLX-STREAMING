@@ -1,7 +1,8 @@
 """W33 / kernel-ledger K4 -- Hyper-Connection tape collapse (CPU, synthetic).
+W39 rebase on W32/K3: the tape calls W32's ``_hc_split_sinkhorn`` dispatcher.
 
 DSV4.1 wraps attention and the MoE each in a Hyper-Connection pre/post: a
-flatten + rsqrt-norm + small ``fn`` matmul + the ``hc_split_sinkhorn`` normaliser
+flatten + rsqrt-norm + small ``fn`` matmul + the ``_hc_split_sinkhorn`` normaliser
 (a row-softmax + 20 alternating row/column normalises over a ``[..., hc, hc]``
 matrix, 16 floats at decode) + the ``pre_mix`` collapse + RMSNorm on the way in,
 and the ``post`` re-mix on the way out -- ~two dozen tiny primitives, twice per
@@ -17,12 +18,17 @@ These gates prove, on a tiny CPU config (no artifact):
     bit-exact to the eager body in the small-row regime the row-cap keeps it in;
   * the compiled tape is inert above the row-cap (prefill one-shot flag on ==
     flag off, both eager);
-  * dispatch collapse: eager rebuilds the HC graph (``hc_split_sinkhorn`` invoked
+  * dispatch collapse: eager rebuilds the HC graph (``_hc_split_sinkhorn`` invoked
     twice per layer per token) while a warm compiled tape replays with ZERO
     Python HC-graph construction, and each compiled callable runs exactly once
     per layer per token;
   * the Sinkhorn stays an opaque function boundary (the compiled tape calls the
-    module ``hc_split_sinkhorn`` -- so the K3 worker's Metal kernel drops in);
+    module ``_hc_split_sinkhorn`` -- so the K3 worker's Metal kernel drops in when
+    ``MTPLX_DSV41_SINKHORN_METAL`` is armed on the GPU);
+  * W39: flag-on/off byte-identity holds across ALL FOUR combinations of
+    (``MTPLX_DSV41_HC_COMPILE``) x (``MTPLX_DSV41_SINKHORN_METAL``) -- on CPU the
+    Metal route is inert (``_sinkhorn_use_kernel`` is False off-GPU), so all four
+    are ``mx.array_equal``;
   * ``_hc_use_compile`` gating (flag/env off, or rows > cap -> eager).
 
 Pins MLX to CPU; tiny random config; no artifact load.
@@ -30,6 +36,7 @@ Pins MLX to CPU; tiny random config; no artifact load.
 from __future__ import annotations
 
 import contextlib
+import os
 
 import numpy as np
 import mlx.core as mx
@@ -99,6 +106,26 @@ def _hc(flag: bool, max_rows: int = _TEST_CAP):
     finally:
         dv41._HC_COMPILE, dv41._HC_COMPILE_MAX_ROWS = old_f, old_r
         dv41._HC_COMPILED.clear()
+
+
+@contextlib.contextmanager
+def _metal(flag: bool):
+    """Arm/disarm ``MTPLX_DSV41_SINKHORN_METAL`` via the env (W32 reads it at use,
+    never at import).  On CPU ``_sinkhorn_use_kernel()`` stays False regardless, so
+    this is numerically inert here -- exactly what the 2x2 gate asserts."""
+    key = dv41._SINKHORN_METAL_ENV
+    old = os.environ.get(key)
+    if flag:
+        os.environ[key] = "1"
+    else:
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
 
 
 def _new_model(seed=1, **over):
@@ -240,7 +267,7 @@ def test_cache_state_identical_flag_on_off():
 # 6. dispatch collapse + one compiled-callable invocation per layer per token.
 #
 # Two distinct counts:
-#   (A) Python HC-graph CONSTRUCTION -- counted on ``hc_split_sinkhorn`` (the
+#   (A) Python HC-graph CONSTRUCTION -- counted on ``_hc_split_sinkhorn`` (the
 #       module boundary both the eager body and the compiled trace call).  Eager
 #       rebuilds it 2x per layer per token (the ~6.4k-dispatch source, rebuilt
 #       from Python every step); the compiled path builds it ONCE for the whole
@@ -254,7 +281,7 @@ def test_dispatch_collapse_and_once_per_layer():
     L = args.num_hidden_layers
 
     build = {"sinkhorn": 0}          # (A) graph construction
-    real_sinkhorn = dv41.hc_split_sinkhorn
+    real_sinkhorn = dv41._hc_split_sinkhorn
 
     def c_sinkhorn(*a, **k):
         build["sinkhorn"] += 1
@@ -272,7 +299,7 @@ def test_dispatch_collapse_and_once_per_layer():
 
         return wrapped
 
-    dv41.hc_split_sinkhorn = c_sinkhorn
+    dv41._hc_split_sinkhorn = c_sinkhorn
     dv41._hc_compiled = counting_hc_compiled
     try:
         # ---- eager: every decode token rebuilds the HC graph from Python ----
@@ -309,7 +336,7 @@ def test_dispatch_collapse_and_once_per_layer():
             assert build["sinkhorn"] == 0, build   # <-- the dispatch collapse
             assert inv == {"attn_prep": 3 * L, "ffn_prep": 3 * L, "moe_combine": 3 * L}, inv
     finally:
-        dv41.hc_split_sinkhorn = real_sinkhorn
+        dv41._hc_split_sinkhorn = real_sinkhorn
         dv41._hc_compiled = real_hc_compiled
 
 
@@ -326,3 +353,51 @@ def test_hc_use_compile_gating():
         assert dv41._hc_use_compile(x1) is True
         assert dv41._hc_use_compile(x4) is True
         assert dv41._hc_use_compile(x9) is False   # rows > cap -> eager
+
+
+# ---------------------------------------------------------------------------
+# 8. W39: byte-identity across all four (HC_COMPILE) x (SINKHORN_METAL) combos.
+#
+# On CPU ``_sinkhorn_use_kernel()`` is always False (default device is not the
+# GPU), so W32's Metal route is inert and the SINKHORN_METAL flag can never move
+# CPU numerics; K4's compiled tape is bit-exact to eager in the small-row regime.
+# So all four combinations must produce identical logits over decode, a K+1
+# verify batch, and a chunk-5 (<= cap) prefill.
+# ---------------------------------------------------------------------------
+def _probe_logits(hc_flag, metal_flag):
+    out = {}
+    with _metal(metal_flag), _hc(hc_flag):
+        # decode: prefill one-shot (> cap -> eager both) then 4 n=1 steps
+        model, args = _new_model(seed=11)
+        cache = _prefill_one_shot(model, args, s=12, seed=7)
+        out["decode"] = []
+        for t in (3, 17, 5, 29):
+            lo = model(mx.array([[t]]), cache=cache)
+            mx.eval(lo)
+            out["decode"].append(np.array(lo))
+        # verify batch (K+1 = 4 rows) against a fresh prefilled cache
+        m2, a2 = _new_model(seed=11)
+        c2 = _prefill_one_shot(m2, a2, s=12, seed=7)
+        v = m2(mx.array([[7, 2, 41, 13]]), cache=c2)
+        mx.eval(v)
+        out["verify"] = np.array(v)
+        # chunk-5 prefill (<= cap -> compiled per span when HC on)
+        m3, a3 = _new_model(seed=11)
+        ids = mx.array(np.random.RandomState(4).randint(0, a3.vocab_size, size=(1, 20)))
+        pl = m3(ids, cache=m3.make_cache(), prefill_chunk=5)
+        mx.eval(pl)
+        out["prefill_chunk5"] = np.array(pl)
+    return out
+
+
+def test_flag_2x2_byte_identical_on_cpu():
+    combos = [(False, False), (True, False), (False, True), (True, True)]
+    ref = _probe_logits(*combos[0])
+    for hc_flag, metal_flag in combos[1:]:
+        got = _probe_logits(hc_flag, metal_flag)
+        tag = f"HC_COMPILE={hc_flag} SINKHORN_METAL={metal_flag}"
+        for i, (a, b) in enumerate(zip(ref["decode"], got["decode"])):
+            assert np.array_equal(a, b), f"decode[{i}] differs vs baseline ({tag})"
+        assert np.array_equal(ref["verify"], got["verify"]), f"verify differs vs baseline ({tag})"
+        assert np.array_equal(ref["prefill_chunk5"], got["prefill_chunk5"]), \
+            f"chunk-5 prefill differs vs baseline ({tag})"
