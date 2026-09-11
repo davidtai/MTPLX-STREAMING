@@ -35,9 +35,14 @@ from typing import Any
 import mlx.core as mx
 import pytest
 
-# Worker tests must pin MLX to CPU (MLX defaults to Metal); do it at import and
-# again per test so no lane silently runs on the GPU.
-mx.set_default_device(mx.cpu)
+# This module must NOT pin an MLX device at import time.  pytest imports every
+# test module before running any test, so an import-time
+# ``mx.set_default_device(mx.cpu)`` would silently force the Metal kernel lanes
+# in SIBLING modules (e.g. tests/test_kernel_selfcheck.py) onto their CPU
+# fallbacks and fail them (gdn/qmm dmax >> tolerance).  The CPU pin is scoped to
+# this module's own tests by the ``_cpu_pinned_selfcheck`` fixture below, which
+# records the process default device, pins CPU for the test, and restores it in
+# teardown.
 
 from mtplx import kernel_selfcheck as ks
 from mtplx.expert_runtime import ExpertStreamingConfig
@@ -55,15 +60,47 @@ from mtplx.kernel_selfcheck import (
 from mtplx.runtime import load
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _default_device_guard():
+    """Record the process default device once (before any test pins CPU) and
+    assert it is unchanged after every test in this module has run.  This is the
+    invariant that proves the per-test CPU pin never leaks past this module into
+    sibling test modules whose Metal kernel lanes must run on the GPU."""
+    original = mx.default_device()
+    yield original
+    assert mx.default_device() == original, (
+        f"this module leaked its CPU pin: default device is now "
+        f"{mx.default_device()}, expected {original}"
+    )
+
+
 @pytest.fixture(autouse=True)
-def _cpu_and_clean_selfcheck(monkeypatch: pytest.MonkeyPatch):
+def _cpu_pinned_selfcheck(monkeypatch: pytest.MonkeyPatch):
+    """Scope the CPU pin to THIS module's tests: record the entry device, pin
+    CPU for the test, and restore the entry device in teardown (even on
+    failure) so no sibling module inherits the pin."""
+    entry = mx.default_device()
     mx.set_default_device(mx.cpu)
     monkeypatch.setenv("MTPLX_KERNEL_SELFCHECK", "1")
     monkeypatch.delenv("MTPLX_NAX_VERIFY", raising=False)
     monkeypatch.delenv("MTPLX_GQA_PACKED_SDPA", raising=False)
     ks._reset_for_tests()
-    yield
-    ks._reset_for_tests()
+    try:
+        yield
+    finally:
+        ks._reset_for_tests()
+        mx.set_default_device(entry)
+
+
+def test_cpu_pin_is_scoped_and_restores(_default_device_guard) -> None:
+    """The per-test fixture pins CPU while this module runs, and the recorded
+    original device round-trips back exactly.  The _default_device_guard
+    teardown separately asserts the pin does not leak past the module."""
+    original = _default_device_guard
+    assert mx.default_device() == mx.cpu  # pin is active during our tests
+    mx.set_default_device(original)
+    assert mx.default_device() == original
+    mx.set_default_device(mx.cpu)  # leave as the function fixture expects
 
 
 # --------------------------------------------------------------------------- #
