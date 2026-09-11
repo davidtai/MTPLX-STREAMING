@@ -318,3 +318,59 @@ def test_mtp_vl_gate_bias_is_dropped_and_absent_from_the_head() -> None:
     # the backbone's, and the text-only head omits its own), which is exactly why
     # the mtp.*_vl residents have no home and must be dropped before strict load
     assert not any(n.endswith("_vl") for n in params)
+
+
+# --------------------------------------------------------------------------
+# window-16: the streamed native path installs the DSpark drafter itself
+# (the streaming block returns before the general is_deepseek_v41_mtp_config
+# dispatch, so it must publish the in-model head -- not raise "unresolved
+# streamed MTP backend None").
+# --------------------------------------------------------------------------
+def test_native_mtp_install_degrades_without_a_head() -> None:
+    # inject returns False (degrade-to-AR) rather than raising when the model
+    # carries no head or the config declares no stages -- the runtime branch
+    # then raises the clear "injection failed", never "unresolved backend".
+    from mtplx.models.deepseek_v41 import inject_deepseek_v41_mtp_support
+
+    cfg = {"model_type": "deepseek_v41", "text_config": {"n_mtp_layers": 3}}
+
+    class _NoHead:
+        mtp_blocks = None
+
+    assert inject_deepseek_v41_mtp_support(_NoHead(), None, cfg, None) is False
+    # a head-bearing model but a config with no MTP stages also degrades
+    class _Head:
+        mtp_blocks = [1, 2, 3]
+
+    assert inject_deepseek_v41_mtp_support(_Head(), None, {"model_type": "deepseek_v41"}, None) is False
+
+
+@pytest.mark.skipif(not _MXFP4.exists(), reason="mxfp4 artifact not on this box")
+def test_served_native_mtp_constructs_and_publishes_the_drafter() -> None:
+    # Runs the served MTP setup far enough to construct the DSpark drafter (the
+    # mtp=True resident construct, no experts.bin) and publish it exactly as the
+    # runtime.py streaming block's native branch does, then validate it.
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    from mlx_lm.utils import load_config
+
+    from mtplx.models.deepseek_v41 import (
+        inject_deepseek_v41_mtp_support,
+        is_deepseek_v41_mtp_config,
+    )
+    from mtplx.models.deepseek_v41_loader import deepseek_v41_model_classes
+    from mtplx.mtp_patch import validate_mtp_support
+
+    cfg = load_config(_MXFP4)
+    assert is_deepseek_v41_mtp_config(cfg)  # the served native-MTP gate
+
+    Model, ModelArgs = deepseek_v41_model_classes()
+    model = Model(
+        ModelArgs.from_dict(cfg), engram_bank_path=None,
+        quantization=cfg.get("quantization"), mtp=True,
+    )
+    model.eval()
+    # the streaming block's native branch: publish the in-model head + validate
+    assert inject_deepseek_v41_mtp_support(model, _MXFP4, cfg, None) is True
+    assert validate_mtp_support(model) is True
