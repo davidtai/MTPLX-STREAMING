@@ -2363,6 +2363,7 @@ class HotExpertSwitchGLU(nn.Module):
                                 ready.plan.hits,
                                 phase=phase,
                             )
+                        deferred_release = False
                         try:
                             if wave.positions == tuple(range(len(expert_ids))):
                                 assignment_inputs = mx.broadcast_to(
