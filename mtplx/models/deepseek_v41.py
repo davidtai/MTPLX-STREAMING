@@ -1194,10 +1194,114 @@ class Model(nn.Module):
         routed ``ffn.experts.*`` are streamed (never in the resident dict).
         """
         out = {}
+        keep_mtp = self.mtp is not None
+        mtp_items: dict[str, object] = {}
         for name, value in weights.items():
-            if name.startswith(("vision.", "aligner.", "image_", "mtp.")):
+            if name.startswith(("vision.", "aligner.", "image_")):
+                continue
+            if name.startswith("mtp."):
+                # Text-only AR (no DSpark head built): drop the MTP residents, as
+                # phase 1 did.  On the opt-in ``mtp=True`` path the head is built,
+                # so map ``mtp.{i}.*`` onto the DSpark head's parameter paths.
+                if keep_mtp:
+                    mtp_items[name] = value
                 continue
             if name.endswith(".bias_vl"):
                 continue  # VL routing bias, unused on the text path
             out[_sanitize_name(name)] = value
+        if mtp_items:
+            out.update(_map_mtp_residents(mtp_items))
         return out
+
+
+# ---------------------------------------------------------------------------
+# DSpark MTP resident name mapping + MTPLX runtime binding (worker W23)
+# ---------------------------------------------------------------------------
+#: DeepSeek shared-expert / routed-expert FFN weight -> mlx-lm SwitchGLU proj.
+_MTP_W_TO_PROJ = {"w1": "gate_proj", "w3": "up_proj", "w2": "down_proj"}
+
+
+def _map_mtp_residents(items: dict) -> dict:
+    """Map the checkpoint ``mtp.{i}.*`` residents onto the DSpark head parameter
+    paths ``mtp.layers.{i}.*`` (worker W23's opt-in load path).
+
+    Dense tensors are renamed with the same transforms the backbone
+    :func:`_sanitize_name` applies (``norm.weight`` -> ``norm_weight``,
+    ``ffn.gate.bias`` -> ``mlp.gate.e_score_correction_bias``, ``ffn.`` ->
+    ``mlp.``).  The 128 per-expert routed tensors ``mtp.{i}.ffn.experts.{e}.w{j}``
+    (RESIDENT mxfp4, W18_REPORT) are STACKED over the expert axis into the
+    mlx-lm :class:`SwitchGLU` projections (``gate_proj``/``up_proj``/``down_proj``).
+
+    NOTE (W23_REPORT): the DENSE name mapping is gated against the model's own
+    parameter tree by ``tests/models/test_deepseek_v41_dspark.py``.  The mxfp4
+    stacked-expert load is NOT verified end to end against the real artifact --
+    the 12 GiB CPU cap forbids loading the 376 GiB bank -- so it is committed as
+    an implemented-but-unverified path (see PORT_CONTRACT W23)."""
+    import re
+
+    experts: dict[tuple, dict[int, object]] = {}
+    out: dict[str, object] = {}
+    for name, value in items.items():
+        m = re.match(r"mtp\.(\d+)\.(.+)$", name)
+        if not m:
+            continue
+        stage, rest = m.group(1), m.group(2)
+        exp = re.match(r"ffn\.experts\.(\d+)\.(w[123])\.(.+)$", rest)
+        if exp:
+            eidx, w, leaf = int(exp.group(1)), exp.group(2), exp.group(3)
+            experts.setdefault((stage, _MTP_W_TO_PROJ[w], leaf), {})[eidx] = value
+            continue
+        rest = rest.replace("ffn.gate.bias", "ffn.gate.e_score_correction_bias")
+        rest = rest.replace("norm.weight", "norm_weight")
+        if rest.startswith("ffn."):
+            rest = "mlp." + rest[len("ffn."):]
+        out[f"mtp.layers.{stage}.{rest}"] = value
+    for (stage, proj, leaf), by_idx in experts.items():
+        ordered = [by_idx[i] for i in sorted(by_idx)]
+        out[f"mtp.layers.{stage}.mlp.switch_mlp.{proj}.{leaf}"] = mx.stack(ordered, axis=0)
+    return out
+
+
+def is_deepseek_v41_mtp_config(config: dict) -> bool:
+    """Does this artifact declare a DeepSeek-V4.1 DSpark draft head?
+
+    Keys on ``model_type in {deepseek_v41, deepseek_v41_text}`` (top-level or the
+    nested ``text_config``) plus a positive stage count (``n_mtp_layers`` /
+    ``num_nextn_predict_layers``).  Weight presence is decided later by the load
+    path (the head is built only on the opt-in ``mtp=True`` path); a config that
+    declares stages but ships no built head degrades to AR via the injector."""
+    cfg = config or {}
+
+    def _mt(d):
+        return str((d or {}).get("model_type") or "").lower()
+
+    types = {_mt(cfg), _mt(cfg.get("text_config"))}
+    if not ({"deepseek_v41", "deepseek_v41_text"} & types):
+        return False
+
+    def _stages(d):
+        d = d or {}
+        return int(d.get("n_mtp_layers") or d.get("num_nextn_predict_layers") or 0)
+
+    return max(_stages(cfg), _stages(cfg.get("text_config"))) > 0
+
+
+def inject_deepseek_v41_mtp_support(model, path=None, config=None, contract=None) -> bool:
+    """Enable the DSpark speculative lane on an already-loaded DeepSeek-V4.1 model.
+
+    Like the sibling native draft head (:func:`mtplx.models.deepseek_v4.
+    inject_deepseek_v4_mtp_support`), there is nothing to graft: the DSpark head
+    binds through the opt-in ``mtp=True`` load path from the checkpoint's
+    ``mtp.{0,1,2}.*`` tensors, and :class:`Model` already carries the runtime's
+    draft surface (``__call__(return_hidden=...)``, :meth:`Model.mtp_forward`,
+    :meth:`Model.mtp_update_cache`, :meth:`Model.make_mtp_cache`).  This publishes
+    that fact in the shape ``mtplx.mtp_patch.validate_mtp_support`` checks (the
+    :class:`~mtplx.models.deepseek_v41_dspark.DSparkHead` already answers
+    ``.layers``), and returns False -- the degrade-to-autoregressive signal --
+    for a checkpoint whose head was not built.  The generic Qwen graft
+    (``inject_mtp_support``) cannot serve this backend (it builds a qwen3_5
+    ``_MTPModule`` and grafts a sidecar), so this needs its own runtime dispatch
+    arm; ``is_deepseek_v4_mtp_config`` never matches a V4.1 config."""
+    if not is_deepseek_v41_mtp_config(config or {}):
+        return False
+    return bool(getattr(model, "mtp_blocks", None))

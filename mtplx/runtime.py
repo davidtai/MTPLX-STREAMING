@@ -1246,6 +1246,10 @@ def _load_impl(
             inject_deepseek_v4_mtp_support,
             is_deepseek_v4_mtp_config,
         )
+        from .models.deepseek_v41 import (
+            inject_deepseek_v41_mtp_support,
+            is_deepseek_v41_mtp_config,
+        )
         from .models.qwen4_exp import (
             inject_qwen4_exp_mtp_support,
             is_qwen4_exp_mtp_config,
@@ -1260,6 +1264,13 @@ def _load_impl(
             # glm_moe_dsa}, so it cannot match a deepseek_v4 config today, but it
             # is the arm that would build a V3 head if the sets ever overlap.
             mtp_enabled = inject_deepseek_v4_mtp_support(model, path, config, contract)
+        elif is_deepseek_v41_mtp_config(config):
+            # DeepSeek-V4.1 DSpark native draft head: the head binds through the
+            # opt-in mtp=True load path and the model carries the runtime surface,
+            # so this only publishes it.  A dedicated arm is required because
+            # is_deepseek_v4_mtp_config never matches a V4.1 config and the generic
+            # inject_mtp_support builds a qwen3_5 graft, not this native head (W23).
+            mtp_enabled = inject_deepseek_v41_mtp_support(model, path, config, contract)
         elif is_nemotron_h_mtp_config(config):
             mtp_enabled = inject_nemotron_h_mtp_support(model, path, config, contract)
         elif is_mimo_mtp_config(config):

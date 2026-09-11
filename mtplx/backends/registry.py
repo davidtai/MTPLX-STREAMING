@@ -382,11 +382,48 @@ ARCHITECTURE_CATALOG: dict[str, ArchitectureSupport] = {
             "through the SSD-streamed MoE lane: the 384 routed experts per text "
             "layer stream from an affine Q2 bank (experts.bin via "
             "expert-manifest.json, model_key deepseek-v41-flash-expert-q2) while "
-            "the q8 text residents stay wired.  Phase 1 is text-only "
-            "autoregressive (vision/aligner/image and mtp.* residents skipped at "
-            "load; generation_mode 'ar').  A streamed artifact's runnability is "
-            "decided by its admitted manifest, so the streaming serve path does "
-            "not depend on this catalog row's runtime gate."
+            "the q8 text residents stay wired.  Text-only autoregressive is the "
+            "default (vision/aligner/image residents skipped; generation_mode "
+            "'ar').  The 3-stage DSpark MTP head is served through the opt-in "
+            "mtp=True load path -- the mtp.{0,1,2}.* residents are kept and mapped "
+            "onto mtplx.models.deepseek_v41_dspark -- and driven with "
+            "'mtplx serve --generation-mode mtp' (worker W23); see the "
+            "deepseek-v41-mtp row.  A streamed artifact's runnability is decided "
+            "by its admitted manifest, so the streaming serve path does not depend "
+            "on this catalog row's runtime gate."
+        ),
+    ),
+    "deepseek-v41-mtp": ArchitectureSupport(
+        arch_id="deepseek-v41-mtp",
+        display_name="DeepSeek-V4.1 DSpark MTP (native draft head)",
+        family="deepseek",
+        backend="deepseek_v41",
+        support_level="experimental-native-contract-gated",
+        runtime_compatibility="native-contract-gated",
+        can_run_verified=True,
+        # Distinct model_type marker only; the runnable artifact is the MERGED
+        # deepseek_v41 directory (mtp.{0,1,2}.* beside the trunk) which detects as
+        # arch_id 'deepseek-v41'.  This alias never appears in that config, so it
+        # cannot wrongly capture the AR checkpoint (same discipline as the
+        # deepseek_v4 substring note above).
+        aliases=("deepseek_v41_mtp",),
+        family_gate="appended-layer-mtp-markers",
+        references=(
+            "REFERENCES:TOOLS/DeepSeek-V4.1-Flash/inference/model.py",
+            "https://huggingface.co/OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
+        ),
+        notes=(
+            "The DSpark 3-stage speculative draft head for DeepSeek-V4.1-Flash "
+            "(mtplx.models.deepseek_v41_dspark, worker W23): main_proj over the "
+            "target-layer hiddens, three MLA+MoE draft stages (128 resident mxfp4 "
+            "experts each, top-3), and a markov + confidence head that drafts a "
+            "block per cycle.  It binds through the opt-in mtp=True load path from "
+            "the merged checkpoint's mtp.{0,1,2}.* residents and drives through "
+            "mtplx.generation's native speculative lane (is_deepseek_v41_mtp_config "
+            "/ inject_deepseek_v41_mtp_support) like every other native MTP "
+            "backend.  Greedy verify == AR argmax is the lossless bar; K is capped "
+            "at the 3 physical stages (K>3 and tree/wide verify are dead on the "
+            "streaming bank -- a wider verify only widens the routed-expert union)."
         ),
     ),
     "glm4-moe-mtp": ArchitectureSupport(
