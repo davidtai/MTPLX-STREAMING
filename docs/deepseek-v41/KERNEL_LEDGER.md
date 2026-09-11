@@ -40,6 +40,25 @@ reduction, Sinkhorn kernel, verify-batched dispatch) are **on the critical path 
 the SSD levers**, not the "behind-the-wall +2–5 %" refinement OPT_LEDGER R6 correctly calls them
 *at today's SSD-bound state*. This file's whole job is to price the wall behind the wall.
 
+**⚠ One measured caution up front (governs K1/K14):** on A3B, removing a per-cycle decision sync was
+**+3.27 % *slower*** and the `MLX_MAX_MB_PER_BUFFER`/`MAX_OPS` env sweep was **≈dead** (200 → −0.9 %,
+2000 → +9 % worse, promotion rejected) because MLX's async-submission backpressure (10 outstanding
+buffers × 50 ops / 50 MB force-commit) **conserves the block regardless of the Python sync** — the
+cv-wait is genuine GPU-dependency time, not recoverable by cadence changes
+([[a3b-decode-roundtrip-is-the-lever]]). DSV4.1's barrier differs in one load-bearing way — it is a
+genuine device→host **route materialization** (`.tolist()` the ids to issue an SSD/DRAM gather), not
+a bare decision drain — so its host-side portion *is* real work with a real GPU-idle window to fill.
+But the a3b result forbids assuming the fill is free: every K1/K14 arm counts `mx.eval` and is
+measured against the backpressure floor, not credited on the roofline.
+
+**And V4's "road to 40" finding, which this file inherits:** on V4 (experts resident), once the
+Sinkhorn kernel + fused-CSA/HC-tape stack landed, decode was **no longer** attention- or
+dispatch-bound — the residual binding term was the **MoE gather/dequant GPU-forward** itself, and
+"2-bit is ALU-bound, hand kernels lose there" ([[deepseek-v4-kernel-verdicts]],
+[[iq2xxs-kernel-loses-to-stock]]). DSV4.1's routed forward is the **native mxfp4** gather (K7): so
+after K1/K3/K4 exhaust the barrier and dispatch, the mxfp4 `gather_qmm` efficiency (K7) is the residual
+decode lever — via the *stock* kernel, never a hand one.
+
 MTP (OPT_LEDGER R1) is the multiplier on this side too: one K+1 verify forward runs the 40 barriers
 **once** and covers ~2.85 accepted tokens → **~14 ms/accepted-token of barrier**, not 40. Verify is
 GPU-cheaper per accepted token than 4 AR steps for the same reason it is SSD-cheaper (amortization) —
@@ -144,6 +163,7 @@ compute must be *overlapped under* that read, and the read must not be repeated.
 | Resident dense read (M=1024 GEMM, **once**) | 10.65 GB / 614 = 17 ms | trivial vs bank read |
 | Attention score transient | [1024,64,1536] f32 = 402 MB (one-shot) | under the buffer cap; K6 shrinks it |
 | MoE / attn FLOPs (M=1024) | compute-bound, ~few s | gather_qmm M=1024 = good ALU util (unlike M=1) |
+| Head logits (all rows) | [1,1024,129280] f32 = 0.53 GB | K19: head last row only → decode needs one row |
 | Routing barriers | 40 (one pass) | negligible vs 20 s |
 
 **1024 TTFT lever = overlap compute under the ~20 s bank read + don't re-read the bank** (OPT_LEDGER
@@ -172,8 +192,9 @@ per layer, then stream each expert **once** and apply it to every chunk-row that
 | Component | Cost (as-is, chunked) | With K16 |
 |---|---:|---:|
 | Bank read | up to ~13 × 20 s ≈ **~260 s** | ~20 s (once) |
-| Attention score (per chunk) | [1272,64,24576] f32 = 8 GB transient/chunk | K6 two-pass split-K shrinks it |
+| Attention score (per chunk) | [1271,64,24576] f32 = 8 GB transient/chunk | K6 two-pass split-K shrinks it |
 | Resident read | 10.65 GB × 13 (re-read per chunk!) = 138 GB / 614 = 0.23 s | fold into K16 layer-major pass |
+| **Head logits (all rows)** | [1, 16385, 129280] f32 = **8.47 GB** (one-shot and chunked alike, W20 §7) | **K19: head only the last row at prefill** — decode seeds from the last token; the 8.47 GB + the head GEMM over 16 384 useless rows is pure waste |
 
 **16K TTFT is bank-re-gather bound; K16 is the lever, K6 shrinks the attention transient, K17/K18
 tune the compute.**
@@ -221,7 +242,14 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   removing the Python sync was **+3.27 % *slower*** because MLX's async submission backpressure
   (10-buffer / 50-op force-commit) conserves the blocking regardless of the Python sync. So the win is
   **overlap-fill**, not sync-deletion; price it as utilization and A/B with `mx.eval` counted per arm.
-- **Precedent:** shared-hoist ~0.44 ms already coded; a3b one-sync-per-cycle framing.
+  **The DSV4.1-specific reason it may still pay where a3b did not:** a3b's barrier was a bare decision
+  `_eval` drain (nothing to hide behind); DSV4.1's barrier additionally does a device→host `.tolist()`
+  to build the SSD-gather id list — real host work with a genuine GPU-idle window that the shared
+  branch (x-only dependency) provably fills. Recover the *proven* piece first (shared-hoist), then
+  test whether async_eval of the next layer's route-independent prologue clears more without tripping
+  the backpressure floor.
+- **Precedent:** shared-hoist ~0.44 ms already coded (`expert_mlx.py:1956`); a3b one-sync-per-cycle
+  KILL (the ceiling, not a promise).
 
 ### K2 — MTP verify amortizes barrier + resident read (Factor A, GPU side) — **Rank (owned by R1)**
 - **Mechanism:** one K+1 forward runs the 40 barriers and the 10.65 GB resident read **once** for
@@ -285,12 +313,17 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (144 Metal variants) but its **speed vs affine gs32 is UNMEASURED** ([[mlx-native-float-quant-modes]],
   OPT_LEDGER §8). At M=1 sub-4-bit gathers are ALU/occupancy-bound ([[metal-sub4bit-alu-bound]]); the
   native codec may cost more (or less) ALU than affine. **Where:** decode (M=1, ALU-bound) + prefill
-  (M=chunk, compute-bound). **Measure plan:** queued-lane microbench, `gather_qmm(mode="mxfp4")` vs the
-  bit-exact affine-q4 repack of the same records, at M∈{1,4,1272}, **x shape `[rows,1,K]` enforced**
-  ([[gather-qmm-calling-convention-trap]]), `mx.eval` counted per arm. **Decides:** whether the native
-  bank carries a decode/prefill compute tax; **~0 today** (behind SSD). **Exactness:** affine repack
-  must be bit-exact (it is, per W16). **Effort:** low (microbench only). **Precedent:**
-  [[iq2xxs-kernel-loses-to-stock]] (hand sub-4-bit loses 1.74×) → expect stock native to win; confirm.
+  (M=chunk, compute-bound). This is the **residual decode lever** once K1/K3/K4 exhaust
+  barrier+dispatch — V4 found the binding term after the Sinkhorn+CSA stack is the MoE gather/dequant
+  forward itself ([[deepseek-v4-kernel-verdicts]] "road to 40"). **Measure plan:** queued-lane
+  microbench, `gather_qmm(mode="mxfp4")` on the shipped native records vs an affine-q4 gs32 repack of
+  the same records (a **speed reference on equivalent shapes, not a shippable alternative** — affine q4
+  gs64 is only cos 0.995 / 285 GiB per W16; native mxfp4 stays the bit-exact bank), at
+  M in {1, 4, 1271}, **x shape `[rows,1,K]` enforced** ([[gather-qmm-calling-convention-trap]]),
+  `mx.eval` counted per arm. **Decides:** whether the native bank carries a decode/prefill compute tax;
+  **~0 today** (behind SSD). **Effort:** low (microbench only). **Precedent:**
+  [[iq2xxs-kernel-loses-to-stock]] (hand sub-4-bit loses 1.74× to stock) → use the stock native kernel;
+  the microbench only picks native-vs-affine among *stock* codecs, never a hand kernel.
 
 ### K8 — mxfp8 resident GEMV vs affine-q8 (MEASURE) — **Rank 8**
 - **Mechanism:** the 10.65 GiB residents are **mxfp8**; every decode token GEMVs all of them (§2.1).
@@ -311,13 +344,18 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   ~0. **Exactness:** **risk** — q8 head can tip near-tie argmax; gate the streamed==resident argmax
   (PORT_PLAN P1.7) and a HumanEval cell before shipping. **Effort:** low. **Precedent:** [[report-fastest-of-seeds]]-class byte cuts; q8 head is standard but exactness-gated here.
 
-### K14 — `MLX_MAX_MB_PER_BUFFER` sweep — **Rank 10 (cheap)**
-- **Mechanism:** gemma4's command-buffer throttling lever — caps bytes per command buffer, changing
-  commit granularity and host-encode/GPU overlap (and peak). **Where:** decode + prefill.
-  **After/now:** a cheap sweep may recover overlap on the barrier chain and bound prefill peak; can
-  also *hurt* if it over-commits. **Exactness:** none. **Effort:** trivial (env sweep). **Precedent:**
-  [[gemma4-dflash-cycle-program]] MLX_MAX_MB_PER_BUFFER. Run alongside K1 (they interact via commit
-  granularity).
+### K14 — `MLX_MAX_MB_PER_BUFFER` / `MAX_OPS_PER_BUFFER` sweep — **Rank 10 (cheap falsifier, low expectation)**
+- **Mechanism:** command-buffer throttling knob — caps ops/bytes per command buffer, changing commit
+  granularity and host-encode/GPU overlap (and peak). **Where:** decode + prefill.
+- **⚠ measured ≈dead on a3b, do not expect a win:** [[a3b-decode-roundtrip-is-the-lever]] swept it —
+  `200 → −0.9 %`, `2000 → +9 % worse`, and a promotion A/B was **rejected (+1.93 % worse under
+  interleaved pairs)** — because the 10-buffer cap **was never binding** (the cv-wait is genuine
+  GPU-dependency time). So this is not a fresh idea; it is a **cheap re-falsifier** in the DSV4.1
+  streaming regime (which differs — the per-layer preadv issue may change the buffer pressure), run
+  only to confirm the a3b verdict transfers, at ~0 expected. It bounds prefill peak as a side effect,
+  which is the one place it may earn its keep. **Exactness:** none. **Effort:** trivial (env sweep).
+  Run alongside K1 (they share the backpressure mechanism); keep buffer knobs at defaults unless a
+  clean 3-pair A/B beats drift.
 
 ### K12 — Fused HC-mix + RMSNorm — **Rank 11**
 - **Mechanism:** `_mixes` does rsqrt-normalize → `flat @ fn.T` → Sinkhorn split as separate dispatches
@@ -327,26 +365,26 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (count `mx.eval` per arm — fused-MoE looked 1.85× but was 75 % accounting artifact; hold this fusion
   to the same bar).
 
-### K17 — Prefill GEMM tiling for M=chunk — **Rank 12**
-- **Mechanism:** at M=1272 the expert gather is compute-bound; tile to keep it so (avoid the M=1
+### K17 — Prefill GEMM tiling for M=chunk — **Rank 13**
+- **Mechanism:** at M=1271 the expert gather is compute-bound; tile to keep it so (avoid the M=1
   ALU-stall regime). **Where:** prefill. **After/now:** shaves the ~5–7 s of non-hidden prefill
   compute. **Exactness:** none. **Effort:** medium. **Precedent:** [[qwen27b-compile-profile]] small-T
   qmm ALU ramp; folds into K16's layer-major pass.
 
-### K11 — Expert-record dedup at the gather call site (GPU side of R2) — **Rank 13 (owned by R2)**
+### K11 — Expert-record dedup at the gather call site (GPU side of R2) — **Rank 14 (owned by R2)**
 - **Mechanism:** union the per-cycle expert-id set before the gather so each distinct record feeds one
   `gather_qmm` slot and one preadv. **Where:** verify. GPU side: fewer rhs slots + fewer syscalls;
   SSD side is OPT_LEDGER R2 (the binding win). **Exactness:** none. **⚠** slice the union preadv per
   IOV_MAX (a 40-layer union can exceed 1024 iovecs → EINVAL, [[hy3-c5-dense-islands]]). Ranked as R2.
 
-### K13 — In-place verify-KV writes (footprint, GPU side of R7) — **Rank 14 (owned by R7)**
+### K13 — In-place verify-KV writes (footprint, GPU side of R7) — **Rank 15 (owned by R7)**
 - **Mechanism:** avoid `mx.slice_update` KV copies during verify (Qwen3.8 256K: 6.4 GB/verify copy,
   [[qwen38-verify-band-sdpa-dead-band]]). CSA2 shares KV across 36 layers (only 4 own it), so fewer
   caches than Qwen3.8, but SWA windows + compressed caches are copy-prone. **Where:** verify.
   **After:** prevents a peak spike that steals expert-cache slots / trips the knob (~4× collapse,
   [[never-exceed-the-memory-knob]]). Not a tok/s add — a regression guard. Ranked as R7.
 
-### K5 — `mx.compile` of the per-layer decode step (MEASURE, may be dead) — **Rank 15**
+### K5 — `mx.compile` of the per-layer decode step (MEASURE, may be dead) — **Rank 16**
 - **Mechanism:** compile the per-layer *non-expert* subgraph (HC-mix + attn + norms), leaving the
   host-sync'd expert gather outside the compiled region, to collapse its dispatches. **Where:** decode.
   **⚠ likely dead:** [[hy3-decode-roofline]] compile-**the-forward** was DEAD (async_eval already
@@ -354,11 +392,23 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   necessarily step-compile. **Measure** a per-layer compiled step vs K3+K4 hand-fusion; if async_eval
   already hides the rebuild, mark dead. **Exactness:** none. **Effort:** low to test.
 
-### K18 — Prefill attention chunk sizing sweep — **Rank 16 (cheap)**
+### K18 — Prefill attention chunk sizing sweep — **Rank 17 (cheap)**
 - **Mechanism:** sweep `MTPLX_DSV41_PREFILL_CHUNK_TARGET_GB` (default 8 GB) — bigger chunks =
   fewer re-gathers (helps K16's problem) but larger transients; with K16 landed the chunk only bounds
   the attention score, so raise it to the K6 two-pass ceiling. **Where:** prefill. **Exactness:** none
   (W13 pooling is chunk-independent). **Effort:** trivial. Run after K16/K6.
+
+### K19 — Head only the last row at prefill — **Rank 12 (prefill peak + TTFT)**
+- **Mechanism:** `Model.__call__` runs `self.head(h)` over **all** prefill rows → a **8.47 GB** f32
+  logits transient at 16K (W20 §7) plus a 129280×5120 GEMM over 16 384 rows whose logits are never
+  read — decode seeds only from the **last** token's logits. Slice `h[:, -1:]` before the head at
+  prefill (keep all rows for chunked-forward continuation; only the head input narrows). **Where:**
+  prefill (1024: 0.53 GB saved; 16384: **8.47 GB + a 16 384-row GEMM** saved). **After/now:** cuts the
+  single largest prefill transient and a full head GEMM — helps TTFT *and* peak (protects the knob at
+  16K). **Exactness:** none for AR (same last-token logits); if MTP/DSpark needs multi-row prefill
+  logits, gate on which rows the draft head consumes. **Effort:** low (one slice, guard the
+  cache-continuation path). **Precedent:** standard prefill last-token head; W20 §7 identifies the
+  8.47 GB transient explicitly.
 
 ---
 
@@ -388,13 +438,13 @@ two microbenches (K7/K8), which are CPU/queued and can run now.
 
 | Order | Lever(s) | Gate (pass condition) | When | Cost |
 |---|---|---|---|---|
-| **KG-a** | K7 mxfp4-vs-affine + K8 mxfp8-vs-affine-q8 | queued microbench, x `[rows,1,K]`, `mx.eval` counted; report M∈{1,4,1272} ratios. Decides whether the native codecs carry a compute tax before any decode A/B trusts parity. | now (CPU/queued) | queued microbench |
+| **KG-a** | K7 mxfp4-vs-affine + K8 mxfp8-vs-affine-q8 | queued microbench, x `[rows,1,K]`, `mx.eval` counted; report M in {1, 4, 1271} ratios. Decides whether the native codecs carry a compute tax before any decode A/B trusts parity. | now (CPU/queued) | queued microbench |
 | **KG-b** | K16 prefill expert-major read-once | 16K one-shot bank read A/B: chunked (~13×) vs layer-major (~1×). **Pass if 16K TTFT −≥40 %**, outputs byte-identical, peak under knob. | now (16K TTFT is a today problem) | 1 window |
 | **KG-c** | K3 Sinkhorn kernel (+K12 fused mix) | *after* streaming exposes GPU time: AR + K3 vs AR. **Pass if decode +≥15 % AND argmax parity.** | after R1–R4 | 1 window |
 | **KG-d** | K1 barrier overlap (+K14 buffer sweep) | K3-on baseline vs +overlap-fill; **`mx.eval` counted per arm** (a3b caution: sync-delete alone was −3.27 %). **Pass if decode +≥15 %.** | after KG-c | 1 window |
 | **KG-e** | K10 verify batched M=4 (needs W23) + K11/R2 dedup | MTP+dedup with per-layer M=4 dispatch vs per-position M=1. **Pass if outputs byte-identical AND barrier count 40 (not 160)/cycle AND decode ≥ 2.0× AR.** | after W23 + OPT Gate 2 | 1 window |
 | **KG-f** | K4 HC-compile + fused CSA attn | carry from V4; **argmax parity + decode +** (expect the smaller residual after K3). | after KG-c | folded |
-| **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk | 16K prefill ± two-pass split-K + tiling on the K16 base. **Pass if TTFT −≥15 % beyond K16, parity on long-prompt A/B.** | after KG-b | 1 window |
+| **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk + K19 head-last-row | 16K prefill ± two-pass split-K + tiling + head-last-row on the K16 base. **Pass if TTFT −≥15 % beyond K16 AND peak −≥8 GB (K19 drops the 8.47 GB logits), parity on long-prompt A/B.** | after KG-b | 1 window |
 | **KG-h** | K9 head byte cut + K13 in-place verify-KV | q8/mxfp8 head vs bf16 head: **ship only if argmax parity + HumanEval(164) ≥ exact−noise**; K13 footprint-guard folded into first MTP window. | after KG-e | folded |
 
 **Sequencing rationale:** KG-a/KG-b run **now** (CPU/queued microbenches + the today 16K-TTFT
@@ -408,7 +458,7 @@ kernel both removes the biggest dispatch source and shrinks the GPU-idle window 
 
 ## 8. Open unknowns that gate these numbers (GPU side)
 
-- **mxfp4 native gather speed vs affine at M∈{1,4,1272}** — K7/KG-a. Unmeasured ([[mlx-native-float-quant-modes]]).
+- **mxfp4 native gather speed vs affine at M in {1, 4, 1271}** — K7/KG-a. Unmeasured ([[mlx-native-float-quant-modes]]).
 - **mxfp8 resident GEMV speed vs affine-q8 at M=1** — K8/KG-a. W18 has a precision note, no speed note.
 - **Real per-layer barrier p50 under the served path** — cited ~1 ms from `expert_mlx.py:1959`; confirm
   in-window and whether the shared-hoist / async_eval overlap actually recovers it (a3b backpressure
