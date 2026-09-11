@@ -5277,6 +5277,19 @@ def _decode(tokenizer, tokens: list[int]) -> str:
 
 
 def _default_stop_tokens(tokenizer) -> set[int]:
+    # Opt-in fixed-step decode-rate probe (W46, off by default). With
+    # MTPLX_IGNORE_STOP_TOKENS set, the served generation treats no token as a
+    # stop, so max_tokens is honoured in full. The decode-rate benchmark
+    # (scripts/deepseek_v41/ab_decode_env_levers.py) force-decodes N steps and
+    # ignores EOS; the raw prefill_bench prompt's greedy FIRST token is EOS, so
+    # an EOS-honouring server otherwise stops at 1 blank token (W18: both arms
+    # completion_tokens=1, empty-string sha, 4 blank attempts). This is the
+    # single chokepoint every server generation path falls back to when it
+    # passes stop_token_ids=None, so one gate covers AR and MTP. Only a
+    # dedicated benchmark server process (serve_bench_1k.sh) sets the env; it is
+    # never set on the shared :8080 serve.
+    if _env_truthy("MTPLX_IGNORE_STOP_TOKENS"):
+        return set()
     ids: set[int] = set()
     for attr in ("eos_token_id", "pad_token_id"):
         value = getattr(tokenizer, attr, None)

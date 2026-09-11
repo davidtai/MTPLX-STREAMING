@@ -201,6 +201,35 @@ def receipt_from_response(
     if not isinstance(prompt_tokens, int):
         prompt_tokens = int(timings.get("prompt_n") or 0)
 
+    finish_reason = (
+        (response.get("choices") or [{}])[0].get("finish_reason")
+        if isinstance(response, dict)
+        else None
+    )
+    requested_max = (request or {}).get("max_tokens")
+    # Early-stop guard (W18): the raw prefill_bench prompt's greedy first token
+    # is EOS, so an EOS-honouring server returns 1 blank token. When that
+    # happens the decode tok/s is computed from a single token and is garbage.
+    # Flag it so a receipt cannot be mistaken for a real decode-rate sample --
+    # the fix is MTPLX_IGNORE_STOP_TOKENS on the server (serve_bench_1k.sh sets
+    # it by default).
+    early_stop = (
+        finish_reason == "stop"
+        and isinstance(requested_max, int)
+        and requested_max > 1
+        and isinstance(completion_tokens, int)
+        and completion_tokens < requested_max
+    )
+    warning = None
+    if early_stop:
+        warning = (
+            f"server stopped after {completion_tokens} token(s) with "
+            f"finish_reason=stop although max_tokens={requested_max}; the greedy "
+            "first token is likely EOS. The decode tok/s from so few tokens is "
+            "NOT a valid rate. Serve with MTPLX_IGNORE_STOP_TOKENS=1 "
+            "(serve_bench_1k.sh sets it) to force the full fixed-step decode."
+        )
+
     receipt: dict[str, Any] = {
         "kind": "dsv41-served-1k-bench",
         "created": int(time.time()),
@@ -225,12 +254,10 @@ def receipt_from_response(
             "decode_ms": predicted_ms,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "finish_reason": (
-                (response.get("choices") or [{}])[0].get("finish_reason")
-                if isinstance(response, dict)
-                else None
-            ),
+            "finish_reason": finish_reason,
         },
+        "early_stop": early_stop,
+        "warning": warning,
         "client_wall": {
             "wall_s": wall_s,
             "end_to_end_tok_s": (
@@ -313,13 +340,16 @@ def _summary_line(receipt: dict[str, Any]) -> str:
     def _f(v):
         return "n/a" if v is None else f"{v:.3f}"
 
-    return (
+    line = (
         f"[serve_bench_1k] decode {_f(s['decode_tok_s'])} tok/s | "
         f"prefill {_f(s['prefill_tok_s'])} tok/s | "
         f"ttft {_f(s['ttft_s'])} s | "
         f"prompt_tok={s['prompt_tokens']} completion_tok={s['completion_tokens']} | "
         f"sha={receipt['completion_sha256'][:16]}"
     )
+    if receipt.get("warning"):
+        line += f"\n[serve_bench_1k] WARNING: {receipt['warning']}"
+    return line
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -372,6 +402,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[serve_bench_1k] receipt -> {out_path}")
     if args.print_summary or not args.canned_response:
         print(_summary_line(receipt))
+    # On a REAL request, an early stop means the decode-rate sample is invalid
+    # (see receipt["warning"]); fail loudly so a window cannot bank it as a
+    # measurement. The canned CPU path never fails on this (the test controls
+    # the response body).
+    if receipt.get("early_stop") and not args.canned_response:
+        sys.stderr.write(f"[serve_bench_1k] ERROR: {receipt['warning']}\n")
+        return 3
     return 0
 
 
