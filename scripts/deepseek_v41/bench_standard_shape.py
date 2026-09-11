@@ -235,6 +235,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--reprice",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Reprice the DSpark head's ~7.4 GiB residents out of the memory budget "
+            "(default). --no-reprice loads the head at the full budget to separate "
+            "the budget/slots effect from a head-load code-path effect (window 26)."
+        ),
+    )
+    parser.add_argument(
         "--repeats",
         type=int,
         default=1,
@@ -933,6 +943,7 @@ def run_real(args) -> int:
         want_dspark=want_head,
         memory_limit_bytes=int(args.memory_limit_gib * GIB),
         expert_cache_limit_bytes=cache_limit,
+        reprice=bool(getattr(args, "reprice", True)),
     )
 
     resident = load_deepseek_v41_streaming(
@@ -1049,6 +1060,19 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"bench_standard_shape: {exc}", file=sys.stderr)
         return 2
+
+    if getattr(args, "decode_mode", "ar") == "dspark":
+        # Arm K29/K30 for the whole process so the AR baseline cell and the dspark
+        # verify share the (greedy-identical) decode attention branch -- see
+        # ab_decode_env_levers._run_arm. MTPLX_DSV41_DSPARK_DECODE_KERNELS=0 opts out.
+        from mtplx.models.deepseek_v41_dspark_decode import (
+            _DSPARK_DECODE_KERNEL_ENVS,
+            _dspark_decode_kernels_disabled,
+        )
+
+        if not _dspark_decode_kernels_disabled():
+            for _k in _DSPARK_DECODE_KERNEL_ENVS:
+                os.environ.setdefault(_k, "1")
 
     if args.dry_run:
         return run_dry(args)

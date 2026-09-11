@@ -311,6 +311,87 @@ A/B** (`MTPLX_DSV41_DSPARK_VERIFY_DECODE_PHASE` on/off, `--with-mtp` on/off); th
 CPU double cannot exercise the streamed switch, so the fix is proven byte-identical
 and correct here, and its throughput is a window-25 measurement.
 
+## 6c. Window-25 root-cause: head-load cost + the verify still 1.68 s/cycle
+
+Window 25 (integration f622f91f6): AR stack_a **5.86 tok/s** plain vs **2.12 tok/s**
+`--with-mtp` (peak 75.9 vs 76.3 GB); dspark on the DECODE phase still 1.68 s/cycle
+(draft 216 ms, verify 1,677 ms).
+
+### (a) Head-load 2.8× — the reprice shrinks the COLD expert cache
+
+Ruled out, from the code (not measurable further on CPU):
+- **`main_hidden` capture is identical** with/without the head: `_mtp_target_layer_ids`
+  is set from the **config** (`deepseek_v41.py:2177`), not from the head build, and
+  `Model.__call__` always passes `return_main_hidden=True`, so plain AR and
+  `--with-mtp` AR both capture the target-layer hiddens — not the diff.
+- **The MTP experts stay resident, never bound to the streamed switch**: the loader's
+  `bind_streamed_switches` walks only `model.model.layers` and asserts
+  `bound == routed_layer_count` (40 backbone layers); the head's 3×128 experts are
+  resident mxfp4 (`_build_mtp_head` `nn.quantize`), and `partition_text_residents`
+  keeps them off the streamed bank. So the streamed slot plan has 40 layers
+  regardless of the head.
+
+What remains: at the **same** memory budget the streamed slot plan is identical
+(the planner's `text_only_resident_discount` is applied regardless of `with_mtp`),
+so the only levers are (i) the head loading ~6.7 GiB of residents the plan
+discounted, and (ii) the harness reprice removing a further ~7.4 GiB. Peak was
+nearly unchanged (76.3 vs 75.9) — the reprice traded ~7 GiB of **expert-cache
+slots** for the MTP residents, so the COLD decode has ~7 GiB fewer resident
+experts and pays far more cold misses. "Misses nearly free" (window 13) was a WARM
+repeat; the window-25 pass is COLD. **`--with-mtp --no-reprice` was added** (both
+scripts, via `dspark_bench_loader_overrides(reprice=False)`): it loads the head at
+the FULL budget so window 26 can separate the budget/slots effect (should recover
+most of the 2.8× if it is purely slots) from any residual head-load code-path
+effect (a slowdown at the same budget would be a code path, since the slot plan is
+identical). Follow-up if it is slots: thread `with_mtp` into the loader plan so it
+discounts only vision (not MTP) when the head is kept, instead of the blanket
+harness reprice.
+
+### (b) Verify 1.68 s/cycle — attention took the prefill path; the switch is host-sync-bound
+
+The window-25 verify stage census:
+- **attn (`attn.reuse`) ~830 ms per 4-row verify** (vs ~50 ms at M=1): the verify's
+  attention ran the **rows>1 prefill score path**. K29 (fused decode/verify
+  attention, `b*s ≤ 8`) and K30 (selected-key gather) were **not armed** in the
+  window-25 arm. `_sparse_attend` checks `_decode_attn_kernel_use(q)` *before* the
+  `q.shape[1] <= 1` branch, so a 4-row verify **does** take the decode kernel when
+  armed — the gating was fine, the flags were just off. **Fix:** the lane now arms
+  `MTPLX_DSV41_DECODE_ATTN_KERNEL` + `MTPLX_DSV41_SELECTED_KEYS` for the whole
+  dspark run (`arm_dspark_decode_kernels`; the ab_decode/bench harness `setdefault`s
+  them for `--decode-mode dspark`, the served `generate_dspark` wraps its cycles).
+  They are armed for the AR reference too so the (greedy-identical, not
+  bit-identical) kernels stay consistent and `byte_identical_vs_ar` holds.
+  `MTPLX_DSV41_DSPARK_DECODE_KERNELS=0` opts out for the A/B.
+- **switch (`moe.routed_switch`) ~630 ms per verify** (vs ~74 ms at M=1): the
+  `route_stage` census pins it to **host-sync barriers**, not the gather (which the
+  microbench puts at ~1 ms for 24 rows): `hot.eval_indices` = the dominant stage
+  (~10 ms each — a device→host sync of the per-layer routing indices before the
+  gather; memory `queued-vs-eager-metal-microbench`), and `hot.allhit_fence_eval`
+  (~3.6 ms each). The M=4 verify issues **many more** of these per layer than an
+  M=1 step because the all-hit/split-route path evaluates indices per split rather
+  than once for the whole 4-row wave. **This is a streamed-runtime fix (GPU-only,
+  cannot be validated under the ≤3 GB CPU cap), so it is proposed, not shipped
+  here:** keep the verify's per-layer routing indices on-device (one gather, no
+  host sync) or batch the M=4 index eval into a single barrier per layer, so the
+  verify approaches ~1.3× an M=1 step. Owner: the streamed-switch decode path
+  (`expert_streaming.py` DECODE branch / `expert_mlx` all-hit dispatch), not this
+  lane.
+
+### New per-cycle model
+
+```
+cycle_ms = draft_ms + verify_ms + accept_ms(~0) + commit_ms
+verify_ms ≈ attn_ms + switch_ms + (hc/head/misc)
+   attn_ms  : ~830 ms with prefill attention  ->  K29/K30 target ~1.3× M=1 (~65 ms)
+   switch_ms: ~630 ms host-sync-bound (hot.eval_indices) -> target ~1.3× M=1 (~95 ms)
+```
+With both addressed the verify should fall from ~1.68 s toward ~0.2–0.3 s, i.e.
+at 3.78 tokens/cycle roughly `3.78 × (decode_tok_s of a head-loaded AR step)`.
+Both the K29/K30 win and the switch host-sync fix need a GPU-window A/B
+(`MTPLX_DSV41_DSPARK_DECODE_KERNELS` on/off; `--no-reprice` on/off); the CPU double
+has no streamed switch, so the lane changes here are proven byte-identical and the
+throughput is window-26 measurement.
+
 ## 7. Caveats
 
 - **Acceptance α + `T_{K+1}/T1` unmeasured on this box** — the tok/s win is a GPU

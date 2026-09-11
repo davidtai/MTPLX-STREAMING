@@ -457,6 +457,40 @@ def test_dspark_bench_loader_overrides():
     )
     assert with_mtp is True and cache == cap - DSPARK_MTP_RESIDENT_BYTES
 
+    # --no-reprice: load the head at the FULL budget (window-26 budget-vs-codepath A/B)
+    with_mtp, mem, cache = dspark_bench_loader_overrides(
+        want_dspark=True, memory_limit_bytes=base_mem, expert_cache_limit_bytes=cap,
+        reprice=False,
+    )
+    assert with_mtp is True and mem == base_mem and cache == cap
+
+
+def test_arm_dspark_decode_kernels_sets_and_restores(monkeypatch):
+    from mtplx.models.deepseek_v41_dspark_decode import arm_dspark_decode_kernels
+
+    for k in ("MTPLX_DSV41_DECODE_ATTN_KERNEL", "MTPLX_DSV41_SELECTED_KEYS",
+              "MTPLX_DSV41_DSPARK_DECODE_KERNELS"):
+        monkeypatch.delenv(k, raising=False)
+
+    # default: arms both, restores (removes) after
+    with arm_dspark_decode_kernels():
+        assert os.environ["MTPLX_DSV41_DECODE_ATTN_KERNEL"] == "1"
+        assert os.environ["MTPLX_DSV41_SELECTED_KEYS"] == "1"
+    assert "MTPLX_DSV41_DECODE_ATTN_KERNEL" not in os.environ
+    assert "MTPLX_DSV41_SELECTED_KEYS" not in os.environ
+
+    # an operator's explicit setting is preserved, not overwritten
+    monkeypatch.setenv("MTPLX_DSV41_DECODE_ATTN_KERNEL", "0")
+    with arm_dspark_decode_kernels():
+        assert os.environ["MTPLX_DSV41_DECODE_ATTN_KERNEL"] == "0"
+    assert os.environ["MTPLX_DSV41_DECODE_ATTN_KERNEL"] == "0"
+
+    # opt-out flag disables arming entirely
+    monkeypatch.delenv("MTPLX_DSV41_DECODE_ATTN_KERNEL", raising=False)
+    monkeypatch.setenv("MTPLX_DSV41_DSPARK_DECODE_KERNELS", "0")
+    with arm_dspark_decode_kernels():
+        assert "MTPLX_DSV41_DECODE_ATTN_KERNEL" not in os.environ
+
 
 def test_ab_decode_load_model_passes_with_mtp_for_dspark(monkeypatch, tmp_path):
     """The ab_decode harness's _load_model must pass with_mtp=True + a reduced
@@ -516,6 +550,12 @@ def test_ab_decode_load_model_passes_with_mtp_for_dspark(monkeypatch, tmp_path):
     resident = mod._load_model(args, bench, mx=None)
     assert captured["with_mtp"] is True
     assert captured["memory_limit_bytes"] == int(82.0 * GIB) - DSPARK_MTP_RESIDENT_BYTES
+
+    # AR + --with-mtp --no-reprice: head loaded at the FULL budget (window-26 A/B)
+    args.reprice = False
+    resident = mod._load_model(args, bench, mx=None)
+    assert captured["with_mtp"] is True
+    assert captured["memory_limit_bytes"] == int(82.0 * GIB)
 
 
 def test_serve_argv_parses_dspark_and_resolves_lane(tmp_path, monkeypatch):
