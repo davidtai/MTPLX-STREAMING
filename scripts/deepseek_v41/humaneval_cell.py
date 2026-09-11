@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One HumanEval(164) pass@1 cell for DeepSeek-V4.1-Flash q2 streaming.
+"""One HumanEval(164) pass@1 cell for DeepSeek-V4.1-Flash streaming.
 
 Drives the repo's existing correctness harness against an already-served
 OpenAI-compatible endpoint (``humaneval_cell.sh`` owns the serve lifecycle),
@@ -7,31 +7,48 @@ scores ONE pass@1 cell at David's sampler, and writes an append-only receipt
 that reports **strict pass@1**, **completed-task pass@1** and the **truncation
 rate** (memory/eval-truncation-is-not-failure.md).
 
-Harness reuse (do not reimplement scoring):
-  * ``scripts/code_eval_gate.py`` — the server driver the Qwen3.8 PRs used
-    (``evals/litellm_hy3/run_humaneval.sh`` calls it). Generation + sandboxed
-    scoring + pass@k live there and in ``mtplx/benchmarks/code_eval.py``. This
-    module builds that driver's argv, runs it, then reads its report JSON and
-    derives the two truncation-aware metrics it does not itself compute.
+Harness reuse (do not reimplement message construction or scoring):
+  * ``scripts/code_eval_gate.py`` — the SAME server driver the Qwen3.8 125B
+    MTPLX PRs used (#475/#478/#482/#485/#488). Its ``build_messages`` is the
+    construction to keep: the HumanEval system prompt ("You are a Python
+    programming assistant. Complete the function ... single fenced Python code
+    block ...") and the user turn ``Complete this function:\n\n```python\n{task
+    .prompt}\n``` ``. Generation + sandboxed scoring + pass@k live there and in
+    ``mtplx/benchmarks/code_eval.py``. This module builds that driver's argv,
+    runs it, then reads its report JSON and derives the two truncation-aware
+    metrics it does not itself compute, plus a self-contained per-task pass map
+    so an AR-vs-DSpark lane comparison (``humaneval_lane_compare.py``) needs
+    nothing but the two receipts.
 
 Sampler (memory/humaneval-one-seed.md, memory/follow-the-specific-setup.md):
-David's served sampler is temperature 1, top-p 0.95, top-k 20
+David's served sampler is temperature 1, top-p 0.95, top-k 20, seed 20260829
 (docs/perf/qwen38-475-battery/README.md) — NOT greedy — one seed, one sample per
-task (``n=1``). The output cap is set so it does NOT bind
-(memory/eval-truncation-is-not-failure.md): ``--max-tokens`` defaults to 32768
-for the sampled xhigh-thinking cell; a bound cap shows up as a nonzero
-truncation rate rather than being silently scored as failures.
+task (``n=1``). The served path renders DeepSeek-V4.1's real chat template with
+BOS and thinking OFF by default (W52), so the answer is direct and a modest
+non-binding output cap suffices: ``--max-tokens`` defaults to 2048 and a bound
+cap shows up as a nonzero truncation rate rather than being silently scored as
+failures (memory/eval-truncation-is-not-failure.md).
+
+Lanes (W57): there are two served decode lanes to gate. ``--lane ar`` is the
+served AR baseline (the profile defaults the byte-identical decode levers: head
+bf16, Sinkhorn kernel, attention compile, window memo). ``--lane dspark`` is the
+DSpark-DIRECT lane (``mtplx serve --load-mtp --generation-mode dspark --depth
+3``). ``humaneval_cell.sh`` sets the serve flags; this module only records the
+lane, the depth, the raw serve flags and the daemon's resolved decode-lever env
+line into the receipt so a cell is self-describing.
 
 Receipts are APPEND-ONLY (memory/never-overwrite-a-measurement.md): one fresh
 UTC-stamped directory per invocation under
 ``<out-dir>/humaneval_cell/<utc-stamp>/`` (never reused) holding the derived
-receipt, the full ``code_eval_gate`` report JSON, and the completions sidecar;
-the writer refuses to overwrite an existing receipt file.
+receipt (named ``humaneval_cell__<lane>__seed<S>__cap<T>__<stamp>.json`` so AR
+and DSpark cells never collide), the full ``code_eval_gate`` report JSON, and
+the completions sidecar; the writer refuses to overwrite an existing receipt
+file.
 
-``--dry-run`` proves argument parsing, the metric derivation, the receipt path
-and the append-only guard on CPU from a synthetic report — no server, no model,
-no code execution. This module does no GPU/model work at import; ``--help`` and
-``--dry-run`` are CPU-safe.
+``--dry-run`` proves argument parsing, the metric derivation, the decode-lever
+parse, the receipt path and the append-only guard on CPU from a synthetic
+report — no server, no model, no code execution. This module does no GPU/model
+work at import; ``--help`` and ``--dry-run`` are CPU-safe.
 """
 
 from __future__ import annotations
@@ -49,14 +66,21 @@ DEFAULT_DATASET = Path(
 DEFAULT_OUT_DIR = Path(".benchmark-artifacts/deepseek-v41")
 STEP = "humaneval_cell"
 # David's served sampler (docs/perf/qwen38-475-battery/README.md): temperature 1,
-# top-p 0.95, top-k 20 -- not greedy. Non-binding cap (eval-truncation-is-not-
-# failure.md: 32768 for the sampled xhigh cell).
+# top-p 0.95, top-k 20, seed 20260829 -- not greedy. Non-binding cap: the served
+# chat template runs thinking OFF by default (W52), so 2048 tokens is ample for a
+# single fenced solution and a bound cap surfaces as truncation, never a silent
+# fail (eval-truncation-is-not-failure.md).
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_TOP_P = 0.95
 DEFAULT_TOP_K = 20
-DEFAULT_MAX_TOKENS = 32768
-DEFAULT_SEED = 42
+DEFAULT_MAX_TOKENS = 2048
+DEFAULT_SEED = 20260829
+DEFAULT_LANE = "ar"
+DEFAULT_DEPTH = 3
 _TRUNCATED_FINISH = "length"
+# The daemon prints this once at startup (mtplx/server/openai.py, W46):
+#   "[4/6] DeepSeek-V4.1 decode levers (resolved env): HEAD_MODE=bf16 ...".
+_LEVERS_MARKER = "decode levers (resolved env):"
 
 
 # --------------------------------------------------------------------------
@@ -95,8 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-tokens",
         type=int,
         default=DEFAULT_MAX_TOKENS,
-        help="output cap. Default 32768 so it does NOT bind for the sampled "
-        "xhigh-thinking cell (eval-truncation-is-not-failure.md).",
+        help="output cap. Default 2048 (non-binding for the thinking-OFF served "
+        "chat path, W52); a bound cap surfaces as truncation "
+        "(eval-truncation-is-not-failure.md).",
     )
     parser.add_argument(
         "--seed",
@@ -113,6 +138,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--label", default=None)
+    parser.add_argument(
+        "--lane",
+        choices=("ar", "dspark"),
+        default=DEFAULT_LANE,
+        help="decode lane being gated (W57). Recorded in the receipt and in the "
+        "receipt filename so AR and DSpark cells never collide.",
+    )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=DEFAULT_DEPTH,
+        help="DSpark draft depth (dspark lane); recorded for provenance.",
+    )
+    parser.add_argument(
+        "--serve-flags",
+        default=None,
+        help="the lane's raw serve flags, recorded verbatim in the receipt "
+        "(e.g. '--load-mtp --generation-mode dspark --depth 3').",
+    )
+    parser.add_argument(
+        "--server-log",
+        type=Path,
+        default=None,
+        help="daemon log to scrape the 'decode levers (resolved env)' line from "
+        "(the last matching line is parsed into the receipt).",
+    )
+    parser.add_argument(
+        "--decode-levers-line",
+        default=None,
+        help="explicit decode-levers log line; overrides --server-log. Mainly "
+        "for CPU tests.",
+    )
+    parser.add_argument(
+        "--expert-memory-limit",
+        default=None,
+        help="the --expert-memory-limit passed to the served daemon, recorded "
+        "for provenance (e.g. '60GiB').",
+    )
     parser.add_argument(
         "--spec-key",
         default=None,
@@ -165,10 +228,11 @@ def fresh_out_dir(base: Path, step: str = STEP) -> Path:
 
 
 def receipt_filename(receipt: dict) -> str:
+    lane = receipt.get("lane") or DEFAULT_LANE
     seed = receipt.get("seed", "NA")
     cap = receipt.get("max_tokens", "NA")
     stamp = receipt.get("utc_compact", "NA")
-    return f"{STEP}__seed{seed}__cap{cap}__{stamp}.json"
+    return f"{STEP}__{lane}__seed{seed}__cap{cap}__{stamp}.json"
 
 
 def write_receipt(out_dir: Path, receipt: dict) -> Path:
@@ -179,6 +243,65 @@ def write_receipt(out_dir: Path, receipt: dict) -> Path:
         )
     path.write_text(json.dumps(receipt, indent=2))
     return path
+
+
+# --------------------------------------------------------------------------
+# decode-lever env capture (pure; unit-tested directly)
+# --------------------------------------------------------------------------
+
+
+def parse_decode_levers(line: str | None) -> dict | None:
+    """Parse the daemon's 'decode levers (resolved env)' line into a dict.
+
+    The line is ``... decode levers (resolved env): HEAD_MODE=bf16
+    SINKHORN_METAL=1 ... PREFILL_LAYER_MAJOR=<unset>``. Any prefix (a log
+    timestamp, the ``[4/6]`` stage tag) is ignored; each ``KEY=value`` token
+    after the marker becomes an entry, with ``<unset>`` mapped to ``None`` to
+    match the daemon's own rendering. Returns ``{"raw", "resolved"}`` or
+    ``None`` if the line is empty / carries no ``KEY=value`` tokens.
+    """
+
+    if not line:
+        return None
+    idx = line.find(_LEVERS_MARKER)
+    tail = line[idx + len(_LEVERS_MARKER) :] if idx >= 0 else line
+    resolved: dict[str, str | None] = {}
+    for token in tail.split():
+        if "=" not in token:
+            continue
+        key, _, value = token.partition("=")
+        if not key:
+            continue
+        resolved[key] = None if value == "<unset>" else value
+    if not resolved:
+        return None
+    return {"raw": line.strip(), "resolved": resolved}
+
+
+def _scrape_levers_from_log(log_path: Path) -> str | None:
+    """The LAST 'decode levers (resolved env)' line in a daemon log, or None."""
+
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError:
+        return None
+    last: str | None = None
+    for line in text.splitlines():
+        if _LEVERS_MARKER in line:
+            last = line
+    return last
+
+
+def resolve_decode_levers(args) -> dict | None:
+    """Resolve the decode-lever env for the receipt: explicit line wins, then log."""
+
+    explicit = getattr(args, "decode_levers_line", None)
+    if explicit:
+        return parse_decode_levers(explicit)
+    log_path = getattr(args, "server_log", None)
+    if log_path:
+        return parse_decode_levers(_scrape_levers_from_log(Path(log_path)))
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -227,6 +350,28 @@ def compute_cell_metrics(report: dict) -> dict:
         "by_status": report.get("summary", {}).get("by_status"),
         "by_finish_reason": by_finish,
     }
+
+
+def per_task_rows(report: dict) -> list[dict]:
+    """A self-contained per-task pass map, so a lane comparison needs only receipts.
+
+    One entry per (task, sample) with ``task_id``, ``passed``, ``finish_reason``
+    and ``status`` -- exactly what ``humaneval_lane_compare.py`` diffs between the
+    AR and DSpark cells without having to re-open either code_eval_gate report.
+    """
+
+    out: list[dict] = []
+    for r in report.get("rows") or []:
+        out.append(
+            {
+                "task_id": r.get("task_id"),
+                "sample": r.get("sample"),
+                "passed": bool(r.get("passed")),
+                "finish_reason": r.get("finish_reason"),
+                "status": r.get("status"),
+            }
+        )
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -333,11 +478,13 @@ def run_real(args) -> int:
         report=report,
         report_path=report_path,
         completions_path=completions_path,
+        decode_levers=resolve_decode_levers(args),
+        per_task=per_task_rows(report),
         gate_rc=rc,
         dry_run=False,
     )
     path = write_receipt(out_dir, receipt)
-    _print_summary(path, metrics)
+    _print_summary(path, receipt, metrics)
     # A request error means the cell did not actually score; surface it.
     if metrics["request_errors"]:
         return 1
@@ -352,6 +499,8 @@ def _assemble_receipt(
     report: dict | None,
     report_path: Path | None,
     completions_path: Path | None,
+    decode_levers: dict | None,
+    per_task: list[dict],
     gate_rc,
     dry_run: bool,
 ) -> dict:
@@ -366,9 +515,15 @@ def _assemble_receipt(
         "git_rev": _git_rev(worktree),
         "dry_run": bool(dry_run),
         "label": args.label,
+        "lane": args.lane,
+        "depth": args.depth if args.lane == "dspark" else None,
+        "serve_flags": args.serve_flags,
+        "expert_memory_limit": args.expert_memory_limit,
+        "decode_levers": decode_levers,
         "harness": {
             "driver": "scripts/code_eval_gate.py",
             "scorer": "mtplx/benchmarks/code_eval.py",
+            "message_construction": "code_eval_gate.build_messages",
             "endpoint": args.endpoint,
         },
         "served_model": args.model,
@@ -390,6 +545,7 @@ def _assemble_receipt(
         "dataset_sha256": provenance.get("dataset_sha256"),
         "limit": args.limit,
         "metrics": metrics,
+        "per_task": per_task,
         "gate_return_code": gate_rc,
         "gate_params": params,
         "gate_report_json": str(report_path) if report_path else None,
@@ -397,16 +553,23 @@ def _assemble_receipt(
     }
 
 
-def _print_summary(path: Path, metrics: dict) -> None:
+def _print_summary(path: Path, receipt: dict, metrics: dict) -> None:
     print(f"[humaneval_cell] receipt -> {path}", flush=True)
+    levers = receipt.get("decode_levers") or {}
+    lever_note = ""
+    if levers.get("resolved"):
+        lever_note = "  levers=" + ",".join(
+            f"{k}={v}" for k, v in levers["resolved"].items()
+        )
     print(
-        "[humaneval_cell] "
+        f"[humaneval_cell] lane={receipt.get('lane')} "
         f"strict_pass@1={metrics['strict_pass_at_1']:.4f} "
         f"({metrics['passed']}/{metrics['tasks']})  "
         f"completed_task_pass@1={metrics['completed_task_pass_at_1']:.4f} "
         f"({metrics['completed_tasks']} completed)  "
         f"truncation_rate={metrics['truncation_rate']:.4f} "
-        f"({metrics['truncated_tasks']} truncated)",
+        f"({metrics['truncated_tasks']} truncated)"
+        f"{lever_note}",
         flush=True,
     )
 
@@ -440,10 +603,21 @@ def _synthetic_report() -> dict:
     }
 
 
+# A representative resolved-env line so the DRY receipt shows the lever field's
+# shape without a server (dry_run:true marks it synthetic).
+_DRY_LEVERS_LINE = (
+    "[4/6] DeepSeek-V4.1 decode levers (resolved env): HEAD_MODE=bf16 "
+    "SINKHORN_METAL=1 ATTN_COMPILE=1 ATTN_WIN_MEMO=1 SWITCH_FASTPATH=1 "
+    "SWITCH_SUBMIT=1 DEVICE_ROUTE=1 HC_COMPILE=1 SHARED_OVERLAP=<unset> "
+    "PREFILL_LAYER_MAJOR=<unset>"
+)
+
+
 def run_dry(args) -> int:
     worktree = Path(__file__).resolve().parents[2]
     report = _synthetic_report()
     metrics = compute_cell_metrics(report)
+    decode_levers = resolve_decode_levers(args) or parse_decode_levers(_DRY_LEVERS_LINE)
     out_dir = fresh_out_dir(args.out_dir)
     receipt = _assemble_receipt(
         args,
@@ -452,12 +626,14 @@ def run_dry(args) -> int:
         report=report,
         report_path=None,
         completions_path=None,
+        decode_levers=decode_levers,
+        per_task=per_task_rows(report),
         gate_rc=None,
         dry_run=True,
     )
     path = write_receipt(out_dir, receipt)
     print(f"[humaneval_cell] DRY-RUN receipt -> {path}", flush=True)
-    _print_summary(path, metrics)
+    _print_summary(path, receipt, metrics)
     return 0
 
 

@@ -217,9 +217,11 @@ def test_humaneval_parser_defaults_match_davids_sampler(humaneval):
     assert args.temperature == 1.0  # not greedy
     assert args.top_p == 0.95
     assert args.top_k == 20
-    assert args.max_tokens == 32768  # non-binding cap
-    assert args.seed == 42
+    assert args.max_tokens == 2048  # non-binding cap (thinking-OFF served path, W52)
+    assert args.seed == 20260829  # David's served seed
     assert args.endpoint == "chat"
+    assert args.lane == "ar"  # default lane
+    assert args.depth == 3
 
 
 def test_humaneval_compute_metrics_truncation_aware(humaneval):
@@ -252,7 +254,8 @@ def test_humaneval_gate_argv_reuses_driver_with_davids_sampler(humaneval):
     assert "--allow-code-execution" in argv
     assert argv[argv.index("--temperature") + 1] == "1.0"
     assert argv[argv.index("--top-p") + 1] == "0.95"
-    assert argv[argv.index("--max-tokens") + 1] == "32768"
+    assert argv[argv.index("--max-tokens") + 1] == "2048"
+    assert argv[argv.index("--seed") + 1] == "20260829"
     assert argv[argv.index("--n") + 1] == "1"
     assert argv[argv.index("--suite") + 1] == "humaneval"
     # top-k rides on the driver's --extra-body passthrough
@@ -274,11 +277,25 @@ def test_humaneval_gate_argv_optional_limit_and_key(humaneval):
 
 def test_humaneval_write_receipt_append_only_guard(humaneval, tmp_path):
     out = humaneval.fresh_out_dir(tmp_path)
-    receipt = {"seed": 42, "max_tokens": 32768, "utc_compact": "S"}
+    receipt = {"lane": "ar", "seed": 20260829, "max_tokens": 2048, "utc_compact": "S"}
     p = humaneval.write_receipt(out, receipt)
     assert p.exists()
+    # The lane is in the filename so AR and DSpark cells never collide.
+    assert p.name == "humaneval_cell__ar__seed20260829__cap2048__S.json"
     with pytest.raises(FileExistsError):
         humaneval.write_receipt(out, receipt)
+
+
+def test_humaneval_receipt_filename_carries_the_lane(humaneval):
+    ar = humaneval.receipt_filename(
+        {"lane": "ar", "seed": 20260829, "max_tokens": 2048, "utc_compact": "S"}
+    )
+    ds = humaneval.receipt_filename(
+        {"lane": "dspark", "seed": 20260829, "max_tokens": 2048, "utc_compact": "S"}
+    )
+    assert ar == "humaneval_cell__ar__seed20260829__cap2048__S.json"
+    assert ds == "humaneval_cell__dspark__seed20260829__cap2048__S.json"
+    assert ar != ds  # AR and DSpark receipts never share a filename
 
 
 def test_humaneval_fresh_out_dir_step_namespaced(humaneval, tmp_path):
@@ -298,10 +315,16 @@ def test_humaneval_dry_run_end_to_end(humaneval, tmp_path):
     assert d["step"] == "humaneval_cell"
     assert d["sampler"]["temperature"] == 1.0
     assert d["sampler"]["top_p"] == 0.95
-    assert d["sampler"]["max_tokens"] == 32768
+    assert d["sampler"]["max_tokens"] == 2048
+    assert d["sampler"]["seed"] == 20260829
     assert d["sampler"]["greedy"] is False
+    assert d["lane"] == "ar"  # default lane recorded
     assert d["harness"]["driver"] == "scripts/code_eval_gate.py"
     assert d["harness"]["scorer"] == "mtplx/benchmarks/code_eval.py"
+    # The dry receipt shows the decode-lever field shape + a self-contained
+    # per-task pass map (what the lane comparison consumes).
+    assert d["decode_levers"]["resolved"]["HEAD_MODE"] == "bf16"
+    assert isinstance(d["per_task"], list) and len(d["per_task"]) == 10
     m = d["metrics"]
     for key in (
         "strict_pass_at_1",

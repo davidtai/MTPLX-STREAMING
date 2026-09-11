@@ -1,27 +1,49 @@
 #!/usr/bin/env bash
-# One HumanEval(164) pass@1 cell for the DeepSeek-V4.1-Flash q2 streaming
-# artifact: serve it on a FREE HIGH PORT (never :8080), assert /health, then run
-# humaneval_cell.py against it at David's sampler and write an append-only
-# receipt (strict + completed-task pass@1 + truncation rate). Stops the server
+# One HumanEval(164) pass@1 cell for the DeepSeek-V4.1-Flash streaming artifact,
+# per decode lane: serve it on a FREE HIGH PORT (never :8080), assert /health,
+# then run humaneval_cell.py against it at David's sampler and write an
+# append-only receipt (strict + completed-task pass@1 + truncation rate) that
+# records the lane and the daemon's resolved decode-lever env. Stops the server
 # cleanly on exit.
 #
 # This is a STEP meant to run *inside* gpu_window.sh, which holds the exclusive
 # GPU lock and has already booted out the resident agent. It therefore does NOT
 # take the lock or touch launchctl / :8080 itself.
 #
+#   # AR lane (served default; the profile arms the byte-identical decode levers:
+#   #   head bf16 + Sinkhorn kernel + attention compile + window memo)
+#   DSV41_LANE=ar \
+#   DSV41_RECEIPT_DIR=docs/deepseek-v41/receipts/w68-humaneval-ar \
+#   bash scripts/deepseek_v41/gpu_window.sh \
+#        bash scripts/deepseek_v41/humaneval_cell.sh
+#
+#   # DSpark-DIRECT lane (W57): mtplx serve --load-mtp --generation-mode dspark
+#   #   --depth 3
+#   DSV41_LANE=dspark \
+#   DSV41_RECEIPT_DIR=docs/deepseek-v41/receipts/w68-humaneval-dspark \
 #   bash scripts/deepseek_v41/gpu_window.sh \
 #        bash scripts/deepseek_v41/humaneval_cell.sh
 #
 # Reuses serve_health.sh's port finder + editable-install engagement assertion
 # (memory/editable-install-cwd-shadowing.md): runs the WORKTREE's code
 # (PYTHONPATH + cwd = worktree) and asserts mtplx resolves under it before
-# serving. The SSD SessionBank cold tier is turned OFF so the shared prod bank
-# never warms this correctness cell (memory/ssd-session-bank-warms-benchmarks.md);
-# HumanEval sends 164 distinct prompts, so cross-request restore is irrelevant.
+# serving, and served_cell_bench.sh's serve lifecycle (free port, engagement
+# assertion, --expert-memory-limit passthrough, clean stop, decode-lever
+# startup-line grep). The SSD SessionBank cold tier is turned OFF so the shared
+# prod bank never warms this correctness cell
+# (memory/ssd-session-bank-warms-benchmarks.md); HumanEval sends 164 distinct
+# prompts, so cross-request restore is irrelevant.
 #
-# Requires worker W1's mtplx/models/deepseek_v41.py and a faithful port that has
-# passed its CPU probe; until then the server fails admission/construction and
-# this script reports it and exits non-zero (by design).
+# Env knobs:
+#   DSV41_LANE=ar|dspark          which decode lane to gate (default ar)
+#   DSV41_DEPTH=3                 DSpark draft depth (dspark lane only)
+#   DSV41_RECEIPT_DIR=<dir>       append-only receipt root (default
+#                                 .benchmark-artifacts/deepseek-v41; DSV41_OUT_DIR
+#                                 still honoured as a fallback alias)
+#   DSV41_MEMORY_LIMIT_GIB=<N>    -> mtplx serve --expert-memory-limit <N>GiB
+#   DSV41_MAX_LIVE_KV_TOKENS=<N>  -> mtplx serve --expert-max-live-kv-tokens <N>
+#   DSV41_WORKERS=<N>             concurrent in-flight requests (default 4)
+#   DSV41_SERVE_EXTRA_ARGS="..."  extra serve args, appended verbatim
 #
 #   --dry-run : prove wiring on CPU (paths, venv, driver) with NO serve, NO
 #               model, NO code execution -- invokes humaneval_cell.py --dry-run.
@@ -39,8 +61,13 @@ HEALTH_TIMEOUT="${DSV41_HEALTH_TIMEOUT:-600}"   # server load = residents + admi
 STOP_TIMEOUT="${DSV41_STOP_TIMEOUT:-60}"
 LOG_DIR="${DSV41_LOG_DIR:-${TMPDIR:-/tmp}/dsv41-humaneval-cell}"
 DATASET="${HUMANEVAL_DATASET:-/Users/davidtai/projects/OpenSourceWTF/benchmark-archive/datasets/HumanEval.jsonl}"
-OUT_DIR="${DSV41_OUT_DIR:-${WORKTREE}/.benchmark-artifacts/deepseek-v41}"
+# Append-only receipt root: DSV41_RECEIPT_DIR is the primary knob; DSV41_OUT_DIR
+# stays as a back-compat alias so older window scripts keep working.
+RECEIPT_DIR="${DSV41_RECEIPT_DIR:-${DSV41_OUT_DIR:-${WORKTREE}/.benchmark-artifacts/deepseek-v41}}"
 LIMIT="${HUMANEVAL_LIMIT:-}"                     # empty = all 164 tasks
+WORKERS="${DSV41_WORKERS:-4}"
+LANE="${DSV41_LANE:-ar}"
+DEPTH="${DSV41_DEPTH:-3}"
 DRY_RUN="0"
 for arg in "$@"; do
   case "${arg}" in
@@ -57,16 +84,37 @@ if [[ ! -x "${VENV_PY}" ]]; then
   exit 1
 fi
 
+# Resolve the decode lane -> serve flags. AR is the served default (no lane
+# flags); DSpark is the W57 DSpark-DIRECT lane.
+SERVE_LANE_ARGS=()
+case "${LANE}" in
+  ar)
+    SERVE_FLAGS_DESC="(served AR default)"
+    ;;
+  dspark)
+    SERVE_LANE_ARGS=(--load-mtp --generation-mode dspark --depth "${DEPTH}")
+    SERVE_FLAGS_DESC="--load-mtp --generation-mode dspark --depth ${DEPTH}"
+    ;;
+  *)
+    err "unknown DSV41_LANE '${LANE}' (expected ar|dspark)"
+    exit 2
+    ;;
+esac
+
 # -------------------------------- dry run ------------------------------------
 # Prove the wiring on CPU with no serve, no model, no code execution.
 if [[ "${DRY_RUN}" == "1" ]]; then
   log "DRY-RUN: no serve, no model, no code execution"
-  log "would serve: mtplx serve --model ${MODEL} --host ${HOST} --port <free 18080-18299> --no-auth --ssd-session-cache off"
-  log "would score: humaneval_cell.py --dataset-path ${DATASET} --out-dir ${OUT_DIR}"
+  log "lane=${LANE} serve flags: ${SERVE_FLAGS_DESC}"
+  log "would serve: mtplx serve --model ${MODEL} --host ${HOST} --port <free 18080-18299> --no-auth --ssd-session-cache off ${SERVE_LANE_ARGS[*]:-}"
+  log "would score: humaneval_cell.py --dataset-path ${DATASET} --out-dir ${RECEIPT_DIR}"
   exec env PYTHONPATH="${WORKTREE}" "${VENV_PY}" "${HERE}/humaneval_cell.py" \
     --dry-run \
-    --out-dir "${OUT_DIR}" \
+    --out-dir "${RECEIPT_DIR}" \
     --dataset-path "${DATASET}" \
+    --lane "${LANE}" \
+    --depth "${DEPTH}" \
+    --serve-flags "${SERVE_FLAGS_DESC}" \
     --label "dry-run"
 fi
 
@@ -78,8 +126,8 @@ if [[ ! -f "${DATASET}" ]]; then
   err "HumanEval dataset not found at ${DATASET} (set HUMANEVAL_DATASET)"
   exit 1
 fi
-mkdir -p "${LOG_DIR}"
-SERVER_LOG="${LOG_DIR}/serve-$(date -u +%Y%m%dT%H%M%SZ).log"
+mkdir -p "${LOG_DIR}" "${RECEIPT_DIR}"
+SERVER_LOG="${LOG_DIR}/serve-${LANE}-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 # Never :8080. Pick the first free port in a high range (serve_health.sh's finder).
 PORT="$(
@@ -105,7 +153,9 @@ if [[ "${PORT}" == "8080" || ! "${PORT}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 BASE="http://${HOST}:${PORT}"
+log "lane=${LANE}; serve flags: ${SERVE_FLAGS_DESC}"
 log "selected free port ${PORT} (never :8080); server log -> ${SERVER_LOG}"
+log "receipt dir -> ${RECEIPT_DIR}"
 
 # Editable-install engagement guard: the served code MUST be this worktree's.
 log "asserting mtplx resolves to the worktree ${WORKTREE}"
@@ -118,6 +168,19 @@ PYASSERT
 ); then
   err "engagement assertion failed; refusing to serve the wrong tree"
   exit 1
+fi
+
+# --expert-memory-limit passthrough (served_cell_bench.sh contract): the accepted
+# flag is a size string like "60GiB"; NOT --memory-budget (the serve parser
+# rejects that). Optional --expert-max-live-kv-tokens for finer KV control.
+MEM_ARGS=()
+if [[ -n "${DSV41_MEMORY_LIMIT_GIB:-}" ]]; then
+  MEM_ARGS+=(--expert-memory-limit "${DSV41_MEMORY_LIMIT_GIB}GiB")
+  log "expert memory ceiling override: --expert-memory-limit ${DSV41_MEMORY_LIMIT_GIB}GiB"
+fi
+if [[ -n "${DSV41_MAX_LIVE_KV_TOKENS:-}" ]]; then
+  MEM_ARGS+=(--expert-max-live-kv-tokens "${DSV41_MAX_LIVE_KV_TOKENS}")
+  log "context window override: --expert-max-live-kv-tokens ${DSV41_MAX_LIVE_KV_TOKENS}"
 fi
 
 SERVER_PID=""
@@ -146,7 +209,7 @@ trap cleanup EXIT INT TERM
 
 # Start the server from the worktree. The SSD SessionBank cold tier is OFF so
 # the shared prod bank never warms this cell (ssd-session-bank-warms-benchmarks).
-log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} --no-auth --ssd-session-cache off"
+log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} --no-auth --ssd-session-cache off ${SERVE_LANE_ARGS[*]:-} ${MEM_ARGS[*]:-} ${DSV41_SERVE_EXTRA_ARGS:-}"
 (
   cd "${WORKTREE}" || exit 97
   exec env PYTHONPATH="${WORKTREE}" "${VENV_PY}" -m mtplx.cli serve \
@@ -154,7 +217,8 @@ log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} --no-a
     --host "${HOST}" \
     --port "${PORT}" \
     --no-auth \
-    --ssd-session-cache off
+    --ssd-session-cache off \
+    "${SERVE_LANE_ARGS[@]}" "${MEM_ARGS[@]}" ${DSV41_SERVE_EXTRA_ARGS:-}
 ) >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 log "server pid=${SERVER_PID}"
@@ -180,6 +244,11 @@ if (( healthy == 0 )); then
   exit 1
 fi
 log "/health is up at ${BASE}/health"
+
+# Surface which decode levers engaged (daemon startup line); humaneval_cell.py
+# re-scrapes the same line from --server-log into the receipt.
+grep -a "DeepSeek-V4.1 decode levers (resolved env):" "${SERVER_LOG}" | tail -n 1 || \
+  log "no lever startup line found in ${SERVER_LOG} (older daemon?)"
 
 # generation_mode + model_key from /health; model id from /v1/models.
 HEALTH_JSON="$(curl -sf -m 10 "${BASE}/health" 2>/dev/null || true)"
@@ -224,12 +293,18 @@ CELL_ARGS=(
   --base-url "${BASE}"
   --model "${MODEL_ID}"
   --dataset-path "${DATASET}"
-  --out-dir "${OUT_DIR}"
+  --out-dir "${RECEIPT_DIR}"
+  --lane "${LANE}"
+  --depth "${DEPTH}"
+  --serve-flags "${SERVE_FLAGS_DESC}"
+  --server-log "${SERVER_LOG}"
+  --workers "${WORKERS}"
 )
 [[ -n "${MODEL_KEY}" ]] && CELL_ARGS+=(--spec-key "${MODEL_KEY}")
 [[ -n "${LIMIT}" ]] && CELL_ARGS+=(--limit "${LIMIT}")
+[[ -n "${DSV41_MEMORY_LIMIT_GIB:-}" ]] && CELL_ARGS+=(--expert-memory-limit "${DSV41_MEMORY_LIMIT_GIB}GiB")
 
-log "running HumanEval(164) pass@1 cell (temperature 1, top-p 0.95, top-k 20, non-binding cap)"
+log "running HumanEval(164) pass@1 cell, lane=${LANE} (temperature 1, top-p 0.95, top-k 20, seed 20260829, non-binding cap)"
 (
   cd "${WORKTREE}" || exit 97
   exec env PYTHONPATH="${WORKTREE}" "${VENV_PY}" "${HERE}/humaneval_cell.py" \
