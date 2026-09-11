@@ -257,6 +257,12 @@ class SharedAttentionRuntime:
         self.index_k: Optional[mx.array] = None        # [B, n_comp, index_head_dim] (L1174)
         self.topk_idxs: Optional[mx.array] = None      # index source's published selection (L1175)
         self.candidates: Optional[mx.array] = None     # candidate-block mask (L1176)
+        #: W59 / K30: the index source's selection as integer row indices into
+        #: ``compress_kv`` ([B, s, k] int32, -1 = unreachable pad), the gather form
+        #: of ``topk_idxs``.  Published once per index source and reused by its
+        #: downstream Reuse layers, mirroring ``topk_idxs``.  Only populated under
+        #: ``MTPLX_DSV41_SELECTED_KEYS`` (prefill); ``None`` otherwise.
+        self.selected_idx: Optional[mx.array] = None
 
     # W10's Attention publishes the selection as a boolean row mask rather than
     # the reference's integer indices; ``topk_mask`` is that view's name for the

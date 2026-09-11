@@ -104,6 +104,12 @@ SCORE_PATH_ENV = "MTPLX_DSV41_PREFILL_SCORE_PATH"          # W50: prefill score
 # three passes over the [rows,64,T] transient.  Reassociation-level vs control
 # (greedy-identical); the throughput play once window-20 showed the stage is
 # pass/bandwidth-bound.  Unset = "oneshot" (byte-identical).
+SELECTED_KEYS_ENV = "MTPLX_DSV41_SELECTED_KEYS"    # W59 / K30: prefill selected-key
+# gather -- gather only the window + index_topk selected compressed rows each query
+# attends into a compact [rows, k, 512] operand and score over k (~640) keys, vs the
+# shipped masked-full [rows,64,T] score that grows with T.  Reassociation-level vs
+# control (greedy-identical); the score-stage FLOP/byte play (24x FLOPs, 50x score
+# bytes at 16K).  Prefill only (rows > 1); decode untouched.  Unset = masked-full.
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -135,6 +141,7 @@ ALL_LEVER_ENVS = (
     SCORE_PATH_ENV,
     LAYOUT_FIX_ENV,
     DOWN_K_PAD_ENV,
+    SELECTED_KEYS_ENV,
 )
 
 
@@ -144,7 +151,7 @@ def _preset(
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
-    layout_fix=None, down_k_pad=None,
+    layout_fix=None, down_k_pad=None, selected_keys=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -173,6 +180,7 @@ def _preset(
         SCORE_PATH_ENV: score_path,
         LAYOUT_FIX_ENV: layout_fix,
         DOWN_K_PAD_ENV: down_k_pad,
+        SELECTED_KEYS_ENV: selected_keys,
     }
 
 
@@ -254,6 +262,21 @@ ARM_PRESETS = {
     # the lean pass-cut score path (bf16 dropped, it lost on the GPU).  LOSSY
     # (dense fp32 accumulation order + score reassociation), task-eval gated.
     "prefill_lean": _preset(layer_major="1", prefill_dense="1", score_path="lean"),
+    # W59 K30: prefill selected-key gather.  Gather only the window + index_topk
+    # selected compressed rows each query attends into a compact [rows, k, 512]
+    # operand (k ~= 640, T-independent) and score over k keys, vs the shipped
+    # masked-full [rows,64,T] score.  Reassociation-level vs control (greedy-
+    # identical, NOT byte-identical -- softmax sum reassociates over a different key
+    # order).  Score-stage FLOPs 24x, peak score bytes ~50x at 16K; expected to cut
+    # the reuse-layer attention (~144-184 s of TTFT at 16K) ~24x.  Prefill only.
+    "selected_keys": _preset(selected_keys="1"),
+    # W59: the K30 gather stacked onto the current best f32 prefill candidate
+    # (prefill_lean = layer-major + dense experts + lean score path).  Pins every
+    # key.  LOSSY vs control (dense fp32 accumulation order + score reassociation),
+    # task-eval gated like prefill_lean.
+    "prefill_lean_sel": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1"
+    ),
 }
 
 
@@ -306,7 +329,8 @@ def build_parser() -> argparse.ArgumentParser:
         "attn_compile, attn_win_memo, device_route, prefill_dense_experts, "
         "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
         "head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
-        "score_bf16_chunked, score_lean, prefill_fast, prefill_lean)",
+        "score_bf16_chunked, score_lean, prefill_fast, prefill_lean, "
+        "selected_keys, prefill_lean_sel)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that

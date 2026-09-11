@@ -998,6 +998,63 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 
 ---
 
+### K30 — Prefill selected-key gather (`MTPLX_DSV41_SELECTED_KEYS`) — **W59 (the score-WIDTH lever; complements K25/K26)**
+- **Mechanism (the transliteration K25/K6 never fixed):** K25 found `attn.*.score` the largest
+  16K-prefill term (201 s of 370 s TTFT; reuse 153 s), and `lean` cut *passes* over the score
+  transient — but every K25/K6 path still computes the **full `[rows,64,T]` score over the entire
+  window+compressed history and masks it** (`_sparse_attend_oneshot`, `deepseek_v41.py`). **The
+  reference does not.** Its `sparse_attn` (`~/models/DeepSeek-V4.1-Flash-src/inference/kernel.py:311`)
+  **gathers only the selected keys** — `num_blocks = cdiv(topk, block)` (`kernel.py:325`),
+  `kv_shared[i,j] = kv[by, idxs[i], j]` (`kernel.py:362`) — so the score is `[rows,64,k]` with
+  `k = topk_idxs.width`, **not** `[rows,64,T]`. `topk_idxs = cat(window_idxs, compress_idxs)`
+  (`model.py:777-780`); the pure-torch golden gathers identically (`ref_forward._k_sparse_attn`
+  `torch.gather(kv_e, 2, idxc…)`, `torchref/ref_forward.py:145`). **The port's mask-then-full-score is
+  a faithful but wasteful transliteration** — masked keys contribute exactly 0 to the softmax, so the
+  two are mathematically identical; the port just materializes and computes over `T` columns where the
+  reference touches `k`. K30 (`_sparse_attend_selected`, prefill/`rows>1` only, decode untouched)
+  gathers the window band (`_window_selected_idx`, reference `get_window_topk_idxs` model.py:410-420)
+  **plus** the indexer's selected compressed rows (the `select` stage's mask, converted once per index
+  source to gather indices `_mask_to_topk_idx` and published on `shared.selected_idx`, reused by the
+  Reuse layers exactly like `topk_mask`) into a compact **`[rows,k,512]`** operand (KV is 1 shared head
+  → no per-head copy, the least-traffic layout; single flat `mx.take`, never the `[rows,T,512]`
+  broadcast), then one softmax with the value-0 sink over `k` keys.
+- **k per mode as f(T) (config: window 128, index_topk 512, ratios L0-1=0, L2-19=2, L20-39=1):**
+  `k = min(T,128) + min(512, T//ratio)`. **k SATURATES independent of T** once `T//ratio ≥ 512`:
+  | mode | layers | ratio | k @1K | k @16K |
+  |---|---|---|---|---|
+  | SWA-only | 0-1 | 0 | 128 | 128 |
+  | Full/Reuse (r2) | 2-19 | 2 | 640 | 640 |
+  | Full/Reindex/Reuse (r1) | 20-39 | 1 | 640 | 640 |
+- **FLOP / byte arithmetic (16K, layer-major, default 8 GB chunk = 953, 18 chunks):** control score
+  width for a ratio-1 layer **grows 1906 → 32768 across chunks (3.0× → 51.2×** vs K30's flat 640);
+  K30's per-query score width is chunk-independent. Totals over 40 backbone layers:
+  **control score FLOPs 6.42e14 vs K30 2.64e13 = 24.4× fewer** (reuse-only layers 23.7×; reuse is 76 %
+  of the all-layer control score). Peak fp32 **score transient** per chunk (ratio-1 layer): **7.91 GB
+  → 0.156 GB = 50.6×** (the gathered KVg `[953,640,512]·4B ≈ 1.25 GB` replaces it as the largest attn
+  transient — still a large peak-GB cut and, unlike control, flat across chunks).
+- **Expected saving (GPU-window estimate, no GPU here):** the K25-measured reuse score ≈ **144–184 s**
+  is the T-growing term; at 23.7× it drops to **~6–8 s → saves ~138–176 s** on the reuse layers alone
+  (the 8 Full/Reindex + 2 SWA layers, the other 24 % of the score, shrink ~24× too). Stacks under
+  `prefill_lean` (K16+K26+K25-lean): the lean pass-cuts still apply to the now-`k`-wide score. Cuts
+  FLOPs *and* passes *and* peak GB — the width axis K25/K6 left on the table.
+- **Exactness (CPU-proven, `tests/models/test_deepseek_v41_selected_keys.py`, 14 tests):**
+  selected-gather vs masked-full is **identical up to float reassociation of the softmax sum** (same
+  key set — the gathered indices are exactly the mask's True set — summed in a different order): unit
+  `_sparse_attend_selected` vs masked-full one-shot **max |Δ| ≤ 1e-5** (with compressed + SWA-only),
+  NaN-free on a fully-invalid row (finite-max → 0, reference convention); tiny 8-layer CSA model (every
+  mode) prefill logits vs control **max |Δ| ≈ 5–6e-6, greedy argmax identical** across one-shot,
+  chunk {4,7,8}, layer-major and layer-major-chunked; **decode (rows=1) byte-identical** (never takes
+  the path). Not bit-identical (reassociation), like K25 `lean`.
+- **Merge note:** the change is at the **key-selection level** (what keys/values are handed to the
+  attention math) — `_sparse_attend_oneshot` / `_sparse_attend_chunked` are untouched, so it composes
+  with a fused-softmax rewrite of those (W58).
+- **Arms:** `selected_keys`, `prefill_lean_sel` (= `prefill_lean` + K30) in `ab_decode_env_levers.py`
+  (pin all 20 keys). **STATUS (W59, `feat/deepseek-v41-w59`):** IMPLEMENTED + CPU-proven, default OFF
+  (masked-full). Peak RSS of the exactness suite <3 GB. **GPU gate remains KG-g** (the 144–184 s → ~7 s
+  saving is a window estimate). See `W59_SELECTED_KEYS.md`.
+
+---
+
 ## 6. Dead-here (GPU-side; do not re-propose)
 
 | Lever | Why dead |

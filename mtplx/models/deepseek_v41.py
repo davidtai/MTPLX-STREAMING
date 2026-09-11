@@ -816,6 +816,80 @@ class Attention(nn.Module):
             _st.add(out)
         return out
 
+    def _window_selected_idx(self, positions, T):
+        """This layer's sliding-window keys as gather indices ``[s, W]`` into the
+        full-history window store (row j == absolute token j), with a ``[s, W]``
+        valid mask.  Reproduces the reference ``get_window_topk_idxs`` (model.py
+        L409-426) in the port's absolute-position frame: query at position ``p``
+        attends ``{max(0, p-W+1) .. p}`` (``idxs = clamp(p-W+1, 0) + arange(W)``,
+        future slots ``idx > p`` marked invalid) -- exactly the set the
+        :meth:`_window_attend` causal band mask keeps, so the selected-gather path
+        attends the identical window keys as the masked-full path."""
+        W = self.window_size
+        qp = positions.reshape(-1, 1)                     # [s, 1] absolute positions
+        base = mx.maximum(qp - (W - 1), 0)
+        idx = base + mx.arange(W).reshape(1, W)           # [s, W]
+        valid = (idx <= qp) & (idx < T)                    # not future / in store
+        return idx.astype(mx.int32), valid
+
+    def _sparse_attend_selected(self, q, window_all, compress_kv, comp_idx,
+                                positions):
+        """K30 (W59) selected-key gather attention -- the faithful,
+        non-transliterated form of :meth:`_sparse_attend` for prefill (rows > 1).
+
+        Instead of scoring the full concatenated ``[b, T+n_comp, hd]`` history and
+        masking (score transient ``[rows, H, T+n_comp]`` growing with T), this
+        gathers only the keys/values each query attends -- its sliding window
+        (``_window_selected_idx``) plus the indexer's ``index_topk`` selected
+        compressed rows (``comp_idx``, published by the index source) -- into one
+        compact ``[rows, k, hd]`` operand and runs a single softmax over ``k``
+        keys, exactly as the reference ``sparse_attn`` gathers ``kv[topk_idxs]``.
+        ``k = window + min(index_topk, n_comp)`` saturates independent of T.
+
+        The KV is shared across all 64 query heads (MLA, 1 KV head), so the gather
+        is ``[rows, k, hd]`` (not per head) -- the least-traffic layout.  The
+        softmax is the reference ``_k_sparse_attn`` value-0 sink form (max includes
+        the sink, normalize after PV), all f32, so vs the masked-full path the only
+        difference is float reassociation of the denom + value sums over a different
+        key ordering (greedy-identical, never bit-identical)."""
+        b, s, H, hd = q.shape
+        mode = getattr(self, "mode", "dspark")
+        with _stime.stage_attn("attn." + mode + ".score.gather") as _st:
+            win_idx, win_valid = self._window_selected_idx(positions, window_all.shape[1])
+            win_idx = mx.broadcast_to(win_idx[None], (b, s, win_idx.shape[-1]))
+            win_valid = mx.broadcast_to(win_valid[None], (b, s, win_valid.shape[-1]))
+            kvg_win = _gather_rows(window_all, win_idx, win_valid)   # [b,s,W,hd]
+            if compress_kv is not None and comp_idx is not None:
+                comp_valid = comp_idx >= 0
+                kvg_cmp = _gather_rows(compress_kv, comp_idx, comp_valid)  # [b,s,Ck,hd]
+                KVg = mx.concatenate([kvg_win, kvg_cmp], axis=2)
+                valid = mx.concatenate([win_valid, comp_valid], axis=2)
+            else:
+                KVg = kvg_win
+                valid = win_valid
+            _st.add(KVg)
+        scale = self.softmax_scale
+        with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
+            scores = mx.einsum(
+                "bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)
+            ) * scale                                       # [b,s,H,k]
+            _st.add(scores)
+        with _stime.stage_attn("attn." + mode + ".score.scale_mask_sink") as _st:
+            scores = mx.where(valid[:, :, None, :], scores, float("-inf"))
+            _st.add(scores)
+        sink = self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1)
+        with _stime.stage_attn("attn." + mode + ".score.softmax") as _st:
+            # reference _k_sparse_attn L149-153: value-0 sink in the denominator,
+            # a finite max floor so an all-invalid row yields all-zero (not NaN).
+            m = mx.maximum(mx.max(scores, axis=-1, keepdims=True), sink)
+            ex = mx.exp(scores - m)                         # masked -> exp(-inf) = 0
+            denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
+            _st.add(ex, denom)
+        with _stime.stage_attn("attn." + mode + ".score.pv_matmul") as _st:
+            o = mx.einsum("bshk,bskd->bshd", ex, KVg.astype(mx.float32)) / denom
+            _st.add(o)
+        return o
+
     def _window_attend(self, positions, T, b, s, shared):
         """The causal sliding-window attend mask ``[b, s, T]``.
 
@@ -903,6 +977,12 @@ class Attention(nn.Module):
                 shared.topk_mask = mask
                 if set_c:
                     shared.candidates = cand_out
+                # K30 (W59): publish the selection as gather indices too, once per
+                # index source (the Reuse layers below reuse it, like topk_mask).
+                if _resolve_selected_keys():
+                    shared.selected_idx = _mask_to_topk_idx(
+                        mask, min(self.indexer.index_topk, n_comp)
+                    )
             else:  # Reuse: read the source's selection
                 mask = shared.topk_mask
             _st.add(mask)
@@ -960,11 +1040,20 @@ class Attention(nn.Module):
             layer_cache.append_window(kv_new)
             window_all = layer_cache.window
             _st.add(window_all)
+        # K30 (W59): prefill (rows > 1) may gather only the selected keys per query
+        # instead of scoring the full history and masking.  The window store and the
+        # indexer selection are built the same way; only what is handed to the
+        # attention math changes.  Decode (s == 1) always takes the masked-full path.
+        use_selected = s > 1 and _resolve_selected_keys()
         # K24 (W45): the sliding-window attend mask is identical across every layer
         # of this forward; memoize it on the per-forward shared runtime under
         # MTPLX_DSV41_ATTN_WIN_MEMO (byte-identical, a pure host-dispatch cut).
-        attend = self._window_attend(positions, window_all.shape[1], b, s, shared)
+        attend = None if use_selected else self._window_attend(
+            positions, window_all.shape[1], b, s, shared
+        )
         KV = window_all
+        sel_compress_kv = None
+        sel_comp_idx = None
 
         if self.compress_ratio:
             comp = self._compressed(
@@ -972,13 +1061,25 @@ class Attention(nn.Module):
             )
             if comp is not None:
                 compress_kv, comp_attend = comp
-                KV = mx.concatenate([window_all, compress_kv], axis=1)
-                attend = mx.concatenate([attend, comp_attend], axis=-1)
+                if use_selected:
+                    # K30: the index source published its selection as gather
+                    # indices on shared.selected_idx; Reuse layers read it.
+                    sel_compress_kv = compress_kv
+                    sel_comp_idx = shared.selected_idx
+                else:
+                    KV = mx.concatenate([window_all, compress_kv], axis=1)
+                    attend = mx.concatenate([attend, comp_attend], axis=-1)
 
-        # W47 score+softmax+value + output projection: the [rows, H, T] score
-        # transient that grows with T is this stage.
+        # W47 score+softmax+value + output projection: the masked-full path's
+        # [rows, H, T] score transient grows with T; the K30 selected-gather path
+        # (use_selected) bounds it at [rows, H, window + index_topk].
         with _stime.stage_prefill("attn." + mode + ".score") as _st:
-            o = self._sparse_attend(q, KV, attend)
+            if use_selected:
+                o = self._sparse_attend_selected(
+                    q, window_all, sel_compress_kv, sel_comp_idx, positions
+                )
+            else:
+                o = self._sparse_attend(q, KV, attend)
             # K22: the post-attention output chain -- query-RoPE removal, the grouped
             # o-LoRA down-projection and the ``wo_b`` up-projection -- is pure and
             # fixed-shape (the SDPA output ``o`` is [b,s,H,hd]); one compiled tape at
@@ -1193,6 +1294,75 @@ def _resolve_prefill_score_key_chunk(raw=None):
             "(or empty/0/'off' for the one-shot path)"
         )
     return n
+
+
+# --- W59 / K30: selected-key (gather) prefill attention ----------------------
+#: Under ``MTPLX_DSV41_SELECTED_KEYS`` the prefill (rows > 1) attention gathers
+#: only the keys/values each query actually attends -- its sliding window plus the
+#: indexer's ``index_topk`` selected compressed rows -- into a compact
+#: ``[rows, k, head_dim]`` operand and runs one softmax over ``k`` keys, exactly as
+#: the reference ``sparse_attn`` (kernel.py ``sparse_attn_kernel``: gather
+#: ``kv[topk_idxs]`` then FlashAttention over ``k = cdiv(topk, block)*block``
+#: columns).  The shipped port instead computes the full ``[rows, H, T]`` score
+#: over the entire window+compressed history and masks -- a faithful but wasteful
+#: transliteration (masked keys contribute exactly 0 to the softmax), whose score
+#: transient grows with T while the reference's ``k`` saturates at
+#: ``window + index_topk``.  Selected-gather vs masked-full are mathematically
+#: identical up to float reassociation of the softmax sum (greedy-identical, never
+#: bit-identical).  Prefill only; decode (``q.shape[1] == 1``) is untouched.  Read
+#: at use, never frozen at import ([[env-flags-read-at-use-not-import]]).
+_SELECTED_KEYS_ENV = "MTPLX_DSV41_SELECTED_KEYS"
+
+
+def _resolve_selected_keys(raw=None) -> bool:
+    """Whether ``MTPLX_DSV41_SELECTED_KEYS`` arms the K30 selected-key gather
+    prefill attention (default OFF).  Read at call time so the serving harness can
+    stamp the key after importing this module."""
+    val = os.environ.get(_SELECTED_KEYS_ENV) if raw is None else raw
+    return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
+
+
+def _mask_to_topk_idx(mask: mx.array, k: int) -> mx.array:
+    """Convert a boolean top-k row mask ``[b, s, n]`` (exactly ``min(k, reachable)``
+    True per row) into ``[b, s, k]`` int32 indices of the True positions in
+    ascending order, padded with ``-1`` where a row has fewer than ``k`` selected.
+
+    Reproduces the reference's ``score.topk(k).indices.sort().values`` *as a
+    function of the same selection the port already computed*: the True positions
+    are exactly ``_topk_rows``' selected set, so the gathered key set is identical
+    to the masked-full path's unmasked set (softmax reassociation-level equal).
+    Position order within the row is irrelevant to the softmax; ascending is chosen
+    to match the reference.  One argsort over ``n`` per row -- run once per index
+    source (published on ``shared.selected_idx``, reused down the stack), O(n) in
+    memory and ~n/(H*head_dim) cheaper than the score it replaces."""
+    b, s, n = mask.shape
+    ar = mx.arange(n)
+    # True positions sort by their own index (0..n-1); False positions by n+index,
+    # so every True lands ahead of every False.  All keys distinct -> deterministic.
+    keys = mx.where(mask, ar.reshape(1, 1, n), (n + ar).reshape(1, 1, n))
+    order = mx.argsort(keys, axis=-1)[..., :k].astype(mx.int32)   # [b, s, k]
+    count = mx.sum(mask.astype(mx.int32), axis=-1, keepdims=True)  # [b, s, 1]
+    valid = mx.arange(k).reshape(1, 1, k) < count
+    return mx.where(valid, order, mx.array(-1, dtype=mx.int32))
+
+
+def _gather_rows(source: mx.array, idx: mx.array, valid: mx.array) -> mx.array:
+    """Gather ``source`` rows named by ``idx`` into a compact per-query operand.
+
+    ``source`` is ``[b, n, d]`` (the shared 1-KV-head window / compressed history),
+    ``idx`` ``[b, s, k]`` int (``-1`` for a pad slot), ``valid`` ``[b, s, k]`` bool.
+    Returns ``[b, s, k, d]``.  Uses a single flat ``take`` over ``b*n`` rows
+    (invalid slots clamped to row 0, masked out later by the caller), so it never
+    materialises the ``[b, s, n, d]`` broadcast that a naive ``take_along_axis``
+    would -- the only traffic is the ``b*s*k`` gathered ``d``-vectors, the
+    least-traffic layout given the KV is shared across all query heads."""
+    b, n, d = source.shape
+    s, k = idx.shape[1], idx.shape[2]
+    idx_c = mx.where(valid, idx, 0)
+    offs = (mx.arange(b) * n).reshape(b, 1, 1)
+    flat = (idx_c + offs).reshape(-1)
+    g = mx.take(source.reshape(b * n, d), flat, axis=0)   # [b*s*k, d]
+    return g.reshape(b, s, k, d)
 
 
 def _lin_desc(linear):
