@@ -314,6 +314,40 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
 - **Precedent:** hy3-oq2e profiles ship this exact pair in production (`expert_profiles.json`);
   W28's shared-overlap uses the same env-isolation pattern.
 
+### K24 — Barrier-free all-hit device route (W44) — **Rank 1a (removes the routing barrier itself; subsumes K23 on all-hit layers)**
+- **Mechanism:** the per-layer `mx.eval(indices)` routing barrier exists only because the
+  **host** needs the routed ids to (1) check residency and (2) build the gather's slot indices.
+  Put the expert→slot map **on the device** — a per-layer LUT `lut[layer]` (int32 `[n_experts]`,
+  slot for resident / −1 for miss, snapshot of `LayerExpertSlotBank._expert_to_slot`, rebuilt on the
+  host **only when residency changes**) — and issue `gather_qmm` over `lut[indices]` **without
+  evaluating `indices` on the host**. Residency verification is deferred: `async_eval(indices)` +
+  an enqueued probe read back at the next flush / token end (covered by the sampler's eval). **0
+  host syncs on an all-hit layer.**
+- **Where:** decode (all-hit). **Now:** exposed today (the barrier is the top decode-stage cost,
+  W44 §0). **After:** per-layer routing barriers **40 → m** (`m` = miss layers, fenced on the recovery
+  pass) **+ 1** batched span-end verify sync. Warm (all-hit token) → **1**; window-12 cold (≈16 miss
+  layers/tok) → ≈17; the barrier-free path itself is 0-sync per all-hit layer.
+- **Exactness:** all-hit layer is byte-identical (LUT slot == fenced `bank_index`, same kernel, same
+  rows). A miss reads a void row (clamped) and is caught by the deferred probe; recovery admits the
+  miss experts and re-runs the fenced path → **final token byte-identical** (W44_DEVICE_ROUTE.md §2–3).
+  Proven on the fake bank: all-hit/mixed/all-miss reconcile to fenced at M=1 & M=4; 0-sync-on-all-hit
+  census; LUT-refresh-only-on-change (`tests/test_deepseek_v41_device_route.py`).
+- **⚠ Effort/risk:** medium. **W44 lands it end to end** (switch + runtime + the decode-forward
+  cold recovery in `DeepseekV41Backbone._forward_span` / `_device_route_recover`): on a cold token it
+  rolls back every layer's cache to pre-token, re-runs the span on a fresh `shared` with only the miss
+  layers forced fenced, and leaves output + cache + engram **byte-identical to fenced** while paying
+  exactly `m` barriers. Byte-identity + barrier count are asserted on the tiny backbone with a
+  controllable fake bank (all-hit/single/multi/all-miss × M=1,4). Real-artifact slot-numbering
+  (`_expert_to_slot` row == `bank_index`) is validated by the GPU A/B sha.
+- **Cost when misses frequent (honest):** warm (all-hit token) = **0 barriers, 1× compute** — the
+  win. Cold (`m` miss layers) = **`m` barriers + 2× compute** (pass-1 + one recovery span; re-run
+  from layer 0 because DSV4.1's CSA source layers sit near the top of the stack, so a partial
+  `m1`-restart saves little and is fragile). At window-12 (≈16 miss layers/token) cold trades 40
+  barriers for 16 + one extra span — net sign is the GPU A/B's call; if compute-bound, the partial
+  `m1`-restart (W44 §7) is the follow-up. **Default off; GPU A/B prices it.**
+- **Composes with / subsumes K23:** K23 deferred the second per-layer sync (the wave fence); K24
+  removes the first (the barrier) on all-hit layers — no barrier means no fence to defer.
+
 ### K2 — MTP verify amortizes barrier + resident read (Factor A, GPU side) — **Rank (owned by R1)**
 - **Mechanism:** one K+1 forward runs the 40 barriers and the 10.65 GB resident read **once** for
   ~2.85 accepted tokens (§2.2). **Where:** decode. **After:** barrier 40→14 ms/acc-tok, resident

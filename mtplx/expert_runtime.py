@@ -1868,6 +1868,21 @@ class ExpertStreamingRuntime:
         self._island_store: Any | None = None
         self._banked_island_store: Any | None = None
         self._shadow_store: Any | None = None
+        # W44 device-route (barrier-free all-hit, K24): per-layer device LUT
+        # (expert -> persistent bank row, -1 = non-resident), rebuilt on the host
+        # ONLY when that layer's residency changes; the resident snapshot each LUT
+        # was built from; a dirty flag per layer; the per-layer component bank
+        # captured from the first fenced binding (so the device path gathers
+        # without a routed binding); and the async verification queue.
+        self._device_route_lut: dict[int, Any] = {}
+        self._device_route_lut_snapshot: dict[int, frozenset[int]] = {}
+        self._device_route_lut_dirty: dict[int, bool] = {}
+        self._device_route_bank: dict[int, Any] = {}
+        self._device_route_probes: list[tuple[int, Any, frozenset[int]]] = []
+        # Layers the backbone has forced back onto the fenced path for a W44 cold
+        # recovery pass (the switch skips the device path for these). Empty in the
+        # steady state; set/cleared around a recovery re-run by the decode forward.
+        self._device_route_force_fenced: frozenset[int] = frozenset()
         self._shadow_serve_routes = 0
         self._shadow_serve_assignments = 0
         self._shadow_serve_experts = 0
@@ -2386,6 +2401,7 @@ class ExpertStreamingRuntime:
                 skipped.add(expert)
                 continue
             bank.invalidate_expert(expert)
+            self._mark_device_route_dirty(layer)  # W44: residency changed
 
     def _evict_global_bank_to_capacity(self, capacity: int) -> None:
         """Synchronously evict the global bank's policy victims to a cap."""
@@ -2705,6 +2721,10 @@ class ExpertStreamingRuntime:
                 # not need to copy the entire LRU merely to undo a later
                 # counter failure.
                 policy_txn.commit()
+                # W44: a route that loads/evicts/misses changed this layer's
+                # persistent residency, so its device-route LUT is now stale.
+                if plan.loads or plan.evictions or plan.misses:
+                    self._mark_device_route_dirty(layer)
             except BaseException:
                 for counter, snapshot in zip(counters, counter_snapshots, strict=True):
                     counter.__dict__.clear()
@@ -3239,6 +3259,122 @@ class ExpertStreamingRuntime:
         with lock:
             return bank.published_experts(expert_ids)
 
+    # ------------------------------------------------------------------
+    # W44 device-route (barrier-free all-hit; env MTPLX_DSV41_DEVICE_ROUTE).
+    # See docs/deepseek-v41/W44_DEVICE_ROUTE.md.
+    # ------------------------------------------------------------------
+    def _mark_device_route_dirty(self, layer: int) -> None:
+        """Residency for ``layer`` changed -> its device LUT must be rebuilt on
+        the next device-route gather. No-op until the device path is used."""
+
+        if self._device_route_lut:
+            self._device_route_lut_dirty[int(layer)] = True
+
+    def register_component_bank(self, layer: int, bank: Any) -> None:
+        """Capture ``layer``'s component bank from a fenced binding (idempotent),
+        so the device-route path can gather without a routed binding of its own."""
+
+        if bank is not None and int(layer) not in self._device_route_bank:
+            self._device_route_bank[int(layer)] = bank
+
+    def component_bank_for_layer(self, layer: int) -> Any | None:
+        return self._device_route_bank.get(int(layer))
+
+    def device_route_lut(self, layer: int, *, mx_module: Any | None = None) -> Any:
+        """Device expert->slot LUT for ``layer`` (int32 ``[expert_count]``; -1 =
+        non-resident).  Rebuilt on the host only when the layer's persistent
+        residency has changed since the last build; otherwise the cached mx.array
+        is returned unchanged (no host work).  Only per-layer component banks
+        populate the table; under other layouts every expert reads as -1 (a miss),
+        so the device path never fabricates an all-hit it cannot back with the
+        exact resident slot."""
+
+        layer = int(layer)
+        cached = self._device_route_lut.get(layer)
+        if cached is not None and not self._device_route_lut_dirty.get(layer, False):
+            return cached
+        mx = mx_module
+        if mx is None:  # local import: keep this module MLX-free at import time
+            import mlx.core as mx
+        n = int(self.spec.expert_count)
+        table = [-1] * n
+        snapshot: set[int] = set()
+        bank = self._banks.get(layer) if self._banks else None
+        lock = self._layer_locks.get(layer)
+
+        def _fill(source_bank: Any) -> None:
+            slot_map = getattr(source_bank, "_expert_to_slot", None)
+            if not slot_map:
+                return
+            for expert, slot in slot_map.items():
+                e = int(expert)
+                if 0 <= e < n:
+                    table[e] = int(slot)
+                    snapshot.add(e)
+
+        if bank is not None:
+            if lock is not None:
+                with lock:
+                    _fill(bank)
+            else:
+                _fill(bank)
+        arr = mx.array(table, dtype=mx.int32)
+        mx.eval(arr)
+        self._device_route_lut[layer] = arr
+        self._device_route_lut_snapshot[layer] = frozenset(snapshot)
+        self._device_route_lut_dirty[layer] = False
+        return arr
+
+    def device_route_snapshot(self, layer: int) -> frozenset[int]:
+        """The resident-expert set the current LUT for ``layer`` was built from
+        (what an all-hit device gather for ``layer`` is exact against)."""
+
+        return self._device_route_lut_snapshot.get(int(layer), frozenset())
+
+    def set_device_route_force_fenced(self, layers: Iterable[int]) -> None:
+        """Force ``layers`` onto the fenced path (barrier + admit + gather) for a
+        W44 cold-recovery re-run; pass ``()`` to clear. The switch reads this and
+        skips its device path for those layers, so a flagged miss is repaired
+        byte-identically while every other layer keeps the barrier-free route."""
+
+        self._device_route_force_fenced = frozenset(int(x) for x in layers)
+
+    def enqueue_device_route_probe(
+        self, layer: int, indices: Any, snapshot: frozenset[int]
+    ) -> None:
+        """Queue a routed ``indices`` array (already ``async_eval``'d by the
+        switch) for deferred residency verification against ``snapshot``."""
+
+        self._device_route_probes.append((int(layer), indices, snapshot))
+
+    def flush_device_route_probes(self) -> list[tuple[int, tuple[int, ...]]]:
+        """Read back the queued route indices and return, per probed layer, the
+        experts that were NOT in that layer's LUT snapshot -- the misses whose
+        optimistic gather is void and must be recovered on the fenced path.  An
+        empty result means every probed layer was all-hit (its device gather is
+        byte-identical to the fenced path)."""
+
+        probes = self._device_route_probes
+        if not probes:
+            return []
+        self._device_route_probes = []
+        # ONE batched host sync for the whole span's verification: the ids were
+        # async_eval'd per layer during the barrier-free pass (so they are usually
+        # already resident by now), and evaluating them together here forces a
+        # single device->host round-trip -- not one per layer, which would
+        # reintroduce the ~40 syncs the device route exists to remove. (The
+        # warm/all-hit token therefore costs this ONE verify sync, not 40.)
+        import mlx.core as mx  # local: keep this module MLX-free at import
+
+        mx.eval(*[indices for _layer, indices, _snapshot in probes])
+        misses: list[tuple[int, tuple[int, ...]]] = []
+        for layer, indices, snapshot in probes:
+            ids = [int(v) for v in indices.reshape(-1).tolist()]
+            missed = tuple(sorted({e for e in ids if e not in snapshot}))
+            if missed:
+                misses.append((layer, missed))
+        return misses
+
     def note_shadow_serve(
         self, layer: int, *, assignments: int, experts: int
     ) -> None:
@@ -3459,6 +3595,13 @@ class ExpertStreamingRuntime:
         # Deferred pin releases must flush (with a covering fence) before the
         # pool resets, or reset waits forever on the final routes' pins.
         self.flush_deferred_slot_releases(evaluate=True)
+        # W44: residency is cleared below, so every device-route LUT is stale and
+        # any un-flushed route probes belong to the pre-reset row. Keep the
+        # captured component banks (physical arrays survive the reset).
+        self._device_route_lut.clear()
+        self._device_route_lut_snapshot.clear()
+        self._device_route_lut_dirty.clear()
+        self._device_route_probes = []
         # Straggler speculative loads hold pool lifecycle claims; without
         # this drain the pool reset below would reject them as active
         # routes. The bank reset then retires any not-yet-committed

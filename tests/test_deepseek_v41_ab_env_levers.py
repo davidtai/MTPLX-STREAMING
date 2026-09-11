@@ -10,11 +10,12 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
   * the ``--dry-run`` CPU double (no model, no MLX/Metal op, no server);
   * per-arm env application for every preset
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
-    switch_fastpath / switch_fastpath_b / attn_compile / attn_win_memo / both /
-    all_levers / stack_a / head_bf16 / head_mxfp8 / head_q8),
-    including arm independence (each arm force-unsets the keys it does not set,
-    and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE and the eight boolean
-    per-forward levers never leak across each other);
+    switch_fastpath / switch_fastpath_b / attn_compile / attn_win_memo /
+    device_route / both / all_levers / stack_a / head_bf16 / head_mxfp8 /
+    head_q8), including arm independence (each arm force-unsets the keys it does
+    not set, and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE, the W44
+    device-route boolean, and the eight boolean per-forward levers never leak
+    across each other);
   * prompt-build metadata parity with ``bench_standard_shape`` at 1024.
 
 No GPU, no Metal, no model, no server, no network. The scripts are not a package
@@ -47,9 +48,15 @@ _FP = "MTPLX_DSV41_SWITCH_FASTPATH"    # W42 / K23: switch all-hit fast-path
 _SB = "MTPLX_DSV41_SWITCH_SUBMIT"      # W42 / K23 var B: all-hit async submit
 _AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
 _WM = "MTPLX_DSV41_ATTN_WIN_MEMO"      # W45 / K24: sliding-window mask memo
+_DR = "MTPLX_DSV41_DEVICE_ROUTE"       # W44 / K24: barrier-free all-hit device route
 _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
-_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight boolean per-forward levers
-_BOOL_AND_HEAD = _ALL_KEYS + (_HM,)    # + the load-time head codec = all nine keys
+# The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) is a
+# separate boolean tracked like the head codec: byte-identical (incl. cold
+# recovery) but carrying a cold-token recovery cost, and NOT part of all_levers
+# (which already covers the switch lever via the variant-B fast-path) -- so it
+# never joins the "all-on" independence invariant. It IS in stack_a.
+_ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight booleans all_levers sets
+_BOOL_AND_HEAD = _ALL_KEYS + (_DR, _HM)  # + device_route + head codec = all ten keys
 
 ALL_ARMS = [
     "control",
@@ -61,6 +68,7 @@ ALL_ARMS = [
     "switch_fastpath_b",
     "attn_compile",
     "attn_win_memo",
+    "device_route",
     "both",
     "all_levers",
     "stack_a",
@@ -80,16 +88,21 @@ EXPECTED_ON = {
     "switch_fastpath_b": {_FP, _SB},
     "attn_compile": {_AC},
     "attn_win_memo": {_WM},
+    "device_route": set(),   # its only key is _DR, tracked in EXPECTED_DEVICE
     "both": {_OV, _LM},
     "all_levers": {_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM},
     # W42 window-14: pure fast path measured -13.4%, so the fast path is LEFT OUT
-    # of stack_a until variant B (switch_fastpath_b) beats control.  W45: the K24
-    # window-mask memo (byte-identical) joins the winning stack.
+    # of stack_a until variant B (switch_fastpath_b) beats control.  W45/W44: the
+    # window-mask memo and the device route (both byte-identical) join the stack.
     "stack_a": {_SK, _AC, _WM},
     "head_bf16": set(),
     "head_mxfp8": set(),
     "head_q8": set(),
 }
+
+# The device-route boolean each arm pins (W44 K24; separate from _ALL_KEYS because
+# it is not part of all_levers). In device_route and stack_a; off elsewhere.
+EXPECTED_DEVICE = {arm: (arm in ("device_route", "stack_a")) for arm in ALL_ARMS}
 
 # The head-codec value each arm pins on MTPLX_DSV41_HEAD_MODE (None = force-unset).
 EXPECTED_HEAD = {
@@ -102,6 +115,7 @@ EXPECTED_HEAD = {
     "switch_fastpath_b": None,
     "attn_compile": None,
     "attn_win_memo": None,
+    "device_route": None,
     "both": None,
     "all_levers": None,
     "stack_a": "bf16",
@@ -195,6 +209,11 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
             assert os.environ.get(k) == "1", f"{arm}: {k} should be '1'"
         else:
             assert k not in os.environ, f"{arm}: {k} should be force-unset"
+    # the device-route boolean is set for exactly its arms (device_route, stack_a).
+    if EXPECTED_DEVICE[arm]:
+        assert os.environ.get(_DR) == "1", f"{arm}: {_DR} should be '1'"
+    else:
+        assert _DR not in os.environ, f"{arm}: {_DR} should be force-unset"
     # the head codec pins its value (a string), or is force-unset when None.
     if EXPECTED_HEAD[arm] is None:
         assert _HM not in os.environ, f"{arm}: {_HM} should be force-unset"
@@ -273,13 +292,15 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
-        on = {k for k, v in r["arm_env"].items() if v == "1"}
+        # _ALL_KEYS booleans only (device_route + head tracked separately).
+        on = {k for k, v in r["arm_env"].items() if v == "1" and k in _ALL_KEYS}
         assert on == EXPECTED_ON[r["arm"]], r["arm"]
         # keys not in this arm must be recorded as unset (None), never "bogus".
         for k in _ALL_KEYS:
             if k not in EXPECTED_ON[r["arm"]]:
                 assert r["arm_env"][k] is None, (r["arm"], k)
-        # the head codec value is recorded verbatim (or None when unset).
+        # the device-route boolean and the head codec are recorded per arm.
+        assert (r["arm_env"].get(_DR) == "1") == EXPECTED_DEVICE[r["arm"]], r["arm"]
         assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]
 
 

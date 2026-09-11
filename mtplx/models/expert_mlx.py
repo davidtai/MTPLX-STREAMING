@@ -1891,6 +1891,15 @@ class HotExpertSwitchGLU(nn.Module):
     ) -> mx.array:
         """Execute one component-bank wave under this layer's record codec."""
 
+        # W44: capture this layer's component bank from a routed binding the
+        # first time we see one, so the barrier-free device-route path can gather
+        # against it without a binding of its own. Idempotent + guarded (fakes
+        # and non-streamed runtimes simply lack the hook).
+        if bindings:
+            register = getattr(self.runtime, "register_component_bank", None)
+            if callable(register):
+                register(self.layer_index, getattr(bindings[0].buffer, "bank", None))
+
         if self.codec in ("affine", "mxfp4"):
             return _run_component_bank_q4(
                 selected,
@@ -1912,6 +1921,61 @@ class HotExpertSwitchGLU(nn.Module):
         return _run_component_bank_shadow(
             selected, bindings, codec=self.codec, swiglu_limit=self.swiglu_limit
         )
+
+    def _run_device_route(
+        self,
+        x: mx.array,
+        indices: mx.array,
+        tokens: mx.array,
+        top_k: int,
+        hidden_size: int,
+        shared_work: Callable[[], mx.array] | None,
+    ) -> tuple[mx.array, mx.array | None] | None:
+        """W44 barrier-free all-hit path (env ``MTPLX_DSV41_DEVICE_ROUTE``).
+
+        Gathers ``lut[indices]`` on the device -- NO ``mx.eval(indices)``, no
+        ``.tolist()``, zero host syncs on this layer -- and defers residency
+        verification to an ``async_eval`` read enqueued for the next flush.  For
+        every all-hit assignment the LUT slot equals the fenced ``bank_index``, so
+        the routed output is byte-identical; a missing expert reads row 0 (a void
+        value) and is caught by the deferred probe, whose caller recovers it on
+        the fenced path (see docs/deepseek-v41/W44_DEVICE_ROUTE.md).  Returns
+        ``None`` to fall back to the fenced path when the bank is not yet captured.
+        """
+
+        bank = self.runtime.component_bank_for_layer(self.layer_index)
+        if bank is None:
+            return None
+        lut = self.runtime.device_route_lut(self.layer_index)
+        # Device-side expert -> slot: no host round-trip on ``indices``.
+        slot = mx.take(lut, indices.reshape(-1))
+        safe = mx.maximum(slot, 0).reshape((-1, 1))
+        rows = int(tokens.shape[0])
+        assignment_inputs = mx.broadcast_to(
+            tokens[:, None, :], (rows, top_k, hidden_size)
+        ).reshape((-1, hidden_size))
+        with _route_probe.bracket("hot.device_route_gather"):
+            routed = _gather_component_bank(
+                assignment_inputs,
+                bank,
+                safe,
+                group_size=self.group_size,
+                bits=self.bits,
+                swiglu_limit=self.swiglu_limit,
+                codec=self.codec,
+            )
+        routed = routed.reshape((*indices.shape, hidden_size))
+        # Deferred verification: submit ``indices`` (non-blocking) and enqueue the
+        # residency probe against the snapshot the LUT was built from. Never read
+        # here -- that would be the barrier this path exists to remove.
+        snapshot = self.runtime.device_route_snapshot(self.layer_index)
+        _async_eval = getattr(mx, "async_eval", None)
+        if callable(_async_eval):
+            _async_eval(indices)
+        self.runtime.enqueue_device_route_probe(self.layer_index, indices, snapshot)
+        _route_probe.count("hot.device_route")
+        shared = shared_work() if shared_work is not None else None
+        return routed, shared
 
     def __call__(self, x: mx.array, indices: mx.array) -> mx.array:
         output, _overlap_result = self._run(
@@ -2017,6 +2081,33 @@ class HotExpertSwitchGLU(nn.Module):
             == "deferred"
             or _fastpath_can_defer
         )
+        # W44 device-route (K24, env ``MTPLX_DSV41_SWITCH``... ``DEVICE_ROUTE``):
+        # the barrier-free all-hit path.  Engages only for a DECODE component-bank
+        # layer whose bank has been captured (a prior fenced route) and whose codec
+        # gathers through gather_qmm (affine/mxfp4).  It issues the gather over the
+        # device LUT WITHOUT ``mx.eval(indices)`` and defers residency verification
+        # (``flush_device_route_probes`` at the token boundary).  Falls through to
+        # the fenced path otherwise -- including the first route for a layer, which
+        # populates residency and captures the bank.  See W44_DEVICE_ROUTE.md.
+        if (
+            os.environ.get("MTPLX_DSV41_DEVICE_ROUTE") == "1"
+            and self.codec in ("affine", "mxfp4")
+            and self.runtime.config.slot_layout == "component-banks"
+            and current_expert_routing_phase(token_count=int(x.shape[-2]))
+            is RoutingPhase.DECODE
+            and callable(getattr(self.runtime, "device_route_lut", None))
+            and callable(getattr(self.runtime, "component_bank_for_layer", None))
+            # W44 cold recovery: the backbone forces specific layers back onto the
+            # fenced path (barrier + admit + gather) on a recovery pass, so a miss
+            # is repaired byte-identically. Those layers skip the device path here.
+            and self.layer_index
+            not in getattr(self.runtime, "_device_route_force_fenced", frozenset())
+        ):
+            device_result = self._run_device_route(
+                x, indices, tokens, top_k, hidden_size, shared_work
+            )
+            if device_result is not None:
+                return device_result
         # Shared-branch hoist (issue #51, flag-gated, exact-quality). Normally
         # the resident shared MLP is submitted AFTER begin_split_route so it
         # overlaps the miss reads (~0.44 ms). But the router host-sync below

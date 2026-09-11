@@ -1684,6 +1684,15 @@ class DeepseekV41Backbone(nn.Module):
         shared = cache.new_shared_runtime()
         want_main = return_main_hidden and bool(self._mtp_target_layer_ids)
         main_hiddens: List[mx.array] = []
+        # W44 device-route cold recovery: when the barrier-free device path is
+        # armed for this (decode / verify) span, snapshot each layer's pre-token
+        # cache length (mark) and the span's initial (h, pre_mix) so, if the
+        # token-end probe flush shows a miss, we can rewind every layer's cache and
+        # re-run the whole span with the miss layers forced onto the fenced path --
+        # final token, cache, and engram byte-identical to fenced.
+        dr = self._device_route_active(cache, s)
+        dr_marks = [lc.mark() for lc in cache.layers] if dr else None
+        dr_initial = (h, pre_mix) if dr else None
         for layer in self.layers:
             if layer.engram_hook is not None and engram_state is not None:
                 h = layer.engram_hook(h, input_ids, engram_state)
@@ -1692,6 +1701,14 @@ class DeepseekV41Backbone(nn.Module):
             if want_main and layer.layer_id in self._mtp_target_layer_ids:
                 main_hiddens.append(mx.mean(h.astype(mx.float32), axis=2).astype(h.dtype))
             h, pre_mix = layer(h, pre_mix, positions, cache.layers[layer.layer_id], shared)
+        if dr:
+            h, pre_mix, main_hiddens = self._device_route_recover(
+                cache, input_ids, positions, engram_state,
+                dr_initial, dr_marks, want_main, main_hiddens, h, pre_mix,
+            )
+        # Advance AFTER recovery: the rollback is length-based and the engram
+        # (advanced once, above) is rewound only by an offset delta, which is zero
+        # while offset is still pre-token -- so recovery never disturbs the engram.
         cache.advance(s)
 
         # final collapse of the hc copies with the last pre_mix, then RMSNorm
@@ -1703,6 +1720,107 @@ class DeepseekV41Backbone(nn.Module):
             return out
         main_hidden = mx.concatenate(main_hiddens, axis=-1) if main_hiddens else None
         return out, main_hidden
+
+    # -----------------------------------------------------------------------
+    # W44 / KERNEL_LEDGER K24 -- barrier-free device route + cold recovery.
+    # See docs/deepseek-v41/W44_DEVICE_ROUTE.md.
+    # -----------------------------------------------------------------------
+    def _device_route_runtime(self):
+        """The shared expert-streaming runtime backing the streamed switches (the
+        one that queues/flushes device-route probes), or None for the resident /
+        dense path where device route never engages."""
+
+        for layer in self.layers:
+            switch = getattr(getattr(layer, "mlp", None), "switch_mlp", None)
+            runtime = getattr(switch, "runtime", None)
+            if runtime is not None and callable(
+                getattr(runtime, "flush_device_route_probes", None)
+            ):
+                return runtime
+        return None
+
+    def _device_route_active(self, cache, s: int) -> bool:
+        """Arm the device-route recovery for this span iff the env flag is set, a
+        streamed runtime is present, and the routing phase is DECODE -- exactly the
+        condition under which the switch takes the barrier-free device path (so a
+        prefill span never arms it and never leaves orphan probes)."""
+
+        if os.environ.get("MTPLX_DSV41_DEVICE_ROUTE") != "1":
+            return False
+        if self._device_route_runtime() is None:
+            return False
+        # Local import keeps the module import graph acyclic at load time.
+        from mtplx.expert_streaming import RoutingPhase
+        from mtplx.models.expert_mlx import current_expert_routing_phase
+
+        return current_expert_routing_phase(token_count=int(s)) is RoutingPhase.DECODE
+
+    def _device_route_recover(
+        self, cache, input_ids, positions, engram_state,
+        dr_initial, dr_marks, want_main, main_hiddens, h_final, pre_mix_final,
+    ):
+        """Make the device-route span byte-identical to the fenced path even when
+        cold-token misses occurred, paying only ``m`` routing barriers (``m`` =
+        miss layers).
+
+        Flush the token's probes; if any layer missed, rewind EVERY layer to its
+        pre-token cache length (``rollback`` -- window / compressed / index /
+        compressor frontier; the engram is untouched -- its offset delta is zero
+        pre-advance) and re-run the whole span from the span's initial (h, pre_mix)
+        on a FRESH shared runtime, forcing ONLY the miss layers onto the fenced
+        path (barrier + admit + gather -> correct + admitted); every other layer
+        stays on the device path (0 barriers). So barriers = miss layers, and
+        re-running the (already-correct) prefix costs compute but zero extra
+        barriers -- and it sidesteps the cross-layer CSA candidate/index coupling
+        a partial-from-``m1`` restart would have to reconstruct on a fresh
+        ``shared``. Repeat until a pass has no misses (bounded; the final fallback
+        forces the fenced path for every layer). Returns the corrected
+        ``(h, pre_mix, main_hiddens)``; cache + engram end exactly as fenced."""
+
+        runtime = self._device_route_runtime()
+        flush = runtime.flush_device_route_probes
+        misses = flush()
+        if not misses:
+            return h_final, pre_mix_final, main_hiddens  # all-hit token: already exact
+
+        n = len(self.layers)
+        target_ids = self._mtp_target_layer_ids
+        h, pre_mix = h_final, pre_mix_final
+        max_passes = 4
+        passes = 0
+        while misses:
+            passes += 1
+            if passes > max_passes:
+                # Safety net: force the fenced path everywhere. Guarantees
+                # termination (no device miss survives a fully fenced re-run).
+                force_fenced = set(range(n))
+            else:
+                force_fenced = {int(lid) for lid, _ in misses}
+            # Rewind every layer to pre-token (length-based; engram untouched).
+            for lid in range(n):
+                cache.layers[lid].rollback(dr_marks[lid])
+            shared = cache.new_shared_runtime()  # fresh: clean CSA candidate state
+            h, pre_mix = dr_initial
+            new_main: List[mx.array] = []
+            runtime.set_device_route_force_fenced(force_fenced)
+            try:
+                for lid in range(n):
+                    layer = self.layers[lid]
+                    if layer.engram_hook is not None and engram_state is not None:
+                        h = layer.engram_hook(h, input_ids, engram_state)
+                    if want_main and layer.layer_id in target_ids:
+                        new_main.append(
+                            mx.mean(h.astype(mx.float32), axis=2).astype(h.dtype)
+                        )
+                    h, pre_mix = layer(
+                        h, pre_mix, positions, cache.layers[lid], shared
+                    )
+            finally:
+                runtime.set_device_route_force_fenced(())
+            if want_main and target_ids:
+                main_hiddens = new_main
+            misses = flush()
+        return h, pre_mix, main_hiddens
 
     @staticmethod
     def _eval_cache_state(cache, *extra):
