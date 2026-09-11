@@ -1360,6 +1360,11 @@ def make_mlx_component_bank_allocator(
     setattr(allocate, "slots", slots)
     setattr(allocate, "banks", banks)
     setattr(allocate, "close", close_banks)
+    # The plan this allocator sizes its per-bank capacities from. Exposed so a
+    # caller/test can confirm the allocator's ``slots_per_layer`` matches the
+    # slot pool's plan (they must agree or a persistent slot the pool enumerates
+    # is rejected as "outside planned capacity"); no bank is allocated to read it.
+    setattr(allocate, "plan", plan)
     return allocate
 
 
