@@ -18221,6 +18221,83 @@ def _block_restorable_prefix_tokens(matched_tokens: int) -> int:
     return int(aligned)
 
 
+def _dsv41_prefill_transient_bytes() -> int:
+    """The bounded prefill-chunk transient budget for the DSV4.1 streamed lane.
+
+    Chunked prefill (``MTPLX_DSV41_PREFILL_CHUNK``) sizes the query chunk so the
+    dominant per-chunk transient stays under ``MTPLX_DSV41_PREFILL_CHUNK_TARGET_GB``
+    (~8 GB), so the prefill transient is this FIXED budget, not a per-prompt-token
+    cost -- the whole 16K prompt never materializes at once."""
+
+    try:
+        from mtplx.models.deepseek_v41 import _prefill_chunk_target_bytes
+
+        # already a byte count (GB * 1e9)
+        return int(_prefill_chunk_target_bytes())
+    except Exception:
+        return 8 * 10**9
+
+
+def _expert_streaming_prefill_admission(
+    state: "ServerState", expert_streaming: Any, prompt_ids: list[int]
+) -> dict[str, Any] | None:
+    """Prefill memory admission for the SSD-streamed expert lane.
+
+    The expert cache is a BOUNDED, RECLAIMABLE pool inside the memory plan: the
+    planner already reserved ``runtime_reserve`` + KV for ``max_live_kv_tokens``,
+    and the persistent expert cache is the remainder that yields to KV under the
+    derived single-limit policy. So the guard must NOT count the whole cache as
+    committed and stack the prompt's KV on top of it (which refuses every prompt
+    ~one prompt-KV over the cap). It projects only the non-cache committed
+    footprint (resident weights + the reused transient service slots) + this
+    prompt's live KV at the spec's REAL per-token cost (the MLA latent + index-K
+    over the compress-ratio kv_source layers, e.g. 3,200 B/token for DSV4.1 --
+    not the 65,536 B/token Qwen dense default) + the bounded per-chunk prefill
+    transient. A prompt whose live KV fits ``max_live_kv_tokens`` is admitted;
+    one beyond it is refused (its KV exceeds the plan's reservation).
+    """
+
+    spec = getattr(expert_streaming, "spec", None)
+    cfg = getattr(expert_streaming, "config", None)
+    plan = getattr(expert_streaming, "plan", None)
+    if spec is None or cfg is None or plan is None:
+        return None
+    per_token = int(getattr(spec, "kv_bytes_per_token", 0) or 0)
+    max_kv = int(getattr(cfg, "max_live_kv_tokens", 0) or 0)
+    if per_token <= 0 or max_kv <= 0:
+        return None
+    prompt_tokens = len(prompt_ids)
+    committed = int(getattr(plan, "resident_bytes", 0) or 0) + int(
+        getattr(plan, "transient_bytes", 0) or 0
+    )
+    prefill_transient = _dsv41_prefill_transient_bytes()
+    projected = committed + prompt_tokens * per_token + prefill_transient
+    # The plan's KV-reservation ceiling: the committed footprint + the reserved
+    # max_live_kv_tokens KV + the bounded chunk transient. The expert cache
+    # absorbs everything up to the engine cap, so this reservation -- not the raw
+    # byte cap -- is the real admission bound for this lane.
+    reservation = committed + max_kv * per_token + prefill_transient
+    if prompt_tokens <= max_kv:
+        return None  # within the plan's KV reservation -> admit
+    receipt: dict[str, Any] = {
+        "action": "prefill_admission_shed",
+        "lane": "expert_streaming",
+        "prompt_tokens": int(prompt_tokens),
+        "miss_tokens": int(prompt_tokens),
+        "max_live_kv_tokens": int(max_kv),
+        "kv_bytes_per_token": int(per_token),
+        "committed_bytes": int(committed),
+        "prefill_transient_bytes": int(prefill_transient),
+        "projected_bytes": int(projected),
+        "projected_bytes_after": int(projected),
+        "limit_bytes": int(reservation),
+        "refused": True,
+        "refusal_reason": "prompt_live_kv_exceeds_max_live_kv_tokens",
+    }
+    _record_guard_event(state, receipt)
+    return receipt
+
+
 def _prefill_admission_shed(
     state: "ServerState",
     *,
@@ -18256,6 +18333,16 @@ def _prefill_admission_shed(
         prompt_tokens = len(prompt_ids)
         if prompt_tokens < _prefill_admission_min_miss_tokens():
             return None
+        # SSD-streamed expert lane: the reclaimable expert cache must not be
+        # counted as committed against the prompt's KV (that refuses every prompt
+        # ~one prompt-KV over the cap). Project against the plan's reservation.
+        expert_streaming = getattr(
+            getattr(state, "runtime", None), "expert_streaming", None
+        )
+        if expert_streaming is not None:
+            return _expert_streaming_prefill_admission(
+                state, expert_streaming, prompt_ids
+            )
         if vision_splice is not None:
             # Admission must ask the same content-keyed question as restore.
             # Raw image pads only match the text before the first image;

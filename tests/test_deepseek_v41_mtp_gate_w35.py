@@ -14,6 +14,7 @@ import pytest
 MODEL_KEY = "deepseek-v41-flash-expert-mxfp4"
 PROFILE_NAME = "deepseek-v41-mxfp4-75"
 BIG = 200 * 10**9
+GiB = 1024**3
 
 
 def _mtp_args(**kw):
@@ -453,3 +454,81 @@ def test_real_dsv41_model_exposes_lm_head_and_served_attrs() -> None:
     # rt.embed_tokens -> model.model.embed_tokens; model.model.layers exists.
     assert model.model.embed_tokens is not None
     assert len(model.model.layers) == int(cfg["text_config"]["num_hidden_layers"])
+
+
+# --------------------------------------------------------------------------
+# window-18: prefill memory admission for the SSD-streamed expert lane. The
+# reclaimable expert cache must not be counted as committed against the prompt
+# KV, KV is priced at the spec's real per-token cost (not the Qwen 65,536 B/token
+# default), and the prefill transient is the bounded per-chunk budget.
+# --------------------------------------------------------------------------
+def _es_admission_state(cap_gib: int):
+    import types
+
+    from mtplx.expert_runtime import ExpertStreamingConfig
+    from mtplx.expert_streaming_models import get_model_spec
+
+    spec = get_model_spec(MODEL_KEY)
+    cfg = ExpertStreamingConfig(
+        model_key=spec.key, memory_limit_bytes=cap_gib * GiB,
+        max_live_kv_tokens=16384, runtime_reserve_bytes=7 * GiB,
+        transient_slots=48, cache_policy="lru", cache_scope="layer",
+    )
+    plan = cfg.memory_plan(
+        spec, additional_resident_bytes=40 * 128 * (512 * 2),
+        resident_discount_bytes=8_920_505_736,
+    )
+    es = types.SimpleNamespace(spec=spec, config=cfg, plan=plan)
+    state = types.SimpleNamespace(runtime=types.SimpleNamespace(expert_streaming=es))
+    return state, es
+
+
+def test_expert_streaming_16k_prompt_admitted(monkeypatch):
+    import mtplx.server.openai as O
+
+    monkeypatch.setattr(O, "_record_guard_event", lambda *a, **k: None)
+    for cap in (60, 70):
+        state, es = _es_admission_state(cap)
+        assert O._expert_streaming_prefill_admission(state, es, [0] * 16384) is None
+        committed = es.plan.resident_bytes + es.plan.transient_bytes
+        projected = committed + 16384 * es.spec.kv_bytes_per_token + O._dsv41_prefill_transient_bytes()
+        assert projected < cap * GiB
+        assert projected < 25 * GiB
+
+
+def test_expert_streaming_prompt_beyond_max_kv_refused(monkeypatch):
+    import mtplx.server.openai as O
+
+    monkeypatch.setattr(O, "_record_guard_event", lambda *a, **k: None)
+    state, es = _es_admission_state(60)
+    receipt = O._expert_streaming_prefill_admission(state, es, [0] * 20000)
+    assert receipt is not None and receipt["refused"] is True
+    assert receipt["refusal_reason"] == "prompt_live_kv_exceeds_max_live_kv_tokens"
+    assert receipt["kv_bytes_per_token"] == 3200
+    assert receipt["max_live_kv_tokens"] == 16384
+
+
+def test_prefill_shed_dispatches_to_the_expert_streaming_lane(monkeypatch):
+    import mtplx.server.openai as O
+
+    monkeypatch.setattr(O, "_record_guard_event", lambda *a, **k: None)
+    monkeypatch.setattr(O, "_prefill_admission_shed_enabled", lambda: True)
+    monkeypatch.setattr(O, "_prefill_admission_min_miss_tokens", lambda: 1)
+    state, es = _es_admission_state(60)
+    assert O._prefill_admission_shed(
+        state, prompt_ids=[0] * 16384, session_bank=None, session_id=None
+    ) is None
+    refused = O._prefill_admission_shed(
+        state, prompt_ids=[0] * 20000, session_bank=None, session_id=None
+    )
+    assert refused is not None and refused.get("refused") is True
+    assert refused.get("lane") == "expert_streaming"
+
+
+def test_dsv41_prefill_transient_is_the_bounded_chunk_budget(monkeypatch):
+    import mtplx.server.openai as O
+
+    monkeypatch.delenv("MTPLX_DSV41_PREFILL_CHUNK_TARGET_GB", raising=False)
+    assert 5 * 10**9 <= O._dsv41_prefill_transient_bytes() <= 12 * 10**9
+    monkeypatch.setenv("MTPLX_DSV41_PREFILL_CHUNK_TARGET_GB", "4")
+    assert 3.5 * 10**9 <= O._dsv41_prefill_transient_bytes() <= 4.5 * 10**9
