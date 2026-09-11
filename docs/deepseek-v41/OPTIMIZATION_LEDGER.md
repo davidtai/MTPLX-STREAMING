@@ -299,7 +299,7 @@ decode). Do not confuse the two — that is the mistake the Qwen3.8 dispatch sto
 | **mxfp4 bank lossless compression** | [[hy3-lossless-compression-c7]]: Q2 experts compress 1.29× (order-0 saturated), **Q4 near-incompressible**. mxfp4 E2M1 codes are high-entropy 4-bit → expect ~1.0×. rANS also "shrinks bytes/service, removes none → capped ~+4 %, negative if decode serializes behind the read" ([[island-placement-beats-tuning]]). Dead on this format. (One cheap entropy check on a bank sample to fully close.) |
 | **mmap / MADV_WILLNEED as the primary read path** | [[mmap-willneed-unwired]]: demand-fault flat ~1.4 GiB/s at any thread count; even fully-fixed mmap tops 6.7–10.8 vs **pread 12.9**; mmap can only approximate the *bad* LRU-uniform policy (kernel can't see routing) and drops further under a resident server. Keep pread into fixed slots; the lever is slot allocation, not the mapping. |
 | **Resident n-gram / expert arena (static prefetch table)** | [[qwen38-flash-next-80tps-program]]: decode rows 85–93 % novel → resident n-gram arena *falsified*. Engram is disk-backed by design; do not make it resident to "prefetch." |
-| **Prefetch as a byte reduction** | [[a3b-decode-roundtrip-is-the-lever]] (prefetch KILLED at M1 once bandwidth-bound); [[island-placement-beats-tuning]] (prefetch −11 % at 96 GiB despite +6–12 pts hit rate — "raising hit rate is not the objective"); [[glm52-q1t-lane-state]] ("prefetch can't cut miss bytes — NO-GO"). Prefetch/overlap (R4) *moves* bytes in time (queue depth), it does not delete them. Price it as utilization, never as fewer bytes. |
+| **Prefetch as a byte reduction** | [[island-placement-beats-tuning]] (prefetch −11 % at 96 GiB despite +6–12 pts hit rate — "raising hit rate is not the objective"); [[glm52-q1t-lane-state]] ("prefetch can't cut miss bytes — NO-GO"); [[hy3-c5-dense-islands]] (history-based prefetch DEAD — 24 % prev-wave route overlap). Also [[a3b-decode-roundtrip-is-the-lever]]: sync-removal / branch-predict prefetch was KILLED (+3.27 % *slower*) not by bandwidth but because MLX's async submission backpressure (10-buffer / 50-op force-commit) conserves the blocking regardless of the Python sync. Prefetch/overlap (R4) *moves* bytes in time (queue depth), it does not delete them, and compute-side prefetch can be swallowed by the scheduler. Price it as utilization, never as fewer bytes. |
 | **Dispatch-fusion / compile-the-forward as the primary DECODE lever** | [[hy3-decode-roofline]] compile-the-forward DEAD (async_eval already overlaps the graph rebuild); [[moe-exec-fusion-25-26-27]] fused MoE *slower* than stock, #25's 1.85× ~75 % accounting artifact. DSV4.1 decode is SSD-bound, so the Qwen3.8 dispatch story does not transfer to decode (it helps prefill only — R6). |
 
 ---
@@ -322,10 +322,13 @@ decode). Do not confuse the two — that is the mistake the Qwen3.8 dispatch sto
    *routing predictor* to warm the expert preadv queue. Novel: the memory doubles as a prefetch oracle.
 
 3. **DSpark's own routing is a free expert-prefetch oracle.** The 3 DSpark stages run their *resident*
-   q8/mxfp4 MTP experts (top-6 of 128) and produce token proposals. The MTP experts' routing correlates
-   with the big model's routing for the same positions → use the (already-computed, resident) MTP
-   routing as the prefetch key / dedup pre-seed for the big-bank verify reads, cheaper than a separate
-   predictor. This directly feeds R2's union and R4's concurrent issue.
+   mxfp8/mxfp4 MTP experts (top-6 of 128) and produce token proposals. The MTP experts' routing
+   correlates with the big model's routing for the same positions → use the (already-computed, resident)
+   MTP routing as the prefetch key / dedup pre-seed for the big-bank verify reads, cheaper than a separate
+   predictor. This directly feeds R2's union and R4's concurrent issue. **Corroboration:** every
+   *history*-based prefetch died on hy3 (24 % prev-wave overlap, [[hy3-c5-dense-islands]]), but that note
+   explicitly leaves **"draft-route prefetch (model-signal)"** open as the one surviving prefetch idea —
+   DSpark gives DSV4.1 exactly that model signal for free.
 
 4. **CSA2 shared-KV frees the budget for expert cache.** 36 of 40 layers reuse 4 owned caches
    (PORT_PLAN §0). Confirm attention KV traffic/latency is negligible so the *entire* non-SSD budget and
@@ -396,6 +399,10 @@ refinements once the stack clears its central estimate.
   not component or roofline.
 - **Spot-check outputs per rounding-class window** ([[spot-check-outputs-per-result]]); truncation from an
   output cap is not a quality failure ([[eval-truncation-is-not-failure]]).
+- **IOV_MAX / macOS preadv trap** ([[hy3-c5-dense-islands]]): scatter `preadv` with >1024 iovecs returns
+  EINVAL on macOS (a full hy3 layer was 1,728 views; a DSV4.1 verify union across 40 layers issued as one
+  gather can far exceed 1024). The reader must slice per syscall — enforce this when R2/R4 issue the
+  concurrent union read set, or the whole gather silently fails.
 
 ---
 
