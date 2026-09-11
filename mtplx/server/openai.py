@@ -76,6 +76,9 @@ from mtplx.a3b_mtp_batch import (
 from mtplx.adaptive import AdaptiveDepthPolicy, ExpectedValueDepthPolicy
 from mtplx.attention_context import attention_phase
 from mtplx.cache_state import snapshot_cache
+from mtplx.serve_stage_timing import (
+    write_stage_timing_receipt as _write_serve_stage_timing_receipt,
+)
 from mtplx.mtp_patch import MTPContract
 from mtplx.mtp_batch_numerics import (
     MTP_BATCH_NUMERICS_CHOICES,
@@ -25335,29 +25338,38 @@ def _run_generation(
         if seed_is_explicit or out.text.strip():
             break
     assert last is not None
+    # W53 served-decode stage timer (MTPLX_SERVE_STAGE_TIMING=1): a per-token
+    # stage table on the completion event, and an optional standalone receipt.
+    _stage_timing = last["stats"].get("serve_stage_timing") or {}
     if not bool(
         (request_observability or {}).get("warmup")
     ) and not _server_console_enabled(state):
-        _safe_stdout_print(
-            json.dumps(
-                {
-                    "event": "mtplx_openai_generation",
-                    "prompt_tokens": last["prompt_tokens"],
-                    "completion_tokens": last["completion_tokens"],
-                    "max_tokens": last["stats"].get("request_max_tokens"),
-                    "effective_max_tokens": last["stats"].get("effective_max_tokens"),
-                    "finish_reason": last.get("finish_reason"),
-                    "elapsed_s": round(float(last["elapsed_s"]), 6),
-                    "tok_s": round(float(last["tok_s"]), 6),
-                    "end_to_end_tok_s": round(float(last["end_to_end_tok_s"]), 6),
-                    "seed": last["stats"].get("server_seed"),
-                    "attempts": last["stats"].get("server_attempts"),
-                    "blank_retries": last["stats"].get("server_blank_retries"),
-                    "text_preview": str(last["text"])[:120],
-                },
-                ensure_ascii=False,
-            )
+        _generation_event: dict[str, Any] = {
+            "event": "mtplx_openai_generation",
+            "prompt_tokens": last["prompt_tokens"],
+            "completion_tokens": last["completion_tokens"],
+            "max_tokens": last["stats"].get("request_max_tokens"),
+            "effective_max_tokens": last["stats"].get("effective_max_tokens"),
+            "finish_reason": last.get("finish_reason"),
+            "elapsed_s": round(float(last["elapsed_s"]), 6),
+            "tok_s": round(float(last["tok_s"]), 6),
+            "end_to_end_tok_s": round(float(last["end_to_end_tok_s"]), 6),
+            "seed": last["stats"].get("server_seed"),
+            "attempts": last["stats"].get("server_attempts"),
+            "blank_retries": last["stats"].get("server_blank_retries"),
+            "text_preview": str(last["text"])[:120],
+        }
+        if _stage_timing:
+            _generation_event["serve_stage_timing"] = _stage_timing
+        _safe_stdout_print(json.dumps(_generation_event, ensure_ascii=False))
+    if _stage_timing:
+        _stage_receipt_path = _write_serve_stage_timing_receipt(
+            _stage_timing,
+            request_id=str((request_observability or {}).get("request_id") or ""),
+            mode=effective_mode,
         )
+        if _stage_receipt_path and request_observability is not None:
+            request_observability["serve_stage_timing_receipt"] = _stage_receipt_path
     if request_capture.capture_dir():
         request_capture.capture_outcome(
             (request_observability or {}).get("request_id"),

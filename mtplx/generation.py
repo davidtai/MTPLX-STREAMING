@@ -96,6 +96,7 @@ from .qsa_mtp_precompute import (
     qsa_mtp_precompute_enabled,
 )
 from .runtime import MTPLXRuntime
+from .serve_stage_timing import StageTimer, stage_timing_enabled
 from .sampling import (
     SamplerConfig,
     SparseDistribution,
@@ -2107,6 +2108,22 @@ class _DecodeTrace:
             return [(float(item) - float(prev)) for item, prev in zip(value, previous)]
         return value - previous
 
+    def wants_totals(self, *, force: bool = False, final: bool = False) -> bool:
+        """True when maybe_emit could consume a totals dict this call.
+
+        When it returns False, maybe_emit is a guaranteed no-op for the given
+        force/final, so the caller may skip building the (per-token) totals
+        dict entirely — an exactness-neutral saving on the hot decode loop.
+        A live sink always wants totals (its 1 Hz gate lives inside
+        maybe_emit); a file trace wants them only while enabled with a path;
+        otherwise only a forced/final flush consumes them.
+        """
+        if self.live_sink is not None:
+            return True
+        if self.enabled and self.path is not None:
+            return True
+        return bool(force or final)
+
     def maybe_emit(
         self,
         *,
@@ -2951,6 +2968,9 @@ class GenerationStats:
     # Fork-EV shadow telemetry aggregate (MTPLX_FORKEV_TELEMETRY); empty dict
     # when the instrument is off. Schema: mtplx/forkev_telemetry.py snapshot().
     forkev: dict[str, object] = field(default_factory=dict)
+    # W53 served-decode stage timer (MTPLX_SERVE_STAGE_TIMING=1); {} when off.
+    # Schema: mtplx/serve_stage_timing.py StageTimer.summary().
+    serve_stage_timing: dict[str, object] = field(default_factory=dict)
     events: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -7026,6 +7046,14 @@ def generate_ar(
         }
 
     def emit_trace(*, force: bool = False, final: bool = False) -> None:
+        # W53: trace_totals() builds a ~55-key dict on EVERY emitted token.
+        # When no live sink is attached and no file trace is enabled,
+        # maybe_emit is a guaranteed no-op for a non-forced call, so skip the
+        # per-token dict build entirely. Exactness-neutral (the totals are
+        # never consumed on that path); MTPLX_AR_LAZY_TRACE_TOTALS=0 restores
+        # the unconditional build.
+        if _lazy_trace_totals and not trace.wants_totals(force=force, final=final):
+            return
         trace.maybe_emit(
             force=force,
             final=final,
@@ -7068,6 +7096,13 @@ def generate_ar(
                     if released:
                         token_callback(released)
         emit_trace()
+
+    # W53: exactness-neutral per-token savings + optional stage attribution.
+    # Both flags are read once here (env-at-use, not import-frozen).
+    _lazy_trace_totals = str(
+        os.environ.get("MTPLX_AR_LAZY_TRACE_TOTALS", "1")
+    ).strip().lower() not in ("0", "false", "no", "off")
+    _stage_timer = StageTimer(enabled=stage_timing_enabled())
 
     # Double-buffered decode (mlx-lm pattern, PR #413-family contribution by
     # maceip in PR #396): dispatch step t+1's forward without blocking and let
@@ -7222,6 +7257,7 @@ def generate_ar(
 
     _classic_start = max_tokens if _lane_finished else _lane_committed
     for step in range(_classic_start, max_tokens):
+        _stage_timer.begin()
         if _loop_guard is not None:
             _guard_transition = _loop_guard.observe(tokens)
             if _guard_transition is not None:
@@ -7264,6 +7300,7 @@ def generate_ar(
             sync_elapsed = time.perf_counter() - sync_started
             target_eval_time += sync_elapsed
             target_decode_time += sync_elapsed
+        _stage_timer.lap("guards")
         token, _ = _sample_from_logits(
             logits_row,
             sampler,
@@ -7273,9 +7310,12 @@ def generate_ar(
             else None,
             penalty_overlay=(_ar_steer_overlay(tokens) if _steer_active else None),
         )
+        _stage_timer.lap("sample")
         tokens.append(token)
         emit_token(token)
         events.append({"step": step, "token": token})
+        _stage_timer.lap("emit")
+        _stage_timer.tick_token()
         if constraint is not None:
             constraint.advance(token)
             if constraint.stopped and not _is_stop(token, stop_token_ids):
@@ -7284,6 +7324,7 @@ def generate_ar(
                 events.append({"step": step, "constraint_stop": True})
                 break
         repetition_result = _trim_repeated_suffix(tokens, repetition_config)
+        _stage_timer.lap("stopcheck")
         if repetition_result is not None:
             events.append(
                 {
@@ -7335,6 +7376,10 @@ def generate_ar(
         target_decode_time += elapsed_decode
         target_forward_graph_time += forward_graph_elapsed
         target_eval_time += eval_elapsed
+        # W53: reuse the forward/eval deltas the loop already measures (no
+        # extra perf_counter or GPU sync from the probe).
+        _stage_timer.add("forward", forward_graph_elapsed)
+        _stage_timer.add("eval", eval_elapsed)
         verify_calls += 1
         logits = logits_next[:, -1, :]
 
@@ -7494,6 +7539,7 @@ def generate_ar(
         constraint_mask_time_s=(
             constraint.mask_time_s if constraint is not None else 0.0
         ),
+        serve_stage_timing=_stage_timer.summary(),
         events=events,
     )
     _attach_runtime_diagnostics(
