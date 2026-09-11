@@ -29,7 +29,7 @@ Three independent GPU-side floors, per accepted token, measured against the actu
 | Resident-weight DRAM read (mxfp8, once/token) | ~9.4 GiB = **10.1 GB** → 16.5 ms @ 614 GB/s | ~60 tok/s |
 | + routed experts if DRAM-resident (240 recs, 4.51 GB) | 24 ms total DRAM | ~42 tok/s |
 | **Per-layer routing barrier** `mx.eval(indices)` × 40 | **~1 ms p50 × 40 = ~40 ms** (measured, `expert_mlx.py:1959`) | **~25 tok/s** |
-| Dispatch host-encode (~2.4–3.6 k dispatches × 2.9 µs) | ~7–10 ms | folds into the chain |
+| Dispatch host-encode (~6.8 k dispatches, Sinkhorn-dominated — cf. V4's 6,794) | ~20 ms naive × 2.9 µs, **production-discounted ~45 % → ~9 ms** (V4 note) | folds into the chain; K3 kills most |
 
 The routing barrier is a **serial** chain (layer N's route needs layer N−1's output) with the GPU
 idle during each round-trip, so it does **not** overlap the DRAM read — the exposed decode floor is
@@ -121,7 +121,7 @@ kernel misses by the ALU factor noted.
 | HC mix + Sinkhorn (×2/layer) | small (fn GEMV) | <0.5 ms compute | **~80 disp/mix w/o kernel; 1 w/ kernel** | 20-iter 4×4 recurrence ×2×40 = the top dispatch source (K3) |
 | Engram gather+wkv (L1,L14) | 24 rows ×264 B ×2 = 12.4 KiB | <0.1 ms | small | latency, not BW; OPT_LEDGER R9 = ~0 tok/s |
 | Sampling / argmax | 129280 f32 = 0.52 MB | ~1 µs | 1 host sync | greedy argmax; forces the token decision |
-| **Dispatch host-encode (all)** | — | ~7–10 ms | ~2.4–3.6 k × 2.9 µs | Sinkhorn kernel removes most (K3/K4) |
+| **Dispatch host-encode (all)** | — | ~9 ms (prod-discounted; ~20 ms naive) | ~6.8 k × 2.9 µs (Sinkhorn-dominated) | Sinkhorn kernel removes most (K3/K4) |
 
 **AR exposed floor once SSD is hidden ≈ barrier(40) + resident-read not overlapped(~16) ≈ 40–50 ms
 → 20–25 tok/s.** DRAM-bandwidth ceiling (42 tok/s) is *looser* than the barrier ceiling (25 tok/s):
@@ -365,6 +365,18 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (count `mx.eval` per arm — fused-MoE looked 1.85× but was 75 % accounting artifact; hold this fusion
   to the same bar).
 
+### K19 — Head only the last row at prefill — **Rank 12 (prefill peak + TTFT)**
+- **Mechanism:** `Model.__call__` runs `self.head(h)` over **all** prefill rows → a **8.47 GB** f32
+  logits transient at 16K (W20 §7) plus a 129280×5120 GEMM over 16 384 rows whose logits are never
+  read — decode seeds only from the **last** token's logits. Slice `h[:, -1:]` before the head at
+  prefill (keep all rows for chunked-forward continuation; only the head input narrows). **Where:**
+  prefill (1024: 0.53 GB saved; 16384: **8.47 GB + a 16 384-row GEMM** saved). **After/now:** cuts the
+  single largest prefill transient and a full head GEMM — helps TTFT *and* peak (protects the knob at
+  16K). **Exactness:** none for AR (same last-token logits); if MTP/DSpark needs multi-row prefill
+  logits, gate on which rows the draft head consumes. **Effort:** low (one slice, guard the
+  cache-continuation path). **Precedent:** standard prefill last-token head; W20 §7 identifies the
+  8.47 GB transient explicitly.
+
 ### K17 — Prefill GEMM tiling for M=chunk — **Rank 13**
 - **Mechanism:** at M=1271 the expert gather is compute-bound; tile to keep it so (avoid the M=1
   ALU-stall regime). **Where:** prefill. **After/now:** shaves the ~5–7 s of non-hidden prefill
@@ -398,17 +410,18 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   the attention score, so raise it to the K6 two-pass ceiling. **Where:** prefill. **Exactness:** none
   (W13 pooling is chunk-independent). **Effort:** trivial. Run after K16/K6.
 
-### K19 — Head only the last row at prefill — **Rank 12 (prefill peak + TTFT)**
-- **Mechanism:** `Model.__call__` runs `self.head(h)` over **all** prefill rows → a **8.47 GB** f32
-  logits transient at 16K (W20 §7) plus a 129280×5120 GEMM over 16 384 rows whose logits are never
-  read — decode seeds only from the **last** token's logits. Slice `h[:, -1:]` before the head at
-  prefill (keep all rows for chunked-forward continuation; only the head input narrows). **Where:**
-  prefill (1024: 0.53 GB saved; 16384: **8.47 GB + a 16 384-row GEMM** saved). **After/now:** cuts the
-  single largest prefill transient and a full head GEMM — helps TTFT *and* peak (protects the knob at
-  16K). **Exactness:** none for AR (same last-token logits); if MTP/DSpark needs multi-row prefill
-  logits, gate on which rows the draft head consumes. **Effort:** low (one slice, guard the
-  cache-continuation path). **Precedent:** standard prefill last-token head; W20 §7 identifies the
-  8.47 GB transient explicitly.
+### K20 — Engram 48-row gather + dequant + wkv GEMV fusion — **Rank 18 (latency, ~0 tok/s)**
+- **Mechanism:** each token, the 2 engram layers (L1, L14) each gather 24 disk-backed rows (264 B
+  mxfp8), dequant them, and run the `wkv` [25600,6144] GEMV + sigmoid gate (`engram_v41.py`). Fuse the
+  per-row dequant + the gated add so the 48 small random reads issue as one sliced `preadv` and the
+  dequant/gate is one kernel. **Where:** decode + verify + prefill. **Now/after:** the byte volume is
+  ~12.4 KiB/token — **~5 orders below** the expert read, so this is **not** a bandwidth or tok/s lever
+  (OPT_LEDGER R9 = ~0). It matters only if the 48 random small reads **serialize** badly against the
+  compute (latency), which the engram-hash prefetch (OPT_LEDGER New #2 — hash the DSpark draft tokens
+  to warm the rows before verify) addresses more directly. **Exactness:** none (same rows, same math);
+  do **not** requantize further (PORT_PLAN §4: a second lossy step on a gate-damped memory buys
+  nothing). **⚠** slice the 48-row `preadv` under IOV_MAX ([[hy3-c5-dense-islands]]). **Effort:** low.
+  **Rank 18** — include for completeness; ship only if a probe shows the engram reads serialize.
 
 ---
 
