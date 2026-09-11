@@ -47,6 +47,7 @@ GIB = 1024 ** 3
 DEFAULT_BOS_ID = 0
 OVERLAP_ENV = "MTPLX_DSV41_SHARED_OVERLAP"
 PROBE_ENV = "MTPLX_ROUTE_STAGE_PROBE"
+STAGE_TIMING_ENV = "MTPLX_DSV41_STAGE_TIMING"
 BARRIER_STAGE = "hot.eval_indices"
 
 LAYER_MAJOR_ENV = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
@@ -146,6 +147,34 @@ def build_parser() -> argparse.ArgumentParser:
         "probe ON, to census host syncs/token (0 = skip; the probe inflates "
         "timing, so it never touches the reported tok/s pass)",
     )
+    p.add_argument(
+        "--stage-timing",
+        action="store_true",
+        default=False,
+        help="extra W37 decode pass with MTPLX_DSV41_STAGE_TIMING fences per "
+        "stage (embed / attention-by-CSA-mode / engram / HC / gate+barrier / "
+        "routed switch / shared / combine / head / sample), recorded into the "
+        "receipt as ``stage_timing`` (mean ms/token per stage + counts). The "
+        "fences inflate absolute time, so this pass never touches the reported "
+        "tok/s; the ratios between stages are the signal.",
+    )
+    p.add_argument(
+        "--stage-timing-steps",
+        type=int,
+        default=None,
+        metavar="N",
+        help="decode steps for the --stage-timing pass (default: --decode-tokens).",
+    )
+    p.add_argument(
+        "--warm-repeat",
+        action="store_true",
+        default=False,
+        help="after the measured cold pass, re-run prefill+decode of the SAME "
+        "prompt a second time in the same process (expert cache + engram warm, "
+        "fresh KV / engram history via model.make_cache()) and record the second "
+        "pass's decode/prefill tok/s + TTFT as ``warm_*``; bounds the no-miss "
+        "ceiling. Token ids must match the cold pass (recorded, not asserted).",
+    )
     # GPU-window defaults (agent booted out -> ~82 GiB planner budget).
     p.add_argument("--memory-limit-gib", type=float, default=82.0)
     p.add_argument("--expert-cache-limit-gib", type=float, default=None)
@@ -199,6 +228,15 @@ def _dry_run_arm(args, arm, bench) -> dict:
         "decode_tokens": int(args.decode_tokens),
         "prompt_tokens": len(prompt_ids),
         "prompt_build": prompt_meta,
+        # W37 pass toggles resolved offline (no model / MLX): proves the flags
+        # thread through argument resolution before a GPU window burns on them.
+        "stage_timing": bool(getattr(args, "stage_timing", False)),
+        "stage_timing_steps": (
+            int(args.stage_timing_steps)
+            if getattr(args, "stage_timing_steps", None) is not None
+            else int(args.decode_tokens)
+        ),
+        "warm_repeat": bool(getattr(args, "warm_repeat", False)),
     }
 
 
@@ -340,6 +378,21 @@ def _run_arm(args, arm, bench, mx) -> dict:
             if runtime is not None
             else None,
         }
+        if getattr(args, "warm_repeat", False):
+            receipt["warm"] = _warm_repeat_pass(
+                model=model, ops=ops, mem_probe=mem_probe,
+                prompt_ids=prompt_ids, steps=args.decode_tokens,
+                cold_ids=ids,
+            )
+        if getattr(args, "stage_timing", False):
+            steps = (
+                int(args.stage_timing_steps)
+                if args.stage_timing_steps is not None
+                else int(args.decode_tokens)
+            )
+            receipt["stage_timing"] = _stage_timing_pass(
+                model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
+            )
         if args.syncs > 0:
             receipt["sync_census"] = _sync_census(
                 model=model, ops=ops, mem_probe=mem_probe,
@@ -369,6 +422,75 @@ def _tokenizer(args, bench):
     from mlx_lm.utils import load_tokenizer
 
     return load_tokenizer(Path(args.model))
+
+
+def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> dict:
+    """Second prefill+decode of the SAME prompt in the same process.
+
+    A fresh ``model.make_cache()`` resets the KV window and hands a fresh engram
+    history clone, but the expert-bank LRU and any engram row cache stay warm from
+    the cold pass, so this pass bounds the no-miss decode ceiling.  Greedy decode
+    is deterministic, so the warm token ids must match the cold pass -- recorded
+    (``token_ids_match`` + both sha256), never asserted, so a mismatch is reported
+    instead of crashing the arm."""
+    run = _generate(
+        model=model, ops=ops, mem_probe=mem_probe,
+        prompt_ids=prompt_ids, steps=steps,
+    )
+    warm_ids = run["generated"]
+    cold = [int(t) for t in cold_ids]
+    warm_sha = hashlib.sha256(json.dumps(warm_ids).encode()).hexdigest()
+    cold_sha = hashlib.sha256(json.dumps(cold).encode()).hexdigest()
+    return {
+        "warm_ttft_s": run["ttft_s"],
+        "warm_prefill_tok_s": (len(prompt_ids) / run["ttft_s"])
+        if run["ttft_s"] > 0
+        else None,
+        "warm_decode_wall_s": run["decode_wall_s"],
+        "warm_decode_tok_s": (steps / run["decode_wall_s"])
+        if run["decode_wall_s"] > 0
+        else None,
+        "warm_peak_gb": run["peak_gb"],
+        "warm_token_ids_sha256": warm_sha,
+        "cold_token_ids_sha256": cold_sha,
+        "token_ids_match": warm_ids == cold,
+    }
+
+
+def _stage_timing_pass(*, model, ops, prompt_ids, steps) -> dict:
+    """W37 fenced decode pass -> ``model.stage_timing_report()``.
+
+    Prefill once (probe unarmed -> untouched), then arm the stage-timing session
+    around the decode loop only, wrapping each step in a ``frame`` and the
+    argmax/host round-trip in a ``sample`` stage.  The route-stage probe counters
+    (when ``MTPLX_ROUTE_STAGE_PROBE`` is armed) are cleared before the loop so the
+    merged ``route_stage`` census reflects this window, not the prefill + prior
+    passes.  Fences inflate absolute time, so nothing here feeds the reported
+    tok/s."""
+    from mtplx.models import deepseek_v41_stage_timing as stime
+
+    cache = model.make_cache()
+    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    ops.sync(logits)
+    token = ops.argmax_last(logits)
+    # Reset the route probe window (best-effort; its snapshot is cumulative).
+    try:
+        from mtplx import expert_route_probe as route_probe
+
+        if getattr(route_probe, "ENABLED", False):
+            route_probe._SUMS.clear()
+            route_probe._COUNTS.clear()
+    except Exception:
+        pass
+    stime.begin()
+    for _ in range(int(steps)):
+        with stime.frame():
+            logits = model(ops.input([[token]]), cache=cache)
+            with stime.stage("sample"):
+                token = ops.argmax_last(logits)
+    report = model.stage_timing_report()
+    stime.end()
+    return report if report is not None else {"enabled": False}
 
 
 def _sync_census(*, model, ops, mem_probe, prompt_ids, steps) -> dict:
@@ -440,10 +562,16 @@ def main(argv=None) -> int:
     if args.dry_run:
         return _run_dry(args, bench)
 
-    if args.syncs > 0:
-        # The probe reads its ENABLED flag at import, so arm it before any mtplx
-        # import happens inside the arm run.
+    if args.syncs > 0 or args.stage_timing:
+        # The route-stage probe reads its ENABLED flag at import, so arm it before
+        # any mtplx import happens inside the arm run.  --stage-timing arms it too,
+        # so model.stage_timing_report() can merge the switch-internal breakdown
+        # (hot.eval_indices barrier / miss-I/O / gather) under ``route_stage``.
         os.environ[PROBE_ENV] = "1"
+    if args.stage_timing:
+        # Advisory marker in the receipt env snapshot; the fenced session is armed
+        # in-process by deepseek_v41_stage_timing.begin(), not by this env.
+        os.environ[STAGE_TIMING_ENV] = "1"
     import mlx.core as mx
 
     mx.random.seed(int(args.seed))

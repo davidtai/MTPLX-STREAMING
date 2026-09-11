@@ -73,6 +73,7 @@ from mtplx.models.deepseek_v41_cache import (
     make_cache as _make_cache,
 )
 from mtplx.models.deepseek_v41_moe import MoE
+from mtplx.models import deepseek_v41_stage_timing as _stime
 
 # Opt-in per-stage attribution (MTPLX_ROUTE_STAGE_PROBE=1). When disabled the only
 # cost is one module-level boolean check, so it is safe on the hot path; the A/B
@@ -731,6 +732,12 @@ class Attention(nn.Module):
         return compress_kv, mask
 
     def __call__(self, x, positions, layer_cache, shared):
+        with _stime.stage("attn." + self.mode) as _st:
+            out = self._attend(x, positions, layer_cache, shared)
+            _st.add(out)
+        return out
+
+    def _attend(self, x, positions, layer_cache, shared):
         b, s, _ = x.shape
         H, hd, rd = self.n_heads, self.head_dim, self.rope_head_dim
         qcos, qsin = _cos_sin(self.inv_freq, positions)
@@ -962,8 +969,14 @@ def _hc_use_compile(x: mx.array) -> bool:
     Reads the module globals ``_HC_COMPILE`` / ``_HC_COMPILE_MAX_ROWS`` at call
     time (not captured) so a test or operator can flip either knob after import.
     ``x`` is a ``[..., hc, dim]`` HC stream, so ``prod(x.shape[:-2])`` is ``b*s``.
+
+    While a W37 stage-timing decode forward is in flight the eager body is forced
+    (``_stime.recording()``): the compiled tape is one opaque call, so the
+    per-stage ``mx.eval`` fences cannot split its premix/Sinkhorn/combine phases.
+    Timing therefore always measures the eager Hyper-Connection path -- exactly
+    the shipped ``control`` arm -- regardless of ``MTPLX_DSV41_HC_COMPILE``.
     """
-    if not _HC_COMPILE:
+    if not _HC_COMPILE or _stime.recording():
         return False
     rows = 1
     for d in x.shape[:-2]:
@@ -1062,20 +1075,30 @@ class DecoderLayer(nn.Module):
             return moe_input, (residual, ffn_post, ffn_comb), ffn_pre
 
         residual = h
-        attn_pre, attn_post, attn_comb = self._mixes(
-            h, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale
-        )
-        x = self._hc_pre(h, pre_mix)
-        x = _rmsnorm(x, self.attn_norm_weight, self.norm_eps)
+        # W37 attention Hyper-Connection prep: HC pre-mix + Sinkhorn, the pre_mix
+        # collapse and the attention input RMSNorm (the "attention input" that
+        # feeds self.attn).  The attention call itself is timed inside Attention
+        # under attn.<mode>; its combine ("hc.combine") folds it back below.
+        with _stime.stage("hc.premix_sinkhorn") as _st:
+            attn_pre, attn_post, attn_comb = self._mixes(
+                h, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale
+            )
+            x = self._hc_pre(h, pre_mix)
+            x = _rmsnorm(x, self.attn_norm_weight, self.norm_eps)
+            _st.add(x, attn_pre, attn_post, attn_comb)
         x = self.attn(x, positions, layer_cache, shared)
-        h = _hc_post_impl(x, residual, attn_post, attn_comb)
+        with _stime.stage("hc.combine") as _st:
+            h = _hc_post_impl(x, residual, attn_post, attn_comb)
+            _st.add(h)
 
         residual = h
-        ffn_pre, ffn_post, ffn_comb = self._mixes(
-            h, self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale
-        )
-        x = self._hc_pre(h, attn_pre)
-        moe_input = _rmsnorm(x, self.ffn_norm_weight, self.norm_eps)
+        with _stime.stage("hc.premix_sinkhorn") as _st:
+            ffn_pre, ffn_post, ffn_comb = self._mixes(
+                h, self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale
+            )
+            x = self._hc_pre(h, attn_pre)
+            moe_input = _rmsnorm(x, self.ffn_norm_weight, self.norm_eps)
+            _st.add(moe_input, ffn_pre, ffn_post, ffn_comb)
         return moe_input, (residual, ffn_post, ffn_comb), ffn_pre
 
     @staticmethod
@@ -1088,7 +1111,10 @@ class DecoderLayer(nn.Module):
             return _hc_compiled("moe_combine")(
                 moe_output, residual, ffn_post, ffn_comb
             )
-        return _hc_post_impl(moe_output, residual, ffn_post, ffn_comb)
+        with _stime.stage("hc.combine") as _st:
+            out = _hc_post_impl(moe_output, residual, ffn_post, ffn_comb)
+            _st.add(out)
+        return out
 
     def __call__(self, h, pre_mix, positions, layer_cache, shared):
         moe_input, carry, ffn_pre = self.attn_and_moe_input(
@@ -1350,12 +1376,14 @@ class DeepseekV41Backbone(nn.Module):
         b, s = input_ids.shape
         positions = mx.arange(cache.offset, cache.offset + s)
 
-        h = self.embed_tokens(input_ids)  # [b, s, dim]
-        h = mx.broadcast_to(h[:, :, None, :], (b, s, self.hc_mult, h.shape[-1]))
-        # identity one-hot mix over the hc copies (reference make_identity_pre_mix)
-        pre_mix = mx.concatenate(
-            [mx.ones((b, s, 1)), mx.zeros((b, s, self.hc_mult - 1))], axis=-1
-        ).astype(mx.float32)
+        with _stime.stage("embed") as _st:
+            h = self.embed_tokens(input_ids)  # [b, s, dim]
+            h = mx.broadcast_to(h[:, :, None, :], (b, s, self.hc_mult, h.shape[-1]))
+            # identity one-hot mix over the hc copies (reference make_identity_pre_mix)
+            pre_mix = mx.concatenate(
+                [mx.ones((b, s, 1)), mx.zeros((b, s, self.hc_mult - 1))], axis=-1
+            ).astype(mx.float32)
+            _st.add(h, pre_mix)
 
         # Engram row-id state (owned by the engram worker) is advanced once per
         # span before any engram layer reads it; the n-gram lookback reads the full
@@ -1363,7 +1391,8 @@ class DeepseekV41Backbone(nn.Module):
         # has no image mask).
         engram_state = getattr(cache, "engram_state", None)
         if engram_state is not None:
-            engram_state.advance(input_ids)
+            with _stime.stage("engram.advance"):
+                engram_state.advance(input_ids)  # numpy rolling hash; wall-timed
 
         shared = cache.new_shared_runtime()
         want_main = return_main_hidden and bool(self._mtp_target_layer_ids)
@@ -1379,8 +1408,10 @@ class DeepseekV41Backbone(nn.Module):
         cache.advance(s)
 
         # final collapse of the hc copies with the last pre_mix, then RMSNorm
-        h = mx.sum(pre_mix[..., None] * h.astype(mx.float32), axis=2).astype(h.dtype)
-        out = _rmsnorm(h, self.norm_weight, self.args.rms_norm_eps)
+        with _stime.stage("final_norm") as _st:
+            h = mx.sum(pre_mix[..., None] * h.astype(mx.float32), axis=2).astype(h.dtype)
+            out = _rmsnorm(h, self.norm_weight, self.args.rms_norm_eps)
+            _st.add(out)
         if not return_main_hidden:
             return out
         main_hidden = mx.concatenate(main_hiddens, axis=-1) if main_hiddens else None
@@ -1922,6 +1953,12 @@ class Model(nn.Module):
                 "the DeepSeek-V4.1 text backend does not support input_embeddings "
                 "(no vision splice path)"
             )
+        # W37 stage timing: arm per-forward recording iff this is a decode step
+        # (one query row).  A no-op unless a session is armed; prefill forwards
+        # (s > 1) never record, so their multi-GB transients are never fenced.
+        _stime_probe = _stime.active()
+        if _stime_probe is not None:
+            _stime_probe.enter_forward(int(input_ids.shape[1]))
         keep_last = _resolve_logits_keep(logits_keep, logits_rows)
         h, main_hidden = self.model(
             input_ids, cache, prefill_chunk=prefill_chunk,
@@ -1931,8 +1968,10 @@ class Model(nn.Module):
         if emit_logits:
             # Row-independent GEMM: head(h)[:, -k:] == head(h[:, -k:]) exactly, so
             # narrowing the head input never changes the surviving rows' logits.
-            source = h if keep_last is None else h[:, -keep_last:, :]
-            logits = self.head(source.astype(mx.float32))
+            with _stime.stage("head") as _st:
+                source = h if keep_last is None else h[:, -keep_last:, :]
+                logits = self.head(source.astype(mx.float32))
+                _st.add(logits)
         if not return_hidden:
             return logits
         return logits, main_hidden
@@ -2053,6 +2092,31 @@ class Model(nn.Module):
             self.model.engram_hash.fresh() if self.model.engram_hash is not None else None
         )
         return _make_cache(self.args, engram_state=engram_state)
+
+    def stage_timing_report(self):
+        """W37 decode stage-timing census, or ``None`` when no session is armed.
+
+        Reads the module-level :mod:`deepseek_v41_stage_timing` probe installed
+        for the current decode loop (see ``scripts/deepseek_v41/
+        ab_decode_env_levers.py --stage-timing``): per-stage mean ms/token and
+        counts over the decode steps, plus ``stage_sum_ms`` (their total) and
+        ``frame_wall_ms`` (the reference wall the stages tile).  When the route-
+        stage probe (``MTPLX_ROUTE_STAGE_PROBE``) is also armed, its snapshot is
+        merged under ``route_stage`` for the switch-internal breakdown (the
+        confirmed ~40 ``hot.eval_indices`` barriers/token, and -- streamed only --
+        the miss-I/O and gather brackets).  The fences inflate absolute time, so
+        the ratios between stages are the signal, not the totals."""
+        report = _stime.report()
+        if report is None:
+            return None
+        try:
+            from mtplx import expert_route_probe as _route_probe
+
+            if getattr(_route_probe, "ENABLED", False):
+                report["route_stage"] = _route_probe.snapshot()
+        except Exception:  # pragma: no cover - route probe is best-effort context
+            pass
+        return report
 
     def attach_engram(self, engram_dir, *, tokenizer=None, cache_bytes=None):
         """Build the real Engram hooks (layers 1 and 14) from the on-disk artifact.
