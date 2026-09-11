@@ -222,6 +222,11 @@ cos 0.912 per expert, only 11/31 router agreement. If a smaller bank than mxfp4 
 required, affine **q4 gs64** (285 GiB, cos 0.995) is the next step down; q2/q3 are too
 lossy.
 
+Extending to **layers 0–7** (`bank_ladder.py --max-layer 7`, in `torchref_bank_ladder.json`)
+confirms the ranking holds at depth and is stable: mxfp4 stays **MoE g = 1.000000 at every
+layer 0–7** (lossless is depth-independent — it is a bit-exact repack), while the affine
+formats compound slightly (e.g. q4 gs64 layer g at L7 = 0.9987, q2 = 0.9717).
+
 > Note for W11: `tests/.../test_mxfp4_is_not_bit_exact_in_mlx_032` asserts mxfp4 is NOT
 > bit-exact; on mlx **0.32.2** it now IS (verified on 191 real experts × 3 weights). The
 > "affine q8/gs32 because mxfp4 isn't bit-exact" rationale no longer holds for 0.32.2 —

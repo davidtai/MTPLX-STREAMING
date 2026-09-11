@@ -153,12 +153,17 @@ def main():
             mo_mn, mo_g, _ = RL.cos_maxabs(R0[L]["moe_out"], runs[fname][L]["moe_out"])
             lo_mn, lo_g, _ = RL.cos_maxabs(R0[L]["layer_out"], runs[fname][L]["layer_out"])
             rec[f"L{L}"] = {"moe_global_cos": mo_g, "moe_min_cos": mo_mn, "layer_global_cos": lo_g, "layer_min_cos": lo_mn}
-        # router top-6 set agreement vs R0 at the deepest layer covered
-        Lr = a.max_layer
-        r0i = R0[Lr]["router_ids"]; fi = runs[fname][Lr]["router_ids"]
-        exact = sum(1 for i in range(r0i.shape[0]) if set(r0i[i]) == set(fi[i]))
-        ov = float(np.mean([len(set(r0i[i]) & set(fi[i])) for i in range(r0i.shape[0])]))
-        rec["router_L%d_vs_R0" % Lr] = {"exact_set_match": exact, "n_tokens": int(r0i.shape[0]), "mean_overlap_of_6": ov}
+        # router top-6 set agreement vs R0 at layer 2 (the coordinator's metric) + deepest layer
+        for Lr in sorted({2, a.max_layer}):
+            if Lr > a.max_layer:
+                continue
+            r0i = R0[Lr]["router_ids"]; fi = runs[fname][Lr]["router_ids"]
+            exact = sum(1 for i in range(r0i.shape[0]) if set(r0i[i]) == set(fi[i]))
+            ov = float(np.mean([len(set(r0i[i]) & set(fi[i])) for i in range(r0i.shape[0])]))
+            rec["router_L%d_vs_R0" % Lr] = {"exact_set_match": exact, "n_tokens": int(r0i.shape[0]), "mean_overlap_of_6": ov}
+        Lr = 2 if a.max_layer >= 2 else a.max_layer
+        exact = rec["router_L%d_vs_R0" % Lr]["exact_set_match"]; ov = rec["router_L%d_vs_R0" % Lr]["mean_overlap_of_6"]
+        r0i = R0[Lr]["router_ids"]
         report["forward_vs_R0"][fname] = rec
         q = probe.get("formats", {}).get(fname, {})
         print(f"{fname:12} moe_g[L0..{a.max_layer}]=" + ",".join(f"{rec[f'L{L}']['moe_global_cos']:.5f}" for L in range(a.max_layer + 1))

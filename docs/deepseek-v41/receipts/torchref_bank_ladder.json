@@ -32,7 +32,7 @@
     291,
     2605
   ],
-  "max_layer": 2,
+  "max_layer": 7,
   "expert_quality_vs_source": {
     "q2_gs64": {
       "bits": 2,
@@ -122,10 +122,45 @@
         "layer_global_cos": 0.9376485739690584,
         "layer_min_cos": 0.9330801877098426
       },
+      "L3": {
+        "moe_global_cos": 0.9423058669974113,
+        "moe_min_cos": 0.8714367466515495,
+        "layer_global_cos": 0.9458111107879621,
+        "layer_min_cos": 0.9330997006458047
+      },
+      "L4": {
+        "moe_global_cos": 0.9945280083516657,
+        "moe_min_cos": 0.7895024036189922,
+        "layer_global_cos": 0.960989622568586,
+        "layer_min_cos": 0.9332010820111832
+      },
+      "L5": {
+        "moe_global_cos": 0.9951852415627868,
+        "moe_min_cos": 0.8261816067632235,
+        "layer_global_cos": 0.9715701009255945,
+        "layer_min_cos": 0.9333209095400214
+      },
+      "L6": {
+        "moe_global_cos": 0.906376933630829,
+        "moe_min_cos": 0.8481727058058536,
+        "layer_global_cos": 0.9716486379586934,
+        "layer_min_cos": 0.9329760309561
+      },
+      "L7": {
+        "moe_global_cos": 0.9289502858108848,
+        "moe_min_cos": 0.8652013459937914,
+        "layer_global_cos": 0.9716484258602454,
+        "layer_min_cos": 0.9322110074095351
+      },
       "router_L2_vs_R0": {
         "exact_set_match": 11,
         "n_tokens": 31,
         "mean_overlap_of_6": 5.096774193548387
+      },
+      "router_L7_vs_R0": {
+        "exact_set_match": 10,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.290322580645161
       }
     },
     "q3_gs64": {
@@ -147,10 +182,45 @@
         "layer_global_cos": 0.9851167288428401,
         "layer_min_cos": 0.983971351489984
       },
+      "L3": {
+        "moe_global_cos": 0.9863936765208912,
+        "moe_min_cos": 0.9670259395252292,
+        "layer_global_cos": 0.986882357469846,
+        "layer_min_cos": 0.9839593434767858
+      },
+      "L4": {
+        "moe_global_cos": 0.9985121082708283,
+        "moe_min_cos": 0.89729639852789,
+        "layer_global_cos": 0.9900763732620577,
+        "layer_min_cos": 0.9839735498697783
+      },
+      "L5": {
+        "moe_global_cos": 0.9987495565884682,
+        "moe_min_cos": 0.9248802641242058,
+        "layer_global_cos": 0.9927695951185024,
+        "layer_min_cos": 0.9840116519111544
+      },
+      "L6": {
+        "moe_global_cos": 0.9743543917548859,
+        "moe_min_cos": 0.953622420627409,
+        "layer_global_cos": 0.9927773738859513,
+        "layer_min_cos": 0.9832077004245656
+      },
+      "L7": {
+        "moe_global_cos": 0.9826862059581789,
+        "moe_min_cos": 0.9575177709788482,
+        "layer_global_cos": 0.9926736163069343,
+        "layer_min_cos": 0.984258975011372
+      },
       "router_L2_vs_R0": {
         "exact_set_match": 18,
         "n_tokens": 31,
         "mean_overlap_of_6": 5.548387096774194
+      },
+      "router_L7_vs_R0": {
+        "exact_set_match": 25,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.806451612903226
       }
     },
     "q4_gs64": {
@@ -172,7 +242,42 @@
         "layer_global_cos": 0.9971197245570109,
         "layer_min_cos": 0.9968085878142171
       },
+      "L3": {
+        "moe_global_cos": 0.9969081940398236,
+        "moe_min_cos": 0.979030486050305,
+        "layer_global_cos": 0.9974881390426487,
+        "layer_min_cos": 0.9960663997396665
+      },
+      "L4": {
+        "moe_global_cos": 0.9996317132099027,
+        "moe_min_cos": 0.9522433241941957,
+        "layer_global_cos": 0.9981069129078788,
+        "layer_min_cos": 0.9942248544836654
+      },
+      "L5": {
+        "moe_global_cos": 0.999692665587726,
+        "moe_min_cos": 0.9653946318240991,
+        "layer_global_cos": 0.9986454967981468,
+        "layer_min_cos": 0.9941543191898122
+      },
+      "L6": {
+        "moe_global_cos": 0.9932580179000684,
+        "moe_min_cos": 0.9557370439693521,
+        "layer_global_cos": 0.9986479308651804,
+        "layer_min_cos": 0.9936168889882073
+      },
+      "L7": {
+        "moe_global_cos": 0.9965019377949333,
+        "moe_min_cos": 0.9817745008369604,
+        "layer_global_cos": 0.9986464161633501,
+        "layer_min_cos": 0.9955741958377647
+      },
       "router_L2_vs_R0": {
+        "exact_set_match": 27,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.870967741935484
+      },
+      "router_L7_vs_R0": {
         "exact_set_match": 27,
         "n_tokens": 31,
         "mean_overlap_of_6": 5.870967741935484
@@ -197,10 +302,45 @@
         "layer_global_cos": 0.99764811635984,
         "layer_min_cos": 0.9973652589578113
       },
+      "L3": {
+        "moe_global_cos": 0.997548153654248,
+        "moe_min_cos": 0.9831084928797796,
+        "layer_global_cos": 0.9979412053954726,
+        "layer_min_cos": 0.997100735603873
+      },
+      "L4": {
+        "moe_global_cos": 0.9996518996414586,
+        "moe_min_cos": 0.9508315637090511,
+        "layer_global_cos": 0.9984395434186747,
+        "layer_min_cos": 0.9963658150827565
+      },
+      "L5": {
+        "moe_global_cos": 0.9997755276197271,
+        "moe_min_cos": 0.9679498479379932,
+        "layer_global_cos": 0.9988718135155205,
+        "layer_min_cos": 0.9951179764495234
+      },
+      "L6": {
+        "moe_global_cos": 0.9945047944926428,
+        "moe_min_cos": 0.9618831205047522,
+        "layer_global_cos": 0.9988739123992946,
+        "layer_min_cos": 0.9937270882645759
+      },
+      "L7": {
+        "moe_global_cos": 0.9972049789174965,
+        "moe_min_cos": 0.9858265455584351,
+        "layer_global_cos": 0.9988724132469728,
+        "layer_min_cos": 0.9957909392889256
+      },
       "router_L2_vs_R0": {
         "exact_set_match": 26,
         "n_tokens": 31,
         "mean_overlap_of_6": 5.838709677419355
+      },
+      "router_L7_vs_R0": {
+        "exact_set_match": 29,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.935483870967742
       }
     },
     "q6_gs64": {
@@ -222,10 +362,45 @@
         "layer_global_cos": 0.9998253559176002,
         "layer_min_cos": 0.9988534506806112
       },
+      "L3": {
+        "moe_global_cos": 0.9997897946993448,
+        "moe_min_cos": 0.9820582602995872,
+        "layer_global_cos": 0.99984749996363,
+        "layer_min_cos": 0.9968019201858913
+      },
+      "L4": {
+        "moe_global_cos": 0.9999201807937609,
+        "moe_min_cos": 0.9546329056461165,
+        "layer_global_cos": 0.9998837652504284,
+        "layer_min_cos": 0.9949655026459329
+      },
+      "L5": {
+        "moe_global_cos": 0.9999164740878724,
+        "moe_min_cos": 0.9703582680391377,
+        "layer_global_cos": 0.9999152089878599,
+        "layer_min_cos": 0.9959964841907811
+      },
+      "L6": {
+        "moe_global_cos": 0.9991995913319238,
+        "moe_min_cos": 0.9804352383018613,
+        "layer_global_cos": 0.9999153869318661,
+        "layer_min_cos": 0.995288419749254
+      },
+      "L7": {
+        "moe_global_cos": 0.999659999536543,
+        "moe_min_cos": 0.9851179660180741,
+        "layer_global_cos": 0.9999141542295976,
+        "layer_min_cos": 0.9969142565097208
+      },
       "router_L2_vs_R0": {
         "exact_set_match": 28,
         "n_tokens": 31,
         "mean_overlap_of_6": 5.903225806451613
+      },
+      "router_L7_vs_R0": {
+        "exact_set_match": 29,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.935483870967742
       }
     },
     "mxfp4_gs32": {
@@ -247,7 +422,42 @@
         "layer_global_cos": 0.999999999999999,
         "layer_min_cos": 0.9999999999999998
       },
+      "L3": {
+        "moe_global_cos": 0.9999999999999987,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.9999999999999992,
+        "layer_min_cos": 0.9999999999999998
+      },
+      "L4": {
+        "moe_global_cos": 0.9999999999999991,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.9999999999999992,
+        "layer_min_cos": 0.9999999999999998
+      },
+      "L5": {
+        "moe_global_cos": 0.9999999999999986,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.999999999999999,
+        "layer_min_cos": 0.9999999999999998
+      },
+      "L6": {
+        "moe_global_cos": 1.000000000000001,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.999999999999999,
+        "layer_min_cos": 0.9999999999999998
+      },
+      "L7": {
+        "moe_global_cos": 0.9999999999999988,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.9999999999999983,
+        "layer_min_cos": 0.9999999999999998
+      },
       "router_L2_vs_R0": {
+        "exact_set_match": 31,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 6.0
+      },
+      "router_L7_vs_R0": {
         "exact_set_match": 31,
         "n_tokens": 31,
         "mean_overlap_of_6": 6.0
