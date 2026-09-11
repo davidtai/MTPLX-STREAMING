@@ -753,6 +753,54 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   identical-shape shared compiled callable is **already** K22 (one qkv + one out tape across all layers).
   Realized GPU decode delta is **KG-j** (unmeasured). See `W45_ATTN_DISPATCH_REDUCTION.md`.
 
+### K25 — Prefill score-path precision + split-K online softmax (`MTPLX_DSV41_PREFILL_SCORE_DTYPE` / `..._KEY_CHUNK`) — **W50 (prefill, sibling of K6)**
+- **Mechanism:** W47's stage timing puts **`attn.*.score` at 201 s of the 370 s 16K TTFT**
+  (reuse 153 + reindex 23 + full 19 + swa_only 6; layer-major, 60 GiB plan) — the single largest
+  prefill term. head_dim **512 is not a fused-SDPA dim** (64/96/128/192/256), so the score path
+  materializes the full `[rows,64,T]` f32 transient (§3.2 / K6). The port computes QK^T **and** PV with
+  **both matmul inputs cast to f32** (`_sparse_attend`, `deepseek_v41.py`), matching the pure-f32
+  torch oracle (`ref_forward._k_sparse_attn`, `torch.einsum(q.float(), kvg.float())`) — but at ~153 s
+  the reuse score runs **≈7 TFLOPS, i.e. f32-matmul territory; the M5 Max does ~2× that in bf16**.
+  K25 splits the lever in two, both **prefill-only** (gated `q.shape[1] > 1`; decode/M=1 always runs
+  the shipped f32 one-shot, byte-identical):
+  1. **`MTPLX_DSV41_PREFILL_SCORE_DTYPE=bf16`** — cast the QK^T / PV matmul **inputs** to bf16; the
+     scale, mask, per-head sink and softmax stay f32 (as the oracle). MLX matmul **accumulates in f32
+     and rounds the result back to bf16** — proven on CPU: a bf16 QK^T over K=512 equals
+     `round_bf16(f32-accumulated)` *exactly* (`array_equal`), so the matmul error **== the bf16 output
+     rounding** (0.2039 == 0.2039), not a K-growing accumulation error. Unset/`f32` inserts no casts
+     (byte-identical to control).
+  2. **`MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK=<n>`** (default off) — the gemma4 D512 two-pass split-K
+     **online softmax** over `n`-wide key blocks (running max/denom/value with per-chunk rescale; the
+     value-0 sink seeds `m=attn_sink, denom=1, acc=0`, so a fully-masked chunk never hits
+     `-inf−(−inf)`). Caps the score transient at `[rows,64,n]` instead of `[rows,64,T]`.
+- **FLOP / byte arithmetic (16K, layer-major, rows=1024/chunk):**
+  - Score matmuls per call ≈ `4·rows·H·T·d` FLOP (QK^T `2·rows·H·T·d` + PV `2·rows·H·T·d`, d=512, H=64);
+    summed over 17 chunks × 30 reuse layers ≈ the W47 **1.12 PFLOP** attention estimate. **bf16 2×** on
+    the two matmuls (the compute-bound majority of the 201 s score term) → **est. −60 to −90 s off the
+    score stages, TTFT 370 → ~290–310 s (−16 to −22 %)** — a GPU-window estimate (softmax/mask/dispatch
+    stay f32, so not the full 2×). Byte cut per element: 4 B (f32) → 2 B (bf16) on the two matmuls' i/o.
+  - Score **transient** at the last 16K chunk: one-shot f32 **6 GiB** (W47); bf16 one-shot ~half; split-K
+    `n=2048` → `[1024,64,2048]·4 B ≈ 0.54 GB` (~8× smaller → protects the 100 GiB knob / admits a larger
+    prefill chunk); **bf16 + n=2048 ≈ 0.27 GB**. Split-K is **compute-neutral** (same FLOP, extra
+    per-chunk host dispatch) — its win is peak GB, possibly a small TTFT cost.
+- **Exactness (CPU-proven, `tests/models/test_deepseek_v41_prefill_score_precision.py`, 16 tests):**
+  - `f32` one-shot **byte-identical** to the pre-W50 inline formula (`array_equal`), and to control
+    end-to-end (tiny-model logits `array_equal`).
+  - **split-K f32 == one-shot f32 up to reassociation only**: scores are bit-identical (the QK^T reduces
+    over head_dim, **not** the chunked T axis), so only the softmax denom + value sum reorder — real
+    DSV4.1 shape (H=64, d=512, rows 128, T 4096) **max |Δ| = 6.1e-7 (rel 2e-6)**, greedy argmax identical
+    on every row; NaN-free on a fully-masked chunk (collapses to the value-0 sink → 0).
+  - **bf16 is LOSSY by design** (like head_bf16, K21): real-shape attention-output **max |Δ| ≈ 1.8–3.9e-3
+    (rel 6e-3 to 1.1e-2)**, at bf16 rounding scale. Greedy tokens **can flip on near-ties** — the untrained
+    tiny double flips intermediate-row argmax under bf16 while chunked-f32 does not — so exactness is
+    **not** the ship bar; a task eval (HumanEval, [[deepseek-v4-quality-verdict]]) gates bf16, and the
+    real deployment runs bf16 anyway (the f32 oracle is stricter than the reference's own precision).
+- **STATUS (W50, `feat/deepseek-v41-w50`):** IMPLEMENTED + CPU-proven, both levers default OFF (f32 /
+  one-shot). Peak RSS of the real-shape exactness test 1.62 GB (<3 GB). Arms `score_bf16`,
+  `score_chunked` (`n=2048`), `score_bf16_chunked` added to `ab_decode_env_levers.py`. **Realized GPU
+  TTFT / peak delta is unmeasured — the GPU gate is KG-g** (K6 two-pass + tiling on the K16 base:
+  *TTFT −≥15 % beyond K16 AND peak −≥8 GB, parity on the long-prompt A/B*). See `W50_PREFILL_SCORE_PRECISION.md`.
+
 ---
 
 ### K26 — Prefill dequantize-once / dense-bf16 experts (`MTPLX_DSV41_PREFILL_DENSE_EXPERTS`) — **Rank (W51, the ALU-bound 16K prefill switch)**

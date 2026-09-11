@@ -660,15 +660,91 @@ class Attention(nn.Module):
     def _sparse_attend(self, q, KV, attend):
         """One softmax over the concatenated KV with a per-head sink (value 0),
         equivalent to reference ``sparse_attn``.  q: [b,s,H,hd], KV: [b,T,hd],
-        attend: [b,s,T] bool."""
+        attend: [b,s,T] bool.
+
+        Prefill (query rows ``q.shape[1] > 1``) reads the W50/K25 score-path
+        levers -- ``MTPLX_DSV41_PREFILL_SCORE_DTYPE`` (f32|bf16, the QK^T/PV matmul
+        input dtype) and ``MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK`` (the split-K online
+        softmax chunk width, off by default).  Decode / M=1 (``s == 1``) always
+        runs the shipped f32 one-shot path, byte-identical to control regardless of
+        the env."""
+        if q.shape[1] <= 1:
+            return self._sparse_attend_oneshot(q, KV, attend, mx.float32)
+        score_dtype = _resolve_prefill_score_dtype()
+        key_chunk = _resolve_prefill_score_key_chunk()
+        if key_chunk is not None:
+            return self._sparse_attend_chunked(q, KV, attend, score_dtype, key_chunk)
+        return self._sparse_attend_oneshot(q, KV, attend, score_dtype)
+
+    def _sparse_attend_oneshot(self, q, KV, attend, score_dtype):
+        """One-shot softmax over the full concatenated KV (the shipped path).
+
+        ``score_dtype`` casts the QK^T / PV matmul *inputs*; MLX matmul accumulates
+        in f32 internally and rounds the result back to ``score_dtype``, so the
+        scale, mask, per-head sink and softmax stay in f32 exactly as the reference
+        oracle -- the only numerical change under ``bf16`` is the two matmuls'
+        input+output bf16 rounding.  ``score_dtype == float32`` inserts no casts and
+        is byte-identical to control."""
         b, s, H, _ = q.shape
-        scores = mx.einsum("bshd,btd->bsht", q.astype(mx.float32), KV.astype(mx.float32))
+        if score_dtype == mx.float32:
+            scores = mx.einsum("bshd,btd->bsht", q.astype(mx.float32), KV.astype(mx.float32))
+        else:
+            scores = mx.einsum(
+                "bshd,btd->bsht", q.astype(score_dtype), KV.astype(score_dtype)
+            ).astype(mx.float32)
         scores = scores * self.softmax_scale
         scores = mx.where(attend[:, :, None, :], scores, float("-inf"))
         sink = mx.broadcast_to(self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1), (b, s, H, 1))
         full = mx.concatenate([scores, sink], axis=-1)
         w = mx.softmax(full, axis=-1)[..., : KV.shape[1]]  # drop the sink column (value 0)
-        return mx.einsum("bsht,btd->bshd", w, KV.astype(mx.float32))
+        if score_dtype == mx.float32:
+            return mx.einsum("bsht,btd->bshd", w, KV.astype(mx.float32))
+        return mx.einsum(
+            "bsht,btd->bshd", w.astype(score_dtype), KV.astype(score_dtype)
+        ).astype(mx.float32)
+
+    def _sparse_attend_chunked(self, q, KV, attend, score_dtype, key_chunk):
+        """Two-pass split-K online softmax (gemma4 D512 two-pass / K6) over
+        ``key_chunk``-wide key blocks: caps the score transient at
+        ``[rows, H, key_chunk]`` instead of the full ``[rows, H, T]``.
+
+        Mathematically identical to :meth:`_sparse_attend_oneshot`: the per-element
+        QK^T dot products are bit-identical (the matmul reduces over ``head_dim``,
+        NOT the chunked ``T`` axis), so only the softmax-denominator sum and the
+        value accumulation reassociate across chunks -- in f32 the sole difference
+        from one-shot is float reassociation.  The per-head value-0 sink seeds the
+        running state (``m = attn_sink`` finite, ``denom = exp(0) = 1``, ``acc =
+        0``), so a fully-masked chunk (all scores ``-inf``) produces ``corr =
+        exp(m-m) = 1`` and ``p = 0`` -- never a ``-inf − (−inf)`` NaN."""
+        b, s, H, hd = q.shape
+        T = KV.shape[1]
+        qd = q.astype(score_dtype)
+        KVd = KV.astype(score_dtype)
+        m = mx.broadcast_to(
+            self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1), (b, s, H, 1)
+        )
+        denom = mx.ones((b, s, H, 1), dtype=mx.float32)   # sink: exp(attn_sink - m) = 1
+        acc = mx.zeros((b, s, H, hd), dtype=mx.float32)   # sink value is 0
+        for c0 in range(0, T, key_chunk):
+            c1 = min(c0 + key_chunk, T)
+            KVc = KVd[:, c0:c1, :]
+            att_c = attend[:, :, c0:c1]
+            sc = mx.einsum("bshd,btd->bsht", qd, KVc).astype(mx.float32) * self.softmax_scale
+            sc = mx.where(att_c[:, :, None, :], sc, float("-inf"))
+            m_c = mx.max(sc, axis=-1, keepdims=True)
+            m_new = mx.maximum(m, m_c)
+            corr = mx.exp(m - m_new)
+            p = mx.exp(sc - m_new)
+            denom = denom * corr + mx.sum(p, axis=-1, keepdims=True)
+            if score_dtype == mx.float32:
+                pv = mx.einsum("bsht,btd->bshd", p, KVc)
+            else:
+                pv = mx.einsum(
+                    "bsht,btd->bshd", p.astype(score_dtype), KVc
+                ).astype(mx.float32)
+            acc = acc * corr + pv
+            m = m_new
+        return acc / denom
 
     def _window_attend(self, positions, T, b, s, shared):
         """The causal sliding-window attend mask ``[b, s, T]``.
@@ -947,6 +1023,72 @@ _ATTN_WIN_MEMO_ENV = "MTPLX_DSV41_ATTN_WIN_MEMO"
 _ATTN_WIN_MEMO = (os.environ.get(_ATTN_WIN_MEMO_ENV) or "").strip().lower() not in (
     "", "0", "false", "no", "off", "auto",
 )
+
+
+# --- W50 / K25: prefill score-path precision + split-K online softmax --------
+#: Casts the prefill (rows > 1) QK^T / PV matmul *inputs* to a cheaper dtype.  MLX
+#: matmul accumulates in f32 internally and rounds the result back to the input
+#: dtype (verified: a bf16 matmul equals ``round_bf16(f32-accumulated result)``),
+#: so ``bf16`` keeps the ~2× bf16 matmul throughput while the scale / mask / sink /
+#: softmax stay in f32 exactly as the reference oracle -- the only numerical change
+#: is bf16 rounding of the two matmuls' inputs+outputs.  ``f32`` (unset/default) is
+#: byte-identical to the shipped path.  Decode (``q.shape[1] == 1``) never reads
+#: this lever.  Read at call time (the serving harness stamps keys after import,
+#: [[env-flags-read-at-use-not-import]]).
+_PREFILL_SCORE_DTYPE_ENV = "MTPLX_DSV41_PREFILL_SCORE_DTYPE"
+_PREFILL_SCORE_DTYPE_DEFAULT_ALIASES = (
+    "", "default", "off", "none", "control", "f32", "fp32", "float32",
+)
+_PREFILL_SCORE_DTYPE_BF16_ALIASES = ("bf16", "bfloat16")
+
+
+def _resolve_prefill_score_dtype(raw=None):
+    """Resolve ``MTPLX_DSV41_PREFILL_SCORE_DTYPE`` to the mx dtype for the prefill
+    QK^T / PV matmul inputs.  Unset / ``f32`` -> ``mx.float32`` (byte-identical to
+    control); ``bf16`` -> ``mx.bfloat16``.  Read at use, never frozen at import.
+    An unrecognised non-empty value raises so a mistyped precision lever fails fast
+    rather than silently running the default through a whole benchmark window."""
+    val = os.environ.get(_PREFILL_SCORE_DTYPE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in _PREFILL_SCORE_DTYPE_DEFAULT_ALIASES:
+        return mx.float32
+    if val in _PREFILL_SCORE_DTYPE_BF16_ALIASES:
+        return mx.bfloat16
+    raise ValueError(
+        f"{_PREFILL_SCORE_DTYPE_ENV}={val!r} is not one of ('f32', 'bf16') "
+        "(or empty/'default' for the current f32 behaviour)"
+    )
+
+
+#: Key-chunk width for the two-pass split-K online softmax (gemma4 D512 two-pass /
+#: K6) over the concatenated KV.  Unset / 0 -> one-shot (full-T score transient,
+#: the shipped path).  A positive int caps the score transient at
+#: ``[rows, H, key_chunk]``; mathematically identical to one-shot up to float
+#: reassociation of the softmax denom + value sum.  Read at call time.
+_PREFILL_SCORE_KEY_CHUNK_ENV = "MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK"
+
+
+def _resolve_prefill_score_key_chunk(raw=None):
+    """Resolve ``MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK`` to a positive int chunk
+    width, or ``None`` (off = one-shot, the default).  An unrecognised /
+    non-positive value raises (fail fast) except the explicit ``off`` aliases."""
+    val = os.environ.get(_PREFILL_SCORE_KEY_CHUNK_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "off", "none", "default"):
+        return None
+    try:
+        n = int(val)
+    except ValueError:
+        raise ValueError(
+            f"{_PREFILL_SCORE_KEY_CHUNK_ENV}={val!r} is not a positive integer "
+            "(or empty/0/'off' for the one-shot path)"
+        )
+    if n <= 0:
+        raise ValueError(
+            f"{_PREFILL_SCORE_KEY_CHUNK_ENV}={val!r} must be > 0 "
+            "(or empty/0/'off' for the one-shot path)"
+        )
+    return n
 
 
 def _lin_desc(linear):

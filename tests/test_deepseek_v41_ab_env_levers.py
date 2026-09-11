@@ -11,11 +11,14 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
   * per-arm env application for every preset
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
     switch_fastpath / switch_fastpath_b / attn_compile / attn_win_memo /
-    device_route / both / all_levers / stack_a / head_bf16 / head_mxfp8 /
-    head_q8), including arm independence (each arm force-unsets the keys it does
-    not set, and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE, the W44
-    device-route boolean, and the eight boolean per-forward levers never leak
-    across each other);
+    device_route / prefill_dense_experts / both / all_levers / stack_a /
+    head_bf16 / head_mxfp8 / head_q8 / score_bf16 / score_chunked /
+    score_bf16_chunked / prefill_fast), including arm independence (each arm
+    force-unsets the keys it does not set, and the W40 load-time head codec
+    MTPLX_DSV41_HEAD_MODE, the W44 device-route boolean, the W51 dense-experts
+    boolean + its two value knobs, the two W50 prefill score-path keys
+    MTPLX_DSV41_PREFILL_SCORE_DTYPE / MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK, and the
+    eight boolean per-forward levers never leak across each other);
   * prompt-build metadata parity with ``bench_standard_shape`` at 1024.
 
 No GPU, no Metal, no model, no server, no network. The scripts are not a package
@@ -53,14 +56,19 @@ _PD = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"     # W51 / K26: prefill dense experts
 _PDMR = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"  # W51 / K26: per-expert row threshold
 _PDB = "MTPLX_DSV41_PREFILL_DENSE_BATCH"      # W51 / K26: dequant batch size
 _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
+_SD = "MTPLX_DSV41_PREFILL_SCORE_DTYPE"      # W50 / K25: prefill score matmul dtype (bf16, lossy)
+_SC = "MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK"  # W50 / K25: split-K online-softmax chunk width
 # The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
 # PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
 # NOT part of all_levers, so they never join the "all-on" independence invariant.
-# DEVICE_ROUTE is in stack_a; PREFILL_DENSE_EXPERTS is its own arm. The two dense
-# value knobs (min_rows, batch) take an integer string and are left unset by every
-# arm (the code default applies), so they are always recorded None.
+# DEVICE_ROUTE is in stack_a; PREFILL_DENSE_EXPERTS is its own arm (+ prefill_fast).
+# The two dense value knobs (min_rows, batch) take an integer string and are left
+# unset by every arm (the code default applies), so they are always recorded None.
+# The two W50 score-path keys (_SD "bf16", _SC an int width) are value-taking like
+# _HM, tracked separately and never in all_levers.
 _ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight booleans all_levers sets
-_BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _HM)  # every key a preset pins
+_BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _HM)  # every pre-W50 key a preset pins
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC)  # + the two W50 score-path keys = all fifteen
 
 ALL_ARMS = [
     "control",
@@ -80,6 +88,10 @@ ALL_ARMS = [
     "head_bf16",
     "head_mxfp8",
     "head_q8",
+    "score_bf16",
+    "score_chunked",
+    "score_bf16_chunked",
+    "prefill_fast",
 ]
 
 # The boolean lever env keys each arm must leave set to "1" (every other unset).
@@ -106,6 +118,13 @@ EXPECTED_ON = {
     "head_bf16": set(),
     "head_mxfp8": set(),
     "head_q8": set(),
+    "score_bf16": set(),
+    "score_chunked": set(),
+    "score_bf16_chunked": set(),
+    # W50+W51: the stacked prefill candidate rides the layer-major schedule; its
+    # _PD (dense) is in EXPECTED_DENSE and its score keys in EXPECTED_SCORE_*, so
+    # _LM is the only _ALL_KEYS member here.
+    "prefill_fast": {_LM},
 }
 
 # The device-route boolean each arm pins (W44 K24; separate from _ALL_KEYS because
@@ -115,8 +134,8 @@ EXPECTED_ON = {
 EXPECTED_DEVICE = {arm: (arm == "device_route") for arm in ALL_ARMS}
 
 # The prefill-dense-experts boolean each arm pins (W51 K26; separate from
-# _ALL_KEYS, not part of all_levers). Only its own arm sets it.
-EXPECTED_DENSE = {arm: (arm == "prefill_dense_experts") for arm in ALL_ARMS}
+# _ALL_KEYS, not part of all_levers). Its own arm and the W50+W51 prefill_fast stack.
+EXPECTED_DENSE = {arm: (arm in ("prefill_dense_experts", "prefill_fast")) for arm in ALL_ARMS}
 
 # The head-codec value each arm pins on MTPLX_DSV41_HEAD_MODE (None = force-unset).
 EXPECTED_HEAD = {
@@ -137,7 +156,24 @@ EXPECTED_HEAD = {
     "head_bf16": "bf16",
     "head_mxfp8": "mxfp8",
     "head_q8": "q8",
+    "score_bf16": None,
+    "score_chunked": None,
+    "score_bf16_chunked": None,
+    "prefill_fast": None,
 }
+
+# The W50/K25 prefill score-path values each arm pins (None = force-unset). _SD is
+# the QK^T/PV matmul dtype ("bf16"); _SC is the split-K online-softmax chunk width
+# ("2048").  Off on every pre-W50 arm; set on the score arms and the prefill_fast stack.
+EXPECTED_SCORE_DTYPE = {arm: None for arm in ALL_ARMS}
+EXPECTED_SCORE_DTYPE["score_bf16"] = "bf16"
+EXPECTED_SCORE_DTYPE["score_bf16_chunked"] = "bf16"
+EXPECTED_SCORE_DTYPE["prefill_fast"] = "bf16"
+
+EXPECTED_SCORE_CHUNK = {arm: None for arm in ALL_ARMS}
+EXPECTED_SCORE_CHUNK["score_chunked"] = "2048"
+EXPECTED_SCORE_CHUNK["score_bf16_chunked"] = "2048"
+EXPECTED_SCORE_CHUNK["prefill_fast"] = "2048"
 
 
 def _load(name: str):
@@ -163,7 +199,7 @@ def bench():
 def _restore_lever_env():
     """Snapshot and restore the lever + probe env keys around every test so an
     arm applied in one test never leaks into the next."""
-    watched = _BOOL_AND_HEAD + ("MTPLX_ROUTE_STAGE_PROBE",)
+    watched = _ALL_WATCHED + ("MTPLX_ROUTE_STAGE_PROBE",)
     saved = {k: os.environ.get(k) for k in watched}
     try:
         yield
@@ -213,10 +249,10 @@ def test_prompt_args_no_longer_raises_attributeerror(env_levers, bench):
 
 @pytest.mark.parametrize("arm", ALL_ARMS)
 def test_apply_arm_env_sets_and_clears(env_levers, arm):
-    # Pre-pollute every lever key (booleans + head) so we prove the arm force-
-    # unsets the ones it does not set (arms are independent), not merely sets the
-    # ones it wants.
-    for k in _BOOL_AND_HEAD:
+    # Pre-pollute every lever key (booleans + dense + head + the two W50 score
+    # keys) so we prove the arm force-unsets the ones it does not set (arms are
+    # independent), not merely sets the ones it wants.
+    for k in _ALL_WATCHED:
         os.environ[k] = "bogus"
     env_levers._apply_arm_env(arm)
     for k in _ALL_KEYS:
@@ -242,6 +278,12 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert _HM not in os.environ, f"{arm}: {_HM} should be force-unset"
     else:
         assert os.environ.get(_HM) == EXPECTED_HEAD[arm], f"{arm}: {_HM}"
+    # the W50 score-path keys pin their value (a string), or are force-unset (None).
+    for key, expected in ((_SD, EXPECTED_SCORE_DTYPE[arm]), (_SC, EXPECTED_SCORE_CHUNK[arm])):
+        if expected is None:
+            assert key not in os.environ, f"{arm}: {key} should be force-unset"
+        else:
+            assert os.environ.get(key) == expected, f"{arm}: {key} should be {expected!r}"
 
 
 def test_head_arms_do_not_touch_boolean_levers(env_levers):
@@ -329,6 +371,8 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_HM] = "bogus"
     os.environ[_PD] = "bogus"
     os.environ[_PDMR] = "bogus"
+    os.environ[_SD] = "bogus"
+    os.environ[_SC] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -346,6 +390,9 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         assert (r["arm_env"].get(_PD) == "1") == EXPECTED_DENSE[r["arm"]], r["arm"]
         assert r["arm_env"].get(_PDMR) is None, r["arm"]
         assert r["arm_env"].get(_PDB) is None, r["arm"]
+        # the two W50 score-path keys are recorded per arm.
+        assert r["arm_env"].get(_SD) == EXPECTED_SCORE_DTYPE[r["arm"]], r["arm"]
+        assert r["arm_env"].get(_SC) == EXPECTED_SCORE_CHUNK[r["arm"]], r["arm"]
 
 
 def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path):
