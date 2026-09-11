@@ -1,0 +1,257 @@
+{
+  "probe_ids": [
+    0,
+    3465,
+    1258,
+    6036,
+    14,
+    291,
+    3395,
+    361,
+    1354,
+    260,
+    940,
+    291,
+    6328,
+    3465,
+    1241,
+    6036,
+    14,
+    291,
+    3395,
+    361,
+    1354,
+    260,
+    565,
+    291,
+    6328,
+    3465,
+    21740,
+    6036,
+    14,
+    291,
+    2605
+  ],
+  "max_layer": 2,
+  "expert_quality_vs_source": {
+    "q2_gs64": {
+      "bits": 2,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.912062228453342,
+      "min_cos_vs_source": 0.9104911721740689,
+      "n_weights": 573,
+      "bytes_per_record": 11059200,
+      "bank_bytes_40x384": 169869312000,
+      "bank_GiB_40x384": 158.2
+    },
+    "q3_gs64": {
+      "bits": 3,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.9781588231808208,
+      "min_cos_vs_source": 0.977197972034235,
+      "n_weights": 573,
+      "bytes_per_record": 15482880,
+      "bank_bytes_40x384": 237817036800,
+      "bank_GiB_40x384": 221.48
+    },
+    "q4_gs64": {
+      "bits": 4,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.9953376677383121,
+      "min_cos_vs_source": 0.9952460616150323,
+      "n_weights": 573,
+      "bytes_per_record": 19906560,
+      "bank_bytes_40x384": 305764761600,
+      "bank_GiB_40x384": 284.77
+    },
+    "q4_gs32": {
+      "bits": 4,
+      "group_size": 32,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.996288637485935,
+      "min_cos_vs_source": 0.9962230790603097,
+      "n_weights": 573,
+      "bytes_per_record": 22118400,
+      "bank_bytes_40x384": 339738624000,
+      "bank_GiB_40x384": 316.41
+    },
+    "q6_gs64": {
+      "bits": 6,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.999734715595699,
+      "min_cos_vs_source": 0.9997304368128315,
+      "n_weights": 573,
+      "bytes_per_record": 28753920,
+      "bank_bytes_40x384": 441660211200,
+      "bank_GiB_40x384": 411.33
+    },
+    "mxfp4_gs32": {
+      "bits": 4,
+      "group_size": 32,
+      "mode": "mxfp4",
+      "mean_cos_vs_source": 1.0,
+      "min_cos_vs_source": 0.9999999999999999,
+      "n_weights": 573,
+      "bytes_per_record": 18800640,
+      "bank_bytes_40x384": 288777830400,
+      "bank_GiB_40x384": 268.95,
+      "bit_exact_vs_source": true
+    }
+  },
+  "forward_vs_R0": {
+    "q2_gs64": {
+      "L0": {
+        "moe_global_cos": 0.9347082461667118,
+        "moe_min_cos": 0.9270759869945161,
+        "layer_global_cos": 0.9342147286646154,
+        "layer_min_cos": 0.9290685005362156
+      },
+      "L1": {
+        "moe_global_cos": 0.9282863539555335,
+        "moe_min_cos": 0.9299803933093954,
+        "layer_global_cos": 0.9367315482279925,
+        "layer_min_cos": 0.9332968276420254
+      },
+      "L2": {
+        "moe_global_cos": 0.9469640363116815,
+        "moe_min_cos": 0.8539481811257131,
+        "layer_global_cos": 0.9376485739690584,
+        "layer_min_cos": 0.9330801877098426
+      },
+      "router_L2_vs_R0": {
+        "exact_set_match": 11,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.096774193548387
+      }
+    },
+    "q3_gs64": {
+      "L0": {
+        "moe_global_cos": 0.9837248569533109,
+        "moe_min_cos": 0.9815605955812083,
+        "layer_global_cos": 0.9837645462571472,
+        "layer_min_cos": 0.9821287265313893
+      },
+      "L1": {
+        "moe_global_cos": 0.9835077387131216,
+        "moe_min_cos": 0.9719380027471152,
+        "layer_global_cos": 0.9851850990361558,
+        "layer_min_cos": 0.9840462061685648
+      },
+      "L2": {
+        "moe_global_cos": 0.9861851986996172,
+        "moe_min_cos": 0.9337152189842388,
+        "layer_global_cos": 0.9851167288428401,
+        "layer_min_cos": 0.983971351489984
+      },
+      "router_L2_vs_R0": {
+        "exact_set_match": 18,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.548387096774194
+      }
+    },
+    "q4_gs64": {
+      "L0": {
+        "moe_global_cos": 0.9969504839988299,
+        "moe_min_cos": 0.9965706197039117,
+        "layer_global_cos": 0.9969828633850727,
+        "layer_min_cos": 0.996674705518411
+      },
+      "L1": {
+        "moe_global_cos": 0.9967580883599092,
+        "moe_min_cos": 0.9850452120573925,
+        "layer_global_cos": 0.9971024231442186,
+        "layer_min_cos": 0.9968293635309645
+      },
+      "L2": {
+        "moe_global_cos": 0.9971852235323849,
+        "moe_min_cos": 0.9436393599205042,
+        "layer_global_cos": 0.9971197245570109,
+        "layer_min_cos": 0.9968085878142171
+      },
+      "router_L2_vs_R0": {
+        "exact_set_match": 27,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.870967741935484
+      }
+    },
+    "q4_gs32": {
+      "L0": {
+        "moe_global_cos": 0.997541222375361,
+        "moe_min_cos": 0.9972401097971915,
+        "layer_global_cos": 0.997561143228883,
+        "layer_min_cos": 0.997324428054591
+      },
+      "L1": {
+        "moe_global_cos": 0.9973532969055077,
+        "moe_min_cos": 0.9903307241266632,
+        "layer_global_cos": 0.9976408083401458,
+        "layer_min_cos": 0.997384694346374
+      },
+      "L2": {
+        "moe_global_cos": 0.9977883202995665,
+        "moe_min_cos": 0.9446623369660657,
+        "layer_global_cos": 0.99764811635984,
+        "layer_min_cos": 0.9973652589578113
+      },
+      "router_L2_vs_R0": {
+        "exact_set_match": 26,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.838709677419355
+      }
+    },
+    "q6_gs64": {
+      "L0": {
+        "moe_global_cos": 0.9998111031439443,
+        "moe_min_cos": 0.9997859092356597,
+        "layer_global_cos": 0.9998114477510218,
+        "layer_min_cos": 0.9997922505170134
+      },
+      "L1": {
+        "moe_global_cos": 0.9998065279044768,
+        "moe_min_cos": 0.9998016305884837,
+        "layer_global_cos": 0.9998253162721532,
+        "layer_min_cos": 0.9998108936708353
+      },
+      "L2": {
+        "moe_global_cos": 0.9997970360406051,
+        "moe_min_cos": 0.9448093663502063,
+        "layer_global_cos": 0.9998253559176002,
+        "layer_min_cos": 0.9988534506806112
+      },
+      "router_L2_vs_R0": {
+        "exact_set_match": 28,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 5.903225806451613
+      }
+    },
+    "mxfp4_gs32": {
+      "L0": {
+        "moe_global_cos": 0.999999999999999,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.9999999999999962,
+        "layer_min_cos": 0.9999999999999998
+      },
+      "L1": {
+        "moe_global_cos": 0.9999999999999988,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.9999999999999988,
+        "layer_min_cos": 0.9999999999999998
+      },
+      "L2": {
+        "moe_global_cos": 0.9999999999999986,
+        "moe_min_cos": 0.9999999999999998,
+        "layer_global_cos": 0.999999999999999,
+        "layer_min_cos": 0.9999999999999998
+      },
+      "router_L2_vs_R0": {
+        "exact_set_match": 31,
+        "n_tokens": 31,
+        "mean_overlap_of_6": 6.0
+      }
+    }
+  }
+}

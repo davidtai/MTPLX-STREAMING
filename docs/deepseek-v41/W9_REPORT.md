@@ -195,6 +195,38 @@ layer; over 40 layers that flips borderline next-token argmaxes at specific posi
 while high-confidence positions stay correct — exactly the scattered pattern. This is
 W8's "withdraw 'Q2 quality', record prefill defect", now quantified.
 
+## Candidate-bank ladder — the routed-expert quantization decision (`bank_ladder.py` + `bank_mx_probe.py`)
+
+Requantizes the FP4-source routed experts (those the reference router selects) into
+each candidate format and runs the reference forward (layers 0–2, source dense /
+engram / gate held fixed, so the ONLY variable is the expert format), vs R0 (source
+fp4). Requant uses `mx.quantize` (authoritative — numpy affine ≠ mlx affine, cos
+0.988). Receipts: `torchref_bank_ladder.json`, `bank_mx_probe.json`.
+
+| format | expert cos vs source | MoE g (L2) | layer g (L2) | router top-6 vs R0 (L2) | bytes/record | bank (40×384) |
+|--------|----------------------|-----------|--------------|-------------------------|--------------|----------------|
+| **q2 gs64 (current)** | 0.9121 | 0.9470 | 0.9377 | 11/31 (ov 5.10) | 11.06 MB | **158.2 GiB** |
+| q3 gs64 | 0.9782 | 0.9862 | 0.9851 | 18/31 (ov 5.55) | 15.48 MB | 221.5 GiB |
+| q4 gs64 | 0.9953 | 0.9972 | 0.9971 | 27/31 (ov 5.87) | 19.91 MB | 284.8 GiB |
+| q4 gs32 | 0.9963 | 0.9978 | 0.9977 | 26/31 (ov 5.84) | 22.12 MB | 316.4 GiB |
+| q6 gs64 | 0.9997 | 0.9998 | 0.9998 | 28/31 (ov 5.90) | 28.75 MB | 411.3 GiB |
+| **mxfp4 gs32 (native)** | **1.000000** | **1.000000** | **1.000000** | **31/31 (ov 6.00)** | 18.80 MB | **269.0 GiB** |
+
+**Recommendation: ship the routed experts as native mxfp4 gs32.** In mlx 0.32.2
+`mx.quantize(..., mode="mxfp4")` round-trips the source E2M1+E8M0 experts **bit-for-bit**
+(`bank_mx_probe.json` `bit_exact_vs_source: true`), so mxfp4 is a **lossless repack** of
+the fp4 source — zero expert-quantization error (cos 1.0, router 31/31) — and at 18.8 MB/record
+(**269 GiB bank**) it is *smaller* than affine q4 gs64 (285 GiB) because it carries a
+1-byte E8M0 scale per 32 and no bias. The current q2 bank (158 GiB) is the junk source:
+cos 0.912 per expert, only 11/31 router agreement. If a smaller bank than mxfp4 is
+required, affine **q4 gs64** (285 GiB, cos 0.995) is the next step down; q2/q3 are too
+lossy.
+
+> Note for W11: `tests/.../test_mxfp4_is_not_bit_exact_in_mlx_032` asserts mxfp4 is NOT
+> bit-exact; on mlx **0.32.2** it now IS (verified on 191 real experts × 3 weights). The
+> "affine q8/gs32 because mxfp4 isn't bit-exact" rationale no longer holds for 0.32.2 —
+> native mxfp4 is the better routed-expert format.
+
 ## Recommendations / next steps
 
 1. **Fix quality by re-quantizing the routed experts**, not the code. The layers-0–2
