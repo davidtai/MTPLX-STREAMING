@@ -101,7 +101,13 @@ from mtplx.backends.descriptors import (
 from mtplx.backends.registry import load_runtime_contract
 from mtplx.batching import BatchSchedulerConfig, SchedulerMode, SchedulerPreset
 from mtplx.chat_encode_cache import GLOBAL_CHAT_ENCODE_CACHE, ChatEncodeCache
-from mtplx.chat_encoding import encode_chat_messages, is_gemma4_tokenizer
+from mtplx.chat_encoding import (
+    DEEPSEEK_V41_BOS_ID,
+    encode_chat_messages,
+    encode_deepseek_v41_messages,
+    is_deepseek_v41_tokenizer,
+    is_gemma4_tokenizer,
+)
 from mtplx.constrained import (
     ResponseFormatError,
     constraint_spec_from_response_format,
@@ -13176,9 +13182,20 @@ def _coerce_token_ids(encoded: Any) -> list[int]:
         return [int(token) for token in getattr(encoded, "ids")]
     if hasattr(encoded, "tolist"):
         return _coerce_token_ids(encoded.tolist())
-    if isinstance(encoded, dict):
-        if "input_ids" in encoded:
-            return _coerce_token_ids(encoded["input_ids"])
+    # Plain dict AND transformers BatchEncoding (a UserDict, so NOT a dict
+    # subclass): apply_chat_template(tokenize=True) returns a BatchEncoding on a
+    # raw fast tokenizer, which must be unwrapped to its input_ids, not passed to
+    # int(). Duck-typed so both shapes route here without an extra import.
+    if isinstance(encoded, dict) or (
+        hasattr(encoded, "keys")
+        and hasattr(encoded, "__getitem__")
+        and not isinstance(encoded, (str, bytes, list, tuple))
+    ):
+        try:
+            if "input_ids" in encoded:
+                return _coerce_token_ids(encoded["input_ids"])
+        except TypeError:
+            pass
         return []
     if isinstance(encoded, (list, tuple)):
         tokens: list[int] = []
@@ -13214,6 +13231,34 @@ def _encode_plain_text(tokenizer: Any, text: str) -> list[int]:
         return _coerce_token_ids(tokenizer.encode(text, add_special_tokens=True))
     except TypeError:
         return _coerce_token_ids(tokenizer.encode(text))
+
+
+def _is_deepseek_v41_tokenizer_cached(tokenizer: Any) -> bool:
+    """Memoized deepseek_v41 detection (get_vocab is expensive per request)."""
+    cached = getattr(tokenizer, "_mtplx_is_deepseek_v41", None)
+    if cached is None:
+        cached = is_deepseek_v41_tokenizer(tokenizer)
+        try:
+            setattr(tokenizer, "_mtplx_is_deepseek_v41", cached)
+        except Exception:
+            pass
+    return bool(cached)
+
+
+def _maybe_prepend_deepseek_v41_bos(tokenizer: Any, ids: list[int]) -> list[int]:
+    """Prepend BOS id 0 for the deepseek_v41 /v1/completions path (idempotent).
+
+    add_bos_token is false and the tokenizer's ByteLevel post-processor adds
+    nothing, so a raw completions encode carries no leading BOS. The port
+    contract (W8) and the in-process bench require BOS id 0 first. Idempotent:
+    a client that already sent a list[int] beginning with 0 (or text that
+    encoded to a leading BOS) is left unchanged.
+    """
+    if ids and ids[0] == DEEPSEEK_V41_BOS_ID:
+        return ids
+    if _is_deepseek_v41_tokenizer_cached(tokenizer):
+        return [DEEPSEEK_V41_BOS_ID, *ids]
+    return ids
 
 
 # SCOPE (audit F11 P2): these are Qwen-family ChatML+think template
@@ -14344,6 +14389,30 @@ def _encode_messages_uncached(
             preserve_thinking=not strip_assistant_reasoning_history,
             tools=native_tools,
         )
+    if not getattr(tokenizer, "chat_template", None) and _is_deepseek_v41_tokenizer_cached(
+        tokenizer
+    ):
+        # DeepSeek-V4.1 code fallback (W52): a checkpoint whose tokenizer ships
+        # no chat template must still get the reference render + BOS id 0, never
+        # the plain "user:/assistant:" base-model fallback below. When the
+        # artifact carries chat_template.jinja this branch is skipped and the
+        # template path (identical bytes) governs.
+        if template_observability is not None:
+            template_observability["backend_chat_encoding"] = "deepseek_v41"
+        native_tools = (
+            tools
+            if effective_tool_prompt_mode == _TOOL_PROMPT_MODE_NATIVE and tools
+            else None
+        )
+        return encode_deepseek_v41_messages(
+            tokenizer,
+            normalized,
+            enable_thinking=enable_thinking,
+            reasoning_effort=reasoning_effort,
+            add_generation_prompt=add_generation_prompt,
+            preserve_thinking=not strip_assistant_reasoning_history,
+            tools=native_tools,
+        )
     template_tools = _template_tools_for_prompt_mode(
         tools,
         tool_prompt_mode=effective_tool_prompt_mode,
@@ -14779,15 +14848,21 @@ def _encode_prompt(
     if prompt is None:
         return []
     if isinstance(prompt, str):
-        return _encode_plain_text(tokenizer, prompt)
-    if isinstance(prompt, list) and all(isinstance(item, int) for item in prompt):
-        return [int(item) for item in prompt]
-    if isinstance(prompt, list):
-        return _encode_plain_text(
-            tokenizer,
-            "\n".join(str(item) for item in prompt),
+        return _maybe_prepend_deepseek_v41_bos(
+            tokenizer, _encode_plain_text(tokenizer, prompt)
         )
-    return _encode_plain_text(tokenizer, str(prompt))
+    if isinstance(prompt, list) and all(isinstance(item, int) for item in prompt):
+        return _maybe_prepend_deepseek_v41_bos(
+            tokenizer, [int(item) for item in prompt]
+        )
+    if isinstance(prompt, list):
+        return _maybe_prepend_deepseek_v41_bos(
+            tokenizer,
+            _encode_plain_text(tokenizer, "\n".join(str(item) for item in prompt)),
+        )
+    return _maybe_prepend_deepseek_v41_bos(
+        tokenizer, _encode_plain_text(tokenizer, str(prompt))
+    )
 
 
 def _count_text_tokens(tokenizer: Any, text: str) -> int:

@@ -254,6 +254,469 @@ def encode_gemma4_messages(
     return encode_without_added_special_tokens(tokenizer, "".join(parts))
 
 
+# ===========================================================================
+# DeepSeek-V4.1-Flash chat encoding (W52).
+#
+# A faithful, MLX-free port of the official reference encoder
+# (DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages, text path).
+# It is the server-side code fallback for the deepseek_v41 family so a
+# checkpoint that ships no chat template still gets the correct render + a
+# leading BOS (id 0), never the plain "user:/assistant:" base-model render.
+# The installed chat_template.jinja reproduces the identical bytes; this port
+# is the parity twin (both validated byte-for-byte against the reference's
+# encoding/tests vectors 1-4 and the README quickstart).
+#
+# Out of scope (text serving path): vision/image content blocks (dropped) and
+# the namespace-description merge on tool *schemas* (tool CALLS keep namespaces).
+# ===========================================================================
+
+DEEPSEEK_V41_BOS = "<｜begin▁of▁sentence｜>"
+DEEPSEEK_V41_EOS = "<｜end▁of▁sentence｜>"
+#: DeepSeek-V4.1 begin-of-sentence id. The tokenizer maps the BOS string above
+#: to this id; both the render (via the literal token) and the completions path
+#: (via a prepend) rely on it. add_bos_token is false, so nothing else adds it.
+DEEPSEEK_V41_BOS_ID = 0
+_DSV41_THINK_OPEN = "<think>"
+_DSV41_THINK_CLOSE = "</think>"
+_DSV41_DSML = "｜DSML｜"
+_DSV41_USER_SP = "<｜User｜>"
+_DSV41_ASSISTANT_SP = "<｜Assistant｜>"
+_DSV41_SYSTEM_SP = "<｜System｜>"
+_DSV41_REMINDER_SP = "<｜latest_reminder｜>"
+_DSV41_TC_BLOCK = " calls"
+_DSV41_TC_TAG = " invoke"
+_DSV41_TP_TAG = " parameter"
+_DSV41_TASK_TOKENS = {
+    "action": "<｜action｜>",
+    "query": "<｜query｜>",
+    "authority": "<｜authority｜>",
+    "domain": "<｜domain｜>",
+    "title": "<｜title｜>",
+    "read_url": "<｜read_url｜>",
+}
+_DSV41_REASONING_EFFORT_MAP = {"low": 50, "high": 75, "max": 100}
+_DSV41_DEFAULT_REASONING_EFFORT = "high"
+_DSV41_REASONING_EFFORT_TEMPLATE = (
+    "Reasoning Effort: {budget} "
+    "(range 1-100, the higher the value, the more thorough the reasoning)\n\n"
+)
+_DSV41_TOOLS_TEMPLATE = """## Tools
+
+You have access to a set of tools to help answer the user's question. You can invoke tools by writing a "<{dsml}{tc_block}>" block like the following:
+
+<{dsml}{tc_block}>
+<{dsml}{tc_tag} name="$TOOL_NAME">
+<{dsml}{tp_tag} name="$PARAMETER_NAME" string="true|false">$PARAMETER_VALUE</{dsml}{tp_tag}>
+...
+</{dsml}{tc_tag}>
+<{dsml}{tc_tag} name="$TOOL_NAME2">
+...
+</{dsml}{tc_tag}>
+</{dsml}{tc_block}>
+
+String parameters should be specified as is and set `string="true"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.
+
+If thinking_mode is enabled (triggered by {think_open}), you MUST output your complete reasoning inside {think_open}...{think_close} BEFORE any tool calls or final response.
+
+Otherwise, output directly after {think_close} with tool calls or final response.
+
+### Available Tool Schemas
+
+{tool_schemas}
+
+You MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.
+"""
+_DSV41_RESPONSE_FORMAT_TEMPLATE = (
+    "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{schema}"
+)
+#: The special tokens whose joint presence in the vocab identifies a
+#: DeepSeek-V4.1-family tokenizer. All are DeepSeek-only (Qwen uses
+#: ``<|im_start|>``, Gemma ``<start_of_turn>``, Step its own set), so the set
+#: never collides with the other served families. ``｜DSML｜`` is the DeepSeek
+#: tool-markup token.
+_DSV41_SIGNATURE_TOKENS = (
+    "<｜begin▁of▁sentence｜>",
+    "<｜User｜>",
+    "<｜Assistant｜>",
+    "<｜System｜>",
+    "｜DSML｜",
+)
+
+
+def is_deepseek_v41_tokenizer(tokenizer: Any) -> bool:
+    """True for a DeepSeek-V4.1-family tokenizer (signature special tokens).
+
+    Deliberately tokenizer-only (mirrors :func:`is_gemma4_tokenizer`): the
+    encode helpers receive a tokenizer, not the model config. The signature is
+    DeepSeek-specific and does not match Qwen/Gemma/Step. (It does not by
+    itself separate V4 from V4.1; only V4.1 is served here, and both share the
+    render below.)
+    """
+    try:
+        vocab = tokenizer.get_vocab()
+    except Exception:
+        return False
+    try:
+        return all(token in vocab for token in _DSV41_SIGNATURE_TOKENS)
+    except Exception:
+        return False
+
+
+def _dsv41_to_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return json.dumps(value, ensure_ascii=True)
+
+
+def _dsv41_split_tool_name(name: str, namespace: Any = None):
+    prefix, sep, bare = str(name).partition("::")
+    if sep:
+        namespace, name = prefix, bare
+    return namespace, name
+
+
+def _dsv41_tool_name_for_encoding(tool: dict[str, Any]) -> str:
+    namespace = tool.get("namespace")
+    if isinstance(namespace, dict):
+        namespace = namespace.get("name")
+    namespace, name = _dsv41_split_tool_name(tool.get("name", ""), namespace)
+    return name if namespace is None else f"{namespace}::{name}"
+
+
+def _dsv41_tools_from_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    functions: list[dict[str, Any]] = []
+    for tool in tools:
+        function = dict(tool.get("function") or {})
+        if tool.get("namespace") is not None:
+            function["namespace"] = tool["namespace"]
+        function["name"] = _dsv41_tool_name_for_encoding(function)
+        namespace = function.pop("namespace", None)
+        if isinstance(namespace, dict) and namespace.get("description"):
+            function["description"] = (
+                namespace["description"] + "\n" + (function.get("description") or "")
+            )
+        functions.append(function)
+    return functions
+
+
+def _dsv41_render_tools(tools: list[dict[str, Any]]) -> str:
+    schema = "\n".join(_dsv41_to_json(t) for t in _dsv41_tools_from_openai(tools))
+    return _DSV41_TOOLS_TEMPLATE.format(
+        tool_schemas=schema,
+        dsml=_DSV41_DSML,
+        tc_block=_DSV41_TC_BLOCK,
+        tc_tag=_DSV41_TC_TAG,
+        tp_tag=_DSV41_TP_TAG,
+        think_open=_DSV41_THINK_OPEN,
+        think_close=_DSV41_THINK_CLOSE,
+    )
+
+
+def _dsv41_encode_arguments_to_dsml(tool_call: dict[str, Any]) -> str:
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, dict):
+        parsed = arguments
+        for _ in range(2):
+            if isinstance(parsed, str):
+                try:
+                    parsed = json.loads(parsed)
+                except Exception:
+                    break
+            else:
+                break
+        arguments = parsed if isinstance(parsed, dict) else {"arguments": tool_call.get("arguments")}
+    out: list[str] = []
+    for key, value in arguments.items():
+        is_str = isinstance(value, str)
+        rendered = value if is_str else _dsv41_to_json(value)
+        out.append(
+            f'<{_DSV41_DSML}{_DSV41_TP_TAG} name="{key}" '
+            f'string="{"true" if is_str else "false"}">{rendered}'
+            f"</{_DSV41_DSML}{_DSV41_TP_TAG}>"
+        )
+    return "\n".join(out)
+
+
+def _dsv41_tool_calls_from_openai(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        function = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+        namespace, name = _dsv41_split_tool_name(
+            function.get("name", ""), tc.get("namespace") or function.get("namespace")
+        )
+        call = {"name": name, "arguments": function.get("arguments")}
+        if namespace is not None:
+            call["namespace"] = namespace
+        calls.append(call)
+    return calls
+
+
+def _dsv41_content_text(content: Any) -> str:
+    """Text-only flatten (server text path): list content -> joined text, images dropped."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        return "\n\n".join(parts)
+    return str(content)
+
+
+def _dsv41_merge_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge ``tool`` messages (and consecutive users) into user turns.
+
+    Mirrors encoding.py::merge_tool_messages for the text path. Tool results
+    become ``<tool_result>...</tool_result>`` inside a user turn; the
+    call-order sort is a no-op for a single result and applied by the caller.
+    """
+    merged: list[dict[str, Any]] = []
+    for raw in messages:
+        msg = dict(raw)
+        role = msg.get("role")
+        if role == "tool":
+            block = _DSV41_TOOL_RESULT(_dsv41_content_text(msg.get("content", "")))
+            if merged and merged[-1].get("role") == "user" and merged[-1].get("_tool_result"):
+                merged[-1] = {
+                    "role": "user",
+                    "content": merged[-1]["content"] + "\n\n" + block,
+                    "_tool_result": True,
+                }
+            else:
+                merged.append({"role": "user", "content": block, "_tool_result": True})
+        elif role == "user":
+            content = _dsv41_content_text(msg.get("content"))
+            if (
+                merged
+                and merged[-1].get("role") == "user"
+                and merged[-1].get("task") is None
+            ):
+                merged[-1] = {
+                    **merged[-1],
+                    "content": merged[-1]["content"] + "\n\n" + content,
+                    "task": msg.get("task"),
+                }
+            else:
+                new_msg = dict(msg)
+                new_msg["content"] = content
+                new_msg.setdefault("_tool_result", False)
+                merged.append(new_msg)
+        else:
+            merged.append(msg)
+    return merged
+
+
+def _DSV41_TOOL_RESULT(content: str) -> str:
+    return f"<tool_result>{content}</tool_result>"
+
+
+def _dsv41_find_last_user_index(messages: list[dict[str, Any]]) -> int:
+    for idx in range(len(messages) - 1, -1, -1):
+        role = messages[idx].get("role")
+        if role == "user" or (role == "system" and idx > 0):
+            return idx
+    return -1
+
+
+def _dsv41_reasoning_effort_prefix(
+    index: int, thinking_mode: str, effort: Any
+) -> str:
+    if effort is None:
+        effort = _DSV41_DEFAULT_REASONING_EFFORT
+    if isinstance(effort, str) and effort in _DSV41_REASONING_EFFORT_MAP:
+        budget: Any = _DSV41_REASONING_EFFORT_MAP[effort]
+    else:
+        budget = effort
+    if index == 0 and thinking_mode == "thinking":
+        return _DSV41_REASONING_EFFORT_TEMPLATE.format(budget=budget)
+    return ""
+
+
+def _dsv41_drop_thinking_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    last_user_idx = _dsv41_find_last_user_index(messages)
+    keep_roles = {"user", "system", "tool", "latest_reminder", "direct_search_results"}
+    result: list[dict[str, Any]] = []
+    for idx, msg in enumerate(messages):
+        role = msg.get("role")
+        if role in keep_roles or idx >= last_user_idx:
+            result.append(msg)
+        elif role == "assistant":
+            trimmed = dict(msg)
+            trimmed.pop("reasoning_content", None)
+            result.append(trimmed)
+    return result
+
+
+def _dsv41_render_message(
+    index: int,
+    messages: list[dict[str, Any]],
+    *,
+    thinking_mode: str,
+    drop_thinking: bool,
+    reasoning_effort: Any,
+    add_generation_prompt: bool,
+) -> str:
+    msg = messages[index]
+    last_user_idx = _dsv41_find_last_user_index(messages)
+    role = msg.get("role")
+    tools = msg.get("tools")
+    response_format = msg.get("response_format")
+    tool_calls = msg.get("tool_calls")
+
+    re_prefix = _dsv41_reasoning_effort_prefix(index, thinking_mode, reasoning_effort)
+    prompt = _DSV41_SYSTEM_SP if index == 0 and (re_prefix or role == "system") else ""
+    prompt += re_prefix
+
+    if role == "system":
+        if index > 0:
+            prompt += _DSV41_SYSTEM_SP
+        prompt += msg.get("content") or ""
+        if tools:
+            prompt += "\n\n" + _dsv41_render_tools(tools)
+        if response_format:
+            prompt += "\n\n" + _DSV41_RESPONSE_FORMAT_TEMPLATE.format(
+                schema=_dsv41_to_json(response_format)
+            )
+    elif role == "user":
+        prompt += _DSV41_USER_SP + (msg.get("content") or "")
+    elif role == "latest_reminder":
+        prompt += _DSV41_REMINDER_SP + (msg.get("content") or "")
+    elif role == "assistant":
+        thinking_part = ""
+        tc_content = ""
+        if tool_calls:
+            calls = _dsv41_tool_calls_from_openai(tool_calls)
+            rendered_calls = [
+                f'<{_DSV41_DSML}{_DSV41_TC_TAG} name="{_dsv41_tool_name_for_encoding(c)}">\n'
+                f"{_dsv41_encode_arguments_to_dsml(c)}\n"
+                f"</{_DSV41_DSML}{_DSV41_TC_TAG}>"
+                for c in calls
+            ]
+            tc_content = (
+                "\n\n"
+                + f"<{_DSV41_DSML}{_DSV41_TC_BLOCK}>\n"
+                + "\n".join(rendered_calls)
+                + f"\n</{_DSV41_DSML}{_DSV41_TC_BLOCK}>"
+            )
+        prev_has_task = index - 1 >= 0 and messages[index - 1].get("task") is not None
+        if thinking_mode == "thinking" and not prev_has_task:
+            if not drop_thinking or index > last_user_idx:
+                thinking_part = (msg.get("reasoning_content") or "") + _DSV41_THINK_CLOSE
+        prompt += thinking_part + (msg.get("content") or "") + tc_content
+        if not msg.get("wo_eos", False):
+            prompt += DEEPSEEK_V41_EOS
+    else:
+        raise ValueError(f"deepseek_v41: unknown role {role!r}")
+
+    # Transition: header emitted only when this is the last message or the next
+    # message is assistant/latest_reminder (encoding.py::render_message).
+    if index + 1 < len(messages) and messages[index + 1].get("role") not in (
+        "assistant",
+        "latest_reminder",
+    ):
+        return prompt
+
+    task = msg.get("task")
+    is_last = index + 1 >= len(messages)
+    if task is not None:
+        task_token = _DSV41_TASK_TOKENS[task]
+        if task != "action":
+            prompt += task_token
+        else:
+            prompt += _DSV41_ASSISTANT_SP
+            prompt += _DSV41_THINK_OPEN if thinking_mode == "thinking" else _DSV41_THINK_CLOSE
+            prompt += task_token
+    elif role == "user" or (role == "system" and index > 0):
+        if is_last and not add_generation_prompt:
+            return prompt
+        prompt += _DSV41_ASSISTANT_SP
+        if (not drop_thinking and thinking_mode == "thinking") or (
+            drop_thinking and thinking_mode == "thinking" and index >= last_user_idx
+        ):
+            prompt += _DSV41_THINK_OPEN
+        else:
+            prompt += _DSV41_THINK_CLOSE
+    return prompt
+
+
+def render_deepseek_v41_prompt(
+    messages: list[dict[str, Any]],
+    *,
+    enable_thinking: bool,
+    reasoning_effort: Any = None,
+    add_generation_prompt: bool = True,
+    drop_thinking: bool = True,
+) -> str:
+    """Render DeepSeek-V4.1 messages to the reference prompt STRING (BOS-first).
+
+    ``drop_thinking`` defaults True (reference default); it is forced False when
+    any message defines tools. Text-only: vision content is flattened to text.
+    """
+    thinking_mode = "thinking" if enable_thinking else "chat"
+    prepared = _dsv41_merge_tool_messages(messages)
+    effective_drop = drop_thinking
+    if any(m.get("tools") for m in prepared):
+        effective_drop = False
+    if thinking_mode == "thinking" and effective_drop:
+        prepared = _dsv41_drop_thinking_messages(prepared)
+    prompt = DEEPSEEK_V41_BOS
+    for idx in range(len(prepared)):
+        prompt += _dsv41_render_message(
+            idx,
+            prepared,
+            thinking_mode=thinking_mode,
+            drop_thinking=effective_drop,
+            reasoning_effort=reasoning_effort,
+            add_generation_prompt=add_generation_prompt,
+        )
+    return prompt
+
+
+def encode_deepseek_v41_messages(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    *,
+    enable_thinking: bool | None,
+    reasoning_effort: str | None = None,
+    add_generation_prompt: bool = True,
+    preserve_thinking: bool = True,
+    tools: list[dict[str, Any]] | None = None,
+) -> list[int]:
+    """Encode DeepSeek-V4.1 chat turns to token ids (BOS id 0 first).
+
+    The code fallback for a deepseek_v41 checkpoint whose tokenizer ships no
+    chat template. ``preserve_thinking`` maps to the reference's inverse
+    ``drop_thinking`` (preserve → keep history); tools force history kept. A
+    top-level ``tools`` list is attached to the first system message when no
+    message already carries tools (OpenAI convention), mirroring the template.
+    """
+    if not messages:
+        messages = [{"role": "user", "content": ""}]
+    prepared = [dict(m) for m in messages]
+    if tools and not any(m.get("tools") for m in prepared):
+        attached = False
+        for m in prepared:
+            if m.get("role") == "system":
+                m["tools"] = tools
+                attached = True
+                break
+        if not attached:
+            prepared = [{"role": "system", "content": "", "tools": tools}, *prepared]
+    rendered = render_deepseek_v41_prompt(
+        prepared,
+        enable_thinking=bool(enable_thinking),
+        reasoning_effort=reasoning_effort,
+        add_generation_prompt=add_generation_prompt,
+        drop_thinking=not preserve_thinking,
+    )
+    return encode_without_added_special_tokens(tokenizer, rendered)
+
+
 def encode_chat_messages(
     tokenizer: Any,
     messages: list[dict[str, Any]],

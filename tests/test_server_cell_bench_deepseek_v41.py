@@ -10,8 +10,11 @@ its DSV4.1 model-family switch, plus the ``--prompt-ids-file`` hook added to
     (skipped if the artifact is absent);
   * the seed rotation offsets are 701/702/703 (seed % 1752 lines);
   * the instruction is byte-identical to the fixture line + the sweep suffix;
-  * the DSV4.1 request body equals the Qwen-PR body MINUS the two unsupported
-    kwargs (enable_thinking / reasoning_effort);
+  * the DSV4.1 request body carries enable_thinking (default False, the official
+    thinking-OFF) and omits reasoning_effort in chat mode (inert), matching the
+    Qwen-PR body on everything else;
+  * the DSV4.1 counter/ids template the real chat prompt WITH a leading BOS id 0
+    (artifact chat_template.jinja), not the old plain "user:/assistant:" render;
   * an exported ids file round-trips into the A/B script's dry-run path;
   * the harness's streaming parse works on a canned SSE stream.
 
@@ -107,10 +110,15 @@ def _args(model_family_resolved: str, seed: int) -> argparse.Namespace:
         no_seed=False,
         reasoning="xhigh",
         model_family_resolved=model_family_resolved,
+        dsv41_enable_thinking=None,
+        dsv41_reasoning_effort=None,
     )
 
 
-def test_request_body_deepseek_is_pr_body_minus_unsupported_kwargs():
+def test_request_body_deepseek_sends_thinking_off_and_omits_effort(monkeypatch):
+    # Deterministic official default regardless of the shell environment.
+    monkeypatch.delenv("DSV41_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("DSV41_REASONING_EFFORT", raising=False)
     sweep_prompt = {"cell": "sweep", "target_tokens": 1024}
     seed = _SEEDS[0]
 
@@ -131,26 +139,52 @@ def test_request_body_deepseek_is_pr_body_minus_unsupported_kwargs():
     assert qwen_body["stream"] is True
     assert qwen_body["stream_options"] == {"include_usage": True}
 
-    # DSV4.1 OMITS the two unsupported kwargs and matches on everything else.
+    # DSV4.1 SENDS enable_thinking=false (the official default) and OMITS
+    # reasoning_effort (inert in chat mode); everything else matches Qwen.
+    assert dsv_body["enable_thinking"] is False
     assert "reasoning_effort" not in dsv_body
-    assert "enable_thinking" not in dsv_body
     expected = {
         k: v
         for k, v in qwen_body.items()
         if k not in ("reasoning_effort", "enable_thinking", "model")
     }
-    got = {k: v for k, v in dsv_body.items() if k != "model"}
+    got = {k: v for k, v in dsv_body.items() if k not in ("enable_thinking", "model")}
     assert got == expected
 
 
-def test_template_settings_records_no_thinking_no_bos():
+def test_request_body_deepseek_thinking_override(monkeypatch):
+    monkeypatch.delenv("DSV41_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("DSV41_REASONING_EFFORT", raising=False)
+    args = _args(scb.DEEPSEEK_V41_FAMILY, _SEEDS[0])
+    args.dsv41_enable_thinking = True
+    args.dsv41_reasoning_effort = "max"
+    sampling = scb.cell_sampling(args, {"cell": "sweep", "target_tokens": 1024}, _SEEDS[0])
+    body = scb.chat_body(model_id="dsv41-id", **sampling)
+    assert body["enable_thinking"] is True
+    assert body["reasoning_effort"] == "max"
+    # the vanity cell always runs thinking-off, even with the override on
+    vanity = scb.cell_sampling(args, {"cell": "vanity", "target_tokens": 0}, _SEEDS[0])
+    vbody = scb.chat_body(model_id="dsv41-id", **vanity)
+    assert vbody["enable_thinking"] is False
+    assert "reasoning_effort" not in vbody
+
+
+def test_template_settings_records_thinking_off_and_bos():
     settings = scb.template_settings_for_family(scb.DEEPSEEK_V41_FAMILY)
     assert settings["model_family"] == "deepseek-v41"
     assert settings["thinking_mode"] is False
-    assert settings["enable_thinking"] is None
+    assert settings["enable_thinking"] is False
     assert settings["reasoning_effort"] is None
-    assert settings["bos_id_prepended"] is False
+    assert settings["bos_id_prepended"] is True
+    assert settings["bos_token_id"] == 0
     assert settings["add_special_tokens"] is False
+    # thinking-on override is reflected
+    on = scb.template_settings_for_family(
+        scb.DEEPSEEK_V41_FAMILY, dsv41_enable_thinking=True, dsv41_reasoning_effort="max"
+    )
+    assert on["thinking_mode"] is True
+    assert on["enable_thinking"] is True
+    assert on["reasoning_effort"] == "max"
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +349,7 @@ def test_dsv41_builder_sizes_within_tolerance(target):
         assert built["text"].endswith(body)
 
 
-def test_dsv41_exported_ids_carry_no_bos_and_match_counter():
+def test_dsv41_exported_ids_carry_bos_and_match_counter():
     tokenizer = _dsv41_tokenizer()
     context = scb.load_fixture_context()
     instruction = scb.load_fixture_instruction()
@@ -335,7 +369,10 @@ def test_dsv41_exported_ids_carry_no_bos_and_match_counter():
     ids = scb.server_prompt_ids(
         tokenizer, scb.DEEPSEEK_V41_FAMILY, built, reasoning_effort="xhigh"
     )
-    # exact plain templateless render, no BOS id 0, count == templated_tokens
-    assert ids[0] != 0
+    # the chat template render: BOS id 0 first, count == templated_tokens, and
+    # the exported ids equal the named DSV4.1 helper (default thinking-off).
+    assert ids[0] == 0
     assert len(ids) == built["templated_tokens"]
     assert ids == scb.deepseek_v41_prompt_ids(tokenizer, built["text"])
+    # the render starts BOS + <｜User｜> (128803), never the plain "user:" (5265)
+    assert ids[:2] == [0, 128803]

@@ -1,0 +1,169 @@
+{#- DeepSeek-V4.1-Flash chat template (MTPLX port, W52).
+    Byte-for-byte reproduction of the official reference encoder
+    (DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages, text path).
+    The whole prompt is built in ns2.out and emitted once, so every byte is
+    controlled regardless of trim_blocks/lstrip_blocks. Uses only namespace +
+    list concatenation (the immutable sandbox blocks .append/.update).
+    Kwargs: add_generation_prompt, enable_thinking, reasoning_effort,
+    preserve_thinking, tools. Assistant tool_call `arguments` must be an object
+    (the server normalizes it). Vision/image blocks are out of scope (text
+    serving); namespaced tool schemas are not merged here (server-port only). -#}
+{%- set BOS = "<｜begin▁of▁sentence｜>" -%}
+{%- set EOS = "<｜end▁of▁sentence｜>" -%}
+{%- set THINK_OPEN = "<think>" -%}
+{%- set THINK_CLOSE = "</think>" -%}
+{%- set DSML = "｜DSML｜" -%}
+{%- set USER_SP = "<｜User｜>" -%}
+{%- set ASSISTANT_SP = "<｜Assistant｜>" -%}
+{%- set SYSTEM_SP = "<｜System｜>" -%}
+{%- set REMINDER_SP = "<｜latest_reminder｜>" -%}
+{%- set TC_BLOCK = " calls" -%}
+{%- set TC_TAG = " invoke" -%}
+{%- set TP_TAG = " parameter" -%}
+{%- set TASK_TOKENS = {"action": "<｜action｜>", "query": "<｜query｜>", "authority": "<｜authority｜>", "domain": "<｜domain｜>", "title": "<｜title｜>", "read_url": "<｜read_url｜>"} -%}
+{%- set thinking = (enable_thinking is defined and enable_thinking) -%}
+{%- set thinking_mode = "thinking" if thinking else "chat" -%}
+{%- set dt = namespace(v = not (preserve_thinking is defined and preserve_thinking)) -%}
+{%- set flags = namespace(have_tools = false) -%}
+{%- for m in messages -%}
+  {%- if m.tools is defined and m.tools -%}{%- set flags.have_tools = true -%}{%- endif -%}
+{%- endfor -%}
+{%- if tools is defined and tools -%}{%- set flags.have_tools = true -%}{%- endif -%}
+{%- if flags.have_tools -%}{%- set dt.v = false -%}{%- endif -%}
+{%- set effort = reasoning_effort if (reasoning_effort is defined and reasoning_effort is not none) else "high" -%}
+{%- if effort == "low" -%}{%- set budget = 50 -%}
+{%- elif effort == "high" -%}{%- set budget = 75 -%}
+{%- elif effort == "max" -%}{%- set budget = 100 -%}
+{%- else -%}{%- set budget = effort -%}{%- endif -%}
+{%- set agp = (add_generation_prompt is defined and add_generation_prompt) -%}
+{#- ------- pass 1: normalize (flatten list content, merge tool msgs + consecutive users) ------- -#}
+{%- set ns = namespace(msgs = []) -%}
+{%- for m in messages -%}
+  {%- set role = m.role -%}
+  {%- set content = namespace(v = "") -%}
+  {%- if m.content is defined and m.content is not none -%}
+    {%- if m.content is string -%}{%- set content.v = m.content -%}
+    {%- elif m.content is iterable and m.content is not mapping -%}
+      {%- set cp = namespace(parts = []) -%}
+      {%- for b in m.content -%}
+        {%- if b is mapping and b.type is defined and b.type == "text" -%}{%- set cp.parts = cp.parts + [b.text] -%}{%- endif -%}
+      {%- endfor -%}
+      {%- set content.v = cp.parts | join("\n\n") -%}
+    {%- else -%}{%- set content.v = m.content | string -%}{%- endif -%}
+  {%- endif -%}
+  {%- set mtask = m.task if m.task is defined else none -%}
+  {%- if role == "tool" -%}
+    {%- set tr = "<tool_result>" ~ content.v ~ "</tool_result>" -%}
+    {%- if ns.msgs and ns.msgs[-1].role == "user" and ns.msgs[-1].is_tool_result -%}
+      {%- set prev = ns.msgs[-1] -%}
+      {%- set merged = {"role": "user", "content": prev.content ~ "\n\n" ~ tr, "reasoning_content": none, "tool_calls": none, "tools": none, "response_format": none, "task": none, "wo_eos": false, "is_tool_result": true} -%}
+      {%- set ns.msgs = ns.msgs[:-1] + [merged] -%}
+    {%- else -%}
+      {%- set item = {"role": "user", "content": tr, "reasoning_content": none, "tool_calls": none, "tools": none, "response_format": none, "task": none, "wo_eos": false, "is_tool_result": true} -%}
+      {%- set ns.msgs = ns.msgs + [item] -%}
+    {%- endif -%}
+  {%- elif role == "user" and ns.msgs and ns.msgs[-1].role == "user" and (ns.msgs[-1].task is none) -%}
+    {%- set prev = ns.msgs[-1] -%}
+    {%- set merged = {"role": "user", "content": prev.content ~ "\n\n" ~ content.v, "reasoning_content": none, "tool_calls": none, "tools": none, "response_format": none, "task": mtask, "wo_eos": false, "is_tool_result": prev.is_tool_result} -%}
+    {%- set ns.msgs = ns.msgs[:-1] + [merged] -%}
+  {%- else -%}
+    {%- set item = {"role": role, "content": content.v, "reasoning_content": (m.reasoning_content if m.reasoning_content is defined else none), "tool_calls": (m.tool_calls if m.tool_calls is defined else none), "tools": (m.tools if m.tools is defined else none), "response_format": (m.response_format if m.response_format is defined else none), "task": mtask, "wo_eos": (m.wo_eos if m.wo_eos is defined else false), "is_tool_result": false} -%}
+    {%- set ns.msgs = ns.msgs + [item] -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- top-level tools fallback: attach to first system message when no message carries tools -#}
+{%- set carry = namespace(any = false) -%}
+{%- for m in ns.msgs -%}{%- if m.tools -%}{%- set carry.any = true -%}{%- endif -%}{%- endfor -%}
+{%- set inj = namespace(i = -1) -%}
+{%- if (tools is defined and tools) and not carry.any -%}
+  {%- for m in ns.msgs -%}
+    {%- if m.role == "system" and inj.i < 0 -%}{%- set inj.i = loop.index0 -%}{%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+{#- last user index: last user, or a system at index > 0 -#}
+{%- set lu = namespace(i = -1) -%}
+{%- for m in ns.msgs -%}
+  {%- if m.role == "user" or (m.role == "system" and loop.index0 > 0) -%}{%- set lu.i = loop.index0 -%}{%- endif -%}
+{%- endfor -%}
+{#- ------- pass 2: render ------- -#}
+{%- set ns2 = namespace(out = BOS) -%}
+{%- for m in ns.msgs -%}
+  {%- set index = loop.index0 -%}
+  {%- set role = m.role -%}
+  {%- set re_prompt = "" -%}
+  {%- if index == 0 and thinking_mode == "thinking" -%}
+    {%- set re_prompt = "Reasoning Effort: " ~ budget ~ " (range 1-100, the higher the value, the more thorough the reasoning)\n\n" -%}
+  {%- endif -%}
+  {%- if index == 0 and (re_prompt != "" or role == "system") -%}{%- set ns2.out = ns2.out ~ SYSTEM_SP -%}{%- endif -%}
+  {%- set ns2.out = ns2.out ~ re_prompt -%}
+  {%- if role == "system" -%}
+    {%- if index > 0 -%}{%- set ns2.out = ns2.out ~ SYSTEM_SP -%}{%- endif -%}
+    {%- set ns2.out = ns2.out ~ m.content -%}
+    {%- set eff_tools = m.tools if m.tools else (tools if index == inj.i else none) -%}
+    {%- if eff_tools -%}
+      {%- set sc = namespace(items = []) -%}
+      {%- for t in eff_tools -%}
+        {%- set fn = t.function if (t.function is defined and t.function) else t -%}
+        {%- set sc.items = sc.items + [fn | tojson] -%}
+      {%- endfor -%}
+      {%- set tools_block = "## Tools\n\nYou have access to a set of tools to help answer the user's question. You can invoke tools by writing a \"<" ~ DSML ~ TC_BLOCK ~ ">\" block like the following:\n\n<" ~ DSML ~ TC_BLOCK ~ ">\n<" ~ DSML ~ TC_TAG ~ " name=\"$TOOL_NAME\">\n<" ~ DSML ~ TP_TAG ~ " name=\"$PARAMETER_NAME\" string=\"true|false\">$PARAMETER_VALUE</" ~ DSML ~ TP_TAG ~ ">\n...\n</" ~ DSML ~ TC_TAG ~ ">\n<" ~ DSML ~ TC_TAG ~ " name=\"$TOOL_NAME2\">\n...\n</" ~ DSML ~ TC_TAG ~ ">\n</" ~ DSML ~ TC_BLOCK ~ ">\n\nString parameters should be specified as is and set `string=\"true\"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string=\"false\"`.\n\nIf thinking_mode is enabled (triggered by " ~ THINK_OPEN ~ "), you MUST output your complete reasoning inside " ~ THINK_OPEN ~ "..." ~ THINK_CLOSE ~ " BEFORE any tool calls or final response.\n\nOtherwise, output directly after " ~ THINK_CLOSE ~ " with tool calls or final response.\n\n### Available Tool Schemas\n\n" ~ (sc.items | join("\n")) ~ "\n\nYou MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.\n" -%}
+      {%- set ns2.out = ns2.out ~ "\n\n" ~ tools_block -%}
+    {%- endif -%}
+    {%- if m.response_format -%}
+      {%- set ns2.out = ns2.out ~ "\n\n## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n" ~ (m.response_format | tojson) -%}
+    {%- endif -%}
+  {%- elif role == "user" -%}
+    {%- set ns2.out = ns2.out ~ USER_SP ~ m.content -%}
+  {%- elif role == "latest_reminder" -%}
+    {%- set ns2.out = ns2.out ~ REMINDER_SP ~ m.content -%}
+  {%- elif role == "assistant" -%}
+    {%- set thinking_part = "" -%}
+    {%- set prev_has_task = (index - 1 >= 0 and ns.msgs[index - 1].task is not none) -%}
+    {%- if thinking_mode == "thinking" and not prev_has_task -%}
+      {%- if (not dt.v) or index > lu.i -%}
+        {%- set thinking_part = (m.reasoning_content if m.reasoning_content else "") ~ THINK_CLOSE -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- set ns2.out = ns2.out ~ thinking_part ~ (m.content if m.content else "") -%}
+    {%- if m.tool_calls -%}
+      {%- set tcl = namespace(items = []) -%}
+      {%- for tc in m.tool_calls -%}
+        {%- set fn = tc.function if (tc.function is defined and tc.function) else tc -%}
+        {%- set tcname = fn.name -%}
+        {%- if tc.namespace is defined and tc.namespace is not none -%}{%- set tcname = tc.namespace ~ "::" ~ fn.name -%}
+        {%- elif fn.namespace is defined and fn.namespace is not none -%}{%- set tcname = fn.namespace ~ "::" ~ fn.name -%}{%- endif -%}
+        {%- set args = fn.arguments -%}
+        {%- set pr = namespace(items = []) -%}
+        {%- for k, v in args.items() -%}
+          {%- if v is string -%}{%- set pr.items = pr.items + ["<" ~ DSML ~ TP_TAG ~ " name=\"" ~ k ~ "\" string=\"true\">" ~ v ~ "</" ~ DSML ~ TP_TAG ~ ">"] -%}
+          {%- else -%}{%- set pr.items = pr.items + ["<" ~ DSML ~ TP_TAG ~ " name=\"" ~ k ~ "\" string=\"false\">" ~ (v | tojson) ~ "</" ~ DSML ~ TP_TAG ~ ">"] -%}{%- endif -%}
+        {%- endfor -%}
+        {%- set tcl.items = tcl.items + ["<" ~ DSML ~ TC_TAG ~ " name=\"" ~ tcname ~ "\">\n" ~ (pr.items | join("\n")) ~ "\n</" ~ DSML ~ TC_TAG ~ ">"] -%}
+      {%- endfor -%}
+      {%- set ns2.out = ns2.out ~ "\n\n" ~ "<" ~ DSML ~ TC_BLOCK ~ ">\n" ~ (tcl.items | join("\n")) ~ "\n</" ~ DSML ~ TC_BLOCK ~ ">" -%}
+    {%- endif -%}
+    {%- if not m.wo_eos -%}{%- set ns2.out = ns2.out ~ EOS -%}{%- endif -%}
+  {%- endif -%}
+  {#- transition -#}
+  {%- set next_role = ns.msgs[index + 1].role if index + 1 < (ns.msgs | length) else none -%}
+  {%- set do_transition = (index + 1 >= (ns.msgs | length)) or (next_role in ["assistant", "latest_reminder"]) -%}
+  {%- if do_transition -%}
+    {%- set is_last = index + 1 >= (ns.msgs | length) -%}
+    {%- if m.task is not none -%}
+      {%- if m.task != "action" -%}{%- set ns2.out = ns2.out ~ TASK_TOKENS[m.task] -%}
+      {%- else -%}
+        {%- set ns2.out = ns2.out ~ ASSISTANT_SP ~ (THINK_OPEN if thinking_mode == "thinking" else THINK_CLOSE) ~ TASK_TOKENS["action"] -%}
+      {%- endif -%}
+    {%- elif role == "user" or (role == "system" and index > 0) -%}
+      {%- if not (is_last and not agp) -%}
+        {%- set ns2.out = ns2.out ~ ASSISTANT_SP -%}
+        {%- if (not dt.v and thinking_mode == "thinking") or (dt.v and thinking_mode == "thinking" and index >= lu.i) -%}
+          {%- set ns2.out = ns2.out ~ THINK_OPEN -%}
+        {%- else -%}
+          {%- set ns2.out = ns2.out ~ THINK_CLOSE -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{{- ns2.out -}}

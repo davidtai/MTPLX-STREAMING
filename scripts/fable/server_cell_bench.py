@@ -1645,6 +1645,44 @@ QWEN38_FAMILY = "qwen38"
 DEEPSEEK_V41_FAMILY = "deepseek-v41"
 MODEL_FAMILIES: tuple[str, ...] = (QWEN38_FAMILY, DEEPSEEK_V41_FAMILY)
 
+# W52: DSV4.1 DOES have a chat template + a thinking mode. The artifact now
+# carries chat_template.jinja (a byte-for-byte port of the official reference
+# encoder) and the served path adds BOS id 0, so the counter/ids template the
+# real chat prompt instead of the old plain "user:/assistant:" render. The
+# OFFICIAL default is thinking OFF: the reference generate.py defaults
+# --thinking-mode "chat", and the reference encoding-test harness renders with
+# thinking_mode="chat". So the served cells default to enable_thinking=False;
+# reasoning_effort is inert in chat mode (only rendered in thinking mode) and is
+# omitted there. Override with --dsv41-enable-thinking / --dsv41-reasoning-effort
+# (or DSV41_ENABLE_THINKING / DSV41_REASONING_EFFORT). DeepSeek's own instruct
+# evals use thinking + reasoning_effort=100; flip the knob to mirror them.
+DEEPSEEK_V41_DEFAULT_ENABLE_THINKING = False
+DEEPSEEK_V41_DEFAULT_REASONING_EFFORT: str | None = None
+
+
+def _parse_bool_flag(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "on", "true", "yes"}
+
+
+def deepseek_v41_thinking_settings(
+    args: argparse.Namespace | None,
+) -> tuple[bool, str | None]:
+    """Resolve (enable_thinking, reasoning_effort) for the DSV4.1 sweep cell.
+
+    Precedence: explicit CLI flag > DSV41_* env > official default (thinking
+    OFF). reasoning_effort is returned only when thinking is on (it is inert in
+    chat mode and omitted from the request body there).
+    """
+    et: Any = getattr(args, "dsv41_enable_thinking", None) if args is not None else None
+    if et is None:
+        env = os.environ.get("DSV41_ENABLE_THINKING")
+        et = _parse_bool_flag(env) if env is not None else DEEPSEEK_V41_DEFAULT_ENABLE_THINKING
+    et = bool(et)
+    eff: str | None = getattr(args, "dsv41_reasoning_effort", None) if args is not None else None
+    if eff is None:
+        eff = os.environ.get("DSV41_REASONING_EFFORT") or DEEPSEEK_V41_DEFAULT_REASONING_EFFORT
+    return et, (str(eff) if (et and eff) else None)
+
 
 def resolve_model_family(explicit: str | None, model_id: str | None) -> str:
     """--model-family wins; else detect from the served/model id substring."""
@@ -1662,28 +1700,85 @@ def resolve_model_family(explicit: str | None, model_id: str | None) -> str:
     return QWEN38_FAMILY
 
 
-def deepseek_v41_chat_render(text: str) -> str:
-    """The exact string the served templateless chat path builds for one user
-    turn (mtplx/server/openai.py:14537-14539)."""
+def _cell_thinking_settings(
+    family: str,
+    is_vanity: bool,
+    *,
+    reasoning_effort: str | None,
+    dsv41_enable_thinking: bool,
+    dsv41_reasoning_effort: str | None,
+) -> tuple[bool, str | None]:
+    """(enable_thinking, reasoning_effort) for one family+cell.
 
-    return "user: " + str(text) + "\nassistant:"
+    Both families run the vanity cell thinking-OFF (a short sanity prompt).
+    Qwen sweep = thinking ON + reasoning_effort; DSV4.1 sweep = the resolved
+    DSV4.1 setting (default thinking OFF). reasoning_effort is dropped when
+    thinking is off (inert; keeps the wire body minimal)."""
+
+    if family == DEEPSEEK_V41_FAMILY:
+        if is_vanity:
+            return False, None
+        return dsv41_enable_thinking, (dsv41_reasoning_effort if dsv41_enable_thinking else None)
+    if is_vanity:
+        return VANITY_ENABLE_THINKING, VANITY_REASONING_EFFORT
+    return True, reasoning_effort
 
 
-def deepseek_v41_prompt_ids(tokenizer: Any, text: str) -> list[int]:
-    """The exact ids the DSV4.1 server sees for one user turn: the plain render
-    encoded with ``add_special_tokens=False`` (no BOS)."""
+def templated_prompt_ids(
+    tokenizer: Any,
+    text: str,
+    *,
+    enable_thinking: bool,
+    reasoning_effort: str | None,
+) -> list[int]:
+    """Ids for one user-turn prompt via the tokenizer's chat template.
 
-    rendered = deepseek_v41_chat_render(text)
-    try:
-        ids = tokenizer.encode(rendered, add_special_tokens=False)
-    except TypeError:
-        ids = tokenizer.encode(rendered)
-    return [int(token) for token in ids]
+    For DSV4.1 the artifact's chat_template.jinja emits a leading BOS id 0 (and
+    the served path also prepends it), so these ids match the server
+    byte-for-byte WITH BOS. reasoning_effort is passed only when thinking is on."""
+
+    kwargs: dict[str, Any] = {
+        "tokenize": True,
+        "add_generation_prompt": True,
+        "enable_thinking": enable_thinking,
+    }
+    if enable_thinking and reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return templated_ids(
+        tokenizer.apply_chat_template([{"role": "user", "content": text}], **kwargs)
+    )
 
 
-def make_deepseek_v41_counter(tokenizer: Any) -> Callable[[str], int]:
+def deepseek_v41_prompt_ids(
+    tokenizer: Any,
+    text: str,
+    *,
+    enable_thinking: bool = DEEPSEEK_V41_DEFAULT_ENABLE_THINKING,
+    reasoning_effort: str | None = None,
+) -> list[int]:
+    """The exact ids the DSV4.1 server prefills for one user turn: the chat
+    template render (BOS id 0 first). Kept as a named helper for the tests."""
+
+    return templated_prompt_ids(
+        tokenizer, text, enable_thinking=enable_thinking, reasoning_effort=reasoning_effort
+    )
+
+
+def make_deepseek_v41_counter(
+    tokenizer: Any,
+    *,
+    enable_thinking: bool = DEEPSEEK_V41_DEFAULT_ENABLE_THINKING,
+    reasoning_effort: str | None = None,
+) -> Callable[[str], int]:
     def count(text: str) -> int:
-        return len(deepseek_v41_prompt_ids(tokenizer, text))
+        return len(
+            deepseek_v41_prompt_ids(
+                tokenizer,
+                text,
+                enable_thinking=enable_thinking,
+                reasoning_effort=reasoning_effort,
+            )
+        )
 
     return count
 
@@ -1694,60 +1789,70 @@ def server_prompt_ids(
     entry: Mapping[str, Any],
     *,
     reasoning_effort: str | None,
+    dsv41_enable_thinking: bool = DEEPSEEK_V41_DEFAULT_ENABLE_THINKING,
+    dsv41_reasoning_effort: str | None = None,
 ) -> list[int]:
     """Exactly the token ids the server will prefill for one built prompt.
 
-    DSV4.1: the plain templateless render, no BOS. Qwen3.8: the tokenizer's
-    chat template with the SAME kwargs the request carries (sweep = thinking
-    on + reasoning_effort; vanity = thinking off), i.e. what the Qwen served
-    path renders.
-    """
+    Both families now go through the tokenizer's chat template with the SAME
+    kwargs the request carries (per :func:`_cell_thinking_settings`). DSV4.1's
+    template emits BOS id 0; Qwen's does not."""
 
     text = str(entry.get("text") or "")
-    if family == DEEPSEEK_V41_FAMILY:
-        return deepseek_v41_prompt_ids(tokenizer, text)
     is_vanity = entry.get("cell") == "vanity"
-    enable_thinking = VANITY_ENABLE_THINKING if is_vanity else True
-    effort = VANITY_REASONING_EFFORT if is_vanity else reasoning_effort
-    kwargs: dict[str, Any] = {
-        "tokenize": True,
-        "add_generation_prompt": True,
-        "enable_thinking": enable_thinking,
-    }
-    if effort is not None:
-        kwargs["reasoning_effort"] = effort
-    return templated_ids(
-        tokenizer.apply_chat_template([{"role": "user", "content": text}], **kwargs)
+    enable_thinking, effort = _cell_thinking_settings(
+        family,
+        is_vanity,
+        reasoning_effort=reasoning_effort,
+        dsv41_enable_thinking=dsv41_enable_thinking,
+        dsv41_reasoning_effort=dsv41_reasoning_effort,
+    )
+    return templated_prompt_ids(
+        tokenizer, text, enable_thinking=enable_thinking, reasoning_effort=effort
     )
 
 
 def template_settings_for_family(
-    family: str, *, reasoning_effort: str | None = "xhigh"
+    family: str,
+    *,
+    reasoning_effort: str | None = "xhigh",
+    dsv41_enable_thinking: bool = DEEPSEEK_V41_DEFAULT_ENABLE_THINKING,
+    dsv41_reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """What the receipt records about how prompts were templated for a family."""
 
     if family == DEEPSEEK_V41_FAMILY:
+        effort = dsv41_reasoning_effort if dsv41_enable_thinking else None
         return {
             "model_family": family,
-            "chat_template_source": "none (tokenizer.chat_template is None)",
-            "render": "plain role-prefixed: 'user: ' + content + '\\nassistant:'",
-            "render_cite": "mtplx/server/openai.py:14537-14540",
+            "chat_template_source": (
+                "artifact chat_template.jinja (W52 port of the official reference "
+                "encoder) + served code fallback "
+                "(mtplx.chat_encoding.encode_deepseek_v41_messages)"
+            ),
+            "render": (
+                "DeepSeek-V4.1 reference chat format: BOS + [<｜System｜>effort/"
+                "system] + <｜User｜>content + <｜Assistant｜> + <think>|</think>"
+            ),
+            "render_cite": (
+                "mtplx/templates/deepseek_v41/chat_template.jinja; "
+                "DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages"
+            ),
             "add_special_tokens": False,
-            "enable_thinking": None,
-            "reasoning_effort": None,
-            "thinking_mode": False,
-            "bos_id_prepended": False,
+            "enable_thinking": dsv41_enable_thinking,
+            "reasoning_effort": effort,
+            "thinking_mode": bool(dsv41_enable_thinking),
+            "bos_id_prepended": True,
             "bos_token_id": 0,
             "note": (
-                "DSV4.1 ships no chat template; enable_thinking/reasoning_effort "
-                "are inert (byte-identical ids on/off) and are OMITTED from the "
-                "request. The served chat path emits NO leading BOS id 0 "
-                "(add_bos_token False + ByteLevel post-processor; "
-                "add_special_tokens=False on the rendered text). The exported "
-                "ids therefore match the server byte-for-byte with no BOS. NOTE: "
-                "the in-process reference/A-B path (dump_hidden_states.build_prompt) "
-                "DOES prepend BOS id 0 by default -- feed it these ids via "
-                "--prompt-ids-file to run on identical ids."
+                "DSV4.1 now templates the real chat prompt (BOS id 0 first). The "
+                "OFFICIAL default is thinking OFF (reference generate.py "
+                "--thinking-mode 'chat'; the encoding-test harness renders "
+                "thinking_mode='chat'); reasoning_effort is inert in chat mode "
+                "and omitted there. DeepSeek's instruct evals use thinking + "
+                "reasoning_effort=100 -- set --dsv41-enable-thinking "
+                "(DSV41_ENABLE_THINKING) + --dsv41-reasoning-effort to mirror them. "
+                "The exported ids match the server byte-for-byte WITH BOS."
             ),
         }
     return {
@@ -1837,6 +1942,8 @@ def build_prompt_cache(
     model_id: str | None = None,
     model_family: str | None = None,
     reasoning_effort: str | None = "xhigh",
+    dsv41_enable_thinking: bool = DEEPSEEK_V41_DEFAULT_ENABLE_THINKING,
+    dsv41_reasoning_effort: str | None = None,
     ids_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build every prompt the battery will send and cache it to JSON.
@@ -1858,9 +1965,17 @@ def build_prompt_cache(
     instruction = load_fixture_instruction()
 
     if family == DEEPSEEK_V41_FAMILY:
-        # No chat template: both cells count the plain templateless render.
-        sweep_count = make_deepseek_v41_counter(tokenizer)
-        vanity_count = sweep_count
+        # Chat template (artifact sidecar): count the real templated prompt,
+        # BOS included. Vanity runs thinking-off like Qwen; sweep uses the
+        # resolved DSV4.1 setting (default thinking-off).
+        sweep_count = make_deepseek_v41_counter(
+            tokenizer,
+            enable_thinking=dsv41_enable_thinking,
+            reasoning_effort=(dsv41_reasoning_effort if dsv41_enable_thinking else None),
+        )
+        vanity_count = make_deepseek_v41_counter(
+            tokenizer, enable_thinking=False, reasoning_effort=None
+        )
     else:
         sweep_count = make_counter(
             tokenizer, enable_thinking=True, reasoning_effort=reasoning_effort
@@ -1899,7 +2014,10 @@ def build_prompt_cache(
         "model_family": family,
         "served_model_id": model_id,
         "template_settings": template_settings_for_family(
-            family, reasoning_effort=reasoning_effort
+            family,
+            reasoning_effort=reasoning_effort,
+            dsv41_enable_thinking=dsv41_enable_thinking,
+            dsv41_reasoning_effort=dsv41_reasoning_effort,
         ),
         "context_sha256": EXPECTED_CONTEXT_SHA256,
         "vanity_prompt_sha256": VANITY_PROMPT_SHA256,
@@ -1915,6 +2033,8 @@ def build_prompt_cache(
             tokenizer=tokenizer,
             family=family,
             reasoning_effort=reasoning_effort,
+            dsv41_enable_thinking=dsv41_enable_thinking,
+            dsv41_reasoning_effort=dsv41_reasoning_effort,
             path=Path(ids_path),
             tokenizer_path=tok_path,
             model_id=model_id,
@@ -1931,6 +2051,8 @@ def write_prompt_ids(
     path: Path,
     tokenizer_path: str,
     model_id: str | None,
+    dsv41_enable_thinking: bool = DEEPSEEK_V41_DEFAULT_ENABLE_THINKING,
+    dsv41_reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Export every built prompt as the EXACT token-id list the server will
     prefill (per cell, per seed), so an in-process arm can be handed the same
@@ -1939,7 +2061,12 @@ def write_prompt_ids(
     id_entries: list[dict[str, Any]] = []
     for entry in entries:
         ids = server_prompt_ids(
-            tokenizer, family, entry, reasoning_effort=reasoning_effort
+            tokenizer,
+            family,
+            entry,
+            reasoning_effort=reasoning_effort,
+            dsv41_enable_thinking=dsv41_enable_thinking,
+            dsv41_reasoning_effort=dsv41_reasoning_effort,
         )
         id_entries.append(
             {
@@ -1962,7 +2089,10 @@ def write_prompt_ids(
         "model_family": family,
         "served_model_id": model_id,
         "template_settings": template_settings_for_family(
-            family, reasoning_effort=reasoning_effort
+            family,
+            reasoning_effort=reasoning_effort,
+            dsv41_enable_thinking=dsv41_enable_thinking,
+            dsv41_reasoning_effort=dsv41_reasoning_effort,
         ),
         "context_sha256": EXPECTED_CONTEXT_SHA256,
         "prompts": id_entries,
@@ -2873,10 +3003,18 @@ def cell_sampling(
     is_vanity = prompt.get("cell") == "vanity"
     family = getattr(args, "model_family_resolved", None) or QWEN38_FAMILY
     if family == DEEPSEEK_V41_FAMILY:
-        # No chat template consumes them; the served render is identical with
-        # thinking on or off, so both kwargs are OMITTED (chat_body drops None).
-        reasoning_effort: str | None = None
-        enable_thinking: bool | None = None
+        # DSV4.1 now has a real chat template + thinking mode. Send
+        # enable_thinking explicitly so the served render matches the counter;
+        # reasoning_effort is inert in chat mode and dropped there. Default is
+        # the official thinking-OFF (see DEEPSEEK_V41_DEFAULT_ENABLE_THINKING).
+        dsv_thinking, dsv_effort = deepseek_v41_thinking_settings(args)
+        enable_thinking, reasoning_effort = _cell_thinking_settings(
+            DEEPSEEK_V41_FAMILY,
+            is_vanity,
+            reasoning_effort=None,
+            dsv41_enable_thinking=dsv_thinking,
+            dsv41_reasoning_effort=dsv_effort,
+        )
     else:
         reasoning_effort = VANITY_REASONING_EFFORT if is_vanity else args.reasoning
         enable_thinking = VANITY_ENABLE_THINKING if is_vanity else True
@@ -5024,6 +5162,7 @@ def run_cells_remote(
     base_url = str(args.base_url)
     model_id = str(args.served_model_id)
     family = args.model_family_resolved
+    _dsv41_thinking = deepseek_v41_thinking_settings(args)
     started_epoch = time.time()
 
     print(
@@ -5138,7 +5277,10 @@ def run_cells_remote(
         "model_family": family,
         "served_model_id": model_id,
         "template_settings": template_settings_for_family(
-            family, reasoning_effort=args.reasoning
+            family,
+            reasoning_effort=args.reasoning,
+            dsv41_enable_thinking=_dsv41_thinking[0],
+            dsv41_reasoning_effort=_dsv41_thinking[1],
         ),
         "base_url": base_url,
         "prompt_cache": str(cache_path),
@@ -5361,9 +5503,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=(
             "prompt-template family. Default: auto-detect from --served-model-id "
             "(a 'deepseek'/'v4.1' id => deepseek-v41), else qwen38. deepseek-v41 "
-            "counts/renders the plain templateless chat prompt and OMITS "
-            "enable_thinking/reasoning_effort (the DSV4.1 tokenizer has no chat "
-            "template and no thinking mode)."
+            "counts/renders via the artifact chat_template.jinja (BOS id 0 first) "
+            "and sends enable_thinking (default OFF; see --dsv41-enable-thinking)."
+        ),
+    )
+    parser.add_argument(
+        "--dsv41-enable-thinking",
+        dest="dsv41_enable_thinking",
+        action="store_true",
+        default=None,
+        help=(
+            "deepseek-v41 only: run the sweep cell in THINKING mode. Default is "
+            "the official thinking-OFF (reference generate.py --thinking-mode "
+            "'chat'). Also settable via DSV41_ENABLE_THINKING=1. DeepSeek's own "
+            "instruct evals use thinking + reasoning_effort=100."
+        ),
+    )
+    parser.add_argument(
+        "--dsv41-reasoning-effort",
+        dest="dsv41_reasoning_effort",
+        default=None,
+        help=(
+            "deepseek-v41 only: reasoning effort for the sweep cell when thinking "
+            "is on (int 1-100 or low/high/max; default high=75). Inert in chat "
+            "mode. Also settable via DSV41_REASONING_EFFORT."
         ),
     )
     parser.add_argument(
@@ -5410,6 +5573,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.model_family_resolved = resolve_model_family(
         args.model_family, args.served_model_id
     )
+    _dsv41_thinking, _dsv41_effort = deepseek_v41_thinking_settings(args)
     if args.dry_run and args.mode not in {"run", "preflight", "serve-hold"}:
         parser.error(f"--dry-run has nothing to plan for --mode {args.mode}")
 
@@ -5430,6 +5594,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_id=args.served_model_id,
             model_family=args.model_family_resolved,
             reasoning_effort=args.reasoning,
+            dsv41_enable_thinking=_dsv41_thinking,
+            dsv41_reasoning_effort=_dsv41_effort,
             ids_path=args.prompt_ids_out,
         )
         print(
@@ -5465,6 +5631,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             tokenizer=tokenizer,
             family=family,
             reasoning_effort=args.reasoning,
+            dsv41_enable_thinking=_dsv41_thinking,
+            dsv41_reasoning_effort=_dsv41_effort,
             path=Path(args.prompt_ids_out),
             tokenizer_path=tok_path,
             model_id=args.served_model_id or payload.get("served_model_id"),
