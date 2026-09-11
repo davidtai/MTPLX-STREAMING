@@ -717,3 +717,109 @@ def test_convert_residents_sidecar_and_manifest(tmp_path):
     outp = module(xx, np.zeros((B, L), np.int64), _StepState(row_ids=row_ids))
     assert tuple(outp.shape) == (B, L, hc_mult, dim)
     assert bool(mx.all(mx.isfinite(outp)).item())
+
+
+# --------------------------------------------------------------------------
+# mxfp8 wkv residents (`--wkv-codec mxfp8`): EXACT verbatim repack
+# --------------------------------------------------------------------------
+def test_repack_dense_fp8_block_to_mxfp8_bit_exact():
+    rng = np.random.default_rng(4)
+    O, I = 96, 128                                    # 3 scale-rows x 4 scale-cols (32x32 blocks)
+    wu8 = _rand_e4m3_bytes(rng, O * I).reshape(O, I)
+    su8 = _rand_e8m0_bytes(rng, (O // 32) * (I // 32)).reshape(O // 32, I // 32)
+    codes, scales, ref = conv.repack_dense_fp8_block_to_mxfp8(wu8, su8, name="wkv")
+    assert tuple(codes.shape) == (O, I // 4) and codes.dtype == mx.uint32
+    assert tuple(scales.shape) == (O, I // 32) and scales.dtype == mx.uint8
+    # scales are the source block bytes replicated across each block's 32 rows
+    assert np.array_equal(np.array(scales), np.repeat(su8, 32, axis=0))
+    # whole-tensor bit-exact: mxfp8 dequant == the source FP8 block dequant
+    deq = np.array(mx.dequantize(codes, scales, group_size=32, bits=8, mode="mxfp8").astype(mx.float32))
+    assert np.array_equal(deq, ref)
+    assert np.array_equal(ref, dc.dequant_fp8_block(wu8, su8))
+    # a non-32 block column width is rejected
+    with pytest.raises(ValueError):
+        conv.repack_dense_fp8_block_to_mxfp8(wu8, su8[:, :2], name="bad")  # block cols 64 != 32
+
+
+def test_convert_residents_mxfp8_sidecar_manifest_and_loader(tmp_path):
+    from mtplx.engram_v41 import load_engram_residents, _StepState
+    from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
+
+    layer, hc_mult, dim = 1, 3, 64
+    out_w, in_w = dim * (hc_mult + 1), 128           # 256 x 128, both /32 for the block scale
+    src, weight_map, wu8, su8, q_bf, k_bf = _make_resident_shard(
+        tmp_path, layer, out_w, in_w, hc_mult, dim, seed=9)
+    out = tmp_path / "engram"
+    conv.write_manifest(out, [], row_codec="mxfp8")  # base manifest (mxfp8 banks)
+
+    entry, parity, sidecar = conv.convert_residents(
+        src, out, weight_map, layers=[layer], wait=False, poll=0.0, verify=True, wkv_codec="mxfp8")
+    conv.update_manifest_with_residents(out, entry)
+
+    # -- sidecar: wkv weight U32 + scales U8, NO biases; q/k F32 ------------
+    header, _ = dc.read_safetensors_header(str(sidecar))
+    names = {k for k in header if k != "__metadata__"}
+    assert names == {
+        f"layers.{layer}.engram.wkv.weight",
+        f"layers.{layer}.engram.wkv.scales",
+        f"layers.{layer}.engram.q_weight",
+        f"layers.{layer}.engram.k_weight",
+    }
+    assert header[f"layers.{layer}.engram.wkv.weight"]["dtype"] == "U32"
+    assert header[f"layers.{layer}.engram.wkv.scales"]["dtype"] == "U8"
+    assert header[f"layers.{layer}.engram.q_weight"]["dtype"] == "F32"
+    # a partial/.new staging file was not left behind
+    assert not (out / "engram-residents.new.safetensors").exists()
+
+    # -- parity: exact repack ----------------------------------------------
+    p = parity[layer]
+    assert p["wkv_bit_exact"] is True and p["wkv_max_abs_err"] == 0.0
+    assert p["q_exact"] and p["k_exact"]
+
+    # -- manifest residents wkv quant --------------------------------------
+    m = json.loads((out / "engram-manifest.json").read_text())
+    r = m["residents"]
+    assert r["quant"]["wkv"] == {"bits": 8, "group_size": 32, "mode": "mxfp8"}
+    assert r["quant"]["q_weight"] == "f32-exact"
+    assert len(r["sha256"]) == 64
+
+    # -- whole-tensor bit-exact of the STORED wkv vs the source fp32 dequant
+    tensors = mx.load(str(sidecar))
+    codes = tensors[f"layers.{layer}.engram.wkv.weight"]
+    scales = tensors[f"layers.{layer}.engram.wkv.scales"]
+    ref = dc.dequant_fp8_block(wu8, su8)
+    deq = np.array(mx.dequantize(codes, scales, group_size=32, bits=8, mode="mxfp8").astype(mx.float32))
+    assert np.array_equal(deq, ref)
+
+    # -- loader: mxfp8 path, no bias, quantized_matmul(mode=mxfp8) == x@ref.T
+    res = load_engram_residents(out, layer)
+    assert res.mode == "mxfp8" and res.bits == 8 and res.group_size == 32
+    assert res.wkv_biases is None
+    assert res.dim == dim and res.hc_mult == hc_mult
+    assert np.array_equal(np.array(res.q_weight), q_bf) and np.array_equal(np.array(res.k_weight), k_bf)
+
+    rng = np.random.default_rng(3)
+    x = mx.array(rng.standard_normal((2, in_w)).astype(np.float32))
+    kv = res.wkv(x)
+    assert tuple(kv.shape) == (2, out_w)
+    a, b = np.array(kv).reshape(-1), (np.array(x) @ ref.T).reshape(-1)
+    cos = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+    assert cos >= 0.9999, cos
+
+    # -- build EngramV41 from the mxfp8 residents + a synthetic row cache ---
+    head_dim, cols = 64, in_w // 64
+    n_emb = 40
+    f32 = (rng.standard_normal((n_emb, head_dim)) * 0.1).astype(np.float32)
+    rec = dc.engram_chunk_records(f32, group=head_dim)
+    bank_path = tmp_path / "bank.bin"
+    bank_path.write_bytes(np.ascontiguousarray(rec).tobytes())
+    cache = NGramRowCache(
+        FileRowReader(bank_path, row_bytes=rec.shape[1], num_rows=n_emb),
+        RowGeometry(head_dim, 8, head_dim), num_rows=n_emb, cache_rows=16)
+    module = res.build_module(row_cache=cache, layer_hash_index=0, norm_eps=1e-6)
+    B, L = 1, 2
+    row_ids = rng.integers(0, n_emb, size=(B, L, 1, cols)).astype(np.int64)
+    xx = mx.array(rng.standard_normal((B, L, hc_mult, dim)).astype(np.float32))
+    outp = module(xx, np.zeros((B, L), np.int64), _StepState(row_ids=row_ids))
+    assert tuple(outp.shape) == (B, L, hc_mult, dim)
+    assert bool(mx.all(mx.isfinite(outp)).item())
