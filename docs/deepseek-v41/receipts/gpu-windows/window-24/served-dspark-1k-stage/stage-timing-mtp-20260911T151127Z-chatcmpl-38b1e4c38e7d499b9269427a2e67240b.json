@@ -1,0 +1,47 @@
+{
+  "event": "mtplx_serve_stage_timing",
+  "request_id": "chatcmpl-38b1e4c38e7d499b9269427a2e67240b",
+  "generation_mode": "mtp",
+  "stream_counters": {
+    "phase": "decode",
+    "tokens": 1024,
+    "expert_cache": {
+      "expert_misses": 67295,
+      "prefetch_committed": 0,
+      "expert_hits": 248065,
+      "prefetch_issued": 0,
+      "bytes_read": 1089779097600,
+      "route_calls": 11329,
+      "shared_expert_assignments": 94176,
+      "unique_expert_requests": 221184,
+      "persistent_loads": 57965,
+      "transient_loads": 0,
+      "evictions": 57965,
+      "expert_requests": 315360,
+      "records_streamed": 57965,
+      "hit_rate": 0.786609,
+      "miss_rate": 0.213391,
+      "misses_per_token": 65.7178,
+      "records_streamed_per_token": 56.6064,
+      "bytes_read_per_token": 1064237400.0
+    },
+    "incremental_misses": {
+      "parts": 57965,
+      "routes": 10977,
+      "routes_per_token": 10.7197,
+      "parts_per_token": 56.6064
+    },
+    "engram_row_cache": {
+      "hits": 39201,
+      "gathers": 556,
+      "rows_read": 23199,
+      "reads": 23199,
+      "evictions": 0,
+      "misses": 23199,
+      "hit_rate": 0.628221,
+      "miss_rate": 0.371779,
+      "misses_per_token": 22.6553,
+      "rows_read_per_token": 22.6553
+    }
+  }
+}

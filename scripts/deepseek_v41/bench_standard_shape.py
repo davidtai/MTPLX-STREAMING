@@ -224,6 +224,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
     )
     parser.add_argument(
+        "--with-mtp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Force the model to load with the DSpark MTP head (with_mtp=True) and "
+            "reprice its residents. Implied by --decode-mode dspark. On the AR "
+            "cell this measures 'AR + head loaded' for the window-25 A/B against "
+            "plain 'AR' (--no-with-mtp)."
+        ),
+    )
+    parser.add_argument(
         "--repeats",
         type=int,
         default=1,
@@ -620,6 +631,9 @@ def bench_one_cell(
             "accepted_by_depth": sd["accepted_by_depth"],
             "cycles": sd["cycles"],
             "verify_calls": sd["verify_calls"],
+            "verify_decode_phase": sd["verify_decode_phase"],
+            "per_cycle_ms": sd["per_cycle"],
+            "phase_time_s": sd["phase_time_s"],
         }
     return {
         "prompt_tokens": prompt_len,
@@ -907,10 +921,23 @@ def run_real(args) -> int:
         if args.expert_cache_limit_gib is None
         else int(args.expert_cache_limit_gib * GIB)
     )
+    # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
+    # (with_mtp=True) and reprices the MTP residents (~7.4 GiB) against the expert
+    # cache so the plan still fits.
+    from mtplx.models.deepseek_v41_dspark_decode import dspark_bench_loader_overrides
+
+    want_head = (getattr(args, "decode_mode", "ar") == "dspark") or bool(
+        getattr(args, "with_mtp", None)
+    )
+    with_mtp, memory_limit_bytes, cache_limit = dspark_bench_loader_overrides(
+        want_dspark=want_head,
+        memory_limit_bytes=int(args.memory_limit_gib * GIB),
+        expert_cache_limit_bytes=cache_limit,
+    )
 
     resident = load_deepseek_v41_streaming(
         args.model,
-        memory_limit_bytes=int(args.memory_limit_gib * GIB),
+        memory_limit_bytes=memory_limit_bytes,
         max_live_kv_tokens=int(max_kv),
         admit=args.admit,
         admission_receipt=admission_receipt,
@@ -920,8 +947,16 @@ def run_real(args) -> int:
         cache_scope="layer",
         island_layers=(),
         verify_record_hashes=args.verify_record_hashes,
+        with_mtp=with_mtp,
     )
     model = resident.model
+    if with_mtp and getattr(model, "mtp", None) is None:
+        raise RuntimeError(
+            "the DSpark MTP head was requested (--decode-mode dspark or --with-mtp) "
+            "but the loaded model has none (with_mtp did not build it -- the "
+            "artifact ships no mtp.* residents, or the config declares no MTP "
+            "stages). Load a DSpark artifact or drop the flag."
+        )
     runtime = getattr(model, "_mtplx_expert_runtime")
 
     receipt = _base_receipt(args, dry_run=False, worktree=worktree)

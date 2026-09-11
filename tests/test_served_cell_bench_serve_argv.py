@@ -38,7 +38,7 @@ def _serve_parser():
     return cli.build_parser()
 
 
-def _composed_serve_argv(memory_gib=None, extra=()):
+def _composed_serve_argv(memory_gib=None, kv_tokens=17664, extra=()):
     """Mirror the argv scripts/deepseek_v41/served_cell_bench.sh execs."""
 
     argv = [
@@ -49,12 +49,39 @@ def _composed_serve_argv(memory_gib=None, extra=()):
         "127.0.0.1",
         "--port",
         "18080",
-        "--no-auth",
     ]
+    if kv_tokens is not None:
+        argv += ["--expert-max-live-kv-tokens", str(kv_tokens)]
+    argv += ["--no-auth"]
     if memory_gib is not None:
         argv += ["--expert-memory-limit", f"{memory_gib}GiB"]
     argv += list(extra)
     return argv
+
+
+def test_serve_parser_accepts_expert_max_live_kv_tokens():
+    # W23 fix: the 16K cell's prompt (16,384) + max_tokens (1,024) = 17,408 must
+    # fit the served context window, so the script sizes
+    # --expert-max-live-kv-tokens to max(contexts)+max_tokens+margin (17,664).
+    parser = _serve_parser()
+    ns = parser.parse_args(_composed_serve_argv(memory_gib=60, kv_tokens=17664))
+    assert ns.command == "serve"
+    assert ns.expert_max_live_kv_tokens == 17664
+    assert ns.expert_memory_limit == "60GiB"
+
+
+def test_script_serve_sizes_kv_window_and_cells_records_server_log():
+    text = _SCRIPT.read_text()
+    functional = [
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    ]
+    blob = "\n".join(functional)
+    # the serve exec raises the KV window (else the 16K prompt + output 400s) ...
+    assert "--expert-max-live-kv-tokens" in blob
+    assert "REQUIRED_KV=$(( MAX_CTX + MAX_TOKENS + KV_MARGIN ))" in blob
+    # ... and the cells client is handed the server log so a failed cell can
+    # record its error tail.
+    assert "--server-log" in blob
 
 
 @pytest.mark.parametrize("extra", [(), ("--generation-mode", "mtp")])

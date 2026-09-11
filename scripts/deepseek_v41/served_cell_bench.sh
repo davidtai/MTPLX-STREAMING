@@ -69,6 +69,21 @@ TOP_K="${DSV41_TOP_K:-20}"
 # Never above the 16K sanity gate unless deliberately raised.
 STOP_AFTER_CONTEXT="${DSV41_STOP_AFTER_CONTEXT:-16384}"
 
+# Served context window must admit the LARGEST cell's prompt PLUS its output:
+# the profile default (deepseek-v41-mxfp4-75) caps max_live_kv_tokens at 16,384,
+# so a 16,384-token prompt + max_tokens=1,024 output = 17,408 > 16,384 and the
+# server rejects the request with HTTP 400 before prefill (Window-21/23). Size
+# --expert-max-live-kv-tokens to max(contexts) + max_tokens + margin so both the
+# context-window admission AND the KV memory plan cover prompt + output. The
+# +1,024 KV over 16,384 is ~+6% and stays inside the 60 GiB plan (76.6 GB peak).
+KV_MARGIN="${DSV41_KV_MARGIN:-256}"
+MAX_CTX=0
+for _c in ${CONTEXTS}; do
+  if [[ "${_c}" =~ ^[0-9]+$ ]] && (( _c > MAX_CTX )); then MAX_CTX="${_c}"; fi
+done
+REQUIRED_KV=$(( MAX_CTX + MAX_TOKENS + KV_MARGIN ))
+MAX_LIVE_KV_TOKENS="${DSV41_MAX_LIVE_KV_TOKENS:-${REQUIRED_KV}}"
+
 LOG_DIR="${DSV41_LOG_DIR:-${TMPDIR:-/tmp}/dsv41-served-cell-bench}"
 RECEIPT_DIR="${DSV41_RECEIPT_DIR:-${LOG_DIR}/receipts}"
 HARNESS="${WORKTREE}/scripts/fable/server_cell_bench.py"
@@ -191,13 +206,15 @@ if [[ -n "${DSV41_MEMORY_LIMIT_GIB:-}" ]]; then
   MEM_ARGS=(--expert-memory-limit "${DSV41_MEMORY_LIMIT_GIB}GiB")
   log "expert memory ceiling override: --expert-memory-limit ${DSV41_MEMORY_LIMIT_GIB}GiB"
 fi
-log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} --no-auth ${MEM_ARGS[*]:-} ${DSV41_SERVE_EXTRA_ARGS:-}"
+log "context window: --expert-max-live-kv-tokens ${MAX_LIVE_KV_TOKENS} (max ctx ${MAX_CTX} + max_tokens ${MAX_TOKENS} + margin ${KV_MARGIN})"
+log "starting: mtplx serve --model ${MODEL} --host ${HOST} --port ${PORT} --no-auth --expert-max-live-kv-tokens ${MAX_LIVE_KV_TOKENS} ${MEM_ARGS[*]:-} ${DSV41_SERVE_EXTRA_ARGS:-}"
 (
   cd "${WORKTREE}" || exit 97
   exec env PYTHONPATH="${WORKTREE}" "${VENV_PY}" -m mtplx.cli serve \
     --model "${MODEL}" \
     --host "${HOST}" \
     --port "${PORT}" \
+    --expert-max-live-kv-tokens "${MAX_LIVE_KV_TOKENS}" \
     --no-auth "${MEM_ARGS[@]}" ${DSV41_SERVE_EXTRA_ARGS:-}
 ) >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
@@ -254,6 +271,7 @@ if ! (
     --top-p "${TOP_P}" \
     --top-k "${TOP_K}" \
     --stop-after-context "${STOP_AFTER_CONTEXT}" \
+    --server-log "${SERVER_LOG}" \
     --timeout-s "${REQUEST_TIMEOUT}"
 ); then
   err "served cells failed; tail of ${SERVER_LOG}:"

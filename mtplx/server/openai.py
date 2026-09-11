@@ -29675,7 +29675,13 @@ def create_app(state: ServerState) -> FastAPI:
                 smart_status=smart_status,
             ),
             "available_generation_modes": (
-                ["ar"] if streaming_active else ["mtp", "ar"]
+                ["ar"]
+                if streaming_active
+                else (
+                    ["mtp", "ar", "dspark"]
+                    if _served_model_type_is_deepseek_v41(state.args)
+                    else ["mtp", "ar"]
+                )
             ),
             "load_mtp": bool(state.args.load_mtp),
             "mtp_enabled": bool(

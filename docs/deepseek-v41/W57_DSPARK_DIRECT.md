@@ -197,6 +197,120 @@ scripts/deepseek_v41/bench_standard_shape.py --model <mxfp4> \
 
 Plus the restored W23 suite (13/13) and the serve-glue / gate / head suites.
 
+## 6a. Window-23 follow-ups (integration wiring)
+
+Two gaps surfaced when window 23 first ran the lane against the real artifact:
+
+- **Bench loader built the model with_mtp=False → no DSpark head.** `_load_model`
+  in `ab_decode_env_levers.py` / `bench_standard_shape.py` now passes `with_mtp=True`
+  when `--decode-mode dspark`, via the shared pure helper
+  `deepseek_v41_dspark_decode.dspark_bench_loader_overrides` (unit-tested). Because
+  the streaming planner applies `text_only_resident_discount` unconditionally (it
+  frees the MTP+vision residents' slots), a with_mtp load would over-commit the
+  expert slot pool by exactly the MTP residents it then loads; the helper reprices
+  **~7.4 GiB** (the MTP-only residents; vision is never on the text/MTP path) out of
+  the memory budget so the 82 GiB plan still fits, and both scripts assert the head
+  is present with an actionable message before the run. The greedy AR byte-identity
+  reference is produced by the **same loaded model** (the AR cell `_generate` /
+  `bench_one_cell` AR pass runs on the identical `resident.model`).
+
+- **Served-path validators only accepted `mtp|ar`.** `--generation-mode dspark`
+  died in the daemon command layer (`ValueError: generation mode must be 'mtp' or
+  'ar'`). `dspark` is now in every generation-mode validator/choice on the served
+  path: `mtplx/cli.py` serve+bench `--generation-mode` choices; `mtplx/server/openai.py`
+  parser choices + both `_normalize_generation_mode` sites (request + arg-setter) +
+  the `available_generation_modes` health list (dsv41 only); and
+  `mtplx/commands/public.py` `GENERATION_MODES` (with `_streamed_mtp_flag_requested`
+  recognising an explicit `dspark` mode). The `MTPLX_DSV41_DSPARK_DIRECT=1` +
+  `--generation-mode mtp` fallback is unchanged. Covered by CPU tests that the full
+  serve argv parses to `generation_mode=dspark`, the daemon normalizer keeps it
+  (not forced to AR), and it resolves to the DSpark-direct lane for a dsv41 MTP
+  runtime.
+
+## 6b. Window-24 root-cause: 1.5 tok/s despite 3.78 tokens/cycle
+
+Window 24 (integration eff795f75, 1,024-prompt, 256 tokens, receipt
+`receipts/gpu-windows/window-24/dspark-1024.json`) showed the lane byte-identical
+to AR with **superb acceptance** — 68 cycles, 195 drafted, 189 accepted
+(94/98/98% by depth), **3.78 tokens/cycle** — yet only **1.53 tok/s** (168 s), and
+its own AR reference pass only **1.705 tok/s** (control) / 2.08 (stack_a) vs the
+6.24 tok/s AR baseline of window 15. Two separate causes:
+
+### (1) AR-with-head is 1.7 tok/s — the head steals expert cache, not the forward call
+
+The dspark harness's AR reference and the plain `--decode-mode ar` path call the
+**identical** forward — `model(ids, cache=cache)`, one row, no `return_hidden`, no
+`logits_keep`, same engram, same K19 (K19 only fires at multi-row prefill; decode
+is one row), same per-step `argmax`. A 1-row forward is `token_count == 1` →
+`RoutingPhase.DECODE`, so AR is already on the decode path. The slowdown is **not
+the call** — it is the **model plan**:
+
+- `with_mtp=True` materializes the DSpark residents (~6.7 GiB) that otherwise are
+  expert-cache slots, and the harness reprices a further ~7.4 GiB out of the
+  budget (§6a). Net, the resident expert cache is ~14 GiB smaller than window 15's
+  AR-only load. On a decode whose cost is dominated by **per-miss SERVICE**
+  (dispatch/gather per not-resident expert — [[island-placement-beats-tuning]],
+  not raw SSD bytes — [[dsv41-decode-not-ssd-bound]]), fewer resident experts means
+  many more misses/token, and that is the 2.4–3.7× AR regression.
+- `with_mtp=True` also sets the backbone's `_mtp_target_layer_ids`, so every
+  forward captures `main_hidden` at 3 target layers (`mean` over the HC copies).
+  This is 3 small reductions/token — real but minor, not the 3.7×.
+
+`--with-mtp` was added to `--decode-mode ar` (both bench scripts) so window 25 can
+A/B **"AR + head loaded"** (`--decode-mode ar --with-mtp`, same reprice) vs plain
+**"AR"** (`--no-with-mtp`) and attribute the head's expert-cache cost directly. The
+head's cache cost is intrinsic to MTP; the lever is expert residency/placement
+(R2/R3), not the loop. Consider reserving only the true MTP resident bytes (~6.7)
+rather than 7.4 (window 24 peaked at 78 GiB, ~4 GiB of head-room the cache could
+reclaim).
+
+### (2) 2.47 s/cycle — the K+1-row verify took the PREFILL routing phase
+
+`current_expert_routing_phase(token_count)` (`mtplx/models/expert_mlx.py`) returns
+`RoutingPhase.PREFILL` for `token_count > 1` and `DECODE` for 1. The bench harness
+calls `model(...)` **directly** (no `rt.forward_ar`, no
+`_expert_routing_context`), so the K+1 = 4-row verify defaulted to **PREFILL** —
+the wave/admission machinery, `prepare_prefill_seed`, and (armed or not) the
+dense-expert re-read path, which cost seconds per call. The runtime's own
+`_expert_routing_context` already routes MTP verify batches as `DECODE`
+("MTP verify batches are decode traffic regardless of width"); the direct-call
+lane bypassed it.
+
+**Fix (implemented, byte-identity proven on CPU, default ON):** the verify forward
+is wrapped in `attention_phase("decode_verify")` + `expert_routing_phase(DECODE)`
+so both the served (`rt.forward_ar`) and bench (direct `model(...)`) paths use the
+DECODE persistent-slot small-M gather. The phase changes only the routing
+machinery — same experts, same mxfp4 weights, same matmul — so greedy output is
+byte-identical (tests assert this with the phase forced both ways); `DECODE`
+services misses too (`expert_runtime.py:2713` `plan.phase is DECODE and plan.misses`),
+so a 4-row verify with a few missed union experts is handled by the decode
+geometry, not a prefill wave. `MTPLX_DSV41_DSPARK_VERIFY_DECODE_PHASE=0` forces
+PREFILL for the window-25 A/B.
+
+### Cycle cost model + instrumentation
+
+Per-cycle wall is now recorded (coarse `perf_counter`) and emitted in the receipt
+under `dspark.per_cycle_ms` / `phase_time_s`:
+
+```
+cycle_ms  =  draft_ms (3 resident MTP stage forwards)
+           + verify_ms (the (K+1)-row target forward)   <-- the PREFILL-phase cost
+           + accept_ms (greedy/spec decision, ~0)
+           + commit_ms (trim + seed, small)
+tok/s     =  tokens_per_cycle / (cycle_s)   [+ prefill amortized]
+```
+
+`--decode-mode dspark --stage-timing` additionally arms the W37 probe around the
+decode cycles and emits `dspark.verify_stage_timing` — the verify forward's
+internal `attn.<mode>` / `moe.routed_switch` breakdown, the census that shows
+whether the fix moved the verify off the prefill switch. Expected after the fix:
+`verify_ms` drops toward ~1.2× a 1-row decode forward
+([[spec-decode-cycle-anatomy]]), so at 3.78 tokens/cycle the lane approaches
+`3.78 × decode_tok_s`. **Both α and the verify/1-row ratio still need a GPU-window
+A/B** (`MTPLX_DSV41_DSPARK_VERIFY_DECODE_PHASE` on/off, `--with-mtp` on/off); the
+CPU double cannot exercise the streamed switch, so the fix is proven byte-identical
+and correct here, and its throughput is a window-25 measurement.
+
 ## 7. Caveats
 
 - **Acceptance α + `T_{K+1}/T1` unmeasured on this box** — the tok/s win is a GPU

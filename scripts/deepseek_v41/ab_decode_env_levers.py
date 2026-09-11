@@ -104,12 +104,26 @@ SCORE_PATH_ENV = "MTPLX_DSV41_PREFILL_SCORE_PATH"          # W50: prefill score
 # three passes over the [rows,64,T] transient.  Reassociation-level vs control
 # (greedy-identical); the throughput play once window-20 showed the stage is
 # pass/bandwidth-bound.  Unset = "oneshot" (byte-identical).
-SELECTED_KEYS_ENV = "MTPLX_DSV41_SELECTED_KEYS"    # W59 / K30: prefill selected-key
-# gather -- gather only the window + index_topk selected compressed rows each query
-# attends into a compact [rows, k, 512] operand and score over k (~640) keys, vs the
-# shipped masked-full [rows,64,T] score that grows with T.  Reassociation-level vs
-# control (greedy-identical); the score-stage FLOP/byte play (24x FLOPs, 50x score
-# bytes at 16K).  Prefill only (rows > 1); decode untouched.  Unset = masked-full.
+SELECTED_KEYS_ENV = "MTPLX_DSV41_SELECTED_KEYS"    # W59 / K30: selected-key gather --
+# gather only the window + index_topk selected compressed rows each query attends
+# into a compact [rows, k, 512] operand and score over k (~640) keys, vs the shipped
+# masked-full [rows,64,T] score that grows with T.  Reassociation-level vs control
+# (greedy-identical); the score-stage FLOP/byte play (24x FLOPs, 50x score bytes at
+# 16K prefill; 46x decode KV read at 16K).  Prefill + decode + verify.  Composes with
+# K29 (decode kernel consumes the gathered-k operands).  Unset = masked-full.
+SOFTMAX_KERNEL_ENV = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"  # W58 / K28: fuse the
+# prefill mask + per-head value-0 sink + f32 softmax over the [rows,64,T] transient
+# into ONE mx.fast.metal_kernel dispatch (2 device reads + 1 write, no T-wide
+# masked_scores/ex/concat intermediate).  Prefill + one-shot only, GPU-only (CPU
+# falls back to eager).  Reassociation-level vs control (greedy-identical, <=1e-6),
+# NOT byte-identical.  Composes with the lean path (see prefill_lean_k28).
+DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fuse the
+# M=1 decode / K+1 verify MLA attention step -- QK^T score + CSA/causal mask +
+# per-head value-0 sink + f32 softmax + PV -- into ONE mx.fast.metal_kernel dispatch
+# per layer, online-softmax over key tiles (no [64,T] score row).  Decode + small-M
+# verify only (prefill untouched), GPU-only (CPU falls back to the eager one-shot).
+# Reassociation-level vs control (greedy-identical, <=1e-6), NOT byte-identical.
+# LEFT OUT of stack_a until the MTPLX_GPU_PARITY window is clean (W60 report).
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -139,6 +153,8 @@ ALL_LEVER_ENVS = (
     SCORE_DTYPE_ENV,
     SCORE_KEY_CHUNK_ENV,
     SCORE_PATH_ENV,
+    SOFTMAX_KERNEL_ENV,
+    DECODE_ATTN_KERNEL_ENV,
     LAYOUT_FIX_ENV,
     DOWN_K_PAD_ENV,
     SELECTED_KEYS_ENV,
@@ -152,14 +168,17 @@ def _preset(
     prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
     layout_fix=None, down_k_pad=None, selected_keys=None,
+    softmax_kernel=None, decode_attn_kernel=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
     "f32"/"bf16", ``prefill_dense_min_rows`` / ``_batch`` an integer string (None =
     use the code default), ``score_dtype`` a "bf16" value (W50/K25, prefill score
     matmul dtype), ``score_key_chunk`` a positive-int string (W50/K25 split-K chunk
-    width), ``score_path`` a "lean" value (W50 f32 pass-cut one-shot); the rest a
-    "1"/None boolean."""
+    width), ``score_path`` a "lean" value (W50 f32 pass-cut one-shot),
+    ``softmax_kernel`` a "1"/None boolean (W58/K28, the fused mask+sink+softmax
+    Metal kernel), ``decode_attn_kernel`` a "1"/None boolean (W60/K29, the fused
+    decode/verify MLA attention Metal kernel); the rest a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -178,6 +197,8 @@ def _preset(
         SCORE_DTYPE_ENV: score_dtype,
         SCORE_KEY_CHUNK_ENV: score_key_chunk,
         SCORE_PATH_ENV: score_path,
+        SOFTMAX_KERNEL_ENV: softmax_kernel,
+        DECODE_ATTN_KERNEL_ENV: decode_attn_kernel,
         LAYOUT_FIX_ENV: layout_fix,
         DOWN_K_PAD_ENV: down_k_pad,
         SELECTED_KEYS_ENV: selected_keys,
@@ -277,6 +298,41 @@ ARM_PRESETS = {
     "prefill_lean_sel": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1"
     ),
+    # W58 K28: the fused mask + per-head value-0 sink + f32 softmax Metal kernel
+    # (2 device reads + 1 write of the [rows,64,T] transient, no T-wide
+    # masked_scores/ex/concat intermediate).  Standalone (one-shot f32 + kernel),
+    # to isolate the fused-softmax delta against control.  Reassociation-level
+    # (greedy-identical), NOT byte-identical.
+    "softmax_kernel": _preset(softmax_kernel="1"),
+    # W58: the W50 prefill_lean stack + the K28 fused-softmax kernel on the 16K
+    # layer-major schedule -- dense experts (K26) + lean pass-cut score path (K25)
+    # + fused mask/sink/softmax (K28).  LOSSY (dense fp32 accumulation order +
+    # score reassociation), task-eval gated.
+    "prefill_lean_k28": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", softmax_kernel="1"
+    ),
+    # W58: the full prefill stack for the next window's headline A/B on the 16K
+    # layer-major schedule -- dense experts (K26) + lean pass-cut score path (K25)
+    # + sorted routed gather / gather_qmm_rhs (K27 layout_fix) + the K28 fused
+    # mask/sink/softmax kernel.  LOSSY (dense fp32 accumulation order + score
+    # reassociation), task-eval gated.  ``prefill_best_nok28`` is its no-kernel
+    # twin (everything but K28), so the pair isolates the fused-softmax delta on
+    # top of the otherwise-identical full stack.
+    "prefill_best": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
+        softmax_kernel="1",
+    ),
+    "prefill_best_nok28": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
+    ),
+    # W60 K29: the fused decode / verify MLA attention Metal kernel -- QK^T score +
+    # CSA/causal mask + per-head value-0 sink + f32 softmax + PV in ONE dispatch per
+    # layer (online-softmax over key tiles, no [64,T] score row).  Standalone, to
+    # isolate the fused-decode-attention delta against control on the 1K decode
+    # shape (mode-agnostic: all four CSA modes route through it).  Decode + small-M
+    # verify only (prefill untouched).  Reassociation-level (greedy-identical),
+    # NOT byte-identical.  NOT in stack_a until the MTPLX_GPU_PARITY window is clean.
+    "decode_attn_kernel": _preset(decode_attn_kernel="1"),
 }
 
 
@@ -321,6 +377,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
     )
     p.add_argument(
+        "--with-mtp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Force the model to load with the DSpark MTP head (with_mtp=True) and "
+            "reprice its residents. Implied by --decode-mode dspark. On "
+            "--decode-mode ar this measures 'AR + head loaded' so window 25 can "
+            "A/B it against plain 'AR' (--no-with-mtp) and isolate the head's "
+            "expert-cache cost from the verify routing phase."
+        ),
+    )
+    p.add_argument(
         "--arms",
         nargs="+",
         default=["control", "shared_overlap"],
@@ -330,7 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
         "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
         "head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
         "score_bf16_chunked, score_lean, prefill_fast, prefill_lean, "
-        "selected_keys, prefill_lean_sel)",
+        "selected_keys, prefill_lean_sel, softmax_kernel, prefill_lean_k28, "
+        "prefill_best, prefill_best_nok28, decode_attn_kernel)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that
@@ -497,6 +566,7 @@ def _dry_run_arm(args, arm, bench) -> dict:
 
 
 def _load_model(args, bench, mx):
+    from mtplx.models.deepseek_v41_dspark_decode import dspark_bench_loader_overrides
     from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming
 
     admission_receipt = None
@@ -508,9 +578,20 @@ def _load_model(args, bench, mx):
         if args.expert_cache_limit_gib is None
         else int(args.expert_cache_limit_gib * GIB)
     )
+    # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
+    # (with_mtp=True) and reprices the MTP residents against the expert cache so
+    # the plan still fits.
+    want_head = (getattr(args, "decode_mode", "ar") == "dspark") or bool(
+        getattr(args, "with_mtp", None)
+    )
+    with_mtp, memory_limit_bytes, cache_limit = dspark_bench_loader_overrides(
+        want_dspark=want_head,
+        memory_limit_bytes=int(args.memory_limit_gib * GIB),
+        expert_cache_limit_bytes=cache_limit,
+    )
     resident = load_deepseek_v41_streaming(
         args.model,
-        memory_limit_bytes=int(args.memory_limit_gib * GIB),
+        memory_limit_bytes=memory_limit_bytes,
         max_live_kv_tokens=int(max_kv),
         admit=args.admit,
         admission_receipt=admission_receipt,
@@ -520,7 +601,15 @@ def _load_model(args, bench, mx):
         cache_scope="layer",
         island_layers=(),
         verify_record_hashes=args.verify_record_hashes,
+        with_mtp=with_mtp,
     )
+    if with_mtp and getattr(resident.model, "mtp", None) is None:
+        raise RuntimeError(
+            "--decode-mode dspark needs the DSpark MTP head, but the loaded model "
+            "has none (with_mtp did not build it -- the artifact ships no mtp.* "
+            "residents, or the config declares no MTP stages). Load a DSpark "
+            "artifact or drop --decode-mode dspark."
+        )
     return resident
 
 
@@ -550,10 +639,13 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps):
     }
 
 
-def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth):
+def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_timing=False):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
-    per-cycle accept statistics.  Total tokens == steps + 1 to match ``_generate``
-    (prefill token + ``steps`` decode tokens)."""
+    per-cycle accept + phase-timing statistics.  Total tokens == steps + 1 to match
+    ``_generate`` (prefill token + ``steps`` decode tokens).  When ``stage_timing``
+    the W37 probe is armed around the decode cycles so the receipt also carries the
+    VERIFY forward's internal model stages (attention, moe.routed_switch breakdown,
+    which reveals whether rows>1 took the prefill routing phase)."""
     from mtplx.models.deepseek_v41_dspark_decode import (
         DSparkDecodeStats,
         dspark_generate,
@@ -562,6 +654,11 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth):
 
     mem_probe.reset_peak()
     stats = DSparkDecodeStats()
+    stime = None
+    if stage_timing:
+        from mtplx.models import deepseek_v41_stage_timing as stime
+
+        stime.begin()
     t0 = time.perf_counter()
     toks = dspark_generate(
         model,
@@ -573,12 +670,19 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth):
         stats=stats,
     )
     wall = time.perf_counter() - t0
-    return {
+    report = None
+    if stime is not None:
+        report = model.stage_timing_report()
+        stime.end()
+    out = {
         "generated": [int(t) for t in toks],
         "decode_wall_s": wall,
         "peak_gb": mem_probe.peak_bytes() / GIB,
         "stats": stats.to_dict(),
     }
+    if report is not None:
+        out["verify_stage_timing"] = report
+    return out
 
 
 def _overlap_telemetry(runtime) -> dict | None:
@@ -673,6 +777,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 model=model, mx=mx, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
                 depth=args.dspark_depth,
+                stage_timing=bool(getattr(args, "stage_timing", False)),
             )
             dsp_ids = dsp["generated"]
             byte_identical = dsp_ids == ids
@@ -697,10 +802,19 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "drafted_tokens": st["drafted_tokens"],
                 "accepted_drafts": st["accepted_drafts"],
                 "rejected_drafts": st["rejected_drafts"],
+                # the per-cycle cost table (draft/verify/accept/commit ms) + the
+                # verify routing phase actually used.
+                "verify_decode_phase": st["verify_decode_phase"],
+                "per_cycle_ms": st["per_cycle"],
+                "phase_time_s": st["phase_time_s"],
                 "token_ids_sha256": hashlib.sha256(
                     json.dumps(dsp_ids).encode()
                 ).hexdigest(),
             }
+            if dsp.get("verify_stage_timing") is not None:
+                # W37 internal breakdown of the verify forward (attention +
+                # moe.routed_switch): the census that shows the routing phase.
+                receipt["dspark"]["verify_stage_timing"] = dsp["verify_stage_timing"]
             # Byte-identity is a hard correctness gate, not a soft metric: a
             # differing greedy sequence means the speculative lane is broken.
             if not byte_identical:

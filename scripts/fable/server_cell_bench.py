@@ -1207,6 +1207,47 @@ SERVER_MEMORY_KEYS = (
 )
 
 
+def _client_failure(
+    body_receipt: Mapping[str, Any],
+    *,
+    error: str,
+    http_status: int | None,
+    http_body: str | None,
+    wall_s: float,
+) -> dict[str, Any]:
+    """A shape-compatible failure result so a rejected/failed request records
+    the HTTP status + response body instead of a silent all-None row.
+
+    Same keys :func:`stream_chat`'s success path returns, so ``build_record`` /
+    ``response_parity`` read it without KeyErrors.
+    """
+
+    empty_sha = hashlib.sha256(b"").hexdigest()
+    return {
+        "ok": False,
+        "error": error,
+        "http_status": http_status,
+        "http_body": http_body,
+        "first_delta_at": None,
+        "server_error": None,
+        "wall_s": wall_s,
+        "ttft_s": None,
+        "decode_s": None,
+        "delta_count": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "finish_reason": None,
+        "text": "",
+        "text_sha256": empty_sha,
+        "reasoning_sha256": empty_sha,
+        "reasoning_chars": 0,
+        "request_body": dict(body_receipt),
+        "usage": {},
+        "server_stats": {},
+        "raw_engagement": {},
+    }
+
+
 def stream_chat(
     *,
     base_url: str,
@@ -1256,6 +1297,8 @@ def stream_chat(
         method="POST",
     )
 
+    body_receipt = {k: v for k, v in body.items() if k != "messages"}
+
     started = time.monotonic()
     first_delta_at: float | None = None
     last_delta_at: float | None = None
@@ -1267,7 +1310,41 @@ def stream_chat(
     trailing: list[Any] = []
     server_error: dict[str, Any] | None = None
 
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:
+    # A rejected request (e.g. HTTP 400 when prompt + max_tokens exceed the
+    # served context window) raises HTTPError AT urlopen, before the stream.
+    # Capture the status AND the response body -- urllib's HTTPError str is a
+    # bare "HTTP Error 400: Bad Request" with no reason -- so the receipt says
+    # WHY, never a silent all-None row.
+    try:
+        opened = urllib.request.urlopen(request, timeout=timeout_s)
+    except urllib.error.HTTPError as http_error:
+        detail = ""
+        try:
+            detail = http_error.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - body is best-effort
+            detail = ""
+        reason = str(getattr(http_error, "reason", "") or "")
+        summary = detail.strip().replace("\n", " ")[:800]
+        message = f"HTTP {int(http_error.code)} {reason}".strip()
+        if summary:
+            message = f"{message}: {summary}"
+        return _client_failure(
+            body_receipt,
+            error=message,
+            http_status=int(http_error.code),
+            http_body=detail[:2000],
+            wall_s=time.monotonic() - started,
+        )
+    except urllib.error.URLError as url_error:
+        return _client_failure(
+            body_receipt,
+            error=f"URLError: {getattr(url_error, 'reason', url_error)}",
+            http_status=None,
+            http_body=None,
+            wall_s=time.monotonic() - started,
+        )
+
+    with opened as response:
         for raw in response:
             line = raw.decode("utf-8", "replace").strip()
             if not line or not line.startswith("data:"):
@@ -5075,6 +5152,40 @@ def load_records(receipt_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _server_log_error_tail(
+    log_path: str | Path | None, *, max_lines: int = 12, window: int = 400
+) -> str | None:
+    """The last error-ish lines of the server log, for a failed cell's record.
+
+    Read-only. Prefers lines that look like errors (error/exception/traceback/
+    400/reject/refuse/exceed/context) from the tail window; falls back to the
+    last few lines. Returns None if the log is unreadable.
+    """
+
+    try:
+        lines = Path(log_path).read_text(errors="replace").splitlines()
+    except (OSError, TypeError, ValueError):
+        return None
+    if not lines:
+        return None
+    tail = lines[-window:]
+    needles = (
+        "error",
+        "exception",
+        "traceback",
+        "400",
+        "reject",
+        "refuse",
+        "exceed",
+        "context window",
+        "too long",
+        "bad request",
+    )
+    hits = [ln for ln in tail if any(n in ln.lower() for n in needles)]
+    chosen = (hits or tail)[-max_lines:]
+    return "\n".join(chosen)
+
+
 def summarize_fastest_of_seeds(
     records: Sequence[Mapping[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -5244,6 +5355,13 @@ def run_cells_remote(
         record["request_parity_source"] = "wire" if wire else "planned"
         record["request_body_sha256"] = parity_digest(canonical)
         record["response_parity"] = response_parity(call, sampling)
+        # Never a silent all-None failure row: carry the HTTP status + response
+        # body, and (when the server log is known) its last error lines, so the
+        # receipt says WHY a cell failed without re-reading the server log.
+        record["http_status"] = call.get("http_status")
+        record["http_body"] = call.get("http_body")
+        if not record["ok"] and getattr(args, "server_log", None):
+            record["server_log_tail"] = _server_log_error_tail(args.server_log)
         records.append(record)
         if record["ok"]:
             reasoning_tokens = record["response_parity"].get("reasoning_tokens")
@@ -5264,7 +5382,12 @@ def run_cells_remote(
                 flush=True,
             )
         else:
-            print(f"    FAILED: {record['error']}", flush=True)
+            status = record.get("http_status")
+            status_txt = f" [HTTP {status}]" if status else ""
+            print(f"    FAILED{status_txt}: {record['error']}", flush=True)
+            tail = record.get("server_log_tail")
+            if tail:
+                print(f"    server log: {tail.strip()[:400]}", flush=True)
 
     receipt_dir = Path(args.receipt_dir)
     receipt_dir.mkdir(parents=True, exist_ok=True)

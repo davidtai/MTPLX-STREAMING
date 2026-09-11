@@ -1,0 +1,120 @@
+{
+ "schema": "mtplx-server-cell-prompts-v1",
+ "model": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+ "model_family": "deepseek-v41",
+ "served_model_id": null,
+ "template_settings": {
+  "model_family": "deepseek-v41",
+  "chat_template_source": "artifact chat_template.jinja (W52 port of the official reference encoder) + served code fallback (mtplx.chat_encoding.encode_deepseek_v41_messages)",
+  "render": "DeepSeek-V4.1 reference chat format: BOS + [<\uff5cSystem\uff5c>effort/system] + <\uff5cUser\uff5c>content + <\uff5cAssistant\uff5c> + <think>|</think>",
+  "render_cite": "mtplx/templates/deepseek_v41/chat_template.jinja; DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages",
+  "add_special_tokens": false,
+  "enable_thinking": false,
+  "reasoning_effort": null,
+  "thinking_mode": false,
+  "bos_id_prepended": true,
+  "bos_token_id": 0,
+  "note": "DSV4.1 now templates the real chat prompt (BOS id 0 first). The OFFICIAL default is thinking OFF (reference generate.py --thinking-mode 'chat'; the encoding-test harness renders thinking_mode='chat'); reasoning_effort is inert in chat mode and omitted there. DeepSeek's instruct evals use thinking + reasoning_effort=100 -- set --dsv41-enable-thinking (DSV41_ENABLE_THINKING) + --dsv41-reasoning-effort to mirror them. The exported ids match the server byte-for-byte WITH BOS."
+ },
+ "context_sha256": "c8ae2b1790c0300aa7c1421b55e7cd5d43c93461f7fba5d3a732fd34e156b4c4",
+ "vanity_prompt_sha256": "0f52e5a9babc819bcafa443c9253393f8d209a64242d1ef05bb3dea1ad77be30",
+ "contexts": [
+  1024
+ ],
+ "seeds": [
+  20260829,
+  20260830,
+  20260831
+ ],
+ "prompts": [
+  {
+   "cell": "vanity",
+   "target_tokens": 0,
+   "seed": null,
+   "text": "Write a Python function `is_palindrome(text: str) -> bool` that checks whether a string is a palindrome, ignoring case and any non-alphanumeric characters. Give it a docstring explaining the normalisation rule, and follow it with exactly three `assert` statements covering: a phrase with punctuation and mixed case, the empty string, and a non-palindrome.",
+   "text_sha256": "0f52e5a9babc819bcafa443c9253393f8d209a64242d1ef05bb3dea1ad77be30",
+   "templated_tokens": 81
+  },
+  {
+   "seed": 20260829,
+   "target_tokens": 1024,
+   "templated_tokens": 1023,
+   "text": "            return_hidden=False,\n            emit_logits=not _final_logits_prefill_enabled(),\n            input_embeddings=input_embeddings,\n        )\n    _runtime_count(rt, \"prefill_external_cache_only_calls\")\n    if _prefill_stock_cache_only_enabled():\n        _runtime_count(rt, \"prefill_stock_cache_only_calls\")\n    if _prefill_omlx_external_enabled():\n        _runtime_count(rt, \"prefill_omlx_external_calls\")\n    if not _prefill_external_emit_logits_enabled():\n        return rt.forward_ar(\n            token_array,\n            cache=cache,\n            return_hidden=False,\n            emit_logits=False,\n            input_embeddings=input_embeddings,\n        )\n    if input_embeddings is not None:\n        unused_logits = rt.model(\n            token_array, cache=cache, input_embeddings=input_embeddings\n        )\n    else:\n        unused_logits = rt.model(token_array, cache=cache)\n    del unused_logits\n    return None\n\n\ndef _forward_ar_optional_hidden(\n    rt: MTPLXRuntime,\n    token_array: Any,\n    *,\n    cache: Any,\n    hidden_variant: str | None,\n    emit_logits: bool = True,\n    logits_keep: int | None = None,\n    input_embeddings: Any | None = None,\n) -> tuple[Any, Any]:\n    \"\"\"`forward_ar` as (logits, hidden), with hidden None on target-only runtimes.\n\n    Only request hidden states from a runtime that can produce them. Target-only\n    AR runtimes (laguna_ar) have no draft head: their forward_ar returns logits\n    alone, so an ungated ``return_hidden=True`` unpacks a lone logits array as\n    ``(logits, hidden)`` and raises \"not enough values to unpack (expected 2,\n    got 1)\" \u2014 the live serving crash in the warm session-restore suffix prefill.\n    `hidden_variant` travels only on the hidden branch for the same reason: the\n    generic runtime forwards it to the model as a kwarg a stock target does not\n    accept. This mirrors the cold prefill path and generate_ar, which both gate\n    return_hidden on rt.mtp_enabled. Callers must treat hidden as optional.\n    \"\"\"\n\n    if not rt.mtp_enabled:\n        logits = rt.forward_ar(\n            token_array,\n            cache=cache,\n            return_hidden=False,\n            emit_logits=emit_logits,\n            logits_keep=logits_keep,\n            input_embeddings=input_embeddings,\n        )\n        return logits, None\n    return rt.forward_ar(\n        token_array,\n        cache=cache,\n        return_hidden=True,\n        hidden_variant=hidden_variant,\n        emit_logits=emit_logits,\n        logits_keep=logits_keep,\n        input_embeddings=input_embeddings,\n    )\n\n\ndef _prefill_chunk_size() -> int:\n    override = _PREFILL_CHUNK_SIZE_OVERRIDE.get()\n    if override is not None:\n        return max(1, int(override))\n    raw = (os.environ.get(\"MTPLX_PREFILL_CHUNK_SIZE\") or \"2048\").strip().lower()\n    if raw == \"auto\":\n        layout = _sustained_prefill_layout()\n        if layout == \"contiguous_dense_decode\":\n            return max(1, _env_int(\"MTPLX_PREFILL_CHUNK_SIZE_DENSE\", 2048))\n        return max(1, _env_int(\"MTPLX_PREFILL_CHUNK_SIZE_REPAGE\", 2048))\n    try:\n        return max(1, int(raw))\n    except ValueError:\n        return 2048\n\n\n@contextmanager\ndef prefill_chunk_size_override(chunk_size: int | None):\n    \"\"\"\n\nPlease update the generation module above with a reusable `summarize_generation_outputs(outputs: Sequence[GenerationOutput]) -> dict[str, Any]` helper. Return a JSON-serializable summary containing request count, total generated tokens, mean and p95 prefill TPS, mean and p95 decode TPS, mean wall time, and peak memory in GiB. Handle an empty sequence without raising and ignore unavailable optional metrics. Preserve the module's existing type style and add focused pytest tests for an empty input and several representative outputs. Return only a unified diff against the existing code.\n\nAnswer with a SHORT markdown report: one sentence of summary, then a bulleted list of exactly three observations about the module above. No code.",
+   "text_sha256": "37c74fca13b2895ca956935bae9d2b8d0905809b91de3a37325ea368292502d4",
+   "chars": 3951,
+   "rounds": [
+    {
+     "budget": 872,
+     "templated_tokens": 1029
+    },
+    {
+     "budget": 867,
+     "templated_tokens": 1023
+    },
+    {
+     "budget": 868,
+     "templated_tokens": 1025
+    },
+    {
+     "budget": 867,
+     "templated_tokens": 1023
+    },
+    {
+     "budget": 868,
+     "templated_tokens": 1025
+    },
+    {
+     "budget": 867,
+     "templated_tokens": 1023
+    },
+    {
+     "budget": 868,
+     "templated_tokens": 1025
+    },
+    {
+     "budget": 867,
+     "templated_tokens": 1023
+    }
+   ],
+   "cell": "sweep"
+  },
+  {
+   "seed": 20260830,
+   "target_tokens": 1024,
+   "templated_tokens": 1024,
+   "text": "            emit_logits=not _final_logits_prefill_enabled(),\n            input_embeddings=input_embeddings,\n        )\n    _runtime_count(rt, \"prefill_external_cache_only_calls\")\n    if _prefill_stock_cache_only_enabled():\n        _runtime_count(rt, \"prefill_stock_cache_only_calls\")\n    if _prefill_omlx_external_enabled():\n        _runtime_count(rt, \"prefill_omlx_external_calls\")\n    if not _prefill_external_emit_logits_enabled():\n        return rt.forward_ar(\n            token_array,\n            cache=cache,\n            return_hidden=False,\n            emit_logits=False,\n            input_embeddings=input_embeddings,\n        )\n    if input_embeddings is not None:\n        unused_logits = rt.model(\n            token_array, cache=cache, input_embeddings=input_embeddings\n        )\n    else:\n        unused_logits = rt.model(token_array, cache=cache)\n    del unused_logits\n    return None\n\n\ndef _forward_ar_optional_hidden(\n    rt: MTPLXRuntime,\n    token_array: Any,\n    *,\n    cache: Any,\n    hidden_variant: str | None,\n    emit_logits: bool = True,\n    logits_keep: int | None = None,\n    input_embeddings: Any | None = None,\n) -> tuple[Any, Any]:\n    \"\"\"`forward_ar` as (logits, hidden), with hidden None on target-only runtimes.\n\n    Only request hidden states from a runtime that can produce them. Target-only\n    AR runtimes (laguna_ar) have no draft head: their forward_ar returns logits\n    alone, so an ungated ``return_hidden=True`` unpacks a lone logits array as\n    ``(logits, hidden)`` and raises \"not enough values to unpack (expected 2,\n    got 1)\" \u2014 the live serving crash in the warm session-restore suffix prefill.\n    `hidden_variant` travels only on the hidden branch for the same reason: the\n    generic runtime forwards it to the model as a kwarg a stock target does not\n    accept. This mirrors the cold prefill path and generate_ar, which both gate\n    return_hidden on rt.mtp_enabled. Callers must treat hidden as optional.\n    \"\"\"\n\n    if not rt.mtp_enabled:\n        logits = rt.forward_ar(\n            token_array,\n            cache=cache,\n            return_hidden=False,\n            emit_logits=emit_logits,\n            logits_keep=logits_keep,\n            input_embeddings=input_embeddings,\n        )\n        return logits, None\n    return rt.forward_ar(\n        token_array,\n        cache=cache,\n        return_hidden=True,\n        hidden_variant=hidden_variant,\n        emit_logits=emit_logits,\n        logits_keep=logits_keep,\n        input_embeddings=input_embeddings,\n    )\n\n\ndef _prefill_chunk_size() -> int:\n    override = _PREFILL_CHUNK_SIZE_OVERRIDE.get()\n    if override is not None:\n        return max(1, int(override))\n    raw = (os.environ.get(\"MTPLX_PREFILL_CHUNK_SIZE\") or \"2048\").strip().lower()\n    if raw == \"auto\":\n        layout = _sustained_prefill_layout()\n        if layout == \"contiguous_dense_decode\":\n            return max(1, _env_int(\"MTPLX_PREFILL_CHUNK_SIZE_DENSE\", 2048))\n        return max(1, _env_int(\"MTPLX_PREFILL_CHUNK_SIZE_REPAGE\", 2048))\n    try:\n        return max(1, int(raw))\n    except ValueError:\n        return 2048\n\n\n@contextmanager\ndef prefill_chunk_size_override(chunk_size: int | None):\n    \"\"\"Apply a request-local prefill\n\nPlease update the generation module above with a reusable `summarize_generation_outputs(outputs: Sequence[GenerationOutput]) -> dict[str, Any]` helper. Return a JSON-serializable summary containing request count, total generated tokens, mean and p95 prefill TPS, mean and p95 decode TPS, mean wall time, and peak memory in GiB. Handle an empty sequence without raising and ignore unavailable optional metrics. Preserve the module's existing type style and add focused pytest tests for an empty input and several representative outputs. Return only a unified diff against the existing code.\n\nAnswer with a SHORT markdown report: one sentence of summary, then a bulleted list of exactly three observations about the module above. No code.",
+   "text_sha256": "ee4f7052217c3c0699dfa186713701a93b050d139063a39691b771d81000d421",
+   "chars": 3947,
+   "rounds": [
+    {
+     "budget": 872,
+     "templated_tokens": 1029
+    },
+    {
+     "budget": 867,
+     "templated_tokens": 1024
+    }
+   ],
+   "cell": "sweep"
+  },
+  {
+   "seed": 20260831,
+   "target_tokens": 1024,
+   "templated_tokens": 1024,
+   "text": "            input_embeddings=input_embeddings,\n        )\n    _runtime_count(rt, \"prefill_external_cache_only_calls\")\n    if _prefill_stock_cache_only_enabled():\n        _runtime_count(rt, \"prefill_stock_cache_only_calls\")\n    if _prefill_omlx_external_enabled():\n        _runtime_count(rt, \"prefill_omlx_external_calls\")\n    if not _prefill_external_emit_logits_enabled():\n        return rt.forward_ar(\n            token_array,\n            cache=cache,\n            return_hidden=False,\n            emit_logits=False,\n            input_embeddings=input_embeddings,\n        )\n    if input_embeddings is not None:\n        unused_logits = rt.model(\n            token_array, cache=cache, input_embeddings=input_embeddings\n        )\n    else:\n        unused_logits = rt.model(token_array, cache=cache)\n    del unused_logits\n    return None\n\n\ndef _forward_ar_optional_hidden(\n    rt: MTPLXRuntime,\n    token_array: Any,\n    *,\n    cache: Any,\n    hidden_variant: str | None,\n    emit_logits: bool = True,\n    logits_keep: int | None = None,\n    input_embeddings: Any | None = None,\n) -> tuple[Any, Any]:\n    \"\"\"`forward_ar` as (logits, hidden), with hidden None on target-only runtimes.\n\n    Only request hidden states from a runtime that can produce them. Target-only\n    AR runtimes (laguna_ar) have no draft head: their forward_ar returns logits\n    alone, so an ungated ``return_hidden=True`` unpacks a lone logits array as\n    ``(logits, hidden)`` and raises \"not enough values to unpack (expected 2,\n    got 1)\" \u2014 the live serving crash in the warm session-restore suffix prefill.\n    `hidden_variant` travels only on the hidden branch for the same reason: the\n    generic runtime forwards it to the model as a kwarg a stock target does not\n    accept. This mirrors the cold prefill path and generate_ar, which both gate\n    return_hidden on rt.mtp_enabled. Callers must treat hidden as optional.\n    \"\"\"\n\n    if not rt.mtp_enabled:\n        logits = rt.forward_ar(\n            token_array,\n            cache=cache,\n            return_hidden=False,\n            emit_logits=emit_logits,\n            logits_keep=logits_keep,\n            input_embeddings=input_embeddings,\n        )\n        return logits, None\n    return rt.forward_ar(\n        token_array,\n        cache=cache,\n        return_hidden=True,\n        hidden_variant=hidden_variant,\n        emit_logits=emit_logits,\n        logits_keep=logits_keep,\n        input_embeddings=input_embeddings,\n    )\n\n\ndef _prefill_chunk_size() -> int:\n    override = _PREFILL_CHUNK_SIZE_OVERRIDE.get()\n    if override is not None:\n        return max(1, int(override))\n    raw = (os.environ.get(\"MTPLX_PREFILL_CHUNK_SIZE\") or \"2048\").strip().lower()\n    if raw == \"auto\":\n        layout = _sustained_prefill_layout()\n        if layout == \"contiguous_dense_decode\":\n            return max(1, _env_int(\"MTPLX_PREFILL_CHUNK_SIZE_DENSE\", 2048))\n        return max(1, _env_int(\"MTPLX_PREFILL_CHUNK_SIZE_REPAGE\", 2048))\n    try:\n        return max(1, int(raw))\n    except ValueError:\n        return 2048\n\n\n@contextmanager\ndef prefill_chunk_size_override(chunk_size: int | None):\n    \"\"\"Apply a request-local prefill chunk override.\n\n    The legacy env knob remains supported for profiles and CLI diagnostics\n\nPlease update the generation module above with a reusable `summarize_generation_outputs(outputs: Sequence[GenerationOutput]) -> dict[str, Any]` helper. Return a JSON-serializable summary containing request count, total generated tokens, mean and p95 prefill TPS, mean and p95 decode TPS, mean wall time, and peak memory in GiB. Handle an empty sequence without raising and ignore unavailable optional metrics. Preserve the module's existing type style and add focused pytest tests for an empty input and several representative outputs. Return only a unified diff against the existing code.\n\nAnswer with a SHORT markdown report: one sentence of summary, then a bulleted list of exactly three observations about the module above. No code.",
+   "text_sha256": "598e1b5c7df876e99194ed5c8c561824e6c38f9a51354e698033b9954e60346d",
+   "chars": 3978,
+   "rounds": [
+    {
+     "budget": 872,
+     "templated_tokens": 1029
+    },
+    {
+     "budget": 867,
+     "templated_tokens": 1024
+    }
+   ],
+   "cell": "sweep"
+  }
+ ]
+}
