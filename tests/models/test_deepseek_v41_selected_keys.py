@@ -15,9 +15,14 @@ Covers:
     window band + selection, reassociation-level (<= 1e-5), NaN-free on all-masked
     rows;
   * integration: on the tiny 8-layer CSA model (every mode: swa / full-r2 / reuse /
-    full-r1+candidate / reindex), K30 prefill logits equal control (<= 1e-5,
-    greedy argmax identical) across chunked and layer-major schedules;
-  * decode (rows == 1) is untouched -- byte-identical to control.
+    full-r1+candidate / reindex), K30 logits equal control (<= 1e-5, greedy argmax
+    identical) across chunked and layer-major prefill, a multi-step greedy DECODE
+    (W59 decode extension, rows == 1), and the K+1-row VERIFY batch.
+
+The W59 decode extension makes decode/verify T-independent too (the shipped path
+re-scores the whole compressed history [1,64,T] every token); it composes with
+W60's K29 fused decode kernel, which consumes the gathered-k operands when both
+levers are armed on a Metal host (proven by W60's suite; CPU here runs eager).
 
 No GPU/Metal, no artifact load, <3 GB RSS.  MLX pinned to CPU per
 memory/worker-tests-must-pin-mlx-cpu.md.  Run under ``nice -n 19``, no ``-n auto``.
@@ -267,25 +272,64 @@ def test_k30_prefill_matches_control(chunk, layer_major):
         f"chunk={chunk} lm={layer_major} greedy argmax differs"
 
 
-def test_k30_decode_is_byte_identical_to_control():
-    """Decode (rows == 1) never takes the K30 path -- byte-identical to control."""
+def _greedy_decode(model, ids, n_steps, selected):
+    """Prefill ``ids`` then greedily decode ``n_steps`` tokens; return the stacked
+    per-step last-row logits [1+n_steps, vocab].  Every layer/mode is exercised."""
+    os.environ.pop(_SEL, None)
+    if selected:
+        os.environ[_SEL] = "1"
+    cache = model.make_cache()
+    lg = model(ids, cache=cache, prefill_chunk=0)
+    mx.eval(lg)
+    outs = [lg[:, -1, :]]
+    tok = mx.argmax(lg[:, -1, :], axis=-1, keepdims=True)
+    for _ in range(n_steps):
+        lg = model(tok, cache=cache)
+        mx.eval(lg)
+        outs.append(lg[:, -1, :])
+        tok = mx.argmax(lg[:, -1, :], axis=-1, keepdims=True)
+    return mx.concatenate(outs, axis=0)
+
+
+def test_k30_decode_matches_control():
+    """W59 decode extension: rows == 1 now gathers the selected keys (window +
+    index_topk selected compressed) instead of scoring [1,64,T] and masking.
+    Reassociation-level vs control across a multi-step greedy decode (every CSA
+    mode in the 8-layer model: swa / full-r2 / reuse / full-r1+candidate /
+    reindex), greedy tokens identical."""
     model = _build()
-    ids = mx.array(np.random.RandomState(0).randint(0, 48, size=(1, 12)))
+    ids = mx.array(np.random.RandomState(0).randint(0, 48, size=(1, 20)))
+    base = _greedy_decode(model, ids, 6, selected=False)
+    got = _greedy_decode(model, ids, 6, selected=True)
+    ldiff = float(mx.max(mx.abs(got - base)).item())
+    assert ldiff <= 1e-5, f"decode logit max abs diff {ldiff}"
+    assert bool(mx.array_equal(mx.argmax(got, -1), mx.argmax(base, -1))), \
+        "decode greedy argmax differs"
 
-    cache_ctl = model.make_cache()
-    mx.eval(model(ids, cache=cache_ctl, prefill_chunk=0))
-    step = mx.array([[7]])
-    ctl = model(step, cache=cache_ctl)
-    mx.eval(ctl)
 
-    os.environ[_SEL] = "1"
-    cache_k30 = model.make_cache()
-    mx.eval(model(ids, cache=cache_k30, prefill_chunk=0))  # K30 prefill (greedy-identical)
-    # feed the SAME window/compress state a fresh decode step; decode ignores K30
-    got = model(step, cache=cache_k30)
-    mx.eval(got)
-    # decode logits must be byte-identical between the two caches' decode step when
-    # the prefill was greedy-identical; here we assert the decode PATH is untouched
-    # by re-running control decode on a K30-prefilled cache and matching a control
-    # decode on a control-prefilled cache to <= 1e-5 (prefill is reassoc-level).
-    assert float(mx.max(mx.abs(got - ctl)).item()) <= 1e-5
+def test_k30_verify_batch_matches_control():
+    """W59 decode extension: the K+1-row verify batch (rows == K+1) gathers the
+    selected keys per candidate row.  Each row's own window band + selection is
+    gathered (causal among the batch handled by the per-query valid mask).
+    Reassociation-level vs control across all four CSA modes, greedy-identical."""
+    model = _build()
+    ids = mx.array(np.random.RandomState(0).randint(0, 48, size=(1, 20)))
+    K = 3
+    batch = mx.array(np.random.RandomState(1).randint(0, 48, size=(1, K + 1)))
+
+    def run(selected):
+        os.environ.pop(_SEL, None)
+        if selected:
+            os.environ[_SEL] = "1"
+        cache = model.make_cache()
+        mx.eval(model(ids, cache=cache, prefill_chunk=0))
+        v = model(batch, cache=cache)
+        mx.eval(v)
+        return v
+
+    base = run(False)
+    got = run(True)
+    ldiff = float(mx.max(mx.abs(got - base)).item())
+    assert ldiff <= 1e-5, f"verify logit max abs diff {ldiff}"
+    assert bool(mx.array_equal(mx.argmax(got, -1), mx.argmax(base, -1))), \
+        "verify greedy argmax differs"

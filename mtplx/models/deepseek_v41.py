@@ -893,23 +893,35 @@ class Attention(nn.Module):
     def _sparse_attend_selected(self, q, window_all, compress_kv, comp_idx,
                                 positions):
         """K30 (W59) selected-key gather attention -- the faithful,
-        non-transliterated form of :meth:`_sparse_attend` for prefill (rows > 1).
+        non-transliterated form of :meth:`_sparse_attend`, for prefill (rows > 1),
+        decode (rows == 1) and the ``K+1`` verify batch alike.
 
         Instead of scoring the full concatenated ``[b, T+n_comp, hd]`` history and
-        masking (score transient ``[rows, H, T+n_comp]`` growing with T), this
-        gathers only the keys/values each query attends -- its sliding window
+        masking (score transient ``[rows, H, T+n_comp]`` growing with T -- at decode
+        the whole compressed history is re-scored every token), this gathers only
+        the keys/values each query attends -- its sliding window
         (``_window_selected_idx``) plus the indexer's ``index_topk`` selected
         compressed rows (``comp_idx``, published by the index source) -- into one
         compact ``[rows, k, hd]`` operand and runs a single softmax over ``k``
         keys, exactly as the reference ``sparse_attn`` gathers ``kv[topk_idxs]``.
-        ``k = window + min(index_topk, n_comp)`` saturates independent of T.
+        ``k = window + min(index_topk, n_comp)`` saturates independent of T (640 /
+        128), so the per-layer decode attention becomes T-independent.
 
         The KV is shared across all 64 query heads (MLA, 1 KV head), so the gather
-        is ``[rows, k, hd]`` (not per head) -- the least-traffic layout.  The
-        softmax is the reference ``_k_sparse_attn`` value-0 sink form (max includes
-        the sink, normalize after PV), all f32, so vs the masked-full path the only
-        difference is float reassociation of the denom + value sums over a different
-        key ordering (greedy-identical, never bit-identical)."""
+        is ``[rows, k, hd]`` (not per head) -- the least-traffic layout.
+
+        **K30 x K29 composition:** when ``MTPLX_DSV41_DECODE_ATTN_KERNEL`` is also
+        armed on a Metal host at decode / verify (``b*s <= 8``), the compact gathered
+        operands are handed to W60's fused decode-attention kernel -- each query row
+        becomes its own single-query "batch" (``[rows, 1, H, hd]`` / KV
+        ``[rows, k, hd]``), so the kernel's ``row // S`` batch map indexes each
+        query's own gathered KV, scoring + sink-softmax + PV over ``k`` keys in ONE
+        dispatch (mask-free but for the ``[rows, k]`` valid-count edge).  Otherwise
+        (CPU host, kernel off, or prefill rows > 8) the eager gathered softmax runs
+        here: the reference ``_k_sparse_attn`` value-0 sink form (max includes the
+        sink, normalize after PV), all f32.  Either way, vs the masked-full path the
+        only difference is float reassociation over a different key ordering
+        (greedy-identical, never bit-identical)."""
         b, s, H, hd = q.shape
         mode = getattr(self, "mode", "dspark")
         with _stime.stage_attn("attn." + mode + ".score.gather") as _st:
@@ -926,6 +938,23 @@ class Attention(nn.Module):
                 KVg = kvg_win
                 valid = win_valid
             _st.add(KVg)
+        # K30 x K29: feed the gathered-k operands to the fused decode kernel when
+        # both levers are armed (GPU, decode/verify small-M).  Each query row is its
+        # own batch (S=1) so the kernel indexes its own [k,hd] gathered KV; the
+        # [rows,k] valid mask carries the only edge (the -1 pad slots).
+        if _decode_attn_kernel_use(q):
+            from mtplx.models import deepseek_v41_attn_kernels as _k29
+            k = KVg.shape[2]
+            out = _k29.fused_decode_attention(
+                q.reshape(b * s, 1, H, hd),
+                KVg.reshape(b * s, k, hd),
+                KVg.reshape(b * s, k, hd),
+                attend=valid.reshape(b * s, k),
+                attn_sink=self.attn_sink,
+                scale=self.softmax_scale,
+                T=k,
+            )
+            return out.reshape(b, s, H, hd)
         scale = self.softmax_scale
         with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
             scores = mx.einsum(
@@ -1098,11 +1127,14 @@ class Attention(nn.Module):
             layer_cache.append_window(kv_new)
             window_all = layer_cache.window
             _st.add(window_all)
-        # K30 (W59): prefill (rows > 1) may gather only the selected keys per query
-        # instead of scoring the full history and masking.  The window store and the
-        # indexer selection are built the same way; only what is handed to the
-        # attention math changes.  Decode (s == 1) always takes the masked-full path.
-        use_selected = s > 1 and _resolve_selected_keys()
+        # K30 (W59): gather only the selected keys per query instead of scoring the
+        # full history and masking -- for prefill (rows > 1), decode (s == 1) AND the
+        # K+1 verify batch (W59 decode extension).  The window store and the indexer
+        # selection are built the same way; only what is handed to the attention math
+        # changes.  At decode the shipped path re-scores the whole compressed history
+        # [1,64,T] every token; K30 makes it T-independent (k = window + index_topk).
+        # Composes with W60's K29 fused decode kernel (see _sparse_attend_selected).
+        use_selected = _resolve_selected_keys()
         # K24 (W45): the sliding-window attend mask is identical across every layer
         # of this forward; memoize it on the per-forward shared runtime under
         # MTPLX_DSV41_ATTN_WIN_MEMO (byte-identical, a pure host-dispatch cut).

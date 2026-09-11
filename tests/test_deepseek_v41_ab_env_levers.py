@@ -12,7 +12,8 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
     (control / shared_overlap / layer_major / sinkhorn_metal / hc_compile /
     switch_fastpath / switch_fastpath_b / attn_compile / attn_win_memo /
     device_route / prefill_dense_experts / dense_min32 / dense_batch16 /
-    dense_f32 / both / all_levers / stack_a / head_bf16 / head_mxfp8 / head_q8 /
+    dense_f32 / both / all_levers / stack_a / stack_b / head_bf16 / head_mxfp8 /
+    head_q8 /
     score_bf16 / score_chunked / score_bf16_chunked / score_lean / prefill_fast /
     prefill_lean / selected_keys / prefill_lean_sel / softmax_kernel /
     prefill_lean_k28 / prefill_best / prefill_best_nok28 / decode_attn_kernel),
@@ -103,6 +104,7 @@ ALL_ARMS = [
     "both",
     "all_levers",
     "stack_a",
+    "stack_b",
     "head_bf16",
     "head_mxfp8",
     "head_q8",
@@ -145,6 +147,7 @@ EXPECTED_ON = {
     # (byte-identical) joins the stack.  W44/window-19: device_route LEFT OUT (not
     # exact on the real model -- tracked in EXPECTED_DEVICE, off for stack_a).
     "stack_a": {_SK, _AC, _WM},
+    "stack_b": {_SK, _AC, _WM},  # stack_a + selected_keys (K30 tracked in EXPECTED_SELECTED)
     "head_bf16": set(),
     "head_mxfp8": set(),
     "head_q8": set(),
@@ -220,6 +223,7 @@ EXPECTED_HEAD = {
     "both": None,
     "all_levers": None,
     "stack_a": "bf16",
+    "stack_b": "bf16",
     "head_bf16": "bf16",
     "head_mxfp8": "mxfp8",
     "head_q8": "q8",
@@ -258,7 +262,7 @@ EXPECTED_SCORE_PATH["prefill_lean_sel"] = "lean"
 
 # The W59 K30 selected-key gather boolean each arm pins (separate from _ALL_KEYS,
 # not part of all_levers -- like the device-route / dense booleans).
-EXPECTED_SELECTED = {arm: "1" if arm in ("selected_keys", "prefill_lean_sel") else None
+EXPECTED_SELECTED = {arm: "1" if arm in ("selected_keys", "prefill_lean_sel", "stack_b") else None
                      for arm in ALL_ARMS}
 EXPECTED_SCORE_PATH["prefill_lean_k28"] = "lean"
 EXPECTED_SCORE_PATH["prefill_best"] = "lean"

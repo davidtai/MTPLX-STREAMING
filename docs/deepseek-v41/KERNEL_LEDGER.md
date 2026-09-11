@@ -1122,21 +1122,49 @@ time, and several are then **on the critical path to 20 tok/s**, not refinements
   (the 8 Full/Reindex + 2 SWA layers, the other 24 % of the score, shrink ~24× too). Stacks under
   `prefill_lean` (K16+K26+K25-lean): the lean pass-cuts still apply to the now-`k`-wide score. Cuts
   FLOPs *and* passes *and* peak GB — the width axis K25/K6 left on the table.
-- **Exactness (CPU-proven, `tests/models/test_deepseek_v41_selected_keys.py`, 14 tests):**
+- **DECODE + VERIFY extension (W59 follow-up):** the same lever now also covers decode (`rows == 1`)
+  and the `K+1` verify batch — the shipped path re-scores the whole `[1,64,T]` window+compressed
+  history **every decode token** (the port's window store is full-history append-only, so decode reads
+  all `T` rows, not a 128-ring), an O(T) per-token cost. K30 gathers `k = window + min(index_topk, T//r)`
+  per query = **640 (compress) / 128 (SWA), T-independent**. Per-token attention over the 40 backbone
+  layers (KV latent bytes read == score+PV FLOPs ratio, both f32):
+  | context | k (SWA / r2 / r1) | control KV read/tok | K30 KV read/tok | reduction |
+  |---|---|---|---|---|
+  | **1K** | 128 / 640 / 640 | 0.145 GB | 50.3 MB | **2.9×** |
+  | **16K** | 128 / 640 / 640 | 2.315 GB | 50.3 MB | **46×** |
+  K30's per-token attention is **flat 50.3 MB / 1.6 GFLOP at every context** (control grows with T).
+  **Expected decode saving:** at 16K the 2.315 GB attention KV read is **~20 % of the ~11.7 GB/token
+  DRAM** (9.4 GiB resident weights + KV); K30 cuts it 46× → **~9.45 GB/tok (−20 % DRAM)** — a decode
+  win that only bites in the **resident / DRAM-bound regime** (§0's 20–25 tok/s floor), and **grows with
+  context** (64K → control 4× worse, K30 still 50 MB). In today's SSD-streaming regime (1.4 tok/s @ 16K,
+  ~714 ms/tok) the saved ~3.7 ms KV-read is <1 % — the honest read is *T-independence + DRAM cut for the
+  resident regime*, not a headline tok/s at 1.4. At **1K** the KV read is only 0.145 GB (2.9×, ~0.15 ms)
+  — a small decode term; the extension's value scales with context.
+- **K30 × K29 composition:** W60's fused decode kernel (`_decode_attn_kernel` in `_sparse_attend`)
+  consumes the **masked-full** `[b,T]` form. When **both** `SELECTED_KEYS` and `DECODE_ATTN_KERNEL` are
+  armed at decode/verify (Metal, `b*s≤8`), `_sparse_attend_selected` hands the gathered-k operands to
+  the **same** `fused_decode_attention` with each query row as its own single-query batch
+  (`q [rows,1,H,hd]`, KV `[rows,k,hd]`, mask `[rows,k]` valid-count) — the kernel's `row // S` batch map
+  indexes each query's own gathered KV, so it scores + sink-softmax + PV over `k` (not `T`) keys in ONE
+  dispatch. Best of both: T-independent **and** single-dispatch. Composition order: **K30 selects,
+  K29 fuses**; no new Metal variant (the existing kernel serves the `S=1` per-row layout).
+- **Exactness (CPU-proven, `tests/models/test_deepseek_v41_selected_keys.py`, 15 tests):**
   selected-gather vs masked-full is **identical up to float reassociation of the softmax sum** (same
   key set — the gathered indices are exactly the mask's True set — summed in a different order): unit
   `_sparse_attend_selected` vs masked-full one-shot **max |Δ| ≤ 1e-5** (with compressed + SWA-only),
   NaN-free on a fully-invalid row (finite-max → 0, reference convention); tiny 8-layer CSA model (every
-  mode) prefill logits vs control **max |Δ| ≈ 5–6e-6, greedy argmax identical** across one-shot,
-  chunk {4,7,8}, layer-major and layer-major-chunked; **decode (rows=1) byte-identical** (never takes
-  the path). Not bit-identical (reassociation), like K25 `lean`.
+  mode) logits vs control **max |Δ| ≈ 3–6e-6, greedy argmax identical** across one-shot, chunk {4,7,8},
+  layer-major, layer-major-chunked prefill, a **multi-step greedy decode** and the **K+1 verify batch**.
+  Not bit-identical (reassociation), like K25 `lean` / K29. (CPU host → eager gathered; the K29 kernel
+  route is GPU-only, proven by W60's suite.)
 - **Merge note:** the change is at the **key-selection level** (what keys/values are handed to the
-  attention math) — `_sparse_attend_oneshot` / `_sparse_attend_chunked` are untouched, so it composes
-  with a fused-softmax rewrite of those (W58).
-- **Arms:** `selected_keys`, `prefill_lean_sel` (= `prefill_lean` + K30) in `ab_decode_env_levers.py`
-  (pin all 20 keys). **STATUS (W59, `feat/deepseek-v41-w59`):** IMPLEMENTED + CPU-proven, default OFF
+  attention math) — `_sparse_attend_oneshot` / `_sparse_attend_chunked` (W58's K28 fused softmax) are
+  untouched, and the K29 decode-kernel hook composes as above.
+- **Arms:** `selected_keys` (now decode+verify too), `prefill_lean_sel` (= `prefill_lean` + K30), and
+  `stack_b` (= `stack_a` + K30) in `ab_decode_env_levers.py` (pin all 21 keys, incl. K28/K29).
+  **STATUS (W59, `feat/deepseek-v41-w59`, merged with W60 K29):** IMPLEMENTED + CPU-proven, default OFF
   (masked-full). Peak RSS of the exactness suite <3 GB. **GPU gate remains KG-g** (the 144–184 s → ~7 s
-  saving is a window estimate). See `W59_SELECTED_KEYS.md`.
+  prefill and the −20 % 16K decode DRAM are window estimates). See `W59_SELECTED_KEYS.md`.
 
 ---
 

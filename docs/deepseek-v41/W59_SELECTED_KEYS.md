@@ -1,8 +1,8 @@
-# W59 — K30 prefill selected-key gather (`MTPLX_DSV41_SELECTED_KEYS`)
+# W59 — K30 selected-key gather (`MTPLX_DSV41_SELECTED_KEYS`), prefill + decode + verify
 
 Worker `feat/deepseek-v41-w59` (branched off `feat/deepseek-v41-streaming`). CPU-only,
 MLX pinned to `mx.cpu`, no artifact load, <3 GB RSS. No GPU/Metal. Analysis + a
-prefill-only, default-OFF lever + CPU exactness proof; no GPU window run here.
+default-OFF lever (prefill + decode + verify) + CPU exactness proof; no GPU window run here.
 
 ## 0. The question, answered from the reference
 
@@ -121,8 +121,8 @@ dense experts + K25 lean): the lean pass-cuts still apply, now over a `k`-wide (
 ## 3. Implementation
 
 - `MTPLX_DSV41_SELECTED_KEYS` (default OFF), read at use (`_resolve_selected_keys`).
-  Prefill only (`rows > 1`); decode (`rows == 1`) always takes the shipped masked-full
-  path, byte-identical.
+  Covers prefill (`rows > 1`), decode (`rows == 1`) and the `K+1` verify batch
+  (see §6); with the lever off every row count takes the shipped masked-full path.
 - `Attention._sparse_attend_selected` — gathers window (`_window_selected_idx`) +
   selected compressed rows into `[rows, k, 512]` and runs one softmax with the value-0
   sink (reference `_k_sparse_attn` form: max includes the sink, normalize after PV,
@@ -159,8 +159,63 @@ lossy prefill stack; K30 itself is stricter, being a re-ordered identical sum).
 
 ## 5. Arms / status
 
-`ab_decode_env_levers.py`: `selected_keys` (`MTPLX_DSV41_SELECTED_KEYS=1`) and
-`prefill_lean_sel` (`prefill_lean` + K30). Both pin all 20 lever keys. Tests:
-`tests/test_deepseek_v41_ab_env_levers.py` (45 pass, includes the two new arms + the
-dry-run recording). **STATUS:** IMPLEMENTED + CPU-proven, default OFF. GPU gate KG-g.
-See `KERNEL_LEDGER.md` K30.
+`ab_decode_env_levers.py`: `selected_keys` (`MTPLX_DSV41_SELECTED_KEYS=1`, now
+covering decode + verify), `prefill_lean_sel` (`prefill_lean` + K30) and `stack_b`
+(`stack_a` + K30). All pin the full 21-key lever set (incl. W58 K28 / W60 K29).
+Tests: `tests/test_deepseek_v41_ab_env_levers.py` (49 pass). **STATUS:** IMPLEMENTED
++ CPU-proven, default OFF, merged with W60 (K29). GPU gate KG-g. See
+`KERNEL_LEDGER.md` K30.
+
+## 6. Decode + verify extension (W59 follow-up)
+
+`MTPLX_DSV41_SELECTED_KEYS` now also gathers at decode (`rows == 1`) and the `K+1`
+verify batch, not just prefill. The shipped path re-scores the whole `[1, 64, T]`
+window+compressed history **every decode token** — the port's window store is
+full-history append-only (row j == token j), so decode reads all `T` window rows,
+not a 128-slot ring — an O(T) per-token cost that grows with context. K30 gathers
+`k = min(T,128) + min(512, T//ratio)` per query, saturating at **640 (compress) /
+128 (SWA)**, so per-layer decode attention is **T-independent**.
+
+**k per mode at decode (identical to prefill; same at 1K and 16K):** SWA 128,
+ratio-2 640, ratio-1 640.
+
+Per-token attention over the 40 backbone layers (KV latent bytes read == score+PV
+FLOP ratio, both f32):
+
+| context | control KV read/tok | K30 KV read/tok | reduction |
+|---|---|---|---|
+| **1K** | 0.145 GB | 50.3 MB | **2.9×** |
+| **16K** | 2.315 GB | 50.3 MB | **46×** |
+
+K30's per-token attention is a flat **50.3 MB / 1.6 GFLOP at every context**; control
+grows with T (0.145 GB → 2.315 GB → would be ~9 GB at 64K).
+
+**Expected decode saving.** At 16K the 2.315 GB attention KV read is **~20 % of the
+~11.7 GB/token decode DRAM** (9.4 GiB resident weights + KV); K30 cuts it 46× →
+**~9.45 GB/tok (−20 % DRAM)**, a decode win that bites in the **resident /
+DRAM-bound regime** (the §0 20–25 tok/s floor) and **grows with context**. In
+today's SSD-streaming regime (1.4 tok/s @ 16K ≈ 714 ms/token, dominated by expert
+streaming) the ~3.7 ms KV-read saving is <1 % of wall time — the honest read is
+*T-independence + a 20 % DRAM cut for the resident regime*, not a tok/s headline at
+1.4. At **1K** the attention KV is only 0.145 GB (2.9×, ~0.15 ms) — a small decode
+term; the extension's value scales with context.
+
+### Composition with W60's K29 fused decode kernel
+
+W60's `_decode_attn_kernel` (hooked in `_sparse_attend`) consumes the **masked-full**
+`(q, KV [b,T,hd], attend [b,s,T])` form — fusing the O(T) decode attention into one
+Metal dispatch, but still over `T` keys. When **both** `SELECTED_KEYS` and
+`DECODE_ATTN_KERNEL` are armed at decode/verify (Metal host, `b*s ≤ 8`),
+`_sparse_attend_selected` gathers the compact operands and hands them to the **same**
+`fused_decode_attention`, reshaping each query row into its own single-query batch:
+`q [rows,1,H,hd]`, KV `[rows,k,hd]`, mask `[rows,k]` (valid-count only). The kernel's
+`row // S` batch map (S=1) then indexes each query's own gathered KV, so it scores +
+sink-softmax + PV over **k** (not T) keys in one dispatch — no new Metal variant
+needed. Composition order: **K30 selects which keys, K29 fuses the softmax over
+them** — T-independent *and* single-dispatch. On a CPU host (`_decode_attn_kernel_use`
+False) the eager gathered softmax runs, which the tests prove; the kernel route is
+GPU-only (W60's suite proves the kernel itself).
+
+Exactness: decode (multi-step greedy) and the K+1 verify batch, all four CSA modes,
+K30 vs control **max |Δ| ≈ 3–6e-6, greedy argmax identical** — reassociation-level,
+like prefill (`tests/models/test_deepseek_v41_selected_keys.py`).

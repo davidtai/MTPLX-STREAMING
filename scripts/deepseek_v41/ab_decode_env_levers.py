@@ -259,6 +259,12 @@ ARM_PRESETS = {
     # The K23 fast-path also stays OUT (W42 window-14 pure defer -13.4%). overlap /
     # layer_major / hc also OFF.
     "stack_a": _preset(head="bf16", sinkhorn="1", attn="1", win_memo="1"),
+    # W59: stack_a + the K30 selected-key gather (now also covering decode/verify).
+    # All byte-identical/reassociation-level levers -- head bf16 (K21) + Sinkhorn
+    # (K3) + attn compile (K22) + window memo (K24) + selected keys (K30).  K30 is
+    # reassociation-level (greedy-identical), so stack_b as a whole is greedy-
+    # identical, not byte-identical (like stack_a once head_bf16 is in).
+    "stack_b": _preset(head="bf16", sinkhorn="1", attn="1", win_memo="1", selected_keys="1"),
     "head_bf16": _preset(head="bf16"),                      # W40 K21: fix fp32-cast trap
     "head_mxfp8": _preset(head="mxfp8"),                    # W40 K21: native mxfp8 gs32 head
     "head_q8": _preset(head="q8"),                          # W40 K21: affine q8 gs64 head
@@ -396,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sinkhorn_metal, hc_compile, switch_fastpath, switch_fastpath_b, "
         "attn_compile, attn_win_memo, device_route, prefill_dense_experts, "
         "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
-        "head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
+        "stack_b, head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
         "score_bf16_chunked, score_lean, prefill_fast, prefill_lean, "
         "selected_keys, prefill_lean_sel, softmax_kernel, prefill_lean_k28, "
         "prefill_best, prefill_best_nok28, decode_attn_kernel)",
