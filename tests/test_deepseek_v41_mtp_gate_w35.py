@@ -216,3 +216,105 @@ def test_engine_budget_is_ceiling_minus_reserve() -> None:
     assert engine_budget == cfg.memory_limit_bytes - cfg.runtime_reserve_bytes
     assert engine_budget == 75 * 1024**3
     assert cfg.memory_limit_bytes == 82 * 1024**3
+
+
+# --------------------------------------------------------------------------
+# window-14: served MTP construct == what the resident load provides
+# (the mtp.*_vl gate-bias drop). Real config + manifest metadata; the partition
+# tensors are lazy mx.zeros that are never eval'd, so no experts.bin is loaded.
+# --------------------------------------------------------------------------
+_DTYPE_MAP = {
+    "bfloat16": "bfloat16", "bf16": "bfloat16", "float32": "float32", "f32": "float32",
+    "float16": "float16", "uint32": "uint32", "u32": "uint32", "uint8": "uint8",
+    "int8": "int8", "int32": "int32", "uint16": "uint16", "bool": "bool_",
+}
+
+
+@pytest.mark.skipif(not _MXFP4.exists(), reason="mxfp4 artifact not on this box")
+def test_served_mtp_partition_matches_constructed_model_params() -> None:
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)  # no GPU
+    from mlx.utils import tree_flatten
+    from mlx_lm.utils import load_config
+
+    from mtplx.expert_manifest import load_expert_manifest
+    from mtplx.models.deepseek_v41_loader import (
+        deepseek_v41_model_classes,
+        partition_text_residents,
+    )
+
+    cfg = load_config(_MXFP4)
+    Model, ModelArgs = deepseek_v41_model_classes()
+    # Construct exactly what the served MTP path constructs (worker W23 head).
+    model = Model(
+        ModelArgs.from_dict(cfg),
+        engram_bank_path=None,
+        quantization=cfg.get("quantization"),
+        mtp=True,
+    )
+    model.eval()
+    model_params = {k for k, _ in tree_flatten(model.parameters())}
+
+    manifest = load_expert_manifest(_MXFP4 / "expert-manifest.json")
+    partition = partition_text_residents(manifest, with_mtp=True)
+    # lazy zeros -> sanitize maps/stacks names without materializing weights
+    weights = {
+        t.tensor: mx.zeros(
+            tuple(t.shape), dtype=getattr(mx, _DTYPE_MAP.get(str(t.dtype).lower(), "bfloat16"))
+        )
+        for t in partition.kept
+    }
+    weights = model.sanitize(weights)
+    provided = set(weights)
+
+    # THE fix: no resident is passed that the model does not declare (strict
+    # load_weights would otherwise raise "N parameters not in model").
+    extra = provided - model_params
+    assert extra == set(), f"resident keys not in model: {sorted(extra)}"
+
+    # The only model params the residents do not provide are the streamed
+    # backbone routed experts (bound via bind_streamed_switches, not residents).
+    missing = model_params - provided
+    assert missing, "expected the streamed switch_mlp experts among model params"
+    assert all(".switch_mlp." in name for name in missing), sorted(missing)[:5]
+
+
+@pytest.mark.skipif(not _MXFP4.exists(), reason="mxfp4 artifact not on this box")
+def test_mtp_vl_gate_bias_is_dropped_and_absent_from_the_head() -> None:
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    from mlx.utils import tree_flatten
+    from mlx_lm.utils import load_config
+
+    from mtplx.expert_manifest import load_expert_manifest
+    from mtplx.models.deepseek_v41_loader import (
+        deepseek_v41_model_classes,
+        partition_text_residents,
+    )
+
+    manifest = load_expert_manifest(_MXFP4 / "expert-manifest.json")
+    kept = {t.tensor for t in partition_text_residents(manifest, with_mtp=True).kept}
+    # the text-only DSpark head omits the VL gate bias, so its 3 residents are
+    # dropped from the MTP partition (else strict load_weights sees them as
+    # parameters not in the model)
+    assert not any(n.startswith("mtp.") and n.endswith("_vl") for n in kept)
+    # the backbone's VL gate-bias residents are UNTOUCHED (40 kept); the model's
+    # sanitize handles them, so the fix is scoped to the mtp.* namespace only
+    assert sum(
+        1 for n in kept if n.startswith("layers.") and n.endswith("_vl")
+    ) == 40
+
+    cfg = load_config(_MXFP4)
+    Model, ModelArgs = deepseek_v41_model_classes()
+    model = Model(
+        ModelArgs.from_dict(cfg), engram_bank_path=None,
+        quantization=cfg.get("quantization"), mtp=True,
+    )
+    model.eval()
+    params = {k for k, _ in tree_flatten(model.parameters())}
+    # the constructed model declares no ``*_vl`` gate bias at all (sanitize folds
+    # the backbone's, and the text-only head omits its own), which is exactly why
+    # the mtp.*_vl residents have no home and must be dropped before strict load
+    assert not any(n.endswith("_vl") for n in params)

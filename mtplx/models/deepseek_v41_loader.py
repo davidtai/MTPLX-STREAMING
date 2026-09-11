@@ -107,6 +107,22 @@ def is_text_resident(name: str) -> bool:
     return not name.startswith(TEXT_ONLY_SKIP_PREFIXES)
 
 
+# Vision-language variants the TEXT-ONLY DSpark MTP head does not declare. The
+# artifact ships a ``*_vl`` router gate-bias for every routed layer -- the
+# backbone keeps its ``layers.*_vl`` (the full text model declares them), but
+# the text-only DSpark head (worker W23) omits the VL gate bias for its 3 MTP
+# stages, so those ``mtp.*_vl`` residents have no home in the constructed head
+# and must be dropped before the strict resident load (else load_weights sees 3
+# parameters not in the model: mtp.layers.{0,1,2}.mlp.gate.e_score_correction_bias_vl).
+_MTP_VL_DROP_SUFFIX = "_vl"
+
+
+def _is_kept_mtp_resident(name: str) -> bool:
+    """An ``mtp.*`` resident the text-only DSpark head actually declares."""
+
+    return name.startswith("mtp.") and not name.endswith(_MTP_VL_DROP_SUFFIX)
+
+
 def _skip_reason(name: str) -> str:
     if name.startswith("mtp."):
         return "mtp"
@@ -205,7 +221,7 @@ def partition_text_residents(
     skipped_vision_bytes = skipped_vision_count = 0
     for tensor in manifest.resident_tensors:
         if is_text_resident(tensor.tensor) or (
-            with_mtp and tensor.tensor.startswith("mtp.")
+            with_mtp and _is_kept_mtp_resident(tensor.tensor)
         ):
             kept.append(tensor)
             continue
