@@ -198,3 +198,67 @@ did (the sidecar file was untouched, but the manifest stopped referencing it); t
 `write_manifest` now preserves an existing `residents` entry (`read_existing_residents` captures it
 pre-flip), and the live manifest's block was restored via `--mode residents` (sidecar rebuilt
 identically: q/k exact, wkv q8 `cos_row_min` ≥ 0.99996).
+
+---
+
+## 7. wkv residents → mxfp8 (follow-up, on David's directive)
+
+The row banks were the only affine tensors in scope for §1–§6; the last affine tensor in the
+artifact was the W4 residents sidecar's `layers.{1,14}.engram.wkv` (source F8_E4M3 `[25600, 6144]`
+with UE8M0 32×32 block scales). David's directive is exact native formats everywhere, so wkv is
+repacked to mxfp8/gs32 the same way as the banks — **verbatim**, no requantize.
+
+**Mapping (exact byte repack).** Keep the E4M3 code bytes verbatim (`codes = weight` viewed as
+`U32` → `[25600, 1536]`) and expand the 32×32 block scale to MLX's per-(row, 32-col-group) E8M0
+layout by replicating each block's scale byte across its 32 rows (`np.repeat(scale, 32, axis=0)` →
+`[25600, 192]`; the column axis is already at 32-col granularity). Then `mx.dequantize(codes,
+scales, group_size=32, bits=8, mode="mxfp8")` reproduces `dequant_fp8_block(source)` bit-for-bit.
+This is the same block-scale expansion worker **W18** applies to the dense residents
+(`repack_fp8_block_to_mxfp8` on `feat/deepseek-v41-w18`); W18 dequantizes then re-quantizes via
+`mx.quantize(mode="mxfp8")` (numerically equal), whereas this keeps the source code bytes
+byte-for-byte per the directive. (W18's helper lives in `mtplx/deepseek_v41_convert.py`, outside
+this worker's allowlist and not yet merged to `feat/deepseek-v41-streaming`, so the same mapping is
+implemented here as `repack_dense_fp8_block_to_mxfp8`.)
+
+**Bit-exactness (whole tensor, both layers).** `mx.dequantize(mode="mxfp8")` of the packed wkv ==
+the reference FP32 dequant, `np.array_equal` over all 157,286,400 values per layer, and the stored
+codes equal the source E4M3 bytes verbatim:
+
+```
+L1  : stored codes == source verbatim: True | mxfp8 dequant bit-exact vs source: True (157,286,400)
+L14 : stored codes == source verbatim: True | mxfp8 dequant bit-exact vs source: True (157,286,400)
+```
+
+**What changed.**
+- Converter `--wkv-codec mxfp8` (`scripts/convert_deepseek_v41_engram.py`,
+  `repack_dense_fp8_block_to_mxfp8` + `convert_residents`): writes `wkv.{weight U32, scales U8}`
+  (no bias), sidecar to `engram-residents.new.safetensors` → header-verify → atomic rename, and
+  the manifest `residents.quant.wkv` → `{bits 8, group_size 32, mode "mxfp8"}`. Affine path
+  unchanged. q/k stay F32-exact.
+- Runtime (`mtplx/engram_v41.py`): `load_engram_residents` reads `residents.quant.wkv.mode` and
+  wraps wkv as `mx.quantized_matmul(..., mode="mxfp8")` for mxfp8 (`wkv.{weight,scales}`, no bias)
+  or `mode="affine"` for old sidecars (`wkv.{weight,scales,biases}`). `EngramResidents.wkv_biases`
+  is optional; a `mode` field records the codec.
+- Tests (`tests/test_convert_deepseek_v41_engram.py`, `tests/test_engram_residents.py`): repack
+  bit-exactness, full mxfp8 residents convert/sidecar/manifest/loader, and the real-artifact tests
+  made codec-aware (assert U8 scales + no bias for mxfp8, BF16 scales+biases for affine). Both
+  codecs covered; **41 passed** against the live artifact.
+
+**Live artifact flipped.** `--mode residents --wkv-codec mxfp8 --layers 1,14` rewrote
+`engram-residents.safetensors` (334,562,304 → **324,731,695 B**, −9.83 MB: no bias block, U8 vs
+BF16 scales) and updated the manifest `residents` block. Wall 1.22 s, peak RSS 3.13 GB (≤ 6 GB).
+The artifact is now native MLX quant end-to-end: mxfp8 row banks (§6) + mxfp8 wkv residents +
+F32-exact q/k.
+
+**Full-run command (idempotent; re-runnable):**
+
+```bash
+PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w19-wkv \
+  nice -n 19 /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python3 \
+  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w19-wkv/scripts/convert_deepseek_v41_engram.py \
+  --mode residents --wkv-codec mxfp8 --layers 1,14 \
+  --src   /Users/davidtai/models/DeepSeek-V4.1-Flash-src \
+  --out   /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/engram \
+  --index /Users/davidtai/models/DeepSeek-V4.1-Flash-src/model.safetensors.index.json \
+  --manifest-backup /tmp/engram-manifest-preflip-wkv.json
+```
