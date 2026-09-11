@@ -62,6 +62,7 @@ _HM = "MTPLX_DSV41_HEAD_MODE"          # W40 / K21: load-time output-head codec
 _SD = "MTPLX_DSV41_PREFILL_SCORE_DTYPE"      # W50 / K25: prefill score matmul dtype (bf16, lossy)
 _SC = "MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK"  # W50 / K25: split-K online-softmax chunk width
 _SP = "MTPLX_DSV41_PREFILL_SCORE_PATH"       # W50: score impl (lean = f32 pass-cut one-shot)
+_SFK = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"  # W58 / K28: fused mask+sink+softmax Metal kernel
 # The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
 # PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
 # NOT part of all_levers, so they never join the "all-on" independence invariant.
@@ -72,7 +73,8 @@ _SP = "MTPLX_DSV41_PREFILL_SCORE_PATH"       # W50: score impl (lean = f32 pass-
 # value-taking like _HM, tracked separately and never in all_levers.
 _ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight booleans all_levers sets
 _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50 key a preset pins
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP)  # + the three W50 score-path keys = all seventeen
+# + the three W50 score-path keys + the W58 K28 fused-softmax-kernel boolean.
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SFK)
 
 ALL_ARMS = [
     "control",
@@ -101,6 +103,8 @@ ALL_ARMS = [
     "score_lean",
     "prefill_fast",
     "prefill_lean",
+    "softmax_kernel",
+    "prefill_lean_k28",
 ]
 
 # The boolean lever env keys each arm must leave set to "1" (every other unset).
@@ -139,6 +143,10 @@ EXPECTED_ON = {
     # _LM is the only _ALL_KEYS member here.
     "prefill_fast": {_LM},
     "prefill_lean": {_LM},
+    # W58 K28: standalone kernel arm sets no boolean lever (its only key is _SFK,
+    # tracked in EXPECTED_SOFTMAX_KERNEL); the stacked arm rides layer-major.
+    "softmax_kernel": set(),
+    "prefill_lean_k28": {_LM},
 }
 
 # The device-route boolean each arm pins (W44 K24; separate from _ALL_KEYS because
@@ -152,7 +160,7 @@ EXPECTED_DEVICE = {arm: (arm == "device_route") for arm in ALL_ARMS}
 # the W50+W51 prefill stacks (prefill_fast / prefill_lean).
 _DENSE_ARMS = (
     "prefill_dense_experts", "dense_min32", "dense_batch16", "dense_f32",
-    "prefill_fast", "prefill_lean",
+    "prefill_fast", "prefill_lean", "prefill_lean_k28",
 )
 EXPECTED_DENSE = {arm: (arm in _DENSE_ARMS) for arm in ALL_ARMS}
 # The dense value knobs each arm pins (None = force-unset / code default). Only the
@@ -193,6 +201,8 @@ EXPECTED_HEAD = {
     "score_lean": None,
     "prefill_fast": None,
     "prefill_lean": None,
+    "softmax_kernel": None,
+    "prefill_lean_k28": None,
 }
 
 # The W50 prefill score-path values each arm pins (None = force-unset). _SD is the
@@ -211,6 +221,13 @@ EXPECTED_SCORE_CHUNK["prefill_fast"] = "2048"
 EXPECTED_SCORE_PATH = {arm: None for arm in ALL_ARMS}
 EXPECTED_SCORE_PATH["score_lean"] = "lean"
 EXPECTED_SCORE_PATH["prefill_lean"] = "lean"
+EXPECTED_SCORE_PATH["prefill_lean_k28"] = "lean"
+
+# The W58 K28 fused-softmax-kernel boolean each arm pins ("1" or None = force-unset).
+# Only the standalone kernel arm and the prefill_lean_k28 stack set it.
+EXPECTED_SOFTMAX_KERNEL = {arm: None for arm in ALL_ARMS}
+EXPECTED_SOFTMAX_KERNEL["softmax_kernel"] = "1"
+EXPECTED_SOFTMAX_KERNEL["prefill_lean_k28"] = "1"
 
 
 def _load(name: str):
@@ -321,6 +338,7 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         (_SD, EXPECTED_SCORE_DTYPE[arm]),
         (_SC, EXPECTED_SCORE_CHUNK[arm]),
         (_SP, EXPECTED_SCORE_PATH[arm]),
+        (_SFK, EXPECTED_SOFTMAX_KERNEL[arm]),
     ):
         if expected is None:
             assert key not in os.environ, f"{arm}: {key} should be force-unset"
@@ -423,6 +441,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_SD] = "bogus"
     os.environ[_SC] = "bogus"
     os.environ[_SP] = "bogus"
+    os.environ[_SFK] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -441,10 +460,11 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         assert r["arm_env"].get(_PDMR) == EXPECTED_MIN_ROWS[r["arm"]], r["arm"]
         assert r["arm_env"].get(_PDB) == EXPECTED_BATCH[r["arm"]], r["arm"]
         assert r["arm_env"].get(_PDD) == EXPECTED_MATMUL_DTYPE[r["arm"]], r["arm"]
-        # the three W50 score-path keys are recorded per arm.
+        # the three W50 score-path keys + the W58 K28 kernel boolean per arm.
         assert r["arm_env"].get(_SD) == EXPECTED_SCORE_DTYPE[r["arm"]], r["arm"]
         assert r["arm_env"].get(_SC) == EXPECTED_SCORE_CHUNK[r["arm"]], r["arm"]
         assert r["arm_env"].get(_SP) == EXPECTED_SCORE_PATH[r["arm"]], r["arm"]
+        assert r["arm_env"].get(_SFK) == EXPECTED_SOFTMAX_KERNEL[r["arm"]], r["arm"]
 
 
 def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path):

@@ -726,6 +726,28 @@ class Attention(nn.Module):
             with _stime.stage_attn("attn." + mode + ".score.cast") as _st:
                 scores = scores.astype(mx.float32)
                 _st.add(scores)
+        # W58 / K28: prefill-only fused mask + per-head value-0 sink + f32 softmax
+        # in ONE Metal dispatch (reads the [rows,H,T] transient twice, writes the
+        # normalised probabilities once; no T-wide masked_scores/ex/concat
+        # intermediate).  Armed only on the GPU with the flag on and s > 1 (decode
+        # /M=1 always runs the eager path, byte-identical); composes with the lean
+        # path (scale is folded into q, so the kernel scales by 1.0) and the plain
+        # one-shot (kernel applies softmax_scale, folding the scale pass too).  The
+        # kernel folds the sink like ``fold_sink`` regardless, so K28-on is
+        # reassociation-level vs control (<=1e-6, greedy-identical), NOT byte-
+        # identical -- the split-K/chunked path is NOT routed here (W58 report).
+        if s > 1 and _prefill_softmax_kernel_use():
+            from mtplx.kernels.dsv41_fused_softmax import fused_prefill_softmax
+            k_scale = 1.0 if fuse_scale else scale
+            with _stime.stage_attn("attn." + mode + ".score.fused_softmax_kernel") as _st:
+                p = fused_prefill_softmax(
+                    scores, attend=attend, attn_sink=self.attn_sink, scale=k_scale,
+                )
+                _st.add(p)
+            with _stime.stage_attn("attn." + mode + ".score.pv_matmul") as _st:
+                o = mx.einsum("bsht,btd->bshd", p, KV.astype(mx.float32))
+                _st.add(o)
+            return o
         with _stime.stage_attn("attn." + mode + ".score.scale_mask_sink") as _st:
             if not fuse_scale:
                 scores = scores * scale
@@ -1193,6 +1215,54 @@ def _resolve_prefill_score_key_chunk(raw=None):
             "(or empty/0/'off' for the one-shot path)"
         )
     return n
+
+
+#: W58 / K28: fuse the prefill mask + per-head value-0 sink + f32 softmax over the
+#: ``[rows,64,T]`` score transient into ONE ``mx.fast.metal_kernel`` dispatch that
+#: reads the raw scores twice and writes the normalised probabilities once (vs the
+#: eager ~4-6 T-wide passes + one or two T-wide intermediates).  Prefill-only
+#: (gated ``q.shape[1] > 1``), one-shot path only (the split-K/chunked path is NOT
+#: routed through the kernel -- see :mod:`mtplx.kernels.dsv41_fused_softmax`), and
+#: GPU-only (a CPU-pinned host falls back to the eager path, byte-identical to the
+#: chosen score path).  Reassociation-level vs the eager f32 softmax (the
+#: threadgroup tree reorders the max/denom/value sums): expect ``max|Δ| <= 1e-6``,
+#: greedy-argmax identical -- NOT byte-identical (same class as ``score_chunked`` /
+#: ``score_lean``).  Read at use, never frozen at import
+#: ([[env-flags-read-at-use-not-import]]).
+_PREFILL_SOFTMAX_KERNEL_ENV = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"
+
+
+def _resolve_prefill_softmax_kernel(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other DSV4.1
+    prefill levers."""
+    val = os.environ.get(_PREFILL_SOFTMAX_KERNEL_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_PREFILL_SOFTMAX_KERNEL_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager softmax)"
+    )
+
+
+def _prefill_softmax_kernel_use() -> bool:
+    """Whether the K28 fused-softmax kernel should run on THIS call: the flag is
+    armed AND a Metal GPU is the default device.  A CPU-pinned worker test (or a
+    no-Metal host) returns ``False`` so the eager path runs and no Metal is
+    dispatched -- the GPU route is proven by a spy in the tests."""
+    if not _resolve_prefill_softmax_kernel():
+        return False
+    try:
+        if not mx.metal.is_available() or mx.default_device() != mx.gpu:
+            return False
+    except Exception:
+        return False
+    return True
 
 
 def _lin_desc(linear):
