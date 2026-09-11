@@ -210,6 +210,87 @@ def component_bytes(packed, scales, biases) -> tuple[bytes, bytes, bytes]:
 
 
 # --------------------------------------------------------------------------
+# native mxfp4 (lossless FP4 repack) requantization -> raw little-endian bytes
+# --------------------------------------------------------------------------
+# The source routed experts already ship as FP4 (E2M1) codes with per-32-column
+# E8M0 scales -- i.e. they are *already* an MXFP4 (block size 32) tensor.  mlx
+# 0.32.2's ``mx.quantize(mode="mxfp4", group_size=32)`` re-encodes an on-grid
+# FP4 tensor bit-for-bit (verified in scripts/deepseek_v41/torchref/
+# bank_mx_probe.py on 191 real experts x 3 weights: ``bit_exact_vs_source: true``
+# in docs/deepseek-v41/receipts/bank_mx_probe.json), so this is a LOSSLESS repack
+# of the fp4 source -- zero expert-quantization error -- not a re-quantization.
+# Layout (per weight, mlx mxfp4):
+#   * packed weight : uint32 ``[out, in*4/32] == [out, in/8]`` (8 FP4 codes/word)
+#   * scales        : uint8  ``[out, in/32]`` (E8M0 shared exponent per 32 cols)
+#   * NO bias leaf.
+MXFP4_BITS = 4
+MXFP4_GROUP = 32  # matches the FP4 source's per-32-column E8M0 scale block
+MXFP4_LEAVES = ("weight", "scales")
+# _COMPONENTS analogue for the six ordered mxfp4 leaves (mtplx.expert_manifest
+# ``_MXFP4_COMPONENTS`` mirrors this order).
+MXFP4_COMPONENTS = tuple(
+    f"{proj}.{leaf}"
+    for proj in ("gate_proj", "up_proj", "down_proj")
+    for leaf in MXFP4_LEAVES
+)
+
+
+def mxfp4_expert_record_bytes(
+    hidden: int = HIDDEN_SIZE,
+    inter: int = MOE_INTERMEDIATE,
+    bits: int = MXFP4_BITS,
+    group: int = MXFP4_GROUP,
+) -> int:
+    """Bytes of one native-mxfp4 expert record: packed FP4 codes + E8M0 scales.
+
+    ``params = 3*hidden*inter`` (w1 gate + w3 up + w2 down); packed = params*bits/8
+    uint32 codes; scales = params/group one-byte E8M0 exponents; no bias.
+    For the pinned geometry: 17_694_720 + 1_105_920 = 18_800_640 B.
+    """
+    params = 3 * hidden * inter
+    packed = params * bits // 8
+    scales = params // group  # one uint8 E8M0 exponent per group, no bias
+    return packed + scales
+
+
+MXFP4_EXPERT_RECORD_BYTES = mxfp4_expert_record_bytes()  # 18_800_640
+
+
+def quantize_mxfp4(values_f32: np.ndarray, group: int = MXFP4_GROUP,
+                   bits: int = MXFP4_BITS):
+    """Native-mxfp4 repack via ``mx.quantize(mode="mxfp4")`` (CPU).
+
+    Reuses ``scripts/deepseek_v41/torchref/bank_mx_probe.py``'s recipe verbatim:
+    the source-dequantized float32 matrix (on the FP4 grid) is quantized to the
+    mlx mxfp4 layout, which round-trips it bit-for-bit.  Returns
+    ``(packed_u32, scales_u8)`` mlx arrays -- NO ``mode="affine"`` cast to bf16
+    first (mxfp4 is exponent-only; casting to bf16 would perturb the codes).
+    """
+    mx = _cpu_mx()
+    w = mx.array(np.ascontiguousarray(values_f32, dtype=np.float32))
+    packed, scales = mx.quantize(w, group_size=group, bits=bits, mode="mxfp4")
+    mx.eval(packed, scales)
+    return packed, scales
+
+
+def mxfp4_dequant_equals_source(packed, scales, source_f32: np.ndarray,
+                                group: int = MXFP4_GROUP, bits: int = MXFP4_BITS) -> bool:
+    """True iff ``mx.dequantize`` of the packed mxfp4 record == the fp32 source, exactly."""
+    mx = _cpu_mx()
+    deq = mx.dequantize(packed, scales, group_size=group, bits=bits, mode="mxfp4")
+    deq = np.array(deq.astype(mx.float32))
+    return bool(np.array_equal(deq, np.ascontiguousarray(source_f32, dtype=np.float32)))
+
+
+def mxfp4_component_bytes(packed, scales) -> tuple[bytes, bytes]:
+    """Little-endian raw bytes for one mxfp4 projection: (packed u32, scales u8)."""
+    return (
+        np.ascontiguousarray(np.array(packed).astype("<u4")).tobytes(),
+        np.ascontiguousarray(np.array(scales).astype(np.uint8)).tobytes(),
+    )
+
+
+# --------------------------------------------------------------------------
 # safetensors header / raw tensor reading (bounded RSS, one tensor at a time)
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)

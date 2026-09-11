@@ -42,6 +42,7 @@ mx.set_default_device(mx.cpu)
 from mtplx import deepseek_v41_convert as dc  # noqa: E402
 from mtplx.expert_manifest import (  # noqa: E402
     EMPTY_SHA256,
+    MXFP4_ALIGNMENT,
     ExpertManifest,
     ExpertRecord,
     ResidentTensor,
@@ -679,6 +680,333 @@ def add_mtp_residents(out: Path, src: Path, weight_map: dict[str, str], spec,
     log(f"verify report: {json.dumps(report)}")
 
 
+# ==========================================================================
+# native mxfp4 (lossless FP4 repack) conversion path
+# --------------------------------------------------------------------------
+# The source routed experts already ship as FP4 (E2M1) codes + per-32 E8M0
+# scales, so ``mx.quantize(mode="mxfp4", group_size=32)`` re-encodes them
+# bit-for-bit.  This path streams one expert at a time (peak RSS ~ one f32
+# projection, well under the worker cap), writes fixed-size records to
+# ``experts.bin`` at deterministic offsets (resumable per layer), and builds a
+# manifest that REUSES the q8 residents of a sibling (Q2) artifact verbatim by
+# hardlink -- only the routed-expert bank + manifest are new files.
+# ==========================================================================
+def source_shard_for_layer(index: dict[str, str], layer: int) -> str:
+    """The source shard file holding ``layers.{layer}`` routed-expert tensors."""
+    shards = {
+        shard
+        for name, shard in index.items()
+        if dc.is_bank_expert(name) and int(name.split(".")[1]) == layer
+    }
+    if len(shards) != 1:
+        raise SystemExit(
+            f"layer {layer} routed experts span shards {sorted(shards)} "
+            "(expected exactly one)"
+        )
+    return next(iter(shards))
+
+
+def quantize_expert_components_mxfp4(
+    f32_by_proj: dict[str, np.ndarray], verify_exact: bool
+) -> tuple[list[bytes], list[dict]]:
+    """Repack one expert's gate/up/down to native mxfp4; return blobs + segment meta.
+
+    Six ordered components (no bias): ``{proj}.weight`` (U32 packed FP4 codes) and
+    ``{proj}.scales`` (U8 E8M0 exponents) per gate/up/down.  When ``verify_exact``,
+    every projection's ``mx.dequantize`` is asserted byte-identical to the fp32
+    source (the losslessness gate; fails closed).
+    """
+    blobs: list[bytes] = []
+    seg_meta: list[dict] = []
+    cursor = 0
+    for proj in ("gate_proj", "up_proj", "down_proj"):
+        f32 = f32_by_proj[proj]
+        packed, scales = dc.quantize_mxfp4(f32)
+        if verify_exact and not dc.mxfp4_dequant_equals_source(packed, scales, f32):
+            raise RuntimeError(
+                f"mxfp4 repack is NOT bit-exact vs the fp32 source for {proj}; "
+                "the source expert is off the FP4 grid -- refusing a lossy record"
+            )
+        pbytes, sbytes = dc.mxfp4_component_bytes(packed, scales)
+        for leaf, dtype, shape, part in (
+            ("weight", "U32", tuple(packed.shape), pbytes),
+            ("scales", "U8", tuple(scales.shape), sbytes),
+        ):
+            seg_meta.append(
+                {
+                    "component": f"{proj}.{leaf}",
+                    "leaf_name": f"{proj}.{leaf}",
+                    "dtype": dtype,
+                    "shape": list(shape),
+                    "rel_offset": cursor,
+                    "length": len(part),
+                }
+            )
+            blobs.append(part)
+            cursor += len(part)
+        del packed, scales
+    return blobs, seg_meta
+
+
+def _write_record(exp_fd: int, record_index: int, blobs: list[bytes],
+                  record_bytes: int) -> tuple[int, str]:
+    offset = record_index * record_bytes
+    payload = b"".join(blobs)
+    if len(payload) != record_bytes:
+        raise RuntimeError(f"record {record_index}: {len(payload)} != {record_bytes}")
+    pos, view = offset, memoryview(payload)
+    while view:
+        written = os.pwrite(exp_fd, view, pos)
+        if written <= 0:
+            raise RuntimeError("short pwrite to experts.bin")
+        pos += written
+        view = view[written:]
+    return offset, _sha(payload)
+
+
+def process_layer_mxfp4(
+    layer: int, layer_pos: int, srcshard: Path, exp_fd: int, verify_exact: bool
+) -> list[dict]:
+    """Stream all 384 experts of one routed layer into mxfp4 records (one at a time)."""
+    header, ds = dc.read_safetensors_header(str(srcshard))
+    entries = dc.tensor_entries(header)
+    fd = os.open(str(srcshard), os.O_RDONLY)
+    records_meta: list[dict] = []
+    src_bytes = 0
+    t0 = time.time()
+    try:
+        for expert in range(dc.N_ROUTED_EXPERTS):
+            f32_by_proj: dict[str, np.ndarray] = {}
+            for proj, w in dc.PROJ_TO_SOURCE_W.items():
+                base = f"layers.{layer}.ffn.experts.{expert}.{w}"
+                we = entries[base + ".weight"]
+                se = entries[base + ".scale"]
+                packed = np.frombuffer(dc.read_tensor_raw(fd, ds, we), np.uint8).reshape(we.shape)
+                scale = np.frombuffer(dc.read_tensor_raw(fd, ds, se), np.uint8).reshape(se.shape)
+                src_bytes += (we.end - we.begin) + (se.end - se.begin)
+                f32_by_proj[proj] = dc.dequant_fp4(packed, scale)
+                del packed, scale
+            blobs, seg_meta = quantize_expert_components_mxfp4(f32_by_proj, verify_exact)
+            del f32_by_proj
+            record_index = layer_pos * dc.N_ROUTED_EXPERTS + expert
+            offset, sha = _write_record(exp_fd, record_index, blobs,
+                                        dc.MXFP4_EXPERT_RECORD_BYTES)
+            records_meta.append(
+                {"layer": layer, "expert": expert, "index": record_index,
+                 "sidecar_offset": offset, "sha256": sha, "segments": seg_meta}
+            )
+            del blobs
+    finally:
+        os.close(fd)
+    dt = time.time() - t0
+    log(f"layer {layer}: 384 experts -> mxfp4 records, "
+        f"{src_bytes/1024**3:.2f} GiB source in {dt:.1f}s ({dt/384*1000:.0f} ms/expert)")
+    return records_meta
+
+
+def _hardlink_tree(src: Path, dst: Path) -> int:
+    """Hardlink a file or (recursively) a directory tree; skip anything present."""
+    linked = 0
+    if src.is_dir():
+        dst.mkdir(parents=True, exist_ok=True)
+        for child in sorted(src.iterdir()):
+            linked += _hardlink_tree(child, dst / child.name)
+    elif src.is_file() and not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.link(src, dst)
+        linked += 1
+    return linked
+
+
+def hardlink_residents(resident_src: Path, out: Path) -> None:
+    """Hardlink the q8 residents + aux files of a sibling artifact into ``out``.
+
+    Only the routed-expert bank (experts.bin) + manifests are new; every resident
+    shard, config, index, engram bank, tokenizer and license is a hardlink (zero
+    extra disk, byte-identical to the sibling), so the reused resident manifest
+    section stays valid.
+    """
+    linked = 0
+    for shard in sorted(resident_src.glob("*.safetensors")):
+        d = out / shard.name
+        if not d.exists():
+            os.link(shard, d)
+            linked += 1
+    for name in ("model.safetensors.index.json", "config.json",
+                 "tokenizer.json", "tokenizer_config.json", "LICENSE"):
+        s = resident_src / name
+        if s.is_file() and not (out / name).exists():
+            os.link(s, out / name)
+            linked += 1
+    for name in ("engram", "encoding"):
+        s = resident_src / name
+        if s.is_dir():
+            linked += _hardlink_tree(s, out / name)
+    log(f"hardlinked {linked} resident/aux files from {resident_src}")
+
+
+def build_mxfp4_manifest(out: Path, resident_manifest, spec, records_meta: list[dict],
+                         require_pinned: bool):
+    """Assemble the mxfp4 manifest: sibling residents (verbatim) + new mxfp4 records."""
+    exp_path = out / "experts.bin"
+    exp_size = exp_path.stat().st_size
+    exp_sha = _hash_file(exp_path)
+
+    resident_tensors = tuple(resident_manifest.resident_tensors)
+    safetensors_shards = tuple(s for s in resident_manifest.shards if s.kind == "safetensors")
+    resident_total = resident_manifest.resident_tensor_bytes
+
+    records_meta = sorted(records_meta, key=lambda r: (r["layer"], r["expert"]))
+    records: list[ExpertRecord] = []
+    routed_bytes = 0
+    for r in records_meta:
+        base = r["sidecar_offset"]
+        segments = tuple(
+            TensorSegment(
+                component=s["component"],
+                tensor=f"layers.{r['layer']}.ffn.experts.{r['expert']}.{s['leaf_name']}",
+                shard="experts.bin",
+                offset=base + s["rel_offset"],
+                length=s["length"],
+                dtype=s["dtype"],
+                shape=tuple(s["shape"]),
+            )
+            for s in r["segments"]
+        )
+        records.append(
+            ExpertRecord(
+                layer=r["layer"], expert=r["expert"],
+                logical_bytes=dc.MXFP4_EXPERT_RECORD_BYTES, segments=segments,
+                sha256=r["sha256"], sidecar_offset=base,
+                sidecar_length=dc.MXFP4_EXPERT_RECORD_BYTES, part=0,
+            )
+        )
+        routed_bytes += dc.MXFP4_EXPERT_RECORD_BYTES
+
+    sidecar_shard = ShardInfo(
+        name="experts.bin", size=exp_size, header_bytes=0,
+        header_sha256=EMPTY_SHA256, sha256=exp_sha, kind="sidecar",
+    )
+    manifest = ExpertManifest(
+        model_key=spec.key,
+        source_repo=spec.quant_model,
+        source_revision=spec.quant_revision,
+        quant_bits=spec.quant_bits,
+        quant_group_size=spec.quant_group_size,
+        quant_mode="mxfp4",
+        artifact_tensor_bytes=resident_total + routed_bytes,
+        resident_tensor_bytes=resident_total,
+        routed_expert_bytes=routed_bytes,
+        shards=safetensors_shards + (sidecar_shard,),
+        resident_tensors=resident_tensors,
+        records=tuple(records),
+        sidecar=SidecarInfo(file="experts.bin", alignment=MXFP4_ALIGNMENT,
+                            size=exp_size, sha256=exp_sha),
+    ).with_digest()
+    manifest.validate_structure()
+    validate_expert_manifest_spec(manifest, spec, require_pinned_tensor_bytes=require_pinned)
+    (out / "expert-manifest.json").write_text(json.dumps(manifest.to_dict(), indent=2))
+
+    conv = {
+        "model_key": spec.key,
+        "kind": "fp4_e2m1_to_mxfp4_lossless_repack",
+        "source_model": spec.source_model,
+        "source_revision": dc.SOURCE_REVISION,
+        "group_size": dc.MXFP4_GROUP,
+        "expert_bits": dc.MXFP4_BITS,
+        "mode": "mxfp4",
+        "mlx_version": mx.__version__,
+        "expert_record_bytes": dc.MXFP4_EXPERT_RECORD_BYTES,
+        "routed_layers": sorted({r["layer"] for r in records_meta}),
+        "resident_tensor_bytes": resident_total,
+        "routed_expert_bytes": routed_bytes,
+        "artifact_tensor_bytes": resident_total + routed_bytes,
+        "records": len(records),
+        "residents_hardlinked_from_manifest": resident_manifest.model_key,
+        "bit_exact_vs_fp4_source": True,
+    }
+    (out / "conversion-manifest.json").write_text(json.dumps(conv, indent=2))
+    return manifest
+
+
+def convert_mxfp4(args, spec) -> int:
+    """Driver for the native-mxfp4 routed-expert bank (residents hardlinked)."""
+    src: Path = args.src.expanduser().resolve()
+    out: Path = args.out.expanduser().resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    resident_src = args.hardlink_residents_from.expanduser().resolve()
+    resident_manifest = load_expert_manifest(resident_src / "expert-manifest.json")
+
+    index = json.loads(args.index.read_text())["weight_map"]
+    layers = parse_shards(args.layers)
+    layers = sorted(set(layers))
+    if not layers:
+        raise SystemExit("--layers is required for the mxfp4 path")
+    num_records = len(layers) * dc.N_ROUTED_EXPERTS
+    bank_bytes = num_records * dc.MXFP4_EXPERT_RECORD_BYTES
+    log(f"mxfp4 layers to convert: {layers} ({num_records} records, "
+        f"record={dc.MXFP4_EXPERT_RECORD_BYTES} B, bank~{bank_bytes/1024**3:.2f} GiB)")
+
+    exp_path = out / "experts.bin"
+    exp_fd = os.open(str(exp_path), os.O_RDWR | os.O_CREAT, 0o644)
+    if os.fstat(exp_fd).st_size < bank_bytes:
+        os.ftruncate(exp_fd, bank_bytes)
+
+    state = load_state(out)
+    all_records: list[dict] = []
+    for data in state.values():
+        all_records.extend(data.get("records", []))
+
+    verify_exact = not args.no_verify_exact
+    t_start = time.time()
+    try:
+        for layer_pos, layer in enumerate(layers):
+            key = 10_000 + layer  # separate journal namespace from affine shards
+            if key in state:
+                log(f"layer {layer}: already done (resume)")
+                continue
+            srcshard = src / source_shard_for_layer(index, layer)
+            records_meta = process_layer_mxfp4(layer, layer_pos, srcshard, exp_fd, verify_exact)
+            os.fsync(exp_fd)
+            save_state(out, {"srcidx": key, "layer": layer, "records": records_meta,
+                             "resident_shard": None,
+                             "source_file": srcshard.name,
+                             "source_sha256": source_sha256(src, srcshard)})
+            all_records.extend(records_meta)
+            done = len(all_records)
+            elapsed = time.time() - t_start
+            frac = done / num_records if num_records else 1.0
+            eta = (elapsed / frac - elapsed) if frac > 0 else 0
+            log(f"progress: {done}/{num_records} records ({100*frac:.1f}%), "
+                f"elapsed {elapsed/60:.1f}m, ETA {eta/60:.1f}m")
+    finally:
+        os.fsync(exp_fd)
+        os.close(exp_fd)
+
+    if args.no_finalize:
+        log("skipping finalize (--no-finalize)")
+        return 0
+
+    hardlink_residents(resident_src, out)
+    require_pinned = args.require_pinned and not args.pilot
+    fin_spec = spec
+    if args.pilot:
+        fin_spec = replace(spec, routed_layer_start=layers[0], routed_layer_count=len(layers))
+    log("finalizing: mxfp4 manifest (residents reused verbatim) ...")
+    manifest = build_mxfp4_manifest(out, resident_manifest, fin_spec, all_records,
+                                    require_pinned)
+    log(f"manifest: {len(manifest.records)} records, "
+        f"resident={manifest.resident_tensor_bytes/1024**3:.2f} GiB, "
+        f"routed={manifest.routed_expert_bytes/1024**3:.2f} GiB, "
+        f"digest={manifest.manifest_sha256[:12]}")
+    log("verifying (records + shards + sidecar) ...")
+    report = verify_expert_manifest(manifest, out, verify_records=True,
+                                    verify_shard_hashes=True, verify_sidecar_hash=True)
+    log(f"verify report: {json.dumps(report)}")
+    log("DONE (mxfp4)")
+    return 0
+
+
 def parse_shards(spec_str: str) -> list[int]:
     out: list[int] = []
     for part in spec_str.split(","):
@@ -709,12 +1037,34 @@ def main() -> int:
     ap.add_argument("--add-mtp-residents", action="store_true",
                     help="append-only: add MTP routed experts to an existing v1 artifact as "
                          "affine q8/gs32 residents; update index/config/manifests in place")
+    ap.add_argument("--expert-codec", choices=("affine", "mxfp4"), default="affine",
+                    help="routed-expert record codec: 'affine' (Q2/gs64, default) or "
+                         "'mxfp4' (lossless FP4 repack, gs32) with residents hardlinked")
+    ap.add_argument("--layers", default="",
+                    help="mxfp4 path: routed layers to convert (e.g. '0,1' or '0-39')")
+    ap.add_argument("--hardlink-residents-from", type=Path, default=None,
+                    help="mxfp4 path: sibling artifact whose q8 residents/engram/config/"
+                         "index/tokenizer are hardlinked into --out (only the mxfp4 bank + "
+                         "manifest are new files)")
+    ap.add_argument("--no-verify-exact", action="store_true",
+                    help="mxfp4 path: skip the per-record bit-exactness assertion "
+                         "(default: assert mx.dequantize == fp32 source for every expert)")
+    ap.add_argument("--model-key", default=None,
+                    help="streaming spec key (default: derived from --expert-codec)")
     args = ap.parse_args()
+
+    default_key = ("deepseek-v41-flash-expert-mxfp4"
+                   if args.expert_codec == "mxfp4" else dc.MODEL_KEY)
+    spec = get_model_spec(args.model_key or default_key)
+
+    if args.expert_codec == "mxfp4":
+        if args.hardlink_residents_from is None:
+            raise SystemExit("--expert-codec mxfp4 requires --hardlink-residents-from")
+        return convert_mxfp4(args, spec)
 
     src: Path = args.src.expanduser().resolve()
     out: Path = args.out.expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
-    spec = get_model_spec(dc.MODEL_KEY)
     config = json.loads(args.config.read_text())
     index = json.loads(args.index.read_text())["weight_map"]
 
