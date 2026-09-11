@@ -44,17 +44,39 @@ DEFAULT_MODEL = Path(
     "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
 ).expanduser()
 GIB = 1024 ** 3
+DEFAULT_BOS_ID = 0
 OVERLAP_ENV = "MTPLX_DSV41_SHARED_OVERLAP"
 PROBE_ENV = "MTPLX_ROUTE_STAGE_PROBE"
 BARRIER_STAGE = "hot.eval_indices"
 
 LAYER_MAJOR_ENV = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
+SINKHORN_METAL_ENV = "MTPLX_DSV41_SINKHORN_METAL"   # K3, merged @ 8982b93c9
+HC_COMPILE_ENV = "MTPLX_DSV41_HC_COMPILE"           # K4, landing
+
+# Every lever env key, in a stable order. Each preset names ALL of them (None =
+# force-unset) so applying an arm fully determines the four flags regardless of
+# what a prior arm in the same process left set -- the arms are independent.
+ALL_LEVER_ENVS = (OVERLAP_ENV, LAYER_MAJOR_ENV, SINKHORN_METAL_ENV, HC_COMPILE_ENV)
+
+
+def _preset(*, overlap=None, layer_major=None, sinkhorn=None, hc=None) -> dict:
+    """A preset that pins ALL four lever keys (None = force-unset)."""
+    return {
+        OVERLAP_ENV: overlap,
+        LAYER_MAJOR_ENV: layer_major,
+        SINKHORN_METAL_ENV: sinkhorn,
+        HC_COMPILE_ENV: hc,
+    }
+
 
 ARM_PRESETS = {
-    "control": {OVERLAP_ENV: None, LAYER_MAJOR_ENV: None},   # shipped: levers OFF
-    "shared_overlap": {OVERLAP_ENV: "1", LAYER_MAJOR_ENV: None},  # W28 K1 lever ON
-    "layer_major": {OVERLAP_ENV: None, LAYER_MAJOR_ENV: "1"},     # W30 K16 lever ON
-    "both": {OVERLAP_ENV: "1", LAYER_MAJOR_ENV: "1"},
+    "control": _preset(),                                    # shipped: all levers OFF
+    "shared_overlap": _preset(overlap="1"),                 # W28 K1 lever ON
+    "layer_major": _preset(layer_major="1"),                # W30 K16 lever ON
+    "sinkhorn_metal": _preset(sinkhorn="1"),                # K3 lever ON (8982b93c9)
+    "hc_compile": _preset(hc="1"),                          # K4 lever ON (landing)
+    "both": _preset(overlap="1", layer_major="1"),          # shared_overlap + layer_major
+    "all_levers": _preset(overlap="1", layer_major="1", sinkhorn="1", hc="1"),
 }
 
 
@@ -83,9 +105,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--arms",
         nargs="+",
         default=["control", "shared_overlap"],
-        help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, both)",
+        help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, "
+        "sinkhorn_metal, hc_compile, both, all_levers)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
+    # Prompt build: mirrors bench_standard_shape.py exactly, so that
+    # ``bench._prompt_args(args, ctx)`` reads the same fields with the same
+    # defaults and the reused ``build_prompt`` produces the identical standard-
+    # shape prompt (deterministic prefill_bench coding-agent prompt + reference
+    # BOS). Missing these was the W11 crash (_prompt_args hit args.prompt).
+    p.add_argument(
+        "--prompt",
+        default=None,
+        help="literal prompt text; overrides the prefill_bench builder "
+        "(default None = build the deterministic prefill_bench prompt).",
+    )
+    p.add_argument("--prompt-format", default="raw", choices=("raw", "chat"))
+    p.add_argument(
+        "--bos",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="prepend the reference BOS (id --bos-id, default 0). The artifact "
+        "tokenizer does not add it; the reference always does (W8_REPORT.md).",
+    )
+    p.add_argument("--bos-id", type=int, default=DEFAULT_BOS_ID)
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="CPU-only test double: apply each arm's env and build the standard-"
+        "shape prompt with bench's fake tokenizer -- no model load, no MLX/Metal. "
+        "Proves argument resolution, prompt build and per-arm env application.",
+    )
     p.add_argument(
         "--syncs",
         type=int,
@@ -122,6 +173,33 @@ def _apply_arm_env(arm: str) -> None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+
+
+def _arm_env_snapshot() -> dict:
+    """The four lever env keys' current values (None = unset)."""
+    return {key: os.environ.get(key) for key in ALL_LEVER_ENVS}
+
+
+def _dry_run_arm(args, arm, bench) -> dict:
+    """CPU-only arm double (no model, no MLX/Metal): apply the arm's env, then
+    build the standard-shape prompt with bench's fake tokenizer so the prompt-
+    build metadata is byte-for-byte identical to bench_standard_shape's
+    ``--dry-run`` for the same context cell."""
+    build_prompt = bench._load_build_prompt()
+    tokenizer = bench._FakeTokenizer()
+    prompt_ids, prompt_meta = build_prompt(
+        tokenizer, bench._prompt_args(args, args.context_tokens)
+    )
+    return {
+        "arm": arm,
+        "dry_run": True,
+        "overlap_env": os.environ.get(OVERLAP_ENV),
+        "arm_env": _arm_env_snapshot(),
+        "context_tokens": int(args.context_tokens),
+        "decode_tokens": int(args.decode_tokens),
+        "prompt_tokens": len(prompt_ids),
+        "prompt_build": prompt_meta,
+    }
 
 
 def _load_model(args, bench, mx):
@@ -205,6 +283,8 @@ def _overlap_telemetry(runtime) -> dict | None:
 
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
+    if getattr(args, "dry_run", False):
+        return _dry_run_arm(args, arm, bench)
     build_prompt = bench._load_build_prompt()
     prompt_ids, prompt_meta = build_prompt(
         _tokenizer(args, bench),
@@ -227,6 +307,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
         receipt = {
             "arm": arm,
             "overlap_env": os.environ.get(OVERLAP_ENV),
+            "arm_env": _arm_env_snapshot(),
             "context_tokens": int(args.context_tokens),
             "decode_tokens": int(args.decode_tokens),
             "prompt_tokens": len(prompt_ids),
@@ -294,17 +375,44 @@ def _sync_census(*, model, ops, mem_probe, prompt_ids, steps) -> dict:
     }
 
 
+def _run_dry(args, bench) -> int:
+    """CPU-only path: run every requested arm through the dry-run double.
+
+    No MLX/Metal import, no model load; writes the same append-only JSONL
+    receipt (with ``prompt_build`` + ``arm_env`` per arm) so the harness'
+    argument resolution, prompt build and per-arm env application are all
+    exercised offline.
+    """
+    for arm in args.arms:
+        print(
+            f"[ab] DRY-RUN arm={arm} ctx={args.context_tokens} "
+            f"decode={args.decode_tokens}"
+        )
+        receipt = _run_arm(args, arm, bench, mx=None)
+        with args.out.open("a") as fh:
+            fh.write(json.dumps(receipt) + "\n")
+        print(
+            f"[ab]   prompt_tokens={receipt['prompt_tokens']} "
+            f"arm_env={receipt['arm_env']}"
+        )
+    return 0
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    bench = _load_bench_module()
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.dry_run:
+        return _run_dry(args, bench)
+
     if args.syncs > 0:
         # The probe reads its ENABLED flag at import, so arm it before any mtplx
         # import happens inside the arm run.
         os.environ[PROBE_ENV] = "1"
-    bench = _load_bench_module()
     import mlx.core as mx
 
     mx.random.seed(int(args.seed))
-    args.out.parent.mkdir(parents=True, exist_ok=True)
 
     receipts = []
     for arm in args.arms:
