@@ -60,12 +60,15 @@ the resident quantiser and excluded from the strict 1,616-key text load.
 
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from mlx_lm.models.switch_layers import SwiGLU, SwitchGLU
+
+from .expert_mlx import run_switch_with_shared_overlap
 
 
 class ClampedSwiGLU(SwiGLU):
@@ -240,9 +243,29 @@ class MoE(nn.Module):
         # per-expert outputs [n, top_k, dim]; the reference multiplies each
         # expert output by its weight inside the loop (L900) -- done here in one
         # weighted sum, in f32 to match the reference's f32 accumulator (L893).
-        routed = self.switch_mlp(xf, indices)                       # [n, top_k, dim]
-        y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
         # L903: shared expert every token passes through, added in f32.
-        y = y + self.shared_experts(xf).astype(mx.float32)
+        if os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1":
+            # W28 (KERNEL_LEDGER K1) shared-overlap, behind a switch, default off.
+            # The shared expert depends only on xf, never on the routed indices,
+            # so hand it to the streamed switch as ``shared_work``: the switch
+            # dispatches it into the GPU-idle window of the per-layer routing
+            # barrier (``mx.eval(indices)``) + miss I/O instead of serialising it
+            # AFTER the routed gather.  Pure execution reorder -- ``routed`` and
+            # ``shared`` are the same arrays as below, so the f32 combine is
+            # bitwise-identical.  A switch without ``run_with_shared_overlap``
+            # (the resident SwitchGLU / test default) falls back to exactly the
+            # shipped ordering, so only the streamed path actually overlaps.
+            routed, shared = run_switch_with_shared_overlap(
+                self.switch_mlp,
+                xf,
+                indices,
+                lambda: self.shared_experts(xf).astype(mx.float32),
+            )
+            y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
+            y = y + shared
+        else:
+            routed = self.switch_mlp(xf, indices)                   # [n, top_k, dim]
+            y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
+            y = y + self.shared_experts(xf).astype(mx.float32)
         # L904: return y.type_as(x).view(shape)
         return y.astype(x.dtype).reshape(shape)
