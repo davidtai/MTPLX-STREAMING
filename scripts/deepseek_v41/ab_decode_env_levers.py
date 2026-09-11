@@ -40,11 +40,21 @@ import os
 import time
 from pathlib import Path
 
+import numpy as np  # CPU-only (no mlx); safe for the --dry-run path
+
 DEFAULT_MODEL = Path(
     "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
 ).expanduser()
 GIB = 1024 ** 3
 DEFAULT_BOS_ID = 0
+# W77: AR top-1/top-2 logit gap (logit units) below which a greedy DSpark
+# divergence is classed a tie-break flip rather than a genuine divergence.
+# 3x the bf16-class per-logit floor (~1e-2, the W40/K21 HEAD_MODE=bf16 head-GEMV
+# rounding measured by the W77 CPU per-lever probe) -- see
+# mtplx.models.deepseek_v41_dspark_decode.DSPARK_TIE_MARGIN_DEFAULT and
+# docs/deepseek-v41/W77_DSPARK_DIVERGENCE.md.  Duplicated here (not imported) so
+# the parser stays CPU-safe / mlx-free for --dry-run.
+DSPARK_TIE_MARGIN_DEFAULT = 3.0e-2
 OVERLAP_ENV = "MTPLX_DSV41_SHARED_OVERLAP"
 PROBE_ENV = "MTPLX_ROUTE_STAGE_PROBE"
 STAGE_TIMING_ENV = "MTPLX_DSV41_STAGE_TIMING"
@@ -549,6 +559,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
     )
     p.add_argument(
+        "--dspark-require-lossless",
+        action="store_true",
+        help=(
+            "W77: restore the hard abort when the DSpark-DIRECT greedy stream "
+            "diverges from AR (for exactness-class arms whose ship bar IS byte "
+            "identity). Default OFF: a divergence is classified (tie_flip vs "
+            "divergent) into the receipt and both streams decode to full length."
+        ),
+    )
+    p.add_argument(
+        "--dspark-tie-margin",
+        type=float,
+        default=DSPARK_TIE_MARGIN_DEFAULT,
+        help=(
+            "W77: AR top-2 logit gap (logit units) below which a greedy DSpark "
+            "divergence is classed a tie-break flip (rounding-class near-tie) "
+            f"rather than 'divergent'. Default {DSPARK_TIE_MARGIN_DEFAULT} (3x the "
+            "bf16-class head-GEMV floor)."
+        ),
+    )
+    p.add_argument(
         "--device-sample",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -991,7 +1022,60 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     }
 
 
-def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_timing=False):
+def _fmt(v) -> str:
+    return "n/a" if v is None else f"{v:.4g}"
+
+
+def _print_dspark_divergence(arm: str, d: dict) -> None:
+    """W77 census line for a classified DSpark divergence.  ``tie_flip`` is a
+    one-line note (acceptable, rounding-class); ``divergent`` is LOUD (the flip is
+    larger than the bf16 rounding envelope -- a real lane bug or a non-rounding
+    lever), so the operator sees it in the arm log even though the arm no longer
+    aborts."""
+    i = d["divergence_index"]
+    if d["class"] == "tie_flip":
+        print(
+            f"[ab] dspark divergence @ {i} class=tie_flip (acceptable) "
+            f"ar_top2_margin={_fmt(d['ar_top2_margin'])} < tie_margin={_fmt(d['tie_margin'])} "
+            f"max|Δlogit|={_fmt(d['max_abs_logit_delta'])} "
+            f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']} (arm {arm!r})",
+            flush=True,
+        )
+    else:
+        print(
+            "[ab] " + "!" * 8 + " DIVERGENT " + "!" * 8 + "\n"
+            f"[ab] DSpark greedy stream != AR @ {i} class=DIVERGENT (arm {arm!r}): "
+            f"NOT a tie-break flip -- ar_top2_margin={_fmt(d['ar_top2_margin'])} "
+            f">= tie_margin={_fmt(d['tie_margin'])}, max|Δlogit|={_fmt(d['max_abs_logit_delta'])}, "
+            f"dspark_top2_margin={_fmt(d['dspark_top2_margin'])}; "
+            f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']}. "
+            "Investigate the lane (or run --dspark-require-lossless to gate).",
+            flush=True,
+        )
+
+
+def _ar_logits_row_at_index(*, model, ops, mx, prompt_ids, ar_tokens, index):
+    """W77: faithfully replay the AR (M=1) decode forward whose greedy argmax is
+    ``ar_tokens[index]`` and return its FULL logits row as a np.float32 vector.
+
+    ``index == 0`` is the prompt-prefill argmax (the shared prefill logits).  For
+    ``index >= 1`` this re-prefills the prompt and steps ``index`` M=1 forwards
+    feeding ``ar_tokens[0..index-1]`` -- the exact one-row decode shape AR used, so
+    the captured logits carry the same M=1 kernel rounding (not a re-prefill of the
+    whole prefix, which would be a different matmul shape).  Bounded by ``index <=
+    decode_tokens`` M=1 forwards + one prefill; only ever run once, on divergence.
+    """
+    cache = model.make_cache()
+    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    ops.sync(logits)
+    for j in range(int(index)):
+        logits = model(ops.input([[int(ar_tokens[j])]]), cache=cache)
+        ops.sync(logits)
+    return np.asarray(logits[0, -1].astype(mx.float32)).reshape(-1)
+
+
+def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
+                     stage_timing=False, ar_reference=None):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
     per-cycle accept + phase-timing statistics.  Total tokens == steps + 1 to match
     ``_generate`` (prefill token + ``steps`` decode tokens).  When ``stage_timing``
@@ -999,6 +1083,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_ti
     VERIFY forward's internal model stages (attention, moe.routed_switch breakdown,
     which reveals whether rows>1 took the prefill routing phase)."""
     from mtplx.models.deepseek_v41_dspark_decode import (
+        DivergenceCapture,
         DSparkDecodeStats,
         dspark_generate,
     )
@@ -1006,6 +1091,9 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_ti
 
     mem_probe.reset_peak()
     stats = DSparkDecodeStats()
+    # W77: when an AR reference is supplied, capture (zero extra forwards) the
+    # verify logits row of the first committed token that diverges from it.
+    capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
     stime = None
     route_probe = None
     route_prev_enabled = None
@@ -1035,6 +1123,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_ti
         seed=0,
         speculative_depth=int(depth),
         stats=stats,
+        divergence_capture=capture,
     )
     wall = time.perf_counter() - t0
     report = None
@@ -1071,6 +1160,16 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth, stage_ti
         out["verify_stage_timing"] = report
     if w61 is not None:
         out["w61_engagement"] = w61
+    if capture is not None and capture.found:
+        # In-process only: the full logits row stays out of the receipt; the AB
+        # harness reads scalars off it via classify_divergence.
+        out["divergence"] = {
+            "index": capture.index,
+            "ar_token": capture.ar_token,
+            "dspark_token": capture.dspark_token,
+            "dspark_logits_row": capture.dspark_logits_row,
+            "dspark_top2_margin": capture.dspark_top2_margin,
+        }
     return out
 
 
@@ -1281,6 +1380,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
                 depth=args.dspark_depth,
                 stage_timing=bool(getattr(args, "stage_timing", False)),
+                ar_reference=ids,
             )
             dsp_ids = dsp["generated"]
             byte_identical = dsp_ids == ids
@@ -1322,17 +1422,58 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 # W61 single-barrier fast-path engagement (+ eval_indices barrier
                 # count) from the route-stage probe.
                 receipt["dspark"]["w61_engagement"] = dsp["w61_engagement"]
-            # Byte-identity is a hard correctness gate, not a soft metric: a
-            # differing greedy sequence means the speculative lane is broken.
+            # W77: byte-identity is the ship bar only for exact-by-construction
+            # arms. A greedy argmax flip at a near-tie caused by rounding-class
+            # deltas (bf16 head, M=1 vs M=K+1 matmul kernels, compiled attention)
+            # is acceptable ([[dsv41-inexact-ok-if-tie-flips]]). Instead of
+            # aborting, classify the FIRST divergence into the receipt and keep
+            # both fully-decoded streams; --dspark-require-lossless restores the
+            # hard abort for exactness-class arms.
             if not byte_identical:
+                from mtplx.models.deepseek_v41_dspark_decode import (
+                    classify_divergence,
+                )
+
                 first = next(
                     (i for i, (a, b) in enumerate(zip(dsp_ids, ids)) if a != b),
                     min(len(dsp_ids), len(ids)),
                 )
-                raise AssertionError(
-                    "DSpark-DIRECT greedy decode diverged from AR at index "
-                    f"{first} (arm {arm!r}); speculative lane is not lossless"
+                ar_tok = ids[first] if first < len(ids) else None
+                dsp_tok = dsp_ids[first] if first < len(dsp_ids) else None
+                cap = dsp.get("divergence")
+                # The verify logits row is captured for free during the dspark
+                # pass; only the AR row needs a (one-time) faithful M=1 replay.
+                dsp_row = cap.get("dspark_logits_row") if cap else None
+                ar_row = None
+                try:
+                    ar_row = _ar_logits_row_at_index(
+                        model=model, ops=ops, mx=mx, prompt_ids=prompt_ids,
+                        ar_tokens=ids, index=first,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    print(f"[ab] WARN: AR logits replay at {first} failed: {exc!r}",
+                          flush=True)
+                divergence = classify_divergence(
+                    index=first, ar_token=ar_tok, dspark_token=dsp_tok,
+                    ar_logits_row=ar_row, dspark_logits_row=dsp_row,
+                    tie_margin=float(getattr(args, "dspark_tie_margin",
+                                             DSPARK_TIE_MARGIN_DEFAULT)),
                 )
+                # Reconcile the capture's index (from the pass) with the list
+                # compare; they agree for a decode-position divergence, but record
+                # the capture index too so a mismatch is visible.
+                if cap is not None:
+                    divergence["capture_index"] = cap.get("index")
+                receipt["dspark"]["divergence"] = divergence
+                _print_dspark_divergence(arm, divergence)
+                if getattr(args, "dspark_require_lossless", False):
+                    raise AssertionError(
+                        "DSpark-DIRECT greedy decode diverged from AR at index "
+                        f"{first} (arm {arm!r}); speculative lane is not lossless "
+                        "[--dspark-require-lossless]"
+                    )
+            else:
+                receipt["dspark"]["divergence"] = None
         if getattr(args, "warm_repeat", False):
             receipt["warm"] = _warm_repeat_pass(
                 model=model, ops=ops, mem_probe=mem_probe,
