@@ -174,3 +174,66 @@ def test_ballast_and_churn_flags_execute():
     assert r0["ballast_gib"] == 0.0
     assert r0["ballast_churn"] is False
     assert r0["memory"]["n_ballast_chunks"] == 0
+
+
+# ---------------------------------------------------------------------------
+# --in-model plumbing (window-32 follow-up): the three in-situ passes on a tiny
+# FAKE full model (CPU).  The GPU path loads the real artifact via the ab loader;
+# here we only prove the stubs + three passes run and the report is shaped right.
+# ---------------------------------------------------------------------------
+def test_in_model_tiny_three_passes():
+    r = _MOD.run_in_model({"tiny": True, "steps": 3, "prompt_len": 40})
+    assert mx.default_device() == mx.cpu
+    assert r["device"] == "cpu" and r["tiny"] is True and r["mode"] == "in_model"
+    assert set(r["passes"]) == {"full", "expert_stub", "attn_stub"}
+    for key in ("full", "expert_stub", "attn_stub"):
+        assert r["passes"][key]["summary"]["enabled"] is True, key
+
+    full = r["passes"]["full"]["summary"]
+    est = r["passes"]["expert_stub"]["summary"]
+    ast = r["passes"]["attn_stub"]["summary"]
+
+    # (1) full: every CSA mode's attention was timed in situ (ms/layer > 0)
+    for mode in _MODES:
+        v = full["attn_ms_per_layer"][mode]
+        assert isinstance(v, float) and v > 0.0, (mode, v)
+
+    # (2) expert stub really removed the routed switch: moe.routed_switch drops
+    full_routed = full["non_attn_ms_per_layer"]["moe.routed_switch"]
+    stub_routed = est["non_attn_ms_per_layer"]["moe.routed_switch"]
+    assert full_routed is not None and stub_routed is not None
+    assert stub_routed < full_routed, (stub_routed, full_routed)
+    # attention still ran under the expert stub (it is not stubbed here)
+    for mode in _MODES:
+        assert isinstance(est["attn_ms_per_layer"][mode], float)
+
+    # (3) attention stub removed the attn.<mode> stages entirely, and the whole
+    # step got cheaper (attention no longer contributes)
+    for mode in _MODES:
+        assert ast["attn_ms_per_layer"][mode] is None, mode
+    assert ast["frame_wall_ms_per_token"] < full["frame_wall_ms_per_token"]
+
+
+def test_in_model_gpu_argv_parses():
+    """The GPU-path argv the mode builds parses cleanly against the ab parser (arg
+    names / values), without loading the artifact -- a guard against argv typos."""
+    ab = _MOD._load_ab_module()
+    argv = [
+        "--model", "/nonexistent/model",
+        "--context-tokens", "16384",
+        "--decode-tokens", "30",
+        "--max-kv", "17408",
+        "--memory-limit-gib", "60.0",
+        "--arms", "cell16k",
+        "--out", "/dev/null",
+        "--prompt-ids-file", "/some/prompt-ids.json",
+        "--prompt-seed", "20260829",
+    ]
+    ns = ab.build_parser().parse_args(argv)
+    assert ns.context_tokens == 16384
+    assert ns.max_kv == 17408
+    assert abs(ns.memory_limit_gib - 60.0) < 1e-9
+    assert ns.arms == ["cell16k"]
+    assert "cell16k" in ab.ARM_PRESETS
+    # the ab loader/census pass functions the mode reuses exist
+    assert callable(ab._load_model) and callable(ab._stage_timing_pass)
