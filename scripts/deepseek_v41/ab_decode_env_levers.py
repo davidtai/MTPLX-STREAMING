@@ -465,6 +465,16 @@ ARM_PRESETS = {
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         kv_chunk_grow="1",
     ),
+    # the standard cell: 16,384-token Qwen-PR sweep prompt (1K task + filler), real
+    # prefill, then decode; prefill stack + decode stack together.  Prefill lane =
+    # prefill_lean_sel_chunk (layer_major + dense experts + lean score path +
+    # selected keys + chunk-grown KV append) plus the K27 layout_fix; decode lane =
+    # stack_a (head bf16 + Sinkhorn + attn compile + window memo).
+    "cell16k": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        kv_chunk_grow="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+    ),
 }
 
 

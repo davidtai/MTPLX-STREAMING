@@ -135,6 +135,7 @@ ALL_ARMS = [
     "decode_attn_kernel",
     "kv_chunk_grow",
     "prefill_lean_sel_chunk",
+    "cell16k",
 ]
 
 # The boolean lever env keys each arm must leave set to "1" (every other unset).
@@ -209,6 +210,10 @@ EXPECTED_ON = {
     # prefill_lean_sel stack (_LM here; _PD, lean, _SEL, _KCG tracked separately).
     "kv_chunk_grow": set(),
     "prefill_lean_sel_chunk": {_LM},
+    # the standard 16K cell: prefill lane (layer-major; _PD/_SP/_SEL/_LFX/_KCG
+    # tracked separately) + decode lane stack_a (Sinkhorn + attn compile + window
+    # memo + head bf16 in EXPECTED_HEAD).
+    "cell16k": {_LM, _SK, _AC, _WM},
 }
 
 # The device-route boolean each arm pins (W44 K24; separate from _ALL_KEYS because
@@ -238,6 +243,7 @@ _DENSE_ARMS = (
     "prefill_dense_experts", "dense_min32", "dense_batch16", "dense_f32",
     "prefill_fast", "prefill_lean", "prefill_lean_sel", "prefill_lean_k28",
     "prefill_best", "prefill_best_nok28", "prefill_best_sel", "prefill_lean_sel_chunk",
+    "cell16k",
 )
 EXPECTED_DENSE = {arm: (arm in _DENSE_ARMS) for arm in ALL_ARMS}
 # The dense value knobs each arm pins (None = force-unset / code default). Only the
@@ -294,6 +300,7 @@ EXPECTED_HEAD = {
     "decode_attn_kernel": None,
     "kv_chunk_grow": None,
     "prefill_lean_sel_chunk": None,
+    "cell16k": "bf16",
 }
 
 # The W50 prefill score-path values each arm pins (None = force-unset). _SD is the
@@ -323,7 +330,7 @@ EXPECTED_SELECTED = {
     arm: "1"
     if arm in (
         "selected_keys", "prefill_lean_sel", "stack_b", "prefill_best_sel",
-        "prefill_lean_sel_chunk",
+        "prefill_lean_sel_chunk", "cell16k",
     )
     else None
     for arm in ALL_ARMS
@@ -332,6 +339,7 @@ EXPECTED_SCORE_PATH["prefill_lean_k28"] = "lean"
 EXPECTED_SCORE_PATH["prefill_best"] = "lean"
 EXPECTED_SCORE_PATH["prefill_best_nok28"] = "lean"
 EXPECTED_SCORE_PATH["prefill_best_sel"] = "lean"
+EXPECTED_SCORE_PATH["cell16k"] = "lean"
 
 # The W58 K28 fused-softmax-kernel boolean each arm pins ("1" or None = force-unset).
 # Set by the standalone kernel arm, the prefill_lean_k28 stack, and prefill_best
@@ -347,6 +355,7 @@ EXPECTED_LAYOUT = {arm: None for arm in ALL_ARMS}
 EXPECTED_LAYOUT["prefill_best"] = "1"
 EXPECTED_LAYOUT["prefill_best_nok28"] = "1"
 EXPECTED_LAYOUT["prefill_best_sel"] = "1"
+EXPECTED_LAYOUT["cell16k"] = "1"
 
 # The W60 K29 decode-attention-kernel boolean each arm pins ("1" or None =
 # force-unset).  Only the standalone decode_attn_kernel arm sets it (LEFT OUT of
@@ -367,6 +376,7 @@ EXPECTED_MLX_BUFFER["mlx_buffer_500"] = "500"
 EXPECTED_KV_CHUNK_GROW = {arm: None for arm in ALL_ARMS}
 EXPECTED_KV_CHUNK_GROW["kv_chunk_grow"] = "1"
 EXPECTED_KV_CHUNK_GROW["prefill_lean_sel_chunk"] = "1"
+EXPECTED_KV_CHUNK_GROW["cell16k"] = "1"
 
 
 
