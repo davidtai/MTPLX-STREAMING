@@ -197,6 +197,36 @@ scripts/deepseek_v41/bench_standard_shape.py --model <mxfp4> \
 
 Plus the restored W23 suite (13/13) and the serve-glue / gate / head suites.
 
+## 6a. Window-23 follow-ups (integration wiring)
+
+Two gaps surfaced when window 23 first ran the lane against the real artifact:
+
+- **Bench loader built the model with_mtp=False → no DSpark head.** `_load_model`
+  in `ab_decode_env_levers.py` / `bench_standard_shape.py` now passes `with_mtp=True`
+  when `--decode-mode dspark`, via the shared pure helper
+  `deepseek_v41_dspark_decode.dspark_bench_loader_overrides` (unit-tested). Because
+  the streaming planner applies `text_only_resident_discount` unconditionally (it
+  frees the MTP+vision residents' slots), a with_mtp load would over-commit the
+  expert slot pool by exactly the MTP residents it then loads; the helper reprices
+  **~7.4 GiB** (the MTP-only residents; vision is never on the text/MTP path) out of
+  the memory budget so the 82 GiB plan still fits, and both scripts assert the head
+  is present with an actionable message before the run. The greedy AR byte-identity
+  reference is produced by the **same loaded model** (the AR cell `_generate` /
+  `bench_one_cell` AR pass runs on the identical `resident.model`).
+
+- **Served-path validators only accepted `mtp|ar`.** `--generation-mode dspark`
+  died in the daemon command layer (`ValueError: generation mode must be 'mtp' or
+  'ar'`). `dspark` is now in every generation-mode validator/choice on the served
+  path: `mtplx/cli.py` serve+bench `--generation-mode` choices; `mtplx/server/openai.py`
+  parser choices + both `_normalize_generation_mode` sites (request + arg-setter) +
+  the `available_generation_modes` health list (dsv41 only); and
+  `mtplx/commands/public.py` `GENERATION_MODES` (with `_streamed_mtp_flag_requested`
+  recognising an explicit `dspark` mode). The `MTPLX_DSV41_DSPARK_DIRECT=1` +
+  `--generation-mode mtp` fallback is unchanged. Covered by CPU tests that the full
+  serve argv parses to `generation_mode=dspark`, the daemon normalizer keeps it
+  (not forced to AR), and it resolves to the DSpark-direct lane for a dsv41 MTP
+  runtime.
+
 ## 7. Caveats
 
 - **Acceptance α + `T_{K+1}/T1` unmeasured on this box** — the tok/s win is a GPU
