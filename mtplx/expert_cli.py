@@ -172,7 +172,7 @@ def add_expert_streaming_args(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("SSD expert streaming")
     group.add_argument(
         "--expert-profile",
-        choices=EXPERT_PROFILE_CHOICES,
+        choices=expert_profile_choices(),
         default="auto",
         help="Promoted SSD expert memory profile (default: auto).",
     )
