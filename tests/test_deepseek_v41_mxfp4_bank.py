@@ -128,6 +128,10 @@ def test_built_bank_manifest_identity():
         pytest.skip("mxfp4 bank not built yet")
     m = json.loads(man.read_text())
     assert m["model_key"] == MODEL_KEY
-    assert m["source_repo"] == "OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2"
+    # identity is stamped from the spec (build_mxfp4_manifest: source_repo=spec.quant_model)
+    from mtplx.expert_streaming_models import get_model_spec
+    spec = get_model_spec(MODEL_KEY)
+    assert m["source_repo"] == spec.quant_model
+    assert m["source_revision"] == spec.quant_revision
     assert m["artifact"]["record_count"] == 40 * 384
     assert (ARTIFACT / "experts.bin").stat().st_size == EXPECT_BANK_BYTES

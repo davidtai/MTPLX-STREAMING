@@ -192,6 +192,8 @@ def process_shard(srcidx: int, path: Path, exp_fd: int) -> dict:
             records_meta.append({"layer": layer, "expert": expert, "index": rec_index,
                                  "sidecar_offset": offset, "sha256": sha, "segments": seg})
             del f32_by_proj, blobs
+            # bound RSS: release the mlx CPU buffer pool between experts
+            mx.clear_cache()
     finally:
         os.close(fd)
     dt = time.time() - t0
@@ -280,12 +282,44 @@ def cmd_write(args) -> int:
 def cmd_finalize(args) -> int:
     """Build expert-manifest.json + conversion-manifest.json for the mxfp4 bank.
 
-    Uses W15's manifest framing.  Residents are the hardlinked q2 shards already
-    present in <out>.  This couples to W15's committed expert_manifest / spec
-    support for expert_codec='mxfp4'; wired once W15 lands (see W16_REPORT.md).
+    Reuses W15's committed ``build_mxfp4_manifest`` (identical record framing to
+    this driver — verified) against the experts.bin THIS driver wrote and the
+    resident section of a sibling artifact's expert-manifest.json (q2-provenance,
+    since the live q2 artifact was deleted; its residents are byte-identical to
+    the ones hardlinked into <out>).
     """
-    raise SystemExit("finalize: wire to W15 manifest API once its framing commit lands "
-                     "(feat/deepseek-v41-w15).  experts.bin write is independent and complete.")
+    out = args.out.expanduser().resolve()
+    if not args.resident_manifest_dir:
+        raise SystemExit("finalize requires --resident-manifest-dir (dir with the "
+                         "sibling expert-manifest.json whose residents were hardlinked)")
+    from mtplx.expert_streaming_models import get_model_spec
+    from mtplx.expert_manifest import load_expert_manifest, verify_expert_manifest
+    sys.path.insert(0, str(REPO / "scripts"))
+    import convert_deepseek_v41_streamed as conv
+
+    spec = get_model_spec(MODEL_KEY)
+    state = load_journal()
+    all_records: list[dict] = []
+    for d in sorted(state.values(), key=lambda x: x["srcidx"]):
+        all_records.extend(d.get("records", []))
+    want = len(ROUTED_LAYERS) * N_ROUTED_EXPERTS
+    if len(all_records) != want:
+        raise SystemExit(f"journal has {len(all_records)} records, expected {want}; write incomplete")
+
+    resident_src = Path(args.resident_manifest_dir).expanduser().resolve()
+    resident_manifest = load_expert_manifest(resident_src / "expert-manifest.json")
+    log(f"finalizing mxfp4 manifest: {len(all_records)} records, residents from {resident_manifest.model_key}")
+    manifest = conv.build_mxfp4_manifest(out, resident_manifest, spec, all_records,
+                                         require_pinned=True)
+    log(f"manifest: {len(manifest.records)} records, "
+        f"resident={manifest.resident_tensor_bytes/1024**3:.2f} GiB, "
+        f"routed={manifest.routed_expert_bytes/1024**3:.2f} GiB, digest={manifest.manifest_sha256[:12]}")
+    log("verifying (records + shards + sidecar) ...")
+    report = verify_expert_manifest(manifest, out, verify_records=True,
+                                    verify_shard_hashes=True, verify_sidecar_hash=True)
+    log(f"verify report: {json.dumps(report)}")
+    log("DONE (finalize)")
+    return 0
 
 
 def main() -> int:
@@ -298,6 +332,9 @@ def main() -> int:
         s.add_argument("--index", type=Path, required=True)
         s.add_argument("--config", type=Path, default=None)
         s.add_argument("--shards", default="1-46")
+        s.add_argument("--resident-manifest-dir", default=None,
+                       help="finalize: dir holding the sibling expert-manifest.json "
+                            "(resident section) whose residents were hardlinked into --out")
     args = ap.parse_args()
     return cmd_write(args) if args.cmd == "write" else cmd_finalize(args)
 
