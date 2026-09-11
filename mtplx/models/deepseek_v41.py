@@ -34,6 +34,14 @@ import numpy as np
 
 from mlx_lm.models.base import BaseModelArgs
 
+# W75: the model-owner progress heartbeat. Each settled per-chunk / per-layer
+# prefill eval below ticks it, so the stream stall watchdog (#86) can tell a
+# long-but-alive 16K prefill from a wedged owner. A monolithic 16K prefill
+# emits no token for ~200 s; without these ticks the heartbeat is frozen for
+# the whole prefill and a request slowed past the 300 s deadline (e.g. by a
+# spurious memory-pressure clear_cache) was killed with 0 tokens.
+from mtplx.progress_heartbeat import tick as _owner_progress_tick
+
 # Pure arithmetic reused from the V4 backend (imported, not copied), each verified
 # line-by-line against inference/model.py and re-checked by the W6 numpy parity
 # oracle (tests/models/test_deepseek_v41_parity.py):
@@ -2494,6 +2502,9 @@ class DeepseekV41Backbone(nn.Module):
                         arrays.append(a)
         if arrays:
             mx.eval(arrays)
+            # W75: a settled chunk-major prefill span -- proves the owner is
+            # alive so the stream stall watchdog does not kill a long prefill.
+            _owner_progress_tick()
 
     # -----------------------------------------------------------------------
     # W30 / kernel-ledger K16 -- layer-major chunked prefill
@@ -2735,6 +2746,9 @@ class DeepseekV41Backbone(nn.Module):
                     arrays.append(a)
         if arrays:
             mx.eval(arrays)
+            # W75: a settled layer-major (layer, chunk) prefill fence -- ticks
+            # the owner heartbeat so the stall watchdog sees progress.
+            _owner_progress_tick()
 
 
 class _ChunkEngramView:

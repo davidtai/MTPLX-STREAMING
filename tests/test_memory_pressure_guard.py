@@ -405,3 +405,137 @@ def test_bank_shrink_protect_active_never_evicts_the_live_session():
     evicted = bank.shrink_to_bytes(0, reason="memory_pressure_critical")
     assert evicted == 2
     assert bank.total_nbytes == 0
+
+
+# ---------------------------------------------------------------------------
+# W75: served DeepSeek-V4.1 streaming lane 16K prefill stall.
+#
+# The SSD-streamed expert lane sets the Metal limit to its ENGINE BUDGET (cap
+# minus runtime reserve: 73 GiB at an 80 GiB cap, 63 GiB at 70 GiB) -- a soft
+# target far below physical RAM. A legitimately-admitted 16K prefill peaks at
+# ~85 GB (the bounded per-chunk transient + the reclaimable expert cache using
+# real machine headroom), so active+cache/limit read 1.16 and the guard called
+# it CRITICAL every tick, firing the trim + clear_cache (which tore the buffer
+# pool out from under the live prefill -> re-fault thrash) and defeating the
+# graceful abort by oscillating the level. The request then rode to the 300 s
+# stall watchdog and died with 0 tokens.
+# ---------------------------------------------------------------------------
+
+
+def _streaming_state(*, limit, total_ram, expert_streaming=True):
+    caps = {"memory_limit_bytes": limit}
+    if total_ram is not None:
+        caps["total_ram_bytes"] = total_ram
+    return SimpleNamespace(
+        runtime=SimpleNamespace(
+            expert_streaming=object() if expert_streaming else None
+        ),
+        metal_memory_caps=caps,
+    )
+
+
+def test_streaming_prefill_headroom_reaches_the_machine_safe_ceiling():
+    # 128 GiB box, 73 GiB engine budget: system reserve is 16 GiB, so the safe
+    # ceiling is 112 GiB and the headroom lifts the guard limit 73 -> 112 GiB.
+    st = _streaming_state(limit=73 << 30, total_ram=128 << 30)
+    hr = srv._streaming_prefill_pressure_headroom_bytes(st)
+    assert hr == (112 << 30) - (73 << 30)
+
+
+def test_streaming_prefill_headroom_zero_for_non_streaming_lane():
+    st = _streaming_state(limit=73 << 30, total_ram=128 << 30, expert_streaming=False)
+    assert srv._streaming_prefill_pressure_headroom_bytes(st) == 0
+
+
+def test_streaming_prefill_headroom_falls_back_to_transient_without_ram():
+    st = _streaming_state(limit=73 << 30, total_ram=None)
+    hr = srv._streaming_prefill_pressure_headroom_bytes(st)
+    assert hr == int(srv._dsv41_prefill_transient_bytes())
+    assert hr > 0
+
+
+def test_streaming_prefill_headroom_zero_when_ceiling_below_limit():
+    # An explicit MTPLX_MEMORY_LIMIT_BYTES above the safe ceiling: no negative
+    # headroom, the guard keeps the configured limit.
+    st = _streaming_state(limit=120 << 30, total_ram=128 << 30)
+    assert srv._streaming_prefill_pressure_headroom_bytes(st) == 0
+
+
+def test_busy_streaming_prefill_transient_is_not_critical(monkeypatch):
+    # active+cache = 85 GiB > the 73 GiB engine budget (pre-W75 fraction 1.16,
+    # CRITICAL) but 0.76 of the 112 GiB safe ceiling: with the busy-prefill
+    # headroom the guard reads NORMAL, so no trim / clear_cache / abort.
+    st = _streaming_state(limit=73 << 30, total_ram=128 << 30)
+    monkeypatch.setattr(
+        srv,
+        "_mlx_memory_stats_live",
+        lambda: {
+            "ok": True,
+            "active_memory_bytes": 85 << 30,
+            "cache_memory_bytes": 0,
+        },
+    )
+    hr = srv._streaming_prefill_pressure_headroom_bytes(st)
+    level, fraction = srv._allocator_pressure_level(st, extra_limit_bytes=hr)
+    assert level == 1
+    assert fraction < 0.97
+    # Pre-W75 (no headroom) the identical footprint escalates to CRITICAL.
+    level0, frac0 = srv._allocator_pressure_level(st, extra_limit_bytes=0)
+    assert level0 == 4
+    assert frac0 > 1.02
+
+
+def test_allocator_extra_limit_still_escalates_near_the_safe_ceiling(monkeypatch):
+    # A genuine approach to physical RAM (108 GiB) is still CRITICAL even with
+    # the widened limit -- the guard is relaxed, not disabled.
+    st = _streaming_state(limit=73 << 30, total_ram=128 << 30)
+    monkeypatch.setattr(
+        srv,
+        "_mlx_memory_stats_live",
+        lambda: {
+            "ok": True,
+            "active_memory_bytes": 118 << 30,
+            "cache_memory_bytes": 0,
+        },
+    )
+    hr = srv._streaming_prefill_pressure_headroom_bytes(st)  # limit -> 112 GiB
+    level, fraction = srv._allocator_pressure_level(st, extra_limit_bytes=hr)
+    assert level == 4
+    assert fraction > 1.02
+
+
+def _critical_state(*, busy):
+    n = 1 if busy else 0
+    bank = FakeBank(total=0, max_bytes=8 << 30)  # empty -> nothing to evict
+    return bank, SimpleNamespace(
+        sessions=SimpleNamespace(bank=bank),
+        dashboard=SimpleNamespace(
+            last_memory_pressure_level=0,
+            in_flight=SimpleNamespace(count=lambda: n, session_ids=lambda: []),
+        ),
+        metal_memory_caps={"memory_limit_bytes": 100 << 30},
+    )
+
+
+def test_critical_trim_skips_clear_cache_while_a_request_is_in_flight(monkeypatch):
+    import mlx.core as _mx
+
+    calls = []
+    monkeypatch.setattr(_mx, "clear_cache", lambda: calls.append(1))
+    bank, state = _critical_state(busy=True)
+    run_one_tick(state, level=4, monkeypatch=monkeypatch)
+    # The trim still runs (bank empty -> 0 evicted), but clear_cache must NOT
+    # fire: it would tear the buffer pool out from under the live prefill.
+    assert bank.calls == [(0, "memory_pressure_critical")]
+    assert calls == []
+
+
+def test_critical_trim_clears_cache_when_idle(monkeypatch):
+    import mlx.core as _mx
+
+    calls = []
+    monkeypatch.setattr(_mx, "clear_cache", lambda: calls.append(1))
+    bank, state = _critical_state(busy=False)
+    run_one_tick(state, level=4, monkeypatch=monkeypatch)
+    assert bank.calls == [(0, "memory_pressure_critical")]
+    assert calls == [1]  # idle CRITICAL still reclaims the buffer pool
