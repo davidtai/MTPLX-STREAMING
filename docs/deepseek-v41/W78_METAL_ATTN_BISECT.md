@@ -132,6 +132,54 @@ whether `cache_append` / `attend` climb toward the census 3–7× as the residen
 grows — that would confirm the allocator/residency mechanism (and, per
 `[[never-exceed-the-memory-knob]]`, keep every run's `active_end_gib` under 96).
 
+## In-model census (window-32 follow-up)
+
+Window 32 ran the ballast sweep on Metal: with **88 GiB of ballast + churn every
+mode is still flat and ~2 ms/step** (full 2.26→2.72, reuse 2.00→1.96 across
+1K/4K/16K). So heap size and allocator churn do **not** reproduce the census
+6.6 ms/layer for Reuse at 16K. The isolated bench differs from the real decode in:
+the live cache/state after a real 16K prefill (comp_state frontier, index cache,
+engram), T growing by one every step across 40 layers (compile retrace / win-memo
+miss patterns), and the surrounding pipeline (async expert gathers whose drain
+lands inside the next attention fence).
+
+`--in-model` measures the attention ops **in situ on the real loaded model** with
+a live growing cache, reusing the ab_decode_env_levers loader (`_load_model`) and
+the decode stage-timing census (`_stage_timing_pass`) — the per-mode attention
+ms/layer come straight from the production `attn.<mode>` decode-stage mean, exactly
+what window 30 read. It runs three passes:
+
+  1. **full model** — real decode, T advancing one/step (does Reuse read ~6.6 ms?);
+  2. **expert switch stubbed** — `mlp.switch_mlp` → a no-op returning zeros (shared
+     expert kept), skipping the routed gather/gather_qmm. If attention drops from
+     ~6.6 to ~2 ms here, the async expert-gather drain was landing in the attention
+     fence;
+  3. **attention stubbed** — `attn` → a no-op returning zeros (the KV offset still
+     advances). Measures the rest of the step (frame wall, MoE, HC) with attention
+     removed.
+
+Exact window command (needs ~70 GiB with the model loaded — 60 GiB memory limit +
+the 16K KV — under the 96 GiB child cap with Qwen unloaded; ~3 prefills of 16K, so
+budget a few minutes, not the microbench's 3):
+
+```
+PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w78 \
+nice -n 19 /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python3 \
+  scripts/deepseek_v41/metal_decode_attn_bisect.py --in-model --gpu \
+  --model ~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4 \
+  --arms cell16k --context-tokens 16384 --memory-limit-gib 60 --max-kv 17408 \
+  --in-model-steps 30 \
+  --prompt-ids-file docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/prompt-ids-deepseek-v41.json \
+  --prompt-seed <SEED> \
+  --out docs/deepseek-v41/receipts/W78_in_model_w<WINDOW>.json
+```
+
+`<SEED>` is the seed present in the chosen prompt-ids fixture (the standard cell
+seed). The receipt records each pass's full `stage_timing_report` plus a per-mode
+`attn_ms_per_layer` summary; the printed table lines up (1)/(2)/(3) per mode so the
+6.6-vs-2 question is one row. `active_end_gib` in the receipt confirms the run
+stayed under 96 GiB.
+
 ## How to read it
 
 - The **16K/1K ratio** column per op is the O(T) tell. An op flat in T (ratio ≈ 1)

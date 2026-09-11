@@ -37,6 +37,16 @@ Levers (so the GPU window can attribute a cost):
   * ``--ballast-churn``      -- also alloc+free a ~16 MB transient per step between
     ops (mimic the per-token [1,T,512] concat-output churn).
 
+``--in-model`` (window-32 follow-up) is a separate mode: it measures the attention
+ops IN SITU on the REAL loaded model with a live cache that grows one token per
+step (reusing the ab_decode_env_levers loader + decode stage-timing census, not a
+re-implementation), under three pipeline conditions -- (1) full model, (2) the
+routed expert switch stubbed to a no-op (shared kept), (3) attention stubbed --
+to test whether attention alone is ~2 ms or the census 6.6 ms/layer in situ, and
+whether the async expert-gather drain is what lands in the attention fence.  It is
+a GPU-window mode (``--in-model --gpu``); ``--in-model --tiny`` validates the stub
+plumbing on a fake CPU model.
+
 Default device is **CPU** (so an accidental worker run never touches the Metal
 GPU during a benchmark window); pass ``--gpu`` in the exclusive GPU window.  The
 ``--tiny`` mode (tiny dims, CPU, T in {256,1024}) is the unit-test path that proves
@@ -694,6 +704,328 @@ def print_tables(receipt: dict) -> None:
             print(op.ljust(16) + cells + f"{r:>14}")
 
 
+# ===========================================================================
+# --in-model: the peel on the REAL loaded model with a live growing cache
+# ===========================================================================
+# Window 32: heap size + allocator churn (ballast) do NOT reproduce the census
+# 6.6 ms/layer for Reuse at 16K -- the isolated bench stays flat ~2 ms.  The real
+# decode differs in the live cache/state after a 16K prefill, T growing by one
+# each step across 40 layers, and the surrounding pipeline (async expert gathers
+# whose drain lands inside the next attention fence).  This mode measures the
+# attention ops IN SITU on the real layers under three pipeline conditions:
+#   (1) full model, real decode, T advancing one/step;
+#   (2) same, with the routed expert switch stubbed to a no-op (shared kept);
+#   (3) same, with attention stubbed to a no-op (measures the rest of the step).
+# It reuses the proven ab_decode_env_levers loader + census pass (no re-impl); the
+# per-mode attention ms/layer come straight from the production decode stage-timing
+# probe (``attn.<mode>`` mean_ms), exactly the census window 30 read.
+
+
+def _load_ab_module():
+    """Import the sibling ab_decode_env_levers.py for its model loader + census
+    pass (``_load_model`` / ``_stage_timing_pass`` / bench harness).  Its top level
+    imports only the standard library, so this is CPU-safe."""
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parent / "ab_decode_env_levers.py"
+    spec = importlib.util.spec_from_file_location("_w78_ab_decode_env_levers", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import ab module at {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _ZeroSwitch:
+    """Stub for a layer's ``mlp.switch_mlp`` (the streamed routed-expert seam):
+    returns the unweighted per-expert output as zeros ``[n, top_k, dim]``, so the
+    MoE combine yields just the shared expert (routed contribution zeroed).  Skips
+    the expensive routed gather + gather_qmm entirely.  cell16k does not use the
+    shared-overlap path, so the plain ``(xf, indices)`` call is the only one."""
+
+    def __call__(self, x, indices, *args, **kwargs):
+        return mx.zeros((x.shape[0], indices.shape[-1], x.shape[-1]), dtype=x.dtype)
+
+
+class _ZeroAttn:
+    """Stub for a layer's ``attn`` (``Attention.__call__``): returns a zero tensor
+    of the attention-input shape, so the Hyper-Connection folds a zero attention
+    contribution.  Skips qkv/append/gather/score/out and the ``attn.<mode>`` stage
+    bracket.  The KV cache offset still advances (backbone ``cache.advance`` is
+    independent of attention), so the decode loop stays valid."""
+
+    def __call__(self, x, positions, layer_cache, shared):
+        return mx.zeros_like(x)
+
+
+def _apply_stub(model, which: str):
+    """Swap in the expert / attention stub on every backbone layer; returns a
+    restore list.  ``which`` in {"experts", "attn"}."""
+    saved = []
+    for layer in model.layers:
+        if which == "experts":
+            saved.append((layer.mlp, "switch_mlp", layer.mlp.switch_mlp))
+            layer.mlp.switch_mlp = _ZeroSwitch()
+        elif which == "attn":
+            saved.append((layer, "attn", layer.attn))
+            layer.attn = _ZeroAttn()
+        else:
+            raise ValueError(which)
+    return saved
+
+
+def _restore_stub(saved):
+    for obj, name, orig in saved:
+        setattr(obj, name, orig)
+
+
+def _summarize_report(report: dict) -> dict:
+    """Pull the per-mode attention ms/layer and the key non-attention stages out of
+    a decode stage-timing report (``mean_ms`` is per-layer-per-token == ms/layer)."""
+    if not report or not report.get("enabled", False):
+        return {"enabled": False}
+    stages = report.get("stages", {})
+
+    def _mean(name):
+        s = stages.get(name)
+        return None if s is None else s.get("mean_ms")
+
+    dec = report.get("decode_breakdown", {}) or {}
+
+    def _dmean(name):
+        s = dec.get(name)
+        return None if s is None else s.get("mean_ms")
+
+    out = {
+        "enabled": True,
+        "frame_wall_ms_per_token": report.get("frame_wall_ms_per_token"),
+        "stage_sum_ms_per_token": report.get("stage_sum_ms_per_token"),
+        "tokens": report.get("tokens"),
+        "attn_ms_per_layer": {m: _mean("attn." + m) for m in _MODES},
+        "decode_breakdown_ms_per_layer": {
+            m: {
+                "cache_append": _dmean("attn." + m + ".cache_append"),
+                "compress_append": _dmean("attn." + m + ".compress_append"),
+                "select": _dmean("attn." + m + ".select"),
+            }
+            for m in _MODES
+        },
+        "non_attn_ms_per_layer": {
+            "moe.gate_topk": _mean("moe.gate_topk"),
+            "moe.routed_switch": _mean("moe.routed_switch"),
+            "moe.shared_expert": _mean("moe.shared_expert"),
+            "moe.combine": _mean("moe.combine"),
+            "hc.premix_sinkhorn": _mean("hc.premix_sinkhorn"),
+            "hc.combine": _mean("hc.combine"),
+        },
+        "per_token": {
+            "embed": _mean("embed"),
+            "final_norm": _mean("final_norm"),
+            "head": _mean("head"),
+            "sample": _mean("sample"),
+        },
+    }
+    return out
+
+
+def _tiny_full_args():
+    """A tiny full-model config that derives all four CSA modes (mirrors
+    tests/models/test_deepseek_v41_stage_timing.py ``_csa_args``, the proven
+    full-Model + stage-timing config)."""
+    return ModelArgs(
+        vocab_size=48, hidden_size=32, num_hidden_layers=8,
+        num_attention_heads=4, head_dim=16, qk_rope_head_dim=4,
+        q_lora_rank=12, o_lora_rank=8, o_groups=2,
+        moe_intermediate_size=16, n_routed_experts=8, num_experts_per_tok=2,
+        index_n_heads=2, index_head_dim=8, index_topk=5,
+        sliding_window=8, window_size=8, swiglu_limit=0.5,
+        compress_ratios=[0, 0, 2, 2, 2, 1, 1, 1],
+        kv_source_layer_ids=[2, 5], index_source_layer_ids=[2, 5, 6],
+        candidate_source_layer_id=5, candidate_topk_blocks=3, candidate_block_size=2,
+        rope_scaling={"rope_type": "yarn", "factor": 16, "beta_fast": 32,
+                      "beta_slow": 1, "original_max_position_embeddings": 65536},
+    )
+
+
+def _build_tiny_full_model(seed: int = 1):
+    """Full tiny ``Model`` with random weights (no artifact) for CPU validation."""
+    from mlx.utils import tree_flatten, tree_unflatten
+    from mtplx.models.deepseek_v41 import Model
+    args = _tiny_full_args()
+    model = Model(args)
+    mx.random.seed(seed)
+    new = []
+    for name, arr in tree_flatten(model.parameters()):
+        if arr.ndim == 1 and ("norm_weight" in name or name.endswith("norm.weight")):
+            v = 1.0 + 0.2 * mx.random.normal(arr.shape)
+        elif "attn_sink" in name:
+            v = 0.5 * mx.random.normal(arr.shape)
+        else:
+            v = 0.1 * mx.random.normal(arr.shape)
+        new.append((name, v.astype(mx.float32)))
+    model.update(tree_unflatten(new))
+    mx.eval(model.parameters())
+    return model, args
+
+
+class _TinyOps:
+    """The ops surface ``ab._stage_timing_pass`` needs, for the CPU tiny model."""
+
+    def input(self, ids_2d):
+        return mx.array(ids_2d)
+
+    def argmax_last(self, logits) -> int:
+        return int(mx.argmax(logits[0, -1]).item())
+
+    def sync(self, logits) -> None:
+        mx.eval(logits)
+
+
+def run_in_model(cfg: dict) -> dict:
+    """The three in-situ passes on the real (or tiny) model.  Reuses the ab loader
+    + census pass; applies the expert / attention stubs around passes (2) / (3)."""
+    ab = _load_ab_module()
+    tiny = cfg.get("tiny", False)
+    steps = int(cfg.get("steps", 4 if tiny else 30))
+    arm = cfg.get("arms", "cell16k")
+
+    if tiny:
+        # CPU fake-config validation: clean defaults (the proven stage-timing test
+        # config), NOT the cell16k GPU levers.  Only the stub plumbing is exercised.
+        mx.set_default_device(mx.cpu)
+        for k in ("MTPLX_DSV41_SELECTED_KEYS", "MTPLX_DSV41_KV_CHUNK_GROW",
+                  "MTPLX_DSV41_SELECT_FENCE"):
+            os.environ[k] = "0"
+        dsv41._ATTN_COMPILE = False
+        dsv41._ATTN_WIN_MEMO = False
+        model, args = _build_tiny_full_model(seed=int(cfg.get("seed", 1)))
+        ops = _TinyOps()
+        prompt_ids = list(range(1, 1 + int(cfg.get("prompt_len", 48))))
+        dims = {"hidden": args.hidden_size, "n_layers": args.num_hidden_layers,
+                "head_dim": args.head_dim, "n_heads": args.num_attention_heads}
+        prompt_meta = {"prompt_source": "tiny_synthetic", "prompt_tokens": len(prompt_ids)}
+        device = "cpu"
+    else:
+        mx.set_default_device(mx.gpu)
+        bench = ab._load_bench_module()
+        argv = [
+            "--model", str(cfg["model"]),
+            "--context-tokens", str(int(cfg.get("context_tokens", 16384))),
+            "--decode-tokens", str(steps),
+            "--max-kv", str(int(cfg.get("max_kv", 17408))),
+            "--memory-limit-gib", str(float(cfg.get("memory_limit_gib", 60.0))),
+            "--arms", arm,
+            "--out", "/dev/null",  # unused: we write our own receipt
+        ]
+        if cfg.get("prompt_ids_file"):
+            argv += ["--prompt-ids-file", str(cfg["prompt_ids_file"])]
+        if cfg.get("prompt_seed") is not None:
+            argv += ["--prompt-seed", str(int(cfg["prompt_seed"]))]
+        args = ab.build_parser().parse_args(argv)
+        ab._apply_arm_env(arm)  # cell16k: exactly the census arm
+        # This script imports dsv41 at top (before the arm), so the import-frozen
+        # globals must be re-synced from the arm env (the ab script imports dsv41
+        # lazily AFTER the arm, so it never needs this).
+        def _envon(key):
+            return (os.environ.get(key) or "").strip().lower() not in (
+                "", "0", "false", "no", "off", "auto")
+        dsv41._ATTN_COMPILE = _envon("MTPLX_DSV41_ATTN_COMPILE")
+        dsv41._ATTN_WIN_MEMO = _envon("MTPLX_DSV41_ATTN_WIN_MEMO")
+        if hasattr(dsv41, "_HC_COMPILE"):
+            dsv41._HC_COMPILE = _envon("MTPLX_DSV41_HC_COMPILE")
+        build_prompt = bench._load_build_prompt()
+        prompt_ids, prompt_meta = bench._resolve_prompt(
+            args, None, build_prompt, args.context_tokens
+        )
+        resident = ab._load_model(args, bench, mx)
+        model = resident.model
+        ops = bench._MLXOps(mx)
+        dims = {"hidden": args.context_tokens, "context_tokens": args.context_tokens,
+                "max_kv": args.max_kv, "memory_limit_gib": cfg.get("memory_limit_gib", 60.0)}
+        device = "gpu"
+
+    def _pass(label):
+        rep = ab._stage_timing_pass(
+            model=model, ops=ops, prompt_ids=list(prompt_ids), steps=steps
+        )
+        return {"label": label, "report": rep, "summary": _summarize_report(rep)}
+
+    passes = {}
+    # (1) full model
+    passes["full"] = _pass("full_model")
+    # (2) routed expert switch stubbed (keep shared)
+    saved = _apply_stub(model, "experts")
+    try:
+        passes["expert_stub"] = _pass("expert_switch_stubbed")
+    finally:
+        _restore_stub(saved)
+    # (3) attention stubbed (measure the rest of the step)
+    saved = _apply_stub(model, "attn")
+    try:
+        passes["attn_stub"] = _pass("attention_stubbed")
+    finally:
+        _restore_stub(saved)
+
+    receipt = {
+        "worker": "W78",
+        "script": "scripts/deepseek_v41/metal_decode_attn_bisect.py",
+        "mode": "in_model",
+        "device": device,
+        "tiny": tiny,
+        "arm": arm,
+        "steps": steps,
+        "dims": dims,
+        "prompt": prompt_meta,
+        "ballast_gib": 0.0,
+        "memory": {
+            "active_end_gib": _mem_gib("get_active_memory"),
+            "peak_gib": _mem_gib("get_peak_memory"),
+        },
+        "passes": passes,
+    }
+    return receipt
+
+
+def print_in_model(receipt: dict) -> None:
+    print(f"\n=== W78 --in-model [{receipt['device']}, arm={receipt['arm']}, "
+          f"steps={receipt['steps']}] ===")
+    print(f"dims: {receipt['dims']}   prompt: {receipt['prompt']}")
+    mem = receipt.get("memory", {})
+    print(f"active_end={mem.get('active_end_gib')} peak={mem.get('peak_gib')} GiB")
+    labels = [("full", "(1) full"), ("expert_stub", "(2) expert-stub"),
+              ("attn_stub", "(3) attn-stub")]
+    hdr = "attn ms/layer".ljust(16) + "".join(f"{lbl:>18}" for _k, lbl in labels)
+    print("\n-- attention ms/layer (decode stage-timing attn.<mode> mean) --")
+    print(hdr)
+    print("-" * len(hdr))
+    for mode in _MODES:
+        cells = ""
+        for key, _lbl in labels:
+            s = receipt["passes"][key]["summary"]
+            v = (s.get("attn_ms_per_layer") or {}).get(mode) if s.get("enabled") else None
+            cells += (f"{v:>18.4f}" if isinstance(v, (int, float)) else f"{'-':>18}")
+        print(mode.ljust(16) + cells)
+    print("\n-- whole step / non-attention (ms/token, ms/layer) --")
+    rows = [("frame_wall_ms_per_token", "frame_wall/tok", "frame_wall_ms_per_token"),
+            ("moe.routed_switch", "moe.routed/lyr", None),
+            ("moe.shared_expert", "moe.shared/lyr", None),
+            ("hc.premix_sinkhorn", "hc.premix/lyr", None),
+            ("hc.combine", "hc.combine/lyr", None)]
+    for key, lbl, top in rows:
+        cells = ""
+        for pk, _lbl in labels:
+            s = receipt["passes"][pk]["summary"]
+            if not s.get("enabled"):
+                cells += f"{'-':>18}"
+                continue
+            if top:
+                v = s.get(top)
+            else:
+                v = (s.get("non_attn_ms_per_layer") or {}).get(key)
+            cells += (f"{v:>18.4f}" if isinstance(v, (int, float)) else f"{'-':>18}")
+        print(lbl.ljust(16) + cells)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -720,8 +1052,57 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="override the T sweep (default 1024 4096 16384; tiny 256 1024)")
     p.add_argument("--iters", type=int, default=None)
     p.add_argument("--warmup", type=int, default=None)
+    # --in-model (window-32 follow-up): peel on the REAL loaded model, live cache.
+    p.add_argument("--in-model", action="store_true",
+                   help="measure the attention ops in situ on the real loaded model "
+                        "(three passes: full / expert-stub / attn-stub). GPU-window "
+                        "mode; --tiny validates the plumbing on a fake CPU model.")
+    p.add_argument("--model", type=str, default=None,
+                   help="--in-model --gpu: the streaming artifact path "
+                        "(default: ~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4)")
+    p.add_argument("--arms", type=str, default="cell16k",
+                   help="--in-model: the ab_decode_env_levers arm to apply (default cell16k)")
+    p.add_argument("--prompt-ids-file", type=str, default=None,
+                   help="--in-model --gpu: the exported server prompt ids fixture")
+    p.add_argument("--prompt-seed", type=int, default=None,
+                   help="--in-model --gpu: which seed's ids from --prompt-ids-file")
+    p.add_argument("--context-tokens", type=int, default=16384,
+                   help="--in-model --gpu: prefill length (default 16384)")
+    p.add_argument("--memory-limit-gib", type=float, default=60.0,
+                   help="--in-model --gpu: active-allocation memory limit (default 60)")
+    p.add_argument("--max-kv", type=int, default=17408,
+                   help="--in-model --gpu: max live KV tokens (default 17408)")
+    p.add_argument("--in-model-steps", type=int, default=None,
+                   help="--in-model: decode steps per pass (default 30 gpu / 4 tiny)")
     p.add_argument("--out", type=str, default=None, help="write the JSON receipt here")
     a = p.parse_args(argv)
+
+    if a.in_model:
+        if not (a.gpu or a.tiny):
+            p.error("--in-model requires --gpu (real model) or --tiny (CPU fake model)")
+        if a.gpu and a.tiny:
+            p.error("--in-model: choose --gpu OR --tiny, not both")
+        cfg = {
+            "tiny": a.tiny,
+            "arms": a.arms,
+            "model": a.model or os.path.expanduser(
+                "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"),
+            "prompt_ids_file": a.prompt_ids_file,
+            "prompt_seed": a.prompt_seed,
+            "context_tokens": a.context_tokens,
+            "memory_limit_gib": a.memory_limit_gib,
+            "max_kv": a.max_kv,
+        }
+        if a.in_model_steps is not None:
+            cfg["steps"] = a.in_model_steps
+        receipt = run_in_model(cfg)
+        print_in_model(receipt)
+        if a.out:
+            os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+            with open(a.out, "w") as f:
+                json.dump(receipt, f, indent=2, default=str)
+            print(f"\nreceipt -> {a.out}")
+        return 0
 
     cfg = {
         "tiny": a.tiny,
