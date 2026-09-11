@@ -85,8 +85,16 @@ def _read_components(fd, record):
 # spec wiring
 # --------------------------------------------------------------------------
 def test_spec_swiglu_limit_values():
-    assert get_model_spec(KEY).swiglu_limit == 10.0
-    others = {k: v.swiglu_limit for k, v in MODEL_SPECS.items() if k != KEY}
+    # Both DeepSeek-V4.1-Flash streaming specs carry the reference +/-10 clamp:
+    # the affine-Q2 spec (KEY) and the native-mxfp4 spec derived from it via
+    # ``replace`` (W15), which inherits ``swiglu_limit=10.0`` unchanged
+    # (config text_config.swiglu_limit=10.0). Every other model (hy3 / glm)
+    # leaves it None so the plain-swiglu path stays byte-for-byte identical.
+    clamped = {"deepseek-v41-flash-expert-q2", "deepseek-v41-flash-expert-mxfp4"}
+    assert KEY in clamped
+    for key in clamped:
+        assert get_model_spec(key).swiglu_limit == 10.0
+    others = {k: v.swiglu_limit for k, v in MODEL_SPECS.items() if k not in clamped}
     assert set(others.values()) == {None}, others
 
 

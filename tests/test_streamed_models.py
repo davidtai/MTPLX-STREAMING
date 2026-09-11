@@ -439,6 +439,9 @@ class _OverlapPending:
     def release_miss(self, ready) -> None:
         ready.release(synchronize=False)
 
+    def abort(self, error: BaseException) -> None:
+        self.events.append(f"abort:{type(error).__name__}")
+
     def close(self) -> None:
         self.events.append("close")
 
@@ -490,7 +493,7 @@ def test_streamed_decode_evaluates_shared_work_before_waiting_for_misses(
     runtime = _OverlapRuntime(events)
     switch = HotExpertSwitchGLU(runtime, 1)
 
-    def fake_q4(selected, _binding, *, group_size, bits):
+    def fake_q4(selected, _binding, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         assert bits == 4
         events.append("miss-q4")
@@ -665,7 +668,7 @@ def test_component_bank_overlaps_hit_and_shared_work_with_incremental_misses(
     events: list[str] = []
     pending = _BankOverlapPending(events)
 
-    def fake_q4(selected, bindings, *, group_size, bits):
+    def fake_q4(selected, bindings, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         assert bits == 4
         events.append(f"q4:{tuple(item.expert for item in bindings)}")
@@ -711,7 +714,7 @@ def test_component_bank_claims_runnable_work_immediately_before_dispatch(
         pipeline_ledger=ledger,
     )
 
-    def fake_q4(selected, bindings, *, group_size, bits):
+    def fake_q4(selected, bindings, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         assert bits == 4
         events.append(f"q4:{tuple(item.expert for item in bindings)}")
@@ -931,7 +934,7 @@ def test_128k_prefill_preserves_bounded_routed_then_shared_order(
     runtime = _OverlapRuntime(events)
     switch = HotExpertSwitchGLU(runtime, 1)
 
-    def fake_q4(selected, _binding, *, group_size, bits):
+    def fake_q4(selected, _binding, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         assert bits == 4
         events.append("routed-q4")
@@ -1918,7 +1921,7 @@ def test_descriptor_bits_reach_direct_slot_switch(
     runtime.spec.quant_bits = 2
     observed_bits: list[int] = []
 
-    def observe_qmm(selected, _binding, *, group_size, bits):
+    def observe_qmm(selected, _binding, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         observed_bits.append(bits)
         return selected
@@ -1957,7 +1960,7 @@ def test_descriptor_bits_reach_component_bank_all_hit_switch(
     runtime.begin_split_route = unexpected_split
     observed_bits: list[int] = []
 
-    def observe_qmm(selected, _bindings, *, group_size, bits):
+    def observe_qmm(selected, _bindings, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         observed_bits.append(bits)
         return selected
@@ -1978,7 +1981,7 @@ def test_descriptor_bits_reach_component_bank_split_hit_and_misses(
     runtime.spec.quant_bits = 2
     observed: list[tuple[tuple[int, ...], int]] = []
 
-    def observe_qmm(selected, bindings, *, group_size, bits):
+    def observe_qmm(selected, bindings, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         observed.append((tuple(binding.expert for binding in bindings), bits))
         return selected
@@ -2003,7 +2006,7 @@ def test_descriptor_bits_reach_mapped_switch(
     )
     observed_bits: list[int] = []
 
-    def observe_qmm(selected, _mapped, *, group_size, bits):
+    def observe_qmm(selected, _mapped, *, group_size, bits, swiglu_limit=None, codec="affine"):
         assert group_size == 64
         observed_bits.append(bits)
         return selected
@@ -2651,6 +2654,8 @@ def test_component_bank_all_hit_decode_keeps_router_order_without_split_route_op
         *,
         group_size: int,
         bits: int,
+        swiglu_limit: float | None = None,
+        codec: str = "affine",
     ) -> mx.array:
         assert group_size == spec.quant_group_size
         assert bits == spec.quant_bits
@@ -2741,6 +2746,8 @@ def test_global_component_bank_all_hit_decode_binds_without_reads(
             *,
             group_size: int,
             bits: int,
+            swiglu_limit: float | None = None,
+            codec: str = "affine",
         ) -> mx.array:
             observed.append(
                 tuple(
@@ -2819,6 +2826,8 @@ def test_component_bank_all_hit_decode_preserves_route_waves_counters_and_shared
         *,
         group_size: int,
         bits: int,
+        swiglu_limit: float | None = None,
+        codec: str = "affine",
     ) -> mx.array:
         assert group_size == spec.quant_group_size
         assert bits == spec.quant_bits
@@ -2955,6 +2964,8 @@ def test_component_bank_all_hit_decode_releases_pins_on_q4_error(
             *,
             group_size: int,
             bits: int,
+            swiglu_limit: float | None = None,
+            codec: str = "affine",
         ) -> mx.array:
             nonlocal q4_calls
             assert group_size == spec.quant_group_size
