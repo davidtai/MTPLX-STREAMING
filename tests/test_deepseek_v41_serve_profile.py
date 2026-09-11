@@ -244,6 +244,61 @@ def test_discount_zero_for_hy3_like_manifest() -> None:
     assert text_only_resident_discount(manifest, _Spec(mtp_included=False)) == 0
 
 
+def test_session_bank_near_prefix_and_store_on_prefill_off_for_mxfp4() -> None:
+    # W22: a KV-only near-prefix restore desyncs the engram hashing at layers
+    # 1/14 (silent wrong output on warm turns) and the SSD prompt-cache path
+    # fails closed, so both must be off for this model until W26 serialises the
+    # engram hash history into the cache state.
+    profiles = load_expert_profiles()
+    child_env = dict(profiles[PROFILE_NAME].child_env)
+    assert child_env.get("MTPLX_SESSION_NEAR_PREFIX_RESTORE") == "0"
+    assert child_env.get("MTPLX_SESSION_STORE_ON_PREFILL") == "0"
+    assert child_env.get("MTPLX_ENGRAM_CACHE_LIMIT") == "2GiB"
+
+
+def test_session_bank_gate_disables_the_generation_features(monkeypatch) -> None:
+    # The child_env, applied to the serve daemon, actually turns the features
+    # off at their generation-path env gates.
+    from mtplx.expert_cli import apply_expert_profile_child_env
+    from mtplx.generation import (
+        _near_prefix_restore_enabled,
+        _store_on_prefill_env_enabled,
+    )
+
+    profiles = load_expert_profiles()
+
+    class _Args:
+        _resolved_expert_profile = profiles[PROFILE_NAME]
+
+    environ: dict[str, str] = {}
+    apply_expert_profile_child_env(_Args(), environ)
+    for key, value in environ.items():
+        monkeypatch.setenv(key, value)
+    assert _near_prefix_restore_enabled() is False
+    assert _store_on_prefill_env_enabled() is False
+
+
+def test_hy3_profiles_do_not_gate_the_session_bank() -> None:
+    # hy3/glm are untouched: they never set the session-bank kill switches, so
+    # the engine's default (bank on) still applies to them.
+    profiles = load_expert_profiles()
+    for name in ("hy3-oq2e-64", "hy3-oq2e-88", "hy3-oq2e-96"):
+        child_env = dict(profiles[name].child_env)
+        assert "MTPLX_SESSION_NEAR_PREFIX_RESTORE" not in child_env
+        assert "MTPLX_SESSION_STORE_ON_PREFILL" not in child_env
+
+
+def test_expert_profile_choices_are_registry_derived() -> None:
+    # No-flags serve forwards the auto-resolved profile name to the daemon
+    # child, which re-parses it against these choices.
+    from mtplx.expert_cli import expert_profile_choices
+
+    choices = expert_profile_choices()
+    assert "auto" in choices
+    assert PROFILE_NAME in choices
+    assert {"hy3-oq2e-64", "hy3-oq2e-88", "hy3-oq2e-96"} <= set(choices)
+
+
 def test_hy3_promoted_configs_unchanged() -> None:
     # Adding the deepseek profile must not perturb the hy3 promoted profiles.
     profiles = load_expert_profiles()
