@@ -8,6 +8,7 @@ directly.  CPU only.  Writes .benchmark-artifacts/deepseek-v41/w9/mlx_dense/*.np
 (git-ignored) + an index json.
 """
 from __future__ import annotations
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -36,6 +37,9 @@ def deq(x):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--max-layer", type=int, default=2, help="export dense for layers 0..max-layer (default 2; 39 = all backbone)")
+    a = ap.parse_args()
     from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming
     OUT.mkdir(parents=True, exist_ok=True)
     r = load_deepseek_v41_streaming(
@@ -50,7 +54,7 @@ def main():
         np.save(OUT / fn, arr)
         index[f"L{L}/{key}"] = fn
 
-    for L in (0, 1, 2):
+    for L in range(a.max_layer + 1):
         layer = m.model.layers[L]
         attn = layer.attn
         for k in ("wq_a", "wq_b", "wkv", "wo_a", "wo_b"):
@@ -61,14 +65,16 @@ def main():
         if attn.compressor is not None:
             c = attn.compressor
             save(L, "attn/compressor/wkv", deq(c.wkv))
-            save(L, "attn/compressor/wgate", deq(c.wgate))
+            if getattr(c, "wgate", None) is not None:   # ratio>1 only (ratio==1 is a plain projection)
+                save(L, "attn/compressor/wgate", deq(c.wgate))
             save(L, "attn/compressor/norm", deq(c.norm_weight))
         if attn.indexer is not None:
             ix = attn.indexer
             save(L, "attn/indexer/wq_b", deq(ix.wq_b))
-            save(L, "attn/indexer/wk", deq(ix.wk))
             save(L, "attn/indexer/weights_proj", deq(ix.weights_proj))
-            save(L, "attn/indexer/k_norm", deq(ix.k_norm_weight))
+            if getattr(ix, "wk", None) is not None:      # owns_k (kv_source) layers only
+                save(L, "attn/indexer/wk", deq(ix.wk))
+                save(L, "attn/indexer/k_norm", deq(ix.k_norm_weight))
         save(L, "attn_norm", deq(layer.attn_norm_weight))
         save(L, "ffn_norm", deq(layer.ffn_norm_weight))
         for k in ("hc_attn_fn", "hc_attn_base", "hc_attn_scale", "hc_ffn_fn", "hc_ffn_base", "hc_ffn_scale"):

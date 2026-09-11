@@ -150,6 +150,40 @@ the top-6, gate weight `|Δw| = 0`.** The gate is not quantized and is bit-ident
 the 19/31 top-6 agreement seen in the full run is entirely the q2-perturbed MoE input
 flipping borderline routes, not a gate defect.
 
+## Full-depth (40-layer) "no bug" check (`ref_ladder_full.py` + `mlx_dump_full.py`)
+
+Runs the torch reference for all 40 backbone layers as **R2** (our q8 dense + our Q2
+experts + reference router) against the MLX full forward at integration
+`2d566618` (W11's streamed ±10 SwiGLU clamp applied). Per-layer `layer_out`
+**global cosine ≥ 0.99958 at every layer — no layer below 0.999**, and every
+structural seam passes:
+
+| seam | layer | attn g / moe g / layer g |
+|------|-------|--------------------------|
+| kv_source+idx (2nd compressor) | 2 | 0.9989 / 0.9999 / 0.9999 |
+| kv_source (2nd compressor)     | 8 | 0.9994 / 0.9999 / 1.0000 |
+| kv_source+engram               | 14 | 0.9990 / 0.9999 / 1.0000 |
+| kv_source+candidate (ratio 1)  | 20 | 0.9984 / 1.0000 / 1.0000 |
+| Reindex                        | 24 | 0.9971 / 1.0000 / 1.0000 |
+| Reindex                        | 32 | 0.9941 / 0.9937 / 1.0000 |
+| Reindex                        | 36 | 0.9897 / 1.0000 / 1.0000 |
+| last backbone                  | 39 | 0.9788 / 0.9710 / 1.0000 |
+
+Receipt: `torchref_ladder_full.json` (full 40-row table). Reading:
+- **`layer_out` global cos is the bug signal** (magnitude-weighted): ≥0.99958
+  everywhere ⇒ the Reindex / Reuse / candidate / second-compressor paths are
+  faithful. A port bug would tank the global cos at its seam; none does.
+- The **`attn`/`moe` global cos gently declines with depth** (attn 0.995→0.979) and
+  the **per-position min-cos drops at L37–39** (0.89/0.77/0.59). This is the proven
+  **fp32(R2)-vs-bf16(MLX) activation-storage compounding** (~0.995/op from
+  `isolate_wkv.py`), concentrated at low-norm positions; the global cos shows it is
+  aggregate-negligible, not a divergence.
+- **The clamp is load-bearing at depth.** Against the *unclamped* forward (pre-W11)
+  the same check showed a sharp tail break — L39 `moe` 0.891, `attn` 0.809, `layer`
+  min-cos 0.211 — which the ±10 clamp removes (L39 `moe` 0.891→0.971). W11's streamed
+  clamp is required for reference parity at layers ≳15 (where W11 measured
+  gate/up pre-activations of 72/78, 7–8× the limit).
+
 ## Why the probe emits junk (now proven, not hypothesized)
 
 The junk (`Kasipak`/`potentially` at scattered positions, 16/30 correct) is **q2
