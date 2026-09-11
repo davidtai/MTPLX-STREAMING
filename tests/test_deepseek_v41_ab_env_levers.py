@@ -74,6 +74,8 @@ _SFK = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"  # W58 / K28: fused mask+sink+softma
 _LFX = "MTPLX_DSV41_LAYOUT_FIX"              # W56 / K27 F1: sorted routed gather (set by prefill_best*)
 _DAK = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fused decode/verify MLA attention Metal kernel
 _MLXBUF = "MLX_MAX_MB_PER_BUFFER"        # K14 / W63: MLX command-buffer MB cap passthrough
+_PWS = "MTPLX_DSV41_PIN_WORKING_SET"     # W64 / R3-pin: post-prefill pinned working set
+_DRP = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 / K24 revived: pinned device route
 # The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
 # PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
 # NOT part of all_levers, so they never join the "all-on" independence invariant.
@@ -87,7 +89,7 @@ _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50
 # + the three W50 score-path keys + the W59 K30 selected-key gather boolean + the
 # W58 K28 fused-softmax-kernel boolean + the K27 layout_fix boolean (the W58
 # prefill_best* full-stack arms set it) + the W60 K29 decode-attention-kernel boolean.
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF, _DC)
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF, _DC, _PWS, _DRP)
 
 ALL_ARMS = [
     "control",
@@ -101,6 +103,8 @@ ALL_ARMS = [
     "attn_win_memo",
     "draft_compile",
     "device_route",
+    "pin_ws",
+    "device_route_pinned",
     "verify_single_barrier",
     "prefill_dense_experts",
     "dense_min32",
@@ -143,6 +147,10 @@ EXPECTED_ON = {
     "attn_win_memo": {_WM},
     "draft_compile": set(),  # its only key is _DC, tracked in EXPECTED_DRAFT
     "device_route": set(),   # its only key is _DR, tracked in EXPECTED_DEVICE
+    # W64 pin_ws: only _PWS (tracked in EXPECTED_PIN_WS). W71 device_route_pinned:
+    # _PWS + _DR + _DRP (tracked in EXPECTED_PIN_WS / EXPECTED_DEVICE / EXPECTED_DEVICE_PINNED).
+    "pin_ws": set(),
+    "device_route_pinned": set(),
     "verify_single_barrier": set(),  # its only key is _VSB, tracked in EXPECTED_VERIFY
     # W51: the dense-experts arms all ride layer-major; the dense boolean (_PD) and
     # the value knobs are tracked separately, so _LM is the only _ALL_KEYS member.
@@ -199,7 +207,16 @@ EXPECTED_ON = {
 # it is not part of all_levers). Only the standalone device_route arm sets it --
 # W44/window-19 showed it is NOT exact on the real model (unpinned deferred gather
 # vs mid-decode slot recycling), so it is OUT of stack_a until parity is clean.
-EXPECTED_DEVICE = {arm: (arm == "device_route") for arm in ALL_ARMS}
+# W71: device_route_pinned ALSO pins _DR ("1") -- it arms the backbone cold
+# recovery -- alongside its own _DRP + _PWS, so _DR is set for both arms.
+EXPECTED_DEVICE = {arm: (arm in ("device_route", "device_route_pinned")) for arm in ALL_ARMS}
+# W71 K24-revived: the pinned-device-route boolean (_DRP). Only device_route_pinned.
+EXPECTED_DEVICE_PINNED = {arm: (arm == "device_route_pinned") for arm in ALL_ARMS}
+# W64/W71: the pinned-working-set value (_PWS). pin_ws + device_route_pinned pin "all".
+EXPECTED_PIN_WS = {
+    arm: ("all" if arm in ("pin_ws", "device_route_pinned") else None)
+    for arm in ALL_ARMS
+}
 # W61 K31: verify single-barrier (default ON in code; the arm pins it explicitly).
 EXPECTED_VERIFY = {arm: (arm == "verify_single_barrier") for arm in ALL_ARMS}
 # W65 K33: DSpark draft-block compile (separate boolean, not in _ALL_KEYS -- like
@@ -238,6 +255,8 @@ EXPECTED_HEAD = {
     "attn_win_memo": None,
     "draft_compile": None,
     "device_route": None,
+    "pin_ws": None,
+    "device_route_pinned": None,
     "verify_single_barrier": None,
     "prefill_dense_experts": None,
     "dense_min32": None,
@@ -412,11 +431,19 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
             assert os.environ.get(k) == "1", f"{arm}: {k} should be '1'"
         else:
             assert k not in os.environ, f"{arm}: {k} should be force-unset"
-    # the device-route boolean is set for exactly its arms (device_route, stack_a).
+    # the device-route boolean is set for exactly its arms (device_route +
+    # device_route_pinned, which arms the backbone recovery too).
     if EXPECTED_DEVICE[arm]:
         assert os.environ.get(_DR) == "1", f"{arm}: {_DR} should be '1'"
     else:
         assert _DR not in os.environ, f"{arm}: {_DR} should be force-unset"
+    # W71: the pinned-device-route boolean (only device_route_pinned).
+    if EXPECTED_DEVICE_PINNED[arm]:
+        assert os.environ.get(_DRP) == "1", f"{arm}: {_DRP} should be '1'"
+    else:
+        assert _DRP not in os.environ, f"{arm}: {_DRP} should be force-unset"
+    # W64/W71: the pinned-working-set value (pin_ws + device_route_pinned -> "all").
+    assert os.environ.get(_PWS) == EXPECTED_PIN_WS[arm], f"{arm}: {_PWS}"
     # the verify single-barrier boolean is set for exactly its arm (default ON in
     # the code; the preset pins it explicitly so a "0" baseline can A/B the delta).
     if EXPECTED_VERIFY[arm]:
@@ -576,6 +603,8 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_DAK] = "bogus"
     os.environ[_MLXBUF] = "bogus"
     os.environ[_DC] = "bogus"
+    os.environ[_PWS] = "bogus"
+    os.environ[_DRP] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -588,6 +617,9 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
                 assert r["arm_env"][k] is None, (r["arm"], k)
         # the device-route boolean and the head codec are recorded per arm.
         assert (r["arm_env"].get(_DR) == "1") == EXPECTED_DEVICE[r["arm"]], r["arm"]
+        # W71: the pinned-device-route boolean + the pinned-working-set value.
+        assert (r["arm_env"].get(_DRP) == "1") == EXPECTED_DEVICE_PINNED[r["arm"]], r["arm"]
+        assert r["arm_env"].get(_PWS) == EXPECTED_PIN_WS[r["arm"]], r["arm"]
         assert (r["arm_env"].get(_VSB) == "1") == EXPECTED_VERIFY[r["arm"]], r["arm"]
         assert (r["arm_env"].get(_DC) == "1") == EXPECTED_DRAFT[r["arm"]], r["arm"]
         assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]

@@ -95,6 +95,16 @@ PIN_WORKING_SET_ENV = "MTPLX_DSV41_PIN_WORKING_SET"  # W64 (R3-pin): post-prefil
 # ``pin_working_set`` (W64_PINNED_WORKING_SET.md).
 PIN_REFRESH_TOKENS_ENV = "MTPLX_DSV41_PIN_REFRESH_TOKENS"  # W64: re-rank every N
 # decode epochs (0/unset = pin once after prefill).
+DEVICE_ROUTE_PINNED_ENV = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 (K24 revived):
+# the barrier-free device route GUARDED BY the W64 pins -- gather over a PINNED-only
+# expert->slot LUT, defer the all-pinned check, and recompute any not-all-pinned
+# layer on the fenced path. Because a pinned slot never recycles on normal decode
+# admission (W64), the deferred gather over pinned slots cannot race a recycle (the
+# W44 window-19 failure); a force-evicted pin is caught by the flush + recomputed.
+# Byte-identical to fenced; the ``device_route_pinned`` arm pairs it with pin_ws
+# (pin all keys) so every all-hit layer is an all-pinned layer. Its effect is the
+# barrier-free-layers-per-token in receipt ``device_route_pinned``
+# (W71_DEVICE_ROUTE_PINNED.md).
 PREFILL_DENSE_ENV = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"  # K26 (W51): prefill-only
 # "dequantize once, matmul dense" expert path. At the 16K layer-major prefill the
 # mxfp4 gs32 gather_qmm is ALU/dequant-bound (W47: ~2.9 TFLOPS); this dequantizes
@@ -195,6 +205,7 @@ ALL_LEVER_ENVS = (
     PIN_WORKING_SET_ENV,
     PIN_REFRESH_TOKENS_ENV,
     MLX_MAX_MB_PER_BUFFER_ENV,
+    DEVICE_ROUTE_PINNED_ENV,
 )
 
 
@@ -207,7 +218,7 @@ def _preset(
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
     layout_fix=None, down_k_pad=None, selected_keys=None,
     softmax_kernel=None, decode_attn_kernel=None, mlx_max_mb_per_buffer=None,
-    pin_working_set=None, pin_refresh=None,
+    pin_working_set=None, pin_refresh=None, device_route_pinned=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -248,6 +259,7 @@ def _preset(
         PIN_WORKING_SET_ENV: pin_working_set,
         PIN_REFRESH_TOKENS_ENV: pin_refresh,
         MLX_MAX_MB_PER_BUFFER_ENV: mlx_max_mb_per_buffer,
+        DEVICE_ROUTE_PINNED_ENV: device_route_pinned,
     }
 
 
@@ -270,6 +282,17 @@ ARM_PRESETS = {
     # barrier-free device route could take race-free. Byte-identical (cache policy
     # only) -- decode ids must match control; only residency trajectory differs.
     "pin_ws": _preset(pin_working_set="all"),
+    # W71 (K24 revived): the barrier-free device route guarded by the W64 pins.
+    # Pins the WHOLE resident set per layer (pin_working_set="all" -> every layer
+    # fully static) and arms the pinned device path + device route, so every
+    # all-hit layer is an all-pinned layer taken barrier-free at zero recycle risk
+    # (device_route="1" arms the backbone recovery; device_route_pinned="1" selects
+    # the pinned-only LUT + all-pinned deferred check). Byte-identical to control:
+    # the decode ids must match; only the residency trajectory + host-sync count
+    # differ. ``device_route_pinned.barrier_free_layers_per_flush`` reads the win.
+    "device_route_pinned": _preset(
+        pin_working_set="all", device_route="1", device_route_pinned="1"
+    ),
     "verify_single_barrier": _preset(verify_single="1"),    # W61 K31: 1 barrier/layer for small-M verify (default ON)
     # W51 K26: prefill dense experts, armed on the 16K layer-major schedule it
     # targets (the read-once bank pass W47 measured the ALU-bound gather on).
@@ -1023,6 +1046,24 @@ def _pin_telemetry(runtime) -> dict | None:
     return tel
 
 
+def _device_route_pinned_telemetry(runtime) -> dict | None:
+    """W71 pinned-device-route barrier-free-layer telemetry off the runtime
+    (barrier-free / recovered layers per flush). None when the runtime lacks the
+    W71 surface (older build); a compact off marker when the lever never ran."""
+    getter = getattr(runtime, "device_route_pinned_telemetry", None)
+    if not callable(getter):
+        return None
+    try:
+        tel = getter()
+    except Exception:
+        return None
+    if not isinstance(tel, dict):
+        return None
+    if not tel.get("enabled") and not tel.get("flushes"):
+        return {"enabled": False}
+    return tel
+
+
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
     if getattr(args, "decode_mode", "ar") == "dspark":
@@ -1120,6 +1161,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # W64 R3-pin: pinned count per layer + all-pinned-hit rate per token
             # (the layer fraction a barrier-free device route could take race-free).
             "pin_working_set": _pin_telemetry(runtime)
+            if runtime is not None
+            else None,
+            # W71: barrier-free layers per token the pinned device route actually
+            # kept (vs recovered fenced) over this arm -- the K24-revived win read.
+            "device_route_pinned": _device_route_pinned_telemetry(runtime)
             if runtime is not None
             else None,
             # W60/K29 fused-decode-attention engagement (calls/rows/split_calls/
