@@ -35,7 +35,7 @@ from mlx.utils import tree_flatten, tree_unflatten
 import mtplx.deepseek_v41_convert as dc
 from mtplx.cache_state import CacheSnapshot, restore_cache, snapshot_cache
 from mtplx.engram_v41 import EngramV41, NgramHashState, n_hash_cols
-from mtplx.models.deepseek_v41 import DeepseekV41Cache, Model, ModelArgs
+from mtplx.models.deepseek_v41 import Model, ModelArgs
 from mtplx.mtp_patch import MTPContract
 from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
 
