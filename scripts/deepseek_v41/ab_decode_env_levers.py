@@ -110,6 +110,13 @@ SOFTMAX_KERNEL_ENV = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"  # W58 / K28: fuse the
 # masked_scores/ex/concat intermediate).  Prefill + one-shot only, GPU-only (CPU
 # falls back to eager).  Reassociation-level vs control (greedy-identical, <=1e-6),
 # NOT byte-identical.  Composes with the lean path (see prefill_lean_k28).
+DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fuse the
+# M=1 decode / K+1 verify MLA attention step -- QK^T score + CSA/causal mask +
+# per-head value-0 sink + f32 softmax + PV -- into ONE mx.fast.metal_kernel dispatch
+# per layer, online-softmax over key tiles (no [64,T] score row).  Decode + small-M
+# verify only (prefill untouched), GPU-only (CPU falls back to the eager one-shot).
+# Reassociation-level vs control (greedy-identical, <=1e-6), NOT byte-identical.
+# LEFT OUT of stack_a until the MTPLX_GPU_PARITY window is clean (W60 report).
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -140,6 +147,7 @@ ALL_LEVER_ENVS = (
     SCORE_KEY_CHUNK_ENV,
     SCORE_PATH_ENV,
     SOFTMAX_KERNEL_ENV,
+    DECODE_ATTN_KERNEL_ENV,
     LAYOUT_FIX_ENV,
     DOWN_K_PAD_ENV,
 )
@@ -151,7 +159,7 @@ def _preset(
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
     head=None, score_dtype=None, score_key_chunk=None, score_path=None,
-    softmax_kernel=None,
+    softmax_kernel=None, decode_attn_kernel=None,
     layout_fix=None, down_k_pad=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
@@ -161,7 +169,8 @@ def _preset(
     matmul dtype), ``score_key_chunk`` a positive-int string (W50/K25 split-K chunk
     width), ``score_path`` a "lean" value (W50 f32 pass-cut one-shot),
     ``softmax_kernel`` a "1"/None boolean (W58/K28, the fused mask+sink+softmax
-    Metal kernel); the rest a "1"/None boolean."""
+    Metal kernel), ``decode_attn_kernel`` a "1"/None boolean (W60/K29, the fused
+    decode/verify MLA attention Metal kernel); the rest a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -181,6 +190,7 @@ def _preset(
         SCORE_KEY_CHUNK_ENV: score_key_chunk,
         SCORE_PATH_ENV: score_path,
         SOFTMAX_KERNEL_ENV: softmax_kernel,
+        DECODE_ATTN_KERNEL_ENV: decode_attn_kernel,
         LAYOUT_FIX_ENV: layout_fix,
         DOWN_K_PAD_ENV: down_k_pad,
     }
@@ -291,6 +301,14 @@ ARM_PRESETS = {
     "prefill_best_nok28": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", layout_fix="1",
     ),
+    # W60 K29: the fused decode / verify MLA attention Metal kernel -- QK^T score +
+    # CSA/causal mask + per-head value-0 sink + f32 softmax + PV in ONE dispatch per
+    # layer (online-softmax over key tiles, no [64,T] score row).  Standalone, to
+    # isolate the fused-decode-attention delta against control on the 1K decode
+    # shape (mode-agnostic: all four CSA modes route through it).  Decode + small-M
+    # verify only (prefill untouched).  Reassociation-level (greedy-identical),
+    # NOT byte-identical.  NOT in stack_a until the MTPLX_GPU_PARITY window is clean.
+    "decode_attn_kernel": _preset(decode_attn_kernel="1"),
 }
 
 
@@ -356,7 +374,8 @@ def build_parser() -> argparse.ArgumentParser:
         "dense_min32, dense_batch16, dense_f32, both, all_levers, stack_a, "
         "head_bf16, head_mxfp8, head_q8, score_bf16, score_chunked, "
         "score_bf16_chunked, score_lean, prefill_fast, prefill_lean, "
-        "softmax_kernel, prefill_lean_k28, prefill_best, prefill_best_nok28)",
+        "softmax_kernel, prefill_lean_k28, prefill_best, prefill_best_nok28, "
+        "decode_attn_kernel)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that

@@ -670,7 +670,19 @@ class Attention(nn.Module):
         one-shot path (window-20 showed the score stage is pass/bandwidth-bound, not
         matmul-FLOP-bound: bf16 was -34%, split-K -16%); it forces f32 and ignores
         the dtype/chunk knobs.  Decode / M=1 (``s == 1``) always runs the shipped
-        f32 one-shot path, byte-identical to control regardless of the env."""
+        f32 one-shot path, byte-identical to control regardless of the env.
+
+        W60/K29: on the GPU with ``MTPLX_DSV41_DECODE_ATTN_KERNEL=1`` the M=1 decode
+        and the small-M (``K+1``) verify batch route through the fused decode
+        attention Metal kernel (score + mask + sink softmax + PV in ONE dispatch);
+        an unsupported mask shape or a CPU-pinned host falls back to the eager path.
+        The hook is a small guarded early return -- the prefill score path (W58's
+        one-shot/lean/chunked, W59's key selection) is untouched (rows > the
+        small-M cap never enter it)."""
+        if _decode_attn_kernel_use(q):
+            out = self._decode_attn_kernel(q, KV, attend)
+            if out is not None:
+                return out
         if q.shape[1] <= 1:
             return self._sparse_attend_oneshot(q, KV, attend, mx.float32)
         path = _resolve_prefill_score_path()
@@ -684,6 +696,30 @@ class Attention(nn.Module):
         if key_chunk is not None:
             return self._sparse_attend_chunked(q, KV, attend, score_dtype, key_chunk)
         return self._sparse_attend_oneshot(q, KV, attend, score_dtype)
+
+    def _decode_attn_kernel(self, q, KV, attend):
+        """W60/K29 fused decode / verify MLA attention (one Metal dispatch per
+        layer).  Returns the ``[b,s,H,hd]`` f32 output, or ``None`` when the mask
+        shape is unsupported so the caller falls back to the eager one-shot.
+
+        Mode-agnostic: it consumes the already-assembled ``[b,s,T]`` boolean (or
+        additive-f32) ``attend`` mask shared across heads -- exactly what all four
+        CSA modes produce here (swa_only's window mask, and full/reindex/reuse's
+        ``concatenate([window_mask, comp_attend])``) -- so it never re-derives the
+        CSA candidate selection.  MLA: ``KV`` is the one shared latent, passed as
+        both key and value.  A per-head mask (``ndim != 3``) or a shape mismatch is
+        the sole eager-fallback path (returns ``None``); genuine kernel errors are
+        left to propagate ([[dont-rationalize-broken-as-normal]])."""
+        if attend is not None:
+            if attend.ndim != 3 or tuple(attend.shape) != (
+                int(q.shape[0]), int(q.shape[1]), int(KV.shape[1])
+            ):
+                return None  # unsupported mask shape -> eager
+        from mtplx.models import deepseek_v41_attn_kernels as _k29
+        return _k29.fused_decode_attention(
+            q, KV, KV, attend=attend, attn_sink=self.attn_sink,
+            scale=self.softmax_scale, T=int(KV.shape[1]),
+        )
 
     def _sparse_attend_oneshot(self, q, KV, attend, score_dtype,
                                *, fuse_scale=False, fold_sink=False):
@@ -1263,6 +1299,65 @@ def _prefill_softmax_kernel_use() -> bool:
     except Exception:
         return False
     return True
+
+
+# --- W60 / K29: fused decode / verify MLA attention Metal kernel -------------
+#: One ``mx.fast.metal_kernel`` per layer for the M=1 (decode) / small-M (K+1
+#: verify) attention step: QK^T score + CSA/causal mask + per-head value-0 sink +
+#: f32 softmax + PV in ONE dispatch, online-softmax over key tiles so the ``[64,T]``
+#: score row never materialises (``mtplx/models/deepseek_v41_attn_kernels.py``).
+#: Default OFF (the decode win is a GPU-window measurement), GPU-only (a CPU-pinned
+#: host falls back to the eager one-shot, byte-identical to control).  Mode-agnostic
+#: -- it reads the assembled ``[b,s,T]`` boolean ``attend`` mask, so all four CSA
+#: modes (swa_only / full / reindex / reuse) route through it identically; an
+#: unsupported mask shape falls back to eager.  Reassociation-level vs the eager f32
+#: path (the tile reduction reorders the max/denom/value sums): ``max|Δ| <= 1e-6``,
+#: greedy-argmax identical -- NOT byte-identical.  Read at use, never frozen at
+#: import ([[env-flags-read-at-use-not-import]]).
+_DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"
+
+#: Max query rows (``b*s``) the decode kernel serves: M=1 decode and the ``K+1``
+#: verify batch (8 covers MTP depth up to 7).  Above it the eager prefill score
+#: path runs (W58/W59's domain) -- the hook never diverts prefill.
+_DECODE_ATTN_KERNEL_MAX_ROWS = 8
+
+
+def _resolve_decode_attn_kernel(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_DECODE_ATTN_KERNEL`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other DSV4.1
+    levers."""
+    val = os.environ.get(_DECODE_ATTN_KERNEL_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_DECODE_ATTN_KERNEL_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager attention)"
+    )
+
+
+def _decode_attn_kernel_use(q) -> bool:
+    """Whether the K29 fused decode attention should run on THIS call: the flag is
+    armed, a Metal GPU is the default device, AND the query is small-M (decode /
+    verify, ``b*s <= _DECODE_ATTN_KERNEL_MAX_ROWS``).  A CPU-pinned worker test (or
+    a no-Metal host) returns ``False`` so the eager path runs and no Metal is
+    dispatched -- the GPU route is proven by a spy in the tests."""
+    if not _resolve_decode_attn_kernel():
+        return False
+    try:
+        if not mx.metal.is_available() or mx.default_device() != mx.gpu:
+            return False
+    except Exception:
+        return False
+    try:
+        rows = int(q.shape[0]) * int(q.shape[1])
+    except Exception:
+        return False
+    return rows <= _DECODE_ATTN_KERNEL_MAX_ROWS
 
 
 def _lin_desc(linear):

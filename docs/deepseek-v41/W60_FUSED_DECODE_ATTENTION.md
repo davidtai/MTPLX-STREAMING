@@ -1,0 +1,240 @@
+# W60 — Fused decode / verify MLA attention Metal kernel (KERNEL_LEDGER K29)
+
+**Branch:** `feat/deepseek-v41-w60` (off `feat/deepseek-v41-streaming`).
+**Flag:** `MTPLX_DSV41_DECODE_ATTN_KERNEL=1` (default OFF, GPU-only).
+**Kernel + wrapper + references:** `mtplx/models/deepseek_v41_attn_kernels.py`.
+**Integration:** `Attention._sparse_attend` (a small guarded early return) →
+`Attention._decode_attn_kernel`, `mtplx/models/deepseek_v41.py`.
+**Tests:** `tests/models/test_deepseek_v41_decode_attn_kernel.py` (39 CPU + 1
+GPU-gated). **Arm:** `decode_attn_kernel` in
+`scripts/deepseek_v41/ab_decode_env_levers.py` (pins all 21 keys; NOT in `stack_a`
+until the parity window is clean).
+
+Sibling of K22 (attention-chain prep tape) and K24 (window-mask memo): those cut
+the *projection / norm / RoPE / mask-build* dispatch around the SDPA; **K29 cuts
+the SDPA itself** — the score + mask + sink softmax + PV chain W45 measured as the
+irreducible ~22-primitive tail that a shapeless `mx.compile` cannot fold.
+
+---
+
+## 0. Why (the measurement)
+
+Windows 13–16 (`receipts/gpu-windows/window-15/stage-timing-head-bf16.json`,
+`window-16/stage-timing-stack-a.json`, and W41/W45/W56) put **decode at 1,024
+context at ~160 ms/token, dispatch-bound**:
+
+- attention ≈ **60 ms/token** — `attn.reuse` 50.2 ms fenced over 30 layers ≈
+  **1.5–1.9 ms per M=1 layer**, plus ~18 ms on the other 10 layers
+  (`swa_only`/`full`/`reindex`);
+- **~110 Metal primitives per layer** after the K22/K24 compiles;
+- the actual math per layer at M=1 is tiny: 64 heads × head_dim 512 against
+  ~1K–16K compressed keys (the CSA candidate mask + a per-head value-0 sink), plus
+  the q-lora/norm/RoPE prep (K22) and the o-lora output (K22).
+
+A single-row attention step costing 1.5–4.9 ms is a **dispatch-chain problem**
+([[b1-decode-dispatch-removal-hides]]), not a FLOP problem. K22 collapsed the
+pure prep chains (qkv 33 + out 7 = **40 prim/attention-call**, W41) and K24 the
+window mask (**~429 prim/token** at 40 layers, W45). W45 then found the **SDPA
+proper** (`_sparse_attend`: two einsums + softmax + mask + sink-concat + slice) is
+an **irreducible ~22-primitive reduction** that a shapeless tape *cannot* remove —
+the dynamic sink-column slice `softmax(full)[..., :KV.shape[1]]` raises
+`Slice cannot infer output shapes`, and folding the sink diverges from the shipped
+`softmax(concat)+slice` even eager. W45's verdict: *"Do not spend a GPU window on
+a shapeless SDPA tape."*
+
+**K29 is the viable alternative to that dead tape:** a hand `mx.fast.metal_kernel`
+does not need shapelessness (T is a runtime scalar) and removes the concat/slice
+entirely, collapsing the whole ~22-primitive SDPA into **one dispatch per layer**.
+
+MLX's fused SDPA is not an option: head_dim 512 is unsupported by
+`mx.fast.scaled_dot_product_attention`, and the value-0 sink semantics differ (W50
+measured 2.1e-3 divergence vs a plain SDPA).
+
+---
+
+## 1. Kernel design
+
+**One threadgroup per `(row, head)`** (`grid.x = TG · rows · H`, `rows = b·s`), `TG`
+= 128 lanes (power of two; also the key-tile width — one key per lane per tile).
+`H`, `T`, `S` (seq len, so `b_idx = row / S`) and `scale` are **runtime scalar
+inputs**, so ONE compiled kernel serves every context length, batch and mode; `TG`
+and `HD` (head_dim, statically 512) are compile-time `constexpr` (so `q_sh[HD]` /
+`acc_sh[HD]` are statically sized).
+
+**Threadgroup memory** (HD=512, TG=128): `q_sh[HD]` + `acc_sh[HD]` (query + running
+value accumulator, 2·512·4 = 4 KiB) + `s_sh[TG]` (tile scores) + `p_sh[TG]` (tile
+probs) + `red_sh[TG]` (tree-reduce scratch) = 3·128·4 = 1.5 KiB → **≈ 5.6 KiB**,
+well under the 32 KiB limit.
+
+**Per threadgroup:**
+
+1. cooperatively load `q[row,head,:]` (head_dim floats) into `q_sh`; zero
+   `acc_sh`;
+2. **stream the T keys in TG-wide tiles** (online softmax — the `[64, T]` per-head
+   score row is NEVER materialised, so T = 16K+ streams through threadgroup
+   memory):
+   - each lane computes its key's masked score `score = scale · Σ_d q_sh[d]·k[t,d]
+     + add` (a head_dim dot; masked lane → `NEG` sentinel);
+   - a threadgroup **tree** reduces the tile max `m_tile`;
+   - all lanes fold the tile into the running `(m, denom, acc)`:
+     `m_new = max(m_run, m_tile)`; `corr = exp(m_run − m_new)`;
+     `acc *= corr`; `denom = denom·corr + Σ_tile exp(s − m_new)`;
+   - the head_dim axis is split across lanes to add
+     `Σ_tile p_k · v[k]` into `acc` (each lane owns dims `{lane, lane+TG, …}` — no
+     atomics, no cross-lane write conflict);
+3. **fold the per-head value-0 sink into the denominator once**
+   (`denom += exp(sink[head] − m_run)`) and write `out[head,:] = acc / denom`
+   (guarded `denom > 0` → a fully-masked row writes 0, never a NaN).
+
+MLA: `k_cache` and `v_cache` are the **one shared latent** (RoPE already baked into
+q and the cached latents upstream), passed as both inputs; the score dot and the PV
+sum both run over all `head_dim` dims.
+
+**Reductions / threads:** the tile max and tile denom are power-of-two tree
+reductions over `red_sh` (`TG >> 1 … 1`), each bracketed by a threadgroup barrier;
+`p_sh` is kept intact across the denom reduction (it feeds the PV pass). The `NEG =
+-3e38f` **finite** sentinel keeps the online combine NaN-free: an all-masked lane's
+state is `(NEG, 0)` and `NEG − NEG = 0` → `exp = 1` → `0·1 = 0`, never
+`0·exp(nan)`.
+
+### Dispatch count — before / after, per layer
+
+| | eager `_sparse_attend` (M=1) | K29 |
+|---|---:|---:|
+| QK^T einsum | matmul (+reshape) | — |
+| scale · | 1 | — |
+| mask `where` (+attend broadcast) | ~2 | — |
+| sink reshape + broadcast | ~2 | — |
+| `concatenate([scores, sink])` | 1 | — |
+| `softmax` (max/exp/sum/div) | ~4 | — |
+| sink-column slice | 1 | — |
+| PV einsum | matmul (+reshape) | — |
+| **fused kernel** | — | **1** |
+| additive-mask `where` (bool→{0,−inf}) | — | ~1–2 |
+| q / KV contiguity (usually no-op on decode) | — | ~0–1 |
+| **≈ primitives / layer / call** | **~22** (W45) | **~2–4** |
+
+Mode-invariant (all four CSA modes — swa_only / full / reindex / reuse — route
+through the identical `_sparse_attend`, so the delta applies to every layer). At 40
+layers this is **≈ −760 primitives/token** on the attention SDPA — larger than
+K22's whole-token −368 and K24's −429, and it lands on the chain W45 proved a tape
+cannot touch.
+
+### Expected ms/token saved (ESTIMATE — GPU-window-gated, NOT measured)
+
+The SDPA is ~22 of the ~162 primitives in a reuse attention call (W45 micro-census;
+qkv 81 + out 38 + SDPA ~22 + window/select). As a **dispatch-uniform proxy** on the
+~60 ms/token attention, the SDPA chain is ~14% ≈ **~8 ms/token** at 1K; K29's
+ceiling is that minus the kernel's own single dispatch + compute (~70M MACs/layer
+at T=1088, sub-100 µs). Central estimate **−6…−12 ms/token at 1K** (160 → ~148–154,
+~4–8%). This carries the **same roofline caveat as K22/K25/K28** — window-20
+overturned K25's FLOP roofline — so it is an estimate; the paired in-window A/B is
+the gate. At 16K the reuse-layer kernel compute grows ~15× (still ONE dispatch),
+so the *dispatch* win holds while the per-kernel compute rises — the net at 16K is
+the window's to measure.
+
+Unlike K28 (a prefill memory/pass lever — the `[1024,64,T]` transient is up to ~6
+GiB), K29 is a pure **decode dispatch** lever: the M=1 score row is only `[1,64,T]`
+(~4 MB at 16K), so there is no material peak-GB relief — the win is dispatch count.
+
+---
+
+## 2. Integration (minimal, mode-agnostic)
+
+`Attention._sparse_attend` gets a **guarded early return** at the top (before the
+`s <= 1` decode / prefill split):
+
+```python
+if _decode_attn_kernel_use(q):          # flag on + Metal-GPU default + b*s <= 8
+    out = self._decode_attn_kernel(q, KV, attend)
+    if out is not None:                 # None == unsupported mask shape -> eager
+        return out
+# ... unchanged eager decode one-shot / prefill score path (W58/W59) ...
+```
+
+- **Small-M gate.** `_decode_attn_kernel_use` fires only for `b·s <=
+  _DECODE_ATTN_KERNEL_MAX_ROWS` (8): M=1 decode and the `K+1` verify batch (MTP
+  depth ≤ 7). A prefill wave (`s` large) never enters — **W58's prefill score
+  path (one-shot / lean / chunked) and W59's key selection are untouched**, which
+  is why the hook sits above the existing branch and is deliberately tiny.
+- **Mode-agnostic.** `_decode_attn_kernel` consumes the already-assembled
+  `[b,s,T]` boolean `attend` mask shared across heads — exactly what all four CSA
+  modes produce here (`swa_only`'s window mask; `full`/`reindex`/`reuse`'s
+  `concatenate([window_mask, comp_attend])`). It never re-derives the CSA
+  candidate selection.
+- **Fallback.** A per-head mask (`ndim != 3`) or any `(b, s, T)` shape mismatch
+  returns `None` → the eager one-shot runs. Genuine kernel errors are left to
+  propagate ([[dont-rationalize-broken-as-normal]]); the *only* silent path is the
+  documented unsupported-mask fallback the task specifies.
+- **GPU-only.** `_decode_attn_kernel_use` returns `False` unless a Metal GPU is the
+  default device, so a CPU-pinned worker test (or a no-Metal host) runs the eager
+  path, **byte-identical to control**, and dispatches no Metal
+  ([[worker-tests-must-pin-mlx-cpu]]).
+
+---
+
+## 3. Exactness
+
+**Reassociation-level, NOT byte-identical** vs the eager f32 path (the online tile
+reduction reorders the max / denom / value sums; the sink is folded into the
+denominator vs the shipped `softmax(concat)+slice`). Same float class as
+K25/K28's tree softmaxes.
+
+**CPU-proven** (no Metal): the pure-MLX references
+(`decode_attention_reference`, the one-shot fold-sink math; and
+`decode_attention_reference_tiled`, the EXACT online-tile algorithm the kernel
+runs) vs the model's eager `Attention._sparse_attend_oneshot`, over decode M=1 /
+verify M=4 × T ∈ {300, 1088, 4096} × every CSA mode:
+
+- `max|Δ| ≤ 4.3e-7` (≪ the 1e-6 bar), **argmax mismatch 0**;
+- the fully-masked row (no reachable key) is **finite and exactly 0** (matches the
+  reference "all-invalid → zero output"), never a NaN.
+
+The tiled reference matching the one-shot reference to ≤1e-6 is the on-CPU proof
+that the kernel's **tiling reassociation** is greedy-safe before any GPU run.
+
+**GPU parity** (`test_decode_attn_parity_gpu`, gated `MTPLX_GPU_PARITY=1`, receipt
+to `MTPLX_PARITY_RECEIPT`): the real Metal kernel vs the eager f32 reference on
+random cache states at **T ∈ {1088, 4096, 16384}** for **each CSA mode** (decode
+M=1 + a verify M=4 batch) → max|Δ| + argmax parity; and, only if the streaming
+artifact is present, 32 real-model decode steps (recorded — the worker box loads no
+artifact; the orchestrator runs the served A/B via the `decode_attn_kernel` arm).
+**Pass if `max|Δ| ≤ 1e-6` and argmax mismatch 0** for every arm.
+
+---
+
+## 4. Commands (orchestrator, in a GPU window)
+
+**Parity** (proves the Metal kernel matches eager before any A/B trusts it):
+
+```sh
+MTPLX_GPU_PARITY=1 \
+MTPLX_PARITY_RECEIPT=docs/deepseek-v41/receipts/gpu-windows/window-XX/W60_K29_parity.json \
+PYTHONPATH=$PWD .venv/bin/python3 -m pytest -q -s \
+  tests/models/test_deepseek_v41_decode_attn_kernel.py::test_decode_attn_parity_gpu
+```
+
+**Decode A/B** (inside `scripts/deepseek_v41/gpu_window.sh`, flock held, qwen
+unloaded, memory-guarded):
+
+```sh
+PYTHONPATH=$PWD .venv/bin/python3 scripts/deepseek_v41/ab_decode_env_levers.py \
+  --arms control decode_attn_kernel --context-tokens 1024 --decode-tokens 256 \
+  --out docs/deepseek-v41/receipts/gpu-windows/window-XX/W60_decode_attn_kernel.jsonl
+```
+
+Report prefill tok/s, decode tok/s, TTFT, peak GB, wall; token-id sha256 byte-
+identical? (expected **NOT** byte-identical — reassociation-level). Gate: decode
+**+** and argmax parity. **Only after that window is clean**, add
+`decode_attn_kernel="1"` to the `stack_a` preset (currently `head_bf16 +
+sinkhorn_metal + attn_compile + win_memo`).
+
+---
+
+## 5. Status
+
+IMPLEMENTED + CPU-proven (kernel algorithm via the tiled pure-MLX reference,
+wrapper plumbing via a spy kernel, model dispatch for decode + verify across all
+four modes, unsupported-mask fallback, byte-identical CPU fallback), default OFF,
+GPU-only. Peak RSS < 0.2 GB in the CPU suite. Numeric-throughput A/B pending a GPU
+window (**KG-m**, see KERNEL_LEDGER K29).

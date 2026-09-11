@@ -15,7 +15,8 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
     dense_f32 / both / all_levers / stack_a / head_bf16 / head_mxfp8 / head_q8 /
     score_bf16 / score_chunked / score_bf16_chunked / score_lean / prefill_fast /
     prefill_lean / softmax_kernel / prefill_lean_k28 / prefill_best /
-    prefill_best_nok28), including arm independence (each arm force-unsets the keys
+    prefill_best_nok28 / decode_attn_kernel), including arm independence (each arm
+    force-unsets the keys
     it does not set, and the W40 load-time head codec MTPLX_DSV41_HEAD_MODE, the W44
     device-route boolean, the W51 dense-experts boolean + its three value knobs
     (min_rows / batch / matmul_dtype), the three W50 prefill score-path keys
@@ -67,6 +68,7 @@ _SC = "MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK"  # W50 / K25: split-K online-softmax
 _SP = "MTPLX_DSV41_PREFILL_SCORE_PATH"       # W50: score impl (lean = f32 pass-cut one-shot)
 _SFK = "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL"  # W58 / K28: fused mask+sink+softmax Metal kernel
 _LFX = "MTPLX_DSV41_LAYOUT_FIX"              # W56 / K27 F1: sorted routed gather (set by prefill_best*)
+_DAK = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fused decode/verify MLA attention Metal kernel
 # The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
 # PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
 # NOT part of all_levers, so they never join the "all-on" independence invariant.
@@ -78,8 +80,9 @@ _LFX = "MTPLX_DSV41_LAYOUT_FIX"              # W56 / K27 F1: sorted routed gathe
 _ALL_KEYS = (_OV, _LM, _SK, _HC, _FP, _SB, _AC, _WM)  # the eight booleans all_levers sets
 _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50 key a preset pins
 # + the three W50 score-path keys + the W58 K28 fused-softmax-kernel boolean + the
-# K27 layout_fix boolean (the W58 prefill_best* full-stack arms set it).
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SFK, _LFX)
+# K27 layout_fix boolean (the W58 prefill_best* full-stack arms set it) + the W60
+# K29 decode-attention-kernel boolean.  (W59's K30 _SEL is added on top downstream.)
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SFK, _LFX, _DAK)
 
 ALL_ARMS = [
     "control",
@@ -112,6 +115,7 @@ ALL_ARMS = [
     "prefill_lean_k28",
     "prefill_best",
     "prefill_best_nok28",
+    "decode_attn_kernel",
 ]
 
 # The boolean lever env keys each arm must leave set to "1" (every other unset).
@@ -159,6 +163,9 @@ EXPECTED_ON = {
     # separately.
     "prefill_best": {_LM},
     "prefill_best_nok28": {_LM},
+    # W60 K29: standalone decode-attention kernel arm sets no _ALL_KEYS boolean
+    # (its only key is _DAK, tracked in EXPECTED_DECODE_ATTN_KERNEL).
+    "decode_attn_kernel": set(),
 }
 
 # The device-route boolean each arm pins (W44 K24; separate from _ALL_KEYS because
@@ -218,6 +225,7 @@ EXPECTED_HEAD = {
     "prefill_lean_k28": None,
     "prefill_best": None,
     "prefill_best_nok28": None,
+    "decode_attn_kernel": None,
 }
 
 # The W50 prefill score-path values each arm pins (None = force-unset). _SD is the
@@ -253,6 +261,12 @@ EXPECTED_SOFTMAX_KERNEL["prefill_best"] = "1"
 EXPECTED_LAYOUT = {arm: None for arm in ALL_ARMS}
 EXPECTED_LAYOUT["prefill_best"] = "1"
 EXPECTED_LAYOUT["prefill_best_nok28"] = "1"
+
+# The W60 K29 decode-attention-kernel boolean each arm pins ("1" or None =
+# force-unset).  Only the standalone decode_attn_kernel arm sets it (LEFT OUT of
+# stack_a until the MTPLX_GPU_PARITY window is clean).
+EXPECTED_DECODE_ATTN_KERNEL = {arm: None for arm in ALL_ARMS}
+EXPECTED_DECODE_ATTN_KERNEL["decode_attn_kernel"] = "1"
 
 
 def _load(name: str):
@@ -365,6 +379,7 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         (_SP, EXPECTED_SCORE_PATH[arm]),
         (_SFK, EXPECTED_SOFTMAX_KERNEL[arm]),
         (_LFX, EXPECTED_LAYOUT[arm]),
+        (_DAK, EXPECTED_DECODE_ATTN_KERNEL[arm]),
     ):
         if expected is None:
             assert key not in os.environ, f"{arm}: {key} should be force-unset"
@@ -469,6 +484,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
     os.environ[_SP] = "bogus"
     os.environ[_SFK] = "bogus"
     os.environ[_LFX] = "bogus"
+    os.environ[_DAK] = "bogus"
     receipts = _run_dry_main(env_levers, tmp_path / "receipts.jsonl")
     for r in receipts:
         assert r["dry_run"] is True
@@ -493,6 +509,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         assert r["arm_env"].get(_SP) == EXPECTED_SCORE_PATH[r["arm"]], r["arm"]
         assert r["arm_env"].get(_SFK) == EXPECTED_SOFTMAX_KERNEL[r["arm"]], r["arm"]
         assert r["arm_env"].get(_LFX) == EXPECTED_LAYOUT[r["arm"]], r["arm"]
+        assert r["arm_env"].get(_DAK) == EXPECTED_DECODE_ATTN_KERNEL[r["arm"]], r["arm"]
 
 
 def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path):
