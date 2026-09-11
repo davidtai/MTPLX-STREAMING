@@ -62,6 +62,9 @@ import mlx.core as mx
 #: Reference ``ModelArgs.window_size`` default and released config value.
 WINDOW_SIZE_DEFAULT = 128
 
+#: Version tag for a per-layer entry's ``meta_state`` (mlx_lm session contract).
+_LAYER_META_VERSION = "mtplx-deepseek-v41-layer-cache-v1"
+
 
 # ---------------------------------------------------------------------------
 # append-only history primitives (the phase-1 backing store)
@@ -282,10 +285,21 @@ class LayerAttentionCache:
     """
 
     def __init__(self, window_size: int = WINDOW_SIZE_DEFAULT,
-                 compress_ratio: int = 0, is_kv_source: bool = False):
+                 compress_ratio: int = 0, is_kv_source: bool = False,
+                 engram_state=None):
         self.window_size = int(window_size)
         self.compress_ratio = int(compress_ratio)
         self.is_kv_source = bool(is_kv_source)
+        #: this entry's own position counter == the mlx_lm ``cache.offset`` the
+        #: serve/generate path reads and trims per entry (all entries of one
+        #: sequence advance/trim in lockstep, so ``cache[0].offset`` is the
+        #: sequence position -- reference ``start_pos``).
+        self.offset: int = 0
+        #: streaming engram n-gram history, when this entry owns it (only the
+        #: first entry of a sequence does -- see :class:`DeepseekV41Cache`); its
+        #: rewind rides this entry's :meth:`trim`/:meth:`rollback` so a per-entry
+        #: trim moves the shared history exactly once.  ``None`` otherwise.
+        self.engram_state = engram_state
         #: post-RoPE window KV rows, one per token (reference window_kv_cache seed)
         self.window: Optional[mx.array] = None
         #: pooled+RoPE'd compressed KV, one per completed group (compress_kv_cache)
@@ -325,20 +339,47 @@ class LayerAttentionCache:
         """Append this group's index keys (reference L547)."""
         self.index_k = _grow(self.index_k, index_new)
 
+    # -- length / mlx_lm per-entry contract --------------------------------
+    def advance(self, n: int) -> None:
+        """Record ``n`` more processed tokens on this entry's own position
+        counter (reference ``start_pos += seqlen``, kept per entry so the serve
+        path reads ``cache[i].offset``).  The per-layer stores are grown by the
+        layer forward itself; this only moves the entry offset."""
+        self.offset += int(n)
+
+    def is_trimmable(self) -> bool:
+        """Every lane here rewinds exactly -- window/compressed/index truncate to
+        the shorter length, the compressor frontier and the engram history
+        truncate their append-only journals -- so the engine's snapshot-free
+        verify repair (``mtplx.cache_state.trim_verified_window_without_snapshot``)
+        can drive this entry with a plain :meth:`trim`."""
+        return True
+
+    def size(self) -> int:
+        return int(self.offset)
+
+    def empty(self) -> bool:
+        return self.offset == 0
+
     # -- trim / rollback seam ----------------------------------------------
-    def trim(self, n: int) -> None:
-        """Restore this layer to ``n`` tokens earlier.  The window drops its last
-        ``n`` rows; the compressed stores drop back to the number of groups the
-        shortened length still completes (``new_len // compress_ratio``); the
-        compressor frontier re-exposes the shortened partial group."""
-        if n <= 0:
-            if n < 0:
-                raise ValueError("trim count must be >= 0")
-            return
-        cur = self.window_len()
+    def trim(self, n: int) -> int:
+        """Restore this entry to ``n`` tokens earlier and return the number of
+        tokens trimmed (mlx_lm cache ``trim`` contract).  The window drops its
+        last ``n`` rows; the compressed stores drop back to the number of groups
+        the shortened length still completes (``new_len // compress_ratio``); the
+        compressor frontier re-exposes the shortened partial group; the engram
+        history (only the entry that owns it) drops its last ``n`` fed positions.
+        ``offset`` decreases by exactly ``n`` -- the per-entry property the
+        verify repair (``trim_verified_window_to_prefix``) checks."""
+        n = int(n)
+        if n < 0:
+            raise ValueError("trim count must be >= 0")
+        if n == 0:
+            return 0
+        cur = int(self.offset)
         new_len = cur - n
         if new_len < 0:
-            raise ValueError(f"cannot trim {n} of {cur} window rows")
+            raise ValueError(f"cannot trim {n} of {cur} tokens")
         self.window = _truncate(self.window, new_len)
         if self.is_kv_source and self.compress_ratio >= 1:
             groups = new_len // self.compress_ratio
@@ -346,22 +387,92 @@ class LayerAttentionCache:
             self.index_k = _truncate(self.index_k, groups)
             if self.comp_state is not None:
                 self.comp_state.trim(n)
+        if self.engram_state is not None:
+            self.engram_state.trim(n)
+        self.offset = new_len
+        return n
 
     def mark(self):
         return (
+            int(self.offset),
             self.window_len(),
             _rows(self.compress_kv),
             _rows(self.index_k),
             None if self.comp_state is None else self.comp_state.mark(),
+            None if self.engram_state is None else int(self.engram_state.length),
         )
 
     def rollback(self, mark) -> None:
-        nw, nc, ni, comp_mark = mark
+        offset, nw, nc, ni, comp_mark, engram_len = mark
+        if self.engram_state is not None and engram_len is not None:
+            cur = int(self.engram_state.length)
+            if cur > engram_len:
+                self.engram_state.trim(cur - engram_len)
         self.window = _truncate(self.window, nw)
         self.compress_kv = _truncate(self.compress_kv, nc)
         self.index_k = _truncate(self.index_k, ni)
         if self.comp_state is not None and comp_mark is not None:
             self.comp_state.rollback(comp_mark)
+        self.offset = int(offset)
+
+    # -- mlx_lm session state contract -------------------------------------
+    @property
+    def state(self):
+        """The append-only KV lanes as a tuple of arrays (mlx_lm ``cache.state``)
+        for :func:`mtplx.cache_state.snapshot_cache` / :func:`restore_cache`.  The
+        compressor frontier rows travel with it so a snapshot restore rebuilds the
+        exact frontier.  The engram history is deliberately NOT in ``state`` -- it
+        rewinds through :meth:`trim`, the only rollback the served trunk cache
+        drives (session/SSD save-restore is disabled for this model; see
+        docs/deepseek-v41/W22_REPORT.md)."""
+        comp_kv = None if self.comp_state is None else self.comp_state.raw_kv
+        comp_sc = None if self.comp_state is None else self.comp_state.raw_score
+        return (self.window, self.compress_kv, self.index_k, comp_kv, comp_sc)
+
+    @state.setter
+    def state(self, value) -> None:
+        if value is None:
+            self.window = None
+            self.compress_kv = None
+            self.index_k = None
+            if self.comp_state is not None:
+                self.comp_state.raw_kv = None
+                self.comp_state.raw_score = None
+            return
+        window, compress_kv, index_k, comp_kv, comp_sc = value
+        self.window = window
+        self.compress_kv = compress_kv
+        self.index_k = index_k
+        if self.comp_state is not None:
+            self.comp_state.raw_kv = comp_kv
+            self.comp_state.raw_score = comp_sc
+
+    def replace_state(self, value) -> None:
+        self.state = value
+
+    @property
+    def meta_state(self):
+        return (
+            _LAYER_META_VERSION,
+            str(int(self.offset)),
+            str(int(self.window_size)),
+            str(int(self.compress_ratio)),
+            "1" if self.is_kv_source else "0",
+        )
+
+    @meta_state.setter
+    def meta_state(self, value) -> None:
+        if value is None:
+            return
+        if (
+            not isinstance(value, (tuple, list))
+            or len(value) != 5
+            or value[0] != _LAYER_META_VERSION
+        ):
+            raise ValueError(
+                f"unsupported DeepSeek-V4.1 layer cache meta state: {value!r}"
+            )
+        self.offset = int(value[1])
 
 
 # Inline-name aliases (the names W10's in-progress code and the serve path use).
@@ -373,16 +484,34 @@ _SharedRuntime = SharedAttentionRuntime
 # Top-level per-sequence cache
 # ---------------------------------------------------------------------------
 class DeepseekV41Cache:
-    """Per-sequence attention state: one :class:`LayerAttentionCache` per layer,
-    the shared cross-layer runtime, the running token ``offset`` (reference
-    ``start_pos``), and the engram n-gram history slot.
+    """Per-sequence attention state, presented as the mlx_lm *list of per-layer
+    caches* the MTPLX serve/generate path consumes.
 
-    Reused as the ``cache=`` argument to the model every step
-    (``mlx_lm.models.cache.make_prompt_cache`` returns it from
-    :meth:`Model.make_cache`).  :meth:`trim` and :meth:`mark`/:meth:`rollback`
-    are the speculative-verify / gate rollback seam: they restore the state --
-    KV, compressor frontier and engram history together -- to exactly what it was
-    ``n`` tokens earlier, so a rejected draft re-feeds to identical logits.
+    Iterating or indexing this object yields the per-layer
+    :class:`LayerAttentionCache` entries -- ``mlx_lm.models.cache.make_prompt_cache``
+    returns it from :meth:`Model.make_cache`, and ``mtplx.generation`` /
+    ``mtplx.runtime`` then treat it as the standard ``list[cache]`` (iterate for
+    ``_cache_has_recurrent_entries`` / ``snapshot_cache``, index ``cache[0].offset``
+    for the position, call ``cache[i].trim`` per entry to un-decode a rejected
+    speculative tail).  The cross-layer state the reference keeps process-global
+    -- a fresh :class:`SharedAttentionRuntime` per forward and the streaming
+    engram n-gram history -- stays reachable as :meth:`new_shared_runtime` and
+    :attr:`engram_state` for the W10 backbone, and the running position is
+    ``cache[i].offset`` (every entry advances/trims in lockstep).
+
+    This mirrors ``mtplx.models.deepseek_v4.Model.make_cache`` (a list of
+    per-layer :class:`~mtplx.models.deepseek_v4.DeepseekV4Cache`), with the one
+    difference V4.1 forces: the engram history is a single per-sequence object,
+    so the first entry owns its rewind (its :meth:`~LayerAttentionCache.trim` /
+    rollback moves it exactly once even though the serve path trims every entry)
+    and it is also published here for the backbone to advance.
+
+    :meth:`trim` and :meth:`mark`/:meth:`rollback` are the W13 whole-sequence
+    seam (kept for the unit tests and the bare-forward path); the served verify
+    path drives the per-entry :meth:`~LayerAttentionCache.trim` instead.  Both
+    restore the state -- KV, compressor frontier and engram history together --
+    to exactly what it was ``n`` tokens earlier, so a rejected draft re-feeds to
+    identical logits.
     """
 
     def __init__(
@@ -407,11 +536,42 @@ class DeepseekV41Cache:
             )
             for i in range(n_layers)
         ]
-        #: running token count == reference ``start_pos`` for the next forward
-        self.offset = 0
+        #: the engram history is one object per sequence; the first entry owns
+        #: its rewind so a per-entry ``trim`` (the rollback the serve path calls)
+        #: moves it exactly once, and the backbone reaches it via
+        #: :attr:`engram_state`.
+        if self.layers:
+            self.layers[0].engram_state = engram_state
         #: an :class:`mtplx.engram_v41.NgramHashState` clone, or None when engram
-        #: is not wired; advanced by the W10 backbone, trimmed here in step.
+        #: is not wired; advanced by the W10 backbone (once per forward, before
+        #: the layers), rewound through the owning entry in step.
         self.engram_state = engram_state
+
+    # -- mlx_lm sequence protocol (a list of per-layer caches) -------------
+    def __iter__(self):
+        return iter(self.layers)
+
+    def __len__(self) -> int:
+        return len(self.layers)
+
+    def __getitem__(self, idx):
+        return self.layers[idx]
+
+    def __setitem__(self, idx, value) -> None:
+        # The serve path's cache-layout installers (``install_tail_owned_...``)
+        # rebind entries by index; ours are skipped (no ``keys``/``values``), but
+        # honour the contract so a future layout swap stays consistent.
+        self.layers[idx] = value
+
+    def __bool__(self) -> bool:
+        return bool(self.layers)
+
+    @property
+    def offset(self) -> int:
+        """The sequence position (reference ``start_pos``); every entry tracks
+        its own and they advance/trim in lockstep, so the first entry's is the
+        sequence's."""
+        return int(self.layers[0].offset) if self.layers else 0
 
     # a fresh shared runtime per forward (reference re-uses one module global;
     # the backbone calls this once at the top of every forward and threads it
@@ -422,42 +582,35 @@ class DeepseekV41Cache:
     # -- length bookkeeping -------------------------------------------------
     def advance(self, n: int) -> None:
         """Record that ``n`` more tokens were processed (reference ``start_pos +=
-        seqlen``).  The per-layer stores are grown by the layers themselves; this
-        only moves the shared offset."""
-        self.offset += int(n)
+        seqlen``) on every entry.  The per-layer stores are grown by the layers
+        themselves and the engram is advanced by the backbone; this only moves
+        each entry's position counter."""
+        for layer in self.layers:
+            layer.advance(n)
 
     # -- trim / rollback seam ----------------------------------------------
     def trim(self, n: int) -> int:
-        """Drop the last ``n`` tokens from every layer, the engram history and
-        the offset, restoring the state to ``n`` tokens earlier.  Returns the
-        number of tokens trimmed (``mlx_lm`` cache convention)."""
+        """Drop the last ``n`` tokens from every entry (KV, compressor frontier
+        and -- through the owning entry -- the engram history), restoring the
+        state to ``n`` tokens earlier.  Returns the number of tokens trimmed
+        (``mlx_lm`` cache convention)."""
         if n < 0:
             raise ValueError("trim count must be >= 0")
-        n = min(n, self.offset)
+        n = min(int(n), self.offset)
         if n == 0:
             return 0
         for layer in self.layers:
             layer.trim(n)
-        if self.engram_state is not None:
-            self.engram_state.trim(n)
-        self.offset -= n
         return n
 
     def is_trimmable(self) -> bool:
         return True
 
     def mark(self):
-        return (
-            self.offset,
-            [layer.mark() for layer in self.layers],
-        )
+        return tuple(layer.mark() for layer in self.layers)
 
     def rollback(self, mark) -> None:
-        target_offset, layer_marks = mark
-        if self.engram_state is not None and self.offset > target_offset:
-            self.engram_state.trim(self.offset - target_offset)
-        self.offset = target_offset
-        for layer, m in zip(self.layers, layer_marks):
+        for layer, m in zip(self.layers, mark):
             layer.rollback(m)
 
 
