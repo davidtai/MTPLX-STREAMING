@@ -3108,6 +3108,43 @@ def _expert_runtime_io_backend(runtime: Any) -> str | None:
     return _health_string(getattr(reader, "backend", None))
 
 
+#: The DeepSeek-V4.1 decode/prefill lever env, in a stable order, for the served
+#: startup log (W46).  Reading these back on the served path is how a GPU-window
+#: log proves which byte-identical optimizations actually crossed the daemon
+#: spawn boundary (profile default OR an operator's parent-shell export) vs. an
+#: env that never reached the child.  ``DEVICE_ROUTE`` is reported for operator
+#: intent even though no code reads it yet (it stays ``<unset>``).
+_DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
+    "MTPLX_DSV41_HEAD_MODE",
+    "MTPLX_DSV41_SINKHORN_METAL",
+    "MTPLX_DSV41_ATTN_COMPILE",
+    "MTPLX_DSV41_ATTN_WIN_MEMO",
+    "MTPLX_DSV41_SWITCH_FASTPATH",
+    "MTPLX_DSV41_SWITCH_SUBMIT",
+    "MTPLX_DSV41_DEVICE_ROUTE",
+    "MTPLX_DSV41_HC_COMPILE",
+    "MTPLX_DSV41_SHARED_OVERLAP",
+    "MTPLX_DSV41_PREFILL_LAYER_MAJOR",
+)
+
+
+def _dsv41_resolved_lever_env(
+    environ: Mapping[str, str],
+) -> "OrderedDict[str, str | None]":
+    """The resolved DeepSeek-V4.1 lever env (value or ``None`` = unset), ordered."""
+    return OrderedDict((key, environ.get(key)) for key in _DSV41_LEVER_ENV_KEYS)
+
+
+def _format_dsv41_lever_env(resolved: Mapping[str, str | None]) -> str:
+    """One-line ``NAME=value`` render (``<unset>`` for absent keys) for the log."""
+    prefix = "MTPLX_DSV41_"
+    return " ".join(
+        f"{key[len(prefix):] if key.startswith(prefix) else key}="
+        f"{'<unset>' if value is None else value}"
+        for key, value in resolved.items()
+    )
+
+
 class ServerState:
     def __init__(self, args: argparse.Namespace) -> None:
         _coerce_family_verify_strategy(args)
@@ -3331,6 +3368,20 @@ class ServerState:
         from mtplx.expert_cli import apply_expert_profile_child_env
 
         apply_expert_profile_child_env(args, os.environ)
+        # Served-path visibility (W46): print the DeepSeek-V4.1 decode levers as
+        # resolved INSIDE the daemon, right after the profile child_env is
+        # composed onto os.environ. A GPU-window log then shows exactly which
+        # byte-identical levers engaged -- distinguishing "the env never crossed
+        # the spawn boundary" from "it did, and the served rate is a prompt/decode
+        # length artifact". Gated on the DeepSeek-V4.1 streamed model so it never
+        # fires for other served families.
+        _stream_kwargs = getattr(self, "expert_streaming_load_kwargs", None) or {}
+        _stream_cfg = _stream_kwargs.get("expert_streaming_config")
+        if "deepseek-v41" in str(getattr(_stream_cfg, "model_key", "") or ""):
+            _startup_line(
+                "[4/6] DeepSeek-V4.1 decode levers (resolved env): "
+                + _format_dsv41_lever_env(_dsv41_resolved_lever_env(os.environ))
+            )
         _startup_line("[4/6] Checking local acceleration runtime")
         _startup_line("      This may take a few seconds.")
         self.mlx_runtime_status = _mlx_runtime_status()

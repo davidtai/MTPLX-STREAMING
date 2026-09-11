@@ -626,13 +626,40 @@ def resolve_expert_profile_for_args(
     )
 
 
+#: Child-env keys in this namespace are the DeepSeek-V4.1 byte-identical A/B
+#: decode/prefill levers (``MTPLX_DSV41_*``).  A profile ships the measured-good
+#: ones as SERVED DEFAULTS, but they are applied with ``setdefault`` semantics so
+#: an explicit parent-shell export (the operator flipping one lever for a single
+#: GPU window) wins over the profile.  Every OTHER child_env key stays FORCED
+#: (profile overrides whatever the inherited env carried), because those are
+#: memory-safety caps -- ``MTPLX_SESSION_BANK_MAX_BYTES`` / ``MTPLX_ENGRAM_CACHE_LIMIT``
+#: -- that a serve flag such as ``--ram-session-cache`` (which stamps
+#: ``MTPLX_SESSION_BANK_MAX_BYTES`` into the child env before this runs, W35) must
+#: not be able to defeat.
+_OPERATOR_OVERRIDABLE_CHILD_ENV_PREFIX = "MTPLX_DSV41_"
+
+
 def apply_expert_profile_child_env(
     args: Any,
     environ: dict[str, str],
 ) -> None:
+    """Compose a resolved profile's ``child_env`` onto ``environ`` in place.
+
+    Precedence, highest first:
+      * ``MTPLX_DSV41_*`` lever keys: explicit parent env > profile default.
+      * every other key: profile (forced) > inherited/serve-flag env.
+    """
     profile = getattr(args, "_resolved_expert_profile", None)
-    if profile is not None:
-        environ.update(dict(profile.child_env))
+    if profile is None:
+        return
+    for key, value in profile.child_env.items():
+        if (
+            key.startswith(_OPERATOR_OVERRIDABLE_CHILD_ENV_PREFIX)
+            and key in environ
+        ):
+            # Served default: keep the operator's explicit parent-shell value.
+            continue
+        environ[key] = value
 
 
 def _apply_diagnostic_hash_policy(
