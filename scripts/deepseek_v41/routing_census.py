@@ -40,9 +40,9 @@ a guard kills any worker python above 14 GB):
 
 No GPU work at import; ``--help`` is CPU-safe.  The pure analysis functions
 (``simulate_lru``, ``simulate_belady``, ``reuse_distances``,
-``allocate_frequency_quota``, ``held_out_alloc_gate``, ``mtp_union_projection``)
-take plain int sequences and are unit-tested in
-``tests/test_deepseek_v41_decode_levers.py``.
+``verify_union_stats`` [Gate 0], ``pin_residency_gate`` [Gate 1],
+``allocate_frequency_quota``, ``held_out_alloc_gate``) take plain int sequences
+and are unit-tested in ``tests/test_deepseek_v41_decode_levers.py``.
 """
 
 from __future__ import annotations
@@ -240,43 +240,136 @@ def held_out_alloc_gate(train_seq_by_layer: Dict[int, List[int]],
     }
 
 
-def mtp_union_projection(decode_steps_by_layer: Dict[int, List[List[int]]],
-                         widths: Sequence[int]) -> dict:
-    """For each verify-window width W, group the decode steps into consecutive
-    non-overlapping windows and, per layer, take the union of the routed-expert
-    sets across the W tokens.  Returns, per W: mean union records per window per
-    layer, vs the naive W*top_k, and the resulting UNIQUE bytes-per-accepted-token
-    dedup factor (assuming every drafted token in the window is accepted -- an
-    upper bound on the amortization)."""
-    layers = sorted(decode_steps_by_layer)
+def _pct(values: Sequence[float], q: float) -> float | None:
+    """Simple nearest-rank percentile (q in [0,1])."""
+    if not values:
+        return None
+    s = sorted(values)
+    idx = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+    return float(s[idx])
+
+
+def verify_union_stats(steps_by_layer: Dict[int, List[List[int]]],
+                       kplus1_widths: Sequence[int]) -> dict:
+    """GATE 0 (ledger New #1 / R2): the MTP verify-row overlap census.
+
+    For each verify-window width Wp = K+1 (2, 3, 4), slide a Wp-token window over
+    the CONSECUTIVE tokens and, per layer per window, take the UNION of the routed
+    top-k sets across the Wp positions -- the number of distinct 18.80 MB records
+    the verify forward must read once.  ``u`` is that union size.  Report median,
+    p90 and mean of ``u`` across all (window-start, layer), plus the naive
+    Wp*top_k it replaces and the dedup factor.  Pass gate: median u <= 10 at K=3
+    (Wp=4); u > 14 means MTP on a streaming bank widens the read and regresses."""
+    layers = sorted(steps_by_layer)
     out: Dict[int, dict] = {}
-    for W in widths:
-        union_sizes: List[int] = []
+    for Wp in kplus1_widths:
+        u_sizes: List[int] = []
         naive_sizes: List[int] = []
         for L in layers:
-            steps = decode_steps_by_layer[L]
-            for i in range(0, len(steps) - (len(steps) % W), W):
-                window = steps[i:i + W]
+            steps = steps_by_layer[L]
+            for i in range(0, len(steps) - Wp + 1):  # sliding window
+                window = steps[i:i + Wp]
                 u = set()
                 naive = 0
                 for s in window:
                     u.update(s)
                     naive += len(s)
-                union_sizes.append(len(u))
+                u_sizes.append(len(u))
                 naive_sizes.append(naive)
-        if not union_sizes:
+        if not u_sizes:
             continue
-        mean_union = statistics.mean(union_sizes)
+        med = statistics.median(u_sizes)
+        mean_u = statistics.mean(u_sizes)
         mean_naive = statistics.mean(naive_sizes)
-        out[W] = {
-            "windows": len(union_sizes),
-            "mean_union_records_per_layer": mean_union,
-            "mean_naive_records_per_layer": mean_naive,
-            "dedup_factor_vs_naive": mean_naive / mean_union if mean_union else None,
-            # per ACCEPTED token (W tokens per window): union bytes / W.
-            "unique_records_per_accepted_token": mean_union / W,
-            "read_amortization_vs_ar": (mean_naive / W) / (mean_union / W)
-            if mean_union else None,
+        out[Wp] = {
+            "K": Wp - 1,
+            "verify_positions": Wp,
+            "windows": len(u_sizes),
+            "u_median": med,
+            "u_p90": _pct(u_sizes, 0.90),
+            "u_mean": mean_u,
+            "u_max": max(u_sizes),
+            "naive_reads_mean": mean_naive,
+            "dedup_factor_vs_naive": mean_naive / mean_u if mean_u else None,
+            # records read per ACCEPTED token if all Wp accepted (upper bound):
+            "union_records_per_accepted_token": mean_u / Wp,
+            # ledger pass condition is on the MEDIAN at K=3:
+            "passes_u_le_10": med <= 10,
+            "regresses_u_gt_14": med > 14,
+        }
+    return out
+
+
+def pin_residency_gate(trace_by_layer: Dict[int, List[List[int]]],
+                       pin_counts: Sequence[int],
+                       train_frac: float = 0.70) -> dict:
+    """GATE 1 (ledger R3 / Factor C): held-out hot-expert pinning vs LRU vs Belady.
+
+    Chronologically split each layer's per-position routing trace: train on the
+    first ``train_frac`` of positions, evaluate on the rest.  For each pin count
+    N, per layer: pick the top-N hottest experts from the TRAIN frequencies (the
+    static pin set), then on the EVAL positions measure the miss rate of
+      (a) static top-N pinning (hit iff routed expert in the pin set),
+      (b) LRU with N slots (warmed by the train sequence),
+      (c) Belady with N slots (warmed by train) -- the oracle bound.
+    Reports aggregate miss rates and the pin-vs-LRU reduction.  Also the
+    cross-layer stdev of top-N train coverage (hy3 measured 0.027 == near-uniform
+    == the DEAD case; a policy pays only if this is materially larger)."""
+    layers = sorted(trace_by_layer)
+    out: Dict[int, dict] = {}
+    # cross-layer concentration stdev at the smallest pin count.
+    for N in pin_counts:
+        pin_miss = pin_acc = 0
+        lru_miss = lru_acc = 0
+        bel_miss = bel_acc = 0
+        coverages: List[float] = []
+        for L in layers:
+            steps = trace_by_layer[L]
+            split = int(len(steps) * train_frac)
+            train = steps[:split]
+            evl = steps[split:]
+            train_flat = [e for s in train for e in s]
+            eval_flat = [e for s in evl for e in s]
+            if not eval_flat:
+                continue
+            counts: Dict[int, int] = defaultdict(int)
+            for e in train_flat:
+                counts[e] += 1
+            hottest = [e for e, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:N]]
+            pin_set = set(hottest)
+            # coverage of pins on the TRAIN window (concentration diagnostic)
+            tt = sum(counts.values())
+            if tt:
+                coverages.append(sum(counts[e] for e in hottest) / tt)
+            # (a) static pin
+            pm = sum(1 for e in eval_flat if e not in pin_set)
+            pin_miss += pm; pin_acc += len(eval_flat)
+            # (b) LRU N slots, warmed by train
+            _, lm = simulate_lru(eval_flat, N, warm=train_flat)
+            lru_miss += lm; lru_acc += len(eval_flat)
+            # (c) Belady N slots, warmed by train
+            _, bm = simulate_belady(eval_flat, N, warm=train_flat)
+            bel_miss += bm; bel_acc += len(eval_flat)
+        pin_rate = pin_miss / pin_acc if pin_acc else None
+        lru_rate = lru_miss / lru_acc if lru_acc else None
+        bel_rate = bel_miss / bel_acc if bel_acc else None
+        out[N] = {
+            "pin_slots": N,
+            "static_pin_miss_rate": pin_rate,
+            "lru_miss_rate": lru_rate,
+            "belady_miss_rate": bel_rate,
+            "pin_vs_lru_relative_miss_reduction": (
+                (lru_rate - pin_rate) / lru_rate if lru_rate else None
+            ),
+            "belady_vs_lru_relative_miss_reduction": (
+                (lru_rate - bel_rate) / lru_rate if lru_rate else None
+            ),
+            "cross_layer_top_n_coverage_stdev": (
+                statistics.pstdev(coverages) if len(coverages) > 1 else None
+            ),
+            "cross_layer_top_n_coverage_mean": (
+                statistics.mean(coverages) if coverages else None
+            ),
         }
     return out
 
@@ -304,11 +397,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bos-id", type=int, default=0)
     p.add_argument("--no-bos", dest="bos", action="store_false", default=True)
     p.add_argument("--slot-budgets", type=int, nargs="+", default=list(DEFAULT_SLOT_BUDGETS))
-    p.add_argument("--mtp-widths", type=int, nargs="+", default=[1, 2, 3, 4])
+    # Gate 0 verify-window widths = K+1 (K=1,2,3 draft depths).
+    p.add_argument("--mtp-widths", type=int, nargs="+", default=[2, 3, 4])
+    # Gate 1 hot-expert pin counts (slots/layer to pin from the train frequencies).
+    p.add_argument("--pin-counts", type=int, nargs="+", default=[32, 64, 96])
     p.add_argument("--record-bytes", type=int, default=None)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--slot-layout", default="component-banks")
-    p.add_argument("--memory-limit-gib", type=float, default=12.0)
+    # memory_limit is the runtime memory-PLAN ceiling, NOT process RSS: the plan's
+    # fixed-footprint check (expert_runtime.py:2050, unconditional) counts the full
+    # resident manifest (~23 GiB incl. the 15.3 GiB MTP experts the AR path never
+    # loads), so a literal 12 GiB ceiling makes the loader refuse.  Set it above the
+    # resident footprint (like decode_probe.py's 100 GiB) -- because
+    # --expert-cache-limit-gib caps the ACTUAL slot buffers, a higher ceiling does
+    # NOT raise RSS.  Real RSS safety = text-only lazy-mmap residents (~9 GiB) +
+    # capped cache (1.5 GiB) + the --rss-abort-gib watchdog; peak RSS is reported.
+    p.add_argument("--memory-limit-gib", type=float, default=32.0)
     p.add_argument("--expert-cache-limit-gib", type=float, default=1.5)
     # The runtime's fixed-footprint PLAN counts the full resident manifest
     # (incl. the 15.3 GiB MTP experts) against memory_limit, so it rejects at 12
@@ -351,6 +455,15 @@ def _start_rss_watchdog(limit_gib: float, log) -> threading.Event:
     t = threading.Thread(target=_poll, name="rss-watchdog", daemon=True)
     t.start()
     return stop
+
+
+def _io_read_bytes(runtime) -> int | None:
+    """Cumulative real bytes pulled off SSD by the expert reader so far."""
+    try:
+        snap = runtime.snapshot()
+        return int(((snap.get("slots") or {}).get("io") or {}).get("read_bytes") or 0)
+    except Exception:
+        return None
 
 
 def _record_bytes(runtime, override: int | None, log) -> int:
@@ -413,8 +526,9 @@ def run_census(args, log) -> dict:
 
     # -- switch wrapper: capture the gate's routed ids per (phase, step, layer) --
     ctx = {"phase": "prefill", "step": 0}
-    # prefill_counts[layer][expert] -> count ; decode_steps[layer] -> [ [ids]... ]
-    prefill_counts: Dict[int, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    # per-POSITION routed sets so the full 1,024+decode trace can be split
+    # chronologically for Gate 1.  prefill_steps/decode_steps[layer] -> [[ids],...]
+    prefill_steps: Dict[int, List[List[int]]] = defaultdict(list)
     decode_steps: Dict[int, List[List[int]]] = defaultdict(list)
 
     orig_gate_call = Gate.__call__
@@ -425,10 +539,9 @@ def run_census(args, log) -> dict:
             ids = indices.tolist()  # [n_tokens, top_k]
             L = int(self.layer_id)
             if ctx["phase"] == "prefill":
-                lc = prefill_counts[L]
+                ps = prefill_steps[L]
                 for row in ids:
-                    for e in row:
-                        lc[int(e)] += 1
+                    ps.append([int(e) for e in row])
             else:
                 # decode: one token per forward -> ids is [1, top_k]
                 decode_steps[L].append([int(e) for e in ids[-1]])
@@ -451,6 +564,7 @@ def run_census(args, log) -> dict:
     Gate.__call__ = gate_call
     prefill_s = decode_s = 0.0
     ttft_s = None
+    io_prefill_bytes = None
     decoded_ids: List[int] = []
     try:
         from mlx_lm.models.cache import make_prompt_cache
@@ -467,6 +581,7 @@ def run_census(args, log) -> dict:
         log(f"[census] prefill {len(prompt_ids)} tok in {prefill_s:.1f}s "
             f"({len(prompt_ids)/prefill_s:.1f} tok/s)  RSS={_rss_gib():.2f} GiB")
         _refresh_progress()
+        io_prefill_bytes = _io_read_bytes(runtime)  # Gate D: split prefill vs decode SSD
         # -- decode --
         ctx["phase"] = "decode"
         td = time.time()
@@ -534,15 +649,22 @@ def run_census(args, log) -> dict:
     # -- analysis -------------------------------------------------------------
     layers = sorted(decode_steps)
     decode_flat = _flatten_layer_seq(decode_steps)
+    # per-layer prefill counts (derived from the per-position prefill trace) and
+    # the exact prefill access order (real, not a popularity proxy).
+    prefill_counts: Dict[int, Dict[int, int]] = {}
     prefill_flat: Dict[int, List[int]] = {}
-    # reconstruct a prefill access order proxy (frequency-expanded, popularity
-    # order) for warm-priming -- exact prefill order is lost to counts, but LRU
-    # warm-priming only needs the *resident set* the prefill leaves, which for
-    # capacity>=distinct is the whole set and for capacity<distinct we prime with
-    # the most-popular (best case) then measure decode.
     for L in layers:
-        pc = prefill_counts.get(L, {})
-        prefill_flat[L] = [e for e, _ in sorted(pc.items(), key=lambda kv: -kv[1])]
+        seq = [e for step in prefill_steps.get(L, []) for e in step]
+        prefill_flat[L] = seq
+        c: Dict[int, int] = defaultdict(int)
+        for e in seq:
+            c[e] += 1
+        prefill_counts[L] = dict(c)
+    # full chronological per-position trace per layer (prefill then decode).
+    full_trace: Dict[int, List[List[int]]] = {
+        L: list(prefill_steps.get(L, [])) + list(decode_steps.get(L, []))
+        for L in layers
+    }
 
     per_layer = {}
     budgets = list(args.slot_budgets)
@@ -600,34 +722,44 @@ def run_census(args, log) -> dict:
             ),
         }
 
-    # held-out frequency-allocation gate: chronological split of the decode
-    # window (train = first half, eval = second half); prime eval with prefill.
+    # ---- GATE 0: verify-row overlap census (ledger New #1 / R2) -------------
+    # primary = consecutive DECODE tokens (the MTP verify-window proxy); the
+    # supplementary prefill-adjacent estimate has a much larger sample.
+    gate0_decode = verify_union_stats(decode_steps, args.mtp_widths)
+    gate0_prefill_adjacent = verify_union_stats(prefill_steps, args.mtp_widths)
+
+    # ---- GATE 1: held-out hot-expert pinning vs LRU vs Belady (R3) ----------
+    gate1 = pin_residency_gate(full_trace, args.pin_counts, train_frac=0.70)
+
+    # legacy held-out frequency-ALLOCATION gate (water-filling) as supplementary
+    # evidence alongside Gate 1's pinning framing.
     half = n_dec // 2
     train_by_layer = {L: [e for step in decode_steps[L][:half] for e in step] for L in layers}
     eval_by_layer = {L: [e for step in decode_steps[L][half:] for e in step] for L in layers}
     warmp = {L: prefill_flat[L] for L in layers}
     alloc_gate = {}
     for b in budgets:
-        total_slots = b * len(layers)
         alloc_gate[str(b)] = held_out_alloc_gate(
-            train_by_layer, eval_by_layer, total_slots, warm_by_layer=warmp)
+            train_by_layer, eval_by_layer, b * len(layers), warm_by_layer=warmp)
 
-    coverage_stdev = None
-    try:
-        # cross-layer coverage stdev at the smallest budget (hy3 diagnostic).
-        b0 = min(budgets)
-        cov = []
-        for L in layers:
-            pc = prefill_counts.get(L, {})
-            tot = sum(pc.values())
-            if tot:
-                topk = sorted(pc.values(), reverse=True)[:b0]
-                cov.append(sum(topk) / tot)
-        coverage_stdev = statistics.pstdev(cov) if len(cov) > 1 else None
-    except Exception:
-        pass
-
-    mtp = mtp_union_projection(decode_steps, args.mtp_widths)
+    # ---- GATE D: realized decode SSD bandwidth (CPU read; A/B gives GPU) -----
+    io_total_bytes = (rt_tel.get("io") or {}).get("read_bytes_ssd")
+    decode_io_bytes = None
+    if io_total_bytes is not None and io_prefill_bytes is not None:
+        decode_io_bytes = max(0, io_total_bytes - io_prefill_bytes)
+    gate_d = {
+        "io_prefill_bytes": io_prefill_bytes,
+        "io_total_bytes": io_total_bytes,
+        "decode_io_bytes": decode_io_bytes,
+        "decode_wall_s": decode_s,
+        "decode_bytes_per_token": (decode_io_bytes / n_dec
+                                   if decode_io_bytes is not None else None),
+        "realized_decode_gib_per_s_cpu": (
+            (decode_io_bytes / GIB) / decode_s
+            if decode_io_bytes is not None and decode_s else None),
+        "note": ("CPU realized BW is NOT the GPU number; ab_decode_levers.py "
+                 "reports the authoritative GPU realized BW inside gpu_window.sh"),
+    }
 
     census = {
         "meta": {
@@ -659,9 +791,19 @@ def run_census(args, log) -> dict:
             "gib_per_token_all_miss": top_k * len(layers) * record_bytes / GIB,
         },
         "aggregate_by_budget": agg,
-        "held_out_frequency_allocation_gate": alloc_gate,
-        "cross_layer_coverage_stdev": coverage_stdev,
-        "mtp_verify_window_dedup": {str(k): v for k, v in mtp.items()},
+        "gate_0_verify_union": {
+            "pass_condition": "median u <= 10 at K=3 (verify positions=4)",
+            "decode_consecutive": {str(k): v for k, v in gate0_decode.items()},
+            "prefill_adjacent": {str(k): v for k, v in gate0_prefill_adjacent.items()},
+        },
+        "gate_1_frequency_residency": {
+            "pass_condition": "pin_vs_lru miss reduction materially > 0 AND "
+                              "cross_layer coverage stdev >> hy3's 0.027",
+            "hy3_dead_reference_stdev": 0.027,
+            "top_n_pinning": {str(k): v for k, v in gate1.items()},
+            "supplementary_allocation_water_fill": alloc_gate,
+        },
+        "gate_d_realized_bandwidth": gate_d,
         "per_layer": {str(L): per_layer[L] for L in layers},
     }
     try:
