@@ -65,7 +65,7 @@ _force_worktree_mtplx()
 REPO = Path(__file__).resolve().parents[3]
 RECEIPTS = REPO / "docs" / "deepseek-v41" / "receipts"
 NPY_DIR = REPO / ".benchmark-artifacts" / "deepseek-v41" / "w9" / SUBDIR
-MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 GIB = 1024 ** 3
 STOP_AFTER = 2
 

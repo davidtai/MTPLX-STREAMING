@@ -26,7 +26,7 @@ WORKTREE="$(cd "${HERE}/../.." && pwd)"
 # makes the worktree's editable mtplx win (memory/editable-install-cwd-shadowing.md).
 CAMPAIGN_VENV="${MTPLX_CAMPAIGN_VENV:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv}"
 VENV_PY="${MTPLX_VENV_PY:-${CAMPAIGN_VENV}/bin/python3}"
-MODEL="${DSV41_MODEL:-${HOME}/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2}"
+MODEL="${DSV41_MODEL:-${HOME}/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4}"
 HOST="${DSV41_HOST:-127.0.0.1}"
 HEALTH_TIMEOUT="${DSV41_HEALTH_TIMEOUT:-600}"   # server load = 8.67 GB residents + admit
 STOP_TIMEOUT="${DSV41_STOP_TIMEOUT:-60}"

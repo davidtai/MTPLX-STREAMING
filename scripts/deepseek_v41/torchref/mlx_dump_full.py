@@ -45,7 +45,7 @@ _force_worktree_mtplx()
 
 NPY = REPO / ".benchmark-artifacts" / "deepseek-v41" / "w9" / "mlx_full"
 RECEIPTS = REPO / "docs" / "deepseek-v41" / "receipts"
-MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 GIB = 1024 ** 3
 PROBE_IDS = [0, 3465, 1258, 6036, 14, 291, 3395, 361, 1354, 260, 940, 291, 6328, 3465, 1241,
              6036, 14, 291, 3395, 361, 1354, 260, 565, 291, 6328, 3465, 21740, 6036, 14, 291, 2605]

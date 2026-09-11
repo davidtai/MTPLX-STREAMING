@@ -22,7 +22,7 @@ import mlx.nn as nn
 REPO = Path(__file__).resolve().parents[3]
 OUT = REPO / ".benchmark-artifacts" / "deepseek-v41" / "w9" / "mlx_dense"
 GIB = 1024 ** 3
-MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 
 
 def deq(x):

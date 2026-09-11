@@ -36,7 +36,7 @@ NPY = REPO / ".benchmark-artifacts" / "deepseek-v41" / "w9"
 MLXNPY = NPY / "mlx"
 DENSE = NPY / "mlx_dense"
 RECEIPTS = REPO / "docs" / "deepseek-v41" / "receipts"
-ARTIFACT = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+ARTIFACT = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 
 
 def bf16_bytes_to_f32(u16: np.ndarray) -> np.ndarray:

@@ -59,7 +59,7 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+DEFAULT_MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 DEFAULT_OUT_DIR = Path(".benchmark-artifacts/deepseek-v41")
 STEP = "bench_standard_shape"
 DEFAULT_CONTEXT_CELLS = (1024, 16384)

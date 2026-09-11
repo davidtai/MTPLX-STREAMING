@@ -37,7 +37,7 @@ NPY = REPO / ".benchmark-artifacts" / "deepseek-v41" / "w9"
 DENSE = NPY / "mlx_dense"
 MLXFULL = NPY / "mlx_full"
 RECEIPTS = REPO / "docs" / "deepseek-v41" / "receipts"
-ARTIFACT = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+ARTIFACT = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 SEAMS = {2: "kv_source+idx+2nd-compressor-start", 8: "kv_source+idx (2nd compressor)",
          14: "kv_source+idx+engram", 20: "kv_source+idx+candidate-source (ratio1)",
          24: "Reindex", 28: "Reindex", 32: "Reindex", 36: "Reindex", 1: "engram"}

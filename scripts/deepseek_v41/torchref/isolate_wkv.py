@@ -25,7 +25,7 @@ import mlx.core as mx
 REPO = Path(__file__).resolve().parents[3]
 NPY = REPO / ".benchmark-artifacts" / "deepseek-v41" / "w9"
 GIB = 1024 ** 3
-MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 
 
 def cos(a, b):

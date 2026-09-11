@@ -13,7 +13,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 K = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 GIB = 1024**3
 BOS = 0
 def log(*a): print(*a, flush=True)

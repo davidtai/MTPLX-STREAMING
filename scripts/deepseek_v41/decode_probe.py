@@ -13,7 +13,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 LOG = HERE / "decode_probe.log"
 OUT = HERE / "decode_probe_out.json"
-MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+import os as _os
+MODEL = Path(_os.environ.get("DSV41_MODEL", "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4")).expanduser()
 GIB = 1024**3
 BOS = 0
 

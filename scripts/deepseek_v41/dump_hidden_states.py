@@ -40,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2").expanduser()
+DEFAULT_MODEL = Path("~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4").expanduser()
 GIB = 1024**3
 
 
