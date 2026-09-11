@@ -259,6 +259,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--context-tokens", type=int, default=1024, choices=(1024, 16384))
     p.add_argument("--decode-tokens", type=int, default=256)
     p.add_argument(
+        "--decode-mode",
+        choices=("ar", "dspark"),
+        default="ar",
+        help=(
+            "Decode lane. 'ar' is greedy target-only autoregression (the default, "
+            "byte-identical baseline for the levers). 'dspark' runs the "
+            "DSpark-DIRECT speculative loop (W57, mtplx.models."
+            "deepseek_v41_dspark_decode.dspark_generate); it also runs the AR "
+            "lane and ASSERTS the greedy token ids are byte-identical, and records "
+            "tokens/cycle + accept-by-depth in the receipt under 'dspark'."
+        ),
+    )
+    p.add_argument(
+        "--dspark-depth",
+        type=int,
+        default=3,
+        help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
+    )
+    p.add_argument(
         "--arms",
         nargs="+",
         default=["control", "shared_overlap"],
@@ -487,6 +506,37 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps):
     }
 
 
+def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth):
+    """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
+    per-cycle accept statistics.  Total tokens == steps + 1 to match ``_generate``
+    (prefill token + ``steps`` decode tokens)."""
+    from mtplx.models.deepseek_v41_dspark_decode import (
+        DSparkDecodeStats,
+        dspark_generate,
+    )
+    from mtplx.sampling import SamplerConfig
+
+    mem_probe.reset_peak()
+    stats = DSparkDecodeStats()
+    t0 = time.perf_counter()
+    toks = dspark_generate(
+        model,
+        [int(t) for t in prompt_ids],
+        max_tokens=int(steps) + 1,
+        sampler=SamplerConfig(temperature=0.0),
+        seed=0,
+        speculative_depth=int(depth),
+        stats=stats,
+    )
+    wall = time.perf_counter() - t0
+    return {
+        "generated": [int(t) for t in toks],
+        "decode_wall_s": wall,
+        "peak_gb": mem_probe.peak_bytes() / GIB,
+        "stats": stats.to_dict(),
+    }
+
+
 def _overlap_telemetry(runtime) -> dict | None:
     """Best-effort GPU-overlap census off the runtime slot metrics.
 
@@ -571,6 +621,53 @@ def _run_arm(args, arm, bench, mx) -> dict:
             if runtime is not None
             else None,
         }
+        if getattr(args, "decode_mode", "ar") == "dspark":
+            # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR
+            # ids byte-for-byte (verify is authoritative); assert it in the
+            # receipt and record tokens/cycle + accept-by-depth.
+            dsp = _generate_dspark(
+                model=model, mx=mx, mem_probe=mem_probe,
+                prompt_ids=prompt_ids, steps=args.decode_tokens,
+                depth=args.dspark_depth,
+            )
+            dsp_ids = dsp["generated"]
+            byte_identical = dsp_ids == ids
+            st = dsp["stats"]
+            receipt["dspark"] = {
+                "depth": int(args.dspark_depth),
+                "byte_identical_vs_ar": byte_identical,
+                "decode_wall_s": dsp["decode_wall_s"],
+                "decode_tok_s": (
+                    (len(dsp_ids) / dsp["decode_wall_s"])
+                    if dsp["decode_wall_s"] > 0
+                    else None
+                ),
+                "peak_gb": dsp["peak_gb"],
+                "tokens_per_cycle": st["tokens_per_cycle"],
+                "accept_rate": st["accept_rate"],
+                "accept_rate_by_depth": st["accept_rate_by_depth"],
+                "drafted_by_depth": st["drafted_by_depth"],
+                "accepted_by_depth": st["accepted_by_depth"],
+                "cycles": st["cycles"],
+                "verify_calls": st["verify_calls"],
+                "drafted_tokens": st["drafted_tokens"],
+                "accepted_drafts": st["accepted_drafts"],
+                "rejected_drafts": st["rejected_drafts"],
+                "token_ids_sha256": hashlib.sha256(
+                    json.dumps(dsp_ids).encode()
+                ).hexdigest(),
+            }
+            # Byte-identity is a hard correctness gate, not a soft metric: a
+            # differing greedy sequence means the speculative lane is broken.
+            if not byte_identical:
+                first = next(
+                    (i for i, (a, b) in enumerate(zip(dsp_ids, ids)) if a != b),
+                    min(len(dsp_ids), len(ids)),
+                )
+                raise AssertionError(
+                    "DSpark-DIRECT greedy decode diverged from AR at index "
+                    f"{first} (arm {arm!r}); speculative lane is not lossless"
+                )
         if getattr(args, "warm_repeat", False):
             receipt["warm"] = _warm_repeat_pass(
                 model=model, ops=ops, mem_probe=mem_probe,

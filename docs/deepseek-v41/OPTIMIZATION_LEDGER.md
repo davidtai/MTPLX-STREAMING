@@ -142,6 +142,18 @@ decode). Do not confuse the two — that is the mistake the Qwen3.8 dispatch sto
   verify (verified == pure-AR argmax; PORT_PLAN P3.0). **Deps:** R2 (mandatory pairing), R4/D, MTP
   residents (−6.7 GiB cache).
 - **Rank: 1** (necessary; not sufficient; dangerous without R2).
+- **W57 (DSpark-DIRECT lane, code landed):** a lean self-contained loop
+  (`mtplx/models/deepseek_v41_dspark_decode.py`, served via `--generation-mode dspark` /
+  `MTPLX_DSV41_DSPARK_DIRECT=1`) drives W23's drafter through draft → K+1-row verify → greedy/spec
+  accept → `trim_verified_window_to_prefix` (no re-forward; V4.1 cache all-trimmable), **bypassing** the
+  generic native-MTP machinery that window-21 measured *net-negative* (served MTP 2.45–2.94 vs AR
+  2.2–5.0). Greedy == AR byte-for-byte over 256 tokens; sampled K=0 == `generate_ar` exactly (14 CPU
+  tests). Reuses the V4 K3 loop's accept/verify/rollback structure + `mtplx.cache_state` primitives (not
+  the Metal Mia K5 engine). **Also fixed a blocking W23 drafter regression** (`DSparkAttention` missing
+  `self.mode` broke every draft-block forward → the W23 greedy gate was failing on this branch). Cost
+  model in `W57_DSPARK_DIRECT.md`: this lane removes the generic machinery's *overhead* but NOT the
+  §1.4/R2 bytes wall — the dispatch-bound `T_{K+1} ≈ T1` win still needs a resident bank or R2 dedup, and
+  the tok/s number is gated by α (still unmeasured on the box, §8 lever L).
 
 ### R2 — Expert-record dedup across MTP verify rows — Factor B
 

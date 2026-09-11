@@ -206,6 +206,24 @@ def build_parser() -> argparse.ArgumentParser:
         "forwards and decode tok/s = steps / decode wall.",
     )
     parser.add_argument(
+        "--decode-mode",
+        choices=("ar", "dspark"),
+        default="ar",
+        help=(
+            "Decode lane for the cell. 'ar' is the standard greedy target-only "
+            "autoregression. 'dspark' additionally runs the DSpark-DIRECT "
+            "speculative loop (W57), ASSERTS its greedy ids are byte-identical to "
+            "the AR cell, and records tokens/cycle + accept-by-depth under "
+            "the cell's 'dspark' key (the AR metrics stay the reported shape)."
+        ),
+    )
+    parser.add_argument(
+        "--dspark-depth",
+        type=int,
+        default=3,
+        help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
+    )
+    parser.add_argument(
         "--repeats",
         type=int,
         default=1,
@@ -512,8 +530,14 @@ def bench_one_cell(
     gather_probe,
     prompt_ids,
     steps: int,
+    decode_mode: str = "ar",
+    dspark_depth: int = 3,
 ) -> dict:
-    """Greedy prefill + decode of one cell; returns the measured metrics."""
+    """Greedy prefill + decode of one cell; returns the measured metrics.
+
+    ``decode_mode == "dspark"`` additionally runs the DSpark-DIRECT speculative
+    loop (W57) after the AR decode, asserts the greedy ids are byte-identical, and
+    attaches its tokens/cycle + accept-by-depth under the ``dspark`` key."""
 
     prompt_len = len(prompt_ids)
     mem_probe.reset_peak()
@@ -548,9 +572,59 @@ def bench_one_cell(
         text = ""
 
     decode_tokens = int(steps)
+    dspark_metrics = None
+    if decode_mode == "dspark" and getattr(model, "mtp", None) is not None:
+        # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR ids
+        # (verify is authoritative); assert byte-identity and record the accept
+        # structure.  Skipped for the dry-run double (a _FakeModel has no mtp).
+        from mtplx.models.deepseek_v41_dspark_decode import (
+            DSparkDecodeStats,
+            dspark_generate,
+        )
+        from mtplx.sampling import SamplerConfig
+
+        mem_probe.reset_peak()
+        st = DSparkDecodeStats()
+        dsp_start = time.perf_counter()
+        dsp_ids = dspark_generate(
+            model,
+            [int(t) for t in prompt_ids],
+            max_tokens=decode_tokens + 1,
+            sampler=SamplerConfig(temperature=0.0),
+            seed=0,
+            speculative_depth=int(dspark_depth),
+            stats=st,
+        )
+        dsp_wall = time.perf_counter() - dsp_start
+        byte_identical = list(dsp_ids) == list(generated)
+        if not byte_identical:
+            first = next(
+                (i for i, (a, b) in enumerate(zip(dsp_ids, generated)) if a != b),
+                min(len(dsp_ids), len(generated)),
+            )
+            raise AssertionError(
+                "DSpark-DIRECT greedy decode diverged from AR at index "
+                f"{first}; speculative lane is not lossless"
+            )
+        sd = st.to_dict()
+        dspark_metrics = {
+            "depth": int(dspark_depth),
+            "byte_identical_vs_ar": byte_identical,
+            "decode_wall_s": dsp_wall,
+            "decode_tok_s": (len(dsp_ids) / dsp_wall) if dsp_wall > 0 else None,
+            "peak_mlx_gb": mem_probe.peak_bytes() / GIB,
+            "tokens_per_cycle": sd["tokens_per_cycle"],
+            "accept_rate": sd["accept_rate"],
+            "accept_rate_by_depth": sd["accept_rate_by_depth"],
+            "drafted_by_depth": sd["drafted_by_depth"],
+            "accepted_by_depth": sd["accepted_by_depth"],
+            "cycles": sd["cycles"],
+            "verify_calls": sd["verify_calls"],
+        }
     return {
         "prompt_tokens": prompt_len,
         "ttft_s": ttft_s,
+        "dspark": dspark_metrics,
         "prefill_tok_s": (prompt_len / ttft_s) if ttft_s > 0 else None,
         "decode_tokens": decode_tokens,
         "decode_wall_s": decode_wall_s,
@@ -886,6 +960,8 @@ def run_real(args) -> int:
                     gather_probe=gather_probe,
                     prompt_ids=prompt_ids,
                     steps=args.steps,
+                    decode_mode=getattr(args, "decode_mode", "ar"),
+                    dspark_depth=getattr(args, "dspark_depth", 3),
                 )
                 repeats.append(metrics)
                 print(
