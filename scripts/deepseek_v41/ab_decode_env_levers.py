@@ -71,6 +71,17 @@ DEVICE_ROUTE_ENV = "MTPLX_DSV41_DEVICE_ROUTE"  # K24 (W44): barrier-free all-hit
 # 40 -> m+1 host syncs/token (warm 1); cold pays one extra span of compute
 # (W44_DEVICE_ROUTE.md). Byte-identical, but tracked separately from the pure
 # per-forward reorders because of that cold-token recovery cost.
+PREFILL_DENSE_ENV = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"  # K26 (W51): prefill-only
+# "dequantize once, matmul dense" expert path. At the 16K layer-major prefill the
+# mxfp4 gs32 gather_qmm is ALU/dequant-bound (W47: ~2.9 TFLOPS); this dequantizes
+# each expert with >= PREFILL_DENSE_MIN_ROWS routed rows to bf16 ONCE and runs
+# gate/up/down as dense bf16 matmuls. Prefill-only (never engages at decode M=1);
+# NOT bit-identical to gather (fp32 matmul accumulation order), within the W51 CPU
+# tolerance. The two value knobs below tune the row threshold and dequant batch.
+PREFILL_DENSE_MIN_ROWS_ENV = "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS"  # per-expert rows
+# a wave must carry before it densifies (default ~128); below it keeps gather_qmm.
+PREFILL_DENSE_BATCH_ENV = "MTPLX_DSV41_PREFILL_DENSE_BATCH"  # experts dequantized
+# per bounded batch (default 8; ~71 MB bf16/expert -> ~0.57 GB transient peak).
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -92,16 +103,22 @@ ALL_LEVER_ENVS = (
     ATTN_COMPILE_ENV,
     ATTN_WIN_MEMO_ENV,
     DEVICE_ROUTE_ENV,
+    PREFILL_DENSE_ENV,
+    PREFILL_DENSE_MIN_ROWS_ENV,
+    PREFILL_DENSE_BATCH_ENV,
     HEAD_MODE_ENV,
 )
 
 
 def _preset(
     *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None,
-    submit=None, attn=None, win_memo=None, device_route=None, head=None,
+    submit=None, attn=None, win_memo=None, device_route=None,
+    prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
+    head=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
-    codec value ("bf16"/"mxfp8"/"q8"), the other nine a "1"/None boolean."""
+    codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_min_rows`` / ``_batch`` take
+    an integer string (None = use the code default), the rest a "1"/None boolean."""
     return {
         OVERLAP_ENV: overlap,
         LAYER_MAJOR_ENV: layer_major,
@@ -112,6 +129,9 @@ def _preset(
         ATTN_COMPILE_ENV: attn,
         ATTN_WIN_MEMO_ENV: win_memo,
         DEVICE_ROUTE_ENV: device_route,
+        PREFILL_DENSE_ENV: prefill_dense,
+        PREFILL_DENSE_MIN_ROWS_ENV: prefill_dense_min_rows,
+        PREFILL_DENSE_BATCH_ENV: prefill_dense_batch,
         HEAD_MODE_ENV: head,
     }
 
@@ -127,6 +147,11 @@ ARM_PRESETS = {
     "attn_compile": _preset(attn="1"),                      # K22 lever ON (W41 landing)
     "attn_win_memo": _preset(win_memo="1"),                 # K24 lever ON (W45): window-mask memo
     "device_route": _preset(device_route="1"),              # W44 K24: barrier-free all-hit
+    # W51 K26: prefill dense experts, armed on the 16K layer-major schedule it
+    # targets (the read-once bank pass W47 measured the ALU-bound gather on).
+    # Not byte-identical to control (fp32 matmul accumulation order), so the
+    # byte-identity summary flags it -- like the head-* arms, expected.
+    "prefill_dense_experts": _preset(layer_major="1", prefill_dense="1"),
     "both": _preset(overlap="1", layer_major="1"),          # shared_overlap + layer_major
     "all_levers": _preset(
         overlap="1", layer_major="1", sinkhorn="1", hc="1",
@@ -175,8 +200,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=["control", "shared_overlap"],
         help="preset names from ARM_PRESETS (control, shared_overlap, layer_major, "
         "sinkhorn_metal, hc_compile, switch_fastpath, switch_fastpath_b, "
-        "attn_compile, attn_win_memo, device_route, both, all_levers, stack_a, "
-        "head_bf16, head_mxfp8, head_q8)",
+        "attn_compile, attn_win_memo, device_route, prefill_dense_experts, both, "
+        "all_levers, stack_a, head_bf16, head_mxfp8, head_q8)",
     )
     p.add_argument("--out", type=Path, required=True, help="append-only JSONL receipt")
     # Prompt build: mirrors bench_standard_shape.py exactly, so that
