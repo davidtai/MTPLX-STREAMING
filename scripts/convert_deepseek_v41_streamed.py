@@ -929,13 +929,154 @@ def build_mxfp4_manifest(out: Path, resident_manifest, spec, records_meta: list[
     return manifest
 
 
-def convert_mxfp4(args, spec) -> int:
+def mxfp4_record_segment_meta() -> list[dict]:
+    """The fixed six-segment mxfp4 record layout for the pinned geometry."""
+    dims = {
+        "gate_proj": (dc.MOE_INTERMEDIATE, dc.HIDDEN_SIZE),
+        "up_proj": (dc.MOE_INTERMEDIATE, dc.HIDDEN_SIZE),
+        "down_proj": (dc.HIDDEN_SIZE, dc.MOE_INTERMEDIATE),
+    }
+    layout: list[dict] = []
+    cursor = 0
+    for proj in ("gate_proj", "up_proj", "down_proj"):
+        o, k = dims[proj]
+        wshape = (o, k * dc.MXFP4_BITS // 32)
+        wlen = wshape[0] * wshape[1] * 4
+        sshape = (o, k // dc.MXFP4_GROUP)
+        slen = sshape[0] * sshape[1]
+        layout.append({"component": f"{proj}.weight", "leaf_name": f"{proj}.weight",
+                       "dtype": "U32", "shape": list(wshape), "rel_offset": cursor,
+                       "length": wlen})
+        cursor += wlen
+        layout.append({"component": f"{proj}.scales", "leaf_name": f"{proj}.scales",
+                       "dtype": "U8", "shape": list(sshape), "rel_offset": cursor,
+                       "length": slen})
+        cursor += slen
+    if cursor != dc.MXFP4_EXPERT_RECORD_BYTES:
+        raise RuntimeError(f"segment layout {cursor} != {dc.MXFP4_EXPERT_RECORD_BYTES}")
+    return layout
+
+
+def build_pilot_from_bank(args, spec) -> int:
+    """Build an L0/L1 pilot by COPYING the first records of an existing mxfp4 bank.
+
+    The full-bank writer (W16) uses the identical pinned framing (contiguous
+    record = (L*384+e)*record_bytes), so the pilot's first ``len(layers)*384``
+    records are byte-identical to a fresh conversion -- no re-quantization.  A few
+    records are spot-checked bit-exact vs the FP4 source as a cross-validation.
+    """
+    out: Path = args.out.expanduser().resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    bank_dir: Path = args.from_bank.expanduser().resolve()
+    resident_src: Path = args.hardlink_residents_from.expanduser().resolve()
+    resident_manifest = load_expert_manifest(args.resident_manifest.expanduser().resolve())
+
+    layers = sorted(set(parse_shards(args.layers)))
+    if layers != list(range(len(layers))):
+        raise SystemExit("--from-bank pilot expects a contiguous 0..N layer range")
+    num_records = len(layers) * dc.N_ROUTED_EXPERTS
+    REC = dc.MXFP4_EXPERT_RECORD_BYTES
+    seg_layout = mxfp4_record_segment_meta()
+
+    src_bank = bank_dir / "experts.bin"
+    out_bank = out / "experts.bin"
+    log(f"copying {num_records} records ({num_records*REC/1024**3:.2f} GiB) from "
+        f"{src_bank} -> {out_bank}")
+    sfd = os.open(str(src_bank), os.O_RDONLY)
+    ofd = os.open(str(out_bank), os.O_RDWR | os.O_CREAT, 0o644)
+    records_meta: list[dict] = []
+    try:
+        os.ftruncate(ofd, num_records * REC)
+        for layer_pos, layer in enumerate(layers):
+            for expert in range(dc.N_ROUTED_EXPERTS):
+                record_index = layer_pos * dc.N_ROUTED_EXPERTS + expert
+                src_index = layer * dc.N_ROUTED_EXPERTS + expert
+                payload = dc._pread_exact(sfd, src_index * REC, REC)
+                pos, view = record_index * REC, memoryview(payload)
+                while view:
+                    written = os.pwrite(ofd, view, pos)
+                    if written <= 0:
+                        raise RuntimeError("short pwrite to pilot experts.bin")
+                    pos += written
+                    view = view[written:]
+                records_meta.append(
+                    {"layer": layer, "expert": expert, "index": record_index,
+                     "sidecar_offset": record_index * REC, "sha256": _sha(payload),
+                     "segments": seg_layout})
+            log(f"layer {layer}: copied 384 records")
+        os.fsync(ofd)
+    finally:
+        os.close(sfd)
+        os.close(ofd)
+
+    # cross-validation: a few records dequantize bit-exact vs the FP4 source
+    _spotcheck_pilot_vs_source(out_bank, args, layers[:1], (0, 200, 383))
+
+    fin_spec = replace(spec, routed_layer_start=layers[0], routed_layer_count=len(layers))
+    hardlink_residents(resident_src, out)
+    log("finalizing pilot mxfp4 manifest ...")
+    manifest = build_mxfp4_manifest(out, resident_manifest, fin_spec, records_meta,
+                                    require_pinned=False)
+    log(f"pilot manifest: {len(manifest.records)} records, "
+        f"routed={manifest.routed_expert_bytes/1024**3:.2f} GiB, "
+        f"digest={manifest.manifest_sha256[:12]}")
+    report = verify_expert_manifest(manifest, out, verify_records=True,
+                                    verify_shard_hashes=False, verify_sidecar_hash=True)
+    log(f"verify report: {json.dumps(report)}")
+    log("DONE (pilot from bank)")
+    return 0
+
+
+def _spotcheck_pilot_vs_source(out_bank: Path, args, layers, experts) -> None:
+    """Dequantize sampled pilot records and assert byte-equality vs the FP4 source."""
+    src: Path = args.src.expanduser().resolve()
+    index = json.loads(args.index.read_text())["weight_map"]
+    REC = dc.MXFP4_EXPERT_RECORD_BYTES
+    seg = {s["component"]: s for s in mxfp4_record_segment_meta()}
+    ofd = os.open(str(out_bank), os.O_RDONLY)
+    try:
+        for layer in layers:
+            srcshard = src / source_shard_for_layer(index, layer)
+            header, ds = dc.read_safetensors_header(str(srcshard))
+            entries = dc.tensor_entries(header)
+            sfd = os.open(str(srcshard), os.O_RDONLY)
+            try:
+                for expert in experts:
+                    base = (layer * dc.N_ROUTED_EXPERTS + expert) * REC
+                    for proj, w in dc.PROJ_TO_SOURCE_W.items():
+                        we = entries[f"layers.{layer}.ffn.experts.{expert}.{w}.weight"]
+                        se = entries[f"layers.{layer}.ffn.experts.{expert}.{w}.scale"]
+                        pk_np = np.frombuffer(dc.read_tensor_raw(sfd, ds, we), np.uint8).reshape(we.shape)
+                        sc_np = np.frombuffer(dc.read_tensor_raw(sfd, ds, se), np.uint8).reshape(se.shape)
+                        ref = dc.dequant_fp4(pk_np, sc_np)
+                        ws = seg[f"{proj}.weight"]; ss = seg[f"{proj}.scales"]
+                        wbuf = dc._pread_exact(ofd, base + ws["rel_offset"], ws["length"])
+                        sbuf = dc._pread_exact(ofd, base + ss["rel_offset"], ss["length"])
+                        pk = mx.array(np.frombuffer(wbuf, "<u4").reshape(tuple(ws["shape"])))
+                        sc = mx.array(np.frombuffer(sbuf, np.uint8).reshape(tuple(ss["shape"])))
+                        deq = np.array(mx.dequantize(pk, sc, group_size=dc.MXFP4_GROUP,
+                                                     bits=dc.MXFP4_BITS, mode="mxfp4").astype(mx.float32))
+                        if not np.array_equal(deq, ref.astype(np.float32)):
+                            raise RuntimeError(
+                                f"pilot record L{layer}E{expert}.{proj} NOT bit-exact vs source")
+                    log(f"spotcheck L{layer}E{expert}: bit-exact vs FP4 source (3 projs)")
+            finally:
+                os.close(sfd)
+    finally:
+        os.close(ofd)
+
+
+def convert_mxfp4(args, spec, resident_manifest_override=None) -> int:
     """Driver for the native-mxfp4 routed-expert bank (residents hardlinked)."""
     src: Path = args.src.expanduser().resolve()
     out: Path = args.out.expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
     resident_src = args.hardlink_residents_from.expanduser().resolve()
-    resident_manifest = load_expert_manifest(resident_src / "expert-manifest.json")
+    resident_manifest = (
+        resident_manifest_override
+        if resident_manifest_override is not None
+        else load_expert_manifest(resident_src / "expert-manifest.json")
+    )
 
     index = json.loads(args.index.read_text())["weight_map"]
     layers = parse_shards(args.layers)
@@ -1051,15 +1192,32 @@ def main() -> int:
                          "(default: assert mx.dequantize == fp32 source for every expert)")
     ap.add_argument("--model-key", default=None,
                     help="streaming spec key (default: derived from --expert-codec)")
+    ap.add_argument("--from-bank", type=Path, default=None,
+                    help="mxfp4 pilot: copy the first --layers*384 records from an "
+                         "existing mxfp4 bank dir (no re-quantization) instead of "
+                         "converting from source")
+    ap.add_argument("--resident-manifest", type=Path, default=None,
+                    help="mxfp4 path: manifest whose resident section is reused (e.g. "
+                         "the q2-provenance expert-manifest.json; residents identical)")
     args = ap.parse_args()
 
     default_key = ("deepseek-v41-flash-expert-mxfp4"
                    if args.expert_codec == "mxfp4" else dc.MODEL_KEY)
     spec = get_model_spec(args.model_key or default_key)
 
+    if args.from_bank is not None:
+        if args.hardlink_residents_from is None or args.resident_manifest is None:
+            raise SystemExit("--from-bank requires --hardlink-residents-from and "
+                             "--resident-manifest")
+        return build_pilot_from_bank(args, spec)
+
     if args.expert_codec == "mxfp4":
         if args.hardlink_residents_from is None:
             raise SystemExit("--expert-codec mxfp4 requires --hardlink-residents-from")
+        if args.resident_manifest is not None:
+            resident_manifest = load_expert_manifest(
+                args.resident_manifest.expanduser().resolve())
+            return convert_mxfp4(args, spec, resident_manifest_override=resident_manifest)
         return convert_mxfp4(args, spec)
 
     src: Path = args.src.expanduser().resolve()
