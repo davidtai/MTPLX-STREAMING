@@ -347,6 +347,159 @@ class DSparkDecodeStats:
 
 
 # ---------------------------------------------------------------------------
+# W77: greedy divergence classification (tie-flip vs genuine divergence)
+# ---------------------------------------------------------------------------
+# The DSpark-DIRECT greedy stream is byte-for-byte AR *by construction* -- the
+# verify argmax is authoritative -- so any first-token difference from the AR
+# reference comes from the target FORWARD returning slightly different logits at
+# the same committed context depending on the row count: AR runs a 1-row (M=1)
+# decode forward per token, the verify runs a K+1-row (M>1) forward, and under
+# cell16k levers (HEAD_MODE=bf16 head GEMV, ATTN_COMPILE shape-specialised tapes,
+# SELECTED_KEYS rows>1 gather-softmax) those two shapes take different matmul /
+# softmax kernels whose float reassociation is in the bf16 rounding class (never
+# bit-identical on Metal; see W40_HEAD_LEVER / K30 notes).  A greedy argmax only
+# *flips* when the AR top-1/top-2 logit gap at that position is within that
+# rounding envelope -- David's standing rule: "inexact is fine if it's from
+# tie-breaker flips" ([[dsv41-inexact-ok-if-tie-flips]]).
+#
+# Threshold justification (documented per the coordinator ask):
+#   * HEAD_MODE=bf16 (W40/K21) casts the final hidden to bf16 before the head
+#     GEMV; bf16 carries a 7-bit mantissa, so its unit round-off is 2**-8 ~=
+#     3.9e-3.  A single logit therefore carries a bf16-class perturbation of
+#     ~|logit| * 2**-8 plus the M=1-vs-M>1 accumulation-order difference of the
+#     head GEMM.
+#   * The W77 CPU per-lever probe measures the actual max |Δlogit| between the
+#     M=1 and M=K+1 forwards for each cell16k lever (see
+#     docs/deepseek-v41/W77_DSPARK_DIVERGENCE.md); the bf16-class floor below is
+#     that measured order of magnitude (~1e-2 logit units).
+#   * A greedy flip caused purely by rounding needs the top-2 gap to be *within*
+#     that perturbation, so the tie-flip threshold is set to 3x the bf16-class
+#     floor (~3e-2 logit units): a top-2 gap below it is a genuine near-tie that
+#     a few bf16 ulps flip (class "tie_flip", acceptable); a gap above it means
+#     the argmax changed for a reason larger than rounding (class "divergent" --
+#     a real lane bug or a non-rounding lever), which must stay loud.
+DSPARK_BF16_CLASS_DELTA = 1.0e-2
+#: Default AR top-2 logit gap (in logit units) below which a greedy divergence is
+#: classed a tie-break flip.  3x the bf16-class floor.  Overridable per-arm via
+#: ``ab_decode_env_levers.py --dspark-tie-margin``.
+DSPARK_TIE_MARGIN_DEFAULT = 3.0 * DSPARK_BF16_CLASS_DELTA  # 3e-2
+
+
+def _top2_margin(row) -> Optional[float]:
+    """Logit gap between the top-1 and top-2 entries of a 1-D logits row (numpy
+    array or mx.array).  ``None`` for a row with fewer than 2 entries."""
+    if row is None:
+        return None
+    flat = np.asarray(row).reshape(-1)
+    if flat.size < 2:
+        return None
+    top = np.argpartition(flat, -2)[-2:]
+    two = np.sort(flat[top])
+    return float(two[1] - two[0])
+
+
+def classify_divergence(
+    *,
+    index: int,
+    ar_token: Optional[int],
+    dspark_token: Optional[int],
+    ar_logits_row=None,
+    dspark_logits_row=None,
+    tie_margin: float = DSPARK_TIE_MARGIN_DEFAULT,
+) -> dict:
+    """Classify the FIRST greedy divergence of a DSpark stream from its AR
+    reference at position ``index``.
+
+    ``ar_logits_row`` is the AR forward's full logits vector at ``index`` (the
+    faithful M=1 replay); ``dspark_logits_row`` is the verify forward's logits row
+    that produced the committed DSpark token there (captured, zero extra forwards).
+    Either row may be ``None`` (unavailable) -- the classifier degrades to the
+    signals it has and never raises.
+
+    Returns a receipt-ready dict (all JSON scalars, no arrays):
+      ``divergence_index``, ``ar_token``, ``dspark_token``, ``ar_top2_margin``,
+      ``dspark_top2_margin``, ``max_abs_logit_delta``, ``tie_margin``, ``class``.
+    ``class`` is ``"tie_flip"`` when the AR top-2 margin is known and below
+    ``tie_margin`` (a rounding-class near-tie), else ``"divergent"``.  With no AR
+    margin available the class is ``"divergent"`` (conservative: do not silently
+    absolve an unmeasured flip).
+    """
+    ar_margin = _top2_margin(ar_logits_row)
+    dspark_margin = _top2_margin(dspark_logits_row)
+    max_abs_delta: Optional[float] = None
+    if ar_logits_row is not None and dspark_logits_row is not None:
+        a = np.asarray(ar_logits_row).reshape(-1)
+        b = np.asarray(dspark_logits_row).reshape(-1)
+        if a.shape == b.shape and a.size:
+            max_abs_delta = float(np.max(np.abs(a.astype(np.float64) - b.astype(np.float64))))
+    cls = "tie_flip" if (ar_margin is not None and ar_margin < float(tie_margin)) else "divergent"
+    return {
+        "divergence_index": int(index),
+        "ar_token": None if ar_token is None else int(ar_token),
+        "dspark_token": None if dspark_token is None else int(dspark_token),
+        "ar_top2_margin": ar_margin,
+        "dspark_top2_margin": dspark_margin,
+        "max_abs_logit_delta": max_abs_delta,
+        "tie_margin": float(tie_margin),
+        "class": cls,
+    }
+
+
+class DivergenceCapture:
+    """Watches a greedy DSpark stream against an AR reference and snapshots the
+    verify logits row of the FIRST committed token that differs from AR.
+
+    Zero extra forwards: the row is read out of the ``verify_logits`` the cycle
+    already computed.  Only meaningful for greedy decode (temperature 0), where
+    the emitted token at local block index ``m`` is the argmax of
+    ``verify_logits[0, m]`` (an accepted draft) or, for the last emitted token,
+    the correction/bonus argmax at that row.  ``ar_reference`` includes the prompt
+    prefill token at position 0, aligning 1:1 with :func:`dspark_generate`'s
+    returned ids, so ``new_tokens[i]`` is global position ``i + 1``.
+    """
+
+    def __init__(self, ar_reference: Optional[Sequence[int]]):
+        self.ar_reference: Optional[List[int]] = (
+            [int(t) for t in ar_reference] if ar_reference is not None else None
+        )
+        self.index: Optional[int] = None
+        self.ar_token: Optional[int] = None
+        self.dspark_token: Optional[int] = None
+        #: full logits row (np.float32 [vocab]) of the verify forward at the
+        #: first diverging committed token -- kept in-process only, never
+        #: serialised (the AB harness reads scalars off it via classify_divergence).
+        self.dspark_logits_row = None
+        self.dspark_top2_margin: Optional[float] = None
+
+    @property
+    def found(self) -> bool:
+        return self.index is not None
+
+    def observe(self, *, base_len: int, committed: Sequence[int], verify_logits) -> None:
+        """Compare this cycle's actually-committed tokens against the AR
+        reference and snapshot the verify row of the first mismatch.
+
+        ``base_len`` is ``len(new_tokens)`` before this cycle appended, so the
+        m-th committed token is at global position ``base_len + m + 1`` and was
+        produced by ``verify_logits[0, m]``.
+        """
+        if self.found or self.ar_reference is None or verify_logits is None:
+            return
+        for m, tok in enumerate(committed):
+            gpos = base_len + m + 1
+            if gpos >= len(self.ar_reference):
+                return
+            if int(tok) != int(self.ar_reference[gpos]):
+                row = np.asarray(verify_logits[0, m].astype(mx.float32)).reshape(-1)
+                self.index = gpos
+                self.dspark_token = int(tok)
+                self.ar_token = int(self.ar_reference[gpos])
+                self.dspark_logits_row = row
+                self.dspark_top2_margin = _top2_margin(row)
+                return
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 def _is_stop(token: int, stop_ids: Optional[set]) -> bool:
@@ -589,6 +742,7 @@ def _decode_cycles(
     token_callback: Optional[Callable[[List[int]], None]],
     abort_check: Optional[Callable[[], bool]],
     verify_decode_phase: bool = True,
+    divergence_capture: Optional["DivergenceCapture"] = None,
 ) -> tuple[List[int], str]:
     """Run DSpark-direct cycles from ``primary`` (already emitted) + its predictor
     hidden ``main_h``.  Returns ``(new_tokens, finish_reason)`` where ``new_tokens``
@@ -753,6 +907,7 @@ def _decode_cycles(
         # is included (generate_ar appends it then breaks -- the terminal stop is
         # stripped from the decoded text later, not from the token count).
         stopped = False
+        base_len = len(new_tokens)
         delta: List[int] = []
         for tok in emitted:
             if len(new_tokens) >= max_tokens:
@@ -763,6 +918,13 @@ def _decode_cycles(
                 stopped = True
                 break
         stats.generated_tokens = len(new_tokens)
+        # W77: for greedy decode, snapshot the verify logits row of the first
+        # committed token that differs from the AR reference (zero extra
+        # forwards; verify_logits[0, m] produced committed token m).
+        if greedy and divergence_capture is not None and delta:
+            divergence_capture.observe(
+                base_len=base_len, committed=delta, verify_logits=verify_logits
+            )
         if token_callback is not None and delta:
             token_callback(delta)
         if stopped:
@@ -797,6 +959,7 @@ def dspark_generate(
     forward: Optional[Callable[[mx.array, Any], tuple]] = None,
     token_callback: Optional[Callable[[List[int]], None]] = None,
     abort_check: Optional[Callable[[], bool]] = None,
+    divergence_capture: Optional["DivergenceCapture"] = None,
 ) -> List[int]:
     """Self-contained DSpark-direct decode over ``model`` (W23 drafter + V4.1
     target forward).  ``speculative_depth=0`` is pure AR (greedy argmax / sampled
@@ -862,6 +1025,7 @@ def dspark_generate(
             if verify_decode_phase is None
             else bool(verify_decode_phase)
         ),
+        divergence_capture=divergence_capture,
     )
     tokens.extend(rest)
     stats.generated_tokens = len(tokens)
