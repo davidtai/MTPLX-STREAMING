@@ -68,6 +68,7 @@ import mlx.nn as nn
 
 from mlx_lm.models.switch_layers import SwiGLU, SwitchGLU
 
+from . import deepseek_v41_stage_timing as _stime
 from .expert_mlx import run_switch_with_shared_overlap
 
 
@@ -238,7 +239,15 @@ class MoE(nn.Module):
         shape = x.shape                                              # L890
         xf = x.reshape(-1, self.dim)                                # L891
         # L892: gate (text path -> image_mask None); reference order (weights, indices).
-        weights, indices = self.gate(xf)
+        # W37 "gate + top-k + routing barrier": fencing ``indices`` here is the
+        # per-layer routing barrier (``mx.eval(indices)``) -- the streamed switch's
+        # own internal barrier is then a no-op, so this stage owns the host sync
+        # the ledger prices at ~40/token and moe.routed_switch owns only the
+        # subsequent miss I/O + gather_qmm.  On the resident (test) path there is
+        # no internal barrier; the fence attributes the gate compute here anyway.
+        with _stime.stage("moe.gate_topk") as _st:
+            weights, indices = self.gate(xf)
+            _st.add(weights, indices)
         # L893-901: routed experts.  The streamed switch returns the *unweighted*
         # per-expert outputs [n, top_k, dim]; the reference multiplies each
         # expert output by its weight inside the loop (L900) -- done here in one
@@ -255,17 +264,35 @@ class MoE(nn.Module):
             # bitwise-identical.  A switch without ``run_with_shared_overlap``
             # (the resident SwitchGLU / test default) falls back to exactly the
             # shipped ordering, so only the streamed path actually overlaps.
-            routed, shared = run_switch_with_shared_overlap(
-                self.switch_mlp,
-                xf,
-                indices,
-                lambda: self.shared_experts(xf).astype(mx.float32),
-            )
-            y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
-            y = y + shared
+            #
+            # W37 stage timing: the overlap fuses routed + shared into one call,
+            # so both are booked under moe.routed_switch and moe.shared_expert is
+            # absent (documented bias -- time the shared expert with the control
+            # arm, where it is a distinct dispatch).  The early moe.gate_topk fence
+            # also defeats the barrier-window overlap, so measure overlap tok/s
+            # with the probe OFF.
+            with _stime.stage("moe.routed_switch") as _st:
+                routed, shared = run_switch_with_shared_overlap(
+                    self.switch_mlp,
+                    xf,
+                    indices,
+                    lambda: self.shared_experts(xf).astype(mx.float32),
+                )
+                _st.add(routed, shared)
+            with _stime.stage("moe.combine") as _st:
+                y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
+                y = y + shared
+                _st.add(y)
         else:
-            routed = self.switch_mlp(xf, indices)                   # [n, top_k, dim]
-            y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
-            y = y + self.shared_experts(xf).astype(mx.float32)
+            with _stime.stage("moe.routed_switch") as _st:
+                routed = self.switch_mlp(xf, indices)               # [n, top_k, dim]
+                _st.add(routed)
+            with _stime.stage("moe.shared_expert") as _st:
+                shared = self.shared_experts(xf).astype(mx.float32)
+                _st.add(shared)
+            with _stime.stage("moe.combine") as _st:
+                y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2)
+                y = y + shared
+                _st.add(y)
         # L904: return y.type_as(x).view(shape)
         return y.astype(x.dtype).reshape(shape)

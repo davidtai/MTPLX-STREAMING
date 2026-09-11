@@ -35,6 +35,7 @@ import numpy as np
 import mlx.core as mx
 import mlx.nn as nn
 
+from mtplx.models import deepseek_v41_stage_timing as _stime
 from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
 
 __all__ = [
@@ -466,35 +467,48 @@ class EngramV41(nn.Module):
         return apply
 
     def __call__(self, hidden_states: mx.array, token_ids, cache_state) -> mx.array:
-        row_ids = cache_state.current_row_ids(self.layer_hash_index)   # np [B, L, cols]
+        # W37 engram.hash: the per-layer row-id read (the rolling n-gram hash was
+        # computed once for the step in ``NgramHashState.advance`` -> engram.advance;
+        # this slices out THIS layer's [B, L, cols] ids).
+        with _stime.stage("engram.hash"):
+            row_ids = cache_state.current_row_ids(self.layer_hash_index)   # np [B, L, cols]
         B, L = int(hidden_states.shape[0]), int(hidden_states.shape[1])
         if tuple(row_ids.shape[:2]) != (B, L):
             raise ValueError(f"row ids {row_ids.shape[:2]} do not match hidden states {(B, L)}")
         if token_ids is not None and tuple(np.asarray(token_ids).shape) != (B, L):
             raise ValueError("token_ids shape does not match hidden_states / cache_state")
 
-        embed = self.row_cache.dequantize(row_ids)                     # mx [B, L, cols, head_dim]
-        kv = self.wkv(embed.reshape(B, L, -1))                         # [B, L, dim*(hc_mult+1)]
-        split = self.hc_mult * self.dim
-        key = kv[..., :split].astype(mx.float32).reshape(B, L, self.hc_mult, self.dim)
-        value = kv[..., split:].astype(mx.float32)                     # [B, L, dim]
+        # W37 engram.row_fetch: the byte-budgeted row-cache lookup (the SSD/LRU
+        # gather that dequantizes the 24 rows/token) -- the I/O-bound half.
+        with _stime.stage("engram.row_fetch") as _st:
+            embed = self.row_cache.dequantize(row_ids)                 # mx [B, L, cols, head_dim]
+            _st.add(embed)
 
-        h = hidden_states.astype(mx.float32)                           # [B, L, hc_mult, dim]
-        weight = (self.q_weight * self.k_weight).astype(mx.float32)    # [hc_mult, dim]
-        eps = self.norm_eps
-        rstd = mx.rsqrt(mx.mean(h * h, axis=-1) + eps) * mx.rsqrt(mx.mean(key * key, axis=-1) + eps)
-        dot = mx.sum(h * weight * key, axis=-1) * rstd * (self.dim ** -0.5)   # [B, L, hc_mult]
-        # signed sqrt before the sigmoid (copysign(sqrt(clamp|dot|), dot)); +0 -> + branch
-        mag = mx.sqrt(mx.maximum(mx.abs(dot), self.clamp_value))
-        signed = mx.where(dot < 0, -mag, mag)
-        gate = mx.sigmoid(signed)
+        # W37 engram.apply: wkv projection + q/k gate + the additive residual write.
+        with _stime.stage("engram.apply") as _st:
+            kv = self.wkv(embed.reshape(B, L, -1))                     # [B, L, dim*(hc_mult+1)]
+            split = self.hc_mult * self.dim
+            key = kv[..., :split].astype(mx.float32).reshape(B, L, self.hc_mult, self.dim)
+            value = kv[..., split:].astype(mx.float32)                 # [B, L, dim]
 
-        mask = getattr(cache_state, "token_mask", None)
-        if mask is not None:
-            gate = gate * mask.astype(mx.float32)[..., None]   # [B, L] -> [B, L, 1] over hc copies
+            h = hidden_states.astype(mx.float32)                       # [B, L, hc_mult, dim]
+            weight = (self.q_weight * self.k_weight).astype(mx.float32)  # [hc_mult, dim]
+            eps = self.norm_eps
+            rstd = mx.rsqrt(mx.mean(h * h, axis=-1) + eps) * mx.rsqrt(mx.mean(key * key, axis=-1) + eps)
+            dot = mx.sum(h * weight * key, axis=-1) * rstd * (self.dim ** -0.5)   # [B, L, hc_mult]
+            # signed sqrt before the sigmoid (copysign(sqrt(clamp|dot|), dot)); +0 -> + branch
+            mag = mx.sqrt(mx.maximum(mx.abs(dot), self.clamp_value))
+            signed = mx.where(dot < 0, -mag, mag)
+            gate = mx.sigmoid(signed)
 
-        contribution = gate[..., None] * value[:, :, None, :]          # [B, L, hc_mult, dim]
-        return (h + contribution).astype(hidden_states.dtype)
+            mask = getattr(cache_state, "token_mask", None)
+            if mask is not None:
+                gate = gate * mask.astype(mx.float32)[..., None]   # [B, L] -> [B, L, 1] over hc copies
+
+            contribution = gate[..., None] * value[:, :, None, :]      # [B, L, hc_mult, dim]
+            out = (h + contribution).astype(hidden_states.dtype)
+            _st.add(out)
+        return out
 
 
 # --------------------------------------------------------------------------

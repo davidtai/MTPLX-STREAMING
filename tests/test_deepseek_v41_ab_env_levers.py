@@ -220,3 +220,80 @@ def test_dry_run_prompt_metadata_matches_bench_1024(env_levers, bench, tmp_path)
         assert r["context_tokens"] == 1024
         assert r["prompt_tokens"] == len(ref_ids) == 1025
         assert r["prompt_build"] == ref_meta, r["arm"]
+
+
+# --------------------------------------------------------------------------
+# W37: --stage-timing / --warm-repeat parser + dry-run flow
+# --------------------------------------------------------------------------
+
+
+def test_parser_has_stage_timing_and_warm_repeat(env_levers):
+    args = env_levers.build_parser().parse_args(["--out", "/dev/null"])
+    # defaults off; the flags exist and the step override defaults to None.
+    assert args.stage_timing is False
+    assert args.warm_repeat is False
+    assert args.stage_timing_steps is None
+    on = env_levers.build_parser().parse_args(
+        ["--out", "/dev/null", "--stage-timing", "--warm-repeat",
+         "--stage-timing-steps", "8"]
+    )
+    assert on.stage_timing is True
+    assert on.warm_repeat is True
+    assert on.stage_timing_steps == 8
+
+
+def test_dry_run_records_stage_timing_and_warm_repeat_flags(env_levers, tmp_path):
+    out = tmp_path / "r.jsonl"
+    rc = env_levers.main(
+        [
+            "--dry-run", "--context-tokens", "1024", "--decode-tokens", "64",
+            "--arms", "control", "--stage-timing", "--warm-repeat",
+            "--out", str(out),
+        ]
+    )
+    assert rc == 0
+    r = json.loads(out.read_text().splitlines()[0])
+    assert r["dry_run"] is True
+    assert r["stage_timing"] is True
+    assert r["warm_repeat"] is True
+    # step override absent -> mirrors --decode-tokens.
+    assert r["stage_timing_steps"] == 64
+
+
+def test_dry_run_flags_default_off(env_levers, tmp_path):
+    out = tmp_path / "r.jsonl"
+    env_levers.main(
+        ["--dry-run", "--context-tokens", "1024", "--arms", "control",
+         "--out", str(out)]
+    )
+    r = json.loads(out.read_text().splitlines()[0])
+    assert r["stage_timing"] is False
+    assert r["warm_repeat"] is False
+
+
+def test_stage_timing_arms_route_probe_env_marker(env_levers):
+    # main() must arm MTPLX_ROUTE_STAGE_PROBE + MTPLX_DSV41_STAGE_TIMING before the
+    # mtplx import when --stage-timing is requested (the route probe reads ENABLED
+    # at import; the merged route_stage breakdown depends on it).  Assert on the
+    # helper wiring, not a GPU run: the arming block keys off args.stage_timing.
+    args = env_levers.build_parser().parse_args(
+        ["--out", "/dev/null", "--stage-timing"]
+    )
+    assert args.stage_timing is True
+    # the two module-level env names the arming block sets are stable constants.
+    assert env_levers.PROBE_ENV == "MTPLX_ROUTE_STAGE_PROBE"
+    assert env_levers.STAGE_TIMING_ENV == "MTPLX_DSV41_STAGE_TIMING"
+
+
+def test_warm_and_stage_timing_pass_helpers_exist(env_levers):
+    # The GPU-window pass builders are present with the documented signatures so a
+    # window failure is never a missing-helper AttributeError (the W11 class of
+    # crash the dry-run gates guard against).
+    import inspect
+
+    warm = inspect.signature(env_levers._warm_repeat_pass)
+    assert set(warm.parameters) == {
+        "model", "ops", "mem_probe", "prompt_ids", "steps", "cold_ids"
+    }
+    st = inspect.signature(env_levers._stage_timing_pass)
+    assert set(st.parameters) == {"model", "ops", "prompt_ids", "steps"}
