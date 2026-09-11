@@ -27,6 +27,12 @@ from mtplx.expert_shadow import SHADOW_CODECS, shadow_record_bytes
 # the runtime feeds ``plan_expert_memory`` manifest-derived per-layer sizes. The
 # literal must equal ``mtplx.expert_mixed_official.MIXED_MODE``.
 MIXED_OFFICIAL_CODEC = "mixed-official-v1"
+# Native mxfp4 (lossless FP4 repack): packed FP4 (E2M1) codes + one uint8 E8M0
+# shared exponent per 32-column group, no bias leaf.  DeepSeek-V4.1-Flash ships
+# its routed experts in exactly this format, so the repack is bit-exact.
+MXFP4_CODEC = "mxfp4"
+MXFP4_BITS = 4
+MXFP4_GROUP = 32
 
 
 # Load-time resident quantization (group 64 affine over BF16): kept bytes
@@ -188,12 +194,21 @@ class ExpertStreamingModelSpec:
             raise ValueError("full indexer layers must be sorted and unique")
         if (
             self.expert_codec != "affine"
+            and self.expert_codec != MXFP4_CODEC
             and self.expert_codec != MIXED_OFFICIAL_CODEC
             and self.expert_codec not in SHADOW_CODECS
         ):
             choices = ", ".join(repr(codec) for codec in SHADOW_CODECS)
             raise ValueError(
-                f"expert_codec must be 'affine', {MIXED_OFFICIAL_CODEC!r}, {choices}"
+                f"expert_codec must be 'affine', {MXFP4_CODEC!r}, "
+                f"{MIXED_OFFICIAL_CODEC!r}, {choices}"
+            )
+        if self.expert_codec == MXFP4_CODEC and (
+            self.quant_bits != MXFP4_BITS or self.quant_group_size != MXFP4_GROUP
+        ):
+            raise ValueError(
+                f"mxfp4 experts require quant_bits={MXFP4_BITS} and "
+                f"quant_group_size={MXFP4_GROUP}"
             )
         if self.swiglu_limit is not None and (
             not isinstance(self.swiglu_limit, (int, float))
@@ -269,6 +284,12 @@ class ExpertStreamingModelSpec:
                 "mixed-official specs have no uniform expert_record_bytes; use "
                 "the manifest-derived per-layer record sizes (issue #51 D7)"
             )
+        if self.expert_codec == MXFP4_CODEC:
+            # Packed FP4 codes + one 1-byte E8M0 exponent per group, no bias.
+            params = self.expert_source_parameters
+            packed = params * self.quant_bits // 8
+            scales = params // self.quant_group_size
+            return packed + scales
         if self.expert_codec != "affine":
             return shadow_record_bytes(
                 self.expert_codec, self.expert_source_parameters
@@ -747,6 +768,40 @@ DEEPSEEK_V41_FLASH_EXPERT_Q2 = ExpertStreamingModelSpec(
 )
 
 
+# Native-mxfp4 routed-expert bank (W9 decision, 2026-09-10): the source ships
+# its routed experts as FP4 (E2M1) codes with per-32-column E8M0 scales, so
+# ``mx.quantize(mode="mxfp4", group_size=32)`` re-encodes them bit-for-bit (proven
+# on 191 real experts x 3 weights, docs/deepseek-v41/receipts/bank_mx_probe.json
+# ``bit_exact_vs_source: true``; candidate-bank ladder torchref_bank_ladder.json
+# gives MoE g = 1.000000 at every layer 0-7).  This REPLACES the affine Q2 bank
+# (expert cos 0.912, moe_L0_output cos 0.927) that W9 proved is the sole source
+# of the probe's junk.  Residents/engram/router/KV are IDENTICAL to the Q2 spec
+# (same q8 dense residents, same source revision) -- only the routed-expert bank
+# changes format, so resident_bytes matches the Q2 spec exactly.
+#   record  = 18_800_640 B (packed FP4 17_694_720 + E8M0 scales 1_105_920, no bias)
+#   bank    = 40 * 384 * 18_800_640 = 288_777_830_400 B (268.99 GiB)
+#   total   = resident 25_163_923_352 + routed 288_777_830_400 = 313_941_753_752
+DEEPSEEK_V41_FLASH_EXPERT_MXFP4 = replace(
+    DEEPSEEK_V41_FLASH_EXPERT_Q2,
+    key="deepseek-v41-flash-expert-mxfp4",
+    display_name=(
+        "DeepSeek-V4.1-Flash expert-only native mxfp4 "
+        "(gs32 FP4 lossless-repack experts, q8 residents)"
+    ),
+    # The mxfp4 streaming artifact repo (upload + pin is David's call once W16
+    # builds the full 269 GiB bank).  The converter stamps these into the
+    # artifact's expert-manifest.json source identity, so local admission of a
+    # freshly converted artifact matches by construction; re-pin on upload.
+    quant_model="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    quant_revision="unpublished-mxfp4-repack",
+    total_tensor_bytes=313_941_753_752,
+    quant_bits=MXFP4_BITS,
+    quant_group_size=MXFP4_GROUP,
+    quant_parameter_bytes=1,  # E8M0 scale is one byte; no bias (not used by mxfp4 sizing)
+    expert_codec=MXFP4_CODEC,
+)
+
+
 MODEL_SPECS: dict[str, ExpertStreamingModelSpec] = {
     spec.key: spec
     for spec in (
@@ -761,6 +816,7 @@ MODEL_SPECS: dict[str, ExpertStreamingModelSpec] = {
         GLM52_EXPERT_Q1T,
         GLM52_EXPERT_Q1B1,
         DEEPSEEK_V41_FLASH_EXPERT_Q2,
+        DEEPSEEK_V41_FLASH_EXPERT_MXFP4,
     )
 }
 
