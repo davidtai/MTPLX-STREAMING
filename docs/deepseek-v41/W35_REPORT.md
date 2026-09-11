@@ -213,3 +213,48 @@ mtp_serve_glue, expert_cli_runtime, gate_w35): 90 passed.
 ### Next GPU smoke should confirm
 `--generation-mode mtp` reaches `/health` with the DSpark drafter active (no
 "unresolved backend" raise); the MTP acceptance counters populate on a completion.
+
+---
+
+## Window-17 follow-up (past the backend check; no lm_head)
+
+Re-smoke on `85b6cebec`: `--generation-mode mtp` installed the native drafter
+(window-16 fix) but died with `AttributeError: model has no lm_head and does not
+tie output projection to embeddings` at `draft_lm_head.py:349`.
+
+### Root cause
+`_install_draft_lm_head` resolves the output projection as `text.lm_head` (or a
+tied embedding). DSV4.1 names its untied output projection `head` (the W40/K21
+`MTPLX_DSV41_HEAD_MODE` codec repacks it in `apply_head_mode`: bf16 `nn.Linear`,
+q8 `nn.QuantizedLinear`, or the `_MXFP8Head` codec), and `tie_word_embeddings` is
+false, so the lookup fell through to the raise.
+
+### Fix (model-provided contract, the coordinator's preferred option)
+The `Model` exposes an `lm_head` property returning `self.head` — the same module
+the AR head path (`_apply_head`) uses. The draft head is then requantized from the
+real head weight (bf16 / mxfp8 / q8) with no fp32 cast reintroduced. It is a plain
+alias (a `@property`, not a submodule), so `parameters()` still counts the head
+once under `head` (verified: no `lm_head.*` keys).
+
+### Audit of the rest of the served MTP/verify path
+- `rt.embed_tokens` → `text_model.model.embed_tokens`: DSV4.1's `Model.model`
+  (DeepseekV41Backbone) has `embed_tokens`. OK.
+- `model.model.layers`: present (the backbone's decoder layers). OK.
+- final `norm`: DSV4.1 applies it as an internal `norm_weight` in the backbone
+  forward, never accessed externally by the MTP/verify path. OK.
+- the other `.lm_head` accesses (`mtp_patch.py:855/1044`) are the qwen `_MTPModule`
+  graft, which DSV4.1's native DSpark path does not use. OK.
+No further DSV4.1 attribute gaps on the served MTP path.
+
+### Verification (CPU, no GPU, 473 MB RSS)
+`test_served_mtp_resolves_head_via_lm_head_on_a_stub`: a stub DSV4.1 model
+resolves the head via `lm_head` (`_install_draft_lm_head` no longer raises; the
+resolved callable equals the model's AR head-path output on a random hidden; no
+`lm_head` param double-count). `test_real_dsv41_model_exposes_lm_head_and_served_attrs`
+(skips without the artifact): the real Model aliases `head` and the served
+`embed_tokens`/`layers` attrs hold. DSpark W23 tests still green (55 passed /
+5 skipped).
+
+### Next GPU smoke should confirm
+`--generation-mode mtp` reaches a completion (drafter installed, head resolved),
+with the MTP acceptance counters populating.

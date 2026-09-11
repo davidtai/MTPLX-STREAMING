@@ -374,3 +374,82 @@ def test_served_native_mtp_constructs_and_publishes_the_drafter() -> None:
     # the streaming block's native branch: publish the in-model head + validate
     assert inject_deepseek_v41_mtp_support(model, _MXFP4, cfg, None) is True
     assert validate_mtp_support(model) is True
+
+
+# --------------------------------------------------------------------------
+# window-17: served MTP resolves the output head via lm_head (DSV4.1 names it
+# `head`, W40 HEAD_MODE codec) -> _install_draft_lm_head no longer raises
+# "model has no lm_head and does not tie output projection to embeddings".
+# --------------------------------------------------------------------------
+def test_served_mtp_resolves_head_via_lm_head_on_a_stub() -> None:
+    import types
+
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    mx.set_default_device(mx.cpu)
+    from mlx.utils import tree_flatten
+
+    from mtplx.draft_lm_head import _install_draft_lm_head
+
+    class _StubDSV41(nn.Module):
+        # a stub DSV4.1 model: untied output projection named `head`, exposed
+        # under the lm_head alias, plus the DSpark mtp surface (stages carry no
+        # shared_head_head, so _install falls to the lm_head lookup).
+        def __init__(self, hidden: int = 64, vocab: int = 128):
+            super().__init__()
+            self.head = nn.Linear(hidden, vocab, bias=False)
+            self._head_mode = "bf16"
+            self.mtp = types.SimpleNamespace(layers=[types.SimpleNamespace()])
+
+        @property
+        def lm_head(self):
+            return self.head
+
+        def _apply_head(self, source):  # the real bf16 codec head path
+            return self.head(source.astype(self.head.weight.dtype)).astype(mx.float32)
+
+    mx.random.seed(0)
+    model = _StubDSV41()
+    mx.eval(model.parameters())
+
+    # lm_head is a plain alias -> parameters() counts the head once (under head.*)
+    keys = {k for k, _ in tree_flatten(model.parameters())}
+    assert model.lm_head is model.head
+    assert not any(k.startswith("lm_head") for k in keys)
+
+    # the served MTP setup resolves the head instead of raising AttributeError
+    rt = types.SimpleNamespace(model=model)
+    _install_draft_lm_head(rt, bits=4, group_size=64, mode="affine")
+    assert getattr(model, "_mtplx_draft_lm_head", None) is not None
+
+    # the resolved head callable equals the model's own AR head path output
+    h = mx.random.normal((3, 64)).astype(mx.bfloat16)
+    assert mx.allclose(model.lm_head(h).astype(mx.float32), model._apply_head(h))
+
+
+@pytest.mark.skipif(not _MXFP4.exists(), reason="mxfp4 artifact not on this box")
+def test_real_dsv41_model_exposes_lm_head_and_served_attrs() -> None:
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    from mlx.utils import tree_flatten
+    from mlx_lm.utils import load_config
+
+    from mtplx.models.deepseek_v41_loader import deepseek_v41_model_classes
+
+    cfg = load_config(_MXFP4)
+    Model, ModelArgs = deepseek_v41_model_classes()
+    model = Model(
+        ModelArgs.from_dict(cfg), engram_bank_path=None,
+        quantization=cfg.get("quantization"), mtp=True,
+    )
+    model.eval()
+    # lm_head aliases the untied `head`; no duplicate lm_head parameter subtree
+    assert model.lm_head is model.head
+    keys = {k for k, _ in tree_flatten(model.parameters())}
+    assert not any(k.startswith("lm_head") for k in keys)
+    # the served MTP/verify path's model-attribute assumptions hold for DSV4.1:
+    # rt.embed_tokens -> model.model.embed_tokens; model.model.layers exists.
+    assert model.model.embed_tokens is not None
+    assert len(model.model.layers) == int(cfg["text_config"]["num_hidden_layers"])
