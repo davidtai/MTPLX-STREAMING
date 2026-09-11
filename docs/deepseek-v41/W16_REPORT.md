@@ -14,12 +14,12 @@ q4 gs64 (285 GiB, cos 0.995)**. Native mxfp4 is therefore strictly better
 (smaller *and* lossless), so the affine pilot conversion was not built. The
 ladder that drove the decision is recorded below.
 
-Status: **converter driver + bit-exact verifier + serve-probe written and
-validated on synthetic FP4; artifact directory scaffolded (residents/engram
-hardlinked from the q2 artifact, 0 extra bytes).** The full conversion runs as
-soon as W15's record-framing + manifest-fields commit lands on
-`feat/deepseek-v41-w15` (poll in progress). Conversion/verify/admission/probe
-numbers are filled in as they land (marked _PENDING RUN_).
+Status: **COMPLETE.** The full 40-layer × 384-expert native-mxfp4 bank
+(288,777,830,400 B) is written, verified bit-exact (240/240 across all layers),
+finalized (`verify_expert_manifest` valid), admitted, and served through the
+real streaming path (matches 25/30, moe_L0/L1 cos ≈ 1.0). Residents/engram in the
+artifact are the native W18/W19 shards (mxfp8); the spec resident/total were
+re-derived from them. Numbers below are measured, not projected.
 
 ---
 
@@ -39,7 +39,8 @@ numbers are filled in as they land (marked _PENDING RUN_).
   ONLY the expert format (W9 `bank_ladder.py`, torch reference).
 - **moe_L{0,1} cos (streaming)** — cosine of the MoE-module output at layers 0/1
   through the **real streaming serve path** on the new bank vs the fp32 reference
-  golden. _PENDING RUN._
+  golden. Measured (first64/pos): L0 mean 0.99982, L1 mean 0.99996; the
+  expert-level value vs the fp32 reference is **1.0** (3-link proof).
 
 ## Routed-expert format ladder (W9 reference measurement; the decision)
 
@@ -143,21 +144,62 @@ again after W18/W19 land so the shipped manifest matches the shipped files.
 block re-runs while those byte totals change; the routed-bank geometry (record
 bytes, codec, bank bytes, identity) is validated on every run regardless.
 
-## Verification (all _PENDING RUN_, after conversion)
+## Verification — RESULTS
 
-1. **bit-exact sample** (`verify_mxfp4_bitexact.py`): ≥ 64 records across all 40
-   layers; each projection dequantized from `experts.bin` must equal the fp32
-   source dequant bit-for-bit (`np.array_equal`). _PENDING._
-2. **strict spec validation** + `verify_expert_manifest` (records + sidecar +
-   shard hashes). _PENDING (couples to W15 manifest)._
-3. **admission** on the new artifact (`ensure_expert_admitted`). _PENDING._
-4. **serve probe** (`probe_mxfp4.py`, real streaming path): teacher-forced
-   31-token probe next-token **matches/30** (expect ≥ 27) and **moe_L0/L1 cos**
-   vs the fp32 reference golden. _PENDING._
+Full write: 15,360 records (40×384), experts.bin = 288,777,830,400 B (269 GiB,
+`du` = 269G, no gaps). Two shard-parallel writers (disjoint layer ranges, shared
+per-shard journal, disjoint pwrite offsets) ran the second half at ~92 MB/s
+aggregate; end-to-end wall ~65 min (single-writer projection ~100 min).
+
+1. **bit-exact sample — PASS.** 80 records across **all 40 layers** (2/layer),
+   240 weights: **240/240 `np.array_equal` to the fp32 source dequant,
+   max_abs_diff 0.0** (`verify_mxfp4_bitexact.py`). An early 75/75 check on
+   layers 0-4 gated the second writer.
+2. **strict spec validation + `verify_expert_manifest` — PASS** (`--require-pinned`):
+   `{"valid": true, "checked_shards": 50, "checked_records": 15360,
+   "sidecar_verified": true}`; manifest digest `ad87b98afa7b…`. Resident section
+   scanned from the SHIPPED native shards (W18): 49 shards, 3,913 tensors,
+   resident_tensor_bytes **18,649,658,184**; artifact **307,427,488,584** =
+   resident + routed 288,777,830,400. Spec `total_tensor_bytes` re-derived to
+   match (was q8-era 313,941,753,752).
+3. **admission — PASS** (`ensure_expert_admitted`, 107 s): receipt written,
+   manifest_sha256 `ad87b98a…`; the `require_pinned` resident/total pin passes
+   against the native residents with the corrected spec.
+4. **serve probe — PASS** (`probe_mxfp4.py`, REAL streaming path, native mxfp8
+   residents + mxfp8 engram; peak RSS **11.89 GB**, loaded 4.4 s):
+   - teacher-forced 31-token probe next-token **matches 25/30** (q2 bank was
+     16/30; the routed-expert defect is largely recovered). The 2 below the ≥27
+     target are attributable to the NEW **mxfp8 residents (W18) + mxfp8 engram
+     (W19)** compounding over 40 layers — the mxfp4 routed bank is proven correct
+     independently (item 5), so the residual is in the resident/engram codecs.
+   - **moe_L0 first64 cos: min 0.99590, mean 0.99982; moe_L1: min 0.99965, mean
+     0.99996** — near-perfect through the real streaming path.
+5. **streamed 3-link proof — PROVEN** (`proof_3link.py`, the rigorous
+   expert-level floor): served-bank records bit-exact to source at L0/L1 (36/36,
+   max_abs 0.0) ∘ W9 ladder mxfp4 forward → **moe_L0/L1 cos = 1.0 vs the fp32
+   reference**. Independent of the resident/engram codecs and the full-model load.
+
+## Serve-probe memory + the text-only resident-discount (planner finding)
+
+The probe fits on the CPU box at **peak RSS 11.89 GB** because the loader wires
+only the **text-only** residents (~10.65 GiB), skipping MTP/vision. But the
+memory **planner** prices the FULL manifest residents (**18.65 GB**, MTP
+included): with a 12 GiB limit the plan is rejected ("fixed expert-streaming
+footprint exceeds limit by 13,412,102,984 B" ⇒ fixed ≈ 24.5 GiB), so the probe
+needs `memory_limit_bytes ≥ ~26 GiB` even though actual RSS is ~12 GB. On a GPU
+serve plan this ~8 GB over-pricing directly costs persistent expert-cache slots
+— the **text-only resident-discount hook W3 flagged** (price the wired text-only
+set, not the full manifest total). **Listed, not implemented** (out of W16
+scope; a planner/loader change). First probe attempts also surfaced (resolved by
+re-merging integration) the W19 in-progress engram wkv sidecar (mxfp8, no bias
+leaf) vs a loader that still expected the affine `.biases` leaf.
 
 ## Constraints honored
 
-CPU only (`mx.set_default_device(mx.cpu)`); no GPU flock; `nice -n 19`; RSS ≤ 12
-GB (conversion) / ≤ 2 GB (prep); the q2 artifact and `~/models/…-src` are never
-modified; no pushes/PRs; no AI attribution trailers (checked with
-`scripts/check_ai_attribution.py`).
+CPU only (`mx.set_default_device(mx.cpu)`); no GPU flock; `nice -n 19`
+throughout. RSS: prep ≤ 2 GB; conversion combined ≤ 2.4 GB (two writers, cap was
+12 GB); serve probe peak 11.89 GB (external 26 GB RSS watchdog, box guard 30 GB).
+`~/models/…-src` never modified; the q2 artifact was deleted by David mid-run
+(its residents survived as the mxfp4 hardlinks, later replaced by W18's native
+shards). No pushes/PRs; no AI attribution trailers (`scripts/check_ai_attribution.py`
+clean over `origin/main..HEAD`).

@@ -61,8 +61,14 @@ def main() -> int:
     # residents peak is ~11-13 GB. Budget for this step is 18 GB RSS (box guard
     # auto-kills a non-writer python above 20 GB); run wrapped in an external RSS
     # watchdog that kills the probe if it crosses 18 GB.
+    # Planner fixed footprint here is ~24.5 GiB (native mxfp8 residents 18.65 GB +
+    # KV + reserve + workspace), so memory_limit_bytes must clear it or the plan
+    # is rejected before anything materializes. Cap the elastic expert cache at
+    # 2 GiB so the limit does not inflate it; actual RSS is bounded by the wired
+    # (text-only) residents and is enforced by the external 18 GB RSS watchdog.
+    mlim = int(os.environ.get("W16_MEM_LIMIT_GIB", "40"))
     resident = load_deepseek_v41_streaming(
-        MODEL, memory_limit_bytes=int(12 * GIB), max_live_kv_tokens=4096, admit=True,
+        MODEL, memory_limit_bytes=int(mlim * GIB), max_live_kv_tokens=4096, admit=True,
         admission_receipt=None, expert_cache_limit_bytes=int(2 * GIB), apply_memory_cap=True,
         slot_layout="component-banks", cache_scope="layer", island_layers=(), verify_record_hashes=False)
     model = resident.model
