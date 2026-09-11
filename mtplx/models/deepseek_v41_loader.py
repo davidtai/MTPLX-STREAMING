@@ -392,6 +392,7 @@ def _component_bank_allocator_for(
         proj_quant_plan_discount,
         proj_requant_plan_discount,
         resolve_island_placement,
+        text_only_resident_discount,
     )
     from .expert_mlx import make_mlx_component_bank_allocator
 
@@ -401,9 +402,21 @@ def _component_bank_allocator_for(
     plan = resolved_config.memory_plan(
         spec,
         additional_resident_bytes=SWA_WINDOW_BYTES,
+        # This allocator sizes the component-bank per-layer capacities; its
+        # resident discount MUST equal the one ``ExpertStreamingRuntime.open``
+        # applies to its own pool plan (proj_quant + proj_requant + the
+        # text-only skip), or the bank capacity and the slot pool disagree and
+        # a persistent slot the pool enumerates is rejected as "outside planned
+        # capacity". W21 added ``text_only_resident_discount`` to open()'s pool
+        # plan and to runtime.py's production pre-flight allocator but not to
+        # this second open entry, so the two plans drifted apart by the
+        # text-only skip (8.31 GiB / +11 slots/layer at 82 GiB for the shipped
+        # DSV4.1-Flash mxfp4 artifact). The term is 0 for any manifest with no
+        # MTP/vision residents (hy3/glm), so their plans stay byte-identical.
         resident_discount_bytes=(
             proj_quant_plan_discount(manifest, resolved_config.proj_quant)
             + proj_requant_plan_discount(manifest, resolved_config.proj_requant)
+            + text_only_resident_discount(manifest, spec)
         ),
         layer_record_bytes=(
             manifest.record_bytes_by_layer() if spec.is_mixed_official else None
