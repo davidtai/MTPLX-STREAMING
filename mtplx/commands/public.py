@@ -821,21 +821,37 @@ def _apply_runtime_compatibility_mode(
     return None
 
 
-def _streamed_generation_mode_error(args: Any) -> str | None:
+def _streamed_generation_mode_error(args: Any, model_path: Any = None) -> str | None:
     cli_flags = set(getattr(args, "_cli_flags", set()) or set())
     explicit_generation_mode = str(
         getattr(args, "generation_mode", "") or ""
     ).strip().lower()
-    if (
+    mtp_requested = (
         ("generation-mode" in cli_flags and explicit_generation_mode == "mtp")
         or "mtp" in cli_flags
         or (
             "load-mtp" in cli_flags
             and getattr(args, "load_mtp", True) is True
         )
-    ):
-        return "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1"
-    return None
+    )
+    if not mtp_requested:
+        return None
+    # The DeepSeek-V4.1 DSpark native MTP head is served with --generation-mode
+    # mtp (worker W23 glue); every external-MTP (hy3/glm) streamed profile stays
+    # AR-only. Same native-MTP predicate the expert_cli gate uses.
+    if model_path is not None:
+        try:
+            from mtplx.expert_cli import (
+                _authoritative_manifest_path,
+                _is_native_streamed_mtp,
+            )
+
+            root = Path(model_path).resolve()
+            if _is_native_streamed_mtp(root, _authoritative_manifest_path(root)):
+                return None
+        except Exception:
+            pass
+    return "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1"
 
 
 def _runtime_kv_admission(runtime: Any, tokens: int):
@@ -9665,7 +9681,7 @@ def cmd_serve_public(args: Any) -> int:
         _print_serve_start_line(f"error: {exc}")
         return 2
     if streaming_requested:
-        generation_error = _streamed_generation_mode_error(args)
+        generation_error = _streamed_generation_mode_error(args, runtime_model)
         if generation_error is not None:
             _print_serve_start_line(f"error: {generation_error}")
             return 2
@@ -10476,7 +10492,7 @@ def _generate_one_shot_public(
     except ValueError as exc:
         return 2, {"error": str(exc)}, []
     if streaming_requested:
-        generation_error = _streamed_generation_mode_error(args)
+        generation_error = _streamed_generation_mode_error(args, runtime_model)
         if generation_error is not None:
             return 2, {"error": generation_error}, []
         from mtplx.expert_cli import expert_streaming_load_kwargs
