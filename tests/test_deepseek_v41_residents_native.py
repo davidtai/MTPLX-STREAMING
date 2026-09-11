@@ -183,3 +183,104 @@ def test_real_mtp_expert_bit_exact():
         mx.dequantize(codes, scales, group_size=NATIVE_GS, bits=4, mode="mxfp4").astype(mx.float32)
     )
     assert np.array_equal(deq, ref)
+
+
+# ---------------------------------------------------------------------------
+# both codecs construct, strict-load their own residents, and run a forward
+# ---------------------------------------------------------------------------
+import mlx.nn as nn  # noqa: E402
+from mlx.utils import tree_flatten  # noqa: E402
+
+from mtplx.models.deepseek_v41 import Model, ModelArgs  # noqa: E402
+
+
+def _small_args(**over):
+    base = dict(
+        vocab_size=128, hidden_size=64, num_hidden_layers=3, num_attention_heads=2,
+        head_dim=64, qk_rope_head_dim=16, q_lora_rank=64, o_lora_rank=64, o_groups=2,
+        moe_intermediate_size=64, n_routed_experts=8, num_experts_per_tok=2,
+        index_n_heads=2, index_head_dim=64, index_topk=4, sliding_window=8, window_size=8,
+        swiglu_limit=0.5, compress_ratios=[0, 2, 1], kv_source_layer_ids=[1, 2],
+        index_source_layer_ids=[1, 2], candidate_source_layer_id=2,
+        candidate_topk_blocks=2, candidate_block_size=2,
+        rope_scaling={"rope_type": "yarn", "factor": 16, "beta_fast": 32,
+                      "beta_slow": 1, "original_max_position_embeddings": 65536},
+    )
+    base.update(over)
+    return ModelArgs(**base)
+
+
+def _ckpt_name(model_path: str) -> str:
+    """Inverse of Model.sanitize for a resident parameter path (test-side)."""
+    if model_path == "model.norm_weight":
+        return "norm.weight"
+    if model_path.startswith("head."):
+        return model_path
+    if model_path.startswith("model.embed_tokens."):
+        return "embed." + model_path[len("model.embed_tokens."):]
+    rest = model_path[len("model."):] if model_path.startswith("model.") else model_path
+    rest = rest.replace(".mlp.", ".ffn.")
+    rest = rest.replace("gate.e_score_correction_bias", "gate.bias")
+    rest = rest.replace("norm_weight", "norm.weight")
+    return rest
+
+
+class _StubSwitch(nn.Module):
+    """Streamed-expert seam after bind: no resident params; returns zeros so a
+    forward exercises the mxfp8 dense/shared projections without a bank."""
+
+    def __init__(self, dim):
+        super().__init__()
+        self._dim = dim
+
+    def __call__(self, x, indices):
+        top_k = indices.shape[-1]
+        return mx.zeros((x.shape[0], top_k, self._dim), dtype=mx.float32)
+
+
+@pytest.mark.parametrize(
+    "quantization",
+    [
+        {"group_size": 64, "bits": 8, "mode": "affine"},   # original artifact codec
+        {"group_size": 32, "bits": 8, "mode": "mxfp8"},    # native exact-repack codec
+    ],
+    ids=["affine_q8", "mxfp8"],
+)
+def test_both_codecs_strict_load_and_forward(quantization):
+    args = _small_args()
+    model = Model(args, quantize=True, quantization=quantization)
+    # emulate bind_streamed_switches: routed experts stream (no resident params)
+    for layer in model.model.layers:
+        layer.mlp.switch_mlp = _StubSwitch(args.hidden_size)
+    mx.eval(model.parameters())
+
+    params = dict(tree_flatten(model.parameters()))
+    resident_paths = set(params)
+    assert not any(".switch_mlp." in p for p in resident_paths)
+
+    # the mode's shape: mxfp8 residents carry NO biases; affine q8 does
+    if quantization["mode"] == "mxfp8":
+        assert not any(p.endswith(".biases") for p in resident_paths)
+        # embed/head + the bf16-source projections stay dense (no scales)
+        assert not any("embed_tokens.scales" in p for p in resident_paths)
+        assert not any(p == "head.scales" for p in resident_paths)
+        assert not any("indexer.wk.scales" in p for p in resident_paths)
+    else:
+        assert any(p.endswith(".biases") for p in resident_paths)
+        assert any("embed_tokens.scales" in p for p in resident_paths)
+
+    # a checkpoint-named resident dict built from the model's own arrays + drops
+    ckpt = {_ckpt_name(p): v for p, v in params.items()}
+    ckpt["layers.0.ffn.gate.bias_vl"] = mx.zeros((8,))          # must be dropped
+    ckpt["vision.blocks.0.norm1.weight"] = mx.zeros((4,))        # must be dropped
+    ckpt["mtp.0.attn.wq_a.weight"] = mx.zeros((4, 4))            # must be dropped
+    sanitized = model.sanitize(ckpt)
+    assert set(sanitized) == resident_paths, resident_paths.symmetric_difference(sanitized)
+    model.load_weights(list(sanitized.items()), strict=True)     # raises if incomplete
+
+    # forward smoke test: mxfp8/affine dense projections must run on CPU
+    ids = mx.array([[0, 3, 7, 1, 5, 2, 9, 4]])
+    logits = model(ids)
+    mx.eval(logits)
+    assert logits.shape == (1, 8, args.vocab_size)
+    assert bool(mx.isfinite(logits).all())
