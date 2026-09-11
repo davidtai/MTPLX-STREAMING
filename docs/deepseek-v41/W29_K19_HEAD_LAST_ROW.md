@@ -108,6 +108,7 @@ the one JSON line — the model mechanism and tests stand independently.
 
 ## Commit
 
-`feat/deepseek-v41-w29` — SHA `__W29_IMPL_SHA__` (recorded post-commit; see `git log`).
-Attribution check: `python3 scripts/check_ai_attribution.py --range feat/deepseek-v41-streaming..HEAD`
-prints clean.
+`feat/deepseek-v41-w29` — implementation commit `672e121dd` ("W29 (K19): head only the last row at
+DSV4.1 prefill"). Attribution check
+`python3 scripts/check_ai_attribution.py --range feat/deepseek-v41-streaming..HEAD` prints
+`clean: no AI attribution`.
