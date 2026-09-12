@@ -239,8 +239,9 @@ EXPECTED_VERIFY = {arm: (arm == "verify_single_barrier") for arm in ALL_ARMS}
 # device_route / verify_single_barrier; only the standalone draft_compile arm sets it).
 EXPECTED_DRAFT = {arm: (arm == "draft_compile") for arm in ALL_ARMS}
 # W91 K35: none of ALL_ARMS (up to cell16k) arms the fused-small-stages or the
-# HC-premix-kernel booleans -- the K35 arms (small_stages_fused, cell16k_ring_fused)
-# are in the ring family, verified in test_cell16k_ring_composite_arms. So both are
+# HC-premix-kernel booleans -- K35 is rounding-class on GPU (window-37, null win),
+# so its ONLY arm is the isolation A/B small_stages_fused (verified in
+# test_cell16k_ring_composite_arms); it is in NO composite arm. So both are
 # force-unset for every arm here (proves an arm can't leave a stale K35 export set).
 EXPECTED_SMALL_STAGES = {arm: False for arm in ALL_ARMS}
 EXPECTED_PREMIX_KERNEL = {arm: False for arm in ALL_ARMS}
@@ -1028,25 +1029,30 @@ def test_cell16k_ring_composite_arms(env_levers):
         "device_route=1 + device_route_pinned=1"
     )
 
-    # W91 K35: cell16k_ring_fused = cell16k_ring + MTPLX_DSV41_SMALL_STAGES_FUSED=1 only.
-    for name in ("small_stages_fused", "cell16k_ring_fused"):
-        assert name in presets, f"{name} arm missing from ARM_PRESETS"
-    expected_fused = dict(ring)
-    expected_fused[_SS] = "1"
-    assert presets["cell16k_ring_fused"] == expected_fused, (
-        "cell16k_ring_fused must equal cell16k_ring + MTPLX_DSV41_SMALL_STAGES_FUSED=1"
+    # W91 K35 is ROUNDING-CLASS ON GPU (window-37: null perf, token-id sha differs),
+    # so it is kept OUT of every composite arm.  The isolation A/B arm
+    # small_stages_fused is the ONLY arm that carries it, and it sets ONLY
+    # small_stages + sinkhorn (hermetic).
+    assert "small_stages_fused" in presets, "small_stages_fused arm missing"
+    assert "cell16k_ring_fused" not in presets, (
+        "cell16k_ring_fused (a K35 composite) must NOT exist -- K35 is rounding-class "
+        "on GPU with no measured win (window-37); keep it out of every composite arm"
     )
-    # small_stages_fused (isolation) sets ONLY small_stages + sinkhorn.
     ssf = presets["small_stages_fused"]
     assert ssf[_SS] == "1" and ssf[_SK] == "1", "small_stages_fused missing its keys"
     assert all(v is None for k, v in ssf.items() if k not in (_SS, _SK)), (
         "small_stages_fused must set ONLY small_stages + sinkhorn (hermetic)"
     )
-    # both K35 keys are in the master lever list (receipt arm_env + hermetic clear),
-    # and the rounding-class premix kernel is armed by NO arm (GPU-parity-gated).
+    # No composite (cell16k*) arm carries K35 small_stages; and the rounding-class
+    # premix kernel is armed by NO arm (GPU-parity-gated).  Both K35 keys stay in the
+    # master lever list (receipt arm_env + hermetic clear).
     assert _SS in env_levers.ALL_LEVER_ENVS and _HPK in env_levers.ALL_LEVER_ENVS
     for name, preset in presets.items():
         assert preset.get(_HPK) is None, f"{name} must not arm HC_PREMIX_KERNEL"
+        if name != "small_stages_fused":
+            assert preset.get(_SS) is None, (
+                f"{name} must not arm K35 small_stages (rounding-class, no GPU win)"
+            )
 
     # W87: cell16k_ring_pool = cell16k_ring + the single-slot pool only.  A pure
     # residency change (allocation identical); the direct A/B vs cell16k_ring

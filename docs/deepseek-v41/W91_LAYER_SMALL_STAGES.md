@@ -1,13 +1,21 @@
 # W91 / K35 — layer small-stages fusion (AR-decode dispatch collapse)
 
 Kernel-ledger **K35**, env key `MTPLX_DSV41_SMALL_STAGES_FUSED` (default OFF).
-Sub-lever `MTPLX_DSV41_HC_PREMIX_KERNEL` (default OFF, GPU-only). A/B arms
-`small_stages_fused` and `cell16k_ring_fused` in
-`scripts/deepseek_v41/ab_decode_env_levers.py`. All numbers below are the CPU
-tiny real-structure model (`hidden=32, 8 layers, hc_mult=4, hc_sinkhorn_iters=20,
-n_routed=8, top-2` — the same HC/Sinkhorn/MoE geometry as the 40-layer artifact);
-per the worker contract the CPU is a **dispatch-count** proxy — the ms/token
-number is a GPU-window measurement.
+Sub-lever `MTPLX_DSV41_HC_PREMIX_KERNEL` (default OFF, GPU-only). Isolation A/B arm
+`small_stages_fused` in `scripts/deepseek_v41/ab_decode_env_levers.py`. All numbers
+below are the CPU tiny real-structure model (`hidden=32, 8 layers, hc_mult=4,
+hc_sinkhorn_iters=20, n_routed=8, top-2` — the same HC/Sinkhorn/MoE geometry as the
+40-layer artifact); per the worker contract the CPU is a **dispatch-count** proxy.
+
+> **GPU verdict (window-37): K35 is ROUNDING-CLASS on Metal, no measured win.** It
+> is byte-identical on CPU (proven below) but on Metal the n=1 `mx.compile` of the
+> segments reassociates the fp32 GEMM/reductions differently from eager — `cell16k_ring`
+> + K35 measured **2.13 tok/s vs the paired reference 2.17 (null)** with the decode
+> token-id **sha DIFFERING** (a greedy near-tie flipped; [[dsv41-inexact-ok-if-tie-flips]]).
+> So K35 is a rounding-class lever with no GPU win, **kept OUT of every composite arm**
+> (there is no `cell16k_ring_fused`); the isolation arm `small_stages_fused` is the only
+> arm that carries it. The CPU byte-identity below is a necessary condition, not the GPU
+> ship bar.
 
 Census: `scripts/deepseek_v41/dispatch_census.py --small-stages`.
 Tests: `tests/models/test_deepseek_v41_small_stages_fused.py` (12: 11 CPU + 1
@@ -120,10 +128,12 @@ the same fp32 op in the same order as the eager `DecoderLayer` / `MoE` bodies;
   keeps the lever off that band entirely. Decode (n=1) and the DSpark K+1 verify
   (≤6 rows) are fully covered. The fold of the gate top-k + shared expert + MoE
   combine adds **zero** fp delta beyond the HC collapse (seg2/seg3 outputs equal the
-  real `Gate`/`Expert`/combine module outputs bitwise). This CPU byte-identity is a
-  necessary condition; **n=1 GPU byte-identity must be established by the parity
-  window itself** (the shared HC-compile tape family, K4, is also OFF by default and
-  has no warm GPU receipt yet, so K35 cannot inherit one).
+  real `Gate`/`Expert`/combine module outputs bitwise). **This CPU byte-identity did
+  NOT transfer to Metal** — window-37 showed the decode token-id sha differs on the
+  GPU (n=1 `mx.compile` reassociates the fp32 GEMM/reductions, flipping a greedy
+  near-tie), so on GPU K35 is a **rounding-class** lever, judged under David's
+  tie-flip rule, not by sha. It has no measured GPU win (null), so it is not shipped
+  in any composite.
 - **No per-token retrace:** exactly 3 tapes (seg1/seg2/seg3) are traced once and
   replayed for all 64 steps (`len(_SMALL_STAGES_COMPILED) == 3`, zero growth).
 - **Engagement telemetry:** `_small_stages_calls()` (fused vs eager layer forwards)
@@ -149,9 +159,10 @@ bound** — most fused elementwise dispatches pipeline on the GPU; only the
 host-encode of the launches on the M=1 critical path is actually cut. The
 defensible ceiling is the fenced small-stage total the fusion targets
 (hc.premix 32.7 + hc.combine 26.7 + gate_topk 19.4 + shared 13.3 + moe.combine 8.6
-≈ **100 ms/token**, window-33). The real saving is a GPU-window A/B
-(`cell16k_ring_fused` vs `cell16k_ring`); the dispatch collapse (584→107/layer,
-−82%) is the deliverable.
+≈ **100 ms/token**, window-33). The dispatch collapse (584→107/layer, −82%) is the
+CPU deliverable — but window-37 measured the arm on the real model at **null** (2.13
+vs 2.17 tok/s), so on Metal the removed dispatches are not on the M=1 critical path
+here. K35 is retained only as the isolation lever `small_stages_fused`, not a win.
 
 **CPU host-wall proxy** (tiny 8-layer, decode n=1, eager prefill, 200 steps):
 eager **11.28 ms/tok** → fused **7.885 ms/tok**, **−30.1%** (1.41 → 0.99 ms/layer).
@@ -188,5 +199,7 @@ lower bound on the GPU dispatch win.
   `hc_split_sinkhorn` directly, where only the K3 Sinkhorn kernel engages. This is
   intended (the premix kernel is a decode/compiled-path optimization); it is not
   routed through eager `_mixes` to avoid changing the prefill Sinkhorn boundary.
-- Arm `small_stages_fused` = `{small_stages, sinkhorn}`; `cell16k_ring_fused` =
-  `cell16k_ring` + `small_stages` (neither sets `hc_premix_kernel`).
+- Arm `small_stages_fused` = `{small_stages, sinkhorn}` — the **only** arm carrying
+  K35, an isolation A/B against control. There is **no composite arm** with K35
+  (no `cell16k_ring_fused`): window-37 showed it is rounding-class with no GPU win,
+  so it stays out of every candidate stack. Neither arm sets `hc_premix_kernel`.

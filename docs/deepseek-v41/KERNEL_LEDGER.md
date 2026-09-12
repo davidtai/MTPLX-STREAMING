@@ -1373,9 +1373,19 @@ only the HC chains; K22 only the gate prefix + MoE combine. K35 collapses the wh
 THREE compiled per-layer graphs — input norm + HC premix (Sinkhorn) | attention | attn HC combine + ffn
 premix + gate/top-k + shared expert | routed switch | MoE combine + ffn HC combine — leaving attention's
 KV write and the routed switch's gather as the only un-fused per-layer calls. Byte-identical by
-construction at rows ≤ `_SMALL_STAGES_MAX_ROWS = 7` (decode n=1 + DSpark K+1 verify ≤6); fixed-shape
-`mx.compile` (shapeless blocked in MLX 0.32.2 by the Sinkhorn/top-k slices), one trace per segment, no
-per-token retrace. Read at use; `receipt.small_stages_engagement` (fused/eager forwards) confirms it ran.
+construction at rows ≤ `_SMALL_STAGES_MAX_ROWS = 7` **on CPU** (decode n=1 + DSpark K+1 verify ≤6);
+fixed-shape `mx.compile` (shapeless blocked in MLX 0.32.2 by the Sinkhorn/top-k slices), one trace per
+segment, no per-token retrace. Read at use; `receipt.small_stages_engagement` (fused/eager forwards)
+confirms it ran.
+
+**GPU verdict — ROUNDING-CLASS, no measured win (window-37, `docs/deepseek-v41/receipts/gpu-windows/
+window-37/ar-ring-fused.json`).** On Metal the n=1 `mx.compile` of the segments reassociates the fp32
+GEMM/reductions differently from eager, so K35 is NOT byte-identical there even though it is on CPU:
+`cell16k_ring` + K35 measured **2.13 tok/s vs the paired reference 2.17 (null)** with the decode token-id
+sha DIFFERING (a greedy near-tie flipped; [[dsv41-inexact-ok-if-tie-flips]]). K35 engaged
+(`small_stages_engagement.fused_layer_forwards` = 10,240 in the untimed headline). So K35 is a
+**rounding-class lever with no GPU win**: kept **OUT of every composite/candidate arm** (no
+`cell16k_ring_fused`) — the isolation A/B arm `small_stages_fused` is the only arm that carries it.
 
   | per layer (M=1, tiny=real structure) | eager | mx.compile | +K3 kernel |
   |---|---|---|---|
@@ -1417,7 +1427,7 @@ two microbenches (K7/K8), which are CPU/queued and can run now.
 | **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk + K19 head-last-row | 16K prefill ± two-pass split-K + tiling + head-last-row on the K16 base. **Pass if TTFT −≥15 % beyond K16 AND peak −≥8 GB (K19 drops the 8.47 GB logits), parity on long-prompt A/B.** | after KG-b | 1 window |
 | **KG-h** | K9 head byte cut + K13 in-place verify-KV | q8/mxfp8 head vs bf16 head: **ship only if argmax parity + HumanEval(164) ≥ exact−noise**; K13 footprint-guard folded into first MTP window. | after KG-e | folded |
 | **KG-n** | K33 DSpark draft-block tape collapse | `draft_compile` vs control on `--decode-mode dspark`: **byte-identical draft tokens (flag on==off) + greedy-verify == AR + draft-phase ms −**. CPU census −446 prim/draft cycle (−28 %; HC −258, attn prep −168). The drafter sibling of KG-i; only the DIRECT lane runs the draft block, so it composes with K29/K30/K31 on the verify. | after W57 DIRECT lane | folded |
-| **KG-o** | K35 fused per-layer small stages (+ HC-premix kernel) | `small_stages_fused` vs control, and `cell16k_ring_fused` vs `cell16k_ring`: **byte-identical decode/verify (rows≤7) + decode +**. CPU census −319 prim/layer with `mx.compile` (−55 %), −477/layer with the K3 Sinkhorn kernel (−82 %); small stages carry ZERO host syncs. Extends KG-f/KG-i to fold the MoE small stages (gate top-k + shared + combine) too. The rounding-class HC-premix kernel is GPU-parity-gated (`test_hc_premix_kernel_parity_gpu`), default off, in no arm. | after KG-f/KG-i | 1 window |
+| **KG-o** | K35 fused per-layer small stages (+ HC-premix kernel) | **CLOSED — ROUNDING-CLASS, NULL (window-37).** `small_stages_fused` isolation A/B: CPU census −319 prim/layer with `mx.compile` (−55 %), −477/layer with the K3 Sinkhorn kernel (−82 %), zero host syncs; but on Metal `cell16k_ring`+K35 = **2.13 vs 2.17 tok/s (null)** with the token-id sha DIFFERING (n=1 mx.compile reassociates fp32 on Metal → greedy near-tie flip; NOT byte-identical there though it is on CPU). No GPU win → K35 kept **OUT of every composite arm** (no `cell16k_ring_fused`); only `small_stages_fused` carries it. The HC-premix kernel is GPU-parity-gated (`test_hc_premix_kernel_parity_gpu`), default off, in no arm. | window-37 | done (null) |
 
 **Sequencing rationale:** KG-a/KG-b run **now** (CPU/queued microbenches + the today 16K-TTFT
 restructure). The decode kernel/fusion gates (KG-c…KG-f) only pay once OPT_LEDGER R1–R4 have exposed
