@@ -705,15 +705,20 @@ def test_server_plumbed_maxkv_bounds_the_cache(monkeypatch):
         C._bounded_latent_cap(served_max_live_kv)
 
 
-def test_server_setdefault_lets_explicit_cap_win(monkeypatch):
-    """The server stamps MAXKV with setdefault, so an explicit operator cap wins --
-    mirrors the ``os.environ.setdefault`` in the server's KV-window setup."""
+def test_server_hard_sets_maxkv_over_stale_env(monkeypatch):
+    """Review MEDIUM-B: the server HARD-SETS MTPLX_DSV41_KV_BOUNDED_MAXKV from the
+    authoritative max_live_kv_tokens, so a stale env (shell / profile / earlier ab run)
+    does NOT survive (setdefault would have let it win, breaking assert_can_admit or
+    over-preallocating)."""
+    from mtplx.server.openai import _plumb_kv_bounded_maxkv
     _clear_kv_envs(monkeypatch)
-    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "999")   # explicit operator cap
-    # the server's stamp is a setdefault, so it does NOT override an explicit value
-    import os as _os
-    _os.environ.setdefault("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(4096))
-    assert C._kv_bounded_maxkv() == 999
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "999")   # stale/smaller value
+    _plumb_kv_bounded_maxkv(4096)                               # server's plumbing
+    assert C._kv_bounded_maxkv() == 4096, "stale env survived the server hard-set"
+    # a larger stale value is also overridden
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "99999")
+    _plumb_kv_bounded_maxkv(4096)
+    assert C._kv_bounded_maxkv() == 4096
 
 
 # ---------------------------------------------------------------------------
