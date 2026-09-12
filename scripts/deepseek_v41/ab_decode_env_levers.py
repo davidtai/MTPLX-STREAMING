@@ -229,7 +229,7 @@ WINDOW_RING_MAX_VERIFY_ENV = "MTPLX_DSV41_WINDOW_RING_MAX_VERIFY"  # widest veri
 WINDOW_RING_SLACK_ENV = "MTPLX_DSV41_WINDOW_RING_SLACK"            # safety margin
 WINDOW_RING_HEADROOM_ENV = "MTPLX_DSV41_WINDOW_RING_HEADROOM"      # appends per compaction
 WINDOW_RING_MAXKV_ENV = "MTPLX_DSV41_WINDOW_RING_MAXKV"            # compress/index prealloc
-ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K35: shared selected-
+ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K36: shared selected-
 # compress gather -- a DISPATCH-COUNT cleanup, NOT the in-situ floor fix.  All
 # Reuse/Reindex/Full layers of a group read the SAME (compress_kv, selected_idx)
 # pair, so the shipped K30 path issues the compressed-lane gather (~3 tiny host
