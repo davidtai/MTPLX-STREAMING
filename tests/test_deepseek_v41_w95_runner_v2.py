@@ -504,3 +504,63 @@ def test_v2_issue_site_drops_sentinels_no_crash(tmp_path):
         _settle_prefetch(rt)
     finally:
         rt.close()
+
+
+# ---------------------------------------------------------------------------
+# E. W95f -- the speculative-byte budget (demand accounting + recovering window)
+# ---------------------------------------------------------------------------
+def test_v2_cold_demand_misses_increment_demand_bytes(tmp_path):
+    """W95f: a COLD demand miss (expert never resident, never prefetched) advances
+    ``demand_bytes_read`` at the plan site, giving the speculative-byte budget a
+    real demand denominator. At HEAD the only writer was the reconcile FALLBACK, so
+    cold misses left the denominator at 0 and the budget throttled nothing."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        layer = spec.routed_layer_start
+        rec = rt._record_bytes_for_layer(layer)
+        assert rt.demand_bytes_read == 0  # nothing streamed yet
+        # route two cold-miss experts (never resident, never prefetched) -> two
+        # demand SSD reads.  (Fails at HEAD: demand_bytes_read stays 0.)
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [8, 9])
+        _REAL_EVAL(_switch(rt, spec)(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        assert rt.demand_bytes_read == 2 * rec, rt.demand_bytes_read
+    finally:
+        rt.close()
+
+
+def test_v2_byte_budget_recovers_after_latch(tmp_path):
+    """W95f: after speculation runs far ahead of demand (emulating the post-fallback
+    state the review found), the budget backs off for the CURRENT decode token but
+    a LATER token issues prefetch again -- a recovering window, not a one-way latch.
+    At HEAD the cumulative-since-open comparison stayed latched off for the life of
+    the process (demand only grew via another fallback that was never issued)."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        layer = spec.routed_layer_start
+        rec = rt._record_bytes_for_layer(layer)
+        # emulate one fallback then heavy speculation: demand = 1 record, spec = 10x.
+        rt.demand_bytes_read = rec
+        rt.speculative_bytes_read = 10 * rec
+        skips0 = rt._prefetch_budget_skips
+        assert rt.prefetch_experts(layer, [8, 9]) == 0  # over budget -> skip
+        assert rt._prefetch_budget_skips == skips0 + 1
+        # cross a decode-token boundary with a real route: the window re-snapshots
+        # its marks to the current cumulative totals, emptying the window.
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [0, 1])
+        _REAL_EVAL(_switch(rt, spec)(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        assert rt._decode_token_index >= 1  # a token boundary elapsed
+        # window is empty now -> prefetch issues again (real speculative reads).
+        # (Fails at HEAD: still latched, returns 0.)
+        issued = rt.prefetch_experts(layer, [10, 11])
+        _settle_prefetch(rt)
+        assert issued > 0, "budget stayed latched after a decode-token boundary"
+    finally:
+        rt.close()

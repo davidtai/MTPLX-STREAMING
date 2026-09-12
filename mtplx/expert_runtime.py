@@ -2150,6 +2150,16 @@ class ExpertStreamingRuntime:
         else:
             self._prefetch_byte_budget = 0.0
         self._prefetch_budget_skips = 0
+        # W95f: the speculative-byte BUDGET is a RECOVERING per-decode-token window,
+        # not a cumulative-since-open latch. ``demand_bytes_read`` and
+        # ``speculative_bytes_read`` stay cumulative (the receipt reports them and
+        # normalises per decode token); the budget in ``prefetch_experts`` compares
+        # the DELTAS since the last token boundary, marked here and re-snapshotted
+        # whenever ``_decode_token_index`` advances (``_observe_cold_start_unlocked``)
+        # / at ``reset``. Without the window the budget latched off after the first
+        # fallback (spec >> demand forever); with it each token races demand afresh.
+        self._demand_bytes_at_token_start = 0
+        self._speculative_bytes_at_token_start = 0
         # W93 lane C (MED-a): bound the wait ``_reconcile_prefetch_for_route`` holds
         # under the layer lock on an in-flight speculative read. Default 2.0 s;
         # configurable via MTPLX_DSV41_GATE_PREFETCH_RECONCILE_TIMEOUT_S (read at
@@ -2929,6 +2939,17 @@ class ExpertStreamingRuntime:
         )
         self._observe_cold_start_unlocked(layer, plan)
 
+    def _snapshot_prefetch_byte_window(self) -> None:
+        """W95f: open a fresh speculative-byte budget window by marking the current
+        cumulative demand/speculative byte totals as this window's origin. Called at
+        every decode-token boundary (and at ``reset``); the budget in
+        ``prefetch_experts`` throttles on the delta from here, so each token's
+        speculation races that token's demand afresh and the budget cannot latch off
+        for the life of the process. Caller holds ``_counter_lock``."""
+
+        self._demand_bytes_at_token_start = self.demand_bytes_read
+        self._speculative_bytes_at_token_start = self.speculative_bytes_read
+
     def _observe_cold_start_unlocked(self, layer: int, plan: RoutePlan) -> None:
         """W87: attribute each DECODE layer-route's assignment hits to the
         first-N-step (cold-start) or steady-state bucket, advancing the decode-step
@@ -2944,6 +2965,7 @@ class ExpertStreamingRuntime:
                 self._decode_token_index = 0
                 self._decode_layers_seen = set()
                 self._saw_decode_since_prefill = False
+                self._snapshot_prefetch_byte_window()  # W95f: new request window
             return
         self._saw_decode_since_prefill = True
         hit_experts = set(plan.hits)
@@ -2959,11 +2981,13 @@ class ExpertStreamingRuntime:
         if layer in seen:
             self._decode_token_index += 1
             self._decode_layers_seen = {layer}
+            self._snapshot_prefetch_byte_window()  # W95f: new decode-token window
         else:
             seen.add(layer)
             if self._streamed_layer_set and seen >= self._streamed_layer_set:
                 self._decode_token_index += 1
                 self._decode_layers_seen = set()
+                self._snapshot_prefetch_byte_window()  # W95f: new decode-token window
 
     def _cold_start_telemetry_locked(self) -> dict[str, Any]:
         """W87 cold-start decode telemetry (caller holds the counter lock)."""
@@ -3305,6 +3329,27 @@ class ExpertStreamingRuntime:
             )
             hit_plan = self._subset_route_plan(plan, hits=True)
             miss_plan = self._subset_route_plan(plan, hits=False)
+            # W95f: account this layer-route's DEMAND miss bytes -- the reads that
+            # touch the SSD on the blocking path -- WHERE the demand plan is made,
+            # so the speculative-byte budget has a real demand denominator. At HEAD
+            # the only writer was the reconcile fallback below, so cold demand
+            # misses never advanced it: the budget was inert until the first
+            # fallback and then latched off. ``_reconcile_prefetch_for_route`` above
+            # already promoted settled ring reads to hits and invalidated fell-back
+            # predictions, so ``miss_plan.loads`` is exactly the {cold miss,
+            # fell-back} demand set -- counting it here SUPERSEDES the fallback
+            # increment (which is removed, so no double count). Gated on the ring
+            # being armed so the shipped (ring-off) path stays byte-identical.
+            if (
+                self.config.prefetch_slots > 0
+                and miss_plan is not None
+                and miss_plan.loads
+            ):
+                _demand_record_bytes = self._record_bytes_for_layer(layer)
+                with self._counter_lock:
+                    self.demand_bytes_read += (
+                        len(miss_plan.loads) * _demand_record_bytes
+                    )
             # Fix (B) overlap: the layer's decode misses go down as ONE part
             # (single future, admission ahead of the wait, adjacency-run
             # scatter reads in the pool) instead of one part per expert.
@@ -4079,7 +4124,6 @@ class ExpertStreamingRuntime:
         # The common case: the read finished during the one-layer overlap window
         # and only needs publishing (cheap, non-blocking) -> it becomes a hit.
         self._apply_prefetch_completions(layer, bank)
-        record_bytes = self._record_bytes_for_layer(layer)
         awaited = 0
         fell_back = 0
         for expert in dict.fromkeys(int(value) for value in expert_ids):
@@ -4121,13 +4165,19 @@ class ExpertStreamingRuntime:
                 fell_back += 1
         # Catch any reads that settled while we awaited above.
         self._apply_prefetch_completions(layer, bank)
-        if awaited or fell_back:
+        if awaited:
             with self._counter_lock:
-                if awaited:
-                    self.counters.prefetch_awaited_inflight += awaited
-                    self._layer_counters[layer].prefetch_awaited_inflight += awaited
-                if fell_back:
-                    self.demand_bytes_read += fell_back * record_bytes
+                self.counters.prefetch_awaited_inflight += awaited
+                self._layer_counters[layer].prefetch_awaited_inflight += awaited
+        # W95f: the fell-back experts were invalidated above (``invalidate_prefetch``)
+        # and are re-planned as demand misses by ``_plan_route_transaction``
+        # (begin_split_route), where their bytes are now accounted via
+        # ``miss_plan.loads``. Adding them here as well double-counted the demand
+        # denominator -- and, being fallback-only, this was the sole demand writer,
+        # so cold demand misses went uncounted and the budget stayed inert until a
+        # fallback then latched. The demand increment moved wholesale to the plan
+        # site. (``fell_back`` is left counted above for readability/future
+        # telemetry; it no longer feeds any counter.)
 
     def prefetch_experts(self, layer: int, expert_ids: Iterable[int]) -> int:
         """Speculatively load predicted experts into the layer's ring tier.
@@ -4154,18 +4204,31 @@ class ExpertStreamingRuntime:
         executor = self._prefetch_executor
         if executor is None:
             return 0
-        # W95 retune: strict demand priority. Skip speculation once cumulative
-        # speculative bytes reach (budget x cumulative demand bytes) -- so a
+        # W95 retune: strict demand priority. Skip speculation once this token's
+        # speculative bytes reach (budget x this token's demand bytes) -- so a
         # gate-oracle burst can never crowd the drive out of demand reads (window
         # 39: k=12 -> 70% busy, net -6%). Cheap counter read; skipped calls do not
         # drain other layers' completions, but a later within-budget call does, and
         # the budget is exceeded only while speculation is already heavy (exactly
         # when backing off is correct). Off (budget 0) -> pre-retune behaviour.
+        #
+        # W95f: compare the RECOVERING per-decode-token window (bytes since the last
+        # token boundary), not the cumulative-since-open totals. The demand
+        # denominator now advances on every cold miss (plan site), and the marks
+        # re-snapshot at each token boundary (``_observe_cold_start_unlocked``), so a
+        # token that ran speculation ahead backs off for the rest of THAT token
+        # while the NEXT token issues again. At HEAD the cumulative form latched off
+        # for the life of the process after the first fallback (spec >> demand, no
+        # reset). The ``> 0`` guard still short-circuits before this token's first
+        # demand miss -- correct: nothing to prioritise yet, and it cannot latch.
+        _demand_window = self.demand_bytes_read - self._demand_bytes_at_token_start
+        _spec_window = (
+            self.speculative_bytes_read - self._speculative_bytes_at_token_start
+        )
         if (
             self._prefetch_byte_budget > 0.0
-            and self.demand_bytes_read > 0
-            and self.speculative_bytes_read
-            >= self._prefetch_byte_budget * self.demand_bytes_read
+            and _demand_window > 0
+            and _spec_window >= self._prefetch_byte_budget * _demand_window
         ):
             self._prefetch_budget_skips += 1
             return 0
@@ -4458,6 +4521,10 @@ class ExpertStreamingRuntime:
                 self._steady_decode_hits = 0
                 self._steady_decode_requests = 0
                 self._saw_decode_since_prefill = False
+                # W95f: demand/speculative byte totals are cumulative-since-open (not
+                # reset here), so re-mark the budget window origin to the current
+                # totals -> an empty window right after reset.
+                self._snapshot_prefetch_byte_window()
             if self.config.trace_routes:
                 with self._route_trace_lock:
                     previous_epoch = self._route_trace_epoch
