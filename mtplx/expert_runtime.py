@@ -70,6 +70,47 @@ _LOGGER = logging.getLogger(__name__)
 
 _MEMORY_RE = re.compile(r"^([0-9]+)([kmgt]i?b?|b)?$", re.IGNORECASE)
 
+# W109 (T1 / issue I1): DSpark verify SSD queue depth levers, read from the
+# environment AT USE (never cached at import) so an arm that exports them after
+# import still engages -- see memory note "env-flags-read-at-use-not-import".
+# Both default to the current behavior when unset: no fanout regroup, no forced
+# union. They only reshape the DECODE-phase miss submission (byte-identical --
+# scheduling only). ``VERIFY_IO_FANOUT`` maps a layer's miss union into N
+# concurrent batched-scatter groups; ``VERIFY_UNION_READ`` forces the whole union
+# into a single batched submission (== the existing overlap_miss_reads shape) even
+# when that config knob is off.
+VERIFY_IO_FANOUT_ENV = "MTPLX_DSV41_VERIFY_IO_FANOUT"
+VERIFY_UNION_READ_ENV = "MTPLX_DSV41_VERIFY_UNION_READ"
+
+
+def _verify_io_fanout_setting() -> int | None:
+    """Resolved ``MTPLX_DSV41_VERIFY_IO_FANOUT`` (>=1) or ``None`` when unset/invalid.
+
+    ``None`` means "leave the miss grouping as it is today". A value >=1 caps the
+    number of concurrent batched miss groups a DECODE layer is submitted as.
+    """
+
+    raw = os.environ.get(VERIFY_IO_FANOUT_ENV)
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 1 else None
+
+
+def _verify_union_read_setting() -> bool:
+    """Whether ``MTPLX_DSV41_VERIFY_UNION_READ`` is armed (truthy)."""
+
+    raw = os.environ.get(VERIFY_UNION_READ_ENV)
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 
 class ExpertStreamingConfigurationError(ValueError):
     pass
@@ -816,6 +857,10 @@ class PendingSplitRoute:
         self._close_requested = False
         self._finalized = False
         self._closed = False
+        # W109: when True (set by begin_split_route under a verify-IO lever), the
+        # generation thread's blocking wait inside iter_ready_misses is timed into
+        # the verify_io_wait_ns_total counter. Default False -> no timing, no cost.
+        self._verify_io_timed = False
 
     def release_hits(self) -> None:
         ready = self.hit_ready
@@ -1096,6 +1141,13 @@ class PendingSplitRoute:
             if self._pipeline_route is None
             else self._iter_pipeline_miss_completions(snapshot)
         )
+        # W109: time only the generation thread's own execution (which BLOCKS on
+        # the SSD read while advancing ``completion_order``) -- not the consumer's
+        # gather dispatch, which runs while this generator is suspended at ``yield``.
+        # So ``seg_start`` is reset right after each yield resumes.
+        _verify_io_timed = self._verify_io_timed
+        _verify_io_metrics = self.runtime.slots.metrics if _verify_io_timed else None
+        _seg_start = time.perf_counter_ns() if _verify_io_timed else 0
         for future in completion_order:
             with self._state_lock:
                 if future not in self._miss_futures:
@@ -1159,7 +1211,13 @@ class PendingSplitRoute:
                 self.abort(failure)
                 self._finish_failure_if_ready()
                 raise failure
+            if _verify_io_metrics is not None:
+                _verify_io_metrics.note_verify_io(
+                    wait_ns=time.perf_counter_ns() - _seg_start
+                )
             yield ready
+            if _verify_io_timed:
+                _seg_start = time.perf_counter_ns()
         if not self._policy_observed:
             try:
                 self.runtime.slots.raise_if_unhealthy()
@@ -2044,6 +2102,12 @@ class ExpertStreamingRuntime:
             max_workers=max(1, plan.transient_slots),
             thread_name_prefix="mtplx-route-miss",
         )
+        # W109: live gauge of concurrent in-flight verify miss reads (only touched
+        # when a verify-IO lever is armed; see begin_split_route). The pool above is
+        # transient_slots-wide (48 on the DSV4.1 cell), so it never bounds an <=16-way
+        # verify fanout -- no executor resize is needed.
+        self._verify_io_gauge_lock = threading.Lock()
+        self._verify_io_inflight = 0
         # Speculative ring loads run off the route-miss executor so a
         # prediction burst can never starve a real miss read.
         self._prefetch_lock = threading.Lock()
@@ -3200,6 +3264,78 @@ class ExpertStreamingRuntime:
             )
         return tuple(parts)
 
+    @staticmethod
+    def _miss_route_groups(
+        plan: RoutePlan, num_groups: int
+    ) -> tuple[RoutePlan, ...]:
+        """Partition a miss plan into ``num_groups`` contiguous multi-expert parts.
+
+        W109 (T1): the generalization of ``_miss_route_parts`` (which is the
+        ``num_groups == len(unique experts)`` case) and of the single-batched-union
+        part (``num_groups == 1``). The layer's miss union is split into up to
+        ``num_groups`` disjoint groups of experts; each group becomes one RoutePlan
+        submitted as its own future, so N groups read concurrently while each group
+        still coalesces its adjacent records into one scatter ``preadv``. Byte-
+        identical to any other grouping: the groups partition the SAME loads/slots
+        exactly once, so the records land in the SAME slots -- only the read
+        schedule (which records share a syscall, and how many run in parallel)
+        changes. ``ensure_route_part`` already handles multi-expert parts (the
+        overlap_miss_reads path passes the whole union as one such part).
+        """
+
+        unique_experts = tuple(dict.fromkeys(plan.experts))
+        load_experts = tuple(load.expert for load in plan.loads)
+        if len(set(load_experts)) != len(load_experts) or set(load_experts) != set(
+            unique_experts
+        ):
+            raise ExpertSlotError(
+                "incremental miss experts and slot loads must match one-to-one"
+            )
+        if len({load.slot for load in plan.loads}) != len(plan.loads):
+            raise ExpertSlotError("incremental miss parts must own disjoint slots")
+        count = len(unique_experts)
+        groups = max(1, min(int(num_groups), count))
+        # Ceil-balanced contiguous chunks over the unique experts.
+        base, rem = divmod(count, groups)
+        chunks: list[tuple[int, ...]] = []
+        cursor = 0
+        for index in range(groups):
+            size = base + (1 if index < rem else 0)
+            if size:
+                chunks.append(unique_experts[cursor : cursor + size])
+                cursor += size
+        parts: list[RoutePlan] = []
+        for chunk in chunks:
+            chunk_set = set(chunk)
+            positions = tuple(
+                index
+                for index, candidate in enumerate(plan.experts)
+                if candidate in chunk_set
+            )
+            parts.append(
+                RoutePlan(
+                    phase=plan.phase,
+                    experts=tuple(plan.experts[index] for index in positions),
+                    slots=tuple(plan.slots[index] for index in positions),
+                    hits=(),
+                    misses=tuple(chunk),
+                    loads=tuple(
+                        load for load in plan.loads if load.expert in chunk_set
+                    ),
+                    evictions=tuple(
+                        eviction
+                        for eviction in plan.evictions
+                        if eviction.next_expert in chunk_set
+                    ),
+                    generations=(
+                        tuple(plan.generations[index] for index in positions)
+                        if plan.generations
+                        else ()
+                    ),
+                )
+            )
+        return tuple(parts)
+
     def _rollback_route_loads(self, layer: int, plan: RoutePlan) -> None:
         for load in plan.loads:
             if load.persistent:
@@ -3288,6 +3424,22 @@ class ExpertStreamingRuntime:
                             load.generation,
                         )
 
+    def _verify_io_enter(self) -> int:
+        """Record one verify miss read starting; return the live in-flight count.
+
+        The returned value is the peak concurrency observed at this instant; the
+        caller pushes it to ``note_verify_io(inflight_peak=...)`` which keeps the
+        running maximum. W109 (T1) engagement gauge; only called under a lever.
+        """
+
+        with self._verify_io_gauge_lock:
+            self._verify_io_inflight += 1
+            return self._verify_io_inflight
+
+    def _verify_io_exit(self) -> None:
+        with self._verify_io_gauge_lock:
+            self._verify_io_inflight -= 1
+
     def begin_split_route(
         self,
         layer: int,
@@ -3365,13 +3517,47 @@ class ExpertStreamingRuntime:
                 and miss_plan is not None
                 and plan.phase is RoutingPhase.DECODE
             )
-            miss_parts = (
-                self._miss_route_parts(miss_plan)
-                if miss_plan is not None
+            # W109 (T1 / issue I1): DSpark verify SSD queue depth. Read AT USE so an
+            # arm that exports the env after import still engages. Both levers only
+            # RESHAPE the DECODE-phase miss submission -- byte-identical, since every
+            # regrouping partitions the SAME loads/slots exactly once (records land in
+            # the same slots; only which records share a syscall and how many run
+            # concurrently changes). FANOUT=N -> up to N concurrent batched-scatter
+            # groups; UNION_READ=1 -> the whole union as ONE batched submission even
+            # when the overlap_miss_reads config knob is off. Unset -> the exact
+            # grouping below (current behavior).
+            _verify_fanout = _verify_io_fanout_setting()
+            _verify_union = _verify_union_read_setting()
+            _verify_io_active = (
+                miss_plan is not None
+                and bool(miss_plan.loads)
                 and plan.phase is RoutingPhase.DECODE
-                and not batch_misses
-                else ((miss_plan,) if miss_plan is not None else ())
+                and (_verify_fanout is not None or _verify_union)
             )
+            if _verify_io_active:
+                _unique_misses = len(dict.fromkeys(miss_plan.experts))
+                _num_groups = (
+                    max(1, min(_verify_fanout, _unique_misses))
+                    if _verify_fanout is not None
+                    else 1  # union-only: the whole union as one batched submission
+                )
+                if _num_groups <= 1:
+                    # One batched submission -- identical shape to the overlap path.
+                    miss_parts = (miss_plan,)
+                elif _num_groups >= _unique_misses:
+                    # Fanout at/above the union width -> one part per expert (the
+                    # existing per-expert regime, reused verbatim).
+                    miss_parts = self._miss_route_parts(miss_plan)
+                else:
+                    miss_parts = self._miss_route_groups(miss_plan, _num_groups)
+            else:
+                miss_parts = (
+                    self._miss_route_parts(miss_plan)
+                    if miss_plan is not None
+                    and plan.phase is RoutingPhase.DECODE
+                    and not batch_misses
+                    else ((miss_plan,) if miss_plan is not None else ())
+                )
             pipeline_ledger = self._pipeline_ledger
             if pipeline_ledger is not None:
                 try:
@@ -3425,6 +3611,21 @@ class ExpertStreamingRuntime:
                     if plan.phase is RoutingPhase.DECODE
                     else self.slots.ensure_route
                 )
+                # W109: time the gen-thread miss wait for this route, and (only when
+                # a lever is armed) gauge the true peak concurrent in-flight reads by
+                # wrapping the submitted callable. Zero cost on the default path.
+                pending._verify_io_timed = _verify_io_active
+                if _verify_io_active:
+                    _base_ensure = ensure
+
+                    def ensure(*call_args, _base=_base_ensure, **call_kwargs):
+                        _peak = self._verify_io_enter()
+                        self.slots.metrics.note_verify_io(inflight_peak=_peak)
+                        try:
+                            return _base(*call_args, **call_kwargs)
+                        finally:
+                            self._verify_io_exit()
+
                 for ordinal, miss_part in enumerate(miss_parts):
                     part_admission = io_admission.child()
                     if pipeline_route is None:
@@ -3460,6 +3661,13 @@ class ExpertStreamingRuntime:
                         batched_miss_records=sum(
                             len(part.loads) for part in miss_parts
                         ),
+                    )
+                if _verify_io_active:
+                    # reads_issued = expert records scheduled on this verify layer;
+                    # batches = the concurrent groups they were submitted as.
+                    self.slots.metrics.note_verify_io(
+                        reads_issued=len(miss_plan.loads),
+                        batches=len(miss_parts),
                     )
             else:
                 pending._commit_policy()
@@ -4825,12 +5033,28 @@ class ExpertStreamingRuntime:
         def _per_tok(value: int) -> float | None:
             return (value / _steps) if _steps else None
 
+        # W109 (T1 / issue I1): DSpark verify SSD queue-depth engagement. Resolve the
+        # levers here too (they are read AT USE per route) so the receipt records the
+        # values the run actually saw, and surface the four slot-metric counters.
+        _slot_metrics = self.slots.metrics.as_dict()
+        _verify_io_block = {
+            "fanout": _verify_io_fanout_setting(),
+            "union_read": _verify_union_read_setting(),
+            "reads_issued": int(_slot_metrics.get("verify_io_reads_issued", 0)),
+            "batches": int(_slot_metrics.get("verify_io_batches", 0)),
+            "max_inflight": int(_slot_metrics.get("verify_io_max_inflight", 0)),
+            "wait_ms_total": (
+                int(_slot_metrics.get("verify_io_wait_ns_total", 0)) / 1e6
+            ),
+        }
         return {
             "mode": "v2",
             "single_pool": bool(getattr(self, "_single_slot_pool", False)),
             "overlap_miss_reads": bool(
                 getattr(self.config, "overlap_miss_reads", False)
             ),
+            # W109: the verify SSD queue-depth lever state + engagement counters.
+            "verify_io": _verify_io_block,
             # the retuned prefetch knobs (W95): AR predict width, confidence
             # margin, global ring size, and the demand-priority byte budget.
             "prefetch_k": _k_resolved,
