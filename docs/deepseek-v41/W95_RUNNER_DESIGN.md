@@ -29,11 +29,48 @@ persistent) + 48 global transient.
 
 The ≈141 is measured (W96 as-is audit, `w96_sync_census.py`): **40 routing `mx.eval(indices)`
 + ≈10 all-hit wave fences + ≈30 split-layer hit fences + ≈59 per-miss-part fences + 2 at the
-sampler.** The v2 path carries **none** of the wave/hit/per-part fences (they are the pin/
-release design, D3); the only blocking eval on the generation thread is the covering
-barrier, plus one demand sync per layer whose route names an un-prefetched expert (that sync
-is the SSD read the layer always paid, D2 — not new drain). The sync-count test asserts
-exactly this via the W96 census (§6.2/§8).
+sampler.**
+
+> ### ⚠ UPDATE — window 38 re-weights this design (read before §1–§5)
+>
+> A five-pass unfenced attribution on the **real** model (window 38,
+> `receipts/gpu-windows/window-38/unfenced-attribution.json`) **withdraws the
+> host-sync-drain premise** that §0–§5 and W96 were built on. Full token 487 ms;
+> switch stubbed *with* the per-layer barrier kept 311 ms at **93% busy / 1,521 MHz**;
+> *without* the barrier 330 ms (no gain); attention stubbed 196 ms; floor 23.5.
+> Reading: **host syncs cost ≈0 ms extra** — the `mx.eval(indices)` "drain" is the GPU
+> doing real queued work at 93% busy, not a recoverable bubble. So removing syncs (the
+> device-LUT + eviction-epoch + planner-thread of §1.1–§1.2/§2) buys ≈nothing **until
+> the GPU is otherwise idle**, i.e. after attention is fixed (that 291 ms/token of real
+> GPU work, 7.3 ms/layer, is **W97's** problem, not this design's).
+>
+> **Re-weighted plan.** The recoverable cost in the switch is the **SSD miss waits
+> ≈175 ms/token** (82.6 misses/token in that run). So the v2 **first deliverable** is to
+> **hide the SSD waits**, not remove syncs:
+> 1. gate-oracle prefetch one layer ahead (W93 lanes), riding the existing — kept —
+>    per-layer routing eval;
+> 2. issue all of a layer's demand misses at once (raise SSD queue depth above today's
+>    ≈2, drive ≫ 2.4 of 13.4 GB/s);
+> 3. the **single scan-resistant pool admitting every miss** (D5: 68% of miss bytes are
+>    discarded today by frequency admission rejecting first-seen experts);
+> 4. eviction/promotion at token boundaries.
+>
+> **Implemented (this branch):** the single switch **`MTPLX_DSV41_RUNNER=v2`** composes
+> (1)+(3) by arming the W93 gate-oracle ring (k=12 default) and the W87 single pool
+> coherently — one user key, no stacked sub-keys, byte-identical when unset. Items (2)
+> and (4) and the counters are follow-on within this deliverable. **The device-LUT /
+> eviction-epoch / planner-thread sync removal (§1.1–§1.2, §2) is PARKED as phase 2** —
+> correct and worth building, but it only pays once attention no longer keeps the GPU
+> at 93% busy. **Target (paired window):** misses/token and SSD-bound ms/token down
+> ≥60% at equal hit rate; AR **2.05 → ~2.9 tok/s** with attention untouched.
+>
+> Everything below (§0–§8) still holds as the *structure and exactness argument*; only
+> the **cost attribution and the sequencing** change — treat §5/§8's "drain" ms as
+> superseded by window 38, and §1.1–§1.2/§2 as phase-2.
+
+The v2 path (phase 2) carries **none** of the wave/hit/per-part fences (they are the
+pin/release design, D3); the sync-count test asserts the census when that phase lands
+(§6.2/§8).
 
 - **The one unavoidable sync** is the token-boundary covering barrier (the sampler eval,
   which also carries the batched route read-back and the planner hand-off). Autoregression

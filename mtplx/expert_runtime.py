@@ -2275,7 +2275,15 @@ class ExpertStreamingRuntime:
                 artifact_root,
                 verify_sidecar_hash=config.verify_sidecar_hash_at_open,
             )
-        _ssp_env = os.environ.get("MTPLX_DSV41_SINGLE_SLOT_POOL") == "1"
+        # W95 v2 runner (MTPLX_DSV41_RUNNER=v2) arms the single scan-resistant pool
+        # (admit every miss) as part of its one composed switch, without the user
+        # stacking MTPLX_DSV41_SINGLE_SLOT_POOL. Inline env read (no import of the
+        # deepseek_v41 helper) keeps this low-level module free of that cycle; the
+        # value is byte-identical to the pre-v2 path when MTPLX_DSV41_RUNNER is unset.
+        _ssp_env = (
+            os.environ.get("MTPLX_DSV41_SINGLE_SLOT_POOL") == "1"
+            or os.environ.get("MTPLX_DSV41_RUNNER") == "v2"
+        )
         # MED-6: the single slot pool is implemented only for per-layer banks
         # (GlobalExpertSlotBank has no pool policy and would fault every prefill
         # wave). Gate it on layer scope and warn rather than crash a served config.

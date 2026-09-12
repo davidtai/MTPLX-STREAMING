@@ -2498,12 +2498,39 @@ _GATE_PREFETCH_ENV = "MTPLX_DSV41_GATE_PREFETCH"
 _GATE_PREFETCH_MIN_LAYER_ENV = "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER"
 _GATE_PREFETCH_MIN_LAYER_DEFAULT = 4
 
+#: W95 v2 runner switch (docs/deepseek-v41/W95_RUNNER_DESIGN.md).  ``MTPLX_DSV41_RUNNER=v2``
+#: is the SINGLE user switch for the rebuilt streaming decode path: it composes the W93
+#: gate-oracle one-layer-ahead prefetch and the W87 single scan-resistant slot pool (admit
+#: every miss) WITHOUT the user stacking their individual env keys.  Default (unset) is the
+#: current path, byte-for-byte.  Window 38 withdrew the host-sync-drain premise, so v2's
+#: FIRST job is hiding the SSD miss waits (prefetch + admit-every-miss); the device-LUT /
+#: eviction-epoch / planner-thread sync removal is parked as phase 2 (it only pays once the
+#: GPU is otherwise busy).  An explicit sub-key (``MTPLX_DSV41_GATE_PREFETCH`` /
+#: ``MTPLX_DSV41_SINGLE_SLOT_POOL``) still works and always wins over the v2 default.
+_RUNNER_ENV = "MTPLX_DSV41_RUNNER"
+#: v2's default gate-oracle prefetch width when the user set no explicit
+#: ``MTPLX_DSV41_GATE_PREFETCH`` (W89: one-layer-ahead missRed@12 0.766; ring 2*k=24 <= 32).
+_RUNNER_V2_GATE_PREFETCH_K = 12
+
+
+def _runner_v2_enabled() -> bool:
+    """True when the single v2 runner switch (``MTPLX_DSV41_RUNNER=v2``) is armed."""
+    return os.environ.get(_RUNNER_ENV) == "v2"
+
 
 def _resolve_gate_prefetch_k(raw=None) -> int:
-    """Prefetch width ``k`` (0 = off). A non-positive or unparsable value is off."""
-    if raw is None:
+    """Prefetch width ``k`` (0 = off). A non-positive or unparsable value is off.
+
+    When the width comes from the environment (``raw is None``) and no explicit
+    ``MTPLX_DSV41_GATE_PREFETCH`` is set, ``MTPLX_DSV41_RUNNER=v2`` arms it at
+    ``_RUNNER_V2_GATE_PREFETCH_K``.  An explicit env value (or an explicit ``raw``
+    argument) always wins; with neither armed this returns 0 -- byte-identical off."""
+    from_env = raw is None
+    if from_env:
         raw = os.environ.get(_GATE_PREFETCH_ENV)
     if not raw:
+        if from_env and _runner_v2_enabled():
+            return _RUNNER_V2_GATE_PREFETCH_K
         return 0
     try:
         return max(0, int(raw))

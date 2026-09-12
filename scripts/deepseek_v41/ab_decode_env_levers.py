@@ -262,6 +262,11 @@ ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K36: shared sel
 SINGLE_SLOT_POOL_ENV = "MTPLX_DSV41_SINGLE_SLOT_POOL"
 GATE_PREFETCH_ENV = "MTPLX_DSV41_GATE_PREFETCH"  # W93: gate-oracle one-ahead prefetch width k
 GATE_PREFETCH_MIN_LAYER_ENV = "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER"  # W93: skip targets below this
+# W95: the single v2 runner switch -- ONE key composes the W93 gate-oracle prefetch +
+# the W87 single scan-resistant pool (no stacked sub-keys; the user sets only this).
+# Byte-identical to control's CLASS (residency-only: prefetch warms the cache on the
+# TRUE route, the pool only changes which loads happen). See W95_RUNNER_DESIGN.md.
+RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -316,6 +321,8 @@ ALL_LEVER_ENVS = (
     SINGLE_SLOT_POOL_ENV,
     GATE_PREFETCH_ENV,
     GATE_PREFETCH_MIN_LAYER_ENV,
+    # W95 (appended; coordinate with any concurrent list extension):
+    RUNNER_ENV,
 )
 
 
@@ -337,6 +344,7 @@ def _preset(
     single_slot_pool=None,
     gate_prefetch=None,
     gate_prefetch_min_layer=None,
+    runner=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -394,6 +402,7 @@ def _preset(
         SINGLE_SLOT_POOL_ENV: single_slot_pool,
         GATE_PREFETCH_ENV: gate_prefetch,
         GATE_PREFETCH_MIN_LAYER_ENV: gate_prefetch_min_layer,
+        RUNNER_ENV: runner,
     }
 
 
@@ -776,6 +785,26 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         gate_prefetch="10",
+    ),
+    # W95: the single v2 runner switch (docs/deepseek-v41/W95_RUNNER_DESIGN.md).
+    # ONE key (MTPLX_DSV41_RUNNER=v2) composes the W93 gate-oracle one-layer-ahead
+    # prefetch (k=12 default, ring 2*k) AND the W87 single scan-resistant pool
+    # (admit every miss) -- NOT the individual sub-keys stacked. First deliverable
+    # (post window-38, which withdrew the host-sync-drain premise): HIDE THE SSD
+    # MISS WAITS. BYTE-IDENTICAL to control's class -- residency-only (prefetch
+    # warms the cache on the TRUE route; the pool only changes which loads happen).
+    "runner_v2": _preset(runner="v2"),
+    # W95: cell16k_ring + the single v2 switch -- the standard 16K cell (ring +
+    # measured decode/prefill stack) with the composed SSD-hiding runner on ONE key.
+    # The paired A/B against cell16k_ring measures misses/token, bytes/token and the
+    # SSD-bound ms down (target >=60% at equal hit rate) and AR tok/s up (2.05 ->
+    # ~2.9, attention untouched). Byte-identical to cell16k_ring's class (head=bf16
+    # + dense/lean prefill reassoc; the runner adds NO new lossiness).
+    "cell16k_ring_v2": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
     ),
 }
 
