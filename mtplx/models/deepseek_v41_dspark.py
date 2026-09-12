@@ -129,6 +129,87 @@ def _draft_compile_on() -> bool:
     return raw not in _DRAFT_COMPILE_OFF_ALIASES
 
 
+# ---------------------------------------------------------------------------
+# DSpark draft-head fp32-cast trap removal (W103, mirror of the backbone
+# MTPLX_DSV41_HEAD_MODE=bf16 fix / W40-K21)
+# ---------------------------------------------------------------------------
+# ``DSparkBlock.forward_head`` projects the draft hidden through the SHARED trunk
+# output head via ``head(_rmsnorm(x, ...).astype(mx.float32))``.  When the trunk
+# head is a dense bf16 ``nn.Linear`` (the native artifact keeps it bf16 -- and the
+# backbone's ``MTPLX_DSV41_HEAD_MODE=bf16`` fix leaves the *weight* bf16, it only
+# repairs ``Model._apply_head``, NOT this draft call site), the ``.astype(f32)`` on
+# the INPUT forces MLX -- which has no mixed-precision matmul -- to promote the
+# whole 1.324 GB bf16 head weight to a 2.648 GB f32 temporary EVERY draft cycle
+# before the GEMV (6.6 GB traffic/cycle vs 1.3).  It is the exact twin of the trap
+# W40/K21 removed on the backbone and of Hy3's lm_head fp32-cast trap
+# ([[dsv41-head-fp32-cast-trap]] names this draft site as the follow-up), and it is
+# ~83 ms/cycle of ``dspark.head`` in GPU window 39 (which ran HEAD_MODE=bf16 --
+# so the backbone head was already fixed and this draft head was still trapped).
+#
+# ``MTPLX_DSV41_DRAFT_HEAD_BF16`` (default OFF, read at use never frozen at import):
+# cast the draft hidden to the head weight's own dtype before the matmul (a bf16
+# GEMV over the resident bf16 weight, no promotion), f32 logits after -- exactly the
+# backbone ``bf16`` codec.  For a quantised head (packed weight + scales) the source
+# dtype stays f32 (``quantized_matmul`` dequantises per group, never promoting), so
+# the flag is a no-op there.  The draft head's numerics only set the acceptance
+# rate -- the runtime's greedy target verify is authoritative (greedy verify == AR),
+# so bf16-rounding the draft hidden is a rounding-class change, never a correctness
+# one.  Byte-identical when the head is already f32 (the ``.astype`` is then a
+# no-op): the tiny CPU census/tests exercise that identity.
+_DRAFT_HEAD_BF16_ENV = "MTPLX_DSV41_DRAFT_HEAD_BF16"
+_DRAFT_HEAD_BF16_OFF_ALIASES = ("", "0", "false", "no", "off", "auto")
+#: Module-global override (``None`` -> read the env key at use; a bool pins it, the
+#: W103 census / exactness tests flip this directly).
+_DRAFT_HEAD_BF16: Optional[bool] = None
+#: Process-cumulative engagement counters (mirrors the W38/K3 Sinkhorn counters):
+#: how many ``forward_head`` calls took the bf16-source (trap-free) branch vs the
+#: default f32-cast branch.  Always-on, one int add.  Reset with
+#: :func:`_reset_draft_head_calls`.
+_DRAFT_HEAD_BF16_CALLS = 0
+_DRAFT_HEAD_DEFAULT_CALLS = 0
+
+
+def _reset_draft_head_calls() -> None:
+    """Zero the draft-head engagement counters (per-arm reset for the A/B census)."""
+    global _DRAFT_HEAD_BF16_CALLS, _DRAFT_HEAD_DEFAULT_CALLS
+    _DRAFT_HEAD_BF16_CALLS = 0
+    _DRAFT_HEAD_DEFAULT_CALLS = 0
+
+
+def _draft_head_calls() -> dict:
+    """Snapshot of the draft-head engagement counters (bf16 vs default forward)."""
+    return {
+        "bf16": int(_DRAFT_HEAD_BF16_CALLS),
+        "default": int(_DRAFT_HEAD_DEFAULT_CALLS),
+    }
+
+
+def _draft_head_bf16_on() -> bool:
+    """The draft-head fp32-trap switch: the module-global pin if set, else the env
+    key read at use (never frozen at import)."""
+    if _DRAFT_HEAD_BF16 is not None:
+        return bool(_DRAFT_HEAD_BF16)
+    raw = (os.environ.get(_DRAFT_HEAD_BF16_ENV) or "").strip().lower()
+    return raw not in _DRAFT_HEAD_BF16_OFF_ALIASES
+
+
+def _draft_head_source_dtype(head: nn.Module) -> "mx.Dtype":
+    """The dtype to cast the head input to so the matmul never promotes a dense
+    float head weight to a per-call f32 temporary.  A dense float head (weight in
+    a float dtype, no ``.scales``) -> its own weight dtype (bf16/f16/f32 GEMV, no
+    promotion); a quantised head (packed weight + scales) -> f32 (``quantized_matmul``
+    dequantises per group, never promoting).  On the tiny f32 census head this
+    returns f32, so the cast is a no-op and the bf16 branch is byte-identical."""
+    w = getattr(head, "weight", None)
+    if (
+        w is not None
+        and getattr(head, "scales", None) is None
+        and w.dtype in (mx.bfloat16, mx.float16, mx.float32)
+    ):
+        return w.dtype
+    return mx.float32
+
+
 def _draft_use_compile(rows: int) -> bool:
     """Is this ``rows``-row draft chain in the regime the K33 tapes are kept for?
     Reads the switch + cap at call time so a test/operator can flip either after
@@ -680,10 +761,22 @@ class DSparkBlock(DecoderLayer):
         use = _draft_use_compile(b * self.block_size)
         greedy = float(self.temperature) <= 0.0
         with _stime.stage("dspark.head") as _st:
+            global _DRAFT_HEAD_BF16_CALLS, _DRAFT_HEAD_DEFAULT_CALLS
             x = self._hc_pre(x, pre_mix)  # [b, block_size, dim]
-            base_logits = head(
-                _rmsnorm(x, self.norm_weight, self.norm_eps).astype(mx.float32)
-            )
+            hidden_n = _rmsnorm(x, self.norm_weight, self.norm_eps)
+            if _draft_head_bf16_on():
+                # W103: cast the hidden to the head weight dtype (a bf16 GEMV over
+                # the resident bf16 weight, f32 logits after) so a dense bf16 head
+                # is not promoted to a per-cycle f32 temporary -- the fp32-cast trap.
+                _DRAFT_HEAD_BF16_CALLS += 1
+                base_logits = head(
+                    hidden_n.astype(_draft_head_source_dtype(head))
+                ).astype(mx.float32)
+            else:
+                # Default (byte-identical to the historical draft head): cast the
+                # hidden to f32, which promotes a bf16 head weight to a f32 temporary.
+                _DRAFT_HEAD_DEFAULT_CALLS += 1
+                base_logits = head(hidden_n.astype(mx.float32))
             _st.add(x, base_logits)
 
         out_cols: List[mx.array] = [input_ids.reshape(b)]
