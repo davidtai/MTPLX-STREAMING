@@ -1160,9 +1160,14 @@ class LayerAttentionCache:
         #: chunk-grow.  Picked once at construction (per request, after the harness
         #: stamps the env key).  See :data:`_KV_BOUNDED_ENV`.
         self._kv_bounded = _kv_bounded_enabled()
+        #: W107 (review LOW-1): the resolved preallocation cap, so the whole-cache
+        #: admission pre-check can fail an over-cap forward BEFORE any lane is written.
+        #: ``None`` unless bounded with an explicit/resolved max_kv (geometric fallback).
+        self._bounded_max_kv: Optional[int] = None
         if self._kv_bounded:
             _mv, _slk, _hr, _ = _window_ring_config()
             _maxkv = _kv_bounded_maxkv()
+            self._bounded_max_kv = int(_maxkv) if _maxkv else None
             _RING_STATS["layers_ring"] += 1          # the window lane IS a ring
             _BOUNDED_STATS["layers_bounded"] += 1
             if _maxkv:
@@ -1349,6 +1354,34 @@ class LayerAttentionCache:
         path reads ``cache[i].offset``).  The per-layer stores are grown by the
         layer forward itself; this only moves the entry offset."""
         self.offset += int(n)
+
+    def assert_can_admit(self, n: int) -> None:
+        """W107 (review LOW-1): raise if appending ``n`` more tokens would over-cap
+        one of THIS entry's bounded lanes -- checked BEFORE any lane is written, so
+        an over-cap forward fails cleanly instead of leaving the cache half-updated
+        (some entries' windows appended, a later kv-source entry's latent then
+        raising).  No-op unless bounded with a resolved ``max_kv``; the window lane
+        is a genuine ring (drops old rows) and is never a bound."""
+        if not self._kv_bounded or self._bounded_max_kv is None or n <= 0:
+            return
+        new_len = int(self.offset) + int(n)
+        if self.comp_state is not None:
+            cap = _bounded_latent_cap(self._bounded_max_kv)
+            if cap is not None and new_len > cap:
+                raise ValueError(
+                    f"bounded KV entry cannot admit {n} tokens at offset "
+                    f"{self.offset}: latent frontier cap {cap} rows "
+                    f"(max_kv {self._bounded_max_kv})"
+                )
+        if self.is_kv_source and self.compress_ratio >= 1:
+            cap = _bounded_comp_cap(self._bounded_max_kv, self.compress_ratio)
+            groups = new_len // self.compress_ratio
+            if cap is not None and groups > cap:
+                raise ValueError(
+                    f"bounded KV entry cannot admit {n} tokens at offset "
+                    f"{self.offset}: compress/index cap {cap} groups "
+                    f"(max_kv {self._bounded_max_kv}, ratio {self.compress_ratio})"
+                )
 
     def is_trimmable(self) -> bool:
         """Every lane here rewinds exactly -- window/compressed/index truncate to
@@ -1686,6 +1719,15 @@ class DeepseekV41Cache:
         return SharedAttentionRuntime()
 
     # -- length bookkeeping -------------------------------------------------
+    def assert_can_admit(self, n: int) -> None:
+        """W107 (review LOW-1): raise if the next forward of ``n`` tokens would
+        over-cap any bounded lane of any entry -- called at the start of the
+        backbone forward, BEFORE any lane is written, so an over-cap forward fails
+        cleanly instead of half-updating the cache (early layers' windows appended,
+        a later kv-source layer's latent then raising).  No-op unless bounded."""
+        for layer in self.layers:
+            layer.assert_can_admit(n)
+
     def advance(self, n: int) -> None:
         """Record that ``n`` more tokens were processed (reference ``start_pos +=
         seqlen``) on every entry.  The per-layer stores are grown by the layers

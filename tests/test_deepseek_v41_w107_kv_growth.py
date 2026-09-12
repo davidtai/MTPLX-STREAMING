@@ -822,3 +822,47 @@ def test_shallow_rollback_over_ring_is_safe(monkeypatch):
     lc.append_window(_row(1, 16)); lc.advance(1)   # one speculative step
     lc.rollback(m)                                  # reject it -- must not raise
     assert lc.offset == 60
+
+
+# ---------------------------------------------------------------------------
+# Review LOW-1: an over-cap forward must fail BEFORE touching any lane (no
+# half-updated cache).
+# ---------------------------------------------------------------------------
+def test_assert_can_admit_raises_without_mutating(monkeypatch):
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=64)
+    cache = _make_cache(cfg)
+    _prefill_all_lanes(cache, cfg, n=20)          # offset 20 on every entry
+    offs = [lc.offset for lc in cache.layers]
+    wlens = [lc.window_len() for lc in cache.layers]
+    clens = [_r(lc.compress_kv) for lc in cache.layers]
+    # 60 more tokens overflows the latent cap (64 + slack 8 = 72 < 20 + 60 = 80)
+    with pytest.raises(ValueError, match="cannot admit"):
+        cache.assert_can_admit(60)
+    # nothing moved -- the pre-check touched no lane
+    assert [lc.offset for lc in cache.layers] == offs
+    assert [lc.window_len() for lc in cache.layers] == wlens
+    assert [_r(lc.compress_kv) for lc in cache.layers] == clens
+    # a within-cap admission does not raise
+    cache.assert_can_admit(40)                     # 20 + 40 = 60 <= 72
+
+
+def _r(a):
+    return 0 if a is None else int(a.shape[1])
+
+
+def test_over_cap_model_forward_raises_and_leaves_cache_clean(monkeypatch):
+    """An over-cap prefill fails via the backbone pre-check with the cache untouched
+    (offset 0, no lanes written) -- not half-updated."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "16")   # tiny cap
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    model = _tiny_model()
+    cache = model.make_cache()
+    prompt = mx.array([list(range(40))])           # 40 > 16 + slack -> over-cap
+    with pytest.raises(ValueError, match="cannot admit"):
+        model(prompt, cache=cache)
+    # the pre-check ran before any layer appended: every entry is still empty
+    assert all(lc.offset == 0 for lc in cache.layers)
+    assert all(lc.window_len() == 0 for lc in cache.layers)

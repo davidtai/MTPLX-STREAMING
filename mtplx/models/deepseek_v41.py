@@ -3240,6 +3240,12 @@ class DeepseekV41Backbone(nn.Module):
         chunked caller runs this only on the span carrying the position it drafts
         from, so the returned tensor's last row is the final prompt token."""
         b, s = input_ids.shape
+        # W107 (review LOW-1): fail an over-cap forward BEFORE any lane is written,
+        # so a misconfigured max_kv does not leave the cache half-updated (no-op
+        # unless the bounded lanes are armed).
+        _admit = getattr(cache, "assert_can_admit", None)
+        if callable(_admit):
+            _admit(s)
         positions = mx.arange(cache.offset, cache.offset + s)
 
         with _stime.stage("embed") as _st:
@@ -3491,6 +3497,10 @@ class DeepseekV41Backbone(nn.Module):
           prompt (its ``[:, -1:, :]`` slice is still the final prompt token)."""
         _stime.set_schedule("layer_major")
         b, s = input_ids.shape
+        # W107 (review LOW-1): fail an over-cap prefill BEFORE any lane is written.
+        _admit = getattr(cache, "assert_can_admit", None)
+        if callable(_admit):
+            _admit(s)
         offset0 = int(cache.offset)
         spans = [(start, min(start + chunk, s)) for start in range(0, s, chunk)]
         n_chunks = len(spans)
