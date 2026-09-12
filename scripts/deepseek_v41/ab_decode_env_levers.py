@@ -263,13 +263,15 @@ SINGLE_SLOT_POOL_ENV = "MTPLX_DSV41_SINGLE_SLOT_POOL"
 
 # W97: cache the dequantized grouped o-LoRA (wo_a) weight per layer instead of
 # re-issuing mx.dequantize(wo_a) every decode token (the released wo_a is 8x1024x4096
-# = 33.55M params -> a fresh 134 MB f32 / 67 MB bf16 array per token per backbone
-# layer; the reference dequantizes it ONCE at convert; docs/deepseek-v41/
-# W97_ATTENTION_291MS.md).  BYTE-IDENTICAL (the cached array is exactly the dequantize
-# output; the einsum's .astype(f32) is unchanged) -> the byte-identity summary must
-# show it clean.  Read at use (never import-frozen), so it works regardless of the
-# lazy dsv41 import.  Holds a dense wo_a copy resident per layer (q8: ~5.4 GB / native
-# mxfp4: ~2.7 GB across 40 layers), so it is opt-in under the box memory budget.
+# = 33.55M params).  mx.dequantize returns bf16 for BOTH codecs (67 MB); _o_lora_down
+# then promotes it to a fresh 134 MB f32 array per token per layer.  The lever caches
+# that f32 promotion once (bf16->f32 is lossless), so the reference dequantizes it
+# ONCE at convert (docs/deepseek-v41/W97_ATTENTION_291MS.md).  BYTE-IDENTICAL (the
+# cached f32 array is the exact promotion of the dequantize output; the einsum's
+# per-token .astype(f32) becomes a no-op) -> the byte-identity summary must show it
+# clean.  Read at use (never import-frozen), so it works regardless of the lazy dsv41
+# import.  Holds a dense f32 wo_a copy resident per layer (40 x 134 MB ~= 5.4 GB for
+# BOTH codecs), so it is opt-in AND priced into the memory plan (deepseek_v41_loader).
 WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
 
 # W97: fixed-shape mx.compile of the decode-attention CORE (QK + mask + sink softmax
@@ -774,9 +776,11 @@ ARM_PRESETS = {
     "wo_a_cache": _preset(selected_keys="1", wo_a_cache="1"),
     # W97: cell16k_ring + the wo_a-dequant cache ONLY.  Exact key set of cell16k_ring
     # plus wo_a_cache="1"; the direct A/B vs cell16k_ring isolates the per-token
-    # mx.dequantize(wo_a) cost (40 dequant dispatches + ~5.4/2.7 GB dequant writes per
-    # token).  BYTE-IDENTICAL to cell16k_ring -- the byte-identity summary must show it
-    # clean.  Watch peak memory: cell16k_ring already peaks ~65 GB at the 16K cell, so
+    # mx.dequantize(wo_a) + f32-astype cost (40 dequant dispatches + the ~10.7 GB/token
+    # f32 astype write+read the earlier bf16 cache left in place, BOTH codecs).
+    # BYTE-IDENTICAL to cell16k_ring -- the byte-identity summary must show it clean.
+    # The f32 cache is ~5.4 GB resident (40 x 134 MB, both codecs), priced into the
+    # memory plan.  Watch peak memory: cell16k_ring already peaks ~65 GB at the 16K cell, so
     # run this arm at a higher --memory-limit-gib or a smaller cell.
     "cell16k_ring_wo_a_cache": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",

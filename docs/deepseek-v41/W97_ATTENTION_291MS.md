@@ -20,17 +20,21 @@ There is no 3–7 GFLOP op to find.
 The 291 ms decomposes as:
 
 1. **The one real per-token traffic defect (attention-local, fixable): the grouped o-LoRA
-   `wo_a` down-projection re-issues `mx.dequantize(wo_a)` every layer every token.** At the
-   released dims `wo_a` is `[8, 1024, 4096]` = 33.55M params; the port dequantizes it to a
-   fresh **134 MB f32** (q8 gs64) / **67 MB bf16 → 134 MB f32** (native mxfp4) array **per
-   token per layer** and runs the einsum in f32 — **304 MB/layer (q8) / 420 MB/layer
-   (mxfp4)**, ~12–17 GB/token over 40 layers. The reference (model.py L784-787) dequantizes
-   `wo_a` **once at convert time to bf16** and runs the einsum in bf16 (67 MB/layer,
-   2.68 GB/token). At the gappy in-situ bandwidth this is ~1 ms/layer and, more importantly,
-   40 extra dequant **dispatches**/token — the single largest attention compute/traffic
-   item, and one the bf16 isolated bench (dense `wo_a`, no dequant) structurally cannot see.
-   **Confirmed by the W96 as-is audit (finding L9).** Fixed here (§5), byte-identically,
-   behind `MTPLX_DSV41_ATTN_WO_A_CACHE`.
+   `wo_a` down-projection re-issues `mx.dequantize(wo_a)` every layer every token, then
+   promotes the result to f32 every token.** At the released dims `wo_a` is `[8, 1024, 4096]`
+   = 33.55M params. `mx.dequantize` returns the **scale dtype = bf16** for BOTH resident
+   codecs (affine-q8 has bf16 scales/biases; the native mxfp4/mxfp8/nvfp4 banks are bf16-scale)
+   — probe: `[8192,4096]` q8 gs64 → **bf16, 67.1 MB**. `_o_lora_down` (and the K22 out tape)
+   then run `.astype(mx.float32)`, materialising a fresh **134 MB f32** array **per token per
+   layer** for both codecs and running the einsum in f32 — the per-token cost is the dequant
+   (67 MB bf16 write) **plus** the f32 astype (**134 MB write + 134 MB read = ~10.7 GB/token**
+   over 40 layers). The reference (model.py L784-787) dequantizes `wo_a` **once at convert time
+   to bf16** and runs the einsum in bf16 (67 MB/layer, 2.68 GB/token). At the gappy in-situ
+   bandwidth this is ~1 ms/layer and, more importantly, 40 extra dequant **dispatches**/token —
+   the single largest attention compute/traffic item, and one the bf16 isolated bench (dense
+   `wo_a`, no dequant) structurally cannot see. **Confirmed by the W96 as-is audit (finding
+   L9).** Fixed here (§5) by caching the **f32** array (so the per-token dequant AND astype
+   both vanish), byte-identically, behind `MTPLX_DSV41_ATTN_WO_A_CACHE`.
 
 2. **The dominant remainder (~200 ms/token) is exposed host-encode latency, not attention
    compute.** Attention issues ~100–270 tiny dispatches/layer (norms, RoPE, gather, the
@@ -74,14 +78,24 @@ sub-millisecond for the whole token. **Attention is nowhere near compute-bound.*
 
 `wo_a` = `[o_groups·o_lora_rank, in_per_group]` = `[8192, 4096]` = 33.55M params.
 
+`mx.dequantize` returns the **scale dtype = bf16** for both resident codecs, so the dequant
+output is **67.1 MB bf16**; `_o_lora_down` (and the K22 out tape) then `.astype(mx.float32)` it
+to **134.2 MB f32** every token before the einsum. So the per-token cost is the same for both
+codecs — a dequant plus an f32 astype — differing only in the packed read size:
+
 | path | per token / layer | × 40 layers |
 |---|---|---:|
-| **port, q8 gs64** (default) | dequant read 35.7 MB + dequant write **134 MB f32** + einsum read **134 MB f32** = **304 MB** | **12.16 GB/token** |
-| **port, mxfp4 gs32** (native bank) | dequant 84.9 MB + astype bf16→f32 201 MB + einsum read 134 MB = **420 MB** | **16.82 GB/token** |
+| **port, q8 gs64** (default) | dequant read ~35.7 MB (packed+scales) + dequant write **67 MB bf16** + astype write **134 MB f32** + einsum read **134 MB f32** | **~14 GB/token** |
+| **port, mxfp4 gs32** (native bank) | dequant read ~18.9 MB (4-bit packed+scales) + dequant write **67 MB bf16** + astype write **134 MB f32** + einsum read **134 MB f32** | **~13.4 GB/token** |
 | **reference** (bf16, dequantized once) | einsum read (bf16) **67 MB** (no per-token dequant / astype) | **2.68 GB/token** |
 
-Verified with `mx.dequantize` on the real shapes: q8 gs64 → f32 134.22 MB output; mxfp4/mxfp8
-gs32 → bf16 67.11 MB output (then `_o_lora_down`'s `.astype(f32)` promotes it to 134 MB).
+Of that per-token cost the **f32 astype alone is 134 MB write + 134 MB read = 268 MB/layer ×
+40 = ~10.7 GB/token for BOTH codecs** — the traffic the earlier lever left in place (it cached
+the *bf16* dequant and the per-token astype still fired). The fix (§5) caches the **f32** array,
+so both the dequant dispatch and the astype vanish.
+
+Verified with `mx.dequantize` on the real shapes: q8 gs64 → **bf16 67.11 MB** output; mxfp4/mxfp8
+gs32 → **bf16 67.11 MB** output (then `_o_lora_down`'s `.astype(f32)` promotes it to 134.22 MB).
 
 ### The compressor frontier (W96 finding #6) — real but O(T), only 4 layers
 
@@ -115,7 +129,7 @@ Two structural differences between `build_case`'s layer and the loader's real co
 1. **`_build_layer` calls `attn.set_dtype(mx.bfloat16)`** (metal_decode_attn_bisect.py:250) —
    plain **bf16** `nn.Linear` weights, never quantised. So `wo_a` is a dense `nn.Linear` and
    `_o_lora_dense_weight()` takes the `else` branch: **no `mx.dequantize` at all**, ever. The
-   bench never issues the 40 dequant dispatches or the 134 MB f32 dequant write per layer.
+   bench never issues the 40 dequant dispatches or the 67 MB bf16 dequant write per layer.
    (It still pays the f32 einsum via `_o_lora_down`'s `.astype(f32)`, so it sees the einsum
    read but not the dequant.) The projections are bf16 dense matmuls (bandwidth-bound, fast at
    M=1) rather than mxfp4 `quantized_matmul` (ALU-bound at M=1) — another construction diff.
@@ -173,20 +187,24 @@ compute — which is the microscope working.
 ## 5. The fix — `MTPLX_DSV41_ATTN_WO_A_CACHE` (byte-identical, default OFF)
 
 `Attention._o_lora_dense_weight` (`deepseek_v41.py`) now memoises the dequantized `wo_a`
-array per layer when the lever is on, keyed on the packed-weight identity (a re-quantize /
-reload rebuilds it), materialised once via `mx.eval` so later tokens reference the buffer
-rather than a lazy dequantize node. **Byte-identical to control**: the cached array is exactly
-what `mx.dequantize` returned; the reshape and `_o_lora_down`'s `.astype(f32)` are unchanged, so
-no fp math is reordered (this holds for both q8 and native codecs). It removes the per-token
-dequant dispatch (40/token) and its dequant-write traffic (~5.4 GB/token q8 / 2.7 GB/token
-native). Default OFF and opt-in because it holds a dense copy of every layer's `wo_a` resident
-(q8: 40 × 134 MB ≈ 5.4 GB; native: 40 × 67 MB ≈ 2.7 GB) — mind the box memory budget
-([[never-exceed-the-memory-knob]], the 60 GB runner limit; window-38 already peaks 65 GB).
+weight per layer when the lever is on, **promoted to f32**, keyed on the packed-weight identity
+(a re-quantize / reload rebuilds it), materialised once via `mx.eval` so later tokens reference
+the buffer rather than a lazy dequantize node. `mx.dequantize` returns **bf16** for both codecs
+and `_o_lora_down` / the K22 out tape promote it to f32 with `.astype(mx.float32)`; caching that
+exact f32 promotion (**bf16→f32 is lossless**) is **byte-identical to control** — no fp math is
+reordered — and makes the per-token `.astype(mx.float32)` a graph no-op (verified: 0 `AsType` on
+the weight leg). It therefore removes BOTH the per-token dequant dispatch (40/token) AND the
+per-token f32 astype (write+read ~10.7 GB/token, both codecs) that the earlier bf16 cache left
+in place. Default OFF and opt-in because the **f32** cache holds a dense f32 copy of every
+layer's `wo_a` resident — **40 × [8192,4096]·4 = 40 × 134 MB ≈ 5.4 GB for BOTH codecs** (the
+codec only affects the packed source, not the cached f32 size) — so it must be priced into the
+memory plan (`mtplx/models/deepseek_v41_loader.py`) and minded against the box memory budget
+([[never-exceed-the-memory-knob]]; the 60 GB runner already peaks ~65 GB at window-38).
 
-A lower-memory, reference-matching variant (dequantize once to **bf16** and run the einsum in
-bf16, 2.7 GB and half the einsum-read traffic) is a rounding-class change vs the current f32
-einsum — the reference numerics — and is left as a follow-up decision for Fable/David given
-the memory/precision trade.
+A lower-memory, reference-matching variant (cache once as **bf16** and run the einsum in bf16,
+2.7 GB and half the einsum-read traffic) is a rounding-class change vs the current f32 einsum —
+the reference numerics — and is left as a follow-up decision for Fable/David given the
+memory/precision trade.
 
 ### Tests (CPU, tiny, nice -n 19)
 

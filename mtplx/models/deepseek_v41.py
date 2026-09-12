@@ -1520,12 +1520,14 @@ class Attention(nn.Module):
         (bit-exact either way): the dequant is weight-only, no dependence on ``o``.
 
         W97: under ``MTPLX_DSV41_ATTN_WO_A_CACHE`` the dequantized array is computed
-        once (materialised via ``mx.eval``) and reused across decode tokens, keyed
-        on the packed-weight identity so a re-quantize / reload rebuilds it -- byte-
-        identical to the per-token dequant (the cached array is exactly what
-        ``mx.dequantize`` returned; the reshape and the later ``_o_lora_down``
-        ``.astype(f32)`` are unchanged).  Off (default) the dequant is re-issued
-        every layer every token (docs/deepseek-v41/W97_ATTENTION_291MS.md)."""
+        once, promoted to f32 and reused across decode tokens, keyed on the
+        packed-weight identity so a re-quantize / reload rebuilds it.  BYTE-IDENTICAL
+        to the per-token dequant: ``mx.dequantize`` returns bf16 (both q8 and the
+        native codecs) and ``_o_lora_down`` / the K22 out tape promote it to f32 with
+        ``.astype(mx.float32)``; the cache stores that exact f32 promotion (bf16->f32
+        is lossless), so the per-token ``.astype(mx.float32)`` becomes a no-op and no
+        fp math is reordered.  Off (default) the dequant is re-issued every layer
+        every token (docs/deepseek-v41/W97_ATTENTION_291MS.md)."""
         wo = self.wo_a
         if not isinstance(wo, nn.QuantizedLinear):
             return wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)
@@ -1542,6 +1544,19 @@ class Attention(nn.Module):
             group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
         ).reshape(self.n_groups, self.o_lora_rank, -1)
         if use_cache:
+            # W97 (adversarial-review fix): ``mx.dequantize`` returns the SCALE
+            # dtype -- bf16 for BOTH the affine-q8 (bf16 scales/biases) and the
+            # native mxfp4/mxfp8/nvfp4 codecs (probe: [8192,4096] q8 gs64 -> bf16,
+            # 67.1 MB).  Caching that bf16 array left the per-token consumers
+            # (``_o_lora_down`` below and the K22 out tape) still running
+            # ``w.astype(mx.float32)`` EVERY token -- re-materialising the 134 MB
+            # f32 array per layer (~10.7 GB/token of write+read over 40 layers).
+            # Cache the f32 array once (bf16->f32 is exact, so byte-identical) so
+            # that per-token ``.astype(mx.float32)`` is a graph no-op (verified: 0
+            # AsType on the weight leg).  f32 cache = n_layers * [8192,4096]*4
+            # ~= 5.4 GB for BOTH codecs; priced into the memory plan when armed
+            # (mtplx/models/deepseek_v41_loader.py).
+            w = w.astype(mx.float32)
             # Materialise once so later tokens reference the buffer, not a lazy
             # dequantize node that would recompute on every ``mx.eval``.
             mx.eval(w)
@@ -2104,16 +2119,21 @@ def _decode_attn_kernel_use(q) -> bool:
 #: the weight is a per-forward constant with no dependence on the activation, so
 #: caching the dequantized array is a pure host-dispatch + write-traffic cut.
 #:
-#: With the flag ON the dequantized array is computed once and reused (keyed on the
-#: packed-weight array identity, so a re-quantize / reload rebuilds it).  It is
-#: BYTE-IDENTICAL to control: the cached array is exactly what ``mx.dequantize``
-#: returned, and ``_o_lora_down`` still casts it to f32 (a no-op for the q8-f32
-#: dequant, the same bf16->f32 promotion for native codecs) before the einsum --
-#: no fp math is reordered.  Read at use, never frozen at import
+#: With the flag ON the dequantized array is computed once, promoted to f32 and
+#: reused (keyed on the packed-weight array identity, so a re-quantize / reload
+#: rebuilds it).  It is BYTE-IDENTICAL to control: ``mx.dequantize`` returns bf16
+#: for BOTH the affine-q8 (bf16 scales/biases) and the native mxfp4/mxfp8/nvfp4
+#: codecs, and both ``_o_lora_down`` and the K22 out tape then promote it to f32
+#: with ``.astype(mx.float32)``.  The cache stores that exact f32 promotion (bf16->
+#: f32 is lossless), so the per-token cast is a graph no-op and no fp math is
+#: reordered.  (The earlier lever cached the bf16 dequant and left the per-token
+#: f32 materialisation in place -- ~10.7 GB/token of write+read traffic; fixed
+#: here.)  Read at use, never frozen at import
 #: ([[env-flags-read-at-use-not-import]]).  Default OFF: the win is a GPU-window
-#: measurement AND the cache holds a dense copy of every layer's ``wo_a`` resident
-#: (q8: 40 x 134 MB ~= 5.4 GB; native: 40 x 67 MB ~= 2.7 GB), so it is opt-in under
-#: the box memory budget ([[never-exceed-the-memory-knob]]).
+#: measurement AND the f32 cache holds a dense copy of every layer's ``wo_a``
+#: resident (40 x [8192,4096]*4 = 40 x 134 MB ~= 5.4 GB for BOTH codecs), so it is
+#: opt-in AND priced into the memory plan when armed
+#: (mtplx/models/deepseek_v41_loader.py) ([[never-exceed-the-memory-knob]]).
 _ATTN_WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
 
 
