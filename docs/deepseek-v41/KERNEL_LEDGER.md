@@ -1365,6 +1365,36 @@ pins + records it for reproducibility. Still a cheap re-falsifier at ~0 expectat
 
 ## 7. Execution order (each gets a measured A/B at David's shape, one lever/arm, `mx.eval` counted)
 
+### K35 — Fused per-layer small stages (`MTPLX_DSV41_SMALL_STAGES_FUSED`, W91) — **the backbone sibling of K33 (folds the MoE small stages K4/K22 left out)**
+
+The AR-decode census (`scripts/deepseek_v41/dispatch_census.py --small-stages`) shows the per-layer
+stages that are NOT attention and NOT the routed switch are the top M=1 dispatch source. K4 collapses
+only the HC chains; K22 only the gate prefix + MoE combine. K35 collapses the whole small-stage set into
+THREE compiled per-layer graphs — input norm + HC premix (Sinkhorn) | attention | attn HC combine + ffn
+premix + gate/top-k + shared expert | routed switch | MoE combine + ffn HC combine — leaving attention's
+KV write and the routed switch's gather as the only un-fused per-layer calls. Byte-identical by
+construction at rows ≤ `_SMALL_STAGES_MAX_ROWS = 7` (decode n=1 + DSpark K+1 verify ≤6); fixed-shape
+`mx.compile` (shapeless blocked in MLX 0.32.2 by the Sinkhorn/top-k slices), one trace per segment, no
+per-token retrace. Read at use; `receipt.small_stages_engagement` (fused/eager forwards) confirms it ran.
+
+  | per layer (M=1, tiny=real structure) | eager | mx.compile | +K3 kernel |
+  |---|---|---|---|
+  | seg1 (attn premix) | 259 | 111 | 32 |
+  | seg2 (attn combine + ffn premix + gate/top-k + shared) | 308 | 141 | 62 |
+  | seg3 (MoE combine + ffn HC combine) | 17 | 13 | 13 |
+  | **TOTAL** | **584** | **265 (−55%)** | **107 (−82%)** |
+
+Host syncs per small stage: **0** (pure lazy graph-building) — the ~40 barriers/token are the un-fused
+switch's `mx.eval(indices)` + `.tolist()` (device-route territory), not a small stage. K1 SHARED_OVERLAP
+is a no-op under K35 (the fused path already places the shared expert before the switch).
+
+`MTPLX_DSV41_HC_PREMIX_KERNEL` (W91, GPU-only, default OFF): extends the K3 Sinkhorn kernel to fold the
+HC-premix pre/post/comb split + affine + sigmoid into ONE dispatch (rounding-class 1e-6/argmax, like K3;
+HC scale/base/fn are F32 on the artifact, so the kernel's f32 I/O matches). Inert on CPU; NOT in any
+composite arm until `test_hc_premix_kernel_parity_gpu` writes a clean GPU parity receipt
+(MTPLX_GPU_PARITY=1). Routed through `_hc_mixes_split`, so it engages only when a compiled HC tape
+(K4/K33/K35) is on. Both keys are in `openai.py::_DSV41_LEVER_ENV_KEYS` and pinned by every `_preset`.
+
 All A/Bs use [[dsv41-standard-benchmark-shape]] (1K + 16K, greedy, single prompt), paired in-window
 control ([[island-placement-beats-tuning]] window-drift law), GPU windows through the flock with qwen
 unloaded + memory-guarded ([[hy3-benchmark-panic-protocol]], [[box-110gb-hard-limit]]), no CPU-heavy
@@ -1387,6 +1417,7 @@ two microbenches (K7/K8), which are CPU/queued and can run now.
 | **KG-g** | K6 D512 two-pass SDPA + K17/K18 prefill tiling/chunk + K19 head-last-row | 16K prefill ± two-pass split-K + tiling + head-last-row on the K16 base. **Pass if TTFT −≥15 % beyond K16 AND peak −≥8 GB (K19 drops the 8.47 GB logits), parity on long-prompt A/B.** | after KG-b | 1 window |
 | **KG-h** | K9 head byte cut + K13 in-place verify-KV | q8/mxfp8 head vs bf16 head: **ship only if argmax parity + HumanEval(164) ≥ exact−noise**; K13 footprint-guard folded into first MTP window. | after KG-e | folded |
 | **KG-n** | K33 DSpark draft-block tape collapse | `draft_compile` vs control on `--decode-mode dspark`: **byte-identical draft tokens (flag on==off) + greedy-verify == AR + draft-phase ms −**. CPU census −446 prim/draft cycle (−28 %; HC −258, attn prep −168). The drafter sibling of KG-i; only the DIRECT lane runs the draft block, so it composes with K29/K30/K31 on the verify. | after W57 DIRECT lane | folded |
+| **KG-o** | K35 fused per-layer small stages (+ HC-premix kernel) | `small_stages_fused` vs control, and `cell16k_ring_fused` vs `cell16k_ring`: **byte-identical decode/verify (rows≤7) + decode +**. CPU census −319 prim/layer with `mx.compile` (−55 %), −477/layer with the K3 Sinkhorn kernel (−82 %); small stages carry ZERO host syncs. Extends KG-f/KG-i to fold the MoE small stages (gate top-k + shared + combine) too. The rounding-class HC-premix kernel is GPU-parity-gated (`test_hc_premix_kernel_parity_gpu`), default off, in no arm. | after KG-f/KG-i | 1 window |
 
 **Sequencing rationale:** KG-a/KG-b run **now** (CPU/queued microbenches + the today 16K-TTFT
 restructure). The decode kernel/fusion gates (KG-c…KG-f) only pay once OPT_LEDGER R1–R4 have exposed

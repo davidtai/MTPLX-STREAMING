@@ -504,6 +504,194 @@ def _run_draft_census(flag, seed=1):
         return probe.snapshot()
 
 
+# ---------------------------------------------------------------------------
+# K35 (W91): small-stages fusion census -- the per-layer AR-decode dispatch count
+# for everything that is NOT attention and NOT the routed switch, before/after
+# MTPLX_DSV41_SMALL_STAGES_FUSED, plus the GPU projection with the K3 Sinkhorn
+# kernel collapsing each 80-op compiled Sinkhorn to one dispatch.
+# ---------------------------------------------------------------------------
+#: One compiled Sinkhorn recurrence (hc=4, iters=20) is 80 graph primitives
+#: (198 eager); the K3 Metal kernel (MTPLX_DSV41_SINKHORN_METAL, GPU only)
+#: collapses it to a single dispatch.  Measured by
+#: ``mx.compile(_sinkhorn_ops)`` + ``count_prims`` (tests assert it).
+_SINK_COMPILED_HC4_IT20 = 80
+
+
+def _small_seg_micro(seed=1):
+    """Per-segment (seg1/seg2/seg3) eager-vs-compiled primitive counts for the
+    small-stages fusion on ONE full CSA layer at M=1 -- the same ``count_prims``
+    machinery as :func:`_micro_census`, counting each fused graph in isolation
+    (bypassing the ``_stime.recording`` eager-guard that keeps the *timing* census
+    on the eager path).  Returns ``{seg: {eager, compiled, gpu_kernel, n_sinkhorn,
+    op_types}}`` where ``gpu_kernel`` projects each compiled Sinkhorn (80 prims)
+    down to the one K3-kernel dispatch."""
+    from mtplx.models.deepseek_v41 import (
+        _hc_attn_prep_impl, _hc_ffn_prep_impl, _gate_topk_impl, _shared_expert_impl,
+        _hc_post_impl, _lin_desc, _lin_n, _lin_arrays, _small_compiled,
+    )
+    model, args = _build(seed=seed, engram=False)
+    dv41._SMALL_STAGES_COMPILED.clear()
+    # a FULL layer (owns compressed KV + indexer) exercises every small stage
+    L = next(l for l in model.model.layers if l.attn.mode == dv41.MODE_FULL)
+    hc, dim = L.hc_mult, args.hidden_size
+    g, se = L.mlp.gate, L.mlp.shared_experts
+    consts = (hc, L.hc_iters, L.norm_eps, L.hc_eps)
+    mx.random.seed(0)
+    h = (0.3 * mx.random.normal((1, 1, hc, dim))).astype(mx.float32)
+    pre_mix = mx.concatenate(
+        [mx.ones((1, 1, 1)), mx.zeros((1, 1, hc - 1))], axis=-1).astype(mx.float32)
+    attn_out = (0.3 * mx.random.normal((1, 1, dim))).astype(mx.float32)
+    mx.eval(h, pre_mix, attn_out)
+    ai, apre, apost, acomb = _hc_attn_prep_impl(
+        h, pre_mix, L.hc_attn_fn, L.hc_attn_base, L.hc_attn_scale, L.attn_norm_weight, *consts)
+    mx.eval(ai, apre, apost, acomb)
+    w1d, w3d, w2d = _lin_desc(se.w1), _lin_desc(se.w3), _lin_desc(se.w2)
+    n1, n3 = _lin_n(w1d), _lin_n(w3d)
+    warrs = _lin_arrays(se.w1) + _lin_arrays(se.w3) + _lin_arrays(se.w2)
+    gt, sf, tk = float(g.gate_temp), str(g.score_func), int(g.topk)
+    ntp, rsf, swl = bool(g.norm_topk_prob), float(g.route_scale), float(se.swiglu_limit)
+    # ffn-prep outputs (feed seg3); recomputed eager so seg3's inputs are eval'd leaves
+    mi, h2, fpost, fcomb, fpre = _hc_ffn_prep_impl(
+        attn_out, h, apre, apost, acomb,
+        L.hc_ffn_fn, L.hc_ffn_base, L.hc_ffn_scale, L.ffn_norm_weight, *consts)
+    xf0 = mi.reshape(-1, dim)
+    wt0, ix0 = _gate_topk_impl(xf0, g.weight, g.e_score_correction_bias, gt, sf, tk, ntp, rsf)
+    sh0 = _shared_expert_impl(xf0, warrs[:n1], warrs[n1:n1 + n3], warrs[n1 + n3:],
+                              w1d, w3d, w2d, swl).astype(mx.float32)
+    routed = (0.3 * mx.random.normal((1, tk, dim))).astype(mx.float32)
+    mx.eval(h2, fpost, fcomb, wt0, sh0, routed)
+
+    def seg1_e():
+        return _hc_attn_prep_impl(h, pre_mix, L.hc_attn_fn, L.hc_attn_base,
+                                  L.hc_attn_scale, L.attn_norm_weight, *consts)
+
+    def seg1_c():
+        return _small_compiled("seg1", L)(h, pre_mix, L.hc_attn_fn, L.hc_attn_base,
+                                          L.hc_attn_scale, L.attn_norm_weight)
+
+    def seg2_e():
+        m2, h2b, fp, fc, fpr = _hc_ffn_prep_impl(
+            attn_out, h, apre, apost, acomb,
+            L.hc_ffn_fn, L.hc_ffn_base, L.hc_ffn_scale, L.ffn_norm_weight, *consts)
+        xf = m2.reshape(-1, dim)
+        w, ix = _gate_topk_impl(xf, g.weight, g.e_score_correction_bias, gt, sf, tk, ntp, rsf)
+        sh = _shared_expert_impl(xf, warrs[:n1], warrs[n1:n1 + n3], warrs[n1 + n3:],
+                                 w1d, w3d, w2d, swl).astype(mx.float32)
+        return xf, w, ix, sh, h2b, fp, fc, fpr
+
+    def seg2_c():
+        return _small_compiled("seg2", L)(
+            attn_out, h, apre, apost, acomb,
+            L.hc_ffn_fn, L.hc_ffn_base, L.hc_ffn_scale, L.ffn_norm_weight,
+            g.weight, g.e_score_correction_bias, *warrs)
+
+    def seg3_e():
+        y = (routed.astype(mx.float32) * wt0[..., None]).sum(-2) + sh0
+        y = y.astype(h2.dtype).reshape(*h2.shape[:-2], dim)
+        return (_hc_post_impl(y, h2, fpost, fcomb),)
+
+    def seg3_c():
+        return (_small_compiled("seg3", L)(routed, wt0, sh0, h2, fpost, fcomb),)
+
+    n_sink = {"seg1": 1, "seg2": 1, "seg3": 0}
+    out = {}
+    for name, ef, cf in (("seg1", seg1_e, seg1_c), ("seg2", seg2_e, seg2_c),
+                         ("seg3", seg3_e, seg3_c)):
+        e = ef()
+        ne, _ = count_prims(*[a for a in e if isinstance(a, mx.array)])
+        c = cf()
+        nc, oc = count_prims(*[a for a in c if isinstance(a, mx.array)])
+        mx.eval([a for a in e if isinstance(a, mx.array)]
+                + [a for a in c if isinstance(a, mx.array)])
+        ns = n_sink[name]
+        out[name] = {
+            "eager": ne, "compiled": nc,
+            "gpu_kernel": nc - ns * (_SINK_COMPILED_HC4_IT20 - 1),
+            "n_sinkhorn": ns, "op_types": dict(oc),
+        }
+    return out, args.num_hidden_layers
+
+
+_SMALL_STAGE_NAMES = (
+    "hc.premix_sinkhorn", "hc.combine", "moe.gate_topk",
+    "moe.shared_expert", "moe.combine",
+)
+
+
+def _run_small_census(seed=1, cap=7):
+    eager_full = _run_full_census(False, cap, seed=seed)
+    segs, n_layers = _small_seg_micro(seed=seed)
+    return {"eager_full": eager_full, "segments": segs, "n_layers": n_layers}
+
+
+def _small_main(args):
+    """K35/W91 small-stages census: the per-layer AR-decode dispatch count for the
+    small stages, before (eager) / after (fixed-shape ``mx.compile``) / GPU
+    projection (+ K3 Sinkhorn kernel), and the eager per-stage baseline."""
+    r = _run_small_census(seed=args.seed, cap=args.cap)
+    ef, segs, nL = r["eager_full"], r["segments"], r["n_layers"]
+    print("=" * 82)
+    print("W91 small-stages dispatch census -- AR-decode (M=1) per layer, tiny "
+          "real-structure")
+    print("=" * 82)
+    print("eager per-stage baseline (primitives / token, summed over all layers):")
+    small_tot = 0.0
+    for n in _SMALL_STAGE_NAMES:
+        p = ef["stages"].get(n, {}).get("primitives_per_token", 0.0)
+        small_tot += p
+        print(f"  {n:<24} {p:>9.1f}")
+    print(f"  {'SMALL-STAGE TOTAL':<24} {small_tot:>9.1f}   (attention + routed switch "
+          "excluded -- the two un-fused calls)")
+    print()
+    print("fused segments (per LAYER, M=1): input norm+HC premix (seg1) | attention |")
+    print("  HC combine+ffn premix+gate/top-k+shared (seg2) | routed switch | "
+          "MoE combine+HC combine (seg3)")
+    hdr = f"{'segment':<8}{'eager':>8}{'mx.compile':>12}{'+K3 kernel':>12}{'sinkhorns':>10}"
+    print(hdr)
+    print("-" * len(hdr))
+    te = tc = tg = 0
+    for s in ("seg1", "seg2", "seg3"):
+        d = segs[s]
+        te += d["eager"]; tc += d["compiled"]; tg += d["gpu_kernel"]
+        print(f"{s:<8}{d['eager']:>8}{d['compiled']:>12}{d['gpu_kernel']:>12}"
+              f"{d['n_sinkhorn']:>10}")
+    print("-" * len(hdr))
+    print(f"{'TOTAL':<8}{te:>8}{tc:>12}{tg:>12}{'':>10}")
+    pc = 100.0 * (te - tc) / te if te else 0.0
+    pg = 100.0 * (te - tg) / te if te else 0.0
+    print(f"per-layer reduction:  mx.compile -{te - tc} ({pc:.0f}%)   "
+          f"+K3 kernel -{te - tg} ({pg:.0f}%)")
+    print(f"per-token (x{nL} layers):  eager {te * nL}  ->  mx.compile {tc * nL}"
+          f"  ->  +K3 kernel {tg * nL}")
+    print()
+    print(f"M=1 latency estimate (spec: 0.02-0.05 ms per removed dispatch; a linear "
+          f"upper bound --")
+    print(f"  most fused elementwise pipeline, only host-sync-adjacent dispatches are "
+          f"fully critical):")
+    for label, removed in (("mx.compile", (te - tc) * nL), ("+K3 kernel", (te - tg) * nL)):
+        print(f"  {label:<12} -{removed:>5}/tok  ->  {removed * 0.02:.1f}-{removed * 0.05:.1f} "
+              f"ms/tok (this tiny {nL}-layer model)")
+    receipt = {
+        "flag": {"K35": "MTPLX_DSV41_SMALL_STAGES_FUSED"},
+        "census": "small_stages_fused",
+        "seed": args.seed, "row_cap": args.cap,
+        "mlx_version": mx.__version__,
+        "n_layers": nL,
+        "eager_per_stage_per_token": {
+            n: ef["stages"].get(n, {}).get("primitives_per_token", 0.0)
+            for n in _SMALL_STAGE_NAMES
+        },
+        "segments": segs,
+        "per_layer_total": {"eager": te, "compiled": tc, "gpu_kernel": tg},
+        "sinkhorn_compiled_prims": _SINK_COMPILED_HC4_IT20,
+    }
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -515,10 +703,16 @@ def main():
                     help="census the DSpark-DIRECT draft block (K33, W65) instead of "
                          "the backbone decode: primitives per draft cycle per stage, "
                          "before/after MTPLX_DSV41_DRAFT_COMPILE")
+    ap.add_argument("--small-stages", action="store_true", dest="small_stages",
+                    help="census the K35/W91 small-stages fusion: per-layer AR-decode "
+                         "dispatch count before/after MTPLX_DSV41_SMALL_STAGES_FUSED "
+                         "(+ the GPU K3-Sinkhorn-kernel projection)")
     args = ap.parse_args()
 
     if args.draft:
         return _draft_main(args)
+    if args.small_stages:
+        return _small_main(args)
 
     # before = all off (eager); k22 = attention-tape compile only; after = K22 +
     # K24 window-mask memo (the full W45 attention-compile mode).

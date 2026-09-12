@@ -607,10 +607,14 @@ class DSparkBlock(DecoderLayer):
             return h, pre_mix
 
         use = _draft_use_compile(int(h.shape[0]) * int(h.shape[1]))
-        # Trailing bool keys the mix tapes on the active Sinkhorn route (W32); on
-        # CPU it is always the recurrence, so it never perturbs the numerics.
+        # Trailing bools key the mix tapes on the active Sinkhorn route (W32/K3) AND
+        # the fused-premix-kernel route (W91/K35): the shared backbone K4 tape's
+        # ``_hc_mixes_split`` routes its split+Sinkhorn through
+        # ``_hc_premix_sinkhorn``, so a runtime flip of either GPU kernel re-traces
+        # this draft-block tape too.  On CPU both are always the reference, so they
+        # never perturb the numerics.
         hc_consts = (self.hc_mult, self.hc_iters, self.norm_eps, self.hc_eps,
-                     _dv41._sinkhorn_use_kernel())
+                     _dv41._sinkhorn_use_kernel(), _dv41._hc_premix_use_kernel())
 
         residual = h
         # Attention Hyper-Connection prep (mix + Sinkhorn + pre_mix collapse + attn

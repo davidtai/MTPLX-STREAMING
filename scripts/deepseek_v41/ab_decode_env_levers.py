@@ -64,6 +64,21 @@ BARRIER_STAGE = "hot.eval_indices"
 LAYER_MAJOR_ENV = "MTPLX_DSV41_PREFILL_LAYER_MAJOR"
 SINKHORN_METAL_ENV = "MTPLX_DSV41_SINKHORN_METAL"   # K3, merged @ 8982b93c9
 HC_COMPILE_ENV = "MTPLX_DSV41_HC_COMPILE"           # K4, landing
+SMALL_STAGES_FUSED_ENV = "MTPLX_DSV41_SMALL_STAGES_FUSED"  # K35 (W91): collapse the
+# whole per-layer small-stage set (both HC premix/combine incl. the Sinkhorn, the
+# MoE gate+top-k, the shared expert, the MoE combine) into three compiled per-layer
+# graphs separated only by the two un-fused calls (attention KV write, routed
+# switch gather). Extends K4 (HC-only) + K22 (gate-prefix/combine-only) to fold in
+# the gate top-k + shared expert + MoE combine. Byte-identical over its whole
+# admitted range on CPU (cap = _SMALL_STAGES_MAX_ROWS = 7, the mx.compile bit-exact
+# regime: decode n=1 + DSpark K+1 verify <=6 rows); n=1 GPU byte-identity is a
+# parity-window gate. Engagement in receipt.small_stages_engagement.
+HC_PREMIX_KERNEL_ENV = "MTPLX_DSV41_HC_PREMIX_KERNEL"  # K35 (W91): GPU-only fused
+# HC-premix Sinkhorn kernel (folds the pre/post/comb split + affine + sigmoid into
+# the K3 Sinkhorn dispatch). ROUNDING-CLASS (1e-6, argmax-exact), like K3; default
+# off, inert on CPU, and NOT in any composite arm until a GPU parity receipt exists.
+# Pinned by every _preset (force-unset) so a parent-shell export cannot silently arm
+# the rounding-class kernel; the receipt's arm_env records it.
 SWITCH_FASTPATH_ENV = "MTPLX_DSV41_SWITCH_FASTPATH"  # K23 (W42): defer the
 # per-all-hit-layer switch fence + async-dispatch split waves (hy3's shipped
 # deferred-release mechanism, promoted for the DSV4.1 lane whose config leaves it
@@ -282,11 +297,15 @@ ALL_LEVER_ENVS = (
     WINDOW_RING_HEADROOM_ENV,
     WINDOW_RING_MAXKV_ENV,
     ATTN_SHAPE_STABLE_ENV,
+    # W91 / K35 (appended; coordinate with any concurrent list extension):
+    SMALL_STAGES_FUSED_ENV,
+    HC_PREMIX_KERNEL_ENV,
 )
 
 
 def _preset(
-    *, overlap=None, layer_major=None, sinkhorn=None, hc=None, fastpath=None,
+    *, overlap=None, layer_major=None, sinkhorn=None, hc=None, small_stages=None,
+    hc_premix_kernel=None, fastpath=None,
     submit=None, attn=None, win_memo=None, draft=None, device_route=None,
     verify_single=None,
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
@@ -319,6 +338,8 @@ def _preset(
         LAYER_MAJOR_ENV: layer_major,
         SINKHORN_METAL_ENV: sinkhorn,
         HC_COMPILE_ENV: hc,
+        SMALL_STAGES_FUSED_ENV: small_stages,
+        HC_PREMIX_KERNEL_ENV: hc_premix_kernel,
         SWITCH_FASTPATH_ENV: fastpath,
         SWITCH_SUBMIT_ENV: submit,
         ATTN_COMPILE_ENV: attn,
@@ -620,7 +641,7 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         pin_working_set="all", device_route="1", device_route_pinned="1",
     ),
-    # W90 / K35: the shared selected-compress gather in ISOLATION (selected keys on so
+    # W90: the shared selected-compress gather in ISOLATION (selected keys on so
     # the shared K30 gather path is the one measured).  A DISPATCH-COUNT cleanup: all
     # Reuse/Reindex/Full layers of a group read the SAME (compress_kv, selected_idx)
     # pair; the shipped path re-issues the compressed-lane gather (~3 tiny host
@@ -632,7 +653,7 @@ ARM_PRESETS = {
     # the decisive control is swa_only + the --utilization trace.  BYTE-IDENTICAL to
     # selected-keys control (a pure caching of the deterministic K30 gather).
     "attn_shape_stable": _preset(selected_keys="1", attn_shape_stable="1"),
-    # W90 / K35: cell16k_ring + the shared selected-compress gather.  The ring bounds
+    # W90: cell16k_ring + the shared selected-compress gather.  The ring bounds
     # the per-layer window store; this shares the compressed-lane gather so the non-swa
     # layers stop re-issuing it.  Both are byte-identical dispatch/residency cleanups --
     # NOT the mode-independent in-situ floor (that is GPU DVFS-downclock between B=1
@@ -646,6 +667,32 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
+    ),
+    # W91 / K35: the small-stages fusion in ISOLATION, to isolate its decode delta
+    # against control -- collapse the per-layer small stages (HC premix/combine, MoE
+    # gate+top-k, shared expert, MoE combine) into three compiled per-layer graphs.
+    # BYTE-IDENTICAL to control at decode (n=1) / small verify (the decode ids +
+    # cache must match; the byte-identity summary must show it clean at n<=cap).
+    # Pairs with sinkhorn="1" so the Sinkhorn inside the fused premix is the K3
+    # one-dispatch kernel on the GPU (the census GPU projection: 584 -> 107 per-layer
+    # dispatches).  The census/tests carry the per-stage before/after counts.
+    "small_stages_fused": _preset(small_stages="1", sinkhorn="1"),
+    # W91: cell16k_ring + the K35 small-stages fusion -- the standard 16,384-token
+    # cell with the bounded window ring PLUS the fused small-stage decode graphs.
+    # The direct A/B against cell16k_ring that isolates the fusion's decode dispatch
+    # collapse at 16K.  Exact key set of cell16k_ring plus small_stages="1"; cell16k_ring
+    # already runs sinkhorn="1" (K3 kernel) + attn="1" (K22) + head=bf16, so this arm's
+    # decode delta vs cell16k_ring is exactly the HC premix/combine + gate top-k + shared
+    # + MoE combine dispatch collapse (attention + the routed switch stay un-fused).
+    # cell16k_ring does NOT run hc="1", so this arm's HC-compile tapes are new; at the
+    # admitted rows (decode n=1, verify <=6) they are mx.array_equal to eager on CPU
+    # (cap=7, the bit-exact regime), so the arm adds no new lossiness vs cell16k_ring
+    # -- but n=1 GPU byte-identity to cell16k_ring is a parity-window gate, not assumed.
+    "cell16k_ring_fused": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        small_stages="1",
     ),
 }
 
@@ -1430,10 +1477,16 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
                      stage_timing=False, ar_reference=None):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
     per-cycle accept + phase-timing statistics.  Total tokens == steps + 1 to match
-    ``_generate`` (prefill token + ``steps`` decode tokens).  When ``stage_timing``
-    the W37 probe is armed around the decode cycles so the receipt also carries the
-    VERIFY forward's internal model stages (attention, moe.routed_switch breakdown,
-    which reveals whether rows>1 took the prefill routing phase)."""
+    ``_generate`` (prefill token + ``steps`` decode tokens).
+
+    W91: the HEADLINE (tok/s, tokens, stats, peak) is an UNTIMED pass so fused
+    decode levers (K35 small-stages) are active for the number the receipt reports
+    -- arming the W37 probe forces ``_small_stages_use`` eager (the recording
+    guard), which would measure K35 OFF.  When ``stage_timing`` a SEPARATE, timed
+    second pass re-runs the decode purely for the VERIFY forward's internal stage
+    breakdown (attention, moe.routed_switch) + W61 engagement; its tok/s is
+    discarded.  Mirrors the AR path (untimed ``_generate`` + a separate
+    ``_stage_timing_pass``)."""
     from mtplx.models.deepseek_v41_dspark_decode import (
         DivergenceCapture,
         DSparkDecodeStats,
@@ -1446,27 +1499,8 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     # W77: when an AR reference is supplied, capture (zero extra forwards) the
     # verify logits row of the first committed token that diverges from it.
     capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
-    stime = None
     route_probe = None
     route_prev_enabled = None
-    if stage_timing:
-        from mtplx.models import deepseek_v41_stage_timing as stime
-
-        # Arm the route-stage probe (hot.* per-layer counters incl. W61's
-        # hot.verify_single_barrier engagement) for the dspark run, clearing it so
-        # the census is scoped to this pass. ENABLED is read at use, so setting it
-        # here arms the module even if the launch env did not.
-        try:
-            from mtplx import expert_route_probe as route_probe
-
-            route_prev_enabled = route_probe.ENABLED
-            route_probe.ENABLED = True
-            route_probe._SUMS.clear()
-            route_probe._COUNTS.clear()
-        except Exception:
-            route_probe = None
-        stime.begin()
-    t0 = time.perf_counter()
     # W81: snapshot the expert-streaming counters at the prefill->decode boundary
     # (prefill_callback fires after prefill, before the decode cycles) and again
     # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
@@ -1476,6 +1510,13 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     def _stream_prefill_cb(_info):
         _sc["after_prefill"] = _stream_counters_snapshot(model)
 
+    # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
+    # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
+    # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
+    # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
+    # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
+    # per-stage attribution is a SECOND, timed pass below.
+    t0 = time.perf_counter()
     toks = dspark_generate(
         model,
         [int(t) for t in prompt_ids],
@@ -1489,11 +1530,41 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     )
     _sc["end"] = _stream_counters_snapshot(model)
     wall = time.perf_counter() - t0
+    peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
     report = None
     w61 = None
-    if stime is not None:
-        report = model.stage_timing_report()
-        stime.end()
+    if stage_timing:
+        # SECOND pass: arm the W37 probe + the route-stage probe (hot.* per-layer
+        # counters incl. W61's hot.verify_single_barrier engagement), clearing it so
+        # the census is scoped to this pass, then re-run the decode purely for the
+        # verify forward's internal stage breakdown + W61 engagement.  Its tok/s is
+        # discarded -- K35 is forced eager here (the recording guard), which is
+        # exactly what fenced per-stage attribution needs.  ENABLED is read at use,
+        # so setting it here arms the module even if the launch env did not.
+        from mtplx.models import deepseek_v41_stage_timing as stime
+        try:
+            from mtplx import expert_route_probe as route_probe
+
+            route_prev_enabled = route_probe.ENABLED
+            route_probe.ENABLED = True
+            route_probe._SUMS.clear()
+            route_probe._COUNTS.clear()
+        except Exception:
+            route_probe = None
+        stime.begin()
+        try:
+            dspark_generate(
+                model,
+                [int(t) for t in prompt_ids],
+                max_tokens=int(steps) + 1,
+                sampler=SamplerConfig(temperature=0.0),
+                seed=0,
+                speculative_depth=int(depth),
+                stats=DSparkDecodeStats(),
+            )
+            report = model.stage_timing_report()
+        finally:
+            stime.end()  # never leave the probe armed if the timed pass raises
     if route_probe is not None:
         snap = route_probe.snapshot()
         stg = snap.get("stages", {}) if isinstance(snap, dict) else {}
@@ -1554,7 +1625,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     out = {
         "generated": [int(t) for t in toks],
         "decode_wall_s": wall,
-        "peak_gb": mem_probe.peak_bytes() / GIB,
+        "peak_gb": peak_gb,  # W91: headline (untimed) peak, not the timed 2nd pass
         "stats": stats.to_dict(),
         "stream_after_prefill": _sc.get("after_prefill"),
         "stream_end": _sc.get("end"),
@@ -1673,6 +1744,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
     try:
         from mtplx.models import deepseek_v41 as _dsv41
         _dsv41._reset_sinkhorn_kernel_calls()
+        # W91/K35 fused small-stages + fused-premix-kernel engagement counters
+        # (same "did it actually run?" question): zero them after model load so the
+        # receipt reports THIS arm's real fused-layer forwards vs eager fallbacks.
+        _dsv41._reset_small_stages_calls()
+        _dsv41._reset_hc_premix_kernel_calls()
     except Exception:  # pragma: no cover - defensive
         _dsv41 = None
     # W60/K29 engagement: zero the fused-decode-attention counters after model load
@@ -1819,6 +1895,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
             st = dsp["stats"]
             receipt["dspark"] = {
                 "depth": int(args.dspark_depth),
+                # W91: the tok/s/tokens/stats/peak below come from an UNTIMED headline
+                # pass (fused decode levers active); --stage-timing adds a SEPARATE
+                # timed attribution pass (verify_stage_timing) that does not feed tok/s.
+                "headline_pass": "untimed",
                 "byte_identical_vs_ar": byte_identical,
                 "decode_wall_s": dsp["decode_wall_s"],
                 "decode_tok_s": (
@@ -1965,6 +2045,27 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "sinkhorn_metal_env": os.environ.get(SINKHORN_METAL_ENV),
                 "hc_compile_env": os.environ.get(HC_COMPILE_ENV),
                 "note": "cumulative over this arm (prefill + decode + census)",
+            }
+            # W91/K35 engagement: fused vs eager DecoderLayer forwards, and the
+            # fused-premix-kernel calls (GPU only).  ``engaged`` = the fused path
+            # actually ran (>0 fused forwards); distinguishes "K35 ran" from "armed
+            # but forced eager" (the --stage-timing recording guard, or the flag
+            # never reaching the child).  Under mx.compile the premix-kernel wrapper
+            # runs only at (cold) trace, so ``premix_kernel_calls`` reads ~2xshapes,
+            # not once/token -- read cumulatively, like sinkhorn_engagement.
+            ss = _dsv41._small_stages_calls()
+            pk = _dsv41._hc_premix_kernel_calls()
+            receipt["small_stages_engagement"] = {
+                "fused_layer_forwards": ss["fused"],
+                "eager_layer_forwards": ss["eager"],
+                "engaged": ss["fused"] > 0,
+                "premix_kernel_calls": pk["kernel"],
+                "premix_reference_calls": pk["reference"],
+                "small_stages_fused_env": os.environ.get(SMALL_STAGES_FUSED_ENV),
+                "hc_premix_kernel_env": os.environ.get("MTPLX_DSV41_HC_PREMIX_KERNEL"),
+                "note": "cumulative over this arm (prefill + decode + census); the "
+                        "HEADLINE tok/s pass is UNTIMED so K35 is active there -- the "
+                        "timed stage-timing pass forces eager (recording guard)",
             }
         if _dsv41_cache is not None:
             # W73/K32 chunk-grow engagement (cumulative over the arm). ``enabled``
