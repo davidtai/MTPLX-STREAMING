@@ -229,7 +229,15 @@ def stream_counters_delta(
     # byte-identical either way).
     b_io, a_io = before.get("io"), after.get("io")
     if isinstance(b_io, dict) and isinstance(a_io, dict):
-        d = _delta_map(b_io, a_io)
+        # _delta_map differences EVERY key, but ``read_mib_per_second`` is a
+        # cumulative-since-open FLOAT RATE (from ExpertIOMetrics.as_dict), so
+        # differencing it yields a garbage "delta". Drop the non-counter (derived
+        # float) keys before the delta and derive the decode-WINDOW read rate from the
+        # ``read_bytes`` / ``read_ns`` counter deltas instead.
+        _NON_COUNTER_IO = ("read_mib_per_second",)
+        b_c = {k: v for k, v in b_io.items() if k not in _NON_COUNTER_IO}
+        a_c = {k: v for k, v in a_io.items() if k not in _NON_COUNTER_IO}
+        d = _delta_map(b_c, a_c)
         hashed = d.get("records_hashed", 0)
         unhashed = d.get("records_unhashed", 0)
         total = hashed + unhashed
@@ -238,6 +246,14 @@ def stream_counters_delta(
         d["hash_fraction"] = round(hashed / total, 6) if total else None
         d["hash_thread_ms"] = round(d.get("hash_thread_ns_total", 0) / 1e6, 3)
         d["hash_thread_ms_per_token"] = round(d.get("hash_thread_ns_total", 0) / 1e6 / tok, 4)
+        # Decode-window realized read rate from the counter deltas: bytes / ns == GB/s
+        # (1e9 bytes / 1e9 ns). ``read_ns`` is SUMMED io-thread read time, so this is
+        # the aggregate io-thread read throughput WHILE reading (not wall) -- the
+        # per-window SSD read rate W109 wanted in the receipt. None when no reads.
+        _read_ns = d.get("read_ns", 0)
+        d["read_gb_per_s_window"] = (
+            round(d.get("read_bytes", 0) / _read_ns, 4) if _read_ns else None
+        )
         out["io"] = d
 
     b_er, a_er = before.get("engram_row_cache"), after.get("engram_row_cache")

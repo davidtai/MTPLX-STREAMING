@@ -360,6 +360,23 @@ def test_stream_counters_delta_reports_hashing_off_window():
     assert io["hash_thread_ms"] == 0.0
 
 
+def test_stream_counters_delta_drops_float_rate_and_adds_window_read_rate():
+    """The cumulative float read_mib_per_second must NOT be differenced into a garbage
+    'delta'; the decode-window read rate is derived from read_bytes/read_ns deltas."""
+    before = {"io": {"read_bytes": 1_000_000_000, "read_ns": 1_000_000_000,
+                     "read_mib_per_second": 953.7,
+                     "records_hashed": 0, "records_unhashed": 0, "hash_thread_ns_total": 0}}
+    after = {"io": {"read_bytes": 5_000_000_000, "read_ns": 2_000_000_000,
+                    "read_mib_per_second": 111.1,
+                    "records_hashed": 0, "records_unhashed": 0, "hash_thread_ns_total": 0}}
+    d = serve_stream_counters.stream_counters_delta(before, after, tokens=4)
+    io = d["io"]
+    assert "read_mib_per_second" not in io  # non-counter float dropped, not differenced
+    # (5e9-1e9) bytes / (2e9-1e9) ns = 4 bytes/ns = 4 GB/s
+    assert io["read_gb_per_s_window"] == pytest.approx(4.0, abs=1e-6)
+    assert io["read_bytes"] == 4_000_000_000  # real counter delta preserved
+
+
 # ==========================================================================
 # 6. Bench-only diagnostic arm + de-registration (W110 salvage).
 # ==========================================================================
