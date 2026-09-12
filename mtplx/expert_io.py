@@ -117,6 +117,15 @@ class ExpertIOMetrics:
     cancellations: int = 0
     deadline_errors: int = 0
     io_errors: int = 0
+    # W110: per-record sha256 engagement on the DECODE/verify path. ``records_hashed``
+    # counts records whose bytes were sha256-verified in the io thread after the read;
+    # ``records_unhashed`` counts records read with verify OFF (bytes landed, no
+    # re-check); ``hash_ns_total`` is the cumulative io-thread wall spent hashing.
+    # These make the MTPLX_DSV41_VERIFY_RECORD_HASHES lever's engagement auditable in
+    # the A/B receipt (byte-neutral: hashing never changes the bytes read).
+    records_hashed: int = 0
+    records_unhashed: int = 0
+    hash_ns_total: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def update(self, **values: int) -> None:
@@ -154,6 +163,9 @@ class ExpertIOMetrics:
                     "cancellations",
                     "deadline_errors",
                     "io_errors",
+                    "records_hashed",
+                    "records_unhashed",
+                    "hash_ns_total",
                 )
             }
         result["read_mib_per_second"] = (
@@ -969,8 +981,14 @@ class PositionalExpertReader:
                 decode_ns=decode_ns,
             )
             if verify_hash:
+                _hash_started = time.perf_counter_ns()
                 digest = hashlib.sha256(raw_view).hexdigest()
+                self.metrics.update(
+                    records_hashed=1,
+                    hash_ns_total=time.perf_counter_ns() - _hash_started,
+                )
             else:
+                self.metrics.update(records_unhashed=1)
                 digest = "unverified"
         finally:
             if component_views is not None:
@@ -1118,6 +1136,7 @@ class PositionalExpertReader:
                             pipeline_phase=pipeline_phase,
                         )
             if verify_hash:
+                _hash_started = time.perf_counter_ns()
                 hasher = hashlib.sha256()
                 if component_views is None:
                     assert view is not None
@@ -1126,9 +1145,14 @@ class PositionalExpertReader:
                     for component_view in component_views:
                         hasher.update(component_view)
                 digest = hasher.hexdigest()
+                self.metrics.update(
+                    records_hashed=1,
+                    hash_ns_total=time.perf_counter_ns() - _hash_started,
+                )
             else:
                 # Do not report the manifest hash as if these bytes were
                 # verified; trust modes must be visible in telemetry.
+                self.metrics.update(records_unhashed=1)
                 digest = "unverified"
         finally:
             if component_views is not None:
@@ -1249,10 +1273,15 @@ class PositionalExpertReader:
                 )
                 for original_index, record, views in group:
                     if verify_hash:
+                        _hash_started = time.perf_counter_ns()
                         hasher = hashlib.sha256()
                         for view in views:
                             hasher.update(view)
                         digest = hasher.hexdigest()
+                        self.metrics.update(
+                            records_hashed=1,
+                            hash_ns_total=time.perf_counter_ns() - _hash_started,
+                        )
                         if record.sha256 is None:
                             self.metrics.update(integrity_errors=1)
                             raise ExpertIOIntegrityError(
@@ -1266,6 +1295,7 @@ class PositionalExpertReader:
                             )
                     else:
                         # Same telemetry honesty as the single-record path.
+                        self.metrics.update(records_unhashed=1)
                         digest = "unverified"
                     digests[original_index] = digest
         finally:
