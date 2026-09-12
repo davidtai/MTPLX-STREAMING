@@ -500,6 +500,21 @@ token ids are sha-identical, and the receipt counters below. Also the 80 GiB pla
 (`--memory-limit-gib 80`) to measure `b` at 51% all-resident, and a depth-5 DSpark cell to
 gate a4/a5 acceptance.
 
+**W95f (review NOTE) — the paired A/B is NOT at equal persistent capacity.** The 48-slot
+global prefetch ring (`_RUNNER_V2_RING_SLOTS`) is charged to the memory plan
+(`plan_expert_memory`: `prefetch_bytes = ring_slots * expert_record_bytes`, reserved from the
+budget *before* the persistent LRU is sized). It is one SHARED pool, so it reserves **48
+records TOTAL** (not 48 per layer), but those records come out of the same budget as the
+persistent LRU. So `runner_v2` / `cell16k_ring_v2` (48-slot ring) hold **~48 fewer persistent
+records than the paired `cell16k_ring` reference at the same `--memory-limit-gib`** — on the
+40-routed-layer cell that is ~1.2 fewer `slots_per_layer` (48/40), i.e. a slightly lower
+resident fraction, not a like-for-like residency comparison. The receipt already exposes both
+`slots_per_layer` and `slots_per_layer_no_ring` (the counterfactual plan re-computed at
+`prefetch_slots=0`); read the delta between them to attribute a decode-hit-rate change to the
+ring's speculative hits vs the lost persistent capacity. To compare at EQUAL persistent
+capacity, raise the v2 arm's `--memory-limit-gib` by `48 * expert_record_bytes` (or lower the
+reference's by the same) so both plans size the identical `slots_per_layer`.
+
 ### 6.5 Receipt counters (v2 block)
 
 `syncs_per_token` (the headline N), `barrier_free_layers` / `fenced_layers` /
