@@ -646,3 +646,54 @@ def test_rollback_no_realloc_compress_index(monkeypatch):
     assert tuple(lc._compress_kv.raw_backing().shape) == shape_c0
     # rollback restored the exact pre-cycle group count
     assert int(lc.compress_kv.shape[1]) == 20
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH-2: the served path must give the bounded lanes a max_kv.
+# ---------------------------------------------------------------------------
+def test_server_registers_kv_bounded_lever_keys():
+    """The two W107 lever env keys are in the served-log snapshot list (a merge
+    worker adds RUNNER/DRAFT_HEAD_BF16 to the same list -- ours must survive)."""
+    from mtplx.server import openai as O
+    assert "MTPLX_DSV41_KV_BOUNDED" in O._DSV41_LEVER_ENV_KEYS
+    assert "MTPLX_DSV41_KV_BOUNDED_MAXKV" in O._DSV41_LEVER_ENV_KEYS
+    resolved = O._dsv41_resolved_lever_env(
+        {"MTPLX_DSV41_KV_BOUNDED": "1", "MTPLX_DSV41_KV_BOUNDED_MAXKV": "17408"})
+    assert resolved["MTPLX_DSV41_KV_BOUNDED"] == "1"
+    assert resolved["MTPLX_DSV41_KV_BOUNDED_MAXKV"] == "17408"
+
+
+def test_server_plumbed_maxkv_bounds_the_cache(monkeypatch):
+    """The env the server stamps from max_live_kv_tokens is honoured at cache
+    construction: every lane preallocates to that cap (this is what the served path
+    now delivers -- before HIGH-2 the server stamped nothing and the lanes fell back
+    to geometric growth)."""
+    _clear_kv_envs(monkeypatch)
+    # what the server writes at setup: KV_BOUNDED on + MAXKV == max_live_kv_tokens
+    served_max_live_kv = 4096
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(served_max_live_kv))
+    assert C._kv_bounded_maxkv() == served_max_live_kv
+
+    cache = _make_cache(_Cfg())
+    assert all(lc._kv_bounded for lc in cache.layers)
+    # a ratio-2 kv-source layer preallocates compress to ceil(max_kv/2)+slack and the
+    # latent frontier to max_kv+slack -- i.e. it is bounded, not geometric-from-256.
+    lc = cache.layers[2]
+    lc.append_compress(_row(1, _Cfg.head_dim))
+    assert int(lc._compress_kv.raw_backing().shape[1]) == \
+        C._bounded_comp_cap(served_max_live_kv, 2)
+    lc.comp_state.push(_row(1, _Cfg.head_dim), _row(1, _Cfg.head_dim))
+    assert int(lc.comp_state.raw_backings()[0].shape[1]) == \
+        C._bounded_latent_cap(served_max_live_kv)
+
+
+def test_server_setdefault_lets_explicit_cap_win(monkeypatch):
+    """The server stamps MAXKV with setdefault, so an explicit operator cap wins --
+    mirrors the ``os.environ.setdefault`` in the server's KV-window setup."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "999")   # explicit operator cap
+    # the server's stamp is a setdefault, so it does NOT override an explicit value
+    import os as _os
+    _os.environ.setdefault("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(4096))
+    assert C._kv_bounded_maxkv() == 999
