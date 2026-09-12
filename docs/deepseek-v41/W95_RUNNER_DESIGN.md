@@ -22,9 +22,18 @@ persistent) + 48 global transient.
 
 ## Headline
 
-> **syncs per token: today 40+ → design 1 (unavoidable); expected tok/s: AR 2.2 → ~4–6
-> (rebuild + ring + prefetch); DSpark depth-5 → 14–20 (the 20 tok/s goal sits at the
+> **syncs per token: today ≈141 (W96 census — not 40) → design 1 + (uncovered-miss layers)
+> (inherent floor ≈31 today → ≈10 with prefetch → 1 fully warm); expected tok/s: AR 2.2 →
+> ~4–6 (rebuild + ring + prefetch); DSpark depth-5 → 14–20 (the 20 tok/s goal sits at the
 > W82 aggressive corner, not the center).**
+
+The ≈141 is measured (W96 as-is audit, `w96_sync_census.py`): **40 routing `mx.eval(indices)`
++ ≈10 all-hit wave fences + ≈30 split-layer hit fences + ≈59 per-miss-part fences + 2 at the
+sampler.** The v2 path carries **none** of the wave/hit/per-part fences (they are the pin/
+release design, D3); the only blocking eval on the generation thread is the covering
+barrier, plus one demand sync per layer whose route names an un-prefetched expert (that sync
+is the SSD read the layer always paid, D2 — not new drain). The sync-count test asserts
+exactly this via the W96 census (§6.2/§8).
 
 - **The one unavoidable sync** is the token-boundary covering barrier (the sampler eval,
   which also carries the batched route read-back and the planner hand-off). Autoregression
@@ -496,3 +505,38 @@ the lanes' code or duplicates it.
 - **20 tok/s is the optimistic edge, not the center.** W82's honest read — central 13–16
   tok/s (depth 5, full compute stack), 20 only when every lever lands at its good end. The
   runner rebuild is the precondition that unlocks the rest; it is not the whole 20.
+
+---
+
+## 8. W96 as-is deltas the v2 must hit (measured; design targets)
+
+The W96 as-is audit (`docs/deepseek-v41/W96_RUNNER_AS_IS_AUDIT.md`,
+`scripts/deepseek_v41/w96_sync_census.py`) measured the current runner precisely and ranks
+14 structural defects (D1–D14). The v2 path must delete the ones below; each maps to a §1–§3
+mechanism. **The sync-count test (§6.2) counts ALL blocking `mx.eval` on the generation
+thread per token via the W96 census and asserts `= 1 + (uncovered-miss layers)`.**
+
+| W96 defect (measured) | v2 fix (this spec) |
+|---|---|
+| **D1** per-layer drain with nothing queued: ≥315 ms/token inside `mx.eval(indices)` (≥7.9 ms/barrier; ≈80.66 s / 256 tok, w37), GPU 68% busy / 1.13 GHz | barrier-free device-LUT gather on covered layers; one covering barrier/token; gen thread races ahead (§1.1–1.2) |
+| **D2** reads issued only *after* the layer's sync, awaited on the gen thread at QD≈2 → 2.4 of 13.4 GB/s | planner issues **all** of a layer's misses at once, and prefetch issues the *next* layer's reads a layer early (§1.3); concurrent issue raises realized BW |
+| **D3** ≈100 extra blocking fences/token (≈10 all-hit + ≈30 split-hit + ≈59 per-miss-part) from the pin/release design; AR M=1 is the legacy fenced loop | v2 replaces the M=1 loop entirely; **no** wave/hit/per-part fences — deferred under the epoch, covered by the token barrier (§3) |
+| **D4** planning/admission/pinning/counters/releases on the gen thread in the drained window (incl. 3× `counter.__dict__.copy()`/route, O(61) victim scans) | all of it moves to the planner thread; boundary-time policy (§1.4, §2) |
+| **D5** two-tier + pins + ring + single-pool + dirty-flags fused; `frequency` admission rejects first-seen misses → **68% of miss bytes (10,312/15,064, w37) land in transient scratch and are discarded after one use** | **single W87 pool, every miss admitted** (no first-seen rejection); pins dropped from v2; the epoch replaces pin-based recycle safety (§1.2, §3) |
+| **D8** route-independent work serialized behind the route: shared expert + MoE combine issued only after the SSD wait, though they depend only on `xf` | hoist shared-expert/combine to overlap the route resolution (issue on the gen thread before the covered gather) — byte-identical reorder |
+| **D9** per-token O(T) the ring did not remove: (a) compressor frontier `mx.concatenate` on the 4 kv-source layers ≈**268 MB/token**; (d) `mx.dequantize(wo_a)` re-issued per layer per token | v2 cache/attention call **preallocates the frontier** (ring buffer; keep only the last `ratio` rows the pool needs) and **caches the dequantized `wo_a` per layer** (weight-only, invariant across tokens). (b `_mask_to_topk_idx` argsort and c engram concat are noted; b/c are lower priority.) |
+| **D10** two sampler round trips + host→device id upload; the host numpy engram hash forces the sampled id one step early | **one** sampler sync; the engram hash runs off the critical path (**lagged read** — it needs the id but not before the next token's prologue) |
+
+**Inherent floor (W96 §2.4, honest).** Even perfectly, a streaming decode pays 1 sampler +
+one demand sync per layer that *misses and was not prefetched*. At today's hit 0.755 that is
+≈30.6 miss layers → ≈31 syncs/token; with the W89 one-ahead prefetch (missRed@10 ≈0.74) the
+miss-layer count falls to ≈8–10 → **floor ≈10 syncs/token**, → 1 only as residency +
+prediction reach full coverage. The v2 target N in the headline is this floor, not a fixed 1.
+
+**Where the recovered time is (W96 §3).** Of the 460 ms token, **165–215 ms** is
+encode-starved bursts + drain + DVFS *inside* the 40 routing barriers (excluding ~100–150 ms
+of real kernel work that drains during them); **60–110 ms** is serialized SSD waits at QD≈2;
+**10–30 ms** is per-part fences. The v2 removes the barrier bubbles (D1) and the QD≈2
+serialization (D2), and stops discarding 68% of the bytes (D5) — these are the recoverable
+ms behind the AR 2.2 → ~4–6 tok/s and the DSpark verify collapse. The kernel work and the
+compulsory bytes are the floor (§7).
