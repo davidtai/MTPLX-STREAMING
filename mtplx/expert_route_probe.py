@@ -44,6 +44,17 @@ def count(event: str, amount: int = 1) -> None:
         _COUNTS[event] += amount
 
 
+def peek(event: str) -> int:
+    """Current cumulative count for ``event`` (0 if unseen / probe disabled).
+
+    Lets a caller record a delta around a nested span -- e.g. the all-hit switch
+    branch attributes only ITS gather_qmm dispatches to ``hot.allhit_gather_qmm``,
+    instead of dividing the whole-pass ``hot.switch_gather_qmm`` (which also counts
+    split parts and prefill waves) by the all-hit count.
+    """
+    return _COUNTS.get(event, 0)
+
+
 def snapshot() -> dict:
     stages = sorted(set(_SUMS) | set(_COUNTS))
     return {

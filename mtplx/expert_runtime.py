@@ -2453,11 +2453,23 @@ class ExpertStreamingRuntime:
         """Recompute the derived expert-cache allowance and evict down to it.
 
         Runs only at KV boundaries (admission, release, reset); cache hits
-        never reach this path.  Byte accounting is record-granular: every
+        never reach this path.  Those boundaries run on the generation thread,
+        like reset()/close() -- the same thread that holds a deferred route's
+        layer lock -- which is why the flush below (not a blocking re-acquire) is
+        what breaks the self-deadlock.  Byte accounting is record-granular: every
         streamed slot holds exactly ``spec.expert_record_bytes``, so a byte
         allowance maps to an exact entry capacity.
         """
 
+        # A deferred split/all-hit route (split_route_release="deferred",
+        # deferred_pin_release, or the W42/W92 switch fast-path) keeps its layer
+        # lock held until the next covering flush -- but the eviction loop below
+        # takes EVERY layer lock, so on the generation thread (which also runs the
+        # deferral) this KV boundary would self-deadlock waiting on a lock only a
+        # later forward would release.  Drain the deferred releases first (they are
+        # this thread's own, already async-submitted), exactly as reset()/close()
+        # do at their boundaries.  No-op when nothing is deferred.
+        self.flush_deferred_slot_releases(evaluate=True)
         with self._allowance_lock:
             with self._kv_lock:
                 admitted = self._live_kv_tokens + self._pending_kv_tokens
@@ -2702,8 +2714,10 @@ class ExpertStreamingRuntime:
         """Release queued routes; the caller just completed a covering eval.
 
         ``evaluate=True`` fences the pending wave outputs first and is safe at
-        any generation-thread boundary (row end, reset, close) where no later
-        eval is guaranteed to cover them.
+        any generation-thread boundary (row end, reset, close, KV admit/release)
+        where no later eval is guaranteed to cover them.  All of these run on the
+        generation thread -- the same thread that enqueues the deferrals -- so the
+        pop/release below is not racing a concurrent append.
         """
 
         pending = getattr(self, "_deferred_slot_releases", None)
@@ -3543,8 +3557,19 @@ class ExpertStreamingRuntime:
 
         if bank is not None:
             if lock is not None:
-                with lock:
+                # Non-blocking: this rebuild is reached from _run_device_route
+                # BEFORE the per-layer covering flush, so a pending deferred route
+                # (split_route_release="deferred" / deferred_pin_release / the W42
+                # switch fast-path / a W61/W81 verify defer) may hold this layer's
+                # lock. Blocking here would self-deadlock the generation thread; on
+                # contention return None so the caller uses the fenced path (which
+                # flushes) and the LUT stays dirty to rebuild next token. (W92 review.)
+                if not lock.acquire(blocking=False):
+                    return None
+                try:
                     _fill(bank)
+                finally:
+                    lock.release()
             else:
                 _fill(bank)
         arr = mx.array(table, dtype=mx.int32)
@@ -3601,8 +3626,15 @@ class ExpertStreamingRuntime:
 
         if bank is not None:
             if lock is not None:
-                with lock:
+                # Non-blocking (see device_route_lut): a pending deferred route may
+                # hold this layer's lock before the covering flush; on contention
+                # return None so _run_device_route falls to the fenced path. (W92.)
+                if not lock.acquire(blocking=False):
+                    return None
+                try:
                     _fill(bank)
+                finally:
+                    lock.release()
             else:
                 _fill(bank)
         arr = mx.array(table, dtype=mx.int32)
