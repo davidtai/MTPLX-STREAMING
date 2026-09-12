@@ -71,8 +71,11 @@ SMALL_STAGES_FUSED_ENV = "MTPLX_DSV41_SMALL_STAGES_FUSED"  # K35 (W91): collapse
 # switch gather). Extends K4 (HC-only) + K22 (gate-prefix/combine-only) to fold in
 # the gate top-k + shared expert + MoE combine. Byte-identical over its whole
 # admitted range on CPU (cap = _SMALL_STAGES_MAX_ROWS = 7, the mx.compile bit-exact
-# regime: decode n=1 + DSpark K+1 verify <=6 rows); n=1 GPU byte-identity is a
-# parity-window gate. Engagement in receipt.small_stages_engagement.
+# regime) but ROUNDING-CLASS ON GPU: window-37 measured NULL (2.13 vs 2.17 tok/s)
+# with the token-id sha DIFFERING (n=1 mx.compile reassociates the fp32 GEMM/
+# reductions on Metal, flipping a greedy near-tie; [[dsv41-inexact-ok-if-tie-flips]]).
+# No measured GPU win -> kept OUT of every composite arm; only the isolation A/B arm
+# small_stages_fused carries it. Engagement in receipt.small_stages_engagement.
 HC_PREMIX_KERNEL_ENV = "MTPLX_DSV41_HC_PREMIX_KERNEL"  # K35 (W91): GPU-only fused
 # HC-premix Sinkhorn kernel (folds the pre/post/comb split + affine + sigmoid into
 # the K3 Sinkhorn dispatch). ROUNDING-CLASS (1e-6, argmax-exact), like K3; default
@@ -679,32 +682,19 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
     ),
-    # W91 / K35: the small-stages fusion in ISOLATION, to isolate its decode delta
-    # against control -- collapse the per-layer small stages (HC premix/combine, MoE
-    # gate+top-k, shared expert, MoE combine) into three compiled per-layer graphs.
-    # BYTE-IDENTICAL to control at decode (n=1) / small verify (the decode ids +
-    # cache must match; the byte-identity summary must show it clean at n<=cap).
-    # Pairs with sinkhorn="1" so the Sinkhorn inside the fused premix is the K3
-    # one-dispatch kernel on the GPU (the census GPU projection: 584 -> 107 per-layer
-    # dispatches).  The census/tests carry the per-stage before/after counts.
+    # W91 / K35: the small-stages fusion in ISOLATION -- the ONLY arm carrying K35
+    # (small_stages="1"), an A/B against control for the lever alone (collapses the
+    # per-layer small stages -- HC premix/combine, MoE gate+top-k, shared expert, MoE
+    # combine -- into three compiled per-layer graphs).  ROUNDING-CLASS ON GPU: it is
+    # byte-identical on CPU (mx.compile of the segments is mx.array_equal to eager at
+    # rows<=7) but NOT on Metal -- window-37 measured cell16k_ring+K35 at 2.13 tok/s
+    # vs the paired reference 2.17 (NULL) with the token-id sha DIFFERING (n=1
+    # mx.compile reassociates the fp32 GEMM/reductions on Metal, flipping a greedy
+    # near-tie; [[dsv41-inexact-ok-if-tie-flips]]).  So K35 is a rounding-class lever
+    # with NO measured GPU win: kept OUT of every composite/candidate arm (no
+    # cell16k_ring_fused) -- this isolation arm is the only place it appears.  Pairs
+    # with sinkhorn="1" (the K3 Sinkhorn kernel backs the fused premix on the GPU).
     "small_stages_fused": _preset(small_stages="1", sinkhorn="1"),
-    # W91: cell16k_ring + the K35 small-stages fusion -- the standard 16,384-token
-    # cell with the bounded window ring PLUS the fused small-stage decode graphs.
-    # The direct A/B against cell16k_ring that isolates the fusion's decode dispatch
-    # collapse at 16K.  Exact key set of cell16k_ring plus small_stages="1"; cell16k_ring
-    # already runs sinkhorn="1" (K3 kernel) + attn="1" (K22) + head=bf16, so this arm's
-    # decode delta vs cell16k_ring is exactly the HC premix/combine + gate top-k + shared
-    # + MoE combine dispatch collapse (attention + the routed switch stay un-fused).
-    # cell16k_ring does NOT run hc="1", so this arm's HC-compile tapes are new; at the
-    # admitted rows (decode n=1, verify <=6) they are mx.array_equal to eager on CPU
-    # (cap=7, the bit-exact regime), so the arm adds no new lossiness vs cell16k_ring
-    # -- but n=1 GPU byte-identity to cell16k_ring is a parity-window gate, not assumed.
-    "cell16k_ring_fused": _preset(
-        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
-        head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        small_stages="1",
-    ),
     # W87 (window 35): cell16k_ring + the single-slot pool (MTPLX_DSV41_SINGLE_SLOT_
     # POOL).  EXACT key set of cell16k_ring plus single_slot_pool="1".  Merges each
     # layer's persistent + transient tiers into ONE scan-resistant resident pool so
