@@ -47,6 +47,12 @@ _EXPECTED_MEMORY_KEYS = {
     "budget_total_gb",
     "plan_limit_gib_derived",
     "plan_limit_gib_effective",
+    # W118 (H7): the MLX allocator-limit headroom + the effective set_memory_limit value.
+    "mlx_limit_headroom_gib",
+    "mlx_limit_gib_effective",
+    # W118 review HIGH-1: the allocator cache ceiling + the priced extra forecast term.
+    "budget_cache_limit_gib",
+    "budget_headroom_forecast_extra_gib",
     "budget_system_used_at_start_gb",
     "budget_non_metal_overhead_gb",
     "budget_non_metal_overhead_measured_gb",
@@ -916,7 +922,9 @@ def test_high1_plan_overshoot_flag_threads(tmp_path):
     mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
     bt = args._dsv41_budget_total
     assert bt.plan_overshoot_gib == pytest.approx(9.0)
-    assert "plan_overshoot(9)" in bt.formula()
+    # W118 review HIGH-1: the plan_overshoot term is now the allocator_extra term (which
+    # equals the overshoot when headroom is 0); the formula shows "overshoot 9".
+    assert "overshoot 9" in bt.formula()
 
 
 # --------------------------------------------------------------------------
