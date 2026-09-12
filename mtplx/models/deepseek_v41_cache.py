@@ -272,13 +272,12 @@ class _GrowBuffer:
         self.append(arr)
 
     def truncate_to(self, n: int) -> None:
-        """Drop back to the first ``n`` logical rows (length-only; keeps capacity)."""
-        n = max(0, int(n))
-        if n <= 0:
-            self._buf = None
-            self._len = 0
-        else:
-            self._len = min(n, self._len)
+        """Drop back to the first ``n`` logical rows (length-only; keeps capacity).
+
+        W107 (review LOW-2): ``n == 0`` keeps the preallocated buffer (only ``_len``
+        goes to 0) -- a trim/rollback to empty must NOT drop the prealloc and force a
+        realloc on the next append (that is what :meth:`set` is for)."""
+        self._len = min(max(0, int(n)), self._len)
 
     def rows(self) -> int:
         return 0 if self._buf is None else self._len

@@ -866,3 +866,44 @@ def test_over_cap_model_forward_raises_and_leaves_cache_clean(monkeypatch):
     # the pre-check ran before any layer appended: every entry is still empty
     assert all(lc.offset == 0 for lc in cache.layers)
     assert all(lc.window_len() == 0 for lc in cache.layers)
+
+
+# ---------------------------------------------------------------------------
+# Review LOW-2: truncate_to(0) must keep the preallocated buffer (no realloc on
+# the next append).
+# ---------------------------------------------------------------------------
+def test_truncate_to_zero_keeps_prealloc():
+    gb = C._GrowBuffer(bounded_cap=32, counter_lane="compress")
+    C.reset_kv_bounded_stats()
+    gb.append(_row(10, 8))                       # one prealloc
+    assert C.kv_bounded_stats()["kv_realloc_compress"] == 1
+    cap_shape = tuple(gb.raw_backing().shape)
+    gb.truncate_to(0)                            # rollback to empty
+    assert gb.rows() == 0
+    assert gb.raw_backing() is not None          # buffer kept (LOW-2)
+    assert tuple(gb.raw_backing().shape) == cap_shape
+    gb.append(_row(5, 8))                        # next append must reuse, not realloc
+    s = C.kv_bounded_stats()
+    assert s["kv_realloc_compress"] == 1, "truncate_to(0) dropped the prealloc"
+    assert s["kv_inplace_writes_compress"] >= 1
+    assert gb.rows() == 5
+
+
+def test_full_trim_to_zero_no_realloc_via_cache(monkeypatch):
+    """A whole-entry trim to offset 0 keeps every bounded lane's prealloc."""
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=256)
+    C.reset_kv_bounded_stats()
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=2, is_kv_source=True)
+    lc.append_window(_row(20, 16))
+    lc.comp_state.push(_row(20, 16), _row(20, 16))
+    lc.append_compress(_row(10, 16))
+    lc.append_index_k(_row(10, 12))
+    lc.advance(20)
+    reallocs = {ln: C.kv_bounded_stats()[f"kv_realloc_{ln}"]
+                for ln in ("compress", "index", "latent")}
+    lc.trim(20)                                  # trim the whole entry to empty
+    assert lc.offset == 0
+    for ln in ("compress", "index", "latent"):
+        assert C.kv_bounded_stats()[f"kv_realloc_{ln}"] == reallocs[ln], (
+            f"{ln} reallocated on trim-to-0")
