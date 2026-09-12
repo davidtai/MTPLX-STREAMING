@@ -1360,9 +1360,24 @@ class Attention(nn.Module):
                 # K30 (W59): publish the selection as gather indices too, once per
                 # index source (the Reuse layers below reuse it, like topk_mask).
                 if _resolve_selected_keys():
-                    shared.selected_idx = _mask_to_topk_idx(
-                        mask, min(self.indexer.index_topk, n_comp)
+                    # W97 (review item 5): when a FIXED-SHAPE consumer is armed (the
+                    # core-compile tape or the K29 kernel), pad the selection to the
+                    # FULL index_topk so k = window + index_topk is context-independent.
+                    # Otherwise k = window + min(index_topk, n_comp) grows every token
+                    # until the indexer saturates (~index_topk tokens), so a prompt
+                    # shorter than that retraces the compile tape / re-specialises the
+                    # kernel for its whole warmup (~index_topk distinct k).  The
+                    # ``valid`` mask already drops the -1 pads; greedy-identical (the
+                    # extra masked rows contribute exp(-inf)=0), rounding-class vs the
+                    # unpadded selection (the softmax sum reassociates over the pads),
+                    # so it is gated to those already-rounding-class consumers and the
+                    # default selected-keys path stays byte-identical.
+                    topk = (
+                        self.indexer.index_topk
+                        if (_resolve_attn_core_compile() or _resolve_decode_attn_kernel())
+                        else min(self.indexer.index_topk, n_comp)
                     )
+                    shared.selected_idx = _mask_to_topk_idx(mask, topk)
             else:  # Reuse: read the source's selection
                 mask = shared.topk_mask
             # W76: fence ``mask`` always; additionally fence the K30
@@ -1840,13 +1855,27 @@ def _mask_to_topk_idx(mask: mx.array, k: int) -> mx.array:
     Position order within the row is irrelevant to the softmax; ascending is chosen
     to match the reference.  One argsort over ``n`` per row -- run once per index
     source (published on ``shared.selected_idx``, reused down the stack), O(n) in
-    memory and ~n/(H*head_dim) cheaper than the score it replaces."""
+    memory and ~n/(H*head_dim) cheaper than the score it replaces.
+
+    ``k > n`` is supported (W97 item 5: pad the width to a FIXED ``index_topk`` even
+    before the compressed history has ``index_topk`` rows), producing ``[b, s, k]``
+    with ``-1`` in the surplus columns; the ``valid`` mask (``count`` True per row,
+    ``count <= n < k``) already drops them, so the gathered key set is unchanged."""
     b, s, n = mask.shape
     ar = mx.arange(n)
     # True positions sort by their own index (0..n-1); False positions by n+index,
     # so every True lands ahead of every False.  All keys distinct -> deterministic.
     keys = mx.where(mask, ar.reshape(1, 1, n), (n + ar).reshape(1, 1, n))
-    order = mx.argsort(keys, axis=-1)[..., :k].astype(mx.int32)   # [b, s, k]
+    order = mx.argsort(keys, axis=-1).astype(mx.int32)            # [b, s, n]
+    if k <= n:
+        order = order[..., :k]                                   # [b, s, k]
+    else:
+        # Pad the width to k > n with -1 (surplus columns); the valid mask below
+        # (count <= n < k) drops them, so this is byte-identical for the k <= n case
+        # and shape-stabilises the k > n case.
+        order = mx.concatenate(
+            [order, mx.full((b, s, k - n), -1, dtype=mx.int32)], axis=-1
+        )                                                        # [b, s, k]
     count = mx.sum(mask.astype(mx.int32), axis=-1, keepdims=True)  # [b, s, 1]
     valid = mx.arange(k).reshape(1, 1, k) < count
     return mx.where(valid, order, mx.array(-1, dtype=mx.int32))
@@ -2117,8 +2146,13 @@ _ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
 #: mirroring the K29 decode-kernel cap; above it the eager core runs (prefill).
 _ATTN_CORE_COMPILE_MAX_ROWS = 8
 #: One compiled core tape per (geometry, dtype, scale) signature.  Module global so
-#: tests can inspect its growth (must stay bounded over 64 decode steps -- no
-#: per-token retrace) and clear it between configs.
+#: tests can inspect its growth and clear it between configs.  W97 (review item 5):
+#: the tape count is bounded to ONE per distinct ``(b*s, CSA-mode k)`` -- NOT one per
+#: distinct ``k`` -- because arming the tape pads the selected keys to the full
+#: ``index_topk`` (see ``_compressed``), so ``k = window + index_topk`` is fixed
+#: instead of ``window + min(index_topk, n_comp)`` growing every token until the
+#: indexer saturates (~index_topk tokens).  Without the padding a prompt shorter than
+#: ratio*index_topk retraced the tape for its whole warmup (~index_topk tapes).
 _ATTN_CORE_COMPILED: dict = {}
 
 #: W97 (adversarial review, item 3) engagement counters for the decode-attention

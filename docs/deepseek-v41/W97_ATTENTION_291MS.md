@@ -285,9 +285,18 @@ rounding-class (neither byte-identical: the n=1 compile and the K29 tile reducti
 reassociate the fp32 einsum/reductions — the K35 lesson), gated separately from the
 exact levers (`wo_a_cache` is the only byte-identical W97 attention lever).
 
-The core compile is keyed on geometry (`_ATTN_CORE_COMPILED`); §5 (item 5) pads the
-selected keys to a fixed `k` so the tape is built once per distinct `b·s`, not retraced
-per token. Its **engagement is recorded in the ab receipt** (`attn_core_compile_engagement`:
+The core compile is keyed on geometry (`_ATTN_CORE_COMPILED`). **The cache is bounded to
+one tape per distinct `(b·s, CSA-mode k)` — NOT one per distinct `k`.** Arming the tape (or
+the K29 kernel) pads the selected keys to the full `index_topk` (`_mask_to_topk_idx`, the
+`valid` mask drops the `-1` pads), so `k = window + index_topk` is context-independent from
+the first token. Without that padding `k = window + min(index_topk, n_comp)` grows every
+token (ratio-1) or every 2 tokens (ratio-2) until the indexer saturates at ~`index_topk`
+compressed rows, so a prompt **shorter than `ratio·index_topk`** retraced the tape for its
+whole warmup (~`index_topk` distinct `k`, hundreds of ~0.1–0.3 ms retraces plus the 26 ms
+first tape) — a growing dict, not "a handful". Padding is greedy-identical but rounding-class
+vs the unpadded selection (the softmax sum reassociates over the masked pads), so it is gated
+to the already-rounding-class tape/kernel consumers; the default selected-keys path is
+unpadded and byte-identical. Its **engagement is recorded in the ab receipt** (`attn_core_compile_engagement`:
 compiled-core calls vs eager fallbacks, the way `decode_attn_kernel_engagement` records
 K29) so a GPU window can prove the tape actually ran before crediting any delta. The
 compile core does not by itself reach a ≤15/layer whole-layer target (§8): the layer is

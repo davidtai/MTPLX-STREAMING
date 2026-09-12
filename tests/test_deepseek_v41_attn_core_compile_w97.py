@@ -286,3 +286,62 @@ def test_core_compile_prefill_phase_guard(monkeypatch):
     dsv41._ATTN_CORE_COMPILED.clear(); dsv41._reset_attn_core_compile_calls()
     _run_selected_core(attn, b=1, s=4)
     assert len(dsv41._ATTN_CORE_COMPILED) == 1
+
+
+def test_mask_to_topk_idx_pads_beyond_n():
+    """W97 review item 5: ``_mask_to_topk_idx`` supports k > n (pad the width to a
+    FIXED index_topk before the compressed history has index_topk rows), and stays
+    byte-identical to the historical width-k behaviour for k <= n."""
+    mask = mx.array([[[True, False, True, True]]])  # n=4, 3 True (positions 0,2,3)
+    # k=5 > n=4: width 5, the True positions ascending then -1 pads.
+    idx = dsv41._mask_to_topk_idx(mask, 5)
+    assert idx.shape == (1, 1, 5)
+    assert [int(v) for v in idx[0, 0].tolist()] == [0, 2, 3, -1, -1]
+    # k=2 <= n: unchanged (width 2, the first two True positions).
+    idx2 = dsv41._mask_to_topk_idx(mask, 2)
+    assert idx2.shape == (1, 1, 2)
+    assert [int(v) for v in idx2[0, 0].tolist()] == [0, 2]
+    # k == n: full width, all True then pads.
+    idx3 = dsv41._mask_to_topk_idx(mask, 4)
+    assert [int(v) for v in idx3[0, 0].tolist()] == [0, 2, 3, -1]
+
+
+def test_core_compile_cache_bounded_from_short_prompt(monkeypatch):
+    """W97 review item 5: from a prompt SHORTER than ratio*index_topk (n_comp <
+    index_topk for the whole run), the compile cache stays bounded -- the index_topk
+    padding fixes k, so the tape is built once per (b*s, CSA-mode k), NOT retraced
+    every token while the indexer saturates.  Without the padding the pre-fix code
+    built ~index_topk tapes over the warmup (a growing dict)."""
+    bis = _load_bisect()
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    monkeypatch.setenv(dsv41._ATTN_CORE_COMPILE_ENV, "1")
+    monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+
+    model, args = bis._build_tiny_full_model(seed=3)
+    ops = bis._TinyOps()
+    max_ratio = max((r for r in args.compress_ratios if r), default=1)
+    prompt_len = 3
+    assert prompt_len < max_ratio * args.index_topk, "prompt must be below the saturation horizon"
+    prompt_ids = list(range(1, prompt_len + 1))
+
+    # A small fixed set of geometries: {prefill b*s, decode b*s=1} x {swa k=window,
+    # compress k=window+index_topk}.  Padding makes k context-independent, so more
+    # steps add NO tapes (the discriminating property vs the pre-fix per-token retrace).
+    n_bs, n_modes = 2, 2
+    bound = n_bs * n_modes
+
+    dsv41._ATTN_CORE_COMPILED.clear()
+    _decode_ids(model, ops, prompt_ids, 8)
+    n_after_8 = len(dsv41._ATTN_CORE_COMPILED)
+    assert 1 <= n_after_8 <= bound, (
+        f"{n_after_8} core tapes from an 8-step short-prompt run (bound {bound}); "
+        "padding did not fix k"
+    )
+
+    # A longer run over a FRESH cache reuses the SAME fixed geometries: no per-token
+    # retrace, so the dict does not grow with the step count.
+    _decode_ids(model, ops, prompt_ids, 40)
+    n_after_40 = len(dsv41._ATTN_CORE_COMPILED)
+    assert n_after_40 == n_after_8, (
+        f"core tape count grew {n_after_8} -> {n_after_40} over more steps (per-token retrace)"
+    )
