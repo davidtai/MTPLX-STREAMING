@@ -48,6 +48,36 @@ DEFAULT_MODEL = Path(
 ).expanduser()
 GIB = 1024 ** 3
 DEFAULT_BOS_ID = 0
+
+# W106 item 3: derive the MLX plan limit from David's TOTAL box budget while
+# COMPENSATING for the non-Metal requirements (the box has a 110 GB hard ceiling
+# and his budget is 100 GB TOTAL for everything):
+#
+#   plan_limit_gib = total - system_used_at_start - non_metal_overhead
+#                          - kv_growth_to_max_kv - safety
+#
+# Unlike the W62 --box-budget-gib path (fixed profile constants), this MEASURES
+# system_used_at_start (vm_stat, the gpu_window.sh formula) and the non-Metal
+# process overhead (process RSS - mx active) and prices the KV growth to --max-kv,
+# so the plan compensates for everything the MLX allocator peak does NOT see.
+# Every term lands in the receipt ``memory`` block.  See docs/deepseek-v41/
+# W106_WINDOW_MEMORY_ACCOUNTING.md for the once-only definition of each term.
+#
+# Conservative pre-load estimate of the non-Metal process overhead (Python heap +
+# positional-expert bank read buffers + engram host-side row LRU + tokenizer).
+# The plan limit must be fixed BEFORE the model loads (the loader takes it), so
+# the derivation uses this estimate first, then re-measures the real overhead
+# after load (process RSS - mx active) and lowers the MLX active limit if the
+# measurement exceeds it (two-phase).  Mirrors the W62 profile constant
+# HOST_OVERHEAD_GIB (mtplx.deepseek_v41_memory_profile.HOST_OVERHEAD_GIB = 10).
+DEFAULT_NON_METAL_OVERHEAD_GIB = 10.0
+# Safety headroom subtracted from the budget (flag --memory-safety-gb).
+DEFAULT_MEMORY_SAFETY_GIB = 3.0
+# Floor below which a derived plan limit is refused (flag --memory-budget-floor-gib).
+DEFAULT_MEMORY_BUDGET_FLOOR_GIB = 20.0
+# If the post-load re-measured overhead exceeds the pre-load estimate by more than
+# this, the two-phase step lowers the MLX active-allocation limit by the overage.
+_BUDGET_REMEASURE_TOLERANCE_GIB = 0.5
 # W77: AR top-1/top-2 logit gap (logit units) below which a greedy DSpark
 # divergence is classed a tie-break flip rather than a genuine divergence.
 # 3x the bf16-class per-logit floor (~1e-2, the W40/K21 HEAD_MODE=bf16 head-GEMV
@@ -1079,6 +1109,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOTAL box-use budget GiB the plan is derived from (default: "
         "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
     )
+    # W106 item 3: derive the plan limit from the TOTAL box budget while
+    # COMPENSATING for the non-Metal requirements.  When given this OVERRIDES
+    # --memory-limit-gib (derive, don't take it literally); see the W106 doc.
+    p.add_argument(
+        "--memory-budget-total-gb",
+        type=float,
+        default=None,
+        metavar="N",
+        help="TOTAL box budget GiB for EVERYTHING; derive the MLX plan limit as "
+        "total - system_used_at_start - non_metal_overhead - kv_growth_to_max_kv "
+        "- safety (compensates for the non-Metal requirements). Overrides "
+        "--memory-limit-gib. Refuses to start if the derived limit is below "
+        "--memory-budget-floor-gib.",
+    )
+    p.add_argument(
+        "--memory-safety-gb",
+        type=float,
+        default=DEFAULT_MEMORY_SAFETY_GIB,
+        metavar="GB",
+        help=f"safety headroom GiB subtracted in the --memory-budget-total-gb "
+        f"derivation (default {DEFAULT_MEMORY_SAFETY_GIB:g}).",
+    )
+    p.add_argument(
+        "--memory-budget-floor-gib",
+        type=float,
+        default=DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
+        metavar="GB",
+        help=f"refuse to start if the --memory-budget-total-gb derived plan limit "
+        f"is below this floor (default {DEFAULT_MEMORY_BUDGET_FLOOR_GIB:g}).",
+    )
+    p.add_argument(
+        "--non-metal-overhead-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="conservative pre-load estimate GiB of the non-Metal process overhead "
+        "(python heap + expert-reader buffers + engram LRU + tokenizer) used in "
+        f"the --memory-budget-total-gb derivation (default "
+        f"{DEFAULT_NON_METAL_OVERHEAD_GIB:g}); the real value is re-measured after "
+        "load and the MLX limit lowered if it exceeds this.",
+    )
     p.add_argument(
         "--memory-profile",
         action="store_true",
@@ -1206,15 +1277,367 @@ def _dry_run_arm(args, arm, bench) -> dict:
     }
 
 
-def _resolve_derivation(args):
-    """The W62 budget->plan derivation for this run (override or budget)."""
+# --------------------------------------------------------------------------
+# W106 item 3: budget-total -> plan-limit derivation (compensates for the
+# non-Metal requirements).  Pure math in derive_budget_total_plan(); the
+# measurements are taken by the caller and INJECTED, so this is unit-testable on
+# CPU with no MLX, no model and no vm_stat.
+# --------------------------------------------------------------------------
+
+
+class BudgetTotalDerivation:
+    """The plan limit derived from a TOTAL box budget, and every term of it.
+
+    ``plan_limit_gib`` is what the MLX plan is fixed to; ``non_metal_overhead_gb``
+    is the pre-load estimate actually used to derive it, and
+    ``non_metal_overhead_measured_gb`` is the post-load re-measurement (None until
+    measured).  ``memory_keys()`` renders the receipt ``memory``-block keys.
+
+    A PLAIN immutable-by-convention class (not ``@dataclass``): this module is a
+    script loaded by file path in tests, and ``@dataclass`` under ``from __future__
+    import annotations`` needs the module registered in ``sys.modules`` to resolve
+    its string annotations -- which a file-path load does not do.
+    """
+
+    __slots__ = (
+        "source", "budget_total_gb", "system_used_at_start_gb",
+        "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
+        "floor_gib", "plan_limit_gib", "non_metal_overhead_measured_gb",
+        "plan_limit_gib_effective",
+    )
+
+    def __init__(
+        self,
+        *,
+        source,
+        budget_total_gb,
+        system_used_at_start_gb,
+        non_metal_overhead_gb,
+        kv_growth_to_max_kv_gb,
+        safety_gb,
+        floor_gib,
+        plan_limit_gib,
+        non_metal_overhead_measured_gb=None,
+        plan_limit_gib_effective=None,
+    ):
+        self.source = source
+        self.budget_total_gb = budget_total_gb
+        self.system_used_at_start_gb = system_used_at_start_gb
+        self.non_metal_overhead_gb = non_metal_overhead_gb
+        self.kv_growth_to_max_kv_gb = kv_growth_to_max_kv_gb
+        self.safety_gb = safety_gb
+        self.floor_gib = floor_gib
+        self.plan_limit_gib = plan_limit_gib
+        self.non_metal_overhead_measured_gb = non_metal_overhead_measured_gb
+        self.plan_limit_gib_effective = plan_limit_gib_effective
+
+    def replace(self, **changes) -> "BudgetTotalDerivation":
+        """A copy with the named fields overridden (dataclasses.replace-style)."""
+        current = {name: getattr(self, name) for name in self.__slots__}
+        current.update(changes)
+        return BudgetTotalDerivation(**current)
+
+    def formula(self) -> str:
+        return (
+            f"plan_limit = budget_total({self.budget_total_gb:.4g}) "
+            f"- system_used_at_start({self.system_used_at_start_gb:.4g}) "
+            f"- non_metal_overhead({self.non_metal_overhead_gb:.4g}) "
+            f"- kv_growth_to_max_kv({self.kv_growth_to_max_kv_gb:.4g}) "
+            f"- safety({self.safety_gb:.4g}) "
+            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g})"
+        )
+
+    def memory_keys(self) -> dict:
+        """The budget keys merged into the receipt ``memory`` block.  Always the
+        SAME key set (nulls where a term does not apply) so receipts are
+        self-describing regardless of which plan source ran."""
+
+        return {
+            "memory_plan_source": self.source,
+            "budget_total_gb": (
+                None if self.budget_total_gb is None
+                else round(self.budget_total_gb, 4)
+            ),
+            "plan_limit_gib_derived": round(self.plan_limit_gib, 4),
+            "plan_limit_gib_effective": (
+                None if self.plan_limit_gib_effective is None
+                else round(self.plan_limit_gib_effective, 4)
+            ),
+            "budget_system_used_at_start_gb": round(self.system_used_at_start_gb, 4),
+            "budget_non_metal_overhead_gb": round(self.non_metal_overhead_gb, 4),
+            "budget_non_metal_overhead_measured_gb": (
+                None if self.non_metal_overhead_measured_gb is None
+                else round(self.non_metal_overhead_measured_gb, 4)
+            ),
+            "budget_kv_growth_to_max_kv_gb": round(self.kv_growth_to_max_kv_gb, 4),
+            "budget_safety_gb": round(self.safety_gb, 4),
+            "budget_floor_gib": round(self.floor_gib, 4),
+        }
+
+
+def derive_budget_total_plan(
+    *,
+    budget_total_gb: float,
+    system_used_at_start_gb: float,
+    non_metal_overhead_gb: float,
+    kv_growth_to_max_kv_gb: float,
+    safety_gb: float = DEFAULT_MEMORY_SAFETY_GIB,
+    floor_gib: float = DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
+) -> BudgetTotalDerivation:
+    """Derive the MLX plan limit from David's TOTAL box budget, compensating for
+    the non-Metal requirements.  All measurements are injected (pure math):
+
+        plan_limit = total - system_used_at_start - non_metal_overhead
+                           - kv_growth_to_max_kv - safety
+
+    Raises ``ValueError`` (a clear, actionable message) when the derived plan
+    limit is below ``floor_gib`` -- refusing to start rather than opening a GPU
+    window on a plan too small to hold the model.
+    """
+
+    for name, value in (
+        ("budget_total_gb", budget_total_gb),
+        ("system_used_at_start_gb", system_used_at_start_gb),
+        ("non_metal_overhead_gb", non_metal_overhead_gb),
+        ("kv_growth_to_max_kv_gb", kv_growth_to_max_kv_gb),
+        ("safety_gb", safety_gb),
+        ("floor_gib", floor_gib),
+    ):
+        if value < 0:
+            raise ValueError(f"{name} must be non-negative, got {value!r}")
+
+    plan_limit = (
+        float(budget_total_gb)
+        - float(system_used_at_start_gb)
+        - float(non_metal_overhead_gb)
+        - float(kv_growth_to_max_kv_gb)
+        - float(safety_gb)
+    )
+    if plan_limit < float(floor_gib):
+        raise ValueError(
+            f"--memory-budget-total-gb {budget_total_gb:.4g} derives a plan limit "
+            f"of {plan_limit:.4g} GiB, BELOW the floor of {floor_gib:.4g} GiB: "
+            f"plan_limit = {budget_total_gb:.4g} "
+            f"- system_used_at_start {system_used_at_start_gb:.4g} "
+            f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
+            f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
+            f"- safety {safety_gb:.4g}. Raise --memory-budget-total-gb, lower "
+            f"--memory-safety-gb / --non-metal-overhead-gb, reduce --max-kv, or "
+            f"lower --memory-budget-floor-gib (default "
+            f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
+        )
+    return BudgetTotalDerivation(
+        source="budget",
+        budget_total_gb=float(budget_total_gb),
+        system_used_at_start_gb=float(system_used_at_start_gb),
+        non_metal_overhead_gb=float(non_metal_overhead_gb),
+        kv_growth_to_max_kv_gb=float(kv_growth_to_max_kv_gb),
+        safety_gb=float(safety_gb),
+        floor_gib=float(floor_gib),
+        plan_limit_gib=plan_limit,
+    )
+
+
+def _explicit_plan_derivation(plan_limit_gib: float) -> BudgetTotalDerivation:
+    """A BudgetTotalDerivation for the NON-budget path (explicit --memory-limit-gib
+    or the legacy --box-budget default): ``memory_plan_source == "explicit"``, the
+    budget terms null, so receipts still carry the full budget key set."""
+
+    return BudgetTotalDerivation(
+        source="explicit",
+        budget_total_gb=None,
+        system_used_at_start_gb=0.0,
+        non_metal_overhead_gb=0.0,
+        kv_growth_to_max_kv_gb=0.0,
+        safety_gb=0.0,
+        floor_gib=0.0,
+        plan_limit_gib=float(plan_limit_gib),
+        plan_limit_gib_effective=float(plan_limit_gib),
+    )
+
+
+# Released DeepSeek-V4.1-Flash text shapes the KV estimator falls back to when a
+# config field is absent (mtplx/models/deepseek_v41.py ModelArgs defaults).
+_KV_CONFIG_DEFAULTS = {
+    "num_hidden_layers": 40,
+    "head_dim": 512,
+    "qk_rope_head_dim": 64,
+    "index_head_dim": 128,
+    "window_size": 128,
+    "sliding_window": 128,
+    "compress_ratios": [],
+    "kv_source_layer_ids": [],
+}
+
+
+def _read_kv_config_dims(model_path) -> dict:
+    """Read the KV-relevant config dims from the artifact's ``config.json`` WITHOUT
+    importing MLX or loading weights (CPU-safe).  Handles the flat and the nested
+    ``text_config`` spellings; missing fields fall back to the released shapes."""
+
+    dims = dict(_KV_CONFIG_DEFAULTS)
+    try:
+        cfg_path = Path(model_path).expanduser() / "config.json"
+        raw = json.loads(cfg_path.read_text())
+    except (OSError, ValueError, TypeError):
+        return dims
+    if not isinstance(raw, dict):
+        return dims
+    src = dict(raw)
+    text_cfg = raw.get("text_config")
+    if isinstance(text_cfg, dict):
+        src.update(text_cfg)  # text_config keys win (the model's real field names)
+    for key in dims:
+        if key in src and src[key] is not None:
+            dims[key] = src[key]
+    return dims
+
+
+def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
+    """LOCAL, APPROXIMATE estimate of the bytes the DeepSeek-V4.1 KV lanes grow to
+    at ``max_kv`` live tokens (batch 1, bf16).  Deliberately CONSERVATIVE (rounds
+    every lane UP: it prices the window lane at the full ``max_kv`` because the
+    bounded ring is opt-in, and treats an unknown compress_ratio as 1 = no
+    pooling), so the plan errs on the safe side of the 100 GB budget.
+
+    TODO(W107): replace with mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv --
+    a sibling worker (W107) is adding the exact per-lane helper on another branch.
+    Do NOT import it here; swap this call site when it lands on this branch.
+
+    Per the cache module (mtplx/models/deepseek_v41_cache.py docstring + ModelArgs)
+    each layer holds, at bf16 (2 bytes/element), batch 1:
+      * a sliding-window ring   [1, window_size, head_dim]           (every layer;
+        bounded ONLY under MTPLX_DSV41_WINDOW_RING -- else it grows append-only to
+        the sequence length, so priced here at max_kv rows, conservatively)
+      * a compressed/latent KV  [1, ceil(max_kv/ratio), head_dim]    (kv-source layers)
+      * a decoupled rope key    [1, ceil(max_kv/ratio), qk_rope_head_dim] (kv-source)
+      * an index-key lane       [1, ceil(max_kv/ratio), index_head_dim]  (kv-source)
+    A layer is a kv-source when its ``compress_ratios`` entry is non-zero;
+    ``ratio == 1`` is per-token (no pooling), ``ratio > 1`` pools that many tokens.
+    """
+
+    def _cfg(name, default):
+        if isinstance(config, dict):
+            value = config.get(name, default)
+        else:
+            value = getattr(config, name, default)
+        return default if value is None else value
+
+    max_kv = int(max_kv)
+    if max_kv <= 0:
+        return 0
+    n_layers = int(_cfg("num_hidden_layers", 40))
+    head_dim = int(_cfg("head_dim", 512))
+    rope_dim = int(_cfg("qk_rope_head_dim", 64))
+    index_dim = int(_cfg("index_head_dim", 128))
+    window = int(_cfg("sliding_window", 0)) or int(_cfg("window_size", 128))
+    ratios = list(_cfg("compress_ratios", []) or [])
+    bf16 = 2
+
+    def _rows_for_ratio(ratio: int) -> int:
+        if ratio <= 1:
+            return max_kv
+        return -(-max_kv // ratio)  # ceil
+
+    total = 0
+    for layer in range(n_layers):
+        # Window ring: conservatively priced at max_kv rows (ring is opt-in).
+        total += max_kv * head_dim * bf16
+        # kv-source lanes: use the per-layer ratio when known, else ratio 1
+        # (no pooling = the conservative maximum).
+        ratio = int(ratios[layer]) if layer < len(ratios) else 1
+        if ratio == 0:
+            continue  # not a kv-source layer: only the window ring above
+        rows = _rows_for_ratio(ratio)
+        total += rows * head_dim * bf16      # latent / compressed KV
+        total += rows * rope_dim * bf16      # decoupled rope key
+        total += rows * index_dim * bf16     # index key
+    return int(total)
+
+
+def _measure_system_used_at_start_bytes(args, bench) -> int:
+    """The system-wide used-memory baseline (vm_stat, the SAME formula the
+    gpu_window.sh guard uses -- factored in bench._system_used_bytes).  Measured
+    ONCE at process start and cached on ``args`` so every arm derives from the
+    same baseline."""
+
+    cached = getattr(args, "_dsv41_system_used_at_start_bytes", None)
+    if cached is not None:
+        return int(cached)
+    used = int(bench._system_used_bytes())
+    args._dsv41_system_used_at_start_bytes = used
+    return used
+
+
+def _resolve_derivation(args, *, bench=None, max_kv=None):
+    """The plan->limit derivation for this run.
+
+    Precedence:
+      1. ``--memory-budget-total-gb`` -> derive the plan limit from the TOTAL box
+         budget, COMPENSATING for the non-Metal requirements (item 3).  This
+         OVERRIDES ``--memory-limit-gib`` (derive instead of taking it literally).
+      2. ``--memory-limit-gib`` -> explicit plan (source "explicit").
+      3. otherwise the legacy W62 --box-budget derivation (source "explicit" from
+         the item-3 receipt's point of view: the new budget formula did not run).
+
+    Returns the W62 ``BudgetDerivation`` (its memory_limit_bytes/reserve/cache
+    plumb into the loader unchanged); the item-3 ``BudgetTotalDerivation`` is
+    stashed on ``args._dsv41_budget_total`` for the receipt.
+    """
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
-    return derive_plan_from_budget(
+    budget_total = getattr(args, "memory_budget_total_gb", None)
+    if budget_total is not None:
+        if bench is None or max_kv is None:
+            raise ValueError(
+                "--memory-budget-total-gb needs the bench module and resolved "
+                "max_kv to price the KV growth"
+            )
+        system_used_gb = (
+            _measure_system_used_at_start_bytes(args, bench) / GIB
+        )
+        non_metal_gb = float(
+            getattr(args, "non_metal_overhead_gb", None)
+            if getattr(args, "non_metal_overhead_gb", None) is not None
+            else DEFAULT_NON_METAL_OVERHEAD_GIB
+        )
+        dims = _read_kv_config_dims(getattr(args, "model", None))
+        kv_growth_gb = _kv_bytes_at_max_kv(dims, int(max_kv)) / GIB
+        bt = derive_budget_total_plan(
+            budget_total_gb=float(budget_total),
+            system_used_at_start_gb=system_used_gb,
+            non_metal_overhead_gb=non_metal_gb,
+            kv_growth_to_max_kv_gb=kv_growth_gb,
+            safety_gb=float(getattr(args, "memory_safety_gb", DEFAULT_MEMORY_SAFETY_GIB)),
+            floor_gib=float(
+                getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
+            ),
+        )
+        args._dsv41_budget_total = bt
+        override = bt.plan_limit_gib
+    else:
+        override = getattr(args, "memory_limit_gib", None)
+        args._dsv41_budget_total = None
+
+    derivation = derive_plan_from_budget(
         box_budget_gib=getattr(args, "box_budget_gib", None),
-        override_memory_limit_gib=getattr(args, "memory_limit_gib", None),
+        override_memory_limit_gib=override,
     )
+    if args._dsv41_budget_total is None:
+        # Non-budget path: record the actually-used plan limit as "explicit" so the
+        # receipt memory block carries the full budget key set (nulls elsewhere).
+        args._dsv41_budget_total = _explicit_plan_derivation(derivation.plan_gib)
+    return derivation
+
+
+def _budget_memory_keys(args) -> dict:
+    """The item-3 budget keys to merge into a receipt ``memory`` block."""
+
+    bt = getattr(args, "_dsv41_budget_total", None)
+    if bt is None:
+        return _explicit_plan_derivation(0.0).memory_keys()
+    return bt.memory_keys()
 
 
 # Plan fields the served profile sets that the loader would otherwise default
@@ -1338,8 +1761,11 @@ def _load_model(args, bench, mx):
         if args.expert_cache_limit_gib is None
         else int(args.expert_cache_limit_gib * GIB)
     )
-    derivation = _resolve_derivation(args)
+    derivation = _resolve_derivation(args, bench=bench, max_kv=max_kv)
     print("[ab] memory derivation: " + derivation.formula(), flush=True)
+    _bt = getattr(args, "_dsv41_budget_total", None)
+    if _bt is not None and _bt.source == "budget":
+        print("[ab] budget-total derivation: " + _bt.formula(), flush=True)
     # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
     # (with_mtp=True) and reprices the MTP residents against the expert cache so
     # the plan still fits.
@@ -1404,7 +1830,70 @@ def _load_model(args, bench, mx):
             "residents, or the config declares no MTP stages). Load a DSpark "
             "artifact or drop --decode-mode dspark."
         )
+    # W106 item 3 (two-phase): the plan limit had to be fixed BEFORE load with the
+    # conservative non_metal_overhead estimate; now the model is resident, re-MEASURE
+    # the real non-Metal overhead (process RSS - mx active) and record it.  If it
+    # exceeds the estimate, lower the MLX active-allocation limit by the overage so
+    # the TOTAL still fits the budget -- then record both figures on the derivation.
+    _remeasure_non_metal_overhead(args, bench, mx, derivation)
     return resident
+
+
+def _remeasure_non_metal_overhead(args, bench, mx, derivation) -> None:
+    """Phase 2 of the item-3 budget derivation: measure the real non-Metal process
+    overhead after load and, when it overshoots the pre-load estimate, lower the
+    MLX active limit so the box budget still holds.  Best-effort + guarded: it
+    never crashes the harness (records what it can and returns)."""
+
+    bt = getattr(args, "_dsv41_budget_total", None)
+    if bt is None or bt.source != "budget" or mx is None:
+        return
+    try:
+        rss = int(bench._process_rss_bytes())
+        active = 0
+        for owner in (mx, getattr(mx, "metal", None)):
+            getter = getattr(owner, "get_active_memory", None)
+            if callable(getter):
+                try:
+                    active = int(getter())
+                    break
+                except Exception:
+                    active = 0
+        measured_gb = max(0.0, (rss - active) / GIB)
+    except Exception:  # pragma: no cover - defensive
+        return
+
+    effective_gib = bt.plan_limit_gib
+    overage_gb = measured_gb - bt.non_metal_overhead_gb
+    if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:
+        effective_gib = max(0.0, bt.plan_limit_gib - overage_gb)
+        print(
+            f"[ab] budget-total re-measure: non_metal_overhead measured "
+            f"{measured_gb:.2f} GiB > estimate {bt.non_metal_overhead_gb:.2f} GiB "
+            f"(+{overage_gb:.2f}); lowering MLX active limit "
+            f"{bt.plan_limit_gib:.2f} -> {effective_gib:.2f} GiB to hold the budget",
+            flush=True,
+        )
+        setter = getattr(mx, "set_memory_limit", None) or getattr(
+            getattr(mx, "metal", None), "set_memory_limit", None
+        )
+        if callable(setter):
+            try:
+                setter(int(round(effective_gib * GIB)))
+            except Exception:  # pragma: no cover - defensive
+                pass
+    else:
+        print(
+            f"[ab] budget-total re-measure: non_metal_overhead measured "
+            f"{measured_gb:.2f} GiB (estimate {bt.non_metal_overhead_gb:.2f} GiB); "
+            f"plan limit unchanged at {effective_gib:.2f} GiB",
+            flush=True,
+        )
+
+    args._dsv41_budget_total = bt.replace(
+        non_metal_overhead_measured_gb=measured_gb,
+        plan_limit_gib_effective=effective_gib,
+    )
 
 
 def _memory_profile_collector(args, mx, runtime, resident):
@@ -2485,6 +2974,15 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     "slack (bounded); rows_copied flat-per-token == amortized O(1)"
                 )
                 receipt["window_ring"] = rstats
+        # W106 item 3: merge the budget-total derivation terms into every memory
+        # block (memory_plan_source + the derived plan limit + each term), so the
+        # receipt records how the plan compensated for the non-Metal requirements.
+        _budget_keys = _budget_memory_keys(args)
+        if isinstance(receipt.get("memory"), dict):
+            receipt["memory"].update(_budget_keys)
+        _dsp = receipt.get("dspark")
+        if isinstance(_dsp, dict) and isinstance(_dsp.get("memory"), dict):
+            _dsp["memory"].update(_budget_keys)
         return receipt
     finally:
         if runtime is not None:
