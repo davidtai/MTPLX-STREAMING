@@ -130,6 +130,27 @@ def test_runner_v2_arms_ring_in_loader_config():
     assert cfg_big.prefetch_slots == 40
 
 
+def test_runner_v2_arms_overlap_miss_reads():
+    """v2 issues all of a layer's demand misses as ONE part (higher SSD queue
+    depth than the per-expert default, W96 D2).  Off -> default False; explicit
+    caller value wins.  Byte-identical (scheduling, tests/test_expert_overlap_split)."""
+    spec = get_model_spec(_KEY)
+    cfg_off = build_streaming_config(
+        spec, memory_limit_bytes=_MEM, max_live_kv_tokens=4096, prefetch_slots=0
+    )
+    assert cfg_off.overlap_miss_reads is False
+    os.environ["MTPLX_DSV41_RUNNER"] = "v2"
+    cfg_v2 = build_streaming_config(
+        spec, memory_limit_bytes=_MEM, max_live_kv_tokens=4096, prefetch_slots=0
+    )
+    assert cfg_v2.overlap_miss_reads is True
+    cfg_explicit = build_streaming_config(
+        spec, memory_limit_bytes=_MEM, max_live_kv_tokens=4096, prefetch_slots=0,
+        overlap_miss_reads=False,
+    )
+    assert cfg_explicit.overlap_miss_reads is False
+
+
 # ---------------------------------------------------------------------------
 # B/C. runtime arming + exactness (tiny real component-bank runtime)
 # ---------------------------------------------------------------------------

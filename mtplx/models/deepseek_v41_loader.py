@@ -333,6 +333,18 @@ def build_streaming_config(
     if resolved_ring:
         overrides["prefetch_slots"] = resolved_ring
 
+    # W95: the v2 runner (MTPLX_DSV41_RUNNER=v2) arms overlap_miss_reads -- a layer's
+    # decode misses go down as ONE batched part (single future, admission ahead of
+    # the wait) instead of one part per expert, raising the SSD queue depth above the
+    # ~2 the per-part default drives (W96 D2). Byte-identical (scheduling, not math;
+    # tests/test_expert_overlap_split.py); unset RUNNER -> unchanged. An explicit
+    # caller value always wins.
+    if (
+        os.environ.get("MTPLX_DSV41_RUNNER") == "v2"
+        and "overlap_miss_reads" not in overrides
+    ):
+        overrides["overlap_miss_reads"] = True
+
     return ExpertStreamingConfig(
         model_key=spec.key,
         memory_limit_bytes=memory_limit_bytes,

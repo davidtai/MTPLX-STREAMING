@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -395,6 +396,15 @@ def build_expert_streaming_config(
         resolved_ring = resolve_gate_prefetch_ring_slots(values.get("prefetch_slots", 0))
         if resolved_ring:
             values["prefetch_slots"] = resolved_ring
+        # W95: the served v2 runner arms overlap_miss_reads too (all of a layer's
+        # decode misses issued as ONE part -> higher SSD queue depth; W96 D2).
+        # Byte-identical (scheduling, not math); DSV4.1-gated like the ring; an
+        # explicit profile value wins; off when MTPLX_DSV41_RUNNER is unset.
+        if (
+            os.environ.get("MTPLX_DSV41_RUNNER") == "v2"
+            and "overlap_miss_reads" not in values
+        ):
+            values["overlap_miss_reads"] = True
     config = ExpertStreamingConfig(**values)
     if config.model_key != profile.model_key:
         raise ValueError(
