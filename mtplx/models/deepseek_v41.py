@@ -231,6 +231,199 @@ def hc_split_sinkhorn(
 
 
 # ---------------------------------------------------------------------------
+# Fused HC-premix Sinkhorn kernel (kernel-ledger K35, W91) -- extend K3
+# ---------------------------------------------------------------------------
+#: Env toggle for the ONE-dispatch fused HC-premix Sinkhorn kernel.
+#:
+#: The AR-decode census shows the ``hc.premix_sinkhorn`` stage is the top per-token
+#: dispatch source (~259 prim/call in the tiny census; the real model runs it 80x
+#: per token = 2 per layer x 40 layers, and window-33 fenced it at 0.40 ms/call
+#: WITH the K3 Sinkhorn kernel already engaged).  The K3 kernel
+#: (:func:`_sinkhorn_kernel_apply`) collapses only the Sinkhorn *normalise loop* to
+#: one dispatch; the pre/post/comb SPLIT around it -- three slices, two affine
+#: transforms, two sigmoids, an ``+eps`` and a reshape (:func:`hc_split_sinkhorn`
+#: L225-228) -- stays a chain of ~10 tiny elementwise dispatches per call, all of
+#: it M=1 host-encode the GPU never notices.
+#:
+#: This kernel folds that whole split INTO the Sinkhorn kernel: one thread owns one
+#: ``mixes`` row, computes ``pre``/``post`` (sigmoid of the two affine slices) and
+#: the ``comb`` affine in registers, runs the full Sinkhorn schedule (identical fp32
+#: order to :func:`_sinkhorn_ops`, exactly as K3), and writes ``pre``, ``post`` and
+#: the normalised ``comb`` -- collapsing ~11 dispatches (the split) + the Sinkhorn
+#: to ONE.  Bit-identical class to K3 (1e-6, argmax-exact -- fp32 sigmoid/exp round
+#: the same real number), so it is a rounding-class lever gated separately.  Being a
+#: single opaque op with declared ``output_shapes``, it also makes the K35 fused
+#: premix tape ``mx.compile(shapeless=True)``-compatible on the GPU (the Python-side
+#: slices that block a shapeless trace on CPU are gone).
+#:
+#: Default OFF; kernel path taken only on the GPU (CPU/no-Metal always takes the
+#: reference :func:`hc_split_sinkhorn`, so the flag is inert off-GPU and can never
+#: change CPU numerics -- every worker test pins the CPU).  Read at use, never
+#: frozen at import.  Built + validated in a GPU parity window (this file ships the
+#: source and the CPU reference; the kernel is not dispatched on the CPU path).
+_HC_PREMIX_KERNEL_ENV = "MTPLX_DSV41_HC_PREMIX_KERNEL"
+
+#: Engagement counters (kernel vs reference premix calls), like the K3 Sinkhorn
+#: counters, so the A/B census can confirm the kernel actually engaged per arm.
+_HC_PREMIX_KERNEL_CALLS = 0
+_HC_PREMIX_REF_CALLS = 0
+
+#: One compiled premix kernel per ``(hc, iters, eps)`` structural triple.
+_HC_PREMIX_KERNELS: dict = {}
+
+
+def _reset_hc_premix_kernel_calls() -> None:
+    global _HC_PREMIX_KERNEL_CALLS, _HC_PREMIX_REF_CALLS
+    _HC_PREMIX_KERNEL_CALLS = 0
+    _HC_PREMIX_REF_CALLS = 0
+
+
+def _hc_premix_kernel_calls() -> dict:
+    return {"kernel": int(_HC_PREMIX_KERNEL_CALLS), "reference": int(_HC_PREMIX_REF_CALLS)}
+
+
+def _hc_premix_use_kernel() -> bool:
+    """The fused premix kernel path is live only when requested *and* on the GPU.
+
+    A truthy flag on a CPU default device (every worker test) or a no-Metal build
+    stays on the reference :func:`hc_split_sinkhorn`, so the flag never changes CPU
+    numerics and the Metal kernel is never built or dispatched on the CPU path."""
+    if not _env_truthy(_HC_PREMIX_KERNEL_ENV):
+        return False
+    if not mx.metal.is_available():
+        return False
+    return mx.default_device() == mx.gpu
+
+
+def _hc_premix_sinkhorn_metal_kernel(hc: int, iters: int, eps: float):
+    """Build (and cache) the fused HC-premix Sinkhorn kernel for one structural
+    triple.  Extends :func:`deepseek_v4._sinkhorn_metal_kernel` with the pre/post
+    sigmoid split and the ``comb`` affine, so the whole :func:`hc_split_sinkhorn`
+    body runs in one dispatch.  Only reached on the GPU (see
+    :func:`_hc_premix_use_kernel`); never built on the CPU path."""
+    key = (int(hc), int(iters), float(eps))
+    kern = _HC_PREMIX_KERNELS.get(key)
+    if kern is not None:
+        return kern
+    n = hc * hc
+    mix_hc = (2 + hc) * hc
+    eps_lit = f"{float(eps):.9e}f"
+    source = f"""
+        using namespace metal;
+        constexpr uint HC = {hc};
+        constexpr uint N = {n};
+        constexpr uint MIX_HC = {mix_hc};
+        constexpr uint ITERS = {iters};
+        constexpr float EPS = {eps_lit};
+
+        uint gid = thread_position_in_grid.x;
+        if (gid >= nmat) {{ return; }}
+        const uint moff = gid * MIX_HC;
+        const float s0 = scale[0];
+        const float s1 = scale[1];
+        const float s2 = scale[2];
+
+        // pre  = sigmoid(mixes[:HC] * s0 + base[:HC]) + EPS
+        for (uint i = 0; i < HC; ++i) {{
+            float t = mixes[moff + i] * s0 + base[i];
+            pre[gid * HC + i] = 1.0f / (1.0f + metal::exp(-t)) + EPS;
+        }}
+        // post = 2 * sigmoid(mixes[HC:2HC] * s1 + base[HC:2HC])
+        for (uint i = 0; i < HC; ++i) {{
+            float t = mixes[moff + HC + i] * s1 + base[HC + i];
+            post[gid * HC + i] = 2.0f / (1.0f + metal::exp(-t));
+        }}
+        // comb = reshape(mixes[2HC:] * s2 + base[2HC:], [HC, HC]) -> Sinkhorn
+        float c[N];
+        for (uint i = 0; i < N; ++i) {{
+            c[i] = mixes[moff + 2u * HC + i] * s2 + base[2u * HC + i];
+        }}
+        // row-softmax over the last axis k, then + EPS  (identical to _sinkhorn_ops)
+        for (uint i = 0; i < HC; ++i) {{
+            float m = c[i * HC];
+            for (uint k = 1; k < HC; ++k) {{ m = metal::max(m, c[i * HC + k]); }}
+            float s = 0.0f;
+            for (uint k = 0; k < HC; ++k) {{
+                float e = metal::exp(c[i * HC + k] - m);
+                c[i * HC + k] = e;
+                s += e;
+            }}
+            for (uint k = 0; k < HC; ++k) {{ c[i * HC + k] = c[i * HC + k] / s + EPS; }}
+        }}
+        // column normalise
+        for (uint k = 0; k < HC; ++k) {{
+            float cs = 0.0f;
+            for (uint j = 0; j < HC; ++j) {{ cs += c[j * HC + k]; }}
+            float den = cs + EPS;
+            for (uint j = 0; j < HC; ++j) {{ c[j * HC + k] = c[j * HC + k] / den; }}
+        }}
+        // iters-1 alternating row / column normalises
+        for (uint it = 0; it < (ITERS - 1); ++it) {{
+            for (uint i = 0; i < HC; ++i) {{
+                float rs = 0.0f;
+                for (uint k = 0; k < HC; ++k) {{ rs += c[i * HC + k]; }}
+                float den = rs + EPS;
+                for (uint k = 0; k < HC; ++k) {{ c[i * HC + k] = c[i * HC + k] / den; }}
+            }}
+            for (uint k = 0; k < HC; ++k) {{
+                float cs = 0.0f;
+                for (uint j = 0; j < HC; ++j) {{ cs += c[j * HC + k]; }}
+                float den = cs + EPS;
+                for (uint j = 0; j < HC; ++j) {{ c[j * HC + k] = c[j * HC + k] / den; }}
+            }}
+        }}
+        for (uint i = 0; i < N; ++i) {{ comb[gid * N + i] = c[i]; }}
+    """
+    kern = mx.fast.metal_kernel(
+        name=f"mtplx_dsv41_hc_premix_sinkhorn_hc{hc}_it{iters}",
+        input_names=["mixes", "scale", "base", "nmat"],
+        output_names=["pre", "post", "comb"],
+        source=source,
+    )
+    _HC_PREMIX_KERNELS[key] = kern
+    return kern
+
+
+def _hc_premix_sinkhorn_kernel_apply(mixes, scale, base, hc: int, iters: int, eps: float):
+    """Run the whole HC-premix split + Sinkhorn as one Metal dispatch per row.
+
+    Flattens the leading dims to one matrix index and reshapes back.  Returns
+    ``(pre, post, comb)`` with the same shapes / fp32 values (to 1e-6, argmax
+    exact) as :func:`hc_split_sinkhorn`.  GPU only."""
+    lead = tuple(int(d) for d in mixes.shape[:-1])
+    nmat = 1
+    for d in lead:
+        nmat *= d
+    mix_hc = (2 + hc) * hc
+    flat = mixes.reshape(nmat, mix_hc)
+    kern = _hc_premix_sinkhorn_metal_kernel(hc, iters, eps)
+    pre, post, comb = kern(
+        inputs=[flat, scale, base, nmat],
+        grid=(nmat, 1, 1),
+        threadgroup=(min(nmat, 256), 1, 1),
+        output_shapes=[(nmat, hc), (nmat, hc), (nmat, hc, hc)],
+        output_dtypes=[mixes.dtype, mixes.dtype, mixes.dtype],
+    )
+    return (pre.reshape(*lead, hc), post.reshape(*lead, hc),
+            comb.reshape(*lead, hc, hc))
+
+
+def _hc_premix_sinkhorn(mixes, scale, base, hc: int, iters: int, eps: float):
+    """The HC-premix pre/post/comb split + Sinkhorn: the fused Metal kernel when
+    armed on the GPU, else the stock :func:`hc_split_sinkhorn` reference (the exact
+    same arithmetic as ops, and the path every CPU / off-GPU run takes).  This is
+    the boundary :func:`_hc_mixes_split` calls, so the kernel drops into the K35
+    fused-premix tape without touching the split logic; engagement is counted so
+    the A/B census can confirm it ran."""
+    global _HC_PREMIX_KERNEL_CALLS, _HC_PREMIX_REF_CALLS
+    if _hc_premix_use_kernel() and mixes.dtype == mx.float32:
+        _HC_PREMIX_KERNEL_CALLS += 1
+        return _hc_premix_sinkhorn_kernel_apply(mixes, scale, base, hc, iters, eps)
+    _HC_PREMIX_REF_CALLS += 1
+    return hc_split_sinkhorn(mixes, scale, base, hc, iters, eps)
+
+
+# ---------------------------------------------------------------------------
 # Per-layer CSA2 mode (§0 of docs/deepseek-v41/PORT_PLAN.md)
 # ---------------------------------------------------------------------------
 #: A pure sliding-window attention layer: ``compress_ratios[L] == 0``, no
@@ -1951,7 +2144,11 @@ def _hc_mixes_split(x, fn, base, scale, hc, iters, norm_eps, hc_eps):
     flat = mx.flatten(xf, -2, -1)
     rsqrt = mx.rsqrt(mx.mean(mx.square(flat), axis=-1, keepdims=True) + norm_eps)
     mixes = (flat @ fn.astype(mx.float32).T) * rsqrt
-    return hc_split_sinkhorn(mixes, scale, base, hc, iters, hc_eps)
+    # ``_hc_premix_sinkhorn`` is the split+Sinkhorn boundary: the K35 fused premix
+    # kernel when armed on the GPU, the identical stock ``hc_split_sinkhorn`` (which
+    # itself takes the K3 Sinkhorn kernel) otherwise -- always so on CPU, so this is
+    # byte-identical to the previous ``hc_split_sinkhorn`` call off-GPU / flag-off.
+    return _hc_premix_sinkhorn(mixes, scale, base, hc, iters, hc_eps)
 
 
 def _hc_pre_collapse(x, pre_mix):
@@ -2062,6 +2259,232 @@ def _hc_use_compile(x: mx.array) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Small-stages fusion (kernel-ledger K35, W91)
+# ---------------------------------------------------------------------------
+# The AR-decode census (docs/deepseek-v41/W91_LAYER_SMALL_STAGES.md, from
+# scripts/deepseek_v41/dispatch_census.py) shows the per-layer *small* stages --
+# everything that is NOT attention and NOT the routed-expert switch -- are the
+# top per-token DISPATCH source at M=1: two Hyper-Connection premix chains (the
+# Sinkhorn dominates, ~259 prim/call in the tiny census, ~119 of them the
+# Sinkhorn recurrence), the MoE gate + top-k, the shared expert, the two HC
+# combines and the MoE combine.  At M=1 each is a chain of tiny kernels whose
+# host-encode latency (~0.02-0.05 ms/dispatch) the GPU never notices -- pure
+# dispatch overhead ([[b1-decode-dispatch-removal-hides]]).
+#
+# K4 (``MTPLX_DSV41_HC_COMPILE``) already tape-collapses the HC prep/combine
+# chains; K22 (``MTPLX_DSV41_ATTN_COMPILE``) folds the gate PREFIX and the MoE
+# combine.  Neither folds the gate *top-k selection*, the *shared expert*, or
+# ties the MoE combine into the ffn HC combine, and each tape boundary is its own
+# host sync.  This lever collapses the whole small-stage set into THREE compiled
+# per-layer graphs separated only by the two data-dependent un-fused calls
+# (attention's KV write, the routed switch's expert gather):
+#
+#   seg1 :  input(h) -> attn HC premix (Sinkhorn) + pre-collapse + attn RMSNorm
+#           == the attention input                          [before attention]
+#     <attention: writes this layer's KV, un-fused>
+#   seg2 :  attn HC combine + ffn HC premix (Sinkhorn) + pre-collapse + ffn
+#           RMSNorm -> moe_input; gate + top-k -> (weights, indices); shared
+#           expert -> shared                                 [before the switch]
+#     <routed switch: gathers the top-k experts, un-fused>
+#   seg3 :  MoE combine (weighted routed sum + shared) + ffn HC combine
+#           == the next layer's hidden                       [after the switch]
+#
+# Bit-exact by construction at the decode/verify row regime (rows <=
+# _SMALL_STAGES_MAX_ROWS): every op is the SAME fp32 op in the SAME order as the
+# eager DecoderLayer / MoE bodies -- ``mx.compile`` only fuses adjacent
+# elementwise chains and replays one prebuilt tape (no reassociation at rows==1;
+# fused-rows always equal eager-rows, so a single gate/shared GEMM is the same
+# Metal kernel selection).  The Sinkhorn stays the opaque ``hc_split_sinkhorn``
+# boundary INSIDE each tape, so K3's one-dispatch Metal kernel drops in on the
+# GPU (and the identical stock recurrence runs on CPU / off-GPU).
+#
+# ``mx.compile(shapeless=True)`` is NOT used: MLX 0.32.2 cannot infer a Slice
+# output shape on a symbolic axis (``hc_split_sinkhorn``'s pre/post/comb split and
+# the gate top-k's ``argpartition(...)[..., :topk]``), so a shapeless trace raises
+# ``[Primitive::output_shapes] Slice cannot infer output shapes`` (measured here
+# and in the K4/W33 note; unaffected by static-width slices or ``unflatten``
+# restructuring).  Fixed-shape achieves the same goal at decode: the M=1 shape is
+# stable, so one tape is traced ONCE and replayed for every token (verified: 1
+# python trace over 64 decode steps; +1 only for a genuinely new row count such as
+# the K+1 verify batch) -- see tests/test_deepseek_v41_small_stages_fused.py.  On
+# the GPU the fused HC-premix kernel (``_hc_premix_sinkhorn_kernel_apply``, below)
+# makes the premix ONE opaque op, which restores shapeless-compatibility there.
+#
+# Default OFF (a GPU-window measurement, like every decode dispatch lever); read
+# at USE, never frozen at import, so the serving harness's late optimization-key
+# stamp is honoured ([[env-flags-read-at-use-not-import]]) -- mirrors
+# :func:`_sinkhorn_metal_enabled`.
+_SMALL_STAGES_FUSED_ENV = "MTPLX_DSV41_SMALL_STAGES_FUSED"
+#: Row count (``b*s``) at/below which the fused decode graphs run; above it the
+#: eager DecoderLayer body runs.  Capped at the mx.compile bit-exact regime: this
+#: tiny/real HC matmul + RMS/HC-mix mean reductions are ``mx.array_equal`` with
+#: eager up to 7 rows and reassociate ~5e-7..1.2e-6 at >=8 rows / one-shot prefill
+#: s>=8 (W33), so the WHOLE admitted range -- decode (n=1) and the DSpark K+1
+#: verify (<=6 rows) -- is byte-identical, not merely greedy-identical.  Module
+#: global so a test can retarget it.
+_SMALL_STAGES_MAX_ROWS = 7
+#: One compiled tape per (segment, structural constants) triple, shared across
+#: every layer with the same HC geometry + gate/shared codec (the module cache a
+#: test can clear to reset all three segments).
+_SMALL_STAGES_COMPILED: dict = {}
+#: Engagement counters (fused vs eager DecoderLayer forwards), like the K3 Sinkhorn
+#: counters, so the A/B census can confirm the fused path actually engaged per arm
+#: -- a byte-identical, barely-faster arm is equally consistent with "fused ran and
+#: is bit-exact" and "fused never ran" (e.g. the --stage-timing recording guard, or
+#: the flag never reaching the child process).  Near-free (one int add per layer
+#: forward).  Reset with :func:`_reset_small_stages_calls`.
+_SMALL_STAGES_FUSED_CALLS = 0
+_SMALL_STAGES_EAGER_CALLS = 0
+
+
+def _reset_small_stages_calls() -> None:
+    """Zero the fused/eager engagement counters (per-arm reset for the A/B census)."""
+    global _SMALL_STAGES_FUSED_CALLS, _SMALL_STAGES_EAGER_CALLS
+    _SMALL_STAGES_FUSED_CALLS = 0
+    _SMALL_STAGES_EAGER_CALLS = 0
+
+
+def _small_stages_calls() -> dict:
+    """Snapshot of the engagement counters (fused vs eager layer forwards)."""
+    return {
+        "fused": int(_SMALL_STAGES_FUSED_CALLS),
+        "eager": int(_SMALL_STAGES_EAGER_CALLS),
+    }
+
+
+def _small_stages_fused_enabled() -> bool:
+    """Whether ``MTPLX_DSV41_SMALL_STAGES_FUSED`` requests the fused small-stage
+    graphs.  Read at use (not frozen at import), so the serving harness's late
+    environment stamp is honoured -- mirrors :func:`_sinkhorn_metal_enabled`."""
+    return _env_truthy(_SMALL_STAGES_FUSED_ENV)
+
+
+def _small_stages_use(h: mx.array) -> bool:
+    """Is ``h`` a decode/verify HC stream in the fused-graph row regime?
+
+    Reads the env at call time (a test/operator can flip it after import) plus the
+    module cap global.  ``h`` is ``[..., hc, dim]``, so ``prod(h.shape[:-2])`` is
+    ``b*s``.  Forced OFF while a W37 stage-timing forward is recording
+    (``_stime.recording``) -- one opaque fused call cannot be split by the per-stage
+    ``mx.eval`` fences, so timing always measures the eager path (exactly K4/K22's
+    guard).  The fused dispatch census counts the segments in isolation instead, and
+    the A/B harness runs an UNTIMED headline pass (fused active) separate from the
+    timed attribution pass (fused forced eager) -- see ``_generate_dspark``."""
+    if not _small_stages_fused_enabled() or _stime.recording():
+        return False
+    rows = 1
+    for d in h.shape[:-2]:
+        rows *= int(d)
+    return rows <= _SMALL_STAGES_MAX_ROWS
+
+
+def _gate_topk_impl(xf, gweight, gbias, temp, score_func, topk, norm_topk, route_scale):
+    """The MoE gate prefix AND the top-k selection as one pure function.
+
+    Byte-identical to :meth:`deepseek_v41_moe.Gate.__call__` (the eager body,
+    L810-827): score GEMM / temp, scoring function, correction-bias selection,
+    ``torch.topk``-order indices via argpartition+argsort, unbiased weights,
+    ``norm_topk_prob`` and ``route_scale``.  Unlike K22's ``_gate_prefix`` this
+    also traces the argpartition/argsort/take_along_axis selection, so the whole
+    gate is inside the tape and only ``indices`` crosses to the (un-fused) switch."""
+    scores = (xf.astype(mx.float32) @ gweight.astype(mx.float32).T) / temp
+    if score_func == "softmax":
+        scores = mx.softmax(scores, axis=-1)
+    elif score_func == "sigmoid":
+        scores = mx.sigmoid(scores)
+    else:  # sqrtsoftplus
+        scores = mx.sqrt(nn.softplus(scores))
+    biased = scores + gbias
+    part = mx.argpartition(-biased, kth=topk - 1, axis=-1)[..., :topk]
+    order = mx.argsort(-mx.take_along_axis(biased, part, axis=-1), axis=-1)
+    indices = mx.take_along_axis(part, order, axis=-1).astype(mx.int32)
+    weights = mx.take_along_axis(scores, indices, axis=-1)
+    if norm_topk and topk > 1:
+        weights = weights / (mx.sum(weights, axis=-1, keepdims=True) + 1e-20)
+    weights = weights * route_scale
+    return weights, indices
+
+
+def _shared_expert_impl(xf, a1, a3, a2, w1d, w3d, w2d, swiglu_limit):
+    """The shared expert (a clamped-SwiGLU ``Expert`` with ``weights=None``) as one
+    pure function of arrays.  Byte-identical to :meth:`deepseek_v41_moe.Expert.
+    __call__` (L842-851): w1=gate_proj, w3=up_proj, w2=down_proj, the asymmetric
+    ``swiglu_limit`` clamp, then ``silu(gate)*up``.  ``_apply_lin`` reproduces the
+    dense ``x @ w.T`` and the quantized ``mx.quantized_matmul`` exactly (one
+    primitive), so the tape never reassociates the projection matmuls."""
+    dtype = xf.dtype
+    gate = _apply_lin(w1d, a1, xf).astype(mx.float32)
+    up = _apply_lin(w3d, a3, xf).astype(mx.float32)
+    if swiglu_limit > 0:
+        up = mx.clip(up, -swiglu_limit, swiglu_limit)
+        gate = mx.minimum(gate, swiglu_limit)
+    x = nn.silu(gate) * up
+    return _apply_lin(w2d, a2, x.astype(dtype))
+
+
+def _small_compiled(kind: str, layer: "DecoderLayer"):
+    """Build/fetch the compiled fused graph for ``kind`` (``seg1`` / ``seg2`` /
+    ``seg3``) of ``layer``.  Structural constants (HC geometry, gate codec, shared
+    projection descriptors) are closed over and keyed; layer weights are passed as
+    tape inputs, so one tape serves every layer with the same structure."""
+    hc, iters = layer.hc_mult, layer.hc_iters
+    ne, he = layer.norm_eps, layer.hc_eps
+    # Trailing route bools key the Sinkhorn-bearing tapes on the active Sinkhorn
+    # route (W32/K3) AND the fused-premix-kernel route (K35), so an armed GPU kernel
+    # drops in / a runtime flip re-traces; CPU is always the reference, so they never
+    # perturb the numerics.
+    route = (_sinkhorn_use_kernel(), _hc_premix_use_kernel())
+    if kind == "seg1":
+        key = ("seg1", int(hc), int(iters), float(ne), float(he), route)
+
+        def impl(h, pre_mix, attn_fn, attn_base, attn_scale, attn_norm_w):
+            return _hc_attn_prep_impl(
+                h, pre_mix, attn_fn, attn_base, attn_scale, attn_norm_w,
+                hc, iters, ne, he,
+            )
+    elif kind == "seg2":
+        g, se = layer.mlp.gate, layer.mlp.shared_experts
+        gt, sf, tk = float(g.gate_temp), str(g.score_func), int(g.topk)
+        ntp, rsf = bool(g.norm_topk_prob), float(g.route_scale)
+        w1d, w3d, w2d = _lin_desc(se.w1), _lin_desc(se.w3), _lin_desc(se.w2)
+        n1, n3 = _lin_n(w1d), _lin_n(w3d)
+        swl = float(se.swiglu_limit)
+        dim = int(layer.ffn_norm_weight.shape[0])
+        key = ("seg2", int(hc), int(iters), float(ne), float(he), route,
+               gt, sf, tk, ntp, rsf, w1d, w3d, w2d, swl, dim)
+
+        def impl(attn_out, residual, attn_pre, attn_post, attn_comb,
+                 ffn_fn, ffn_base, ffn_scale, ffn_norm_w, gweight, gbias, *warrs):
+            moe_input, h2, ffn_post, ffn_comb, ffn_pre = _hc_ffn_prep_impl(
+                attn_out, residual, attn_pre, attn_post, attn_comb,
+                ffn_fn, ffn_base, ffn_scale, ffn_norm_w, hc, iters, ne, he,
+            )
+            xf = moe_input.reshape(-1, dim)
+            weights, indices = _gate_topk_impl(xf, gweight, gbias, gt, sf, tk, ntp, rsf)
+            a1, a3, a2 = warrs[:n1], warrs[n1:n1 + n3], warrs[n1 + n3:]
+            shared = _shared_expert_impl(xf, a1, a3, a2, w1d, w3d, w2d, swl).astype(mx.float32)
+            return xf, weights, indices, shared, h2, ffn_post, ffn_comb, ffn_pre
+    elif kind == "seg3":
+        key = ("seg3",)
+
+        def impl(routed, weights, shared, residual, ffn_post, ffn_comb):
+            # MoE combine: weighted routed sum (f32 accumulator) + shared add, then
+            # cast/reshape to [b, s, dim] and fold back through the ffn HC combine
+            # -- byte-identical to _moe_combine_impl + MoE.__call__'s reshape +
+            # DecoderLayer.moe_combine's _hc_post_impl.
+            y = (routed.astype(mx.float32) * weights[..., None]).sum(axis=-2) + shared
+            y = y.astype(residual.dtype).reshape(*residual.shape[:-2], residual.shape[-1])
+            return _hc_post_impl(y, residual, ffn_post, ffn_comb)
+    else:  # pragma: no cover - programming error
+        raise ValueError(f"unknown small-stages segment {kind!r}")
+    fn = _SMALL_STAGES_COMPILED.get(key)
+    if fn is None:
+        fn = mx.compile(impl)
+        _SMALL_STAGES_COMPILED[key] = fn
+    return fn
+
+
+# ---------------------------------------------------------------------------
 # Decoder block (Hyper-Connections around attention + MoE)
 # ---------------------------------------------------------------------------
 class DecoderLayer(nn.Module):
@@ -2131,11 +2554,14 @@ class DecoderLayer(nn.Module):
         attention call itself -- which mutates the KV cache -- stays outside them.
         The eager branch below is byte-for-byte the original body."""
         if _hc_use_compile(h):
-            # Trailing bool keys the mix tapes on the active Sinkhorn route (W32),
-            # so an armed GPU kernel drops in / a runtime flip re-traces; on CPU it
-            # is always False (recurrence), so it never perturbs the numerics.
+            # Trailing bools key the mix tapes on the active Sinkhorn route (W32/K3)
+            # AND the fused-premix-kernel route (W91/K35): ``_hc_mixes_split`` routes
+            # its split+Sinkhorn through ``_hc_premix_sinkhorn``, so an armed GPU
+            # kernel (of either kind) drops into THIS K4 tape too and a runtime flip
+            # re-traces instead of replaying a stale tape.  On CPU both are always
+            # False (reference), so they never perturb the numerics.
             consts = (self.hc_mult, self.hc_iters, self.norm_eps, self.hc_eps,
-                      _sinkhorn_use_kernel())
+                      _sinkhorn_use_kernel(), _hc_premix_use_kernel())
             x, attn_pre, attn_post, attn_comb = _hc_compiled("attn_prep", *consts)(
                 h, pre_mix,
                 self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale,
@@ -2193,7 +2619,42 @@ class DecoderLayer(nn.Module):
             _st.add(out)
         return out
 
+    def _fused_small_decode(self, h, pre_mix, positions, layer_cache, shared):
+        """The layer forward with the small stages collapsed into three compiled
+        graphs (K35, W91), separated only by the two un-fused data-dependent calls
+        (attention's KV write, the routed switch's expert gather).  Byte-identical
+        to :meth:`__call__`'s eager body at rows <= ``_SMALL_STAGES_MAX_ROWS``.
+
+        seg1 produces the attention input + the attn HC mixes; the attention call
+        writes this layer's KV; seg2 folds the attn HC combine, the ffn HC premix,
+        the gate+top-k and the shared expert into one graph, emitting the switch
+        operands (``xf``, ``indices``) plus the combine carry; the switch gathers
+        the routed experts; seg3 folds the MoE combine and the ffn HC combine."""
+        attn_input, attn_pre, attn_post, attn_comb = _small_compiled("seg1", self)(
+            h, pre_mix, self.hc_attn_fn, self.hc_attn_base, self.hc_attn_scale,
+            self.attn_norm_weight,
+        )
+        attn_out = self.attn(attn_input, positions, layer_cache, shared)
+        se = self.mlp.shared_experts
+        warrs = _lin_arrays(se.w1) + _lin_arrays(se.w3) + _lin_arrays(se.w2)
+        (xf, weights, indices, shared_out, residual, ffn_post, ffn_comb,
+         ffn_pre) = _small_compiled("seg2", self)(
+            attn_out, h, attn_pre, attn_post, attn_comb,
+            self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale, self.ffn_norm_weight,
+            self.mlp.gate.weight, self.mlp.gate.e_score_correction_bias, *warrs,
+        )
+        routed = self.mlp.switch_mlp(xf, indices)
+        h = _small_compiled("seg3", self)(
+            routed, weights, shared_out, residual, ffn_post, ffn_comb
+        )
+        return h, ffn_pre
+
     def __call__(self, h, pre_mix, positions, layer_cache, shared):
+        global _SMALL_STAGES_FUSED_CALLS, _SMALL_STAGES_EAGER_CALLS
+        if _small_stages_use(h):
+            _SMALL_STAGES_FUSED_CALLS += 1
+            return self._fused_small_decode(h, pre_mix, positions, layer_cache, shared)
+        _SMALL_STAGES_EAGER_CALLS += 1
         moe_input, carry, ffn_pre = self.attn_and_moe_input(
             h, pre_mix, positions, layer_cache, shared
         )

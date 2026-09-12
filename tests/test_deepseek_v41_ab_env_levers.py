@@ -77,6 +77,8 @@ _MLXBUF = "MLX_MAX_MB_PER_BUFFER"        # K14 / W63: MLX command-buffer MB cap 
 _PWS = "MTPLX_DSV41_PIN_WORKING_SET"     # W64 / R3-pin: post-prefill pinned working set
 _DRP = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 / K24 revived: pinned device route
 _KCG = "MTPLX_DSV41_KV_CHUNK_GROW"       # W73 / K32: chunk-grown KV append backing
+_SS = "MTPLX_DSV41_SMALL_STAGES_FUSED"   # W91 / K35: fused per-layer small stages
+_HPK = "MTPLX_DSV41_HC_PREMIX_KERNEL"    # W91 / K35: GPU-only fused HC-premix kernel
 # The eight booleans all_levers turns on together. DEVICE_ROUTE (W44) and
 # PREFILL_DENSE_EXPERTS (W51) are separate booleans tracked like the head codec:
 # NOT part of all_levers, so they never join the "all-on" independence invariant.
@@ -90,7 +92,7 @@ _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50
 # + the three W50 score-path keys + the W59 K30 selected-key gather boolean + the
 # W58 K28 fused-softmax-kernel boolean + the K27 layout_fix boolean (the W58
 # prefill_best* full-stack arms set it) + the W60 K29 decode-attention-kernel boolean.
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF, _DC, _PWS, _DRP, _KCG)
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF, _DC, _PWS, _DRP, _KCG, _SS, _HPK)
 
 ALL_ARMS = [
     "control",
@@ -235,6 +237,12 @@ EXPECTED_VERIFY = {arm: (arm == "verify_single_barrier") for arm in ALL_ARMS}
 # W65 K33: DSpark draft-block compile (separate boolean, not in _ALL_KEYS -- like
 # device_route / verify_single_barrier; only the standalone draft_compile arm sets it).
 EXPECTED_DRAFT = {arm: (arm == "draft_compile") for arm in ALL_ARMS}
+# W91 K35: none of ALL_ARMS (up to cell16k) arms the fused-small-stages or the
+# HC-premix-kernel booleans -- the K35 arms (small_stages_fused, cell16k_ring_fused)
+# are in the ring family, verified in test_cell16k_ring_composite_arms. So both are
+# force-unset for every arm here (proves an arm can't leave a stale K35 export set).
+EXPECTED_SMALL_STAGES = {arm: False for arm in ALL_ARMS}
+EXPECTED_PREMIX_KERNEL = {arm: False for arm in ALL_ARMS}
 
 # The prefill-dense-experts boolean each arm pins (W51 K26; separate from
 # _ALL_KEYS, not part of all_levers). Every dense arm sets it -- W51's sweeps plus
@@ -531,6 +539,17 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert os.environ.get(_DC) == "1", f"{arm}: {_DC} should be '1'"
     else:
         assert _DC not in os.environ, f"{arm}: {_DC} should be force-unset"
+    # W91 K35: the fused-small-stages + HC-premix-kernel booleans are force-unset for
+    # every ALL_ARMS arm (the K35 arms are in the ring family, tested separately) --
+    # proves a parent-shell K35 export cannot survive an arm application.
+    if EXPECTED_SMALL_STAGES[arm]:
+        assert os.environ.get(_SS) == "1", f"{arm}: {_SS} should be '1'"
+    else:
+        assert _SS not in os.environ, f"{arm}: {_SS} should be force-unset"
+    if EXPECTED_PREMIX_KERNEL[arm]:
+        assert os.environ.get(_HPK) == "1", f"{arm}: {_HPK} should be '1'"
+    else:
+        assert _HPK not in os.environ, f"{arm}: {_HPK} should be force-unset"
     # the prefill-dense-experts boolean is set for exactly the dense arms.
     if EXPECTED_DENSE[arm]:
         assert os.environ.get(_PD) == "1", f"{arm}: {_PD} should be '1'"
@@ -1007,3 +1026,23 @@ def test_cell16k_ring_composite_arms(env_levers):
         "cell16k_ring_pinned must equal cell16k_ring + pin_working_set=all + "
         "device_route=1 + device_route_pinned=1"
     )
+
+    # W91 K35: cell16k_ring_fused = cell16k_ring + MTPLX_DSV41_SMALL_STAGES_FUSED=1 only.
+    for name in ("small_stages_fused", "cell16k_ring_fused"):
+        assert name in presets, f"{name} arm missing from ARM_PRESETS"
+    expected_fused = dict(ring)
+    expected_fused[_SS] = "1"
+    assert presets["cell16k_ring_fused"] == expected_fused, (
+        "cell16k_ring_fused must equal cell16k_ring + MTPLX_DSV41_SMALL_STAGES_FUSED=1"
+    )
+    # small_stages_fused (isolation) sets ONLY small_stages + sinkhorn.
+    ssf = presets["small_stages_fused"]
+    assert ssf[_SS] == "1" and ssf[_SK] == "1", "small_stages_fused missing its keys"
+    assert all(v is None for k, v in ssf.items() if k not in (_SS, _SK)), (
+        "small_stages_fused must set ONLY small_stages + sinkhorn (hermetic)"
+    )
+    # both K35 keys are in the master lever list (receipt arm_env + hermetic clear),
+    # and the rounding-class premix kernel is armed by NO arm (GPU-parity-gated).
+    assert _SS in env_levers.ALL_LEVER_ENVS and _HPK in env_levers.ALL_LEVER_ENVS
+    for name, preset in presets.items():
+        assert preset.get(_HPK) is None, f"{name} must not arm HC_PREMIX_KERNEL"

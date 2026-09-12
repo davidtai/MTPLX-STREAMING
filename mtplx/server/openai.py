@@ -3212,6 +3212,9 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_WINDOW_RING_HEADROOM",
     "MTPLX_DSV41_WINDOW_RING_MAXKV",
     "MTPLX_DSV41_ATTN_SHAPE_STABLE",
+    # W91/K35 (appended -- coordinate with any concurrent list extension):
+    "MTPLX_DSV41_SMALL_STAGES_FUSED",
+    "MTPLX_DSV41_HC_PREMIX_KERNEL",
 )
 
 
