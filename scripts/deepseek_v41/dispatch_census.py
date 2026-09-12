@@ -736,7 +736,7 @@ def _attn_core_main(args):
         print(f"  eager    : {ne:3d} graph prims, {_kern(ope):2d} non-view kernels  {dict(ope)}")
         print(f"  compiled : {nc:3d} graph prims, {_kern(opc):2d} non-view kernels  {dict(opc)}")
         print(f"  K29 fused: 1 dispatch (score+mask+softmax+PV in one metal_kernel; "
-              f"GPU-only, rounding-class)")
+              f"GPU-only) -- SHELVED: measured -38% at 1K (window-27)")
         print(f"  compiled vs eager: prims -{ne - nc}, kernels -{_kern(ope) - _kern(opc)}; "
               f"max|Δ| {maxd:.2e} (ROUNDING-CLASS, not byte-identical)")
         receipt["geometries"][label] = {
@@ -746,8 +746,10 @@ def _attn_core_main(args):
             "k29_fused_dispatches": 1,
             "max_abs_delta": maxd,
         }
-    print("\nverdict: the K29 fused kernel (1 dispatch) is the lower-dispatch option; "
-          "the mx.compile core (~8 kernels) is the portable CPU+GPU fallback.")
+    print("\nverdict: K29 = 1 dispatch but measured -38% at 1K (decode_attn_kernel 3.71 "
+          "vs stack_a 6.01 tok/s, window-27, SHELVED, Delta ~1e-3 bf16-class); the "
+          "mx.compile core (~8 kernels, Delta 9.3e-10 f32-reassociation) is the unmeasured "
+          "candidate -- the fewer-kernels-lose-anyway lesson (dispatch count is not the win).")
     if args.out:
         with open(args.out, "w") as f:
             json.dump(receipt, f, indent=2)

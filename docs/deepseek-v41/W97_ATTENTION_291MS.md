@@ -269,23 +269,30 @@ compress modes / 128 for swa_only; `hd` 512; `H` 64). Census (`dispatch_census.p
 |---|---:|---:|---:|---|
 | eager | 26 | 13 (2 matmul + scale/where/max/max/2×sub/2×exp/sum/add/divide) | ~13 | — (exact) |
 | `mx.compile` (`MTPLX_DSV41_ATTN_CORE_COMPILE`) | 16 | 8 (2 matmul + 3 fused `Compiled` + Max + Maximum + Sum) | ~8 | **rounding-class**, max\|Δ\| 9.3e-10 (CPU) |
-| K29 fused kernel (`MTPLX_DSV41_DECODE_ATTN_KERNEL`) | — | — | **1** (score+mask+softmax+PV, one `metal_kernel`) | rounding-class, GPU-only |
+| K29 fused kernel (`MTPLX_DSV41_DECODE_ATTN_KERNEL`) | — | — | **1** (score+mask+softmax+PV, one `metal_kernel`) | **SHELVED**, GPU-only, Δ ~1e-3 (bf16-class) |
 
-**Which is lower: the K29 fused kernel (1 dispatch) beats the `mx.compile` core
-(~8).** K29 wins the early return in `_sparse_attend_selected` before the compile
-path, so the two never both apply; K29 is GPU-only (CPU falls back to eager) and the
-compile core is the portable CPU+GPU fallback / A-B. Both are **rounding-class**
-(neither is byte-identical: the n=1 compile and the K29 tile reduction each
+**Fewer dispatches is NOT the win at M=1.** K29 collapses the core to **1** dispatch,
+but the repo's own re-gate measured it **−38% at 1K** (`decode_attn_kernel` 3.71 vs
+`stack_a` 6.01 tok/s, `receipts/gpu-windows/window-27/ab-1024-k29.json`) — slower than
+the eager SDPA even after the split-K occupancy fix — and it is **SHELVED**
+(`W60_FUSED_DECODE_ATTENTION.md`). Its parity Δ is also coarser: **~1e-3 (bf16 /
+fast-transcendental class)**, not the **9.3e-10 (f32 reassociation)** of the `mx.compile`
+core. So K29 is the lower-*dispatch* option but the *slower* one; **the `mx.compile`
+core is the unmeasured candidate** (a portable CPU+GPU rounding-class A-B, one
+geometry-keyed tape). When both are armed K29 still wins the early return in
+`_sparse_attend_selected` before the compile path, so they never both apply. Both are
+rounding-class (neither byte-identical: the n=1 compile and the K29 tile reduction each
 reassociate the fp32 einsum/reductions — the K35 lesson), gated separately from the
 exact levers (`wo_a_cache` is the only byte-identical W97 attention lever).
 
-The core compile is keyed on geometry (`_ATTN_CORE_COMPILED`), verified bounded: 64
-decode steps build ≤ a handful of tapes (one per distinct `k`), never one per token.
-Combining K29 (core → 1) with the `wo_a` cache (out-proj dequant → 0/token) and the
-existing qkv/out K22 tapes brings a simple (swa/reuse) layer's *substantial-compute*
-dispatches (matmuls + fused blocks + reductions + gather) to ~10–12; the
-index-source layers (full/reindex) still carry the irreducible indexer `Sort`/
-`CumSum`/top-k.
+The core compile is keyed on geometry (`_ATTN_CORE_COMPILED`); §5 (item 5) pads the
+selected keys to a fixed `k` so the tape is built once per distinct `b·s`, not retraced
+per token. Its **engagement is recorded in the ab receipt** (`attn_core_compile_engagement`:
+compiled-core calls vs eager fallbacks, the way `decode_attn_kernel_engagement` records
+K29) so a GPU window can prove the tape actually ran before crediting any delta. The
+compile core does not by itself reach a ≤15/layer whole-layer target (§8): the layer is
+dominated by the qkv/out projection chains, which no core lever touches; the index-source
+layers (full/reindex) still carry the irreducible indexer `Sort`/`CumSum`/top-k.
 
 ### 7.3 Arms, lever, tests
 

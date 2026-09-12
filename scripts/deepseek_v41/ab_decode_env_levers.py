@@ -2066,6 +2066,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # receipt reports THIS arm's real fused-layer forwards vs eager fallbacks.
         _dsv41._reset_small_stages_calls()
         _dsv41._reset_hc_premix_kernel_calls()
+        # W97 (review item 3): zero the decode-attention-core compile engagement so
+        # the receipt reports THIS arm's compiled-tape calls vs eager fallbacks.
+        _dsv41._reset_attn_core_compile_calls()
     except Exception:  # pragma: no cover - defensive
         _dsv41 = None
     # W60/K29 engagement: zero the fused-decode-attention counters after model load
@@ -2170,6 +2173,14 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # means the kernel never ran (all eager) rather than ran-and-was-slow.
             "decode_attn_kernel_engagement": (
                 _k29.engagement() if _k29 is not None else None
+            ),
+            # W97 (review item 3): decode-attention-core compile engagement --
+            # ``compiled`` selected-key core calls that ran the fixed-shape mx.compile
+            # tape vs ``eager`` calls (lever off / above the small-M cap).  compiled 0
+            # on an attn_core_compile arm means the tape never ran (all eager), so a
+            # measured delta cannot be credited to it -- proves the tape engaged.
+            "attn_core_compile_engagement": (
+                _dsv41._attn_core_compile_calls() if _dsv41 is not None else None
             ),
             # W81: the ACTUAL slot plan this arm ran (transient/persistent slot
             # counts + bytes + source), so an A/B is attributable to a capacity and

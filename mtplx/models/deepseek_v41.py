@@ -1206,10 +1206,12 @@ class Attention(nn.Module):
         # einsum/reductions), gated separately; the gather stayed OUTSIDE.  Above the
         # small-M cap (prefill rows) the eager block runs, byte-for-byte control.
         if _resolve_attn_core_compile() and q.shape[1] <= _ATTN_CORE_COMPILE_MAX_ROWS:
+            _note_attn_core_call(True)
             with _stime.stage_attn("attn." + mode + ".score.core_compiled") as _st:
                 o = _attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, self.attn_sink)
                 _st.add(o)
             return o
+        _note_attn_core_call(False)
         # W99 lean casts (byte-identical): cast KVg to f32 ONCE (reused by QK^T and
         # PV, which otherwise re-cast the same array) and use the per-layer cached f32
         # sink instead of re-casting attn_sink every token.
@@ -2084,7 +2086,15 @@ def _resolve_wo_a_cache(raw=None) -> bool:
 #: and its arms are flagged in the byte-identity summary.  The K29 fused decode
 #: kernel (MTPLX_DSV41_DECODE_ATTN_KERNEL) collapses the SAME core to ONE dispatch
 #: and, when armed on a GPU, wins the early return in ``_sparse_attend_selected``
-#: before this path (so the two never both apply; K29 is the lower-dispatch option).
+#: before this path (so the two never both apply).  K29 = 1 dispatch but was
+#: measured -38% at 1K (decode_attn_kernel 3.71 vs stack_a 6.01 tok/s, window-27,
+#: SHELVED -- docs/deepseek-v41/W60_FUSED_DECODE_ATTENTION.md) with a coarser
+#: Delta ~1e-3 (bf16/fast-transcendental class), NOT the 9.3e-10 f32-reassociation
+#: Delta of this compile core; so K29 is the lower-DISPATCH but not the faster
+#: option, and this compile core is the UNMEASURED candidate (fewer dispatches is
+#: not the win at M=1 -- the big-kernel chain dominates).  Its engagement is
+#: recorded in the ab receipt (``attn_core_compile_engagement``) so a window can
+#: prove the tape actually ran vs fell through to eager.
 #: Read at use, never frozen at import ([[env-flags-read-at-use-not-import]]).
 #: Default OFF (the win is a GPU-window measurement).
 _ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
@@ -2095,6 +2105,41 @@ _ATTN_CORE_COMPILE_MAX_ROWS = 8
 #: tests can inspect its growth (must stay bounded over 64 decode steps -- no
 #: per-token retrace) and clear it between configs.
 _ATTN_CORE_COMPILED: dict = {}
+
+#: W97 (adversarial review, item 3) engagement counters for the decode-attention
+#: core: selected-key core calls that ran the fixed-shape ``mx.compile`` tape
+#: (``compiled``) vs calls that ran the eager core (``eager`` -- lever off, or above
+#: the small-M cap).  Recorded in the ab receipt as ``attn_core_compile_engagement``
+#: (mirroring K29's ``decode_attn_kernel_engagement``), so a GPU window can prove the
+#: tape actually ran (compiled > 0) rather than silently falling through to eager.
+_ATTN_CORE_COMPILE_CALLS = 0
+_ATTN_CORE_EAGER_CALLS = 0
+
+
+def _reset_attn_core_compile_calls() -> None:
+    """Zero the compiled/eager decode-attention-core counters (call before each A/B arm)."""
+    global _ATTN_CORE_COMPILE_CALLS, _ATTN_CORE_EAGER_CALLS
+    _ATTN_CORE_COMPILE_CALLS = 0
+    _ATTN_CORE_EAGER_CALLS = 0
+
+
+def _note_attn_core_call(compiled: bool) -> None:
+    """Record one selected-key attention-core call as compiled-tape or eager."""
+    global _ATTN_CORE_COMPILE_CALLS, _ATTN_CORE_EAGER_CALLS
+    if compiled:
+        _ATTN_CORE_COMPILE_CALLS += 1
+    else:
+        _ATTN_CORE_EAGER_CALLS += 1
+
+
+def _attn_core_compile_calls() -> dict:
+    """Counters since the last reset: ``compiled`` (selected-key core calls that ran
+    the fixed-shape mx.compile tape) and ``eager`` (calls that ran the eager core --
+    lever off, or above the small-M cap ``_ATTN_CORE_COMPILE_MAX_ROWS``)."""
+    return {
+        "compiled": int(_ATTN_CORE_COMPILE_CALLS),
+        "eager": int(_ATTN_CORE_EAGER_CALLS),
+    }
 
 
 def _resolve_attn_core_compile(raw=None) -> bool:

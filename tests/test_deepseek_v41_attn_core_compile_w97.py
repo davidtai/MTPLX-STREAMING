@@ -163,3 +163,36 @@ def test_core_compile_off_is_default():
     assert dsv41._resolve_attn_core_compile(raw="1") is True
     with pytest.raises(ValueError):
         dsv41._resolve_attn_core_compile(raw="banana")
+
+
+def test_attn_core_compile_engagement_counts_compiled_vs_eager(monkeypatch):
+    """W97 review item 3: the engagement counter distinguishes 'the compiled tape
+    ran' (compiled > 0) from 'fell through to eager' (compiled == 0), the same
+    'did it actually run?' proof the ab receipt carries as
+    ``attn_core_compile_engagement`` (mirroring K29's ``decode_attn_kernel_engagement``)
+    so a GPU window cannot credit a delta to a tape that never engaged."""
+    bis = _load_bisect()
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+
+    steps = 8
+    model, _args = bis._build_tiny_full_model(seed=5)
+    ops = bis._TinyOps()
+    prompt_ids = list(range(1, 41))
+
+    # Lever OFF: every selected-key core call runs eager -- compiled must be 0.
+    monkeypatch.setenv(dsv41._ATTN_CORE_COMPILE_ENV, "0")
+    dsv41._ATTN_CORE_COMPILED.clear()
+    dsv41._reset_attn_core_compile_calls()
+    _decode_ids(model, ops, prompt_ids, steps)
+    off = dsv41._attn_core_compile_calls()
+    assert off["compiled"] == 0, f"lever OFF ran the compiled tape: {off}"
+    assert off["eager"] > 0, f"selected path never ran the eager core: {off}"
+
+    # Lever ON: the decode (small-M) forwards run the compiled tape -- compiled > 0.
+    monkeypatch.setenv(dsv41._ATTN_CORE_COMPILE_ENV, "1")
+    dsv41._ATTN_CORE_COMPILED.clear()
+    dsv41._reset_attn_core_compile_calls()
+    _decode_ids(model, ops, prompt_ids, steps)
+    on = dsv41._attn_core_compile_calls()
+    assert on["compiled"] > 0, f"lever ON but the compiled tape never engaged: {on}"
