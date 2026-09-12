@@ -4549,9 +4549,17 @@ class ExpertStreamingRuntime:
                 self._steady_decode_hits = 0
                 self._steady_decode_requests = 0
                 self._saw_decode_since_prefill = False
-                # W95f: demand/speculative byte totals are cumulative-since-open (not
-                # reset here), so re-mark the budget window origin to the current
-                # totals -> an empty window right after reset.
+                # W95g (MEDIUM-1): zero the demand/speculative byte totals and the
+                # budget-skip / prefetch-call counters HERE, matching ``counters``.
+                # Leaving them cumulative made ``_runner_snapshot`` divide bytes
+                # accrued across the AR pass + prefill by the post-reset decode step
+                # count, so the DSpark block's per-token figures folded in the prior
+                # phases. Then re-mark the budget window origin (now 0) -> an empty
+                # window right after reset.
+                self.demand_bytes_read = 0
+                self.speculative_bytes_read = 0
+                self._prefetch_budget_skips = 0
+                self._prefetch_calls = 0
                 self._snapshot_prefetch_byte_window()
             if self.config.trace_routes:
                 with self._route_trace_lock:

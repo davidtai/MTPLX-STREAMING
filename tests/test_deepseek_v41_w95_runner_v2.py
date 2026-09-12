@@ -648,6 +648,47 @@ def test_v2_byte_budget_recovers_after_latch(tmp_path):
         rt.close()
 
 
+def test_v2_reset_zeros_byte_window_and_skips(tmp_path):
+    """W95g (MEDIUM-1): reset() zeros demand_bytes_read / speculative_bytes_read /
+    budget_skips (and re-marks the byte window) alongside the counters it already
+    rebuilt.  At HEAD they stayed cumulative, so ``_runner_snapshot`` divided bytes
+    read across the AR pass + prefill by the POST-reset decode-step count -- the
+    DSpark block's per-token figures folded in the earlier phases.  After reset the
+    runner block reports 0/0/0."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        layer = spec.routed_layer_start
+        rec = rt._record_bytes_for_layer(layer)
+        # real demand bytes (cold-miss route) + real speculative bytes (a prefetch).
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [8, 9])
+        _REAL_EVAL(_switch(rt, spec)(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        rt.prefetch_experts(layer, [10, 11])
+        _settle_prefetch(rt)
+        # force one budget skip so _prefetch_budget_skips is non-zero.
+        rt._prefetch_byte_floor_records = 0
+        rt._demand_bytes_at_token_start = 0
+        rt._speculative_bytes_at_token_start = 0
+        rt.speculative_bytes_read = 100 * rec
+        assert rt.prefetch_experts(layer, [12, 13]) == 0
+        before = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        assert before["demand_bytes_read"] > 0
+        assert before["speculative_bytes_read"] > 0
+        assert before["budget_skips"] > 0
+
+        rt.reset()
+
+        after = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        assert after["demand_bytes_read"] == 0
+        assert after["speculative_bytes_read"] == 0
+        assert after["budget_skips"] == 0
+    finally:
+        rt.close()
+
+
 def test_v2_byte_budget_share_with_floor(tmp_path):
     """W95g (HIGH-1): the speculative-byte budget is a per-token SHARE with a floor,
     not a cumulative spec>=(0.5 x demand) cap.  With f=0.85 and an 8-record floor,
