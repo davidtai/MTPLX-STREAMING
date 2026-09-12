@@ -166,6 +166,36 @@ _step_tree_rss() {
   '
 }
 
+# W106 item 4: print every pid in the process tree rooted at $1 (that pid AND every
+# descendant), space-separated, root first, from a SINGLE `ps` snapshot.  Used by
+# the tree-kill on abort: the step is a `bash -c "a; b; c"` chain whose python
+# descendants must ALL be signalled, or an abort of the chain leaves a running
+# python orphaned (reparented to launchd) and the next chained command could still
+# start.  Snapshot the pids BEFORE signalling (killing reparents/removes members).
+# A `seen` guard makes the walk robust against pid-reuse cycles.
+_step_tree_pids() {
+  local root="${1:-}"
+  [[ -n "${root}" ]] || return 0
+  "${PS_CMD}" -axo pid=,ppid= 2>/dev/null | awk -v root="${root}" '
+    { pid = $1 + 0; ppid = $2 + 0; kids[ppid] = kids[ppid] " " pid }
+    END {
+      head = 1; tail = 0; wl[++tail] = root + 0; out = "";
+      while (head <= tail) {
+        p = wl[head]; head++;
+        if (p in seen) continue;
+        seen[p] = 1;
+        out = out " " p;
+        if (p in kids) {
+          n = split(kids[p], cc, " ");
+          for (i = 1; i <= n; i++) if (cc[i] != "") wl[++tail] = cc[i] + 0;
+        }
+      }
+      sub(/^ /, "", out);
+      print out;
+    }
+  '
+}
+
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 # ---- test/introspection hooks (no GPU, no lock, no launchctl) ----------------
@@ -185,7 +215,8 @@ if [[ "${1:-}" == "--selftest" ]]; then
       fi
       ;;
     heavy-workers)  list_heavy_foreign_workers ;;
-    *) err "unknown --selftest target: ${1:-} (used-mem-bytes|used-mem-gib|over-ceiling|heavy-workers)"; exit 2 ;;
+    tree-pids)      _step_tree_pids "${2:-}" ; echo ;;   # W106 item 4: tree walk
+    *) err "unknown --selftest target: ${1:-} (used-mem-bytes|used-mem-gib|over-ceiling|heavy-workers|tree-pids)"; exit 2 ;;
   esac
   exit 0
 fi
@@ -273,19 +304,47 @@ avail_bytes() {
   '
 }
 
-_kill_step_child() {
-  # TERM then (after a grace) KILL the running step child, reap it, clear the pid
-  # so the teardown trap does not try again.  Restore of the resident agent then
-  # runs from the EXIT trap.
+# W106 item 4: grace period (seconds) between the tree-wide TERM and the KILL of
+# any survivor.  Overridable so the tree-kill unit test does not wait the full 2 s.
+KILL_GRACE_SECONDS="${GPU_WINDOW_KILL_GRACE_SECONDS:-2}"
+
+_kill_step_tree() {
+  # W106 item 4: TERM then (after a grace) KILL the ENTIRE process tree rooted at
+  # STEP_PID -- the `bash -c "..."` chain AND every python/sleep descendant -- so
+  # an aborted step can NEVER start its next chained command and no grandchild is
+  # left orphaned (reparented to launchd) still holding GPU/host memory.  The pids
+  # are snapshotted BEFORE any signal (killing reparents/removes tree members), and
+  # signalled by pid so reparenting mid-teardown does not let one escape.  Reaps
+  # STEP_PID (a job of this shell) and clears it so the teardown trap does not
+  # re-run; the restore of the resident agent then runs from the EXIT trap.
   [[ -n "${STEP_PID}" ]] || return 0
-  kill -TERM "${STEP_PID}" 2>/dev/null || true
-  sleep 2
-  if kill -0 "${STEP_PID}" 2>/dev/null; then
-    kill -KILL "${STEP_PID}" 2>/dev/null || true
-  fi
+  local pids _p _i _alive
+  pids="$(_step_tree_pids "${STEP_PID}")"
+  [[ -n "${pids}" ]] || pids="${STEP_PID}"
+  for _p in ${pids}; do
+    kill -TERM "${_p}" 2>/dev/null || true
+  done
+  # Poll for the whole tree to exit, up to KILL_GRACE_SECONDS (0.25 s cadence).
+  for (( _i = 0; _i < KILL_GRACE_SECONDS * 4; _i++ )); do
+    _alive=0
+    for _p in ${pids}; do
+      if kill -0 "${_p}" 2>/dev/null; then _alive=1; break; fi
+    done
+    (( _alive == 0 )) && break
+    sleep 0.25
+  done
+  # KILL any survivor of the grace period.
+  for _p in ${pids}; do
+    if kill -0 "${_p}" 2>/dev/null; then
+      kill -KILL "${_p}" 2>/dev/null || true
+    fi
+  done
   wait "${STEP_PID}" 2>/dev/null || true
   STEP_PID=""
 }
+
+# Back-compat alias for the phase-4 abort call sites (RSS cap / system ceiling).
+_kill_step_child() { _kill_step_tree; }
 
 WAS_LOADED=0
 RESTORED=0
@@ -323,18 +382,12 @@ restore_qwen() {
 teardown() {
   local ec=$?
   trap - EXIT INT TERM
+  # W106 item 4: a TERM/INT to the wrapper (or any non-abort exit with the step
+  # still running) tree-kills the WHOLE step process tree, not just STEP_PID, so a
+  # `bash -c` chain never starts its next step and no python descendant survives.
   if [[ -n "${STEP_PID}" ]] && kill -0 "${STEP_PID}" 2>/dev/null; then
-    log "teardown: terminating step child pid=${STEP_PID}"
-    kill -TERM "${STEP_PID}" 2>/dev/null || true
-    for _ in $(seq 1 20); do
-      kill -0 "${STEP_PID}" 2>/dev/null || break
-      sleep 0.25
-    done
-    if kill -0 "${STEP_PID}" 2>/dev/null; then
-      log "teardown: SIGKILL step child pid=${STEP_PID}"
-      kill -KILL "${STEP_PID}" 2>/dev/null || true
-    fi
-    wait "${STEP_PID}" 2>/dev/null || true
+    log "teardown: terminating step process tree (root pid=${STEP_PID}): $(_step_tree_pids "${STEP_PID}")"
+    _kill_step_tree
   fi
   restore_qwen
   exit "${ec}"

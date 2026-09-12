@@ -142,5 +142,102 @@ else
   bad "used the temp lock path" "lock line did not reference ${LOCK}"
 fi
 
+# =============================================================================
+# W106 item 4: TREE-KILL on abort.  A fake step is a `bash -c` chain that launches
+# a python child which spawns a long-lived `sleep` GRANDCHILD, then allocates
+# enough to trip a (low) child-tree RSS cap so the wrapper aborts.  After the
+# abort NO descendant may survive: pre-W106 the abort killed only STEP_PID (the
+# `bash -c` chain), orphaning the python + sleep (reparented to launchd) and
+# letting a chained next step still run.  The tree-kill must reap the whole tree.
+# =============================================================================
+TK_PIDFILE="${TMP}/treekill_pids"
+TK_CHILD_PY="${TMP}/treekill_child.py"
+cat > "${TK_CHILD_PY}" <<'EOF'
+import os, subprocess, sys, time
+# A long-lived grandchild -- the reparent target that pre-W106 survived the abort.
+sleeper = subprocess.Popen(["sleep", "600"])
+with open(os.environ["TK_PIDFILE"], "w") as fh:
+    fh.write("%d %d\n" % (os.getpid(), sleeper.pid))
+    fh.flush()
+    os.fsync(fh.fileno())
+# ~500 MB resident so the whole-tree RSS trips the low child cap and aborts.
+n = 500 * 1024 * 1024
+buf = bytearray(n)
+for i in range(0, n, 4096):
+    buf[i] = 1
+sys.stderr.write("treekill child resident ~500MB, sleeping\n")
+sys.stderr.flush()
+time.sleep(600)
+EOF
+
+# STEP_PID = this bash -c; python is its child; sleep is the grandchild.
+TK_STEP="python3 '${TK_CHILD_PY}' & _cp=\$!; wait \$_cp"
+TK_LOG="${TMP}/treekill.log"
+
+GPU_WINDOW_TEST_MODE=1 \
+MTPLX_GPU_LOCK="${TMP}/treekill.lock" \
+GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
+GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
+GPU_WINDOW_RSS_POLL_SECONDS=1 \
+GPU_WINDOW_CHILD_RSS_CAP_BYTES=$(( 200 * 1024 * 1024 )) \
+GPU_WINDOW_KILL_GRACE_SECONDS=1 \
+TK_PIDFILE="${TK_PIDFILE}" \
+  bash "${SCRIPT}" bash -c "${TK_STEP}" >"${TK_LOG}" 2>&1
+TK_RC=$?
+
+echo "----- gpu_window.sh log (TREE-KILL) -----"
+cat "${TK_LOG}"
+echo "-----------------------------------------"
+
+# 8. the RSS-cap abort fired (exit 6) and killed the child
+if [[ "${TK_RC}" -eq 6 ]]; then
+  ok "tree-kill scenario aborted on the child-tree RSS cap (exit 6)"
+else
+  bad "tree-kill scenario aborted on the RSS cap (exit 6)" "exit code was ${TK_RC}"
+fi
+
+# 9. the fake step recorded its descendant pids
+TK_PY=""; TK_SLEEP=""
+if [[ -s "${TK_PIDFILE}" ]]; then
+  read -r TK_PY TK_SLEEP < "${TK_PIDFILE}"
+  ok "fake step recorded its descendant pids (python=${TK_PY} sleep=${TK_SLEEP})"
+else
+  bad "fake step recorded its descendant pids" "pidfile empty: ${TK_PIDFILE}"
+fi
+
+# Poll up to 5 s for a pid to be gone (KILL is async; give it a moment).
+_tk_wait_dead() {
+  local pid="$1" i
+  [[ -n "${pid}" ]] || return 1
+  for (( i = 0; i < 20; i++ )); do
+    kill -0 "${pid}" 2>/dev/null || return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+# 10. the python child (the reparented middle of the tree) is dead
+if _tk_wait_dead "${TK_PY}"; then
+  ok "python child (pid ${TK_PY}) was tree-killed on abort"
+else
+  bad "python child tree-killed on abort" "pid ${TK_PY} still alive after abort"
+  kill -KILL "${TK_PY}" 2>/dev/null || true
+fi
+
+# 11. the sleep GRANDCHILD (the pre-W106 orphan) is dead -- the core of the fix
+if _tk_wait_dead "${TK_SLEEP}"; then
+  ok "sleep grandchild (pid ${TK_SLEEP}) was tree-killed on abort"
+else
+  bad "sleep grandchild tree-killed on abort (the pre-W106 orphan)" "pid ${TK_SLEEP} still alive"
+  kill -KILL "${TK_SLEEP}" 2>/dev/null || true
+fi
+
+# 12. the log shows the tree-RSS-cap abort path (not a single-pid poll)
+if grep -q "step tree RSS.*exceeded cap" "${TK_LOG}"; then
+  ok "abort log names the step-TREE RSS cap breach"
+else
+  bad "abort log names the step-TREE RSS cap breach" "cap line not found"
+fi
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [[ "${FAIL}" -eq 0 ]]
