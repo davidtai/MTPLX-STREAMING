@@ -4229,7 +4229,15 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 model=model, ops=ops, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
                 cold_ids=ids,
+                # W113 MEDIUM-2: stop the warm pass at the same point as the cold
+                # pass so denominators match and token_ids_match holds.
+                stop_on_eos=stop_on_eos, eos_id=eos_id,
             )
+        # W113 MEDIUM-2: the --stage-timing and --syncs passes below deliberately
+        # IGNORE --stop-on-eos -- they run the full requested step count for a
+        # fenced per-stage / host-sync census whose absolute tok/s is discarded
+        # (not a headline rate), so an early stop would only shrink the census
+        # sample.  Only the headline AR/DSpark and warm passes honour --stop-on-eos.
         if getattr(args, "stage_timing", False):
             steps = (
                 int(args.stage_timing_steps)
@@ -4393,7 +4401,8 @@ def _tokenizer(args, bench):
     return load_tokenizer(Path(args.model))
 
 
-def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> dict:
+def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids,
+                      stop_on_eos=False, eos_id=None) -> dict:
     """Second prefill+decode of the SAME prompt in the same process.
 
     A fresh ``model.make_cache()`` resets the KV window and hands a fresh engram
@@ -4401,12 +4410,21 @@ def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> 
     the cold pass, so this pass bounds the no-miss decode ceiling.  Greedy decode
     is deterministic, so the warm token ids must match the cold pass -- recorded
     (``token_ids_match`` + both sha256), never asserted, so a mismatch is reported
-    instead of crashing the arm."""
+    instead of crashing the arm.
+
+    W113 MEDIUM-2: ``stop_on_eos`` / ``eos_id`` are threaded through so the warm
+    pass stops at the SAME point as the (also stopped) cold pass -- otherwise the
+    warm pass runs the full ``steps`` while the cold pass stopped early, mixing
+    denominators (warm_decode_tok_s over ``steps`` vs the cold rate over the tokens
+    it generated) and breaking ``token_ids_match``.  ``warm_decode_tok_s`` is over
+    the tokens ACTUALLY generated (``decode_steps_run``)."""
     run = _generate(
         model=model, ops=ops, mem_probe=mem_probe,
         prompt_ids=prompt_ids, steps=steps,
+        stop_on_eos=stop_on_eos, eos_id=eos_id,
     )
     warm_ids = run["generated"]
+    warm_generated = int(run.get("decode_steps_run", steps))
     cold = [int(t) for t in cold_ids]
     warm_sha = hashlib.sha256(json.dumps(warm_ids).encode()).hexdigest()
     cold_sha = hashlib.sha256(json.dumps(cold).encode()).hexdigest()
@@ -4416,8 +4434,10 @@ def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> 
         if run["ttft_s"] > 0
         else None,
         "warm_decode_wall_s": run["decode_wall_s"],
-        "warm_decode_tok_s": (steps / run["decode_wall_s"])
-        if run["decode_wall_s"] > 0
+        # W113: over the tokens actually generated (== steps unless --stop-on-eos).
+        "warm_decode_tokens_generated": warm_generated,
+        "warm_decode_tok_s": (warm_generated / run["decode_wall_s"])
+        if (run["decode_wall_s"] > 0 and warm_generated > 0)
         else None,
         "warm_peak_gb": run["peak_gb"],
         "warm_token_ids_sha256": warm_sha,

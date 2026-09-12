@@ -104,6 +104,18 @@ The EOS id is resolved from the tokenizer files (`tokenizer_config.json` +
 `--prompt-ids-file` path that skips the tokenizer. For this model, EOS = id 1,
 `<｜Assistant｜>` = 128804.
 
+`--stop-on-eos` with an **unresolvable** EOS id (empty/missing tokenizer files and
+no `--eos-id`) is refused in `_run_arm`
+(`SystemExit("--stop-on-eos needs an EOS id … pass --eos-id")`) rather than
+silently no-op'ing while stamping `stop_on_eos: true`.
+
+**Which passes honour `--stop-on-eos`:** the headline AR and DSpark passes and the
+`--warm-repeat` pass (its denominator is the tokens actually generated, and it
+stops at the same point as the cold pass so `token_ids_match` holds). The
+`--stage-timing` and `--syncs` passes deliberately **ignore** it — they run the
+full requested step count for a fenced per-stage / host-sync census whose absolute
+tok/s is discarded, so an early stop would only shrink the census sample.
+
 ## The exact window launcher line for the cell
 
 ```sh

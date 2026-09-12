@@ -486,3 +486,40 @@ def test_stop_on_eos_never_hit_runs_full(env_levers):
                    stop_on_eos=True, eos_id=_EOS_ID)
     assert run["decode_steps_run"] == 5
     assert run["generated"] == [10, 11, 12, 13, 14, 15]
+
+
+# ---------------------------------------------------------------------------
+# 8. MEDIUM-2: --stop-on-eos threaded into the warm-repeat pass
+# ---------------------------------------------------------------------------
+
+
+def test_warm_repeat_pass_honours_stop_on_eos(env_levers):
+    # cold pass stops at EOS (step 2); the warm pass must stop at the SAME point so
+    # the denominator matches and token_ids_match holds (not run the full 5 steps).
+    script = [10, 11, _EOS_ID, 99, 99, 99]
+    cold = env_levers._generate(
+        model=_FakeModel(script), ops=_FakeOps(), mem_probe=_FakeMemProbe(),
+        prompt_ids=[0, 1, 2], steps=5, stop_on_eos=True, eos_id=_EOS_ID,
+    )
+    assert cold["decode_steps_run"] == 2
+    warm = env_levers._warm_repeat_pass(
+        model=_FakeModel(script), ops=_FakeOps(), mem_probe=_FakeMemProbe(),
+        prompt_ids=[0, 1, 2], steps=5, cold_ids=cold["generated"],
+        stop_on_eos=True, eos_id=_EOS_ID,
+    )
+    assert warm["warm_decode_tokens_generated"] == 2  # not the full 5
+    assert warm["token_ids_match"] is True
+
+
+def test_warm_repeat_pass_default_runs_full(env_levers):
+    script = [10, 11, 12, 13, 14, 15]
+    cold = env_levers._generate(
+        model=_FakeModel(script), ops=_FakeOps(), mem_probe=_FakeMemProbe(),
+        prompt_ids=[0, 1, 2], steps=5,
+    )
+    warm = env_levers._warm_repeat_pass(
+        model=_FakeModel(script), ops=_FakeOps(), mem_probe=_FakeMemProbe(),
+        prompt_ids=[0, 1, 2], steps=5, cold_ids=cold["generated"],
+    )
+    assert warm["warm_decode_tokens_generated"] == 5
+    assert warm["token_ids_match"] is True
