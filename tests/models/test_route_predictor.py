@@ -269,3 +269,107 @@ def test_main_cli_tiny_smoke(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "route-predictor feasibility" in out
     assert "one layer ahead" in out
+
+
+# ---------------------------------------------------------------------------
+# training-free gate-oracle: raw safetensors reader + full eval path
+# ---------------------------------------------------------------------------
+def test_read_safetensor_roundtrip_bf16_and_f32(tmp_path):
+    p = tmp_path / "s.safetensors"
+    w = mx.array([[1.5, -2.25, 0.0], [3.5, -0.125, 7.0]], dtype=mx.bfloat16)
+    b = mx.array([0.5, -1.0, 2.0], dtype=mx.float32)
+    mx.save_safetensors(str(p), {"g.weight": w, "g.bias": b})
+    rw = T._read_safetensor(p, "g.weight")
+    rb = T._read_safetensor(p, "g.bias")
+    # bf16 tensor comes back as its exact bf16->f32 values; f32 exact
+    assert np.array_equal(np.array(rw), np.array(w.astype(mx.float32)))
+    assert np.array_equal(np.array(rb), np.array(b))
+    assert rw.shape == (2, 3) and rb.shape == (3,)
+
+
+def _write_synth_gate_artifact(art_dir, trace_dir, *, H, E, K, N_tr, N_te,
+                               n_layers, seed=0):
+    """A minimal synthetic artifact (softmax router, f32 gate tensors + index +
+    config) and a matching trace whose top6(L) IS the gate's top-K on router_in(L)
+    (computed on the stored bf16 hidden), so a' must be ~1.0."""
+    import json as _json
+    from mtplx.models import deepseek_v41_moe as moe
+
+    art_dir = Path(art_dir)
+    art_dir.mkdir(parents=True, exist_ok=True)
+    trace_dir = Path(trace_dir)
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    rng = np.random.RandomState(seed)
+    N = N_tr + N_te
+    phase = np.zeros(N, np.uint8)
+    phase[N_tr:] = C.PHASE_DECODE
+    np.save(trace_dir / "phase.npy", phase)
+    np.save(trace_dir / "tokens.npy", rng.randint(0, 50, size=N).astype(np.int32))
+    np.save(trace_dir / "positions.npy", np.arange(N).astype(np.int32))
+    tensors = {}
+    wmap = {}
+    lids = list(range(n_layers))
+    for L in lids:
+        W = mx.array((rng.randn(E, H) * 0.5).astype(np.float32))
+        bvec = mx.array((rng.randn(E) * 0.1).astype(np.float32))
+        tensors[f"layers.{L}.ffn.gate.weight"] = W
+        tensors[f"layers.{L}.ffn.gate.bias"] = bvec
+        wmap[f"layers.{L}.ffn.gate.weight"] = "model-00001.safetensors"
+        wmap[f"layers.{L}.ffn.gate.bias"] = "model-00001.safetensors"
+        X = (rng.randn(N, H) * 1.5).astype(np.float32)
+        bits = C.bf16_bits(mx.array(X), mx)          # store bf16 hidden
+        Xb = C.bf16_to_f32(bits)                     # the exact stored value
+        _s, biased = moe._gate_prefix_impl(mx.array(Xb), W, bvec, 1.0, "softmax")
+        biased = np.array(biased)
+        top = np.argsort(-biased, axis=1)[:, :K].astype(np.int32)
+        np.save(trace_dir / f"layer{L:03d}_router_in.npy", bits)
+        np.save(trace_dir / f"layer{L:03d}_layer_in.npy", bits)
+        np.save(trace_dir / f"layer{L:03d}_top6.npy", top)
+        np.save(trace_dir / f"layer{L:03d}_gate.npy",
+                np.take_along_axis(biased, top, 1).astype(np.float32))
+    mx.save_safetensors(str(art_dir / "model-00001.safetensors"), tensors)
+    (art_dir / "model.safetensors.index.json").write_text(
+        _json.dumps({"metadata": {}, "weight_map": wmap}))
+    (art_dir / "config.json").write_text(_json.dumps({
+        "model_type": "deepseek_v41", "hidden_size": H, "n_routed_experts": E,
+        "num_experts_per_tok": K, "scoring_func": "softmax",
+        "norm_topk_prob": True, "routed_scaling_factor": 1.0,
+        "num_hidden_layers": n_layers,
+    }))
+    _json.dump({"schema": "w89-route-trace-v1", "layer_ids": lids,
+                "n_layers": n_layers, "n_experts": E, "top_k": K,
+                "stored_hidden": H, "hidden_size": H, "n_rows": N},
+               open(trace_dir / "manifest.json", "w"))
+
+
+def test_load_gate_weights_reads_right_tensors(tmp_path):
+    _write_synth_gate_artifact(tmp_path / "art", tmp_path / "tr",
+                               H=16, E=8, K=2, N_tr=60, N_te=20, n_layers=3)
+    gates = T._load_gate_weights(tmp_path / "art", [0, 1, 2])
+    assert set(gates) == {0, 1, 2}
+    for L in (0, 1, 2):
+        assert gates[L]["weight"].shape == (8, 16)
+        assert gates[L]["bias"].shape == (8,)
+
+
+def test_gate_oracle_eval_recovers_route_a_prime_is_one(tmp_path):
+    _write_synth_gate_artifact(tmp_path / "art", tmp_path / "tr",
+                               H=16, E=8, K=2, N_tr=200, N_te=80, n_layers=4)
+    trace = T.Trace(tmp_path / "tr")
+    ks = [6, 8]
+    res = T.gate_oracle_eval(trace, tmp_path / "art", ks)
+    # a' recomputes the route from router_in through the real gate -> exact
+    assert len(res["a_prime"]) == 4
+    a_prec = float(np.mean([r["precision_at_k"] for r in res["a_prime"]]))
+    assert a_prec > 0.99, f"a' should be ~1.0 (alignment), got {a_prec:.3f}"
+    # b' skips first, c' skips first two; cos present for b' layers
+    assert len(res["b_prime"]) == 3 and len(res["c_prime"]) == 2
+    assert len(res["cos"]) == 3
+    for r in res["b_prime"] + res["c_prime"]:
+        assert 0.0 <= r["precision_at_k"] <= 1.0
+        assert r["miss_red_at_6"] <= r["miss_red_at_8"] + 1e-9
+    summ = T.summarize_oracle(res, ks)
+    assert summ["a_prime"]["mean"]["precision_at_k"] > 0.99
+    assert "cos" in summ and -1.0 <= summ["cos"]["mean"] <= 1.0
+    md = T._oracle_markdown(summ, trace, ks)
+    assert "Verdict" in md and "gate-oracle" in md.lower()

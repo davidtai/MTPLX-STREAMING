@@ -15,9 +15,10 @@ unhooked decode (gated), and a prefetch mispredict may only waste a read.
 Author: Opus 4.8 worker (`w89/route-predictor`, off `0ba388c2d`). Scripts:
 `scripts/deepseek_v41/collect_route_traces.py`,
 `scripts/deepseek_v41/train_route_predictor.py`; tests
-`tests/models/test_route_predictor.py` (11, green, CPU). The trace itself is a
-GPU-window job (a window is running now); the harness is validated on CPU with
-`--tiny` on the fake model from `tests/models/test_deepseek_v41_stage_timing.py`.
+`tests/models/test_route_predictor.py` (14, green, CPU). The trace was collected
+in window-35 (40 layers × 2,304 rows); the harness is validated on CPU with
+`--tiny` on the fake model from `tests/models/test_deepseek_v41_stage_timing.py`,
+and the real-trace verdict is in §2.1 + `receipts/w89-window35-eval/`.
 
 ---
 
@@ -35,9 +36,21 @@ GPU-window job (a window is running now); the harness is validated on CPU with
 > `C + I = 252 → max = 165 ms`, a **~34 %** cut, and the SSD turns co-binding
 > (W82's ~6–8 tok/s wall). On DSpark the prize is larger now (I ≈ 132 ms/accepted
 > token, ~37 % of the cycle's per-accepted cost) because the 4-row verify streams
-> 1.65 GiB/accepted.** The empirical precision — whether a cheap linear/MLP head
-> reaches `r → 1` at prefetch width 8–12 — is what the real trace decides; the
-> harness measures exactly that, train on the prefill tail, test on decode.
+> 1.65 GiB/accepted.**
+>
+> **Window-35 real-trace result (training-free gate oracle — the right
+> instrument; the learned fitter was underdetermined, §2.1).** Feeding the
+> *previous* layer's residual into a layer's OWN router (real weights, no
+> training) recovers **62 %** of that layer's top-6 at prefetch k=6 and clears
+> the **0.70 overlap threshold at k=10** (missRed@10 **0.736**, @12 0.766, @16
+> 0.805). It is strongly **layer-dependent**: 30/39 layers clear 0.70 at k=10–12
+> (deep layers reach missRed@12 0.85–0.93), but the first ~4 layers are a floor
+> (L1 missRed@24 only 0.44) because the residual stream turns over fastest there
+> (cos(layer_in_L, layer_in_{L-1}) = 0.766 at L1 vs 0.921 mean). So a
+> training-free one-layer-ahead prefetch of width ~10–12 hides most of the io on
+> the deep layers where the bytes and compute live — enough to bank the bulk of
+> the +24 % (and the ~34 % post-compute-stack) — with the early layers left on
+> the demand path.
 
 ---
 
@@ -137,8 +150,38 @@ width K.
 
 > The `--tiny` path self-generates a synthetic trace from the fake model and runs
 > the whole pipeline in seconds; its absolute numbers are a smoke test (random
-> weights, 8 experts), **not** a feasibility read. The feasibility numbers come
-> from the real-trace window.
+> weights, 8 experts), **not** a feasibility read.
+
+### 2.1 Window-35: the learned fitter is underdetermined — use the training-free gate oracle
+
+On the real trace (40 layers × 2,304 rows) the **learned** fitter is
+underdetermined — 2,048 tail rows for a 5120→384 map — so it measures the
+fitter, not the route: ridge (a) `router_in(L)→L` scored only **prec@6 0.406**
+(should be ~1.0), (b) one-ahead 0.356 / missRed@12 0.475; logistic worse. That is
+a fitting artifact, not the route's predictability.
+
+The correct instrument is **training-free**: run each layer's OWN router (the
+artifact's real `layers.L.ffn.gate.{weight,bias}`, via the port's exact
+`_gate_prefix_impl`) on a shifted hidden — no fit, no free parameters
+(`train_route_predictor.py --model gate --gate-weights <artifact>`, CPU, ~0.6 GB
+peak via a raw per-tensor safetensors reader). Result
+(`receipts/w89-window35-eval/gate-oracle.{json,md}`):
+
+| predictor (training-free) | prec@6 | missRed@6 | @8 | @10 | @12 | @16 | @24 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| a' `gate_L(router_in_L)` — alignment | **0.999** | 0.999 | 1.000 | — | — | — | — |
+| b' `gate_L(layer_in_{L-1})` one ahead | 0.622 | 0.622 | 0.693 | **0.736** | 0.766 | 0.805 | 0.848 |
+| c' `gate_L(layer_in_{L-2})` two ahead | 0.565 | 0.565 | 0.635 | 0.677 | 0.710 | 0.753 | 0.802 |
+
+- **a' = 0.999** validates trace↔weights alignment (the <1.0 is bf16 near-tie
+  flips at rank 6). The gap from a'=0.999 to the fitter's 0.406 is the whole
+  reason to use the oracle.
+- **Residual cosine** cos(layer_in_L, layer_in_{L-1}) = **0.921** mean explains
+  b': the residual barely turns per layer, so the same router fed the previous
+  layer's residual still ranks the true experts highly.
+- **Layer-dependent**: 30/39 layers clear missRed 0.70 at k=10–12 (deep layers
+  reach 0.85–0.93); the first ~4 layers are the floor (L1 missRed@24 0.44, its
+  cos 0.766) — they turn over fastest and stay on the demand path.
 
 ---
 
@@ -257,11 +300,16 @@ so outputs are bitwise-identical and a mispredict only wastes a read.
    at some precision cost. The runtime picks per-layer from the measured
    miss_reduction table (worst-5 layers → two-ahead).
 
-**Gate before any integration:** the real-trace `miss_reduction@{8,12}` for
-predictor (b). If it clears the additive table's r needed for a worthwhile cut
-(and it must beat W85's 19 % temporal baseline by a wide margin), integrate
-**stacked on W80/W71**; if it does not, the predictor is dead for the same reason
-temporal prefetch was, and the residency verdict (W85) stands unchanged.
+**Integration gate — PASSED on window-35 (§2.1).** The training-free one-ahead
+oracle clears the 0.70 overlap threshold at prefetch k=10 (missRed 0.736, and
+0.766 at k=12), far above W85's 19 % temporal baseline, on 30/39 layers — so the
+route IS predictable a layer ahead with zero training, using each layer's own
+router. Integrate **stacked on W80/W71** (the predictor is second-order until the
+compute stack lands), prefetching width ~10–12 one layer ahead on the deep
+layers and leaving the first ~4 layers (the residual-turnover floor) on the
+demand path; a per-layer width from the measured `miss_reduction` table. Note the
+prefetch head can be the layer's own gate weights (no learned model needed at
+all), which also sidesteps the finite-sample fitting problem.
 
 ---
 
@@ -271,12 +319,15 @@ temporal prefetch was, and the residency verdict (W85) stands unchanged.
 |---|---|
 | trace collector (GPU window; `--tiny` CPU validation) | `scripts/deepseek_v41/collect_route_traces.py` |
 | offline trainer/evaluator (CPU; `--tiny` self-generates) | `scripts/deepseek_v41/train_route_predictor.py` |
-| tests (both scripts; 11, CPU, `nice -n 19`) | `tests/models/test_route_predictor.py` |
+| tests (both scripts; 14, CPU, `nice -n 19`) | `tests/models/test_route_predictor.py` |
+| window-35 gate-oracle result (JSON + table) | `docs/deepseek-v41/receipts/w89-window35-eval/gate-oracle.{json,md}` |
 | this analysis | `docs/deepseek-v41/W89_ROUTE_PREDICTOR.md` |
 
 Inputs: `W82_CYCLE_MODEL.md` (cost model, AR wall, DSpark verify bytes),
 `../dsv41-w85/docs/deepseek-v41/W85_RESIDENCY_PROGRAM.md` (compulsory miss floor,
 19 % temporal predictability, per-layer diffuse layers). Numbers marked
 "measured" are from those receipts; the overlap table is arithmetic over them;
-the predictor precision is **pending the real-trace window** (the harness is the
-instrument). CPU-validated on the fake model; no GPU, no artifact load, ≤1.5 GB.
+the predictor precision is the **window-35 training-free gate oracle** (§2.1). The
+oracle eval loads only the resident gate tensors (40 × `ffn.gate.{weight,bias}`)
+on CPU (~0.6 GB peak); the trace collection was a GPU window. CPU-validated on the
+fake model; ≤1.5 GB.

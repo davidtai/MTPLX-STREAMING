@@ -330,6 +330,251 @@ def print_report(summary: dict, trace: Trace, prefetch_ks) -> None:
     print("=" * 78)
 
 
+# ---------------------------------------------------------------------------
+# Training-free gate-oracle evaluation (the REAL router weights)
+# ---------------------------------------------------------------------------
+# The learned fitter is underdetermined (2,048 train rows for a 5120->384 map),
+# so it measures the fitter, not the route's predictability.  The training-free
+# evaluation runs the artifact's OWN gate (real weights + score-correction bias,
+# via the port's exact routing function) on a shifted hidden and asks: does the
+# real router, fed the residual one/two layers early, name this layer's experts?
+ORACLE_DESC = {
+    "a_prime": "a' gate_L(router_in_L) vs top6_L      (recompute; alignment ~1.0)",
+    "b_prime": "b' gate_L(layer_in_{L-1}) vs top6_L   (one layer ahead, no training)",
+    "c_prime": "c' gate_L(layer_in_{L-2}) vs top6_L   (two layers ahead, no training)",
+}
+
+
+import struct  # noqa: E402
+
+
+def _read_safetensor(shard_path: Path, name: str):
+    """Read a single tensor's raw bytes from a safetensors shard (no whole-shard
+    load), returned as an mlx float32 array with the tensor's shape.
+
+    BF16 tensors are returned as their exact bf16->f32 values (the gate immediately
+    upcasts weight.astype(f32), so f32 here is bit-identical to loading bf16); F32
+    tensors are read directly.  Keeps peak RAM at ~one gate (a few MB) instead of
+    a ~1 GB shard, so the 40-layer sweep stays well under the worker guard."""
+    import mlx.core as mx
+
+    with open(shard_path, "rb") as fh:
+        (hlen,) = struct.unpack("<Q", fh.read(8))
+        header = json.loads(fh.read(hlen).decode("utf-8"))
+        data_start = 8 + hlen
+        ent = header[name]
+        beg, end = ent["data_offsets"]
+        fh.seek(data_start + beg)
+        buf = fh.read(end - beg)
+    dt = ent["dtype"]
+    shape = tuple(ent["shape"])
+    if dt in ("BF16", "bfloat16"):
+        f32 = bf16_to_f32(np.frombuffer(buf, dtype=np.uint16)).reshape(shape)
+    elif dt in ("F32", "float32"):
+        f32 = np.frombuffer(buf, dtype=np.float32).reshape(shape).copy()
+    elif dt in ("F16", "float16"):
+        f32 = np.frombuffer(buf, dtype=np.float16).astype(np.float32).reshape(shape)
+    else:  # pragma: no cover - the gate tensors are bf16/f32 in this artifact
+        raise ValueError(f"unhandled safetensors dtype {dt!r} for {name}")
+    return mx.array(np.ascontiguousarray(f32))
+
+
+def _load_gate_weights(artifact_dir: Path, layer_ids) -> dict:
+    """Read each layer's REAL gate.weight (bf16) + gate.bias (f32) from the
+    artifact's sharded safetensors, one tensor at a time (raw bytes, no whole-
+    shard load).  Returns {layer_id: {"weight": mx f32 [n_exp, dim] (exact bf16
+    values), "bias": mx f32 [n_exp]}}.
+
+    Names are the artifact's resident tensors ``layers.{L}.ffn.gate.{weight,bias}``
+    (``ffn.gate.bias`` is the noaux_tc score-correction the loader renames to
+    ``mlp.gate.e_score_correction_bias``)."""
+    artifact_dir = Path(artifact_dir)
+    index = json.loads((artifact_dir / "model.safetensors.index.json").read_text())
+    wmap = index["weight_map"]
+    gates: dict = {}
+    for L in layer_ids:
+        wn = f"layers.{L}.ffn.gate.weight"
+        bn = f"layers.{L}.ffn.gate.bias"
+        gates[L] = {
+            "weight": _read_safetensor(artifact_dir / wmap[wn], wn),
+            "bias": _read_safetensor(artifact_dir / wmap[bn], bn),
+        }
+    return gates
+
+
+def _row_cosine(a: np.ndarray, b: np.ndarray) -> float:
+    """Mean row-wise cosine similarity between two [n, d] float arrays."""
+    an = a / (np.linalg.norm(a, axis=1, keepdims=True) + 1e-12)
+    bn = b / (np.linalg.norm(b, axis=1, keepdims=True) + 1e-12)
+    return float(np.mean(np.sum(an * bn, axis=1)))
+
+
+def gate_oracle_eval(trace: Trace, artifact_dir: Path, prefetch_ks) -> dict:
+    """Training-free: run each layer's real gate on router_in_L (a'), on
+    layer_in_{L-1} (b'), on layer_in_{L-2} (c'); plus the residual cosine (e')."""
+    import mlx.core as mx
+
+    mx.set_default_device(mx.cpu)
+    from mtplx.models.deepseek_v41 import ModelArgs
+    from mtplx.models import deepseek_v41_moe as moe
+
+    cfg = json.loads((Path(artifact_dir) / "config.json").read_text())
+    args = ModelArgs.from_dict(cfg)
+    temp = float(getattr(args, "gate_temp", 1.0) or 1.0)
+    sf = args.scoring_func
+    gates = _load_gate_weights(artifact_dir, trace.layer_ids)
+    lids = trace.layer_ids
+    test = trace.test_mask  # held-out decode rows
+    results = {"a_prime": [], "b_prime": [], "c_prime": [], "cos": []}
+
+    def _rank_metrics(x_np, gw, gb, true_idx):
+        # the port's EXACT gate prefix -> biased scores; eval_predictor ranks them
+        _scores, biased = moe._gate_prefix_impl(mx.array(x_np), gw, gb, temp, sf)
+        return eval_predictor(np.array(biased), true_idx, trace.top_k, prefetch_ks)
+
+    for pos, L in enumerate(lids):
+        gw, gb = gates[L]["weight"], gates[L]["bias"]
+        true6 = trace.top6(L)[test]
+        # a' -- recompute this layer's route from its own router input
+        m = _rank_metrics(trace.router_in(L)[test], gw, gb, true6)
+        m["layer"] = int(L)
+        results["a_prime"].append(m)
+        # b' -- one layer ahead
+        if pos >= 1:
+            li_prev = trace.layer_in(lids[pos - 1])[test]
+            m = _rank_metrics(li_prev, gw, gb, true6)
+            m["layer"] = int(L)
+            results["b_prime"].append(m)
+            # e' -- residual similarity that explains b'
+            cos = _row_cosine(li_prev, trace.layer_in(L)[test])
+            results["cos"].append({"layer": int(L), "cos": round(cos, 4)})
+        # c' -- two layers ahead
+        if pos >= 2:
+            m = _rank_metrics(trace.layer_in(lids[pos - 2])[test], gw, gb, true6)
+            m["layer"] = int(L)
+            results["c_prime"].append(m)
+    return results
+
+
+def summarize_oracle(results: dict, prefetch_ks) -> dict:
+    keys = ["precision_at_k", "recall_at_k"] + [f"miss_red_at_{K}" for K in prefetch_ks]
+    out = {}
+    for p in ("a_prime", "b_prime", "c_prime"):
+        rows = results[p]
+        if not rows:
+            out[p] = {"n_layers": 0}
+            continue
+        worst_key = f"miss_red_at_{prefetch_ks[0]}"
+        worst = sorted(rows, key=lambda r: r[worst_key])[:5]
+        out[p] = {
+            "n_layers": len(rows),
+            "mean": {k: _mean(rows, k) for k in keys},
+            "worst5": [{"layer": r["layer"], **{k: round(r[k], 4) for k in keys}}
+                       for r in worst],
+        }
+    if results["cos"]:
+        out["cos"] = {
+            "mean": float(np.mean([r["cos"] for r in results["cos"]])),
+            "worst5": sorted(results["cos"], key=lambda r: r["cos"])[:5],
+        }
+    return out
+
+
+def _oracle_markdown(summary: dict, trace: Trace, prefetch_ks) -> str:
+    L = ["# W89 training-free gate-oracle route eval (window-35 real trace)",
+         "",
+         f"Real router weights (`layers.L.ffn.gate.{{weight,bias}}`, {trace.n_experts} "
+         f"experts, top-{trace.top_k}, {trace.hidden}-d) via the port's exact "
+         f"`_gate_prefix_impl` (sqrtsoftplus + noaux_tc bias). Test = "
+         f"{int(trace.test_mask.sum())} held-out decode rows; mean over "
+         f"{len(trace.layer_ids)} layers.",
+         "",
+         "| predictor | prec@6 | rec@6 | " +
+         " | ".join(f"missRed@{K}" for K in prefetch_ks) + " |",
+         "|---|---:|---:|" + "---:|" * len(prefetch_ks)]
+    for p in ("a_prime", "b_prime", "c_prime"):
+        s = summary[p]
+        if s["n_layers"] == 0:
+            continue
+        m = s["mean"]
+        row = (f"| {ORACLE_DESC[p]} | {m['precision_at_k']:.3f} | {m['recall_at_k']:.3f} | "
+               + " | ".join(f"{m['miss_red_at_'+str(K)]:.3f}" for K in prefetch_ks) + " |")
+        L.append(row)
+    if "cos" in summary:
+        L += ["", f"**Residual cosine** cos(layer_in_L, layer_in_{{L-1}}) mean over "
+              f"layers = **{summary['cos']['mean']:.4f}** "
+              f"(worst: " +
+              ", ".join(f"L{r['layer']}={r['cos']:.3f}" for r in summary['cos']['worst5'])
+              + ")"]
+    L += ["", "## Worst-5 layers by missRed@%d" % prefetch_ks[0], ""]
+    for p in ("a_prime", "b_prime", "c_prime"):
+        s = summary[p]
+        if s["n_layers"] == 0:
+            continue
+        w = ", ".join(f"L{r['layer']}={r['miss_red_at_%d' % prefetch_ks[0]]:.2f}"
+                      for r in s["worst5"])
+        L.append(f"- **{p}**: {w}")
+    # Verdict: smallest tested prefetch width k where mean one-ahead miss_reduction
+    # clears the 0.7 overlap threshold.
+    L += ["", "## Verdict"]
+    bm = summary["b_prime"].get("mean") if summary["b_prime"]["n_layers"] else None
+    if bm is not None:
+        cross = next((K for K in prefetch_ks if bm[f"miss_red_at_{K}"] >= 0.70), None)
+        if cross is not None:
+            L.append(
+                f"- One layer ahead (b'), **mean miss_reduction clears 0.70 at "
+                f"prefetch width k={cross}** (missRed@{cross}={bm[f'miss_red_at_{cross}']:.3f}); "
+                f"at k={prefetch_ks[0]} it is {bm[f'miss_red_at_{prefetch_ks[0]}']:.3f}."
+            )
+        else:
+            L.append(
+                f"- One layer ahead (b'): mean miss_reduction does **not** reach 0.70 "
+                f"within the tested widths (max missRed@{prefetch_ks[-1]}="
+                f"{bm[f'miss_red_at_{prefetch_ks[-1]}']:.3f})."
+            )
+    if "cos" in summary:
+        L.append(
+            f"- Explained by the residual stream's layer-to-layer stability "
+            f"(cos={summary['cos']['mean']:.3f}); it is lowest in the early layers, "
+            f"which are the per-layer floor (worst-5 above)."
+        )
+    return "\n".join(L) + "\n"
+
+
+def print_oracle_report(summary: dict, trace: Trace, prefetch_ks) -> None:
+    print("=" * 82)
+    print(f"W89 TRAINING-FREE gate-oracle  |  real router weights  |  "
+          f"n_experts={trace.n_experts} top_k={trace.top_k} "
+          f"layers={len(trace.layer_ids)} decode_rows={int(trace.test_mask.sum())}")
+    print("=" * 82)
+    hdr = f"{'predictor':<48}{'prec@6':>8}{'rec@6':>8}"
+    for K in prefetch_ks:
+        hdr += f"{'missRed@'+str(K):>11}"
+    print(hdr)
+    print("-" * len(hdr))
+    for p in ("a_prime", "b_prime", "c_prime"):
+        s = summary[p]
+        if s["n_layers"] == 0:
+            continue
+        m = s["mean"]
+        line = f"{ORACLE_DESC[p]:<48}{m['precision_at_k']:>8.3f}{m['recall_at_k']:>8.3f}"
+        for K in prefetch_ks:
+            line += f"{m['miss_red_at_'+str(K)]:>11.3f}"
+        print(line)
+    print("-" * len(hdr))
+    if "cos" in summary:
+        print(f"residual cosine cos(layer_in_L, layer_in_L-1) mean = "
+              f"{summary['cos']['mean']:.4f}")
+    for p in ("a_prime", "b_prime", "c_prime"):
+        s = summary[p]
+        if s["n_layers"] == 0:
+            continue
+        w = ", ".join(f"L{r['layer']}={r['miss_red_at_%d' % prefetch_ks[0]]:.2f}"
+                      for r in s["worst5"])
+        print(f"  worst5 {p}: {w}")
+    print("=" * 82)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -338,7 +583,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="route-trace directory (from collect_route_traces.py)")
     p.add_argument("--tiny", action="store_true",
                    help="self-generate a synthetic trace from the fake model, then run")
-    p.add_argument("--model", choices=("ridge", "logistic", "mlp"), default="ridge")
+    p.add_argument("--model", choices=("ridge", "logistic", "mlp", "gate"),
+                   default="ridge",
+                   help="'gate' = training-free eval with the artifact's real "
+                        "router weights (needs --gate-weights)")
+    p.add_argument("--gate-weights", type=Path, default=None,
+                   help="artifact dir with config.json + sharded safetensors "
+                        "(for --model gate)")
     p.add_argument("--ridge-lambda", type=float, default=1.0)
     p.add_argument("--steps", type=int, default=300, help="GD steps (logistic/mlp)")
     p.add_argument("--lr", type=float, default=0.5, help="GD learning rate")
@@ -347,6 +598,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="prefetch widths for miss_reduction (comma-separated)")
     p.add_argument("--out-json", type=Path, default=None,
                    help="write the metrics summary as JSON (data artifact, not a report)")
+    p.add_argument("--md-out", type=Path, default=None,
+                   help="write a markdown results table (data receipt; --model gate)")
     return p
 
 
@@ -364,6 +617,28 @@ def main(argv=None) -> int:
         print("error: pass --traces DIR or --tiny", file=sys.stderr)
         return 2
     trace = Trace(trace_dir)
+    if args.model == "gate":
+        if args.gate_weights is None:
+            print("error: --model gate needs --gate-weights <artifact dir>",
+                  file=sys.stderr)
+            return 2
+        results = gate_oracle_eval(trace, args.gate_weights, prefetch_ks)
+        summary = summarize_oracle(results, prefetch_ks)
+        print_oracle_report(summary, trace, prefetch_ks)
+        if args.md_out is not None:
+            args.md_out.parent.mkdir(parents=True, exist_ok=True)
+            args.md_out.write_text(_oracle_markdown(summary, trace, prefetch_ks))
+            print(f"[w89] wrote markdown table -> {args.md_out}")
+        if args.out_json is not None:
+            payload = {
+                "trace_manifest": trace.manifest, "model": "gate-oracle",
+                "gate_weights": str(args.gate_weights), "prefetch_ks": prefetch_ks,
+                "summary": summary, "per_layer": results,
+            }
+            args.out_json.parent.mkdir(parents=True, exist_ok=True)
+            args.out_json.write_text(json.dumps(payload, indent=2))
+            print(f"[w89] wrote metrics json -> {args.out_json}")
+        return 0
     results = train_and_eval(
         trace, model=args.model, lam=args.ridge_lambda, steps=args.steps,
         hidden=args.hidden, lr=args.lr, prefetch_ks=prefetch_ks,
