@@ -1054,3 +1054,53 @@ def test_over_cap_chunk_major_prefill_raises_at_offset_zero(monkeypatch):
         model(prompt, cache=cache, prefill_chunk=32)
     assert all(lc.offset == 0 for lc in cache.layers), "a chunk was written before the raise"
     assert all(lc.window_len() == 0 for lc in cache.layers)
+
+
+# ---------------------------------------------------------------------------
+# Review round-2 finding 2: the cell16k_ring CONTROL arm is frozen (no kv_bounded);
+# its env set must equal the frozen window-39 basis.  kv_bounded is a CANDIDATE.
+# ---------------------------------------------------------------------------
+def _load_ab_module():
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "scripts" / "deepseek_v41" / "ab_decode_env_levers.py"
+    spec = importlib.util.spec_from_file_location("_ab_w107", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _frozen_control_env():
+    import json
+    from pathlib import Path
+    p = Path(__file__).resolve().parent / "fixtures" / "dsv41_window39_control_arm_env.json"
+    return json.loads(p.read_text())["arm_env_set"]
+
+
+def test_control_arm_frozen_matches_window39():
+    ab = _load_ab_module()
+    frozen = _frozen_control_env()
+    preset = ab.ARM_PRESETS["cell16k_ring"]
+    live_set = {k: v for k, v in preset.items() if v is not None}
+    assert live_set == frozen, (
+        "cell16k_ring control env diverged from the frozen window-39 basis:\n"
+        f"  extra:   {sorted(set(live_set) - set(frozen))}\n"
+        f"  missing: {sorted(set(frozen) - set(live_set))}\n"
+        f"  changed: {[k for k in live_set if k in frozen and live_set[k] != frozen[k]]}"
+    )
+    # the control must NOT carry the bounded lever (it is a candidate)
+    assert preset.get(ab.KV_BOUNDED_ENV) is None
+    assert preset.get(ab.KV_BOUNDED_MAXKV_ENV) is None
+
+
+def test_bounded_candidate_is_control_plus_only_kv_bounded():
+    """cell16k_ring_bounded is the clean bounded candidate: EXACTLY the frozen control
+    set plus MTPLX_DSV41_KV_BOUNDED=1 (so the A/B isolates only the bounded lever)."""
+    ab = _load_ab_module()
+    frozen = _frozen_control_env()
+    cand = ab.ARM_PRESETS["cell16k_ring_bounded"]
+    cand_set = {k: v for k, v in cand.items() if v is not None}
+    assert cand.get(ab.KV_BOUNDED_ENV) == "1"
+    # difference from the frozen control is exactly the one bounded key
+    assert set(cand_set) - set(frozen) == {ab.KV_BOUNDED_ENV}
+    assert {k: cand_set[k] for k in frozen} == frozen

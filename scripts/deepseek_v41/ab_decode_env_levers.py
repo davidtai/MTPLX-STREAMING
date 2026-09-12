@@ -668,7 +668,21 @@ ARM_PRESETS = {
     # (both run selected keys), so the byte-identity summary must show it matching
     # cell16k's class (cell16k itself is lossy vs control ONLY through head=bf16 +
     # the dense/lean prefill reassoc; the ring adds NO new lossiness).
+    # W107 (review round-2 finding 2): cell16k_ring is THE paired CONTROL in every
+    # window (39-42), so its env set is FROZEN -- it must NOT carry kv_bounded (a
+    # round-1 mistake defaulted it on, changing the timing basis vs windows 39-41 even
+    # though the lever is byte-identical).  The bounded lever is a CANDIDATE
+    # (cell16k_ring_bounded below); this control matches window-39's arm_env exactly.
     "cell16k_ring": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+    ),
+    # W107 (review round-2): the CLEAN bounded-KV candidate -- cell16k_ring's EXACT key
+    # set plus kv_bounded="1".  This is the paired candidate for the bounded lever
+    # (A/B: cell16k_ring vs cell16k_ring_bounded), replacing the round-1 "flip
+    # KV_BOUNDED=0 on the control" A/B (the control is now frozen without the lever).
+    "cell16k_ring_bounded": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
@@ -684,7 +698,7 @@ ARM_PRESETS = {
     # isolation is still the standalone ``draft_compile`` arm.
     "cell16k_ring_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         draft="1", draft_head_bf16="1",
     ),
@@ -696,7 +710,7 @@ ARM_PRESETS = {
     # the profile transient_slots measures the barrier-free decode route at 16K.
     "cell16k_ring_pinned": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         pin_working_set="all", device_route="1", device_route_pinned="1",
     ),
@@ -723,7 +737,7 @@ ARM_PRESETS = {
     # the dense/lean prefill reassoc, cf. cell16k).
     "cell16k_ring_stable": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
     ),
@@ -752,7 +766,7 @@ ARM_PRESETS = {
     # (decode_hit_rate_first_64_steps vs steady_state, populated by BOTH arms).
     "cell16k_ring_pool": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         single_slot_pool="1",
     ),
@@ -787,7 +801,7 @@ ARM_PRESETS = {
     # 16, ab-1024-fastpath-b.json), not 16K.  Primarily a host-sync-hygiene lever.
     "cell16k_ring_switch": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         fastpath="1", submit="1", verify_single="1",
     ),
@@ -810,7 +824,7 @@ ARM_PRESETS = {
     # cell16k_ring's class.
     "cell16k_ring_prefetch": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         gate_prefetch="10",
     ),
@@ -830,7 +844,7 @@ ARM_PRESETS = {
     # + dense/lean prefill reassoc; the runner adds NO new lossiness).
     "cell16k_ring_v2": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2",
     ),
@@ -845,7 +859,7 @@ ARM_PRESETS = {
     # docs/deepseek-v41/W104_DRAFT_RESIDENT_MOE.md.)
     "cell16k_ring_v2_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
     ),
