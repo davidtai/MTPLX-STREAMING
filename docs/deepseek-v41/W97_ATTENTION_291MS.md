@@ -56,8 +56,13 @@ empirically in one run.
 
 Dims: `H=64, head_dim=512, rope_head_dim=64, hidden=5120, q_lora_rank=1280, o_lora_rank=1024,
 o_groups=8, window=128, index_topk=512 → k=640 selected keys (bounded, context-independent)`.
-Weight bytes shown for the two resident codecs (q8 gs64 affine = default `_RESIDENT_QUANT`;
-mxfp4 gs32 = the native DSV4.1 bank) and the reference (bf16, dequantized once at convert).
+The released artifact stores the attention projections as **mxfp8 gs32** (U8 E8M0 scales) —
+NOT affine q8 gs64 (that is the code's `_RESIDENT_QUANT` default, kept here only as a byte
+comparison). Weight bytes below are shown for two illustrative codecs (q8 gs64 affine and
+mxfp4 gs32, the native DSV4.1 4-bit bank) plus the reference (bf16, dequantized once at
+convert); the artifact's mxfp8 gs32 is 8-bit, so its packed read tracks the `wt q8` column.
+The `wo_a` dequant output dtype (bf16, below) was **measured** on the real shapes, not
+inferred from the scale format.
 
 | op | FLOP | wt q8 | wt mxfp4 | wt bf16 (ref) |
 |---|---:|---:|---:|---:|
@@ -78,14 +83,15 @@ sub-millisecond for the whole token. **Attention is nowhere near compute-bound.*
 
 `wo_a` = `[o_groups·o_lora_rank, in_per_group]` = `[8192, 4096]` = 33.55M params.
 
-`mx.dequantize` returns the **scale dtype = bf16** for both resident codecs, so the dequant
+`mx.dequantize` **returns bf16** — a **measured** fact (the probe below; the artifact's mxfp8
+gs32 carries U8 E8M0 scales, so the output dtype is NOT simply the scale dtype), so the dequant
 output is **67.1 MB bf16**; `_o_lora_down` (and the K22 out tape) then `.astype(mx.float32)` it
 to **134.2 MB f32** every token before the einsum. So the per-token cost is the same for both
 codecs — a dequant plus an f32 astype — differing only in the packed read size:
 
 | path | per token / layer | × 40 layers |
 |---|---|---:|
-| **port, q8 gs64** (default) | dequant read ~35.7 MB (packed+scales) + dequant write **67 MB bf16** + astype write **134 MB f32** + einsum read **134 MB f32** | **~14 GB/token** |
+| **port, q8 gs64** (8-bit; the artifact's mxfp8 gs32 packed read tracks this row) | dequant read ~35.7 MB (packed+scales) + dequant write **67 MB bf16** + astype write **134 MB f32** + einsum read **134 MB f32** | **~14 GB/token** |
 | **port, mxfp4 gs32** (native bank) | dequant read ~18.9 MB (4-bit packed+scales) + dequant write **67 MB bf16** + astype write **134 MB f32** + einsum read **134 MB f32** | **~13.4 GB/token** |
 | **reference** (bf16, dequantized once) | einsum read (bf16) **67 MB** (no per-token dequant / astype) | **2.68 GB/token** |
 
