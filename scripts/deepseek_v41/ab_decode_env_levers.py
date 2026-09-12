@@ -1225,6 +1225,15 @@ def build_parser() -> argparse.ArgumentParser:
         "the budget can be checked BEFORE the guarded GPU window opens.",
     )
     p.add_argument(
+        "--memory-plan-from",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="PIN the MLX plan from a derived-plan.json sidecar (written by an "
+        "earlier --memory-budget-total-gib arm) instead of deriving live, so every "
+        "A/B arm uses the SAME plan_limit (reproducible residency). HIGH-2.",
+    )
+    p.add_argument(
         "--preflight-freed-gib",
         type=float,
         default=None,
@@ -1428,6 +1437,23 @@ class BudgetTotalDerivation:
         current = {name: getattr(self, name) for name in self.__slots__}
         current.update(changes)
         return BudgetTotalDerivation(**current)
+
+    # W106 HIGH-2: serialize the derivation to a sidecar so later A/B arms PIN the
+    # SAME plan (a live per-process vm_stat would give each arm a different plan ->
+    # different residency -> byte-identity meaningless).
+    def to_plan_dict(self) -> dict:
+        return {name: getattr(self, name) for name in self.__slots__}
+
+    @staticmethod
+    def from_plan_dict(d: dict) -> "BudgetTotalDerivation":
+        fields = {
+            "source", "budget_total_gb", "system_used_at_start_gb",
+            "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
+            "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
+            "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
+            "rss_semantics",
+        }
+        return BudgetTotalDerivation(**{k: v for k, v in d.items() if k in fields})
 
     def forecast_system_peak_gib(self):
         """HIGH-1: the forecast whole-box peak = baseline + plan + plan_overshoot +
@@ -1829,6 +1855,41 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
     )
 
 
+def _derived_plan_sidecar_path(args):
+    """The <out-dir>/derived-plan.json sidecar path (HIGH-2)."""
+    out = getattr(args, "out", None)
+    if out is None:
+        return None
+    return Path(out).parent / "derived-plan.json"
+
+
+def _write_derived_plan_sidecar(args, bt) -> None:
+    """Persist the derived budget plan so later A/B arms can PIN it (HIGH-2).
+    Atomic (tmp + rename); guarded."""
+    path = _derived_plan_sidecar_path(args)
+    if path is None or bt is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = bt.to_plan_dict()
+        payload["_note"] = (
+            "W106 HIGH-2 pinned plan; pass --memory-plan-from this file to later "
+            "A/B arms so every arm uses the SAME plan_limit (reproducible residency)."
+        )
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, path)
+        print(f"[ab] wrote derived plan sidecar: {path}", flush=True)
+    except OSError as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: could not write derived plan sidecar ({exc!r})", flush=True)
+
+
+def _load_pinned_plan(path):
+    """Load a BudgetTotalDerivation from a --memory-plan-from sidecar (HIGH-2)."""
+    data = json.loads(Path(path).read_text())
+    return BudgetTotalDerivation.from_plan_dict(data)
+
+
 def _preflight_memory_plan(args, bench) -> int:
     """W106 LOW-4 / HIGH-B pre-flight: derive the budget plan from a DRY snapshot (no
     model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor), BEFORE the
@@ -1919,13 +1980,27 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
-    bt = _derive_budget_total(args, bench, max_kv)
-    if bt is not None:
+    pin_path = getattr(args, "memory_plan_from", None)
+    if pin_path:
+        # HIGH-2: PIN the plan from a sidecar written by an earlier arm, so every
+        # A/B arm uses the SAME plan_limit (no per-process vm_stat drift).
+        bt = _load_pinned_plan(pin_path)
+        print(
+            f"[ab] memory plan PINNED from {pin_path}: plan_limit "
+            f"{bt.plan_limit_gib:.4g} GiB ({bt.formula()})",
+            flush=True,
+        )
         args._dsv41_budget_total = bt
         override = bt.plan_limit_gib
     else:
-        override = getattr(args, "memory_limit_gib", None)
-        args._dsv41_budget_total = None
+        bt = _derive_budget_total(args, bench, max_kv)
+        if bt is not None:
+            args._dsv41_budget_total = bt
+            override = bt.plan_limit_gib
+            _write_derived_plan_sidecar(args, bt)  # so later arms can pin it
+        else:
+            override = getattr(args, "memory_limit_gib", None)
+            args._dsv41_budget_total = None
 
     derivation = derive_plan_from_budget(
         box_budget_gib=getattr(args, "box_budget_gib", None),
@@ -2206,15 +2281,17 @@ def _remeasure_non_metal_overhead(args, mx) -> None:
         return
 
     footprint = int(footprint)
-    if footprint < active:
-        # Metal is not counted in phys_footprint on this platform -> the non-Metal
-        # overhead cannot be derived by subtraction. Record it as inverted (never a
-        # misleading 0.0) and do not abort.
+    # MEDIUM-2: the inversion is footprint < active + CACHE (not just < active) --
+    # if the cache subtraction would drive the result negative, Metal is not fully
+    # in phys_footprint and the overhead is UNMEASURABLE; record None + inverted,
+    # never a bogus 0.0 stamped "ok".
+    if footprint < active + cache:
         print(
             f"[ab] budget-total re-measure: WARN phys_footprint "
-            f"{footprint / GIB:.2f} GiB < mx active {active / GIB:.2f} GiB "
-            "(Metal not in footprint); non_metal_overhead UNMEASURABLE, recorded "
-            "None (rss_semantics=inverted); MLX limit unchanged, no abort",
+            f"{footprint / GIB:.2f} GiB < mx active {active / GIB:.2f} + cache "
+            f"{cache / GIB:.2f} GiB (Metal not fully in footprint); "
+            "non_metal_overhead UNMEASURABLE, recorded None "
+            "(rss_semantics=inverted); MLX limit unchanged, no abort",
             flush=True,
         )
         args._dsv41_budget_total = bt.replace(
@@ -2224,7 +2301,7 @@ def _remeasure_non_metal_overhead(args, mx) -> None:
         )
         return
 
-    measured_gb = max(0.0, (footprint - active - cache) / GIB)
+    measured_gb = (footprint - active - cache) / GIB
     overage_gb = measured_gb - bt.non_metal_overhead_gb
     # plan_limit is NEVER lowered post-load (HIGH-1).
     args._dsv41_budget_total = bt.replace(
@@ -2956,7 +3033,7 @@ def _memory_headline(receipt) -> str:
         f" mlx_peak_gb={mem.get('mlx_peak_gb', peak_gb):.2f}"
         f" process_peak_rss_gb={mem.get('process_peak_rss_gb', 0.0):.2f}"
         f" system_used_peak_gb={mem.get('system_used_peak_gb', 0.0):.2f}"
-        f" (sys start {mem.get('system_used_at_start_gb', 0.0):.2f})"
+        f" (sys at decode start {mem.get('system_used_at_decode_start_gb', 0.0):.2f})"
     )
 
 
@@ -3140,6 +3217,13 @@ def _abort_receipt_row(arm, exc, args=None) -> dict:
         "reason": str(exc),
         "stage": stage,
         "exception": type(exc).__name__,
+        # LOW: a human note so the ledger row is self-explanatory (this arm produced
+        # no measurement; the run exited 4 -- chain later arms with `&&`, not `;`).
+        "note": (
+            "arm aborted before producing a receipt; no measurement recorded. "
+            "The bench exited 4 at this arm -- with `&&` chaining the launcher stops "
+            "here rather than re-loading + re-aborting every later step."
+        ),
     }
     bt = getattr(args, "_dsv41_budget_total", None) if args is not None else None
     if bt is not None:
@@ -3990,6 +4074,25 @@ def main(argv=None) -> int:
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.
     if len(receipts) >= 2:
         base = receipts[0]
+        # W106 HIGH-2: byte-identity across arms is only meaningful if every arm ran
+        # the SAME plan (same residency).  Assert equal plan_limit_gib_effective (or
+        # _derived) before trusting the comparison; a differing plan is flagged.
+        def _plan_of(r):
+            m = r.get("memory") or {}
+            return m.get("plan_limit_gib_effective", m.get("plan_limit_gib_derived"))
+        _base_plan = _plan_of(base)
+        _plans_equal = all(_plan_of(r) == _base_plan for r in receipts)
+        if not _plans_equal:
+            print(
+                "[ab] WARN: arms ran DIFFERENT plan_limit values "
+                f"({[_plan_of(r) for r in receipts]}); byte-identity/tok-s across "
+                "arms is NOT comparable -- pin the plan with --memory-plan-from "
+                "<out-dir>/derived-plan.json for every arm after the first.",
+                flush=True,
+            )
+        else:
+            print(f"[ab] plan reproducibility: all arms ran plan_limit={_base_plan}",
+                  flush=True)
         for cand in receipts[1:]:
             identical = cand["token_ids_sha256"] == base["token_ids_sha256"]
             d_base = base["decode_tok_s"] or 0.0

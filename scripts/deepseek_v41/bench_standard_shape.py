@@ -701,7 +701,10 @@ class _MLXMemProbe:
             "ru_maxrss_gb": ru_maxrss / GIB,
             "process_peak_rss_gb": process_peak_rss / GIB,
             "system_used_peak_gb": system_used_peak / GIB,
-            "system_used_at_start_gb": system_used_start / GIB,
+            # W106 LOW: renamed from system_used_at_start_gb -- this is the box used
+            # baseline at DECODE start (post-load, when the sampler starts), distinct
+            # from the budget derivation's pre-load budget_system_used_at_start_gb.
+            "system_used_at_decode_start_gb": system_used_start / GIB,
         }
 
 

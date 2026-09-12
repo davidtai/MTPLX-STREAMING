@@ -866,3 +866,61 @@ def test_high1_plan_overshoot_flag_threads(tmp_path):
     bt = args._dsv41_budget_total
     assert bt.plan_overshoot_gib == pytest.approx(9.0)
     assert "plan_overshoot(9)" in bt.formula()
+
+
+# --------------------------------------------------------------------------
+# HIGH-2: derived-plan sidecar + --memory-plan-from pinning (reproducible plan).
+# --------------------------------------------------------------------------
+
+
+def test_high2_derive_writes_sidecar_and_pin_round_trips(tmp_path):
+    mod = _mod()
+    # Arm 1: budget path -> derives + writes <out-dir>/derived-plan.json.
+    args1 = _budget_args(mod, tmp_path)
+    args1._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args1, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    sidecar = tmp_path / "derived-plan.json"
+    assert sidecar.exists(), "budget path must write derived-plan.json"
+    plan1 = args1._dsv41_budget_total.plan_limit_gib
+
+    # Arm 2: a DIFFERENT live baseline, but PINNED from the sidecar -> same plan.
+    args2 = _budget_args(mod, tmp_path)
+    args2.memory_plan_from = sidecar
+    args2._dsv41_system_used_at_start_bytes = int(55 * GIB)  # would derive a smaller plan
+    mod._resolve_derivation(args2, bench=_FakeBench(int(55 * GIB)), max_kv=1000)
+    plan2 = args2._dsv41_budget_total.plan_limit_gib
+    assert plan2 == pytest.approx(plan1)  # pinned, not re-derived from the new baseline
+    assert args2._dsv41_budget_total.source == "budget"
+
+
+def test_high2_pinned_plan_survives_serialization(tmp_path):
+    mod = _mod()
+    d = mod.derive_budget_total_plan(
+        budget_total_gb=93.0, system_used_at_start_gb=10.2, non_metal_overhead_gb=2.0,
+        kv_growth_to_max_kv_gb=0.36, safety_gb=3.0, plan_overshoot_gib=6.0, floor_gib=20.0,
+    )
+    path = tmp_path / "derived-plan.json"
+    path.write_text(json.dumps(d.to_plan_dict()))
+    loaded = mod._load_pinned_plan(path)
+    assert loaded.plan_limit_gib == pytest.approx(d.plan_limit_gib)
+    assert loaded.plan_overshoot_gib == pytest.approx(6.0)
+    assert loaded.forecast_system_peak_gib() == pytest.approx(d.forecast_system_peak_gib())
+
+
+def test_medium2_partial_inversion_footprint_lt_active_plus_cache(monkeypatch):
+    mod = _mod()
+    # footprint 63 < active 60 + cache 6 = 66 -> UNMEASURABLE (inverted), NOT a
+    # bogus 0.0 stamped "ok" (MEDIUM-2).
+    _patch_footprint(mod, monkeypatch, 63.0)
+    mx = _FakeMx(active_bytes=int(60 * GIB), cache_bytes=int(6 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # no raise
+    bt = args._dsv41_budget_total
+    assert bt.non_metal_overhead_measured_gb is None
+    assert bt.rss_semantics == "inverted"
+    assert mx.set_memory_limit_calls == []
