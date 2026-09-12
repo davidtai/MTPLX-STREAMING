@@ -1132,19 +1132,28 @@ ARM_PRESETS = {
         runner="v2", draft="1", draft_head_bf16="1",
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
-    # W115: the HONEST verify-core A/B.  cell16k_ring_v2_draft_attn runs the K+1 verify
+    # W115: the K29 verify-core A/B.  cell16k_ring_v2_draft_attn runs the K+1 verify
     # through the K29 fused decode-attention CORE -- NOT because the preset arms it (it
     # does not) but because _run_arm setdefaults DECODE_ATTN_KERNEL="1" for every
-    # --decode-mode dspark arm (dspark_decode_kernel_env_defaults).  This arm pins that
-    # core OFF for the verify: decode_attn_kernel="0" is the RUNTIME knob (an explicit
-    # "0" beats the setdefault, which only fills unset keys) and dspark_verify_k29="0"
-    # drops K29 from the setdefault entirely -- BOTH, so nothing can re-arm it.  Every
-    # other key is identical to cell16k_ring_v2_draft_attn (SELECTED_KEYS + fused proj +
-    # lean casts + wo_a cache all still on), so the direct A/B isolates the verify SDPA
-    # CORE: K29 (draft_attn) vs the eager per-row gathered core (this arm).  Proof:
-    # dspark.decode_attn_kernel_engagement.calls == 0 here (>0 on draft_attn) and the
-    # dspark per_cycle verify_ms delta.  Both arms are greedy-identical to their own AR
-    # reference (the verify is authoritative); this arm's core is byte-identical eager.
+    # --decode-mode dspark arm (dspark_decode_kernel_env_defaults).  This arm pins K29
+    # OFF: decode_attn_kernel="0" is the RUNTIME knob (an explicit "0" beats the
+    # setdefault, which only fills unset keys) and dspark_verify_k29="0" drops K29 from
+    # the setdefault entirely -- BOTH, so nothing can re-arm it.  Every other key is
+    # identical to cell16k_ring_v2_draft_attn.
+    #
+    # SCOPE CAVEAT: DECODE_ATTN_KERNEL is a WHOLE-ARM runtime knob, not verify-only.
+    # It also gates the DSpark DRAFT attention (deepseek_v41_dspark.py:591 _sparse_attend
+    # -> _decode_attn_kernel_use) and the AR reference decode (M=1) via the same gate.
+    # So this arm flips K29 for draft + AR + verify at once.  W60: K29 is -38% vs eager
+    # at M=1, so this arm's DRAFT may be FASTER and its headline tok/s / stats.draft_ms
+    # are CONFOUNDED by the draft flip -- do NOT read them as the verify-core delta.
+    # ONLY dspark.per_cycle_ms.verify_ms (and verify_stage_timing's attn stages) isolate
+    # the verify core.  Proof reads rows AND calls: control
+    # decode_attn_kernel_engagement has calls>0 with rows>1 (verify rows engaged); this
+    # arm has calls==0.  Run at DSpark depth <= 7 (K+1 <= 8): a depth-8 verify is >8 rows
+    # and runs eager on BOTH arms while control's calls stays >0 from the M=1 draft, so
+    # calls alone would mislead.  greedy-identical to AR either way (verify authoritative;
+    # this arm's core is byte-identical eager, K29 is rounding-class).
     "cell16k_ring_v2_draft_attn_eager": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
@@ -1219,8 +1228,14 @@ ROUNDING_CLASS_ENVS = (
 #: Preset values that mean a lever is UNSET / turned OFF (never a rounding-class
 #: reason).  W115: an arm may pin a rounding-class key to an explicit "0" to defeat a
 #: setdefault (cell16k_ring_v2_draft_attn_eager pins DECODE_ATTN_KERNEL="0"); an OFF
-#: lever must not be listed as a reason its tokens round.
-_LEVER_OFF_VALUES = frozenset({None, "", "0", "false", "off", "no", "none"})
+#: lever must not be listed as a reason its tokens round.  This is the INTERSECTION of
+#: OFF across every rounding-class runtime resolver: the bool resolvers
+#: (_resolve_decode_attn_kernel/_attn_core_compile/_attn_fused_proj) treat "none"/
+#: "default" as OFF but the _env_truthy resolvers (SMALL_STAGES_FUSED, HC_PREMIX_KERNEL)
+#: and _draft_head_bf16_on treat "none"/"default" as ON and "auto" as OFF -- so ONLY
+#: these six are OFF everywhere.  "none"/"auto"/"default" are deliberately excluded
+#: (test_off_values_are_off_in_every_runtime_resolver guards this).
+_LEVER_OFF_VALUES = frozenset({None, "", "0", "false", "off", "no"})
 
 
 def _rounding_class_keys(arm: str) -> list:
@@ -3196,8 +3211,12 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         # W115: zero the decode-core / fused-proj engagement counters right before the
         # UNTIMED headline pass so the dspark receipt block reports THIS pass's verify
         # engagement (the K29 core the verify rows drove + the W101 projections),
-        # captured after the pass and before the timed stage-timing pass (which forces
-        # the cores eager).  Closes the window-43 "fused_proj = AR only" gap.
+        # captured right after it.  Scoped to the headline pass for two reasons: (a) the
+        # optional timed stage-timing pass re-runs the decode and would DOUBLE the
+        # counts, and (b) that pass forces the COMPILE levers (K35 small-stages, the
+        # core-compile tape) eager via their recording guard -- K29 itself has no such
+        # guard and still dispatches under timing, but the double-count alone is reason
+        # enough to capture before it.  Closes the window-43 "fused_proj = AR only" gap.
         _eng_reset = _reset_dspark_engagement_counters()
         t0 = time.perf_counter()
         toks = dspark_generate(
