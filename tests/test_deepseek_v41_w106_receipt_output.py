@@ -7,10 +7,11 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
     bench tokenizer; token_ids + decoded_text + head/tail (first/last 600 chars);
   * ``_divergence_context`` -- decoded text ~200 chars either side of a divergence
     TOKEN index;
-  * ``_nonclobber_write`` -- atomic (tmp + rename) write that never overwrites an
-    existing sidecar (suffix -2, -3);
-  * ``_write_output_sidecars`` -- ``<stem>.output.txt`` for the measured stream and
-    ``<stem>.ar-reference.output.txt`` for the DSpark comparison stream.
+  * ``_reserve_paired`` -- atomic (tmp + rename) reservation that never overwrites
+    an existing sidecar and applies the SAME ``-n`` suffix to a paired set;
+  * ``_write_output_sidecars`` -- ``<stem>.<sha12>.output.txt`` for the measured
+    stream and ``<stem>.<sha12>.ar-reference.output.txt`` for the DSpark comparison
+    stream (sha[:12] in both names, paired suffix).
 
 Uses a FAKE tokenizer (no model, no MLX op, no server). MLX is imported ONLY to
 pin the default device to CPU (memory/worker-tests-must-pin-mlx-cpu.md). Run under
@@ -120,52 +121,63 @@ def test_divergence_context_none_without_tokenizer():
 # --------------------------------------------------------------------------
 
 
-def test_nonclobber_write_creates_then_suffixes(tmp_path):
+def test_suffixed_and_reserve_paired(tmp_path):
     mod = _mod()
-    desired = tmp_path / "receipt.output.txt"
-    p1 = mod._nonclobber_write(desired, "first")
-    assert p1 == desired and desired.read_text() == "first"
-    # a second write must NOT overwrite; it lands on -2.
-    p2 = mod._nonclobber_write(desired, "second")
-    assert p2 == tmp_path / "receipt.output-2.txt"
-    assert p2.read_text() == "second"
-    assert desired.read_text() == "first"  # untouched
-    # and a third -> -3.
-    p3 = mod._nonclobber_write(desired, "third")
-    assert p3 == tmp_path / "receipt.output-3.txt"
-    # no leftover .tmp files
-    assert not list(tmp_path.glob("*.tmp"))
+    a = tmp_path / "r.abc.output.txt"
+    b = tmp_path / "r.abc.ar-reference.output.txt"
+    assert mod._suffixed(a, 1) == a
+    assert mod._suffixed(a, 2) == tmp_path / "r.abc.output-2.txt"
+    # first reservation: both at n=1
+    got = mod._reserve_paired([a, b])
+    assert got == [a, b]
+    assert a.exists() and b.exists()  # reserved (empty)
+    # second reservation of the SAME pair: the SAME -2 applied to BOTH (paired)
+    got2 = mod._reserve_paired([a, b])
+    assert got2 == [tmp_path / "r.abc.output-2.txt",
+                    tmp_path / "r.abc.ar-reference.output-2.txt"]
 
 
-def test_write_output_sidecars_ar_only(tmp_path):
+def test_reserve_paired_bumps_both_when_only_one_taken(tmp_path):
+    mod = _mod()
+    a = tmp_path / "r.abc.output.txt"
+    b = tmp_path / "r.abc.ar-reference.output.txt"
+    a.write_text("pre-existing primary only")  # only ONE of the pair is taken
+    got = mod._reserve_paired([a, b])
+    # n=1 is refused because `a` exists, so BOTH move to -2 (pair never splits)
+    assert got == [tmp_path / "r.abc.output-2.txt",
+                   tmp_path / "r.abc.ar-reference.output-2.txt"]
+    assert b.exists() is False  # the un-suffixed b was NOT created (kept paired)
+
+
+def test_write_output_sidecars_ar_only_sha_in_name(tmp_path):
     mod = _mod()
     out = tmp_path / "cell.jsonl"
     receipt = {
         "arm": "control",
-        "token_ids_sha256": "abc123",
+        "token_ids_sha256": "abc123def456ghi",  # sha[:12] = abc123def456
         "decode_tok_s": 11.5,
         "decoded_text": "HELLO WORLD",
     }
     mod._write_output_sidecars(out, receipt)
-    side = tmp_path / "cell.output.txt"
+    side = tmp_path / "cell.abc123def456.output.txt"
     assert side.exists()
     text = side.read_text()
     assert "# arm: control" in text
     assert "# stream: ar" in text
-    assert "# token_ids_sha256: abc123" in text
+    assert "# token_ids_sha256: abc123def456ghi" in text
     assert "# decode_tok_s: 11.5" in text
     assert "# divergence: none" in text
     assert "HELLO WORLD" in text
     # no AR-reference sidecar for a non-dspark run
-    assert not (tmp_path / "cell.ar-reference.output.txt").exists()
+    assert not (tmp_path / "cell.abc123def456.ar-reference.output.txt").exists()
 
 
-def test_write_output_sidecars_dspark_writes_both(tmp_path):
+def test_write_output_sidecars_dspark_writes_both_paired(tmp_path):
     mod = _mod()
     out = tmp_path / "cell.jsonl"
     receipt = {
         "arm": "dspark",
-        "token_ids_sha256": "ar_sha",
+        "token_ids_sha256": "arsha0000000",  # sha[:12] shared by BOTH names
         "decode_tok_s": 2.2,
         "decoded_text": "AR REFERENCE TEXT",
         "dspark": {
@@ -176,38 +188,45 @@ def test_write_output_sidecars_dspark_writes_both(tmp_path):
         },
     }
     mod._write_output_sidecars(out, receipt)
-    primary = (tmp_path / "cell.output.txt").read_text()
+    primary = (tmp_path / "cell.arsha0000000.output.txt").read_text()
     # the primary sidecar is the measured (DSpark) stream
     assert "# stream: dspark" in primary
     assert "# token_ids_sha256: dsp_sha" in primary
     assert "DSPARK STREAM TEXT" in primary
     assert "tie_flip" in primary  # the divergence lands in the header
-    ref = (tmp_path / "cell.ar-reference.output.txt").read_text()
+    ref = (tmp_path / "cell.arsha0000000.ar-reference.output.txt").read_text()
     assert "# stream: ar-reference" in ref
-    assert "# token_ids_sha256: ar_sha" in ref
+    assert "# token_ids_sha256: arsha0000000" in ref
     assert "AR REFERENCE TEXT" in ref
 
 
-def test_write_output_sidecars_never_overwrites_across_arms(tmp_path):
+def test_write_output_sidecars_same_sha_pairs_suffix(tmp_path):
+    """Two DSpark runs with the SAME sha get the SAME -2 on BOTH sidecars."""
     mod = _mod()
     out = tmp_path / "cell.jsonl"
-    r1 = {"arm": "control", "token_ids_sha256": "s1", "decode_tok_s": 1.0,
-          "decoded_text": "ARM ONE"}
-    r2 = {"arm": "overlap", "token_ids_sha256": "s2", "decode_tok_s": 2.0,
-          "decoded_text": "ARM TWO"}
-    mod._write_output_sidecars(out, r1)
-    mod._write_output_sidecars(out, r2)
-    assert (tmp_path / "cell.output.txt").read_text().find("ARM ONE") != -1
-    assert (tmp_path / "cell.output-2.txt").read_text().find("ARM TWO") != -1
+    receipt = {
+        "arm": "dspark", "token_ids_sha256": "samesha00000", "decode_tok_s": 2.0,
+        "decoded_text": "AR ONE",
+        "dspark": {"token_ids_sha256": "d", "decode_tok_s": 3.0,
+                   "decoded_text": "DSPARK ONE", "divergence": None},
+    }
+    mod._write_output_sidecars(out, receipt)
+    mod._write_output_sidecars(out, receipt)  # same sha -> -2 pair
+    assert (tmp_path / "cell.samesha00000.output.txt").exists()
+    assert (tmp_path / "cell.samesha00000.ar-reference.output.txt").exists()
+    assert (tmp_path / "cell.samesha00000.output-2.txt").exists()
+    assert (tmp_path / "cell.samesha00000.ar-reference.output-2.txt").exists()
+    # no leftover .tmp files
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_write_output_sidecars_decode_unavailable_still_writes(tmp_path):
     mod = _mod()
     out = tmp_path / "cell.jsonl"
-    receipt = {"arm": "control", "token_ids_sha256": "s", "decode_tok_s": 1.0,
+    receipt = {"arm": "control", "token_ids_sha256": "sfoobarbaz00", "decode_tok_s": 1.0,
                "decoded_text": None}  # tokenizer was unavailable
     mod._write_output_sidecars(out, receipt)
-    text = (tmp_path / "cell.output.txt").read_text()
+    text = (tmp_path / "cell.sfoobarbaz00.output.txt").read_text()
     assert "decode unavailable" in text
     assert "# arm: control" in text
 

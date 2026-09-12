@@ -2787,41 +2787,54 @@ def _receipt_stem(out_path) -> Path:
     return p
 
 
-def _nonclobber_write(desired: Path, content: str):
-    """Write ``content`` to ``desired`` (or ``-2``/``-3``... when taken) ATOMICALLY
-    (tmp + rename) and NEVER overwrite an existing sidecar
-    (memory/never-overwrite-a-measurement).  Returns the path written, or None on
-    failure (guarded)."""
+def _suffixed(path: Path, n: int) -> Path:
+    """``path`` for n==1, else ``<stem>-n<suffix>`` (e.g. ``x.output-2.txt``)."""
 
-    try:
-        n = 1
-        target = None
-        while n < 10000:
-            cand = (
-                desired if n == 1
-                else desired.with_name(f"{desired.stem}-{n}{desired.suffix}")
-            )
+    return path if n == 1 else path.with_name(f"{path.stem}-{n}{path.suffix}")
+
+
+def _reserve_paired(paths):
+    """Find the SMALLEST n for which every path in ``paths`` (at suffix n) is free,
+    and atomically reserve them all (O_CREAT|O_EXCL empty files); the SAME n is
+    applied to every path so a receipt's sidecars stay paired
+    (memory/never-overwrite-a-measurement).  Returns the reserved paths (in order),
+    or None on exhaustion/failure."""
+
+    n = 1
+    while n < 100000:
+        cands = [_suffixed(p, n) for p in paths]
+        reserved = []
+        clash = False
+        for cand in cands:
             try:
                 fd = os.open(cand, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             except FileExistsError:
-                n += 1
-                continue
-            os.close(fd)  # reserve the name (empty) so no concurrent run reuses it
-            target = cand
-            break
-        if target is None:
-            return None
-        tmp = target.with_name(target.name + ".tmp")
-        with open(tmp, "w") as fh:
-            fh.write(content)
-        os.replace(tmp, target)  # atomic swap over the reserved empty file
-        return target
-    except OSError as exc:  # pragma: no cover - defensive
-        print(f"[ab] WARN: output sidecar write failed ({exc!r})", flush=True)
-        return None
+                clash = True
+                break
+            os.close(fd)
+            reserved.append(cand)
+        if clash:
+            for r in reserved:  # release partial reservations before trying n+1
+                try:
+                    os.unlink(r)
+                except OSError:
+                    pass
+            n += 1
+            continue
+        return cands
+    return None
 
 
-def _emit_sidecar(path: Path, *, arm, kind, stream, divergence) -> None:
+def _write_reserved(path: Path, content: str) -> None:
+    """Atomically write ``content`` over an already-reserved ``path`` (tmp + rename)."""
+
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as fh:
+        fh.write(content)
+    os.replace(tmp, path)
+
+
+def _sidecar_text(*, arm, kind, stream, divergence) -> str:
     sha = stream.get("token_ids_sha256")
     tok_s = stream.get("decode_tok_s")
     text = stream.get("decoded_text")
@@ -2831,7 +2844,7 @@ def _emit_sidecar(path: Path, *, arm, kind, stream, divergence) -> None:
             f"# stream: {kind}",
             f"# token_ids_sha256: {sha}",
             f"# decode_tok_s: {tok_s}",
-            f"# divergence: "
+            "# divergence: "
             + (json.dumps(divergence) if divergence is not None else "none"),
             "",
             "",
@@ -2841,33 +2854,50 @@ def _emit_sidecar(path: Path, *, arm, kind, stream, divergence) -> None:
         text if text is not None
         else "<decode unavailable (no tokenizer / decode failed)>"
     )
-    written = _nonclobber_write(path, header + body + "\n")
-    if written is not None:
-        print(f"[ab] output sidecar: {written}", flush=True)
+    return header + body + "\n"
 
 
 def _write_output_sidecars(out_path, receipt) -> None:
-    """Persist the FULL decoded output beside the receipt: ``<stem>.output.txt`` for
-    the measured stream and, for a DSpark run, ``<stem>.ar-reference.output.txt``
-    for the AR comparison stream it diverges against.  Fully guarded."""
+    """Persist the FULL decoded output beside the receipt (MEDIUM-3):
+    ``<stem>.<sha12>.output.txt`` for the measured stream and, for a DSpark run,
+    ``<stem>.<sha12>.ar-reference.output.txt`` for the AR comparison stream.  The
+    sha[:12] of the AR pass is in BOTH names (pairs them, and disambiguates arms),
+    and a single ``-n`` suffix is applied to BOTH when a name is taken, so the pair
+    never splits.  Fully guarded."""
 
     try:
         stem = _receipt_stem(out_path)
         arm = receipt.get("arm")
+        sha12 = str(receipt.get("token_ids_sha256") or "nosha")[:12]
+        base = f"{stem.name}.{sha12}"
         dsp = receipt.get("dspark")
         if isinstance(dsp, dict):
-            primary, kind, div = dsp, "dspark", dsp.get("divergence")
+            primary_stream, primary_kind, div = dsp, "dspark", dsp.get("divergence")
         else:
-            primary, kind, div = receipt, "ar", None
-        _emit_sidecar(
-            stem.with_name(stem.name + ".output.txt"),
-            arm=arm, kind=kind, stream=primary, divergence=div,
-        )
+            primary_stream, primary_kind, div = receipt, "ar", None
+
+        want = [stem.with_name(base + ".output.txt")]
         if isinstance(dsp, dict):
-            _emit_sidecar(
-                stem.with_name(stem.name + ".ar-reference.output.txt"),
-                arm=arm, kind="ar-reference", stream=receipt, divergence=div,
+            want.append(stem.with_name(base + ".ar-reference.output.txt"))
+
+        reserved = _reserve_paired(want)
+        if reserved is None:
+            print("[ab] WARN: output sidecar names exhausted; skipping", flush=True)
+            return
+
+        _write_reserved(
+            reserved[0],
+            _sidecar_text(arm=arm, kind=primary_kind, stream=primary_stream,
+                          divergence=div),
+        )
+        print(f"[ab] output sidecar: {reserved[0]}", flush=True)
+        if isinstance(dsp, dict):
+            _write_reserved(
+                reserved[1],
+                _sidecar_text(arm=arm, kind="ar-reference", stream=receipt,
+                              divergence=div),
             )
+            print(f"[ab] output sidecar: {reserved[1]}", flush=True)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[ab] WARN: output sidecar step failed ({exc!r})", flush=True)
 
