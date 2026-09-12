@@ -501,6 +501,16 @@ fi
 # (_GPU_WINDOW_STEP_TAG), inherited by every descendant and UNCHANGED by
 # reparenting; `_pids_with_tag` finds them via `ps -E` regardless of ppid.  The
 # grep uses the [x]-bracket trick so the grep/awk pipeline never matches itself.
+#
+# W106 MEDIUM-3 LIMITATION: `ps -E` does NOT expose the environment of macOS
+# PLATFORM binaries (SIP-signed: /bin/bash, /bin/sleep, /usr/bin/tee, ...), so a
+# reparented platform-binary descendant is INVISIBLE to this tag scan (verified:
+# a tagged /bin/sleep shows no env; a tagged .venv python does).  It reliably
+# catches the descendant that MATTERS -- the venv python holding the model -- so
+# KEEP THE STEP A SINGLE venv-python process (no `python ... | tee`, no wrapping
+# `bash -c` that itself outlives the python) to guarantee the heavy orphan is
+# reaped.  The ppid tree + post-KILL rescan still catch non-reparented platform
+# children; the vm_stat SYSTEM ceiling is the backstop for anything missed.
 _pids_with_tag() {
   [[ -n "${_STEP_TAG:-}" ]] || return 0
   local pat="_GPU_WINDOW_STEP_TAG=[${_STEP_TAG:0:1}]${_STEP_TAG:1}"

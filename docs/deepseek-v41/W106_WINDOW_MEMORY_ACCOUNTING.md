@@ -264,6 +264,13 @@ next command never starts after the abort.
   the UNION of the ppid tree AND the env-tagged set (found via `ps -E`), then
   RE-SCANS after the KILL, logging + KILLing any `ORPHAN survived`. `teardown` reaps
   tagged orphans even after a NORMAL step exit, before releasing the lock.
+  **MEDIUM-3 limitation:** `ps -E` does NOT expose the environment of macOS PLATFORM
+  binaries (SIP-signed: `/bin/bash`, `/bin/sleep`, `/usr/bin/tee`), so a reparented
+  platform-binary descendant is invisible to the tag scan (verified). It reliably
+  catches the descendant that matters — the venv python holding the model — so **keep
+  the step a single venv-python process** (no `python … | tee`, no outer `bash -c`
+  that outlives the python). The ppid tree + rescan catch non-reparented platform
+  children; the vm_stat system ceiling is the backstop.
 
 `GPU_WINDOW_KILL_GRACE_SECONDS` is validated as a non-negative integer (LOW-2; a
 non-integer warns and falls back to 2). Qwen is restored and the lock released from
