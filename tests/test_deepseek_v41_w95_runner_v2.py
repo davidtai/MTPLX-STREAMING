@@ -235,6 +235,41 @@ def _settle_prefetch(rt):
             pass
 
 
+def test_runner_v2_receipt_block(tmp_path):
+    """The snapshot carries a rolled-up ``runner`` block when v2 is armed (mode,
+    the composed knobs, and the SSD-hiding counters the paired window reads);
+    absent -- shipped snapshot byte-unchanged -- when off."""
+    rt_off, _ = _open_runtime(tmp_path / "off", runner_v2=False, prefetch=0)
+    try:
+        assert "runner" not in rt_off.resource_telemetry_snapshot(mx_module=mx)
+    finally:
+        rt_off.close()
+    rt_v2, spec = _open_runtime(
+        tmp_path / "v2", runner_v2=True, resident_slots=2, transient=8, prefetch=6
+    )
+    try:
+        _route_once(rt_v2, spec, [0, 1])           # warm two persistent residents
+        rt_v2.prefetch_experts(spec.routed_layer_start, [6, 7])  # ring-warm two misses
+        _settle_prefetch(rt_v2)
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+        _REAL_EVAL(_switch(rt_v2, spec)(x, idx))    # stream the misses (ring hits)
+        rt_v2.flush_deferred_slot_releases(evaluate=True)
+        block = rt_v2.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        assert block["mode"] == "v2"
+        assert block["single_pool"] is True
+        assert block["overlap_miss_reads"] is True
+        assert block["gate_prefetch_k"] > 0
+        for key in (
+            "expert_misses", "bytes_read", "hit_rate", "prefetch_issued",
+            "prefetch_hit_on_true_route", "prefetch_wasted", "pool_loads",
+            "pool_promotions",
+        ):
+            assert key in block, f"runner block missing {key}"
+        assert block["expert_misses"] >= 1  # experts 6,7 were streamed
+    finally:
+        rt_v2.close()
+
+
 def test_runner_v2_open_arms_single_pool(tmp_path):
     rt_off, _ = _open_runtime(tmp_path / "off", runner_v2=False)
     try:

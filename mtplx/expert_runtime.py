@@ -4609,6 +4609,35 @@ class ExpertStreamingRuntime:
             snapshot["gate_prefetch"] = self._gate_prefetch_snapshot(
                 cache, cache_by_layer
             )
+        # W95: the v2 runner receipt block -- ONE rolled-up view of the composed
+        # SSD-hiding runner (single pool + prefetch ring + overlap_miss_reads).
+        # Only when MTPLX_DSV41_RUNNER=v2 is armed, so the shipped snapshot is
+        # byte-unchanged off. Values are cumulative; the receipt divides by decode
+        # tokens for the per-token window targets (misses/token & bytes/token DOWN,
+        # prefetch hit UP vs the paired cell16k_ring reference).
+        if os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
+            snapshot["runner"] = {
+                "mode": "v2",
+                "single_pool": bool(getattr(self, "_single_slot_pool", False)),
+                "overlap_miss_reads": bool(
+                    getattr(self.config, "overlap_miss_reads", False)
+                ),
+                "gate_prefetch_k": int(getattr(self.config, "prefetch_slots", 0)),
+                "expert_misses": int(cache.get("expert_misses", 0)),
+                "bytes_read": int(cache.get("bytes_read", 0)),
+                "hit_rate": float(cache.get("hit_rate", 0.0)),
+                "prefetch_issued": int(cache.get("prefetch_issued", 0)),
+                "prefetch_hit_on_true_route": int(
+                    cache.get("prefetch_hit_on_true_route", 0)
+                ),
+                "prefetch_wasted": int(cache.get("prefetch_wasted", 0)),
+                "prefetch_bytes": int(cache.get("prefetch_bytes", 0)),
+                "pool_promotions": int(cache.get("promotions", 0)),
+                "pool_loads": int(cache.get("pool_loads", 0)),
+                # Not timed on this path; the receipt derives SSD ms/token from
+                # expert_misses x record_bytes / realized BW.
+                "ssd_wait_ms_per_token": None,
+            }
         return snapshot
 
     def _gate_prefetch_snapshot(
