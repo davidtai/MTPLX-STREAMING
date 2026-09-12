@@ -683,7 +683,10 @@ class _MLXMemProbe:
         mlx_peak = int(self.peak_bytes())
         ru_maxrss = int(_process_rss_bytes())
         sampled_rss = int(sampler.peak_rss_bytes) if sampler is not None else None
-        process_peak_rss = sampled_rss if sampled_rss is not None else ru_maxrss
+        # W106 LOW: fall back to ru_maxrss when the sampler produced NO peak (None,
+        # or 0 because it never got a reading), so process_peak_rss_gb is never a
+        # misleading 0.0.  sampler_peak_rss_gb still reports the sampler's own value.
+        process_peak_rss = sampled_rss if sampled_rss else ru_maxrss
         system_used_peak = (
             int(sampler.peak_system_used_bytes) if sampler is not None else 0
         )
