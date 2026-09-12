@@ -3160,6 +3160,14 @@ class DeepseekV41Backbone(nn.Module):
             engram_state = self.engram_hash.fresh() if self.engram_hash is not None else None
             cache = _make_cache(self.args, engram_state=engram_state)
 
+        # W107 (review LOW-A): admit the WHOLE prompt once, up front -- the chunk-major
+        # driver below feeds the prompt in spans, so a per-span check would only trip on
+        # span 2 with a partial prefix already written; fail at offset 0 instead.  No-op
+        # unless the bounded lanes are armed; _forward_layer_major hoists this too.
+        _admit = getattr(cache, "assert_can_admit", None)
+        if callable(_admit):
+            _admit(s)
+
         chunk = _resolve_prefill_chunk(self.args, s, prefill_chunk)
         if chunk <= 0 or chunk >= s:
             # one-shot (decode, short prompts, or chunking disabled): byte-for-byte

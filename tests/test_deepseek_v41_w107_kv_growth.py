@@ -1034,3 +1034,23 @@ def test_rollback_deep_leaves_engram_untouched(monkeypatch):
     with pytest.raises(ValueError, match="below the drop frontier"):
         lc.rollback(m)
     assert spy.trims == [], "engram was trimmed before the window raise (half-rewound)"
+
+
+# ---------------------------------------------------------------------------
+# Review LOW-A: the over-cap admission check must be hoisted to __call__ so a
+# chunk-major prefill fails at offset 0, not at span 2 with a partial prefix.
+# ---------------------------------------------------------------------------
+def test_over_cap_chunk_major_prefill_raises_at_offset_zero(monkeypatch):
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "40")   # tiny cap
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    model = _tiny_model()
+    cache = model.make_cache()
+    prompt = mx.array([list(range(100))])                      # 100 >> 40 + slack
+    # chunk 32 forces the chunk-major driver (multiple _forward_span spans); the
+    # whole-prompt pre-check in __call__ must raise BEFORE span 0 writes anything.
+    with pytest.raises(ValueError, match="cannot admit"):
+        model(prompt, cache=cache, prefill_chunk=32)
+    assert all(lc.offset == 0 for lc in cache.layers), "a chunk was written before the raise"
+    assert all(lc.window_len() == 0 for lc in cache.layers)
