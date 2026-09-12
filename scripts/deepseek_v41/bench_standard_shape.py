@@ -485,12 +485,41 @@ def write_receipt(out_dir: Path, receipt: dict) -> Path:
 
 
 def _process_rss_bytes() -> int:
-    """Resident set size of this process. macOS ru_maxrss is bytes, Linux KiB."""
+    """LIFETIME peak RSS of this process (``ru_maxrss``, a high-water mark). macOS
+    reports bytes, Linux KiB. This is NOT the current footprint -- use
+    :func:`_phys_footprint_bytes` for a point-in-time (bracketed-window) figure."""
 
     maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return int(maxrss)
     return int(maxrss) * 1024  # Linux reports KiB
+
+
+def _phys_footprint_bytes() -> int:
+    """The CURRENT process footprint in bytes (W106 MEDIUM-2): ``phys_footprint``
+    (falling back to ``resident_size``) from mach ``task_info`` via
+    ``mtplx.deepseek_v41_memory_profile.process_rss_snapshot`` -- a point-in-time
+    figure the 1 Hz sampler can bracket over prefill+decode, unlike the lifetime
+    ``ru_maxrss``. Off darwin / on any failure, falls back to ``ps`` RSS."""
+
+    try:
+        from mtplx.deepseek_v41_memory_profile import process_rss_snapshot
+
+        snap = process_rss_snapshot()
+        fp = snap.get("phys_footprint_bytes") or snap.get("resident_bytes")
+        if fp:
+            return int(fp)
+    except Exception:
+        pass
+    # Fallback: `ps -o rss=` for the current process (KiB -> bytes).
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-o", "rss=", "-p", str(os.getpid())],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    return int(out) * 1024 if out.isdigit() else 0
 
 
 def _vm_stat_count(line: str) -> int:
@@ -557,31 +586,12 @@ class _MemorySampler:
         self.peak_rss_bytes = 0
         self.peak_system_used_bytes = 0
         self.system_used_at_start_bytes = 0
-        # psutil avoids spawning a `ps` per second; fall back to `ps` when absent.
-        try:
-            import psutil  # noqa: F401
-
-            self._psutil_proc = psutil.Process(self._pid)
-        except Exception:
-            self._psutil_proc = None
 
     def _read_rss(self) -> int:
-        proc = self._psutil_proc
-        if proc is not None:
-            try:
-                return int(proc.memory_info().rss)
-            except Exception:
-                pass
-        try:
-            out = subprocess.run(
-                ["/bin/ps", "-o", "rss=", "-p", str(self._pid)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            ).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            return 0
-        return int(out) * 1024 if out.isdigit() else 0  # ps reports KiB
+        # W106 MEDIUM-2: sample the CURRENT footprint (phys_footprint via mach
+        # task_info) so the peak is a genuine over-the-window high-water, not the
+        # lifetime ru_maxrss. Falls back to ps inside _phys_footprint_bytes.
+        return _phys_footprint_bytes()
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -654,19 +664,26 @@ class _MLXMemProbe:
         return _MemorySampler(interval_s=interval_s)
 
     def memory_block(self, sampler: "_MemorySampler | None" = None) -> dict:
-        """The receipt ``memory`` block. ``mlx_peak_gb`` is exactly the old
-        ``peak_gb`` (the MLX allocator peak of THIS process). ``process_peak_rss_gb``
-        is the process's peak RSS -- ``ru_maxrss`` (a lifetime high-water) unioned
-        with the 1 Hz sampler's peak -- which includes the Python heap and the
-        non-Metal expert-reader buffers the MLX peak omits, so it is always >=
-        ``mlx_peak_gb`` (RSS on Apple Silicon counts unified Metal memory too; the
-        max() also makes the invariant hold unconditionally). ``system_used_*`` are
-        the whole-box used-memory envelope the gpu_window.sh guard aborts on."""
+        """The receipt ``memory`` block. W106 MEDIUM-2 decomposes the process figures
+        into three DISTINCT, single-meaning keys (no undecomposable ``max()``):
+
+          * ``mlx_peak_gb`` -- the MLX allocator peak of THIS process
+            (``mx.get_peak_memory``), the legacy ``peak_gb``.
+          * ``sampler_peak_rss_gb`` -- the 1 Hz sampler's peak CURRENT footprint
+            (``phys_footprint``, mach) BRACKETED over prefill+decode; None when no
+            sampler ran.
+          * ``ru_maxrss_gb`` -- the process LIFETIME peak RSS (``ru_maxrss``), which
+            also spans model load and earlier arms.
+          * ``process_peak_rss_gb`` -- the process peak over the RUN: the sampler
+            peak when a sampler ran, else ``ru_maxrss`` (documented fallback).
+          * ``system_used_*`` -- the whole-box used-memory envelope the gpu_window.sh
+            guard aborts on.
+        All values are GiB (bytes / 2**30)."""
 
         mlx_peak = int(self.peak_bytes())
         ru_maxrss = int(_process_rss_bytes())
-        sampled_rss = int(sampler.peak_rss_bytes) if sampler is not None else 0
-        process_peak_rss = max(mlx_peak, ru_maxrss, sampled_rss)
+        sampled_rss = int(sampler.peak_rss_bytes) if sampler is not None else None
+        process_peak_rss = sampled_rss if sampled_rss is not None else ru_maxrss
         system_used_peak = (
             int(sampler.peak_system_used_bytes) if sampler is not None else 0
         )
@@ -675,6 +692,10 @@ class _MLXMemProbe:
         )
         return {
             "mlx_peak_gb": mlx_peak / GIB,
+            "sampler_peak_rss_gb": (
+                None if sampled_rss is None else sampled_rss / GIB
+            ),
+            "ru_maxrss_gb": ru_maxrss / GIB,
             "process_peak_rss_gb": process_peak_rss / GIB,
             "system_used_peak_gb": system_used_peak / GIB,
             "system_used_at_start_gb": system_used_start / GIB,
