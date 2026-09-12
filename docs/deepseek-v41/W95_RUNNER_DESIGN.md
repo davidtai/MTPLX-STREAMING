@@ -246,6 +246,33 @@ wasted read (evicted at lowest priority); a true-route expert the prefetch **mis
 demand read (identical to today). The gather always uses the **true** `indices`. So prefetch
 only warms the cache — **it never changes a result** (§4).
 
+**Demand-priority speculative-byte budget (W95f → W95g).** Speculation shares one drive with
+the demand reads, so a gate-oracle burst must not crowd demand off the SSD. The throttle
+lives in `prefetch_experts` and keys off a per-decode-token window (`speculative_bytes_read`
+/ `demand_bytes_read` deltas since the last token boundary, re-marked at each boundary and at
+`reset`). **W95f** capped *cumulative* speculative bytes at `budget × demand` with
+`budget = 0.5` under v2. That was wrong twice over: cumulatively it latched off for the life
+of the process after the first demand fallback (spec ≫ demand, never recovering — the reason
+W95f added the recovering window), and even per-token the `spec ≥ 0.5 × demand` form is
+algebraically `spec/(spec+demand) ≤ 1/3` with negative feedback — every *hidden* miss (a
+prefetch that paid off) never grows the demand denominator, so the denominator only shrinks
+relative to speculation. A real-runtime probe showed the first `prefetch_experts` call in a
+token issuing 4 ids and every later call skipping; simulated on the 40-layer cell it yields
+**~16–25 issued/token, far below the ~149/token** the §5 prefetch-coverage rows (r ≈
+0.65–0.75 at k = 12) imply.
+
+**W95g** replaces this with a per-token **share** `f` plus a **floor**: skip only when
+`spec_window > f × (spec_window + demand_window) + floor_records × record_bytes`. `f`
+(default **0.85** under v2) is the fraction of the token's *total* SSD bytes speculation may
+hold — an honest cap on drive share rather than a ratio-to-demand — and the floor (default
+**8 records**) means a token's first prefetch calls always issue even at zero demand, so
+speculation can never be latched off by one early call. `MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET`
+keeps its name but now sets `f`; **`0` disables the budget entirely, which every live window
+runs with right now** — so **no window has yet measured a live budget**. The receipt block
+prints `byte_budget` (f), `byte_floor_records`, `budget_skips` and `prefetch_calls`, so the
+first window to arm a non-zero share can read the skips/calls throttle fraction directly.
+`MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR` overrides the floor.
+
 ### 1.4 Eviction / promotion only at token boundaries
 
 Under the epoch (§1.2), no LRU eviction or protected-promotion happens *during* a token.

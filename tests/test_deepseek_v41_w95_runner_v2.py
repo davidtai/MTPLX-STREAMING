@@ -288,7 +288,9 @@ def test_runner_v2_receipt_block(tmp_path):
         assert block["expert_misses"] >= 1  # experts 6,7 were streamed
         assert block["prefetch_k"] == _RUNNER_V2_GATE_PREFETCH_K  # 6 (retuned)
         assert block["prefetch_margin"] == _RUNNER_V2_GATE_PREFETCH_MARGIN  # -0.05
-        assert block["byte_budget"] == 0.5  # v2 default demand-priority budget
+        assert block["byte_budget"] == 0.85  # v2 default speculative SHARE f (W95g)
+        assert block["byte_floor_records"] == 8  # W95g default floor (records)
+        assert "prefetch_calls" in block  # W95g: budget_skips/prefetch_calls ratio
     finally:
         rt_v2.close()
 
@@ -623,6 +625,9 @@ def test_v2_byte_budget_recovers_after_latch(tmp_path):
         layer = spec.routed_layer_start
         rec = rt._record_bytes_for_layer(layer)
         # emulate one fallback then heavy speculation: demand = 1 record, spec = 10x.
+        # W95g: drop the floor so the SHARE alone decides (10rec > 0.85*11rec -> skip);
+        # the recovery behaviour under test is independent of the floor.
+        rt._prefetch_byte_floor_records = 0
         rt.demand_bytes_read = rec
         rt.speculative_bytes_read = 10 * rec
         skips0 = rt._prefetch_budget_skips
@@ -641,6 +646,59 @@ def test_v2_byte_budget_recovers_after_latch(tmp_path):
         assert issued > 0, "budget stayed latched after a decode-token boundary"
     finally:
         rt.close()
+
+
+def test_v2_byte_budget_share_with_floor(tmp_path):
+    """W95g (HIGH-1): the speculative-byte budget is a per-token SHARE with a floor,
+    not a cumulative spec>=(0.5 x demand) cap.  With f=0.85 and an 8-record floor,
+    four prefetch calls of 4/2/2/2 ids against a 3-record demand window all issue
+    (10 speculative reads, ZERO budget skips) -- the old rule (spec/(spec+demand) <=
+    1/3, negative feedback) let only the first call issue and skipped the rest. A
+    tight share (0.1) with a zero floor still skips once speculation dominates."""
+    rt, spec = _open_runtime(
+        tmp_path / "share", runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=16,
+    )
+    try:
+        layer = spec.routed_layer_start
+        rec = rt._record_bytes_for_layer(layer)
+        assert rt._prefetch_byte_budget == 0.85  # v2 default share f
+        assert rt._prefetch_byte_floor_records == 8  # v2 default floor
+        # a 3-record demand window for this token; the marks sit at 0 (no route yet).
+        rt._demand_bytes_at_token_start = 0
+        rt._speculative_bytes_at_token_start = 0
+        rt.demand_bytes_read = 3 * rec
+        skips0 = rt._prefetch_budget_skips
+        total = 0
+        for ids in ([4, 5, 6, 7], [8, 9], [10, 11], [12, 13]):
+            issued = rt.prefetch_experts(layer, ids)
+            _settle_prefetch(rt)  # speculative_bytes_read grows on completion
+            total += issued
+        assert total == 10, total
+        assert rt._prefetch_budget_skips == skips0  # zero skips at the default share
+        assert rt._prefetch_calls >= 4  # every call reached the budget decision
+    finally:
+        rt.close()
+
+    rt2, spec2 = _open_runtime(
+        tmp_path / "tight", runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        layer = spec2.routed_layer_start
+        rec = rt2._record_bytes_for_layer(layer)
+        rt2._prefetch_byte_budget = 0.1  # tight share
+        rt2._prefetch_byte_floor_records = 0  # no floor
+        rt2._demand_bytes_at_token_start = 0
+        rt2._speculative_bytes_at_token_start = 0
+        rt2.demand_bytes_read = rec
+        rt2.speculative_bytes_read = 10 * rec  # spec already dominates
+        skips0 = rt2._prefetch_budget_skips
+        # 10rec > 0.1*(10rec + 1rec) + 0 = 1.1rec  ->  skip.
+        assert rt2.prefetch_experts(layer, [8, 9]) == 0
+        assert rt2._prefetch_budget_skips == skips0 + 1
+    finally:
+        rt2.close()
 
 
 def test_v2_receipt_blocks_reach_harness_and_daemon(tmp_path):

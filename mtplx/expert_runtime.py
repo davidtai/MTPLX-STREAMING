@@ -2132,13 +2132,20 @@ class ExpertStreamingRuntime:
         # route had to stream it on the demand path instead.
         self.speculative_bytes_read = 0
         self.demand_bytes_read = 0
-        # W95 retune: strict demand priority via a cumulative speculative-byte
-        # BUDGET. Window 39: k=12 pushed the drive to 70% busy (speculative
-        # contending with demand -> net -6%). Cap cumulative speculative bytes at
-        # (budget x cumulative demand bytes); ``prefetch_experts`` skips issuing
-        # once exceeded, so demand reads always win the drive.
-        # MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET overrides; default 0.5 under the v2
-        # runner, else 0.0 (no budget -- the pre-retune / GATE_PREFETCH-only path).
+        # W95g (HIGH-1 re-review): strict demand priority via a per-token
+        # speculative SHARE with a floor -- NOT a cumulative spec<=(budget x demand)
+        # cap. The old rule (budget 0.5, cumulative) combined with the recovering
+        # window and the negative feedback of every hidden miss shrinking the demand
+        # denominator settled to spec/(spec+demand) <= 1/3, so a real-runtime probe
+        # showed only the first call in a token issuing and every later call
+        # skipped, throttling to ~16-25 issued/token vs the ~149 the design cost
+        # model (§5) needs. The rule is now: skip only when this token's speculative
+        # bytes exceed a SHARE ``f`` of the token's total (spec+demand) SSD bytes,
+        # PLUS a floor of ``floor_records`` records so early speculation (small or
+        # zero demand) is never throttled. ``MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET``
+        # keeps its name but now sets the share ``f``; 0 disables the budget
+        # entirely (what the live windows use right now). Default f = 0.85 under the
+        # v2 runner, else 0.0 (no budget -- the GATE_PREFETCH-only path).
         _budget_raw = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET")
         if _budget_raw is not None:
             try:
@@ -2146,10 +2153,25 @@ class ExpertStreamingRuntime:
             except (TypeError, ValueError):
                 self._prefetch_byte_budget = 0.0
         elif os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
-            self._prefetch_byte_budget = 0.5
+            self._prefetch_byte_budget = 0.85
         else:
             self._prefetch_byte_budget = 0.0
+        # W95g: the floor (in expert records) below which speculation is never
+        # throttled regardless of the share -- so a token's first prefetch calls
+        # always issue. Env-overridable (MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR);
+        # default 8 records.
+        _floor_raw = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR")
+        if _floor_raw is not None:
+            try:
+                self._prefetch_byte_floor_records = max(0, int(_floor_raw))
+            except (TypeError, ValueError):
+                self._prefetch_byte_floor_records = 8
+        else:
+            self._prefetch_byte_floor_records = 8
         self._prefetch_budget_skips = 0
+        # W95g: prefetch_experts calls that reached the budget decision, so the
+        # receipt exposes budget_skips / prefetch_calls (the visible throttle ratio).
+        self._prefetch_calls = 0
         # W95f: the speculative-byte BUDGET is a RECOVERING per-decode-token window,
         # not a cumulative-since-open latch. ``demand_bytes_read`` and
         # ``speculative_bytes_read`` stay cumulative (the receipt reports them and
@@ -4204,34 +4226,40 @@ class ExpertStreamingRuntime:
         executor = self._prefetch_executor
         if executor is None:
             return 0
-        # W95 retune: strict demand priority. Skip speculation once this token's
-        # speculative bytes reach (budget x this token's demand bytes) -- so a
-        # gate-oracle burst can never crowd the drive out of demand reads (window
-        # 39: k=12 -> 70% busy, net -6%). Cheap counter read; skipped calls do not
-        # drain other layers' completions, but a later within-budget call does, and
-        # the budget is exceeded only while speculation is already heavy (exactly
-        # when backing off is correct). Off (budget 0) -> pre-retune behaviour.
+        # W95g (HIGH-1 re-review): per-token speculative SHARE with a floor (see the
+        # __init__ budget note). Skip only when this token's speculative bytes exceed
+        # a share ``f`` of the token's total (spec+demand) SSD bytes PLUS a floor of
+        # ``floor_records`` records -- so a token's first prefetch calls always issue
+        # (small/zero demand no longer latches speculation off after one call), while
+        # a sustained speculative burst that dominates the drive still backs off. The
+        # previous rule (spec >= budget x demand) settled to spec/(spec+demand) <= 1/3
+        # -- every hidden miss shrank the demand denominator -- so a probe issued 4 on
+        # the first call and skipped every later one, ~16-25 issued/token vs the ~149
+        # the design table needs. ``prefetch_calls`` counts every call reaching this
+        # decision so budget_skips/prefetch_calls is the visible throttle fraction.
+        # Off (share 0) -> no budget (what the live windows use).
         #
-        # W95f: compare the RECOVERING per-decode-token window (bytes since the last
-        # token boundary), not the cumulative-since-open totals. The demand
-        # denominator now advances on every cold miss (plan site), and the marks
-        # re-snapshot at each token boundary (``_observe_cold_start_unlocked``), so a
-        # token that ran speculation ahead backs off for the rest of THAT token
-        # while the NEXT token issues again. At HEAD the cumulative form latched off
-        # for the life of the process after the first fallback (spec >> demand, no
-        # reset). The ``> 0`` guard still short-circuits before this token's first
-        # demand miss -- correct: nothing to prioritise yet, and it cannot latch.
+        # W95f: the windows are RECOVERING per-decode-token deltas (bytes since the
+        # last token boundary), not cumulative-since-open. The demand denominator
+        # advances on every cold miss (plan site), and the marks re-snapshot at each
+        # token boundary (``_observe_cold_start_unlocked``) / at ``reset``, so a token
+        # that ran speculation ahead races demand afresh next token; the budget can
+        # never latch off for the life of the process.
+        self._prefetch_calls += 1
         _demand_window = self.demand_bytes_read - self._demand_bytes_at_token_start
         _spec_window = (
             self.speculative_bytes_read - self._speculative_bytes_at_token_start
         )
-        if (
-            self._prefetch_byte_budget > 0.0
-            and _demand_window > 0
-            and _spec_window >= self._prefetch_byte_budget * _demand_window
-        ):
-            self._prefetch_budget_skips += 1
-            return 0
+        if self._prefetch_byte_budget > 0.0:
+            _record_bytes = self._record_bytes_for_layer(layer)
+            _floor_bytes = self._prefetch_byte_floor_records * _record_bytes
+            _share_cap = (
+                self._prefetch_byte_budget * (_spec_window + _demand_window)
+                + _floor_bytes
+            )
+            if _spec_window > _share_cap:
+                self._prefetch_budget_skips += 1
+                return 0
         # W93 HIGH-2 (self-starving ring): a speculative read that settles AFTER
         # its own layer's reconcile stays queued as an unapplied completion, and
         # its ring slot stays inflight (so unrecyclable) until that layer is
@@ -4792,8 +4820,15 @@ class ExpertStreamingRuntime:
             "prefetch_k": _k_resolved,
             "prefetch_margin": _margin_resolved,
             "ring_slots": int(getattr(self.config, "prefetch_slots", 0)),
+            # W95g: byte_budget is now the per-token speculative SHARE f (0 = off),
+            # with a floor of byte_floor_records records; budget_skips / prefetch_calls
+            # is the visible throttle fraction.
             "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+            "byte_floor_records": int(
+                getattr(self, "_prefetch_byte_floor_records", 0)
+            ),
             "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),
+            "prefetch_calls": int(getattr(self, "_prefetch_calls", 0)),
             # SSD read (demand vs speculative split shows the drive contention).
             "expert_misses": _misses,
             "bytes_read": _bytes_read,
