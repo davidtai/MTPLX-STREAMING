@@ -312,7 +312,13 @@ avail_bytes() {
 
 # W106 item 4: grace period (seconds) between the tree-wide TERM and the KILL of
 # any survivor.  Overridable so the tree-kill unit test does not wait the full 2 s.
+# LOW-2: must be a non-negative INTEGER (it drives bash arithmetic `KILL_GRACE
+# _SECONDS * 4`); a non-integer would break the loop, so fall back to 2.
 KILL_GRACE_SECONDS="${GPU_WINDOW_KILL_GRACE_SECONDS:-2}"
+if [[ ! "${KILL_GRACE_SECONDS}" =~ ^[0-9]+$ ]]; then
+  err "GPU_WINDOW_KILL_GRACE_SECONDS='${KILL_GRACE_SECONDS}' is not a non-negative integer; using 2"
+  KILL_GRACE_SECONDS=2
+fi
 
 _kill_step_tree() {
   # W106 item 4: TERM then (after a grace) KILL the ENTIRE process tree rooted at

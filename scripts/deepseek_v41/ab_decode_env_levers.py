@@ -1185,6 +1185,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="GB",
         help="DEPRECATED alias of --non-metal-overhead-gib (decimal GB -> GiB).",
     )
+    # W106 LOW-4: pre-flight the budget derivation from a dry snapshot (no model
+    # load, no MLX) so the floor refusal happens BEFORE the guarded GPU window opens
+    # (a raise inside _load_model happens after Qwen is already unloaded).
+    p.add_argument(
+        "--memory-plan-preflight",
+        action="store_true",
+        default=False,
+        help="print the --memory-budget-total-* plan derivation from a dry snapshot "
+        "(no model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor), so "
+        "the budget can be checked BEFORE the guarded GPU window opens.",
+    )
     p.add_argument(
         "--memory-profile",
         action="store_true",
@@ -1501,7 +1512,10 @@ _KV_CONFIG_DEFAULTS = {
     "window_size": 128,
     "sliding_window": 128,
     "compress_ratios": [],
-    "kv_source_layer_ids": [],
+    # W106 LOW-1: only a FEW layers hold the compressed/index KV lanes (the released
+    # DeepSeek-V4.1-Flash kv_source_layer_ids); the rest keep only the window ring.
+    # Real config.json values override this default.
+    "kv_source_layer_ids": [2, 8, 14, 20],
 }
 
 
@@ -1547,8 +1561,10 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
       * a compressed/latent KV  [1, ceil(max_kv/ratio), head_dim]    (kv-source layers)
       * a decoupled rope key    [1, ceil(max_kv/ratio), qk_rope_head_dim] (kv-source)
       * an index-key lane       [1, ceil(max_kv/ratio), index_head_dim]  (kv-source)
-    A layer is a kv-source when its ``compress_ratios`` entry is non-zero;
-    ``ratio == 1`` is per-token (no pooling), ``ratio > 1`` pools that many tokens.
+    A layer is a kv-source when it is in ``kv_source_layer_ids`` (authoritative when
+    present; else layers with a non-zero ``compress_ratios`` entry) -- LOW-1: only a
+    few layers, not all 40.  ``ratio == 1`` is per-token (no pooling), ``ratio > 1``
+    pools that many tokens.
     """
 
     def _cfg(name, default):
@@ -1567,6 +1583,7 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
     index_dim = int(_cfg("index_head_dim", 128))
     window = int(_cfg("sliding_window", 0)) or int(_cfg("window_size", 128))
     ratios = list(_cfg("compress_ratios", []) or [])
+    kv_src = {int(x) for x in (_cfg("kv_source_layer_ids", []) or [])}
     bf16 = 2
 
     def _rows_for_ratio(ratio: int) -> int:
@@ -1574,15 +1591,22 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
             return max_kv
         return -(-max_kv // ratio)  # ceil
 
+    def _is_kv_source(layer: int) -> bool:
+        # LOW-1: kv_source_layer_ids is authoritative when present; else fall back
+        # to a non-zero compress_ratios entry.
+        if kv_src:
+            return layer in kv_src
+        return layer < len(ratios) and int(ratios[layer]) != 0
+
     total = 0
     for layer in range(n_layers):
-        # Window ring: conservatively priced at max_kv rows (ring is opt-in).
+        # Window ring: conservatively priced at max_kv rows (ring is opt-in), EVERY
+        # layer.
         total += max_kv * head_dim * bf16
-        # kv-source lanes: use the per-layer ratio when known, else ratio 1
-        # (no pooling = the conservative maximum).
-        ratio = int(ratios[layer]) if layer < len(ratios) else 1
-        if ratio == 0:
+        if not _is_kv_source(layer):
             continue  # not a kv-source layer: only the window ring above
+        # ratio from compress_ratios when known/positive, else 1 (no pooling).
+        ratio = int(ratios[layer]) if (layer < len(ratios) and int(ratios[layer]) > 0) else 1
         rows = _rows_for_ratio(ratio)
         total += rows * head_dim * bf16      # latent / compressed KV
         total += rows * rope_dim * bf16      # decoupled rope key
@@ -1681,6 +1705,38 @@ def _derive_budget_total(args, bench, max_kv):
         safety_gb=safety_gb,
         floor_gib=floor_gib,
     )
+
+
+def _preflight_memory_plan(args, bench) -> int:
+    """W106 LOW-4 pre-flight: derive the budget plan from a DRY snapshot (measure
+    system-used now, estimate the overhead, price the KV growth from config.json --
+    no model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor).  Run this
+    BEFORE the guarded GPU window opens so a floor refusal never fires after Qwen is
+    already unloaded.  With no --memory-budget-total-* it reports the explicit plan
+    and exits 0."""
+
+    if _budget_total_gib(args) is None:
+        print(
+            "[ab] memory-plan preflight: no --memory-budget-total-gib/-gb given; "
+            "plan source is explicit (--memory-limit-gib / legacy box-budget). OK.",
+            flush=True,
+        )
+        return 0
+    max_kv = bench.resolve_max_kv(
+        [args.context_tokens], args.decode_tokens, args.max_kv
+    )
+    try:
+        bt = _derive_budget_total(args, bench, max_kv)
+    except ValueError as exc:
+        print(f"[ab] memory-plan preflight: REFUSED -- {exc}", flush=True)
+        return 3
+    print(
+        "[ab] memory-plan preflight: OK (plan >= floor)\n"
+        f"[ab]   max_kv={max_kv}\n"
+        f"[ab]   {bt.formula()}",
+        flush=True,
+    )
+    return 0
 
 
 def _resolve_derivation(args, *, bench=None, max_kv=None):
@@ -2182,140 +2238,142 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     # carries the real envelope, not just the MLX allocator peak (peak_gb).
     _mem_sampler = mem_probe.new_sampler()
     _mem_sampler.start()
-    t0 = time.perf_counter()
-    cache = model.make_cache()
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
-    ops.sync(logits)
-    ttft_s = time.perf_counter() - t0
-    token = ops.argmax_last(logits)
-    generated = [token]
-    if mem_profile is not None:
-        mem_profile("after_prefill")
-    # W90: idle after prefill, before the timed decode (TTFT already captured).
-    cooldown_block = None
-    if cooldown_s and float(cooldown_s) > 0:
-        cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
-    # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
-    # excluded so the hit rate is the decode hit rate).
-    _sc_after_prefill = _stream_counters_snapshot(model)
-    extra_forward_steps = 0
+    try:
+        t0 = time.perf_counter()
+        cache = model.make_cache()
+        logits = model(ops.input([list(prompt_ids)]), cache=cache)
+        ops.sync(logits)
+        ttft_s = time.perf_counter() - t0
+        token = ops.argmax_last(logits)
+        generated = [token]
+        if mem_profile is not None:
+            mem_profile("after_prefill")
+        # W90: idle after prefill, before the timed decode (TTFT already captured).
+        cooldown_block = None
+        if cooldown_s and float(cooldown_s) > 0:
+            cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
+        # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
+        # excluded so the hit rate is the decode hit rate).
+        _sc_after_prefill = _stream_counters_snapshot(model)
+        extra_forward_steps = 0
 
-    # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
-    # loop (prefill excluded) so the receipt reports per-layer host syncs
-    # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
-    # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
-    # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
-    # module even if the launch env did not; counters cleared to scope to decode.
-    _route_probe = None
-    _route_prev_enabled = None
-    if stage_timing:
-        try:
-            from mtplx import expert_route_probe as _route_probe
+        # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
+        # loop (prefill excluded) so the receipt reports per-layer host syncs
+        # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
+        # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
+        # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
+        # module even if the launch env did not; counters cleared to scope to decode.
+        _route_probe = None
+        _route_prev_enabled = None
+        if stage_timing:
+            try:
+                from mtplx import expert_route_probe as _route_probe
 
-            _route_prev_enabled = _route_probe.ENABLED
-            _route_probe.ENABLED = True
-            _route_probe._SUMS.clear()
-            _route_probe._COUNTS.clear()
-        except Exception:
-            _route_probe = None
+                _route_prev_enabled = _route_probe.ENABLED
+                _route_probe.ENABLED = True
+                _route_probe._SUMS.clear()
+                _route_probe._COUNTS.clear()
+            except Exception:
+                _route_probe = None
 
-    _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
-    # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
-    # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
-    with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
-        decode_start = time.perf_counter()
-        try:  # W92: restore the probe ENABLED flag even if the decode loop raises
-            if device_sample:
-                from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+        _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
+        # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
+        # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
+        with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
+            decode_start = time.perf_counter()
+            try:  # W92: restore the probe ENABLED flag even if the decode loop raises
+                if device_sample:
+                    from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
 
-                def _forward_row(ids):
-                    # ids is a device-side [1, 1] token-id array; the model's embedding
-                    # lookup consumes it directly (mx.take) -- no host round trip.
-                    return model(ids, cache=cache)[0, -1]
+                    def _forward_row(ids):
+                        # ids is a device-side [1, 1] token-id array; the model's embedding
+                        # lookup consumes it directly (mx.take) -- no host round trip.
+                        return model(ids, cache=cache)[0, -1]
 
-                more, _finish, extra_forward_steps = run_device_sample_decode(
-                    forward_row=_forward_row,
-                    first_token=int(token),
-                    n_more=int(steps),
-                    sampler=None,  # greedy (byte-identical to the classic argmax loop)
-                    stop_ids=set(),
-                )
-                generated.extend(int(t) for t in more)
-            else:
-                every = max(1, int(mem_profile_every))
-                for step in range(int(steps)):
-                    logits = model(ops.input([[token]]), cache=cache)
-                    ops.sync(logits)
-                    token = ops.argmax_last(logits)
-                    generated.append(token)
-                    if mem_profile is not None and (step + 1) % every == 0:
-                        mem_profile("decode", token=step + 1)
-        finally:
-            # W92: restore the probe ENABLED flag even if the decode loop raised, so
-            # a failed arm never leaves the module armed for the rest of the process
-            # (the snapshot below reads _COUNTS regardless of ENABLED).
-            if _route_probe is not None and _route_prev_enabled is not None:
-                _route_probe.ENABLED = bool(_route_prev_enabled)
-        decode_wall_s = time.perf_counter() - decode_start
-    _sc_end = _stream_counters_snapshot(model)
-    switch_dispatch = None
-    if _route_probe is not None:
-        _snap = _route_probe.snapshot()
-        _stg = _snap.get("stages", {}) if isinstance(_snap, dict) else {}
+                    more, _finish, extra_forward_steps = run_device_sample_decode(
+                        forward_row=_forward_row,
+                        first_token=int(token),
+                        n_more=int(steps),
+                        sampler=None,  # greedy (byte-identical to the classic argmax loop)
+                        stop_ids=set(),
+                    )
+                    generated.extend(int(t) for t in more)
+                else:
+                    every = max(1, int(mem_profile_every))
+                    for step in range(int(steps)):
+                        logits = model(ops.input([[token]]), cache=cache)
+                        ops.sync(logits)
+                        token = ops.argmax_last(logits)
+                        generated.append(token)
+                        if mem_profile is not None and (step + 1) % every == 0:
+                            mem_profile("decode", token=step + 1)
+            finally:
+                # W92: restore the probe ENABLED flag even if the decode loop raised, so
+                # a failed arm never leaves the module armed for the rest of the process
+                # (the snapshot below reads _COUNTS regardless of ENABLED).
+                if _route_probe is not None and _route_prev_enabled is not None:
+                    _route_probe.ENABLED = bool(_route_prev_enabled)
+            decode_wall_s = time.perf_counter() - decode_start
+        _sc_end = _stream_counters_snapshot(model)
+        switch_dispatch = None
+        if _route_probe is not None:
+            _snap = _route_probe.snapshot()
+            _stg = _snap.get("stages", {}) if isinstance(_snap, dict) else {}
 
-        def _c(name):
-            return int(_stg.get(name, {}).get("count", 0))
+            def _c(name):
+                return int(_stg.get(name, {}).get("count", 0))
 
-        _all_hit = _c("hot.all_hit")
-        _synced = _c("hot.allhit_fence_eval")
-        _deferred = _c("hot.allhit_defer")
-        _gather_qmm_total = _c("hot.switch_gather_qmm")   # all paths
-        _allhit_gather_qmm = _c("hot.allhit_gather_qmm")  # all-hit branch only
-        _decode_steps = max(1, int(steps))
-        switch_dispatch = {
-            # per-layer host round-trips over this DECODE pass (cumulative).
-            "eval_indices": _c("hot.eval_indices"),      # the one routing barrier/layer
-            "route_host_tolist": _c("hot.route_host"),   # .tolist()+int() host read/layer
-            # all-hit switch: fences DEFERRED (to the next routing barrier) vs SYNCED
-            # (the shipped blocking mx.eval(wave_output)). The whole win is the ratio.
-            "all_hit": _all_hit,
-            "allhit_fence_synced": _synced,
-            "allhit_fence_deferred": _deferred,
-            "allhit_defer_submit": _c("hot.allhit_defer_submit"),
-            "allhit_deferred_pct": (
-                round(100.0 * _deferred / _all_hit, 2) if _all_hit else None
-            ),
-            # miss/split switch: begin_split_route admissions + split-route layer-calls.
-            "split_route": _c("hot.split_route"),
-            "begin_split_route": _c("hot.begin_split_route"),
-            # dispatch census. switch_gather_qmm_total counts EVERY gather_qmm on
-            # the pass (all-hit + split parts + prefill waves); allhit_gather_qmm is
-            # the all-hit branch only, so gather_qmm_per_all_hit_call is exactly 3
-            # (gate/up/down grouped over the routed slots -- never per-expert).
-            "switch_gather_qmm_total": _gather_qmm_total,
-            "allhit_gather_qmm": _allhit_gather_qmm,
-            "gather_qmm_per_all_hit_call": (
-                round(_allhit_gather_qmm / _all_hit, 3) if _all_hit else None
-            ),
-            "note": "cumulative over this AR DECODE pass. Per layer the host round-trip "
-                    "is one mx.eval(indices) barrier; allhit_fence_synced counts the "
-                    "SECOND blocking eval the shipped path pays per all-hit layer "
-                    "(switch_lean defers it -> allhit_fence_deferred). "
-                    "allhit_gather_qmm/all_hit is 3 (gate/up/down); "
-                    "switch_gather_qmm_total also includes split parts + prefill waves.",
-        }
-        print(
-            "[ab] switch dispatch: "
-            f"all_hit={_all_hit} fence_synced={_synced} fence_deferred={_deferred} "
-            f"({switch_dispatch['allhit_deferred_pct']}% deferred) "
-            f"allhit_gather_qmm={_allhit_gather_qmm} "
-            f"(~{switch_dispatch['gather_qmm_per_all_hit_call']}/all-hit call) "
-            f"gather_qmm_total={_gather_qmm_total} "
-            f"split_route={switch_dispatch['split_route']} "
-            f"eval_indices={switch_dispatch['eval_indices']}",
-            flush=True,
-        )
-    _mem_sampler.stop()
+            _all_hit = _c("hot.all_hit")
+            _synced = _c("hot.allhit_fence_eval")
+            _deferred = _c("hot.allhit_defer")
+            _gather_qmm_total = _c("hot.switch_gather_qmm")   # all paths
+            _allhit_gather_qmm = _c("hot.allhit_gather_qmm")  # all-hit branch only
+            _decode_steps = max(1, int(steps))
+            switch_dispatch = {
+                # per-layer host round-trips over this DECODE pass (cumulative).
+                "eval_indices": _c("hot.eval_indices"),      # the one routing barrier/layer
+                "route_host_tolist": _c("hot.route_host"),   # .tolist()+int() host read/layer
+                # all-hit switch: fences DEFERRED (to the next routing barrier) vs SYNCED
+                # (the shipped blocking mx.eval(wave_output)). The whole win is the ratio.
+                "all_hit": _all_hit,
+                "allhit_fence_synced": _synced,
+                "allhit_fence_deferred": _deferred,
+                "allhit_defer_submit": _c("hot.allhit_defer_submit"),
+                "allhit_deferred_pct": (
+                    round(100.0 * _deferred / _all_hit, 2) if _all_hit else None
+                ),
+                # miss/split switch: begin_split_route admissions + split-route layer-calls.
+                "split_route": _c("hot.split_route"),
+                "begin_split_route": _c("hot.begin_split_route"),
+                # dispatch census. switch_gather_qmm_total counts EVERY gather_qmm on
+                # the pass (all-hit + split parts + prefill waves); allhit_gather_qmm is
+                # the all-hit branch only, so gather_qmm_per_all_hit_call is exactly 3
+                # (gate/up/down grouped over the routed slots -- never per-expert).
+                "switch_gather_qmm_total": _gather_qmm_total,
+                "allhit_gather_qmm": _allhit_gather_qmm,
+                "gather_qmm_per_all_hit_call": (
+                    round(_allhit_gather_qmm / _all_hit, 3) if _all_hit else None
+                ),
+                "note": "cumulative over this AR DECODE pass. Per layer the host round-trip "
+                        "is one mx.eval(indices) barrier; allhit_fence_synced counts the "
+                        "SECOND blocking eval the shipped path pays per all-hit layer "
+                        "(switch_lean defers it -> allhit_fence_deferred). "
+                        "allhit_gather_qmm/all_hit is 3 (gate/up/down); "
+                        "switch_gather_qmm_total also includes split parts + prefill waves.",
+            }
+            print(
+                "[ab] switch dispatch: "
+                f"all_hit={_all_hit} fence_synced={_synced} fence_deferred={_deferred} "
+                f"({switch_dispatch['allhit_deferred_pct']}% deferred) "
+                f"allhit_gather_qmm={_allhit_gather_qmm} "
+                f"(~{switch_dispatch['gather_qmm_per_all_hit_call']}/all-hit call) "
+                f"gather_qmm_total={_gather_qmm_total} "
+                f"split_route={switch_dispatch['split_route']} "
+                f"eval_indices={switch_dispatch['eval_indices']}",
+                flush=True,
+            )
+    finally:
+        _mem_sampler.stop()
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
@@ -2450,53 +2508,55 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     # optional timed stage-timing pass, so the memory block matches that peak_gb.
     _mem_sampler = mem_probe.new_sampler()
     _mem_sampler.start()
-    stats = DSparkDecodeStats()
-    # W77: when an AR reference is supplied, capture (zero extra forwards) the
-    # verify logits row of the first committed token that diverges from it.
-    capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
-    route_probe = None
-    route_prev_enabled = None
-    # W81: snapshot the expert-streaming counters at the prefill->decode boundary
-    # (prefill_callback fires after prefill, before the decode cycles) and again
-    # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
-    # block (hit rate + streamed bytes/token) matching the served daemon's.
-    _sc: dict = {}
+    try:
+        stats = DSparkDecodeStats()
+        # W77: when an AR reference is supplied, capture (zero extra forwards) the
+        # verify logits row of the first committed token that diverges from it.
+        capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
+        route_probe = None
+        route_prev_enabled = None
+        # W81: snapshot the expert-streaming counters at the prefill->decode boundary
+        # (prefill_callback fires after prefill, before the decode cycles) and again
+        # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
+        # block (hit rate + streamed bytes/token) matching the served daemon's.
+        _sc: dict = {}
 
-    def _stream_prefill_cb(_info):
-        _sc["after_prefill"] = _stream_counters_snapshot(model)
-        # W100: mark the prefill->decode boundary so decode_wall_s can exclude the
-        # re-prefill (this callback fires after prefill, before the decode cycles).
-        _sc["decode_start"] = time.perf_counter()
+        def _stream_prefill_cb(_info):
+            _sc["after_prefill"] = _stream_counters_snapshot(model)
+            # W100: mark the prefill->decode boundary so decode_wall_s can exclude the
+            # re-prefill (this callback fires after prefill, before the decode cycles).
+            _sc["decode_start"] = time.perf_counter()
 
-    # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
-    # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
-    # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
-    # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
-    # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
-    # per-stage attribution is a SECOND, timed pass below.
-    t0 = time.perf_counter()
-    toks = dspark_generate(
-        model,
-        [int(t) for t in prompt_ids],
-        max_tokens=int(steps) + 1,
-        sampler=SamplerConfig(temperature=0.0),
-        seed=0,
-        speculative_depth=int(depth),
-        stats=stats,
-        divergence_capture=capture,
-        prefill_callback=_stream_prefill_cb,
-    )
-    _sc["end"] = _stream_counters_snapshot(model)
-    # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
-    # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
-    _wall_acct = _dspark_decode_wall_accounting(
-        pass_start=t0,
-        decode_start=_sc.get("decode_start"),
-        pass_end=time.perf_counter(),
-        generated_tokens=len(toks),
-    )
-    peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
-    _mem_sampler.stop()
+        # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
+        # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
+        # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
+        # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
+        # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
+        # per-stage attribution is a SECOND, timed pass below.
+        t0 = time.perf_counter()
+        toks = dspark_generate(
+            model,
+            [int(t) for t in prompt_ids],
+            max_tokens=int(steps) + 1,
+            sampler=SamplerConfig(temperature=0.0),
+            seed=0,
+            speculative_depth=int(depth),
+            stats=stats,
+            divergence_capture=capture,
+            prefill_callback=_stream_prefill_cb,
+        )
+        _sc["end"] = _stream_counters_snapshot(model)
+        # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
+        # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
+        _wall_acct = _dspark_decode_wall_accounting(
+            pass_start=t0,
+            decode_start=_sc.get("decode_start"),
+            pass_end=time.perf_counter(),
+            generated_tokens=len(toks),
+        )
+        peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
+    finally:
+        _mem_sampler.stop()
     _dspark_memory_block = mem_probe.memory_block(_mem_sampler)
     report = None
     w61 = None
@@ -3613,6 +3673,12 @@ def _run_dry(args, bench) -> int:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     bench = _load_bench_module()
+
+    # W106 LOW-4: pre-flight the budget plan BEFORE anything else (no MLX, no model,
+    # no --out needed), so a floor refusal happens before the GPU window opens.
+    if getattr(args, "memory_plan_preflight", False):
+        return _preflight_memory_plan(args, bench)
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run:

@@ -234,19 +234,47 @@ def test_kv_estimator_zero_max_kv_is_zero():
     assert mod._kv_bytes_at_max_kv(dict(mod._KV_CONFIG_DEFAULTS), 0) == 0
 
 
-def test_kv_estimator_unknown_ratio_defaults_to_no_pooling():
+def test_kv_estimator_honors_kv_source_layer_ids():
+    # W106 LOW-1: only the layers in kv_source_layer_ids hold the compressed/index
+    # lanes; every layer keeps the window ring.
     mod = _mod()
-    # compress_ratios shorter than num_hidden_layers -> the extra layers default
-    # to ratio 1 (no pooling, the conservative maximum).
-    dims = dict(mod._KV_CONFIG_DEFAULTS)
-    dims["num_hidden_layers"] = 1
-    dims["compress_ratios"] = []
+    dims = {
+        "num_hidden_layers": 4, "head_dim": 512, "qk_rope_head_dim": 64,
+        "index_head_dim": 128, "window_size": 128,
+        "compress_ratios": [0, 0, 4, 0], "kv_source_layer_ids": [2],
+    }
     got = mod._kv_bytes_at_max_kv(dims, 1000)
-    window = 1000 * 512 * 2
-    latent = 1000 * 512 * 2
-    rope = 1000 * 64 * 2
-    index = 1000 * 128 * 2
-    assert got == window + latent + rope + index
+    window = 4 * (1000 * 512 * 2)          # every layer
+    rows = -(-1000 // 4)                    # layer 2 ratio 4 -> ceil = 250
+    src = rows * 512 * 2 + rows * 64 * 2 + rows * 128 * 2
+    assert got == window + src
+
+
+def test_kv_estimator_kv_source_ids_override_compress_ratios():
+    # kv_source_layer_ids is authoritative: layer 0 has compress_ratios=1 but is NOT
+    # in kv_source_layer_ids, so it is window-only.
+    mod = _mod()
+    dims = {
+        "num_hidden_layers": 2, "head_dim": 512, "qk_rope_head_dim": 64,
+        "index_head_dim": 128, "window_size": 128,
+        "compress_ratios": [1, 1], "kv_source_layer_ids": [1],
+    }
+    got = mod._kv_bytes_at_max_kv(dims, 1000)
+    window = 2 * (1000 * 512 * 2)
+    src = 1000 * 512 * 2 + 1000 * 64 * 2 + 1000 * 128 * 2  # only layer 1, ratio 1
+    assert got == window + src
+
+
+def test_kv_estimator_default_config_prices_only_four_source_layers():
+    # The released default kv_source_layer_ids has 4 entries -> only 4 of the 40
+    # layers get the compressed/index lanes (LOW-1 regression: not all 38/40).
+    mod = _mod()
+    dims = dict(mod._KV_CONFIG_DEFAULTS)  # 40 layers, kv_source_layer_ids=[2,8,14,20]
+    got = mod._kv_bytes_at_max_kv(dims, 1000)
+    window = 40 * (1000 * 512 * 2)
+    rows = 1000  # compress_ratios empty -> ratio defaults to 1
+    per_src = rows * 512 * 2 + rows * 64 * 2 + rows * 128 * 2
+    assert got == window + 4 * per_src
 
 
 def test_read_config_dims_flat(tmp_path):
@@ -576,3 +604,57 @@ def test_safety_and_overhead_gib_flags(tmp_path):
     bt = args._dsv41_budget_total
     assert bt.safety_gb == pytest.approx(5.0)
     assert bt.non_metal_overhead_gb == pytest.approx(8.0)
+
+
+# --------------------------------------------------------------------------
+# LOW-4: --memory-plan-preflight derives from a dry snapshot and exits 0/3
+# BEFORE any model load / GPU window.
+# --------------------------------------------------------------------------
+
+
+class _FakeBenchPF:
+    def __init__(self, system_used_bytes):
+        self._sys = int(system_used_bytes)
+
+    def _system_used_bytes(self):
+        return self._sys
+
+    def resolve_max_kv(self, cells, steps, max_kv):
+        return int(max_kv)
+
+
+def _pf_args(mod, tmp_path, **over):
+    cfg = {"num_hidden_layers": 40, "head_dim": 512, "qk_rope_head_dim": 64,
+           "index_head_dim": 128, "sliding_window": 128,
+           "kv_source_layer_ids": [2, 8, 14, 20], "compress_ratios": []}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--context-tokens", "16384", "--decode-tokens", "256",
+            "--max-kv", "17408", "--memory-plan-preflight"]
+    for k, v in over.items():
+        if k == "argv_extra":
+            argv += v
+    args = mod.build_parser().parse_args(argv + over.get("argv_extra", []))
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    return args
+
+
+def test_preflight_ok_returns_0(tmp_path):
+    mod = _mod()
+    args = _pf_args(mod, tmp_path, argv_extra=["--memory-budget-total-gib", "93"])
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
+    assert rc == 0
+
+
+def test_preflight_below_floor_returns_3(tmp_path):
+    mod = _mod()
+    args = _pf_args(mod, tmp_path, argv_extra=["--memory-budget-total-gib", "40"])
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
+    assert rc == 3  # 40 - 20 - 10 - kv - 3 < 20 floor
+
+
+def test_preflight_no_budget_flag_returns_0(tmp_path):
+    mod = _mod()
+    args = _pf_args(mod, tmp_path)  # no --memory-budget-total-*
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
+    assert rc == 0
