@@ -109,6 +109,21 @@ def _hc(flag: bool, max_rows: int = _TEST_CAP):
 
 
 @contextlib.contextmanager
+def _hc_flag_only(flag: bool):
+    """Flip ONLY the K4 flag, leaving ``_HC_COMPILE_MAX_ROWS`` at its SHIPPED
+    module value so the test exercises the real row cap (not a test override).
+    Clears the compiled-tape cache on entry/exit like ``_hc``."""
+    old_f = dv41._HC_COMPILE
+    dv41._HC_COMPILE = flag
+    dv41._HC_COMPILED.clear()
+    try:
+        yield
+    finally:
+        dv41._HC_COMPILE = old_f
+        dv41._HC_COMPILED.clear()
+
+
+@contextlib.contextmanager
 def _metal(flag: bool):
     """Arm/disarm ``MTPLX_DSV41_SINKHORN_METAL`` via the env (W32 reads it at use,
     never at import).  On CPU ``_sinkhorn_use_kernel()`` stays False regardless, so
@@ -353,6 +368,51 @@ def test_hc_use_compile_gating():
         assert dv41._hc_use_compile(x1) is True
         assert dv41._hc_use_compile(x4) is True
         assert dv41._hc_use_compile(x9) is False   # rows > cap -> eager
+
+
+# ---------------------------------------------------------------------------
+# 7b. byte-identity at the SHIPPED module row cap (K4 review / W91).
+#
+# The other gates force _HC_COMPILE_MAX_ROWS to the test cap (7); this one keeps
+# the module's shipped value and proves it IS the bit-exact ceiling: compiled ==
+# eager at rows 1, 3, and the cap; the cap is 7 (NOT 32, which admitted the
+# non-bit-exact 8..32-row band -- rows 8+ reassociate ~6e-7); and rows cap+1 fall
+# to the eager body.  If _HC_COMPILE_MAX_ROWS regressed to 32, the cap+1 row would
+# take the compiled path and differ, failing here.
+# ---------------------------------------------------------------------------
+def test_byte_identity_at_module_row_cap():
+    cap = dv41._HC_COMPILE_MAX_ROWS
+    assert cap == 7, f"shipped HC compile cap is {cap}, expected 7 (bit-exact ceiling)"
+
+    def one_shot(flag, s, seed=0, model_seed=3):
+        model, args = _new_model(seed=model_seed)
+        ids = mx.array(np.random.RandomState(seed).randint(0, args.vocab_size, size=(1, s)))
+        with _hc_flag_only(flag):
+            lo = model(ids, cache=model.make_cache(), prefill_chunk=0)
+            mx.eval(lo)
+            return np.array(lo)
+
+    # compiled (flag on) == eager (flag off), byte-for-byte, at rows 1, 3, and the cap.
+    for s in (1, 3, cap):
+        off, on = one_shot(False, s), one_shot(True, s)
+        assert np.array_equal(off, on), (
+            f"{s}-row HC prep not byte-identical flag on vs off "
+            f"(max {np.max(np.abs(off - on))})"
+        )
+
+    # rows cap+1 are ABOVE the shipped cap -> eager even with the flag on, so the
+    # flag is inert (equal to flag-off).  cap==32 would compile this row and differ.
+    off8, on8 = one_shot(False, cap + 1), one_shot(True, cap + 1)
+    assert np.array_equal(off8, on8), (
+        f"cap+1={cap + 1} rows must fall to the eager body (flag inert), "
+        f"got max {np.max(np.abs(off8 - on8))}"
+    )
+
+    # the gating mirrors the numerics at the shipped cap: <= cap compiled, cap+1 eager.
+    with _hc_flag_only(True):
+        assert dv41._hc_use_compile(mx.zeros((1, 1, 4, 32))) is True
+        assert dv41._hc_use_compile(mx.zeros((1, cap, 4, 32))) is True
+        assert dv41._hc_use_compile(mx.zeros((1, cap + 1, 4, 32))) is False
 
 
 # ---------------------------------------------------------------------------

@@ -204,19 +204,25 @@ def test_explicit_session_bank_env_wins_over_the_plan(monkeypatch) -> None:
 
 
 def test_engine_budget_is_ceiling_minus_reserve() -> None:
-    # issue #3: the 75 GiB engine budget (MTPLX_MEMORY_LIMIT_BYTES) IS the 82 GiB
-    # profile ceiling minus the 7 GiB reserve — the two are consistent, not
-    # competing. The Metal limit governs weights + expert cache.
+    # issue #3: the engine budget (MTPLX_MEMORY_LIMIT_BYTES) IS the profile's plan
+    # ceiling (memory_limit) minus the runtime reserve — the two are consistent,
+    # not competing. The Metal limit governs weights + expert cache. W79 dropped
+    # the mxfp4-75 plan ceiling 82 -> 60 GiB, so the budget is now 60 - 7 = 53 GiB;
+    # derive it from the profile rather than a stale literal.
     from mtplx.expert_profiles import build_expert_streaming_config, load_expert_profiles
     from mtplx.expert_runtime import reconcile_mlx_memory_cap
     from mtplx.expert_streaming_models import get_model_spec
 
-    cfg = build_expert_streaming_config(load_expert_profiles()[PROFILE_NAME])
+    profile = load_expert_profiles()[PROFILE_NAME]
+    cfg = build_expert_streaming_config(profile)
     plan = cfg.memory_plan(get_model_spec(cfg.model_key))
     engine_budget = reconcile_mlx_memory_cap(plan)
+    expected_budget = (
+        profile.config["memory_limit_bytes"] - profile.config["runtime_reserve_bytes"]
+    )
+    assert engine_budget == expected_budget
     assert engine_budget == cfg.memory_limit_bytes - cfg.runtime_reserve_bytes
-    assert engine_budget == 75 * 1024**3
-    assert cfg.memory_limit_bytes == 82 * 1024**3
+    assert cfg.memory_limit_bytes == profile.config["memory_limit_bytes"]
 
 
 # --------------------------------------------------------------------------

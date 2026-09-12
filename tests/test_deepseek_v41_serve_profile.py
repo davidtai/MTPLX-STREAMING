@@ -111,8 +111,15 @@ def test_resolved_serve_config_no_flags() -> None:
     )
     cfg = build_expert_streaming_config(profile)
     assert cfg.model_key == MODEL_KEY
-    assert cfg.memory_limit_bytes == 82 * GiB
-    assert cfg.runtime_reserve_bytes == 7 * GiB
+    # W79 dropped the mxfp4-75 plan ceiling 82 -> 60 GiB (the process ceiling is
+    # kept at 82 and explicit overrides are still clamped <= 82). Assert the config
+    # carries the profile's CURRENT declared values, read from expert_profiles.json,
+    # not a stale literal.
+    assert cfg.memory_limit_bytes == profile.config["memory_limit_bytes"]
+    assert cfg.runtime_reserve_bytes == profile.config["runtime_reserve_bytes"]
+    # the process ceiling (RSS guard) is a SEPARATE knob from the plan ceiling and
+    # stays 82 GiB.
+    assert profile.process_ceiling_bytes == 82 * GiB
     assert cfg.max_live_kv_tokens == 16384
     # KV stays bf16 and minimal
     assert cfg.kv_quant is None
