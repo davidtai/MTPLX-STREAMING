@@ -218,6 +218,23 @@ def test_resolve_eos_id_override_and_from_files(env_levers, tmp_path):
     assert env_levers._resolve_eos_id(a2) == 7
 
 
+def test_stop_on_eos_refuses_when_eos_unresolvable(env_levers, tmp_path):
+    # MEDIUM-3: an empty model dir -> no EOS id -> --stop-on-eos must refuse, not
+    # silently no-op while stamping stop_on_eos:true.
+    empty = tmp_path / "empty-model"
+    empty.mkdir()
+    a = _args(env_levers,
+              ["--out", "/dev/null", "--model", str(empty), "--stop-on-eos"])
+    eos_id = env_levers._resolve_eos_id(a)  # None (empty dir)
+    assert eos_id is None
+    with pytest.raises(SystemExit) as exc:
+        env_levers._require_eos_id_for_stop(bool(a.stop_on_eos), eos_id)
+    assert "--eos-id" in str(exc.value)
+    # with --eos-id given it does not refuse; and off is always fine.
+    env_levers._require_eos_id_for_stop(True, 1)
+    env_levers._require_eos_id_for_stop(False, None)
+
+
 # ---------------------------------------------------------------------------
 # 3. chat-templated detection
 # ---------------------------------------------------------------------------

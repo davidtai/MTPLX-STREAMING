@@ -1695,6 +1695,21 @@ def _resolve_eos_id(args):
     return int(eid) if eid is not None else None
 
 
+def _require_eos_id_for_stop(stop_on_eos, eos_id) -> None:
+    """W113 MEDIUM-3: refuse ``--stop-on-eos`` when no EOS id could be resolved.
+
+    Without this the flag silently no-ops (nothing stops the decode) while the
+    receipt still stamps ``stop_on_eos: true`` -- a served-parity run that did not
+    behave like the served path.  Raised in ``_run_arm`` before the model load.
+    """
+    if stop_on_eos and eos_id is None:
+        raise SystemExit(
+            "[ab] --stop-on-eos needs an EOS id but none could be resolved from "
+            "the tokenizer files (tokenizer_config.json + tokenizer.json) under "
+            "--model; pass --eos-id <id> (DeepSeek-V4.1 EOS is id 1)."
+        )
+
+
 def _prompt_chat_templated(prompt_ids, special):
     """Best-effort: is ``prompt_ids`` chat-templated WITH a generation prompt?
 
@@ -3853,6 +3868,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
     # receipt fields and the optional --stop-on-eos served-parity early stop.
     eos_id = _resolve_eos_id(args)
     stop_on_eos = bool(getattr(args, "stop_on_eos", False))
+    # W113 MEDIUM-3: --stop-on-eos with no resolvable EOS id must refuse (not
+    # silently no-op while stamping stop_on_eos:true).  Before the model load.
+    _require_eos_id_for_stop(stop_on_eos, eos_id)
     resident = _load_model(args, bench, mx)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime", None)
