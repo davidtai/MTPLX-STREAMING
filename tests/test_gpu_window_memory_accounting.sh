@@ -38,29 +38,38 @@ FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n     %s\n' "$1" "$2"; }
 
-# --- a fake vm_stat: (wired + active + inactive + speculative + compressor) = 50 GiB
-# Deterministic and well under the 102 GiB ceiling, so the system-wide guard never
-# trips regardless of the box's real memory state while this test runs.  W121: the
-# used-memory formula is (wired + active + inactive + speculative + occupied-by-
-# compressor) -- the top-equivalent figure that also captures non-wired Metal in
-# the active/inactive LRU (the old wired+anonymous+compressor missed it):
-#   wired 1500000 + active 1300000 + inactive 200000 + spec 0 + comp 276800
-#     = 3276800 pages * 16384 = 50 GiB
+# --- a fake vm_stat whose BASELINE (wired + anonymous + occupied-by-compressor) =
+# 50 GiB, with DELIBERATELY HUGE active/inactive (file page cache) to prove the
+# W121 baseline IGNORES them (an active+inactive formula false-aborts on the 269 GiB
+# expert bank's reclaimable file cache -- the window-47 abort).  The step's own
+# growing memory is added on top as phys_footprint, not read from vm_stat.
+#   baseline: wired 2000000 + anon 1000000 + comp 276800 = 3276800 pages * 16384 = 50 GiB
+#   active 4000000 + inactive 300000 (~67 GiB file cache) are NOT counted.
 FAKE_VMSTAT="${TMP}/vm_stat_50gib"
 cat > "${FAKE_VMSTAT}" <<'EOF'
 #!/bin/bash
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
-Pages active:                               1300000.
-Pages inactive:                              200000.
+Pages active:                               4000000.
+Pages inactive:                              300000.
 Pages speculative:                                0.
-Anonymous pages:                             900000.
-Pages wired down:                           1500000.
+Anonymous pages:                            1000000.
+Pages wired down:                           2000000.
 Pages occupied by compressor:                276800.
 V
 EOF
 chmod +x "${FAKE_VMSTAT}"
+
+# A fake step-tree phys_footprint reader (constant 3 GiB) so box_used is
+# deterministic in the clean-step scenario.  3 GiB = 3221225472 bytes.
+FAKE_FP="${TMP}/fp_reader"
+printf '#!/bin/bash\necho 3221225472\n' > "${FAKE_FP}"
+chmod +x "${FAKE_FP}"
+# A flat compressor sysctl (delta 0, never trips).
+FAKE_COMP="${TMP}/comp_flat"
+printf '#!/bin/bash\necho 1073741824\n' > "${FAKE_COMP}"
+chmod +x "${FAKE_COMP}"
 
 # --- the python child the fake step launches (~500 MB resident, then sleeps) ----
 CHILD_PY="${TMP}/mem_child.py"
@@ -87,9 +96,10 @@ LOG="${TMP}/window.log"
 GPU_WINDOW_TEST_MODE=1 \
 MTPLX_GPU_LOCK="${LOCK}" \
 GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
+GPU_WINDOW_FOOTPRINT_READER="${FAKE_FP}" \
+GPU_WINDOW_COMPRESSOR_CMD="${FAKE_COMP}" \
 GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
 GPU_WINDOW_RSS_POLL_SECONDS=1 \
-GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB=0 \
   bash "${SCRIPT}" bash -c "${STEP_CHAIN}" >"${LOG}" 2>&1
 RC=$?
 
@@ -111,43 +121,43 @@ else
   bad "TEST MODE skipped phases 1-3 + restore" "skip line not found"
 fi
 
-# 3. the exit summary reports the whole-tree peak RSS, not the bash-parent-only 0.0
-PEAK_LINE="$(grep 'peak step tree RSS' "${LOG}" | tail -1)"
+# 3. the exit summary reports the peak step phys_footprint (from the reader)
+PEAK_LINE="$(grep 'peak step footprint' "${LOG}" | tail -1)"
 if [[ -n "${PEAK_LINE}" ]]; then
-  ok "exit summary has a 'peak step tree RSS' line"
+  ok "exit summary has a 'peak step footprint' line"
   echo "     -> ${PEAK_LINE}"
 else
-  bad "exit summary has a 'peak step tree RSS' line" "line not found"
+  bad "exit summary has a 'peak step footprint' line" "line not found"
 fi
 
-# Extract the GiB number after 'peak step tree RSS' and assert it captured the
-# ~0.5 GiB python child (>= 0.3 GiB); a single-pid poll of the bash chain would be
-# ~0.0 GiB, so this is the direct proof the tree walk works.
-PEAK_GIB="$(printf '%s\n' "${PEAK_LINE}" | sed -n 's/.*peak step tree RSS \([0-9.]*\) GiB.*/\1/p')"
-if [[ -n "${PEAK_GIB}" ]] && awk -v v="${PEAK_GIB}" 'BEGIN{exit !(v+0 >= 0.3)}'; then
-  ok "peak step tree RSS captured the python child (${PEAK_GIB} GiB >= 0.3)"
+# 3b. peak step footprint == the fake reader's 3.0 GiB (the guard reads phys_footprint,
+# not ps RSS, so it captures Metal too).
+PEAK_GIB="$(printf '%s\n' "${PEAK_LINE}" | sed -n 's/.*peak step footprint \([0-9.]*\) GiB.*/\1/p')"
+if [[ -n "${PEAK_GIB}" ]] && awk -v v="${PEAK_GIB}" 'BEGIN{exit !(v+0 >= 2.9 && v+0 <= 3.1)}'; then
+  ok "peak step footprint == the reader's 3.0 GiB (${PEAK_GIB})"
 else
-  bad "peak step tree RSS captured the python child (>= 0.3 GiB)" "parsed '${PEAK_GIB}' GiB"
+  bad "peak step footprint == 3.0 GiB" "parsed '${PEAK_GIB}' GiB"
 fi
 
-# 4. the max-single-process figure is present in the same summary
-if [[ "${PEAK_LINE}" == *"max single process"* ]]; then
-  ok "exit summary reports the max single-process RSS"
+# 4. peak box used = baseline 50 + footprint 3 = 53 GiB (the plain sum)
+BOX_GIB="$(printf '%s\n' "${PEAK_LINE}" | sed -n 's/.*peak box used \([0-9.]*\) GiB.*/\1/p')"
+if [[ -n "${BOX_GIB}" ]] && awk -v v="${BOX_GIB}" 'BEGIN{exit !(v+0 >= 52.9 && v+0 <= 53.1)}'; then
+  ok "peak box used = baseline + footprint (${BOX_GIB} GiB = 50 + 3)"
 else
-  bad "exit summary reports the max single-process RSS" "phrase not found"
+  bad "peak box used = 53 GiB" "parsed '${BOX_GIB}' GiB"
 fi
 
-# 5. peak system used is the running max (50 GiB from the fake vm_stat), not 0
-SYS_GIB="$(printf '%s\n' "${PEAK_LINE}" | sed -n 's/.*peak system used \([0-9.]*\) GiB.*/\1/p')"
-if [[ -n "${SYS_GIB}" ]] && awk -v v="${SYS_GIB}" 'BEGIN{exit !(v+0 >= 49.0)}'; then
-  ok "peak system used is the running max (${SYS_GIB} GiB ~= 50 from fake vm_stat)"
+# 5. peak compressor delta is reported (flat here -> 0.0)
+if [[ "${PEAK_LINE}" == *"peak compressor delta"* ]]; then
+  ok "exit summary reports the peak compressor delta"
 else
-  bad "peak system used is the running max (~50 GiB)" "parsed '${SYS_GIB}' GiB"
+  bad "exit summary reports the peak compressor delta" "phrase not found"
 fi
 
-# 6. a periodic memory-envelope sample line was logged during the step
-if grep -q "phase 4: mem sample -- step tree RSS" "${LOG}"; then
-  ok "logged a periodic 'mem sample' envelope line during the step"
+# 6. a periodic memory-envelope sample line was logged during the step (baseline +
+# step footprint = box used; compressor delta)
+if grep -q "phase 4: mem sample -- baseline .* step footprint .* box used" "${LOG}"; then
+  ok "logged a periodic 'mem sample' envelope line (baseline + footprint = box used)"
 else
   bad "logged a periodic 'mem sample' envelope line during the step" "no sample line"
 fi
@@ -164,13 +174,13 @@ fi
 #     102 GiB ceiling (50 + 93 > 102), MEDIUM-B LOWERS the effective child cap to
 #     ceiling - used_start = 52 GiB. Assert the lowering line (naming the original
 #     93 GiB default) + the guard-caps line showing the 52 GiB effective cap.
-if grep -q "phase 4: effective child-tree cap 52.0 GiB (lowered from 93.0 GiB" "${LOG}" \
-   && grep -q "phase 4: guard caps -- child-tree RSS cap 52.0 GiB" "${LOG}" \
-   && grep -q "system used ceiling 102 GiB" "${LOG}"; then
-  ok "MEDIUM-B: effective child cap lowered to ceiling-used_start (52 GiB); ceiling 102 GiB (HIGH-2)"
+if grep -q "phase 4: effective child-tree footprint cap 52.0 GiB (lowered from 93.0 GiB" "${LOG}" \
+   && grep -q "phase 4: guard caps -- child-tree footprint cap 52.0 GiB" "${LOG}" \
+   && grep -q "box-used ceiling 102 GiB" "${LOG}"; then
+  ok "MEDIUM-B: effective child cap lowered to ceiling-used_start (52 GiB); box-used ceiling 102 GiB (HIGH-2)"
 else
   bad "MEDIUM-B effective child cap 52 GiB + 102 GiB ceiling" \
-      "$(grep -E 'effective child-tree cap|guard caps' "${LOG}" || echo 'no cap lines')"
+      "$(grep -E 'effective child-tree footprint cap|guard caps' "${LOG}" || echo 'no cap lines')"
 fi
 
 # =============================================================================
@@ -205,6 +215,20 @@ EOF
 TK_STEP="python3 '${TK_CHILD_PY}' & _cp=\$!; wait \$_cp"
 TK_LOG="${TMP}/treekill.log"
 
+# W121: a stateful fake phys_footprint reader that returns 0 for the first two polls
+# (so the python child + sleep grandchild are spawned before any abort -- race-free)
+# then 60 GiB.  With baseline 50 GiB + a 100 GiB ceiling, box_used = 50 -> 50 -> 110,
+# so the BOX guard fires on the third poll and tree-kills the whole step subtree.
+TK_FP="${TMP}/tk_fp_reader"
+cat > "${TK_FP}" <<EOF
+#!/bin/bash
+C="${TMP}/tk_fp_count"
+n=\$(cat "\$C" 2>/dev/null || echo 0); echo \$((n + 1)) > "\$C"
+if [ "\$n" -lt 2 ]; then echo 0; else echo 64424509440; fi
+EOF
+chmod +x "${TK_FP}"
+rm -f "${TMP}/tk_fp_count"
+
 # W106 LOW-2: pass a NON-INTEGER grace so we also assert the wrapper validates it
 # (falls back to 2) instead of breaking the KILL loop's bash arithmetic.  (NB: no
 # comments INSIDE the backslash-continued env chain below -- a `#` there truncates
@@ -212,9 +236,11 @@ TK_LOG="${TMP}/treekill.log"
 GPU_WINDOW_TEST_MODE=1 \
 MTPLX_GPU_LOCK="${TMP}/treekill.lock" \
 GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
+GPU_WINDOW_FOOTPRINT_READER="${TK_FP}" \
+GPU_WINDOW_COMPRESSOR_CMD="${FAKE_COMP}" \
 GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
 GPU_WINDOW_RSS_POLL_SECONDS=1 \
-GPU_WINDOW_TOTAL_MEM_CEILING_GB=40 \
+GPU_WINDOW_TOTAL_MEM_CEILING_GB=100 \
 GPU_WINDOW_KILL_GRACE_SECONDS=abc \
 TK_PIDFILE="${TK_PIDFILE}" \
   bash "${SCRIPT}" bash -c "${TK_STEP}" >"${TK_LOG}" 2>&1
@@ -224,11 +250,11 @@ echo "----- gpu_window.sh log (TREE-KILL) -----"
 cat "${TK_LOG}"
 echo "-----------------------------------------"
 
-# 8. the system-ceiling abort fired (exit 8) and killed the child
+# 8. the box-ceiling abort fired (exit 8) and killed the child
 if [[ "${TK_RC}" -eq 8 ]]; then
-  ok "tree-kill scenario aborted on the system ceiling (exit 8)"
+  ok "tree-kill scenario aborted on the box ceiling (exit 8)"
 else
-  bad "tree-kill scenario aborted on the system ceiling (exit 8)" "exit code was ${TK_RC}"
+  bad "tree-kill scenario aborted on the box ceiling (exit 8)" "exit code was ${TK_RC}"
 fi
 
 # 9. the fake step recorded its descendant pids
@@ -267,11 +293,11 @@ else
   kill -KILL "${TK_SLEEP}" 2>/dev/null || true
 fi
 
-# 12. the log shows the system-ceiling abort path
-if grep -q "SYSTEM used memory .* exceeded ceiling" "${TK_LOG}"; then
-  ok "abort log names the system-ceiling breach"
+# 12. the log shows the box-ceiling abort path (baseline + step footprint)
+if grep -q "BOX used memory .* exceeded ceiling" "${TK_LOG}"; then
+  ok "abort log names the box-ceiling breach (baseline + step footprint)"
 else
-  bad "abort log names the system-ceiling breach" "ceiling line not found"
+  bad "abort log names the box-ceiling breach" "ceiling line not found"
 fi
 
 # 13. W106 LOW-2: the non-integer GPU_WINDOW_KILL_GRACE_SECONDS was validated
@@ -336,20 +362,10 @@ else
   bad "LOW poll=0 refusal" "rc=${POLL_RC}; log: $(cat "${POLL_LOG}")"
 fi
 
-# 16. W106 MEDIUM-1: the child cap is lowered by the ps-vs-Metal RSS undercount.
-UC_LOG="${TMP}/undercount.log"
-GPU_WINDOW_TEST_MODE=1 \
-MTPLX_GPU_LOCK="${TMP}/uc.lock" \
-GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
-GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
-GPU_WINDOW_RSS_POLL_SECONDS=1 \
-GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB=18 \
-  bash "${SCRIPT}" bash -c "true" >"${UC_LOG}" 2>&1
-if grep -q "by the 18 GiB ps-vs-Metal RSS undercount" "${UC_LOG}"; then
-  ok "MEDIUM-1: effective child cap lowered by the 18 GiB Metal RSS undercount"
-else
-  bad "MEDIUM-1 undercount adjustment" "$(grep -E 'effective child-tree cap' "${UC_LOG}" || echo 'no line')"
-fi
+# (W121: the old MEDIUM-1 "ps-vs-Metal RSS undercount" adjustment is retired -- the
+# guard now measures phys_footprint directly, which already includes Metal, so there
+# is no ps-RSS undercount to correct.  Compressor-tripwire coverage lives in
+# tests/test_gpu_window_used_mem_w121.sh.)
 
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [[ "${FAIL}" -eq 0 ]]
