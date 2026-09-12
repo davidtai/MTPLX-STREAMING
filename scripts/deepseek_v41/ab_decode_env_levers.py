@@ -91,6 +91,16 @@ STANDARD_CELL16K_PROMPT_SHA256 = (
 DEFAULT_NON_METAL_OVERHEAD_GIB = 10.0
 # Safety headroom subtracted from the budget (flag --memory-safety-gb).
 DEFAULT_MEMORY_SAFETY_GIB = 3.0
+# W106 HIGH-1 (budget re-review): the MLX allocator PEAK overshoots the plan's
+# expert-cache ceiling by the KV + prefill transients that live OUTSIDE the plan
+# body (window 43: 60 GiB plan -> 65.1-65.5 GiB mlx_peak, ~5.5 GiB over).  Price
+# this explicitly so it is not silently absorbed by an inflated non_metal_overhead
+# (which would invite lowering the overhead into the window-41c pressure regime).
+DEFAULT_PLAN_OVERSHOOT_GIB = 6.0
+# HIGH-1: the real non-Metal overhead is ~1-2 GiB (system_used_peak - mlx_peak -
+# baseline); clamp the estimate to at least this so it never goes to zero once the
+# overshoot is a separate term.
+_MIN_NON_METAL_OVERHEAD_GIB = 2.0
 # Floor below which a derived plan limit is refused (flag --memory-budget-floor-gib).
 DEFAULT_MEMORY_BUDGET_FLOOR_GIB = 20.0
 # If the post-load re-measured overhead exceeds the pre-load estimate by more than
@@ -1584,6 +1594,23 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="GB",
         help="DEPRECATED alias of --non-metal-overhead-gib (decimal GB -> GiB).",
     )
+    p.add_argument(
+        "--plan-overshoot-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=f"GiB the MLX allocator PEAK overshoots the plan's expert-cache ceiling "
+        f"(KV + prefill transients that live outside the plan body); subtracted in "
+        f"the budget derivation so the forecast box peak stays under budget (default "
+        f"{DEFAULT_PLAN_OVERSHOOT_GIB:g}).",
+    )
+    p.add_argument(
+        "--plan-overshoot-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --plan-overshoot-gib (decimal GB -> GiB).",
+    )
     # W106 LOW-4: pre-flight the budget derivation from a dry snapshot (no model
     # load, no MLX) so the floor refusal happens BEFORE the guarded GPU window opens
     # (a raise inside _load_model happens after Qwen is already unloaded).
@@ -1594,6 +1621,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the --memory-budget-total-* plan derivation from a dry snapshot "
         "(no model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor), so "
         "the budget can be checked BEFORE the guarded GPU window opens.",
+    )
+    p.add_argument(
+        "--memory-plan-from",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="PIN the MLX plan from a derived-plan.json sidecar (written by an "
+        "earlier --memory-budget-total-gib arm) instead of deriving live, so every "
+        "A/B arm uses the SAME plan_limit (reproducible residency). HIGH-2.",
     )
     p.add_argument(
         "--preflight-freed-gib",
@@ -2126,8 +2162,9 @@ class BudgetTotalDerivation:
     __slots__ = (
         "source", "budget_total_gb", "system_used_at_start_gb",
         "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
-        "floor_gib", "plan_limit_gib", "non_metal_overhead_measured_gb",
-        "plan_limit_gib_effective", "kv_estimator", "rss_semantics",
+        "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
+        "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
+        "kv_estimator", "rss_semantics",
     )
 
     def __init__(
@@ -2141,6 +2178,7 @@ class BudgetTotalDerivation:
         safety_gb,
         floor_gib,
         plan_limit_gib,
+        plan_overshoot_gib=DEFAULT_PLAN_OVERSHOOT_GIB,
         non_metal_overhead_measured_gb=None,
         plan_limit_gib_effective=None,
         kv_estimator=None,
@@ -2152,6 +2190,7 @@ class BudgetTotalDerivation:
         self.non_metal_overhead_gb = non_metal_overhead_gb
         self.kv_growth_to_max_kv_gb = kv_growth_to_max_kv_gb
         self.safety_gb = safety_gb
+        self.plan_overshoot_gib = plan_overshoot_gib
         self.floor_gib = floor_gib
         self.plan_limit_gib = plan_limit_gib
         self.non_metal_overhead_measured_gb = non_metal_overhead_measured_gb
@@ -2172,14 +2211,45 @@ class BudgetTotalDerivation:
         current.update(changes)
         return BudgetTotalDerivation(**current)
 
+    # W106 HIGH-2: serialize the derivation to a sidecar so later A/B arms PIN the
+    # SAME plan (a live per-process vm_stat would give each arm a different plan ->
+    # different residency -> byte-identity meaningless).
+    def to_plan_dict(self) -> dict:
+        return {name: getattr(self, name) for name in self.__slots__}
+
+    @staticmethod
+    def from_plan_dict(d: dict) -> "BudgetTotalDerivation":
+        fields = {
+            "source", "budget_total_gb", "system_used_at_start_gb",
+            "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
+            "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
+            "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
+            "rss_semantics",
+        }
+        return BudgetTotalDerivation(**{k: v for k, v in d.items() if k in fields})
+
+    def forecast_system_peak_gib(self):
+        """HIGH-1: the forecast whole-box peak = baseline + plan + plan_overshoot +
+        non_metal_overhead.  With the plan derived by subtracting overshoot/kv/safety
+        too, this stays <= budget_total (the invariant the derivation guarantees)."""
+        if self.budget_total_gb is None:
+            return None
+        return (
+            self.system_used_at_start_gb + self.plan_limit_gib
+            + self.plan_overshoot_gib + self.non_metal_overhead_gb
+        )
+
     def formula(self) -> str:
+        fc = self.forecast_system_peak_gib()
         return (
             f"plan_limit = budget_total({self.budget_total_gb:.4g}) "
             f"- system_used_at_start({self.system_used_at_start_gb:.4g}) "
             f"- non_metal_overhead({self.non_metal_overhead_gb:.4g}) "
             f"- kv_growth_to_max_kv({self.kv_growth_to_max_kv_gb:.4g}) "
             f"- safety({self.safety_gb:.4g}) "
-            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g})"
+            f"- plan_overshoot({self.plan_overshoot_gib:.4g}) "
+            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g}; "
+            f"forecast_system_peak {fc:.4g} <= budget)"
         )
 
     def memory_keys(self) -> dict:
@@ -2187,6 +2257,7 @@ class BudgetTotalDerivation:
         SAME key set (nulls where a term does not apply) so receipts are
         self-describing regardless of which plan source ran."""
 
+        fc = self.forecast_system_peak_gib()
         return {
             "memory_plan_source": self.source,
             "budget_total_gb": (
@@ -2207,6 +2278,8 @@ class BudgetTotalDerivation:
             "budget_kv_growth_to_max_kv_gb": round(self.kv_growth_to_max_kv_gb, 4),
             "budget_kv_estimator": self.kv_estimator,
             "budget_safety_gb": round(self.safety_gb, 4),
+            "budget_plan_overshoot_gib": round(self.plan_overshoot_gib, 4),
+            "budget_forecast_system_peak_gb": (None if fc is None else round(fc, 4)),
             "budget_floor_gib": round(self.floor_gib, 4),
             "rss_semantics": self.rss_semantics,
         }
@@ -2219,6 +2292,7 @@ def derive_budget_total_plan(
     non_metal_overhead_gb: float,
     kv_growth_to_max_kv_gb: float,
     safety_gb: float = DEFAULT_MEMORY_SAFETY_GIB,
+    plan_overshoot_gib: float = DEFAULT_PLAN_OVERSHOOT_GIB,
     floor_gib: float = DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
     kv_estimator: str | None = None,
 ) -> BudgetTotalDerivation:
@@ -2226,11 +2300,12 @@ def derive_budget_total_plan(
     the non-Metal requirements.  All measurements are injected (pure math):
 
         plan_limit = total - system_used_at_start - non_metal_overhead
-                           - kv_growth_to_max_kv - safety
+                           - kv_growth_to_max_kv - safety - plan_overshoot
 
-    Raises ``ValueError`` (a clear, actionable message) when the derived plan
-    limit is below ``floor_gib`` -- refusing to start rather than opening a GPU
-    window on a plan too small to hold the model.
+    ``plan_overshoot`` (HIGH-1) prices the MLX allocator peak that lands OVER the
+    plan's expert-cache ceiling (KV + prefill transients), so the forecast box peak
+    = baseline + plan + overshoot + overhead stays <= budget.  Raises ``ValueError``
+    (actionable) when the derived plan limit is below ``floor_gib``.
     """
 
     for name, value in (
@@ -2239,6 +2314,7 @@ def derive_budget_total_plan(
         ("non_metal_overhead_gb", non_metal_overhead_gb),
         ("kv_growth_to_max_kv_gb", kv_growth_to_max_kv_gb),
         ("safety_gb", safety_gb),
+        ("plan_overshoot_gib", plan_overshoot_gib),
         ("floor_gib", floor_gib),
     ):
         if value < 0:
@@ -2250,6 +2326,7 @@ def derive_budget_total_plan(
         - float(non_metal_overhead_gb)
         - float(kv_growth_to_max_kv_gb)
         - float(safety_gb)
+        - float(plan_overshoot_gib)
     )
     if plan_limit < float(floor_gib):
         exc = ValueError(
@@ -2259,8 +2336,9 @@ def derive_budget_total_plan(
             f"- system_used_at_start {system_used_at_start_gb:.4g} "
             f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
             f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
-            f"- safety {safety_gb:.4g}. Raise --memory-budget-total-gib, lower "
-            f"--memory-safety-gib / --non-metal-overhead-gib, reduce --max-kv, or "
+            f"- safety {safety_gb:.4g} - plan_overshoot {plan_overshoot_gib:.4g}. "
+            f"Raise --memory-budget-total-gib, lower --memory-safety-gib / "
+            f"--non-metal-overhead-gib / --plan-overshoot-gib, reduce --max-kv, or "
             f"lower --memory-budget-floor-gib (default "
             f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
         )
@@ -2273,6 +2351,7 @@ def derive_budget_total_plan(
         non_metal_overhead_gb=float(non_metal_overhead_gb),
         kv_growth_to_max_kv_gb=float(kv_growth_to_max_kv_gb),
         safety_gb=float(safety_gb),
+        plan_overshoot_gib=float(plan_overshoot_gib),
         floor_gib=float(floor_gib),
         plan_limit_gib=plan_limit,
         kv_estimator=kv_estimator,
@@ -2544,9 +2623,24 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
         args, "non_metal_overhead_gib", "non_metal_overhead_gb",
         DEFAULT_NON_METAL_OVERHEAD_GIB, "--non-metal-overhead",
     )
+    # HIGH-1: clamp the non-Metal overhead to >= 2 GiB -- the real value is ~1-2 GiB
+    # once the plan overshoot is a separate term, and a 0 estimate would under-budget.
+    if non_metal_gb < _MIN_NON_METAL_OVERHEAD_GIB:
+        print(
+            f"[ab] NOTE: --non-metal-overhead {non_metal_gb:.4g} GiB is below the "
+            f"{_MIN_NON_METAL_OVERHEAD_GIB:.4g} GiB floor; clamping up "
+            "(the real non-Metal overhead is ~1-2 GiB and the plan overshoot is a "
+            "separate --plan-overshoot-gib term).",
+            flush=True,
+        )
+        non_metal_gb = _MIN_NON_METAL_OVERHEAD_GIB
     safety_gb = _resolve_gib_flag(
         args, "memory_safety_gib", "memory_safety_gb",
         DEFAULT_MEMORY_SAFETY_GIB, "--memory-safety",
+    )
+    plan_overshoot_gib = _resolve_gib_flag(
+        args, "plan_overshoot_gib", "plan_overshoot_gb",
+        DEFAULT_PLAN_OVERSHOOT_GIB, "--plan-overshoot",
     )
     floor_gib = float(
         getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
@@ -2565,9 +2659,45 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
         non_metal_overhead_gb=non_metal_gb,
         kv_growth_to_max_kv_gb=kv_growth_gb,
         safety_gb=safety_gb,
+        plan_overshoot_gib=plan_overshoot_gib,
         floor_gib=floor_gib,
         kv_estimator=kv_estimator,
     )
+
+
+def _derived_plan_sidecar_path(args):
+    """The <out-dir>/derived-plan.json sidecar path (HIGH-2)."""
+    out = getattr(args, "out", None)
+    if out is None:
+        return None
+    return Path(out).parent / "derived-plan.json"
+
+
+def _write_derived_plan_sidecar(args, bt) -> None:
+    """Persist the derived budget plan so later A/B arms can PIN it (HIGH-2).
+    Atomic (tmp + rename); guarded."""
+    path = _derived_plan_sidecar_path(args)
+    if path is None or bt is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = bt.to_plan_dict()
+        payload["_note"] = (
+            "W106 HIGH-2 pinned plan; pass --memory-plan-from this file to later "
+            "A/B arms so every arm uses the SAME plan_limit (reproducible residency)."
+        )
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, path)
+        print(f"[ab] wrote derived plan sidecar: {path}", flush=True)
+    except OSError as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: could not write derived plan sidecar ({exc!r})", flush=True)
+
+
+def _load_pinned_plan(path):
+    """Load a BudgetTotalDerivation from a --memory-plan-from sidecar (HIGH-2)."""
+    data = json.loads(Path(path).read_text())
+    return BudgetTotalDerivation.from_plan_dict(data)
 
 
 def _preflight_memory_plan(args, bench) -> int:
@@ -2660,13 +2790,27 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
-    bt = _derive_budget_total(args, bench, max_kv)
-    if bt is not None:
+    pin_path = getattr(args, "memory_plan_from", None)
+    if pin_path:
+        # HIGH-2: PIN the plan from a sidecar written by an earlier arm, so every
+        # A/B arm uses the SAME plan_limit (no per-process vm_stat drift).
+        bt = _load_pinned_plan(pin_path)
+        print(
+            f"[ab] memory plan PINNED from {pin_path}: plan_limit "
+            f"{bt.plan_limit_gib:.4g} GiB ({bt.formula()})",
+            flush=True,
+        )
         args._dsv41_budget_total = bt
         override = bt.plan_limit_gib
     else:
-        override = getattr(args, "memory_limit_gib", None)
-        args._dsv41_budget_total = None
+        bt = _derive_budget_total(args, bench, max_kv)
+        if bt is not None:
+            args._dsv41_budget_total = bt
+            override = bt.plan_limit_gib
+            _write_derived_plan_sidecar(args, bt)  # so later arms can pin it
+        else:
+            override = getattr(args, "memory_limit_gib", None)
+            args._dsv41_budget_total = None
 
     derivation = derive_plan_from_budget(
         box_budget_gib=getattr(args, "box_budget_gib", None),
@@ -3023,15 +3167,17 @@ def _remeasure_non_metal_overhead(args, mx) -> None:
         return
 
     footprint = int(footprint)
-    if footprint < active:
-        # Metal is not counted in phys_footprint on this platform -> the non-Metal
-        # overhead cannot be derived by subtraction. Record it as inverted (never a
-        # misleading 0.0) and do not abort.
+    # MEDIUM-2: the inversion is footprint < active + CACHE (not just < active) --
+    # if the cache subtraction would drive the result negative, Metal is not fully
+    # in phys_footprint and the overhead is UNMEASURABLE; record None + inverted,
+    # never a bogus 0.0 stamped "ok".
+    if footprint < active + cache:
         print(
             f"[ab] budget-total re-measure: WARN phys_footprint "
-            f"{footprint / GIB:.2f} GiB < mx active {active / GIB:.2f} GiB "
-            "(Metal not in footprint); non_metal_overhead UNMEASURABLE, recorded "
-            "None (rss_semantics=inverted); MLX limit unchanged, no abort",
+            f"{footprint / GIB:.2f} GiB < mx active {active / GIB:.2f} + cache "
+            f"{cache / GIB:.2f} GiB (Metal not fully in footprint); "
+            "non_metal_overhead UNMEASURABLE, recorded None "
+            "(rss_semantics=inverted); MLX limit unchanged, no abort",
             flush=True,
         )
         args._dsv41_budget_total = bt.replace(
@@ -3041,7 +3187,7 @@ def _remeasure_non_metal_overhead(args, mx) -> None:
         )
         return
 
-    measured_gb = max(0.0, (footprint - active - cache) / GIB)
+    measured_gb = (footprint - active - cache) / GIB
     overage_gb = measured_gb - bt.non_metal_overhead_gb
     # plan_limit is NEVER lowered post-load (HIGH-1).
     args._dsv41_budget_total = bt.replace(
@@ -3806,7 +3952,7 @@ def _memory_headline(receipt) -> str:
         f" mlx_peak_gb={mem.get('mlx_peak_gb', peak_gb):.2f}"
         f" process_peak_rss_gb={mem.get('process_peak_rss_gb', 0.0):.2f}"
         f" system_used_peak_gb={mem.get('system_used_peak_gb', 0.0):.2f}"
-        f" (sys start {mem.get('system_used_at_start_gb', 0.0):.2f})"
+        f" (sys at decode start {mem.get('system_used_at_decode_start_gb', 0.0):.2f})"
     )
 
 
@@ -3824,29 +3970,52 @@ _DIVERGENCE_CONTEXT_CHARS = 200
 
 
 def _decode_ids(tok, ids):
-    """Decode token ids to text with the bench's already-loaded tokenizer.  Guarded:
-    returns None on any failure or when no tokenizer is available (e.g.
-    --prompt-ids-file), so a decode never kills a run."""
+    """Decode token ids to text.  Returns ``(text_or_None, error_or_None)``: never a
+    SILENT empty string.  Tries the tokenizer's ``decode`` then the underlying HF
+    ``_tokenizer.decode``; a raise records its repr, and an EMPTY result for a
+    non-empty id list is itself recorded as an error (window 43: the decode was
+    skipped entirely because --prompt-ids-file left the tokenizer None; now the
+    caller always supplies an output tokenizer and any failure is loud + recorded)."""
 
-    if tok is None or ids is None:
-        return None
-    decode = getattr(tok, "decode", None)
-    if not callable(decode):
-        return None
-    try:
-        return decode([int(t) for t in ids])
-    except Exception as exc:  # pragma: no cover - defensive
-        print(f"[ab] WARN: token decode failed ({exc!r}); text output omitted",
-              flush=True)
-        return None
+    if ids is None:
+        return None, "no ids"
+    if tok is None:
+        return None, "no tokenizer available for output decode"
+    ids_int = [int(t) for t in ids]
+    last_err = None
+    candidates = (
+        ("decode", getattr(tok, "decode", None)),
+        ("_tokenizer.decode", getattr(getattr(tok, "_tokenizer", None), "decode", None)),
+    )
+    for label, fn in candidates:
+        if not callable(fn):
+            continue
+        try:
+            text = fn(ids_int)
+        except Exception as exc:
+            last_err = f"{label} raised {exc!r}"
+            continue
+        if text:  # non-empty string -> success
+            return text, None
+        # An empty result for a non-empty id list is suspicious: record it and try
+        # the next method (never return a silent '').
+        last_err = f"{label} returned empty for {len(ids_int)} ids"
+    return None, (last_err or "no usable decode method on the tokenizer")
 
 
 def _text_output_fields(tok, ids) -> dict:
     """The receipt text-audit fields for one id stream: the FULL id list, the full
-    decoded text, and its head/tail (first/last 600 chars)."""
+    decoded text + head/tail (first/last 600 chars), and ``decoded_text_error`` (the
+    reason decode produced no text, or None on success).  A failure is LOUD."""
 
     ids_list = [int(t) for t in (ids or [])]
-    text = _decode_ids(tok, ids_list)
+    text, err = _decode_ids(tok, ids_list)
+    if err is not None:
+        print(
+            f"[ab] WARN: output decode produced no text ({err}); "
+            f"token_ids present ({len(ids_list)}), decoded_text_error recorded",
+            flush=True,
+        )
     if text is None:
         head = tail = None
     else:
@@ -3857,6 +4026,7 @@ def _text_output_fields(tok, ids) -> dict:
         "decoded_text": text,
         "decoded_text_head": head,
         "decoded_text_tail": tail,
+        "decoded_text_error": err,
     }
 
 
@@ -3865,10 +4035,10 @@ def _divergence_context(tok, ids, token_index, span=_DIVERGENCE_CONTEXT_CHARS):
     divergence TOKEN index maps to (decode the prefix to find the offset).  None
     when the stream cannot be decoded."""
 
-    full = _decode_ids(tok, ids)
+    full, _ = _decode_ids(tok, ids)
     if full is None:
         return None
-    prefix = _decode_ids(tok, list(ids)[: max(0, int(token_index))])
+    prefix, _ = _decode_ids(tok, list(ids)[: max(0, int(token_index))])
     offset = len(prefix) if prefix is not None else 0
     return full[max(0, offset - span): offset + span]
 
@@ -3966,6 +4136,13 @@ def _abort_receipt_row(arm, exc, args=None) -> dict:
         "reason": str(exc),
         "stage": stage,
         "exception": type(exc).__name__,
+        # LOW: a human note so the ledger row is self-explanatory (this arm produced
+        # no measurement; the run exited 4 -- chain later arms with `&&`, not `;`).
+        "note": (
+            "arm aborted before producing a receipt; no measurement recorded. "
+            "The bench exited 4 at this arm -- with `&&` chaining the launcher stops "
+            "here rather than re-loading + re-aborting every later step."
+        ),
     }
     bt = getattr(args, "_dsv41_budget_total", None) if args is not None else None
     if bt is not None:
@@ -4084,6 +4261,21 @@ def _run_arm(args, arm, bench, mx) -> dict:
     # W113 MEDIUM-3: --stop-on-eos with no resolvable EOS id must refuse (not
     # silently no-op while stamping stop_on_eos:true).  Before the model load.
     _require_eos_id_for_stop(stop_on_eos, eos_id)
+    # W106 output persistence (window-43 fix): the prompt path leaves _tok None when
+    # --prompt-ids-file supplies the prompt ids -- but the OUTPUT still needs a
+    # tokenizer to be decoded for the audit.  Always obtain one for decoding
+    # (reusing _tok when present), guarded, so a decode is never silently skipped.
+    _out_tok = _tok
+    if _out_tok is None:
+        try:
+            _out_tok = _tokenizer(args, bench)
+        except Exception as exc:  # pragma: no cover - defensive
+            _out_tok = None
+            print(
+                "[ab] WARN: could not load a tokenizer for OUTPUT decode "
+                f"({exc!r}); receipts will carry decoded_text_error",
+                flush=True,
+            )
     resident = _load_model(args, bench, mx)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime", None)
@@ -4237,7 +4429,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # head/tail) for the AR pass, so a rounding-class result is text-
             # auditable, not just sha-comparable. Decoded with the loaded bench
             # tokenizer; None if unavailable (guarded).
-            **_text_output_fields(_tok, ids),
+            **_text_output_fields(_out_tok, ids),
             "overlap_telemetry": _overlap_telemetry(runtime)
             if runtime is not None
             else None,
@@ -4378,8 +4570,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # W106 output persistence: the FULL DSpark stream (ids + decoded text)
             # AND the AR comparison stream it is verified against, both under the
             # dspark block so the divergence is text-auditable from the receipt.
-            receipt["dspark"].update(_text_output_fields(_tok, dsp_ids))
-            receipt["dspark"]["ar_reference"] = _text_output_fields(_tok, ids)
+            receipt["dspark"].update(_text_output_fields(_out_tok, dsp_ids))
+            receipt["dspark"]["ar_reference"] = _text_output_fields(_out_tok, ids)
             if dsp.get("verify_stage_timing") is not None:
                 # W37 internal breakdown of the verify forward (attention +
                 # moe.routed_switch): the census that shows the routing phase.
@@ -4415,8 +4607,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 # W106: the decoded text ~200 chars either side of the divergence
                 # point, for BOTH streams, so the flip is readable in the receipt.
                 receipt["dspark"]["divergence_context"] = {
-                    "ar": _divergence_context(_tok, ids, first),
-                    "dspark": _divergence_context(_tok, dsp_ids, first),
+                    "ar": _divergence_context(_out_tok, ids, first),
+                    "dspark": _divergence_context(_out_tok, dsp_ids, first),
                 }
                 ar_tok = ids[first] if first < len(ids) else None
                 dsp_tok = dsp_ids[first] if first < len(dsp_ids) else None
@@ -4975,6 +5167,25 @@ def main(argv=None) -> int:
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.
     if len(receipts) >= 2:
         base = receipts[0]
+        # W106 HIGH-2: byte-identity across arms is only meaningful if every arm ran
+        # the SAME plan (same residency).  Assert equal plan_limit_gib_effective (or
+        # _derived) before trusting the comparison; a differing plan is flagged.
+        def _plan_of(r):
+            m = r.get("memory") or {}
+            return m.get("plan_limit_gib_effective", m.get("plan_limit_gib_derived"))
+        _base_plan = _plan_of(base)
+        _plans_equal = all(_plan_of(r) == _base_plan for r in receipts)
+        if not _plans_equal:
+            print(
+                "[ab] WARN: arms ran DIFFERENT plan_limit values "
+                f"({[_plan_of(r) for r in receipts]}); byte-identity/tok-s across "
+                "arms is NOT comparable -- pin the plan with --memory-plan-from "
+                "<out-dir>/derived-plan.json for every arm after the first.",
+                flush=True,
+            )
+        else:
+            print(f"[ab] plan reproducibility: all arms ran plan_limit={_base_plan}",
+                  flush=True)
         for cand in receipts[1:]:
             identical = cand["token_ids_sha256"] == base["token_ids_sha256"]
             d_base = base["decode_tok_s"] or 0.0

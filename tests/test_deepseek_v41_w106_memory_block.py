@@ -6,7 +6,7 @@ Covers ``scripts/deepseek_v41/bench_standard_shape.py``:
     no MLX and holds no lock), and
   * ``_MLXMemProbe.memory_block`` -- the block that fixes David's "peak_gb is the
     actual memory usage" misread by carrying ``mlx_peak_gb`` (the old ``peak_gb``),
-    ``process_peak_rss_gb``, ``system_used_peak_gb`` and ``system_used_at_start_gb``.
+    ``process_peak_rss_gb``, ``system_used_peak_gb`` and ``system_used_at_decode_start_gb``.
 
 The block machinery is MLX-agnostic (it reads ru_maxrss / ps / vm_stat, never the
 allocator), so this test drives it with a FAKE mx that reports a chosen MLX peak.
@@ -85,7 +85,7 @@ def test_memory_block_has_all_keys_and_process_rss_ge_mlx_peak():
         "ru_maxrss_gb",
         "process_peak_rss_gb",
         "system_used_peak_gb",
-        "system_used_at_start_gb",
+        "system_used_at_decode_start_gb",
     ):
         assert key in block, f"missing key {key!r} in memory block: {block}"
         assert isinstance(block[key], float)
@@ -102,8 +102,8 @@ def test_memory_block_has_all_keys_and_process_rss_ge_mlx_peak():
 
     # Non-negative envelope figures (system_used is >0 on darwin, 0 elsewhere).
     assert block["system_used_peak_gb"] >= 0.0
-    assert block["system_used_at_start_gb"] >= 0.0
-    assert block["system_used_peak_gb"] >= block["system_used_at_start_gb"]
+    assert block["system_used_at_decode_start_gb"] >= 0.0
+    assert block["system_used_peak_gb"] >= block["system_used_at_decode_start_gb"]
 
     del blob
 
@@ -120,12 +120,12 @@ def test_memory_block_without_sampler_still_builds():
         "ru_maxrss_gb",
         "process_peak_rss_gb",
         "system_used_peak_gb",
-        "system_used_at_start_gb",
+        "system_used_at_decode_start_gb",
     }
     assert block["sampler_peak_rss_gb"] is None  # no sampler ran
     assert block["process_peak_rss_gb"] == block["ru_maxrss_gb"]  # documented fallback
     assert block["system_used_peak_gb"] == 0.0
-    assert block["system_used_at_start_gb"] == 0.0
+    assert block["system_used_at_decode_start_gb"] == 0.0
 
 
 def test_sampler_thread_is_daemon_and_stops_cleanly():
@@ -155,7 +155,7 @@ def _ab():
 def test_peak_process_gb_reads_process_peak_rss_from_run():
     ab = _ab()
     run = {"memory": {"mlx_peak_gb": 40.0, "process_peak_rss_gb": 52.5,
-                      "system_used_peak_gb": 90.0, "system_used_at_start_gb": 20.0}}
+                      "system_used_peak_gb": 90.0, "system_used_at_decode_start_gb": 20.0}}
     # peak_process_gb is the whole-process RSS peak, NOT the MLX allocator peak.
     assert ab._peak_process_gb(run) == 52.5
 
@@ -174,7 +174,7 @@ def test_memory_headline_prints_non_metal_keys():
             "mlx_peak_gb": 40.0,
             "process_peak_rss_gb": 52.5,
             "system_used_peak_gb": 90.0,
-            "system_used_at_start_gb": 20.0,
+            "system_used_at_decode_start_gb": 20.0,
         },
     }
     line = ab._memory_headline(receipt)
@@ -183,7 +183,7 @@ def test_memory_headline_prints_non_metal_keys():
     assert "mlx_peak_gb=40.00" in line
     assert "process_peak_rss_gb=52.50" in line
     assert "system_used_peak_gb=90.00" in line
-    assert "sys start 20.00" in line
+    assert "sys at decode start 20.00" in line
 
 
 def test_memory_headline_handles_missing_memory_block():

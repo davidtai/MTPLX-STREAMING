@@ -37,6 +37,14 @@
 # which reaps the process group and leaves qwen down.  Do NOT stop the launching
 # agent mid-window (it kills this wrapper AND its lock holder).
 #
+# W106 MEDIUM-3 launcher pattern: chain multiple windows / arms with `&&`, NEVER
+# `;`.  A step that aborts exits non-zero (the ab harness exits 4 at the FIRST arm
+# that aborts); with `;` the chain would re-open a window and re-abort every later
+# step, and the launcher would report only the LAST rc.  With `&&` the first
+# non-zero rc stops the chain and is the reported rc.  To abort a running window by
+# hand, `kill -TERM` the pid this wrapper prints at start ("abort:" line) -- the
+# bash gpu_window.sh, NOT its parent python lock-holder (which ignores signals).
+#
 # Borrowed shape:
 #   - lock path + fcntl advisory lock:     mtplx/qwen_guard.py:27,408 (LOCK_EX)
 #   - bootout (not kickstart) / bootstrap: mtplx/qwen_guard.py:1136,1078
@@ -50,13 +58,15 @@
 set -uo pipefail  # intentionally NOT -e: exit codes are managed explicitly so
                   # the teardown trap always runs and restores the resident agent.
 
-# W106 MEDIUM-A: several GiB caps feed bash arithmetic (`GB * 1024^3`, `X * 4`) that
-# a fractional/non-integer value would break -- and with `set -u` an unset derived
-# var would kill the window at the first poll AFTER Qwen is already booted out.
-# Validate them to a non-negative INTEGER BEFORE phase 0 (warn + fall back to the
-# default, like KILL_GRACE).  Defined before the config block so it can guard it.
-# NOTE: the env var names carry GiB despite the historical `_GB` suffix (see the
-# W106 doc "Units" section); the value is GiB (1 GiB = 1024^3 bytes).
+# W106 MEDIUM-A/HIGH-3: several GiB caps feed bash arithmetic (`GB * 1024^3`,
+# `X * 4`) that a fractional/non-integer value would break -- and with `set -u` an
+# unset derived var would kill the window at the first poll AFTER Qwen is already
+# booted out.  Validate them to a non-negative INTEGER BEFORE phase 0.  Defined
+# before the config block so they can guard it.  NOTE: the env var names carry GiB
+# despite the historical `_GB` suffix (see the W106 doc "Units" section); the value
+# is GiB (1 GiB = 1024^3 bytes).
+#
+# _int_or_default warns + falls back (used for non-safety knobs like KILL_GRACE).
 _int_or_default() {  # $1=value $2=default $3=env-name -> a valid non-negative int
   if [[ "$1" =~ ^[0-9]+$ ]]; then
     printf '%s' "$1"
@@ -67,6 +77,27 @@ _int_or_default() {  # $1=value $2=default $3=env-name -> a valid non-negative i
   fi
 }
 
+# HIGH-3: the SAFETY caps (system ceiling, min-avail, foreign cap, child-tree cap)
+# must REFUSE on an invalid value, not fall back to a default -- a fractional
+# GPU_WINDOW_TOTAL_MEM_CEILING_GB=95.5 falling back to 102 would silently RAISE the
+# ceiling (over the operator's intent).  _require_int VALIDATES (prints an ERROR to
+# stderr and returns non-zero on a bad value) but does NOT exit -- the CALLER does
+# `|| exit 2` in the MAIN shell, because an `exit` inside `$(...)` would only leave
+# a subshell and the invalid value would slip through.  Refuses BEFORE phase 0.
+_require_int() {  # $1=env-name $2=value [min] -> return 0 valid, else err + return 1
+  local name="$1" val="$2" min="${3:-0}" reason=""
+  if [[ ! "${val}" =~ ^[0-9]+$ ]]; then
+    reason="must be a non-negative integer"
+  elif (( val < min )); then
+    reason="must be >= ${min}"
+  else
+    return 0
+  fi
+  printf '%s [gpu_window] ERROR: %s=%s is invalid (%s); refusing to open a GPU window\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${name}" "${val}" "${reason}" >&2
+  return 1
+}
+
 # ------------------------------- configuration -------------------------------
 LOCK_PATH="${MTPLX_GPU_LOCK:-/tmp/mtplx-gpu-exclusive.lock}"
 LOCK_TIMEOUT="${GPU_WINDOW_LOCK_TIMEOUT:-0}"          # seconds; 0 = block forever
@@ -74,13 +105,37 @@ QWEN_LABEL="${GPU_WINDOW_QWEN_LABEL:-com.tea.qwen}"
 WIRED_CAP_MB="${GPU_WINDOW_WIRED_CAP_MB:-102400}"     # 100 GiB, never exceeded/raised
 STOP_TIMEOUT="${GPU_WINDOW_STOP_TIMEOUT:-180}"        # seconds to confirm the stop
 RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm restore
-MIN_AVAIL_GB="$(_int_or_default "${GPU_WINDOW_MIN_AVAIL_GB:-100}" 100 GPU_WINDOW_MIN_AVAIL_GB)"  # GiB the step needs available after the stop
+# W106 restore hardening (real-window incident, windows 42/43): the plist that
+# `launchctl print` reports for a running com.tea.qwen is often a TRANSIENT guard-dir
+# copy (~/.mtplx-qwen-guard-<rand>/com.tea.qwen.plist) written by mtplx.qwen_guard
+# when IT bootstrapped the agent; that dir is gone by restore time, so `bootstrap`
+# FAILS and David's agent is left DOWN.  CANONICAL_PLIST is the DURABLE fallback
+# (~/Library/LaunchAgents/<label>.plist).  RESTORE_QWEN_ALWAYS bootstraps it at exit
+# even if the agent was not loaded at entry, so a previous failed restore cannot
+# cascade.  LAUNCHCTL_CMD is overridable so restore is unit-testable with a fake.
+CANONICAL_PLIST="${GPU_WINDOW_QWEN_PLIST:-${HOME}/Library/LaunchAgents/${QWEN_LABEL}.plist}"
+RESTORE_QWEN_ALWAYS="${GPU_WINDOW_RESTORE_QWEN_ALWAYS:-1}"   # default ON on this box
+LAUNCHCTL_CMD="${GPU_WINDOW_LAUNCHCTL_CMD:-/bin/launchctl}"  # overridable for tests
+# HIGH-3: safety caps REFUSE (exit 2) on an invalid value (never silently fall back).
+MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"  # GiB the step needs available after the stop
+_require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
 # W106 HIGH-2: all guard caps are GiB (bytes = N * 1024^3), stated explicitly.
 # Default child-tree RSS cap = 93 GiB ~= 100 GB (David's "100 GB total for
 # everything").  This cap is LIVE for the first time (pre-W106 the poll read the
 # few-MB `bash -c` shell RSS ~= 0); at 93 GiB it sits just under the 100 GB budget.
-CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"  # 93 GiB ~= 100 GB (David's total budget)
-RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
+# HIGH-3: CHILD_RSS_CAP_BYTES is BYTES (not GiB) and must be >= 1 GiB -- "93" would
+# be 93 BYTES (killing the step right after bootout), and a fractional value would
+# break the arithmetic; refuse either.
+CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"
+_require_int GPU_WINDOW_CHILD_RSS_CAP_BYTES "${CHILD_RSS_CAP_BYTES}" $(( 1024 * 1024 * 1024 )) || exit 2
+RSS_POLL_SECONDS="$(_int_or_default "${GPU_WINDOW_RSS_POLL_SECONDS:-1}" 1 GPU_WINDOW_RSS_POLL_SECONDS)"  # MEDIUM-1: default 1s (streaming grows fast)
+# W106 MEDIUM-1: the child-tree cap compares `ps` RSS, which UNDERCOUNTS unified
+# Metal memory by ~18 GiB (window 43: tree RSS 51.2 vs system-baseline 69.5), so it
+# could never fire before the (accurate, vm_stat-based) system ceiling. Lower the
+# effective child cap by this documented undercount so it fires at the real
+# footprint; set 0 to disable the correction.  The SYSTEM ceiling remains the
+# authoritative guard (vm_stat counts wired + compressed Metal).
+RSS_METAL_UNDERCOUNT_GIB="$(_int_or_default "${GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB:-18}" 18 GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB)"
 
 # System-wide phase-4 guard (2026-09-10 panic hardening): the box kernel-panicked
 # and rebooted when TOTAL used memory crossed the box limit, even though no single
@@ -90,9 +145,13 @@ RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
 # cap are resident (their footprint co-resides with the step's).
 # W106 HIGH-2: GiB. Default system ceiling = 102 GiB ~= 109.5 GB, just under the
 # 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
-TOTAL_MEM_CEILING_GB="$(_int_or_default "${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}" 102 GPU_WINDOW_TOTAL_MEM_CEILING_GB)"  # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
+# HIGH-3: REFUSE on an invalid ceiling (a fractional 95.5 must NOT silently become
+# the 102 default and raise the ceiling over the operator's intent).
+TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}"  # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
+_require_int GPU_WINDOW_TOTAL_MEM_CEILING_GB "${TOTAL_MEM_CEILING_GB}" 1 || exit 2
 TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
-FOREIGN_WORKER_RSS_GB="$(_int_or_default "${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}" 2 GPU_WINDOW_FOREIGN_WORKER_RSS_GB)"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
+FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
+_require_int GPU_WINDOW_FOREIGN_WORKER_RSS_GB "${FOREIGN_WORKER_RSS_GB}" || exit 2
 VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
 PS_CMD="${GPU_WINDOW_PS_CMD:-/bin/ps}"                           # overridable for the foreign-worker scan unit test
                                                                 # (also used for the phase-4 step-tree RSS walk below)
@@ -219,6 +278,72 @@ _step_tree_pids() {
   '
 }
 
+# W106 restore hardening: choose a plist that EXISTS at restore time.  Prefer the
+# launchctl-discovered path ($1) if it still exists, else the durable canonical
+# plist ($2); echo the chosen path (empty if neither exists).  Defined before the
+# selftest block so `--selftest restore-plist` can exercise it hermetically.
+_resolve_restore_plist() {
+  local discovered="${1:-}" canonical="${2:-}"
+  if [[ -n "${discovered}" && -f "${discovered}" ]]; then
+    printf '%s' "${discovered}"
+  elif [[ -n "${canonical}" && -f "${canonical}" ]]; then
+    printf '%s' "${canonical}"
+  else
+    printf ''
+  fi
+}
+
+# Core of the resident-agent restore (bootstrap), split out so a fake ${LAUNCHCTL_CMD}
+# can unit-test it.  $1 = was_loaded (1/0), $2 = the launchctl-discovered plist path
+# (may be a vanished guard-dir copy).  Bootstraps a plist that EXISTS, falling back to
+# ${CANONICAL_PLIST}; with RESTORE_QWEN_ALWAYS=1 it bootstraps even when the agent was
+# not loaded at entry (so a previous failed restore cannot cascade), unless the agent
+# is already loaded now.  On failure it prints the exact manual command.
+_do_restore() {
+  local was_loaded="${1:-0}" discovered="${2:-}"
+  local want=0
+  if (( was_loaded == 1 )); then
+    want=1
+  elif [[ "${RESTORE_QWEN_ALWAYS}" == "1" ]]; then
+    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
+      log "restore: ${QWEN_LABEL} already loaded; nothing to do (RESTORE_QWEN_ALWAYS=1)"
+      return 0
+    fi
+    want=1
+    log "restore: ${QWEN_LABEL} was NOT loaded at entry, but GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 -> bootstrapping anyway (guards against a cascaded prior failure)"
+  else
+    log "restore: ${QWEN_LABEL} was not loaded at entry; leaving it stopped (as found)"
+    return 0
+  fi
+
+  local plist
+  plist="$(_resolve_restore_plist "${discovered}" "${CANONICAL_PLIST}")"
+  if [[ -n "${discovered}" && "${discovered}" != "${plist}" ]]; then
+    log "restore: discovered plist '${discovered}' is gone; falling back to '${plist:-<none>}'"
+  fi
+  if [[ -z "${plist}" ]]; then
+    err "restore: NO plist file exists to bootstrap (discovered '${discovered}' gone, canonical '${CANONICAL_PLIST}' missing); ${QWEN_LABEL} may be DOWN -- manual recovery: ${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST}"
+    return 1
+  fi
+
+  log "restore: launchctl bootstrap ${DOMAIN} ${plist}"
+  if ! "${LAUNCHCTL_CMD}" bootstrap "${DOMAIN}" "${plist}"; then
+    err "restore: 'launchctl bootstrap ${DOMAIN} ${plist}' FAILED; ${QWEN_LABEL} may be DOWN on :8080 -- manual recovery: ${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST}"
+    return 1
+  fi
+  local deadline
+  deadline=$(( $(date +%s) + RESTORE_TIMEOUT ))
+  while (( $(date +%s) < deadline )); do
+    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
+      log "restore: ${QWEN_LABEL} is loaded again (launchctl service present); /health may still be warming"
+      return 0
+    fi
+    sleep 1
+  done
+  err "restore: ${QWEN_LABEL} did not reappear within ${RESTORE_TIMEOUT}s; verify :8080 manually (${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST})"
+  return 1
+}
+
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 # ---- test/introspection hooks (no GPU, no lock, no launchctl) ----------------
@@ -239,7 +364,15 @@ if [[ "${1:-}" == "--selftest" ]]; then
       ;;
     heavy-workers)  list_heavy_foreign_workers ;;
     tree-pids)      _step_tree_pids "${2:-}" ; echo ;;   # W106 item 4: tree walk
-    *) err "unknown --selftest target: ${1:-} (used-mem-bytes|used-mem-gib|over-ceiling|heavy-workers|tree-pids)"; exit 2 ;;
+    restore-plist)  _resolve_restore_plist "${2:-}" "${3:-}" ; echo ;;  # discovered, canonical
+    restore-run)
+      # W106 restore test: run _do_restore against a fake ${LAUNCHCTL_CMD} with
+      # env-injected inputs, then exit with its status.  $2 = was_loaded (1/0),
+      # $3 = discovered plist path (may be a vanished guard-dir copy).
+      _do_restore "${2:-0}" "${3:-}"
+      exit $?
+      ;;
+    *) err "unknown --selftest target: ${1:-} (used-mem-bytes|used-mem-gib|over-ceiling|heavy-workers|tree-pids|restore-plist|restore-run)"; exit 2 ;;
   esac
   exit 0
 fi
@@ -286,17 +419,37 @@ while True:
         time.sleep(0.5)
 log(f"acquired exclusive GPU lock: {lock_path}")
 
-# Ignore signals here so a group Ctrl-C reaches the child, which does the ordered
-# teardown (restore qwen) before we release the lock.
-for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+# Ignore signals HERE (in the lock holder) so a group Ctrl-C / a TERM to the holder
+# does not kill it before the child bash has restored qwen and released the lock.
+_ABORT_SIGS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+for signum in _ABORT_SIGS:
     try:
         signal.signal(signum, signal.SIG_IGN)
     except (ValueError, OSError):
         pass
 
+
+# W106 abort fix (real-window incident, window 42): a signal that is SIG_IGN at
+# bash startup CANNOT be trapped ("signals ignored on entry to a non-interactive
+# shell cannot be trapped or reset") -- so the child bash, inheriting the holder's
+# SIG_IGN, silently ignored TERM and its teardown trap never fired.  RESET
+# INT/TERM/HUP to SIG_DFL in the child (after fork, before exec) so the child bash
+# starts with the default disposition and its `trap` installs.  The holder itself
+# stays ignoring them (above), so the operator TERMs the child bash (the abort
+# recipe prints its pid), not the holder.
+def _reset_child_signals():  # runs in the child between fork and exec
+    for _s in _ABORT_SIGS:
+        try:
+            signal.signal(_s, signal.SIG_DFL)
+        except (ValueError, OSError):
+            pass
+
+
 env = dict(os.environ)
 env["_GPU_WINDOW_LOCKED"] = "1"
-child = subprocess.Popen(["/bin/bash", script, *step], env=env)
+child = subprocess.Popen(
+    ["/bin/bash", script, *step], env=env, preexec_fn=_reset_child_signals
+)
 try:
     rc = child.wait()
 finally:
@@ -337,38 +490,64 @@ if [[ ! "${KILL_GRACE_SECONDS}" =~ ^[0-9]+$ ]]; then
   KILL_GRACE_SECONDS=2
 fi
 
+# W106 abort item (b): the tree-kill must catch descendants REPARENTED to launchd.
+# A ppid walk from STEP_PID misses a python whose `bash -c` chain died first (its
+# ppid is now 1) -- window 42: a 27 GB python kept loading experts.bin outside the
+# lock for minutes.  So each step is launched with a UNIQUE env tag
+# (_GPU_WINDOW_STEP_TAG), inherited by every descendant and UNCHANGED by
+# reparenting; `_pids_with_tag` finds them via `ps -E` regardless of ppid.  The
+# grep uses the [x]-bracket trick so the grep/awk pipeline never matches itself.
+_pids_with_tag() {
+  [[ -n "${_STEP_TAG:-}" ]] || return 0
+  local pat="_GPU_WINDOW_STEP_TAG=[${_STEP_TAG:0:1}]${_STEP_TAG:1}"
+  "${PS_CMD}" -axEo pid=,command= 2>/dev/null \
+    | grep -E "${pat}" 2>/dev/null \
+    | awk -v self=" $$ ${PPID:-} ${_GPU_WINDOW_HOLDER_PID:-} " \
+        '{ if (index(self, " " $1 " ") == 0) print $1 }'
+}
+
+# The FULL set of step pids: the ppid tree rooted at STEP_PID UNION the env-tagged
+# processes (which survive reparenting), one pid per line, deduped.
+_collect_step_pids() {
+  {
+    [[ -n "${STEP_PID:-}" ]] && _step_tree_pids "${STEP_PID}" | tr ' ' '\n'
+    _pids_with_tag
+  } 2>/dev/null | grep -E '^[0-9]+$' | sort -un
+}
+
 _kill_step_tree() {
-  # W106 item 4: TERM then (after a grace) KILL the ENTIRE process tree rooted at
-  # STEP_PID -- the `bash -c "..."` chain AND every python/sleep descendant -- so
-  # an aborted step can NEVER start its next chained command and no grandchild is
-  # left orphaned (reparented to launchd) still holding GPU/host memory.  The pids
-  # are snapshotted BEFORE any signal (killing reparents/removes tree members), and
-  # signalled by pid so reparenting mid-teardown does not let one escape.  Reaps
-  # STEP_PID (a job of this shell) and clears it so the teardown trap does not
-  # re-run; the restore of the resident agent then runs from the EXIT trap.
-  [[ -n "${STEP_PID}" ]] || return 0
-  local pids _p _i _alive
-  pids="$(_step_tree_pids "${STEP_PID}")"
-  [[ -n "${pids}" ]] || pids="${STEP_PID}"
-  for _p in ${pids}; do
-    kill -TERM "${_p}" 2>/dev/null || true
-  done
-  # Poll for the whole tree to exit, up to KILL_GRACE_SECONDS (0.25 s cadence).
-  for (( _i = 0; _i < KILL_GRACE_SECONDS * 4; _i++ )); do
-    _alive=0
-    for _p in ${pids}; do
-      if kill -0 "${_p}" 2>/dev/null; then _alive=1; break; fi
+  # TERM then (after a grace) KILL every process in the step set (ppid tree UNION
+  # env-tag), so an aborted or completed step leaves NO descendant -- including one
+  # reparented to launchd -- alive to keep running outside the lock.  Then RE-SCAN
+  # (a couple rounds) for late forks / reparents, logging + KILLing any ORPHAN.
+  # Robust to an empty STEP_PID (reaps tagged orphans after a "normal" step exit).
+  local pids _p _i _alive _r
+  pids="$(_collect_step_pids)"
+  [[ -z "${pids}" && -n "${STEP_PID:-}" ]] && pids="${STEP_PID}"
+  if [[ -n "${pids}" ]]; then
+    for _p in ${pids}; do kill -TERM "${_p}" 2>/dev/null || true; done
+    for (( _i = 0; _i < KILL_GRACE_SECONDS * 4; _i++ )); do
+      _alive=0
+      for _p in ${pids}; do kill -0 "${_p}" 2>/dev/null && { _alive=1; break; }; done
+      (( _alive == 0 )) && break
+      sleep 0.25
     done
-    (( _alive == 0 )) && break
-    sleep 0.25
-  done
-  # KILL any survivor of the grace period.
-  for _p in ${pids}; do
-    if kill -0 "${_p}" 2>/dev/null; then
+    for _p in ${pids}; do
+      kill -0 "${_p}" 2>/dev/null && kill -KILL "${_p}" 2>/dev/null || true
+    done
+  fi
+  # Re-scan: catch anything that forked/reparented AFTER the snapshot (the window-42
+  # orphan). Log each survivor as an ORPHAN and KILL it.
+  for _r in 1 2 3; do
+    local survivors; survivors="$(_collect_step_pids)"
+    [[ -z "${survivors}" ]] && break
+    for _p in ${survivors}; do
+      err "phase 4: ORPHAN survived tree-kill: pid ${_p} ($("${PS_CMD}" -o command= -p "${_p}" 2>/dev/null | tr '\n' ' ' | cut -c1-100)); KILLing"
       kill -KILL "${_p}" 2>/dev/null || true
-    fi
+    done
+    sleep 0.3
   done
-  wait "${STEP_PID}" 2>/dev/null || true
+  [[ -n "${STEP_PID:-}" ]] && { wait "${STEP_PID}" 2>/dev/null || true; }
   STEP_PID=""
 }
 
@@ -378,6 +557,7 @@ _kill_step_child() { _kill_step_tree; }
 WAS_LOADED=0
 RESTORED=0
 STEP_PID=""
+_STEP_TAG=""                # W106 (b): unique env tag on the step, to find reparented descendants
 PEAK_TREE_RSS_BYTES=0       # running peak of the SUM of RSS across the step process tree
 PEAK_MAX_PROC_RSS_BYTES=0   # running peak of the MAX single-process RSS in that tree
 PEAK_SYSTEM_USED_BYTES=0    # running peak of system used memory (NOT the value at exit)
@@ -385,27 +565,18 @@ PLIST=""
 QWEN_PID=""
 
 restore_qwen() {
+  # Teardown entry: guard against double-restore + TEST MODE (never touch launchctl
+  # in tests), then delegate to _do_restore, which chooses a plist that EXISTS
+  # (falling back to the durable CANONICAL_PLIST when the launchctl-discovered guard
+  # -dir copy is gone) and, with RESTORE_QWEN_ALWAYS=1, bootstraps even if the agent
+  # was not loaded at entry so a prior failed restore cannot cascade.
   if (( RESTORED == 1 )); then return; fi
   RESTORED=1
-  if (( WAS_LOADED == 0 )); then
-    log "restore: ${QWEN_LABEL} was not loaded at entry; leaving it stopped (as found)"
+  if [[ "${GPU_WINDOW_TEST_MODE}" == "1" ]]; then
+    log "restore: TEST MODE -- skipping (no launchctl)"
     return
   fi
-  log "restore: launchctl bootstrap ${DOMAIN} ${PLIST}"
-  if ! /bin/launchctl bootstrap "${DOMAIN}" "${PLIST}"; then
-    err "restore: 'launchctl bootstrap ${DOMAIN} ${PLIST}' FAILED; ${QWEN_LABEL} may be DOWN on :8080 -- manual recovery required"
-    return
-  fi
-  local deadline
-  deadline=$(( $(date +%s) + RESTORE_TIMEOUT ))
-  while (( $(date +%s) < deadline )); do
-    if /bin/launchctl print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
-      log "restore: ${QWEN_LABEL} is loaded again (launchctl service present); /health may still be warming"
-      return
-    fi
-    sleep 1
-  done
-  err "restore: ${QWEN_LABEL} did not reappear within ${RESTORE_TIMEOUT}s; verify :8080 manually"
+  _do_restore "${WAS_LOADED}" "${PLIST}"
 }
 
 teardown() {
@@ -417,11 +588,45 @@ teardown() {
   if [[ -n "${STEP_PID}" ]] && kill -0 "${STEP_PID}" 2>/dev/null; then
     log "teardown: terminating step process tree (root pid=${STEP_PID}): $(_step_tree_pids "${STEP_PID}")"
     _kill_step_tree
+  elif [[ -n "${_STEP_TAG:-}" ]]; then
+    # W106 (b): the step already returned, but a tagged descendant may be orphaned
+    # (reparented to launchd) and still running -- reap it before releasing the lock
+    # so nothing keeps loading the model outside the exclusive window.
+    _kill_step_tree
   fi
   restore_qwen
   exit "${ec}"
 }
-trap teardown EXIT INT TERM
+
+# W106 abort item (a): INT/TERM must actually abort while bash is in the phase-4
+# poll loop.  bash DEFERS a heavy trap until the running foreground command
+# (`sleep`, `wait`) returns, so the old `trap teardown INT TERM` could sit for
+# many seconds while the step kept loading.  Instead the signal handler only SETS A
+# FLAG (async-safe, instant); the phase-3/4 loops check it every poll and abort
+# promptly.  teardown still runs from the EXIT trap (so restore always happens).
+_ABORT_SIGNAL=0
+_on_abort_signal() {
+  _ABORT_SIGNAL=1
+  log "abort: INT/TERM received; aborting at the next poll (<= ${RSS_POLL_SECONDS}s)"
+}
+trap teardown EXIT
+trap _on_abort_signal INT TERM
+
+# Called at the top of the phase-3/4 loops: if an abort signal came in, kill the
+# step tree (if any) and exit -> the EXIT trap restores the agent + releases the lock.
+_check_abort() {
+  (( _ABORT_SIGNAL )) || return 0
+  err "phase 4: abort requested (INT/TERM); killing the step tree and restoring"
+  _kill_step_tree
+  exit 9
+}
+
+# W106 (real-window incident): print the ABORT RECIPE + restore plist up front, so
+# an operator aborting by hand signals the RIGHT pid.  The trap owner is THIS bash
+# gpu_window.sh process ($$); its parent (the python fcntl lock-holder) IGNORES
+# INT/TERM/HUP by design, so `kill -TERM <parent>` does nothing.
+log "abort: to abort this window cleanly, kill -TERM $$ (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores ${QWEN_LABEL}."
+log "restore: on exit ${QWEN_LABEL} is bootstrapped from ${CANONICAL_PLIST} (RESTORE_QWEN_ALWAYS=${RESTORE_QWEN_ALWAYS}); a vanished launchctl-discovered guard-dir plist falls back to this path."
 
 if [[ "${GPU_WINDOW_TEST_MODE}" == "1" ]]; then
   log "TEST MODE: skipping phases 1-3 (wired-knob sysctl read, launchctl inspect/bootout) and the resident-agent restore; lock=${LOCK_PATH}"
@@ -473,6 +678,7 @@ if (( WAS_LOADED == 1 )); then
   pid_gone=0
   freed=0
   while (( $(date +%s) < deadline )); do
+    _check_abort   # W106 (a): abort promptly even during the bootout wait
     if (( pid_gone == 0 )); then
       if [[ -z "${QWEN_PID}" ]] || ! kill -0 "${QWEN_PID}" 2>/dev/null; then
         pid_gone=1
@@ -528,12 +734,28 @@ if [[ "${USED_START:-}" =~ ^[0-9]+$ ]] && \
   EFFECTIVE_CHILD_CAP_BYTES="${_headroom}"
   log "phase 4: effective child-tree cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (lowered from $(gib "${CHILD_RSS_CAP_BYTES}") GiB: used_start $(gib "${USED_START}") + cap would cross the ${TOTAL_MEM_CEILING_GB} GiB ceiling)"
 fi
+# W106 MEDIUM-1: `ps` RSS undercounts unified Metal by ~RSS_METAL_UNDERCOUNT_GIB, so
+# lower the cap it is compared against by that amount (the real footprint is ~this
+# much higher than the polled tree RSS).  Clamp at >= 1 GiB so a large undercount
+# cannot zero the cap and abort instantly.
+_UNDERCOUNT_BYTES=$(( RSS_METAL_UNDERCOUNT_GIB * 1024 * 1024 * 1024 ))
+if (( _UNDERCOUNT_BYTES > 0 )); then
+  _capped=$(( EFFECTIVE_CHILD_CAP_BYTES - _UNDERCOUNT_BYTES ))
+  (( _capped < 1024 * 1024 * 1024 )) && _capped=$(( 1024 * 1024 * 1024 ))
+  log "phase 4: effective child-tree cap $(gib "${_capped}") GiB (lowered from $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB by the ${RSS_METAL_UNDERCOUNT_GIB} GiB ps-vs-Metal RSS undercount; the vm_stat system ceiling ${TOTAL_MEM_CEILING_GB} GiB is the authoritative guard)"
+  EFFECTIVE_CHILD_CAP_BYTES="${_capped}"
+fi
 
 # W106 HIGH-2: state BOTH caps explicitly (GiB + the ~GB equivalent) at step start
 # so the operator sees the guard envelope next to the step it is about to run.
 log "phase 4: guard caps -- child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (~$(awk -v b="${EFFECTIVE_CHILD_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); system used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
-log "phase 4: starting GPU step under child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
-"$@" &
+# W106 (b): tag the step's environment with a unique marker, inherited by EVERY
+# descendant and unchanged by reparenting, so _pids_with_tag can find (and kill) a
+# python that was reparented to launchd after its `bash -c` chain died.  Set inline
+# on the step only (NOT exported in the wrapper), so it never matches the wrapper.
+_STEP_TAG="gpuwin-$$-$(date +%s)-${RANDOM}${RANDOM}"
+log "phase 4: starting GPU step (tag ${_STEP_TAG}) under child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
+_GPU_WINDOW_STEP_TAG="${_STEP_TAG}" "$@" &
 STEP_PID=$!
 # Seed the system-used running peak with the at-start reading so PEAK_SYSTEM_USED
 # is a true max over the window (the pre-W106 exit line re-read used_mem_bytes and
@@ -543,6 +765,7 @@ if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
 fi
 _last_mem_sample=0  # 0 => the first poll logs an envelope sample immediately
 while :; do
+  _check_abort   # W106 (a): abort promptly on a queued INT/TERM (not deferred)
   # Loop terminates when STEP_PID is gone or a zombie (same condition as before);
   # RSS is now measured over its whole tree, not this one (near-empty) pid.
   step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"

@@ -55,8 +55,10 @@ Files:
   `(wired down + anonymous + occupied-by-compressor) pages × page size` from
   `vm_stat` — the SAME formula the `gpu_window.sh` phase-4 guard aborts on
   (anonymous, not active). Shared helper `bench._system_used_bytes`.
-- **`system_used_at_start_gb`** — the same box figure sampled once when the
-  sampler starts (the decode baseline).
+- **`system_used_at_decode_start_gb`** — the same box figure sampled once when the
+  sampler starts, i.e. at DECODE start / POST-load (LOW: renamed from
+  `system_used_at_start_gb` to distinguish it from the derivation's PRE-load
+  `budget_system_used_at_start_gb`).
 - **`rss_semantics_note`** — a fixed note (HIGH-2): RSS-vs-`mlx_peak` semantics on
   Metal are **UNVERIFIED** until one real GPU-window receipt lets the
   `gpu_window.sh` tree RSS be compared against this process's `mlx_peak` (unified
@@ -82,15 +84,20 @@ process-tree RSS (in the `gpu_window.sh` log).
   after load** as `current phys_footprint (mach task_info) − mx active − mx CACHE`
   (HIGH-A: the MLX freed-buffer cache is load-transient Metal memory, not non-Metal
   overhead; NOT `ru_maxrss`); `null` until measured / when unmeasurable.
-- **`rss_semantics`** — the state of that re-measurement (HIGH-A): `"ok"`
-  (footprint ≥ active, measured valid), `"inverted"` (footprint < mx active, so
-  Metal is not in `phys_footprint` on this platform and the overhead is
+- **`rss_semantics`** — the state of that re-measurement (HIGH-A / MEDIUM-2): `"ok"`
+  (footprint ≥ active + cache, measured valid), `"inverted"` (footprint < mx active
+  + cache, so Metal is not fully in `phys_footprint` and the overhead is
   unmeasurable — recorded `null`, never a bogus 0.0, and never aborts), or
   `"unmeasured"` (pre-load / footprint unavailable). Distinct from the fixed
   `rss_semantics_note`.
 - **`budget_kv_growth_to_max_kv_gb`** — the bytes the KV lanes grow to at
   `--max-kv`, from config dims × max_kv × bf16 (see the KV estimator note).
 - **`budget_safety_gb`** — `--memory-safety-gib` headroom (default 3 GiB).
+- **`budget_plan_overshoot_gib`** — `--plan-overshoot-gib` (default 6 GiB): the MLX
+  peak over the plan's expert-cache ceiling (KV + prefill transients), subtracted in
+  the derivation (HIGH-1).
+- **`budget_forecast_system_peak_gb`** — `baseline + plan + overshoot + overhead`,
+  the forecast box peak the derivation keeps ≤ `budget_total` (HIGH-1).
 - **`budget_floor_gib`** — `--memory-budget-floor-gib` (default 20 GiB).
 - **`plan_limit_gib_derived`** — the plan limit the derivation produced (pre-load).
 - **`plan_limit_gib_effective`** — the plan limit in force after the two-phase
@@ -207,44 +214,100 @@ held by another worktree). Canonical GiB form (~100 GB budget):
 
 (`--memory-budget-total-gb 100` — the decimal-GB alias — resolves to the same
 ~93.13 GiB. `--memory-safety-gib` / `--memory-budget-floor-gib` /
-`--non-metal-overhead-gib` default to 3 / 20 / 10 GiB. Add `--memory-plan-preflight`
-to check the derivation and exit without loading the model.)
+`--non-metal-overhead-gib` / `--plan-overshoot-gib` default to 3 / 20 / 10 / 6 GiB.
+Add `--memory-plan-preflight` to check the derivation and exit without loading the
+model.)
 
-## Item 4 — tree-kill the whole step process tree on abort
+**HIGH-1 plan overshoot.** The MLX allocator peak lands OVER the plan's expert-cache
+ceiling by the KV + prefill transients (window 43: 60 GiB plan → 65.1–65.5 GiB
+mlx_peak). `plan_overshoot_gib` (default 6, `--plan-overshoot-gib`) is subtracted so
+`forecast_system_peak = baseline + plan + overshoot + overhead ≤ budget`
+(receipt `budget_plan_overshoot_gib` + `budget_forecast_system_peak_gb`). The
+non-Metal overhead is clamped to ≥ 2 GiB (its real value) so it can be lowered
+toward ~2 GiB without absorbing the overshoot.
+
+**HIGH-2 reproducible plan across arms.** The derivation reads a live per-process
+`vm_stat`, so A/B arms could get different plans. The budget path writes
+`<out-dir>/derived-plan.json`; **later arms pin it with `--memory-plan-from`** so
+every arm runs the SAME `plan_limit`. The A/B summary asserts equal
+`plan_limit_gib_effective` across arms before trusting byte-identity.
+
+**Launcher pattern (MEDIUM-3).** Chain windows/arms with `&&`, never `;`: a step
+that aborts exits non-zero (the ab harness exits **4** at the first aborted arm),
+and `&&` stops the chain at the first failure and reports its rc; `;` would re-open
+a window and re-abort every later step and report only the last rc. Recommended:
+```
+# 1) pre-flight OUTSIDE the window (freed-adjusted; no model load):
+ab_decode_env_levers.py --memory-plan-preflight --preflight-freed-gib 45 \
+    --memory-budget-total-gib 93 --context-tokens 16384 --max-kv 17408 --out X.jsonl
+# 2) arm 1 derives + writes derived-plan.json; later arms pin it; && chaining:
+gpu_window.sh ab ... --memory-budget-total-gib 93 --out X.jsonl --arms control \
+  && gpu_window.sh ab ... --memory-plan-from <dir>/derived-plan.json --out X.jsonl --arms overlap
+```
+
+## Item 4 / abort — kill the whole step tree, including reparented orphans
 
 On any abort — the child-tree RSS cap, the system-used ceiling, or a TERM/INT to
 the wrapper — `gpu_window.sh` kills the ENTIRE process tree of the step, not just
 STEP_PID (the `bash -c` chain), so no python descendant is orphaned and a chained
 next command never starts after the abort.
 
-- `_step_tree_pids <root>` — every pid in the tree from a single `ps` snapshot.
-- `_kill_step_tree` — snapshot the tree pids BEFORE signalling, `TERM` them all,
-  poll up to `GPU_WINDOW_KILL_GRACE_SECONDS` (default 2), then `KILL` any survivor;
-  reap STEP_PID. `_kill_step_child` (the RSS-cap / ceiling abort sites) and the
-  `teardown` trap both delegate to it. `GPU_WINDOW_KILL_GRACE_SECONDS` is validated
-  as a non-negative integer (LOW-2: it drives `× 4` bash arithmetic) — a
-  non-integer warns and falls back to 2.
+**Real-window incident (window 42) — two root causes fixed:**
 
-Qwen is still restored and the lock released from the EXIT trap (restore before
-release).
+- **TERM was silently ignored (abort a).** The python fcntl lock-holder sets
+  INT/TERM/HUP to `SIG_IGN`, and the child bash INHERITED it — "a signal ignored on
+  entry to a non-interactive shell cannot be trapped", so the child bash's teardown
+  trap never installed and `kill -TERM` did nothing for 12 s. Fix: the holder resets
+  those signals to `SIG_DFL` in the child (`preexec_fn`) so the child can trap them;
+  and the INT/TERM trap only SETS A FLAG (`_ABORT_SIGNAL`) — the phase-3/4 loops
+  call `_check_abort` every poll and abort within one interval (bash defers a heavy
+  trap during `sleep`/`wait`). The startup log prints the abort recipe: the pid to
+  `kill -TERM` is the bash gpu_window.sh, NOT the parent holder.
 
-## Guard caps (HIGH-2, MEDIUM-A, MEDIUM-B) — under David's limits
+- **A reparented python survived (abort b).** A 27 GB python kept loading
+  `experts.bin` OUTSIDE the lock after the abort: its `bash -c` chain died first, so
+  it was reparented to launchd (ppid 1) and the ppid walk missed it. Fix: each step
+  is launched with a unique env tag (`_GPU_WINDOW_STEP_TAG`, inline on the step,
+  inherited by every descendant, unchanged by reparenting). `_kill_step_tree` kills
+  the UNION of the ppid tree AND the env-tagged set (found via `ps -E`), then
+  RE-SCANS after the KILL, logging + KILLing any `ORPHAN survived`. `teardown` reaps
+  tagged orphans even after a NORMAL step exit, before releasing the lock.
 
-- System used-memory **ceiling = 102 GiB** (~109.5 GB, under the 110 GB hard
-  line). Default was 105 GiB ≈ 112.7 GB, which was OVER the hard line.
-- Child-tree **RSS cap = 93 GiB** (~100 GB = David's "100 GB total"). This cap is
-  LIVE for the first time under W106 (pre-W106 the poll read the ~0 `bash -c`
-  shell RSS). Both caps are printed explicitly (GiB + ~GB) at step start.
-- **MEDIUM-A:** `GPU_WINDOW_TOTAL_MEM_CEILING_GB`, `GPU_WINDOW_MIN_AVAIL_GB` and
-  `GPU_WINDOW_FOREIGN_WORKER_RSS_GB` are integer-validated **before phase 0** (a
-  fractional value would leave the `$(( GB × 1024³ ))` byte var unset and, under
-  `set -u`, kill the window after Qwen is booted out) — a non-integer warns and
-  falls back to the default, like `GPU_WINDOW_KILL_GRACE_SECONDS`. (These
-  historical `*_GB` env names carry **GiB**; see the Units section.)
-- **MEDIUM-B:** the effective child-tree cap is related to the measured baseline:
-  when `used_start + child_cap > ceiling`, it is lowered (never raised, never
-  refused) to `ceiling − used_start` and logged as "effective child-tree cap X
-  GiB"; the phase-4 poll aborts on that effective cap.
+`GPU_WINDOW_KILL_GRACE_SECONDS` is validated as a non-negative integer (LOW-2; a
+non-integer warns and falls back to 2). Qwen is restored and the lock released from
+the EXIT trap (restore before release), on the abort path too.
+
+## Restore — always bootstrap from a plist that exists (windows 42/43)
+
+restore FAILED on every window because it bootstrapped the plist `launchctl print`
+reported — a TRANSIENT guard-dir copy (`~/.mtplx-qwen-guard-<rand>/…`) that
+mtplx.qwen_guard wrote and that was gone by restore time — leaving com.tea.qwen
+DOWN. Fix (`_do_restore` + `_resolve_restore_plist`): bootstrap a plist that
+EXISTS, preferring the discovered path but falling back to the durable
+`CANONICAL_PLIST` (`${GPU_WINDOW_QWEN_PLIST:-~/Library/LaunchAgents/<label>.plist}`);
+on failure print the exact manual command. `GPU_WINDOW_RESTORE_QWEN_ALWAYS=1`
+(default on this box) bootstraps the canonical plist at exit even when the agent
+was NOT loaded at entry (unless already loaded), so a prior failed restore cannot
+cascade. `${GPU_WINDOW_LAUNCHCTL_CMD}` is overridable so restore is unit-testable.
+
+## Guard caps (HIGH-2, HIGH-3, MEDIUM-A, MEDIUM-B, MEDIUM-1) — under David's limits
+
+- System used-memory **ceiling = 102 GiB** (~109.5 GB, under the 110 GB hard line;
+  was 105 ≈ 112.7 GB, over it). Child-tree **RSS cap = 93 GiB** (~100 GB). Both
+  printed (GiB + ~GB) at step start. `RSS_POLL_SECONDS` default **1 s** (streaming
+  grows 2–4 GiB/s, so a 2 s poll can overshoot).
+- **HIGH-3 (supersedes MEDIUM-A):** the SAFETY caps
+  (`GPU_WINDOW_TOTAL_MEM_CEILING_GB`, `MIN_AVAIL_GB`, `FOREIGN_WORKER_RSS_GB`,
+  `CHILD_RSS_CAP_BYTES`) now REFUSE (exit 2, before phase 0) on an invalid value
+  rather than falling back — a fractional 95.5 must not silently become the 102
+  default and RAISE the ceiling. `CHILD_RSS_CAP_BYTES` is BYTES and must be ≥ 1 GiB
+  (so "93" = 93 bytes is refused). (Non-safety knobs — kill-grace, poll — still
+  warn + fall back. These historical `*_GB` names carry **GiB**.)
+- **MEDIUM-B:** the effective child-tree cap is lowered to `ceiling − used_start`
+  when `used_start + child_cap > ceiling` (never raised, never refused).
+- **MEDIUM-1:** `ps` RSS undercounts unified Metal by ~18 GiB, so the effective
+  child cap is further lowered by `GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB` (default 18,
+  clamped ≥ 1 GiB). The vm_stat SYSTEM ceiling remains the authoritative guard.
 
 ## Peak-memory directive — report the whole-process peak, not only MLX
 
@@ -258,9 +321,17 @@ release).
 
 **In the receipt** — AR pass (top level) and, under the `dspark` block, both the
 DSpark stream and the AR comparison stream: `token_ids` (full), `decoded_text`,
-`decoded_text_head` (first 600), `decoded_text_tail` (last 600). For DSpark,
+`decoded_text_head` (first 600), `decoded_text_tail` (last 600), and
+`decoded_text_error` (the reason decode produced no text, else null). For DSpark,
 `dspark.divergence_context = {ar, dspark}` is the decoded text ~200 chars either
 side of the divergence index in each stream (null when identical).
+
+**Window-43 fix:** the standard cell runs with `--prompt-ids-file`, which set the
+tokenizer to `None` for the PROMPT path and thereby silently disabled OUTPUT decode
+(empty `decoded_text`, header-only sidecars). Now `_run_arm` always obtains an
+OUTPUT tokenizer (independent of the prompt source), `_decode_ids` returns
+`(text, error)` — a raise or an EMPTY result for a non-empty id list is recorded in
+`decoded_text_error` and logged LOUDLY, never a silent empty string.
 
 **As text sidecars** beside the receipt (`<stem>` = `--out` with `.jsonl`
 stripped), with the AR pass **sha[:12] in both names** and a **single paired
@@ -270,31 +341,33 @@ stripped), with the AR pass **sha[:12] in both names** and a **single paired
 - `<stem>.<sha12>.ar-reference.output.txt` — the AR comparison stream (dspark
   runs only).
 Written atomically (tmp + `os.replace`) and **never** overwriting an existing
-sidecar. Decoding reuses the already-loaded tokenizer and is fully guarded (a
-failure records `null` / `"<decode unavailable>"` and never kills the run).
+sidecar. Decoding reuses the OUTPUT tokenizer (always loaded, window-43 fix) and is
+fully guarded (a failure records `decoded_text_error` and logs loudly, never a
+silent empty string).
 
 ## Tests (CPU, MLX pinned to CPU; `nice -n 19`, one file per process)
 
-- `tests/test_deepseek_v41_w106_memory_budget.py` — derivation math (injected
-  measurements), floor refusal, the exact receipt key set, the KV estimator
-  (kv_source_layer_ids), the config reader, `_resolve_derivation`; the HIGH-1/HIGH-A
-  re-measure (never `set_memory_limit`/`clear_cache`; subtracts the mx cache so no
-  false abort; `inverted` → `None`, never 0.0); the HIGH-B pre-flight freed baseline
-  (rc 0 with `--preflight-freed-gib`, rc 3 without, rc 3 on both-flag-forms); the
-  MEDIUM-1 `-gib`/`-gb` resolution; the HIGH-2 `rss_semantics_note`; and the
-  MEDIUM-C abort ledger row (stage + reason + append).
-- `tests/test_deepseek_v41_w106_memory_block.py` — the item-2 sampler + the
-  MEDIUM-2 decomposed keys (`sampler_peak_rss_gb` / `ru_maxrss_gb` /
-  `process_peak_rss_gb`), the LOW 0-sampler-peak fallback to `ru_maxrss`,
+- `tests/test_deepseek_v41_w106_memory_budget.py` — derivation math + the HIGH-1
+  plan-overshoot / forecast-≤-budget invariant / overhead clamp; floor refusal; the
+  exact receipt key set; the KV estimator (kv_source_layer_ids); `_resolve_derivation`;
+  the HIGH-A/MEDIUM-2 re-measure (subtracts mx cache; `footprint < active + cache`
+  → `inverted`/None; never `set_memory_limit`); the HIGH-B pre-flight freed baseline;
+  the HIGH-2 pinned-plan sidecar round-trip; the MEDIUM-1 `-gib`/`-gb` resolution;
+  and the MEDIUM-C abort ledger row.
+- `tests/test_deepseek_v41_w106_memory_block.py` — the sampler + MEDIUM-2 decomposed
+  keys, the LOW 0-sampler fallback + `system_used_at_decode_start_gb` rename,
   `_peak_process_gb` / `_memory_headline`, and a high-water (peak-not-exit) test.
-- `tests/test_deepseek_v41_w106_receipt_output.py` — decode guards, token_ids /
-  head / tail, divergence-context spans, and the MEDIUM-3 paired sha-named
-  sidecars.
-- `tests/test_gpu_window_memory_accounting.sh` — item-1 tree-RSS accounting, the
-  item-4 tree-kill (a `sleep` grandchild does not survive the abort), the MEDIUM-B
-  effective-cap lowering (52 GiB) + 102 GiB ceiling, the LOW-2 non-integer-grace
-  fallback, and the MEDIUM-A fractional-ceiling validation (warn + fall back to 102,
-  clean exit) — in `GPU_WINDOW_TEST_MODE=1` with a hermetic temp lock (no sysctl,
-  no launchctl, no real GPU lock, no Metal).
+- `tests/test_deepseek_v41_w106_receipt_output.py` — decode `(text, error)` guards
+  (raise / empty-result / success), token_ids / head / tail, divergence-context
+  spans, and the MEDIUM-3 paired sha-named sidecars.
+- `tests/test_gpu_window_memory_accounting.sh` — tree-RSS accounting, tree-kill via
+  the system ceiling, MEDIUM-B effective-cap lowering, HIGH-3 refuse-on-invalid
+  (fractional ceiling / sub-GiB child cap → exit 2), and the MEDIUM-1 undercount.
+- `tests/test_gpu_window_abort.sh` — a TERM to the trap-owner bash aborts PROMPTLY
+  (the SIG_DFL reset lets bash trap it), the tree (incl. a `sleep` grandchild) dies,
+  and a python REPARENTED to launchd is reaped via the env tag on a normal exit.
+- `tests/test_gpu_window_restore.sh` — `_resolve_restore_plist` (guard-dir gone →
+  canonical) and `_do_restore` (RESTORE_QWEN_ALWAYS bootstraps; already-loaded
+  no-op; no-plist → manual command; ALWAYS=0 leaves stopped) via a fake launchctl.
 - `scripts/deepseek_v41/test_gpu_window_guard.sh` — the phase-4 guard math + the
-  HIGH-2 102 GiB default ceiling.
+  102 GiB default ceiling.

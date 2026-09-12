@@ -64,12 +64,29 @@ class _BoomTok:
 # --------------------------------------------------------------------------
 
 
-def test_decode_ids_guards_no_tokenizer_and_failure():
+class _EmptyTok:
+    """A tokenizer whose decode returns an EMPTY string (window-43-class failure:
+    a decode that silently yields '' for a non-empty id list)."""
+
+    def decode(self, ids):
+        return ""
+
+
+def test_decode_ids_returns_text_and_error_tuple():
     mod = _mod()
-    assert mod._decode_ids(None, [1, 2, 3]) is None      # no tokenizer
-    assert mod._decode_ids(_FakeTok(), None) is None      # no ids
-    assert mod._decode_ids(object(), [1]) is None         # tok w/o .decode
-    assert mod._decode_ids(_BoomTok(), [1, 2]) is None    # decode raises -> None
+    # (text, error) tuple: never a silent ''.
+    assert mod._decode_ids(None, [1, 2, 3]) == (None, "no tokenizer available for output decode")
+    assert mod._decode_ids(_FakeTok(), None) == (None, "no ids")
+    text, err = mod._decode_ids(object(), [1])   # tok w/o .decode
+    assert text is None and "no usable decode method" in err
+    text, err = mod._decode_ids(_BoomTok(), [1, 2])  # decode raises -> recorded
+    assert text is None and "raised" in err
+    # EMPTY result for a non-empty id list is an ERROR, not a silent '' (window 43).
+    text, err = mod._decode_ids(_EmptyTok(), [1, 2, 3])
+    assert text is None and "returned empty for 3 ids" in err
+    # success path
+    text, err = mod._decode_ids(_FakeTok(), [1, 2, 3])
+    assert text == "BCD" and err is None
 
 
 def test_text_output_fields_full_ids_and_head_tail():
@@ -78,19 +95,30 @@ def test_text_output_fields_full_ids_and_head_tail():
     fields = mod._text_output_fields(_FakeTok(), ids)
     assert fields["token_ids"] == ids            # FULL id list, not truncated
     assert len(fields["decoded_text"]) == 700
+    assert fields["decoded_text_error"] is None
     assert fields["decoded_text_head"] == fields["decoded_text"][:600]
     assert fields["decoded_text_tail"] == fields["decoded_text"][-600:]
     assert len(fields["decoded_text_head"]) == 600
     assert len(fields["decoded_text_tail"]) == 600
 
 
-def test_text_output_fields_none_text_on_decode_failure():
+def test_text_output_fields_records_error_on_decode_failure():
     mod = _mod()
     fields = mod._text_output_fields(_BoomTok(), [1, 2, 3])
     assert fields["token_ids"] == [1, 2, 3]      # ids still recorded
     assert fields["decoded_text"] is None
     assert fields["decoded_text_head"] is None
     assert fields["decoded_text_tail"] is None
+    assert "raised" in fields["decoded_text_error"]  # LOUD, not silent
+
+
+def test_text_output_fields_records_error_on_empty_decode():
+    mod = _mod()
+    # window-43-class: decode returns '' -> recorded as an error, decoded_text None
+    # (never a silent empty string masquerading as real output).
+    fields = mod._text_output_fields(_EmptyTok(), [1, 2, 3])
+    assert fields["decoded_text"] is None
+    assert "returned empty for 3 ids" in fields["decoded_text_error"]
 
 
 def test_divergence_context_span_either_side():
