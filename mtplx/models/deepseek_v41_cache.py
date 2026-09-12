@@ -166,6 +166,49 @@ def _rows_copied_total() -> int:
     return _KV_STATS["rows_copied"]
 
 
+# ---------------------------------------------------------------------------
+# W107 (review round-3): the append write PRIMITIVE.
+# ---------------------------------------------------------------------------
+#: The GPU census (window 42) + the CPU donation probe
+#: (scripts/deepseek_v41/kv_donation_probe.py) showed ``mx.slice_update`` is an
+#: **O(T) COPY even on CPU** -- it is a functional op that allocates a fresh output
+#: plane every append -- which is why the bounded lever left ``cache_append`` ms/token
+#: unchanged.  In-place slice assignment (``buf[:, r:r+n] = new``) DONATES (writes in
+#: place, no allocation) when ``buf`` is uniquely referenced, and copy-on-writes
+#: SAFELY (byte-identical, held views untouched -- verified on MLX 0.32.2) when a
+#: ``view()`` alias is live.  So this is byte-identical to ``slice_update`` in every
+#: case and strictly cheaper when the buffer is unique.
+#:
+#: It rides the BOUNDED lanes (the bounded lever's lanes construct with
+#: ``inplace=True``); the shipped window_ring / chunk-grow lanes keep ``slice_update``
+#: so the FROZEN control's timing basis is unchanged (review round-2 finding 2 --
+#: don't silently shift the control).  ``MTPLX_DSV41_KV_INPLACE_WRITE`` overrides
+#: either way (the A/B lever that isolates the write primitive within a bounded arm:
+#: set it to 0 to force slice_update, 1 to force in-place).  Read at construction.
+_KV_INPLACE_WRITE_ENV = "MTPLX_DSV41_KV_INPLACE_WRITE"
+
+
+def _kv_inplace_write_enabled(default: bool) -> bool:
+    """Whether a lane uses the donating in-place ``__setitem__`` write vs the
+    functional ``mx.slice_update`` (never donates -- W107 round-3 probe).  Unset env
+    -> the construction ``default`` (True for bounded lanes, False for the frozen
+    window_ring / chunk-grow lanes); an explicit env forces it either way."""
+    raw = (os.environ.get(_KV_INPLACE_WRITE_ENV) or "").strip().lower()
+    if raw == "":
+        return bool(default)
+    return raw not in ("0", "false", "no", "off")
+
+
+def _inplace_row_write(buf: mx.array, new: mx.array, row: int) -> mx.array:
+    """Write ``new`` ([B, n, *tail]) into ``buf`` rows ``[row, row+n)`` via in-place
+    slice assignment and return ``buf``.  Donates when ``buf`` is uniquely referenced;
+    MLX copy-on-writes (byte-identically, without corrupting a live view) otherwise."""
+    n = int(new.shape[1])
+    idx = (slice(None), slice(row, row + n)) + (slice(None),) * (buf.ndim - 2)
+    buf[idx] = new
+    return buf
+
+
 class _GrowBuffer:
     """Geometric-capacity append backing for one store lane (W73 / K32).
 
@@ -183,12 +226,16 @@ class _GrowBuffer:
     the plain path) but the same bytes.
     """
 
-    __slots__ = ("_buf", "_len", "_init_cap", "_bounded_cap", "_lane")
+    __slots__ = ("_buf", "_len", "_init_cap", "_bounded_cap", "_lane", "_inplace")
 
     def __init__(self, init_cap: int = 256, *, bounded_cap: Optional[int] = None,
-                 counter_lane: Optional[str] = None):
+                 counter_lane: Optional[str] = None, inplace: bool = False):
         self._buf: Optional[mx.array] = None
         self._len: int = 0
+        #: W107 round-3: donating in-place ``__setitem__`` write vs functional
+        #: ``mx.slice_update`` (never donates).  ``inplace`` default False (frozen
+        #: window_ring / chunk-grow); bounded lanes pass True; env overrides.
+        self._inplace = _kv_inplace_write_enabled(inplace)
         #: W107: when ``bounded_cap`` is set the buffer is preallocated to it on the
         #: first append and the logical length may never exceed it -- an append that
         #: would overflow RAISES (no geometric resize), so the lane is hard-bounded
@@ -205,6 +252,10 @@ class _GrowBuffer:
         return mx.array([0, int(row)] + [0] * (ndim - 2), dtype=mx.int32)
 
     def _write(self, buf: mx.array, new: mx.array, row: int) -> mx.array:
+        # W107 round-3: in-place __setitem__ DONATES (slice_update never does); both
+        # write the same bytes, so this is byte-identical (probe + tests).
+        if self._inplace:
+            return _inplace_row_write(buf, new, row)
         axes = tuple(range(new.ndim))
         return mx.slice_update(buf, new, self._starts(new.ndim, row), axes=axes)
 
@@ -678,11 +729,11 @@ class _WindowRing:
 
     __slots__ = (
         "window_size", "cap_keep", "phys_cap", "_base_phys_cap",
-        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail", "_lane",
+        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail", "_lane", "_inplace",
     )
 
     def __init__(self, window_size: int, max_verify: int, slack: int, headroom: int,
-                 *, counter_lane: Optional[str] = None):
+                 *, counter_lane: Optional[str] = None, inplace: bool = False):
         self.window_size = int(window_size)
         self.cap_keep = int(window_size) + int(max_verify) + int(slack)
         self.phys_cap = self.cap_keep + int(headroom)
@@ -702,6 +753,10 @@ class _WindowRing:
         #: W107: lane name for the per-lane bounded engagement counters (``"window"``
         #: under KV_BOUNDED), or ``None`` for the plain W80 window_ring arm.
         self._lane = counter_lane
+        #: W107 round-3: donating in-place ``__setitem__`` write vs ``mx.slice_update``
+        #: (never donates).  ``inplace`` default False (frozen window_ring arm); the
+        #: bounded window lane passes True; env overrides.
+        self._inplace = _kv_inplace_write_enabled(inplace)
 
     # -- absolute-position accessors ---------------------------------------
     @property
@@ -716,8 +771,12 @@ class _WindowRing:
         return self._len
 
     # -- internals ---------------------------------------------------------
-    @staticmethod
-    def _write(buf: mx.array, new: mx.array, row: int) -> mx.array:
+    def _write(self, buf: mx.array, new: mx.array, row: int) -> mx.array:
+        # W107 round-3: in-place __setitem__ DONATES (slice_update never does);
+        # byte-identical, and copy-on-write keeps the OTHER ping-pong buffer / any
+        # live view safe.
+        if self._inplace:
+            return _inplace_row_write(buf, new, row)
         n = new.ndim
         starts = mx.array([0, int(row)] + [0] * (n - 2), dtype=mx.int32)
         return mx.slice_update(buf, new, starts, axes=tuple(range(n)))
@@ -962,9 +1021,11 @@ class CompressorState:
         if self._bounded:
             cap = _bounded_latent_cap(maxkv)
             self._kv_buf: Optional[_GrowBuffer] = _GrowBuffer(
-                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent",
+                inplace=True)  # W107 round-3: donating in-place write for the frontier
             self._sc_buf: Optional[_GrowBuffer] = _GrowBuffer(
-                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent",
+                inplace=True)
             self._raw_kv: Optional[mx.array] = None
             self._raw_score: Optional[mx.array] = None
         else:
@@ -1193,15 +1254,17 @@ class LayerAttentionCache:
             #: not shrunk); the compressor frontier (main latent KV) is preallocated
             #: below.  ``max_kv`` unset -> geometric fallback (still in place, but the
             #: ``kv_realloc_*`` counters flag it as not preallocated-bounded).
+            #: W107 round-3: bounded lanes use the DONATING in-place write (the frozen
+            #: window_ring / chunk-grow lanes keep slice_update); env can override.
             self._window = _WindowRing(self.window_size, _mv, _slk, _hr,
-                                       counter_lane="window")
+                                       counter_lane="window", inplace=True)
             _comp_cap = _bounded_comp_cap(_maxkv, self.compress_ratio)
             self._compress_kv = _GrowBuffer(
                 init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
-                counter_lane="compress")
+                counter_lane="compress", inplace=True)
             self._index_k = _GrowBuffer(
                 init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
-                counter_lane="index")
+                counter_lane="index", inplace=True)
             #: compressor frontier: preallocated to max_kv (W107 fixes the last O(T)
             #: concatenate lane) for ratio>1 kv-source layers, else None.
             self.comp_state: Optional[CompressorState] = (
