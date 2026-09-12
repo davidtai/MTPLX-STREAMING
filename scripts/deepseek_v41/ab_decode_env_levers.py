@@ -1753,39 +1753,49 @@ def _prompt_provenance(args, prompt_ids, prompt_meta) -> dict:
     }
 
 
-def _eos_surfacing(generated_ids, eos_id, *, n=None) -> dict:
+def _eos_surfacing(generated_ids, eos_id) -> dict:
     """EOS surfacing over a generated id stream (W113).
 
     ``first_token_eos`` -- the FIRST generated token is EOS (a served path would
     then return an EMPTY answer).  ``eos_index`` -- the first position of the EOS
     id in the stream, or ``None``.  ``tokens_before_eos`` -- ``eos_index`` if
-    present, else the whole stream length.  ``answer_valid`` -- ``True`` when EOS
-    never appears OR appears past the halfway point (``eos_index > 0.5 * N``): the
-    model produced a substantial answer before stopping.  ``N`` is the number of
-    generated tokens recorded in the stream (defaults to ``len(generated_ids)``;
-    for the AR pass that is ``decode_tokens + 1`` -- the prefill argmax token plus
-    the decode loop).  All fields are ``None`` when ``eos_id`` is unknown.
+    present, else the whole stream length.  ``answer_valid`` -- ``not
+    first_token_eos``: the answer is non-empty iff the first token is not EOS.
+    This is CAP-INDEPENDENT -- it does not change whether --stop-on-eos truncated
+    the stream or the full fixed-step decode ran -- unlike the withdrawn
+    ``eos_index > 0.5*N`` rule, which flipped a correct SHORT answer (e.g. a valid
+    60-token answer) to invalid once --stop-on-eos shrank N.  ``answer_truncated``
+    -- ``eos_index is None``: the decode hit the token cap without the model
+    emitting EOS (the answer may be cut off).  ``post_eos_tokens_timed`` -- when
+    EOS is present, the number of FORCED post-EOS tokens that were still timed
+    (``n_generated - eos_index - 1``; the wasted filler a served path would never
+    produce -- 256 on the windows 39-42 raw prompt, whose EOS was at index 0);
+    ``0`` when EOS is absent.  All fields are ``None`` when ``eos_id`` is unknown.
     """
     ids = [int(t) for t in (generated_ids or [])]
     total = len(ids)
-    n_eff = int(n) if n is not None else total
     if eos_id is None:
         return {
             "first_token_eos": None,
             "eos_index": None,
             "tokens_before_eos": None,
             "answer_valid": None,
+            "answer_truncated": None,
+            "post_eos_tokens_timed": None,
             "eos_id": None,
             "n_generated": total,
         }
     eos_id = int(eos_id)
     eos_index = next((i for i, t in enumerate(ids) if t == eos_id), None)
+    first_token_eos = bool(ids and ids[0] == eos_id)
     return {
-        "first_token_eos": bool(ids and ids[0] == eos_id),
+        "first_token_eos": first_token_eos,
         "eos_index": eos_index,
         "tokens_before_eos": int(eos_index if eos_index is not None else total),
-        "answer_valid": bool(
-            eos_index is None or (n_eff > 0 and eos_index > 0.5 * n_eff)
+        "answer_valid": not first_token_eos,
+        "answer_truncated": eos_index is None,
+        "post_eos_tokens_timed": (
+            (total - eos_index - 1) if eos_index is not None else 0
         ),
         "eos_id": eos_id,
         "n_generated": total,

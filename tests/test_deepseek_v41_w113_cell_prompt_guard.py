@@ -298,28 +298,28 @@ def test_provenance_raw_builder(env_levers, tmp_path):
 
 
 def test_eos_surfacing_first_token_eos(env_levers):
-    surf = env_levers._eos_surfacing([_EOS_ID, 5, 6], _EOS_ID)
+    # eos at position 0 -> empty answer; the 256 forced post-eos tokens are timed.
+    surf = env_levers._eos_surfacing([_EOS_ID] + [9] * 256, _EOS_ID)
     assert surf["first_token_eos"] is True
     assert surf["eos_index"] == 0
     assert surf["tokens_before_eos"] == 0
-    assert surf["answer_valid"] is False  # 0 is not > 0.5*N
+    assert surf["answer_valid"] is False  # empty answer (first token EOS)
+    assert surf["answer_truncated"] is False  # EOS present, not cap-truncated
+    assert surf["post_eos_tokens_timed"] == 256  # the wasted filler (windows 39-42)
     assert surf["eos_id"] == _EOS_ID
-    assert surf["n_generated"] == 3
+    assert surf["n_generated"] == 257
 
 
 def test_eos_surfacing_mid_stream(env_levers):
-    # eos at index 100 of 257 -> 100 <= 128.5 -> not valid (stopped early-ish).
+    # eos mid-stream: valid regardless of position (answer is non-empty).
     ids = [9] * 100 + [_EOS_ID] + [9] * 156
     surf = env_levers._eos_surfacing(ids, _EOS_ID)
     assert surf["first_token_eos"] is False
     assert surf["eos_index"] == 100
     assert surf["tokens_before_eos"] == 100
-    assert surf["answer_valid"] is False
-    # eos past the halfway point (200 of 257) -> valid.
-    ids2 = [9] * 200 + [_EOS_ID] + [9] * 56
-    surf2 = env_levers._eos_surfacing(ids2, _EOS_ID)
-    assert surf2["eos_index"] == 200
-    assert surf2["answer_valid"] is True
+    assert surf["answer_valid"] is True
+    assert surf["answer_truncated"] is False
+    assert surf["post_eos_tokens_timed"] == 257 - 100 - 1  # 156 forced tokens
 
 
 def test_eos_surfacing_never(env_levers):
@@ -328,6 +328,8 @@ def test_eos_surfacing_never(env_levers):
     assert surf["eos_index"] is None
     assert surf["tokens_before_eos"] == 257
     assert surf["answer_valid"] is True
+    assert surf["answer_truncated"] is True  # hit the cap without EOS
+    assert surf["post_eos_tokens_timed"] == 0
 
 
 def test_eos_surfacing_unknown_eos_id_all_none(env_levers):
@@ -335,15 +337,24 @@ def test_eos_surfacing_unknown_eos_id_all_none(env_levers):
     assert surf["first_token_eos"] is None
     assert surf["eos_index"] is None
     assert surf["answer_valid"] is None
+    assert surf["answer_truncated"] is None
+    assert surf["post_eos_tokens_timed"] is None
     assert surf["eos_id"] is None
     assert surf["n_generated"] == 2
 
 
-def test_eos_surfacing_explicit_n(env_levers):
-    # N override: eos at 10 with N=15 -> 10 > 7.5 -> valid.
-    surf = env_levers._eos_surfacing([9] * 10 + [_EOS_ID], _EOS_ID, n=15)
-    assert surf["eos_index"] == 10
-    assert surf["answer_valid"] is True
+def test_eos_surfacing_answer_valid_is_cap_independent(env_levers):
+    # MEDIUM-1: the SAME answer (eos at index 60) must get the SAME verdict whether
+    # --stop-on-eos truncated the stream (n=61) or the full fixed-step decode ran
+    # (n=257 with forced post-eos filler).  The withdrawn 0.5*N rule flipped this.
+    stopped = env_levers._eos_surfacing([9] * 60 + [_EOS_ID], _EOS_ID)  # n=61
+    full = env_levers._eos_surfacing([9] * 60 + [_EOS_ID] + [7] * 196, _EOS_ID)  # n=257
+    assert stopped["answer_valid"] == full["answer_valid"] is True
+    assert stopped["eos_index"] == full["eos_index"] == 60
+    assert stopped["answer_truncated"] == full["answer_truncated"] is False
+    # only the timed-filler count differs (that is the point of the field).
+    assert stopped["post_eos_tokens_timed"] == 0
+    assert full["post_eos_tokens_timed"] == 196
 
 
 # ---------------------------------------------------------------------------
@@ -352,25 +363,27 @@ def test_eos_surfacing_explicit_n(env_levers):
 
 
 @pytest.mark.parametrize(
-    "fixture,expect_eos_index,expect_prompt_tokens",
+    "fixture,expect_eos_index,expect_truncated,expect_post_eos",
     [
-        ("window43_ar_ring_ref.json", None, 16384),
-        ("window43_ar_ring_v2.json", 238, 16384),
+        ("window43_ar_ring_ref.json", None, True, 0),
+        ("window43_ar_ring_v2.json", 238, False, 257 - 238 - 1),
     ],
 )
 def test_eos_surfacing_window43_fixtures(env_levers, fixture, expect_eos_index,
-                                         expect_prompt_tokens):
+                                         expect_truncated, expect_post_eos):
     receipt = json.loads((_FIXTURES / fixture).read_text())
     # window-43 ran the CORRECT chat-templated cell: 16,384 prompt tokens (not the
     # 16,385 raw builder), and the greedy first token is NOT EOS (id 666, not 1).
-    assert receipt["prompt_tokens"] == expect_prompt_tokens
+    assert receipt["prompt_tokens"] == 16384
     ids = receipt["token_ids"]
     assert ids[0] != _EOS_ID
     surf = env_levers._eos_surfacing(ids, _EOS_ID)
     assert surf["first_token_eos"] is False
     assert surf["eos_index"] == expect_eos_index
     assert surf["n_generated"] == 257  # decode_tokens (256) + prefill token
-    assert surf["answer_valid"] is True  # None or > 128.5
+    assert surf["answer_valid"] is True  # cap-independent: first token not EOS
+    assert surf["answer_truncated"] is expect_truncated
+    assert surf["post_eos_tokens_timed"] == expect_post_eos
 
 
 # ---------------------------------------------------------------------------

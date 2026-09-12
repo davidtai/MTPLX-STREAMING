@@ -75,10 +75,17 @@ AR top level **and** in the `dspark` block:
   `[ab] !!! WARNING: first generated token is EOS -- answer would be EMPTY on a served path !!!`
 - `eos_index` — first position of the EOS id in the stream, or `null`.
 - `tokens_before_eos` — `eos_index`, or the whole stream length if EOS is absent.
-- `answer_valid` — `true` when EOS never appears **or** appears past the halfway
-  point (`eos_index > 0.5 * N`); the model produced a substantial answer before
-  stopping. **N** = the number of generated tokens recorded in the stream
-  (AR: `decode_tokens + 1` — the prefill argmax token plus the decode loop).
+- `answer_valid` — `not first_token_eos`: the answer is non-empty iff the first
+  token is not EOS. **Cap-independent** — it does not change whether `--stop-on-eos`
+  truncated the stream or the full fixed-step decode ran. (The earlier
+  `eos_index > 0.5·N` rule was withdrawn: it flipped a correct short answer to
+  invalid once `--stop-on-eos` shrank N.)
+- `answer_truncated` — `eos_index is null`: the decode hit the token cap without
+  the model emitting EOS (the answer may be cut off).
+- `post_eos_tokens_timed` — when EOS is present, the number of forced post-EOS
+  tokens that were still timed (`n_generated - eos_index - 1`; the wasted filler a
+  served path never produces — **256** on the windows 39–42 raw prompt, whose EOS
+  was at index 0); `0` when EOS is absent.
 - `eos_id`, `n_generated` — for auditability.
 
 This mirrors the `serve_bench_1k` W18 guard semantics (an EOS‑honouring server
