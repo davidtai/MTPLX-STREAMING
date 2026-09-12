@@ -198,3 +198,57 @@ def test_wo_a_cache_rebuilds_on_requantize(monkeypatch):
         mode=getattr(attn.wo_a, "mode", "affine"),
     ).reshape(attn.n_groups, args.o_lora_rank, -1)
     assert bool(mx.all(w2 == expected).item())
+
+
+def _astype_count(*outs):
+    """Number of AsType (dtype-cast) primitives in the lazy graph rooted at ``outs``
+    -- via ``mx.export_to_dot``, the same dispatch proxy dispatch_census.py uses."""
+    import io
+    import re
+
+    buf = io.StringIO()
+    mx.export_to_dot(buf, *[a for a in outs if isinstance(a, mx.array)])
+    return len(re.findall(r'\[label ="AsType", shape=rectangle\]', buf.getvalue()))
+
+
+def test_wo_a_cache_is_f32_and_removes_per_token_astype(monkeypatch):
+    """W97 review fix (item 1): ``mx.dequantize`` returns bf16 for both codecs, so the
+    earlier lever (which cached that bf16) left the per-token ``.astype(mx.float32)``
+    on the weight leg in place.  The cache now stores the f32 promotion, so its dtype
+    is f32 AND the per-token ``_o_lora_down`` graph carries no AsType on the wo_a leg
+    (only the ``o`` cast survives) -- proven with the export_to_dot primitive counter,
+    not assumed."""
+    attn = _build_quantized_layer()
+    monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+
+    # ``o`` reaching ``_o_lora_down`` is [b, s, n_groups, in_per_group]; make it bf16
+    # so the ``o.astype(f32)`` is a REAL cast (the single AsType expected to survive).
+    in_per_group = attn.n_heads * attn.head_dim // attn.n_groups
+    o = mx.zeros((1, 1, attn.n_groups, in_per_group), dtype=mx.bfloat16)
+    mx.eval(o)
+
+    # Cache ON: the dense weight is f32 and the wo_a leg contributes 0 AsType.
+    monkeypatch.setenv(dsv41._ATTN_WO_A_CACHE_ENV, "1")
+    if hasattr(attn, "_wo_a_dense_cache"):
+        del attn._wo_a_dense_cache
+    w_on = attn._o_lora_dense_weight()
+    mx.eval(w_on)
+    assert w_on.dtype == mx.float32, f"cache must be f32, got {w_on.dtype}"
+    on_count = _astype_count(attn._o_lora_down(o))
+    assert on_count == 1, (
+        f"cache ON: only the o.astype should remain, got {on_count} AsType "
+        "(the f32 cache must make the weight-leg .astype a graph no-op; the cached f32 "
+        "weight is a materialised leaf, so no dequant/astype is in the per-token graph)"
+    )
+
+    # Cache OFF (control): the per-token graph re-runs the whole dequant (which carries
+    # its own internal AsType) AND the bf16 weight's .astype(f32), so it strictly
+    # exceeds the cached-f32 graph -- the per-token weight-leg work the fix removes.
+    monkeypatch.setenv(dsv41._ATTN_WO_A_CACHE_ENV, "0")
+    if hasattr(attn, "_wo_a_dense_cache"):
+        del attn._wo_a_dense_cache
+    off_count = _astype_count(attn._o_lora_down(o))
+    assert off_count > on_count, (
+        f"cache OFF must carry the per-token weight-leg AsType(s) the fix removes: "
+        f"off={off_count} on={on_count}"
+    )
