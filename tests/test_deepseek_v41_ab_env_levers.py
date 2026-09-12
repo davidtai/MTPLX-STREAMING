@@ -870,7 +870,11 @@ def test_warm_and_stage_timing_pass_helpers_exist(env_levers):
         "model", "ops", "mem_probe", "prompt_ids", "steps", "cold_ids"
     }
     st = inspect.signature(env_levers._stage_timing_pass)
-    assert set(st.parameters) == {"model", "ops", "prompt_ids", "steps"}
+    # W90 added optional keyword-only telemetry params (cooldown_s / util_sampler,
+    # both defaulting to a no-op so the shipped call sites are unaffected).
+    assert {"model", "ops", "prompt_ids", "steps"} <= set(st.parameters)
+    assert st.parameters["cooldown_s"].default == 0.0
+    assert st.parameters["util_sampler"].default is None
 
 
 # --------------------------------------------------------------------------

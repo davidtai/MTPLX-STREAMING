@@ -910,7 +910,7 @@ class Attention(nn.Module):
         return (idx - drop_offset).astype(mx.int32), valid
 
     def _sparse_attend_selected(self, q, window_all, compress_kv, comp_idx,
-                                positions, drop_offset=0):
+                                positions, drop_offset=0, shared=None):
         """K30 (W59) selected-key gather attention -- the faithful,
         non-transliterated form of :meth:`_sparse_attend`, for prefill (rows > 1),
         decode (rows == 1) and the ``K+1`` verify batch alike.
@@ -950,8 +950,13 @@ class Attention(nn.Module):
             win_valid = mx.broadcast_to(win_valid[None], (b, s, win_valid.shape[-1]))
             kvg_win = _gather_rows(window_all, win_idx, win_valid)   # [b,s,W,hd]
             if compress_kv is not None and comp_idx is not None:
-                comp_valid = comp_idx >= 0
-                kvg_cmp = _gather_rows(compress_kv, comp_idx, comp_valid)  # [b,s,Ck,hd]
+                # W90: gather the selected compressed KV once per (compress_kv,
+                # selected_idx) source and share it, so a Reuse/Reindex layer
+                # references the BOUNDED [b,s,k,hd] operand rather than the O(T)
+                # compress_kv store (the W90 in-situ mechanism).  Byte-identical --
+                # same rows in the same order as a per-layer gather.
+                kvg_cmp, comp_valid = _selected_compress_gather(
+                    compress_kv, comp_idx, shared)              # [b,s,Ck,hd]
                 KVg = mx.concatenate([kvg_win, kvg_cmp], axis=2)
                 valid = mx.concatenate([win_valid, comp_valid], axis=2)
             else:
@@ -1227,7 +1232,8 @@ class Attention(nn.Module):
         with _stime.stage_prefill("attn." + mode + ".score") as _st:
             if use_selected:
                 o = self._sparse_attend_selected(
-                    q, window_all, sel_compress_kv, sel_comp_idx, positions, win_drop
+                    q, window_all, sel_compress_kv, sel_comp_idx, positions, win_drop,
+                    shared=shared,
                 )
             else:
                 o = self._sparse_attend(q, KV, attend)
@@ -1499,6 +1505,44 @@ def _resolve_select_fence(raw=None) -> bool:
     return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
 
 
+#: W90: shape-stable selected-key gather -- a DISPATCH-COUNT reduction (default OFF).
+#: All Reuse/Reindex/Full layers of a group read the SAME (compress_kv,
+#: selected_idx) pair, so the shipped K30 path issues the compressed-lane gather (~3
+#: tiny host dispatches) once per layer.  This lever gathers it ONCE per source and
+#: shares the bounded ``[b, s, k, hd]`` result (identity-keyed on the per-forward
+#: ``shared`` runtime), so only the first layer of a group issues it -- the
+#: token-total tiny-gather dispatches drop by ~the reuse-layer count (<= ~1% of the
+#: token).  BYTE-IDENTICAL: a pure caching of an already-deterministic gather (same
+#: rows, same order); the only difference is which layer issues the physical gather.
+#: Small-M gated (rows == b*s <= 8): armed at decode/verify only, never at a prefill
+#: chunk (a per-chunk cache would pin every chunk's operand -> ~17 GB at 16K -- see
+#: :func:`_selected_compress_gather`).
+#:
+#: NOT the fix for the mode-independent ~4 ms/layer in-situ decode floor.  W90 CPU
+#: reproduction RULED OUT the host candidates (retrace/memo/Python all FLAT in T,
+#: E1/E2/E5/E6); the earlier "O(T) source reference" claim is FALSIFIED by the
+#: receipts -- ``attn.swa_only`` (no ``compress_kv``, ~5 MB window under the ring)
+#: costs the same in situ as ``attn.reuse``, and the isolated bench already
+#: references O(T) per dispatch yet is flat.  The floor tracks GPU DVFS: macmon
+#: during a live 16K decode read 71 C (NOT thermal), ~45% GPU-busy, freq swinging
+#: 580-1381 MHz -- the GPU downclocks in the sync/latency gaps between B=1 bursts,
+#: so each post-gap burst runs slow (the isolated bench keeps the GPU awake).  See
+#: ``docs/deepseek-v41/W90_ATTN_IN_SITU.md``; decisive check = per-mode census with
+#: ``swa_only`` control + the ``utilization`` telemetry.  Read at use, never frozen
+#: at import ([[env-flags-read-at-use-not-import]]).
+_ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"
+
+
+def _resolve_attn_shape_stable(raw=None) -> bool:
+    """Whether ``MTPLX_DSV41_ATTN_SHAPE_STABLE`` shares the selected-compressed-KV
+    gather across a group's layers so a Reuse/Reindex layer references the bounded
+    ``[b,s,k,hd]`` gathered operand instead of the O(T) ``compress_kv`` store
+    (default OFF).  Byte-identical.  Read at call time (serving stamps the key after
+    import)."""
+    val = os.environ.get(_ATTN_SHAPE_STABLE_ENV) if raw is None else raw
+    return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
+
+
 def _mask_to_topk_idx(mask: mx.array, k: int) -> mx.array:
     """Convert a boolean top-k row mask ``[b, s, n]`` (exactly ``min(k, reachable)``
     True per row) into ``[b, s, k]`` int32 indices of the True positions in
@@ -1540,6 +1584,57 @@ def _gather_rows(source: mx.array, idx: mx.array, valid: mx.array) -> mx.array:
     flat = (idx_c + offs).reshape(-1)
     g = mx.take(source.reshape(b * n, d), flat, axis=0)   # [b*s*k, d]
     return g.reshape(b, s, k, d)
+
+
+def _selected_compress_gather(compress_kv: mx.array, comp_idx: mx.array, shared):
+    """W90: gather the ``index_topk`` selected rows out of ``compress_kv`` into a
+    bounded ``[b, s, k, hd]`` operand plus its ``[b, s, k]`` valid mask, sharing the
+    result across every layer of a group that reuses the SAME (``compress_kv``,
+    ``comp_idx``) source under ``MTPLX_DSV41_ATTN_SHAPE_STABLE`` (default OFF).
+
+    Returns ``(kvg_cmp, comp_valid)``, byte-for-byte identical to the per-layer
+    ``_gather_rows(compress_kv, comp_idx, comp_idx >= 0)`` -- a pure caching of an
+    already-deterministic gather.  All Reuse/Reindex/Full layers of a group read the
+    SAME ``(compress_kv, selected_idx)`` pair, so the shipped path issues that gather
+    (~3 tiny host dispatches) once per layer; caching it on the per-forward
+    ``shared`` runtime (keyed by the IDENTITY of the two source arrays, both held so
+    an id can't be recycled) means only the FIRST layer of a group issues it and the
+    Reuse layers reuse the bounded operand.
+
+    **Scope of the win.**  This is a per-token DISPATCH-COUNT reduction (a handful of
+    host encodes per Reuse/Reindex layer -> the token-total drops by ~the reuse-layer
+    count), expected small (<= ~1% of the token).  It is NOT the fix for the
+    mode-independent ~4 ms/layer in-situ decode floor: the repo receipts show
+    ``attn.swa_only`` (no ``compress_kv`` at all) costs the SAME in situ as
+    ``attn.reuse``, and the isolated bench already references O(T) sources per
+    dispatch yet is flat -- so the floor is not this O(T) reference (see
+    ``docs/deepseek-v41/W90_ATTN_IN_SITU.md``; the decisive check is a per-mode
+    census with ``swa_only`` as the control, and the ``utilization`` telemetry --
+    the GPU DVFS-downclocks between B=1 bursts).
+
+    **Small-M gate (rows == b*s <= 8).**  Armed ONLY for the decode (s == 1) and
+    ``K+1`` verify (s <= 8) regime.  Under layer-major CHUNKED PREFILL (rows ==
+    chunk >> 8) each per-chunk ``SharedAttentionRuntime`` would pin its chunk's
+    ``[chunk, k, hd]`` gathered operand for the whole group; summed over chunks that
+    is a full ``[s, k, hd]`` held resident (~17 GB at the 16,384 cell, OOM at 64K).
+    So at prefill row counts this ALWAYS falls back to the plain per-layer transient
+    gather (freed after the layer) -- byte-identical, and identical to the ``off``
+    path for prefill.  ``shared`` is fresh per forward, so the decode cache never
+    leaks across tokens; a new source publishes new arrays whose identity misses and
+    recomputes.  Lever off / no ``shared`` -> the plain per-layer gather, unchanged."""
+    comp_valid = comp_idx >= 0
+    # rows = b*s from the selection ([b, s, k]); share only in the small-M
+    # decode/verify regime (W90 target), never at a prefill chunk (pinning/OOM).
+    rows = int(comp_idx.shape[0]) * int(comp_idx.shape[1])
+    if (shared is None or rows > _DECODE_ATTN_KERNEL_MAX_ROWS
+            or not _resolve_attn_shape_stable()):
+        return _gather_rows(compress_kv, comp_idx, comp_valid), comp_valid
+    cache = getattr(shared, "_sel_cmp_kvg", None)
+    if cache is not None and cache[0] is compress_kv and cache[1] is comp_idx:
+        return cache[2], cache[3]
+    kvg = _gather_rows(compress_kv, comp_idx, comp_valid)
+    shared._sel_cmp_kvg = (compress_kv, comp_idx, kvg, comp_valid)
+    return kvg, comp_valid
 
 
 #: W58 / K28: fuse the prefill mask + per-head value-0 sink + f32 softmax over the

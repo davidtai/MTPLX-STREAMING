@@ -487,9 +487,15 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
         t["gather_iso"] += time.perf_counter_ns() - t0
 
     # -- attend (gather + score + softmax + PV; the production entry) --
+    # W90: mirror Attention._attend exactly -- pass shared (so the W90 shared-gather
+    # lever is exercised on the peeled path too) and the window drop_offset (0 on the
+    # plain/grow backing, the ring's _drop under WINDOW_RING).
     t0 = time.perf_counter_ns()
     if use_selected:
-        o = attn._sparse_attend_selected(q, window_all, sel_compress_kv, sel_comp_idx, positions)
+        o = attn._sparse_attend_selected(
+            q, window_all, sel_compress_kv, sel_comp_idx, positions,
+            cache.window_drop_offset, shared=shared,
+        )
     else:
         o = attn._sparse_attend(q, KV, attend)
     _fence(o)
@@ -539,18 +545,36 @@ _ALL_KEYS = ["qkv_proj", "cache_append", "mask_build", "compress_append", "selec
              "gather_iso", "score", "attend", "out_proj"]
 
 
+def _reset_forward_shared_cache(shared: SharedAttentionRuntime) -> None:
+    """W90 (review fix 5): drop the per-forward selected-compress gather cache so
+    each isolated timed iteration re-issues the gather.  A real per-forward starts
+    with a fresh ``SharedAttentionRuntime``; without this reset,
+    ``MTPLX_DSV41_ATTN_SHAPE_STABLE`` would cache on iteration 1 and every later
+    iteration would HIT -- timing a shared-gather-free step that never happens in
+    situ (the Reuse mode would read artificially fast).  No-op when the lever is off
+    (the attribute is never set)."""
+    if getattr(shared, "_sel_cmp_kvg", None) is not None:
+        shared._sel_cmp_kvg = None
+
+
 def measure_mode_T(args: ModelArgs, attn: Attention, mode: str, T: int,
                    use_selected: bool, iters: int, warmup: int,
                    churn: bool = False) -> Dict[str, float]:
     """Time whole + peeled for one (mode, T).  whole and peeled use freshly
     pre-filled caches so each runs a genuine decode step (the step mutates the
-    cache); returns ms/step per op + the whole."""
+    cache); returns ms/step per op + the whole.
+
+    W90: each timed iteration resets the per-forward shared gather cache
+    (:func:`_reset_forward_shared_cache`) so ``MTPLX_DSV41_ATTN_SHAPE_STABLE`` is
+    measured as a genuine first-touch per step, not a cross-iteration cache hit."""
     # whole
     cache, shared, x, pos = build_case(args, attn, mode, T)
     for _ in range(warmup):
+        _reset_forward_shared_cache(shared)
         decode_step_whole(attn, cache, shared, x, pos, churn=churn)
     whole_ns = 0
     for _ in range(iters):
+        _reset_forward_shared_cache(shared)
         whole_ns += decode_step_whole(attn, cache, shared, x, pos, churn=churn)
     whole_ms = whole_ns / 1e6 / iters
     del cache, shared, x, pos
@@ -559,9 +583,11 @@ def measure_mode_T(args: ModelArgs, attn: Attention, mode: str, T: int,
     cache, shared, x, pos = build_case(args, attn, mode, T)
     twarm: Dict[str, int] = {k: 0 for k in _ALL_KEYS}
     for _ in range(warmup):
+        _reset_forward_shared_cache(shared)
         decode_step_peeled(attn, cache, shared, x, pos, use_selected, twarm, churn=churn)
     t: Dict[str, int] = {k: 0 for k in _ALL_KEYS}
     for _ in range(iters):
+        _reset_forward_shared_cache(shared)
         decode_step_peeled(attn, cache, shared, x, pos, use_selected, t, churn=churn)
     del cache, shared, x, pos
 
@@ -967,15 +993,30 @@ def run_in_model(cfg: dict) -> dict:
                 "max_kv": args.max_kv, "memory_limit_gib": cfg.get("memory_limit_gib", 60.0)}
         device = "gpu"
 
-    def _pass(label):
+    cooldown_s = float(cfg.get("cooldown_s", 0.0) or 0.0)
+    util_on = bool(cfg.get("utilization", False))
+    util_interval_ms = int(cfg.get("util_interval_ms", 2000))
+
+    def _pass(label, *, cooldown_s=0.0, util=False):
+        sampler = None
+        if util:
+            sampler = ab._macmon().UtilizationSampler(interval_ms=util_interval_ms)
         rep = ab._stage_timing_pass(
-            model=model, ops=ops, prompt_ids=list(prompt_ids), steps=steps
+            model=model, ops=ops, prompt_ids=list(prompt_ids), steps=steps,
+            cooldown_s=cooldown_s, util_sampler=sampler,
         )
-        return {"label": label, "report": rep, "summary": _summarize_report(rep)}
+        entry = {"label": label, "report": rep, "summary": _summarize_report(rep)}
+        # W90: peel the utilization / cooldown blocks out of the report onto the pass.
+        entry["utilization"] = rep.pop("__w90_utilization", None)
+        entry["cooldown"] = rep.pop("__w90_cooldown", None)
+        if sampler is not None:
+            print(f"[w78-in-model] {label}: {sampler.census()}", flush=True)
+        return entry
 
     passes = {}
-    # (1) full model
-    passes["full"] = _pass("full_model")
+    # (1) full model -- the W90 discriminator pass carries the cooldown + macmon
+    # utilization telemetry (the GPU DVFS-downclock floor read).
+    passes["full"] = _pass("full_model", cooldown_s=cooldown_s, util=util_on)
     # (2) routed expert switch stubbed (keep shared)
     saved = _apply_stub(model, "experts")
     try:
@@ -1004,6 +1045,10 @@ def run_in_model(cfg: dict) -> dict:
             "active_end_gib": _mem_gib("get_active_memory"),
             "peak_gib": _mem_gib("get_peak_memory"),
         },
+        # W90: the GPU DVFS/utilization + cooldown telemetry of the full pass (the
+        # window-36 --cooldown-s 180-vs-0 discriminator for the mode-independent floor).
+        "utilization": passes["full"].get("utilization"),
+        "cooldown": passes["full"].get("cooldown"),
         "passes": passes,
     }
     return receipt
@@ -1099,6 +1144,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="--in-model --gpu: max live KV tokens (default 17408)")
     p.add_argument("--in-model-steps", type=int, default=None,
                    help="--in-model: decode steps per pass (default 30 gpu / 4 tiny)")
+    # W90: post-prefill cooldown + macmon utilization telemetry (--in-model).
+    p.add_argument("--cooldown-s", type=float, default=0.0,
+                   help="--in-model: idle N s AFTER prefill, BEFORE the timed decode "
+                        "(TTFT unaffected); window-36 runs 180 vs 0 as the discriminator")
+    p.add_argument("--utilization", action="store_true",
+                   help="--in-model: sample macmon (gpu freq/power/busy, temps) over the "
+                        "timed decode into a 'utilization' block + one-line census (W90)")
+    p.add_argument("--util-interval-ms", type=int, default=2000,
+                   help="macmon sampling interval in ms for --utilization (default 2000)")
     p.add_argument("--out", type=str, default=None, help="write the JSON receipt here")
     return p
 
@@ -1115,6 +1169,9 @@ def _in_model_cfg(a) -> dict:
         "context_tokens": a.context_tokens,
         "memory_limit_gib": a.memory_limit_gib,
         "max_kv": a.max_kv,
+        "cooldown_s": a.cooldown_s,
+        "utilization": a.utilization,
+        "util_interval_ms": a.util_interval_ms,
     }
     if a.in_model_steps is not None:
         cfg["steps"] = a.in_model_steps

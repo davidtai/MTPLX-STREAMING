@@ -247,3 +247,28 @@ def test_served_startup_log_resolver_reports_every_lever() -> None:
     # Reported-but-off levers still render as <unset>.
     assert "DEVICE_ROUTE=<unset>" in line
     assert "SWITCH_FASTPATH=<unset>" in line
+
+
+def test_served_log_snapshot_covers_every_ab_lever() -> None:
+    """W90 drift guard: the served-log lever snapshot (``_DSV41_LEVER_ENV_KEYS``)
+    must be a SUPERSET of every A/B lever env (``ab_decode_env_levers.ALL_LEVER_ENVS``),
+    so a new lever cannot ship without appearing in the window startup log.  Loads
+    the ab script by file path (``scripts/`` is not a package)."""
+    import importlib.util
+    from pathlib import Path
+
+    from mtplx.server.openai import _DSV41_LEVER_ENV_KEYS
+
+    ab_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts" / "deepseek_v41" / "ab_decode_env_levers.py"
+    )
+    spec = importlib.util.spec_from_file_location("dsv41_ab_env_levers", ab_path)
+    ab = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ab)
+
+    missing = set(ab.ALL_LEVER_ENVS) - set(_DSV41_LEVER_ENV_KEYS)
+    assert not missing, f"A/B levers absent from the served-log snapshot: {sorted(missing)}"
+    # W90's own key is in both surfaces.
+    assert "MTPLX_DSV41_ATTN_SHAPE_STABLE" in ab.ALL_LEVER_ENVS
+    assert "MTPLX_DSV41_ATTN_SHAPE_STABLE" in _DSV41_LEVER_ENV_KEYS

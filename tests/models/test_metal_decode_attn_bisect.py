@@ -214,6 +214,30 @@ def test_in_model_tiny_three_passes():
     assert ast["frame_wall_ms_per_token"] < full["frame_wall_ms_per_token"]
 
 
+def test_in_model_tiny_cooldown_and_utilization_plumbing(monkeypatch):
+    """W90: --cooldown-s + macmon utilization plumbing runs at tiny dims on the CPU
+    with the READER MOCKED (MTPLX_MACMON_BIN -> a nonexistent path, so the sampler
+    and cooldown readout are graceful no-ops -- no macmon subprocess, no GPU).  The
+    receipt carries the ``utilization`` (empty trace) and ``cooldown`` blocks and the
+    three passes still complete."""
+    monkeypatch.setenv("MTPLX_MACMON_BIN", "/nonexistent/macmon-w90-test")
+    r = _MOD.run_in_model({
+        "tiny": True, "steps": 2, "prompt_len": 40,
+        "cooldown_s": 0.02, "utilization": True, "util_interval_ms": 10,
+    })
+    assert set(r["passes"]) == {"full", "expert_stub", "attn_stub"}
+    # utilization block present (reader mocked -> 0 samples, but the trace RAN)
+    util = r["utilization"]
+    assert isinstance(util, dict) and util.get("samples") == 0
+    assert r["passes"]["full"]["utilization"] == util
+    # cooldown block present with the requested duration and empty (mocked) readings
+    cd = r["cooldown"]
+    assert isinstance(cd, dict) and cd["seconds"] == 0.02
+    assert cd["start"] == {} and cd["end"] == {}
+    # the full pass still produced a real census
+    assert r["passes"]["full"]["summary"]["enabled"] is True
+
+
 def test_in_model_gpu_argv_parses():
     """The GPU-path argv the mode builds parses cleanly against the ab parser (arg
     names / values), without loading the artifact -- a guard against argv typos."""
