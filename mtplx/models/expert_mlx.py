@@ -2658,10 +2658,33 @@ class HotExpertSwitchGLU(nn.Module):
             flush_deferred()
         with _route_probe.bracket("hot.route_host"):
             expert_ids = tuple(int(value) for value in indices.reshape(-1).tolist())
-        # W93: issue the gate-oracle prefetch for the NEXT layer now that its ids
-        # are on the host (already materialized above -- no extra sync). Pure cache
-        # warming: a mispredict only wastes a read (W93_GATE_PREFETCH.md §2/§5).
-        if _gate_prefetch_pending is not None:
+        # W93 issue-order fix (lane C, HIGH-3): the NEXT layer's gate-oracle
+        # prefetch is issued only AFTER this layer's own demand misses have been
+        # submitted by ``begin_split_route`` -- so the speculative ring reads never
+        # queue ahead of the current layer's demand reads at the SSD (the
+        # cannibalism hazard: a ~216 MiB speculative burst racing this layer's
+        # misses on a separate executor). ONLY THE ISSUE POINT MOVES: the eval that
+        # materializes the prediction still happened above, on the single
+        # ``mx.eval(indices, predicted)`` routing barrier, so ``.tolist()`` at the
+        # deferred issue site is host-resident with no extra sync.
+        #
+        # Ordering invariant at the deferred issue site (below, before each route
+        # return): the issue happens AFTER the covering flush
+        # (``flush_deferred_slot_releases`` above) and AFTER ``begin_split_route``
+        # has submitted L's misses; L's gather is an ancestor of indices_{L+1} (the
+        # prediction was formed from L's input residual ``h`` and materialized on
+        # L's own indices barrier), so issuing later adds no host sync and cannot
+        # reorder ahead of the demand reads. Fired exactly once per ``_run`` via the
+        # guard. The barrier-free device-route path returns earlier (above) and
+        # drops the prediction unevaluated -- there is no barrier to piggyback and
+        # so nothing to issue (W93_GATE_PREFETCH.md §3).
+        _gate_prefetch_issued = False
+
+        def _issue_pending_gate_prefetch() -> None:
+            nonlocal _gate_prefetch_issued
+            if _gate_prefetch_pending is None or _gate_prefetch_issued:
+                return
+            _gate_prefetch_issued = True
             _issue_gate_prefetch(self.runtime, _gate_prefetch_pending)
         # Batch size is not a generation phase. A batched decode has shape
         # ``[B, 1, H]`` and must still train/use the persistent decode hot set;
@@ -3032,6 +3055,10 @@ class HotExpertSwitchGLU(nn.Module):
                 output = wave_output.reshape((*indices.shape, hidden_size))
                 if shared_work is not None and shared is None:
                     shared = shared_work()
+                # All-hit route: no demand misses were submitted, so ordering is
+                # vacuously satisfied -- issue the next layer's prefetch on the way
+                # out (W93 issue-order fix; guarded to fire once).
+                _issue_pending_gate_prefetch()
                 return output, shared
             # W66/W81 split single-barrier (batched): this small-M DECODE verify
             # has misses, so W61's all-hit probe declined.  W66 covered the case
@@ -3168,6 +3195,10 @@ class HotExpertSwitchGLU(nn.Module):
                 output = joined.reshape((*indices.shape, hidden_size))
                 if shared_work is not None and shared is None:
                     shared = shared_work()
+                # W93 issue-order fix: every wave's begin_split_route has now
+                # submitted this layer's demand misses; issue the next layer's
+                # speculative prefetch after them (guarded to fire once).
+                _issue_pending_gate_prefetch()
                 return output, shared
             # No defer/flush seam (fake double): fall through to the bounded
             # route_waves loop below (byte-identical, fenced per wave part).
@@ -3668,6 +3699,11 @@ class HotExpertSwitchGLU(nn.Module):
                             phase=phase,
                         )
                         shared_pipeline_work = None
+            # W93 issue-order fix: the bounded route_waves loop (and the shadow
+            # path) has submitted every demand miss for this layer via
+            # begin_split_route above; issue the next layer's speculative prefetch
+            # only now, after the demand reads (guarded to fire once).
+            _issue_pending_gate_prefetch()
             return output, shared
         finally:
             if pipeline_ledger is not None and shared_pipeline_work is not None:
