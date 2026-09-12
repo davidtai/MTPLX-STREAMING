@@ -80,6 +80,7 @@ _SSP = "MTPLX_DSV41_SINGLE_SLOT_POOL"     # W87: merged scan-resistant slot pool
 _WOAC = "MTPLX_DSV41_ATTN_WO_A_CACHE"     # W97: cached dequantized o-LoRA wo_a
 _ACC = "MTPLX_DSV41_ATTN_CORE_COMPILE"    # W97: fixed-shape core compile (rounding-class)
 _ALC = "MTPLX_DSV41_ATTN_LEAN_CASTS"      # W99: byte-identical cast lean
+_AFP = "MTPLX_DSV41_ATTN_FUSED_PROJ"      # W101 / K36: fused projection-chain kernels (rounding-class)
 _KCG = "MTPLX_DSV41_KV_CHUNK_GROW"       # W73 / K32: chunk-grown KV append backing
 _SS = "MTPLX_DSV41_SMALL_STAGES_FUSED"   # W91 / K35: fused per-layer small stages
 _HPK = "MTPLX_DSV41_HC_PREMIX_KERNEL"    # W91 / K35: GPU-only fused HC-premix kernel
@@ -1037,10 +1038,10 @@ def test_cell16k_ring_composite_arms(env_levers):
     # small_stages_fused is the ONLY arm that carries it, and it sets ONLY
     # small_stages + sinkhorn (hermetic).
     assert "small_stages_fused" in presets, "small_stages_fused arm missing"
-    assert "cell16k_ring_fused" not in presets, (
-        "cell16k_ring_fused (a K35 composite) must NOT exist -- K35 is rounding-class "
-        "on GPU with no measured win (window-37); keep it out of every composite arm"
-    )
+    # W101 reclaimed the name ``cell16k_ring_fused`` for the fused PROJECTION-CHAIN
+    # stack (K36, NOT K35): it sets attn_fused_proj + K29 + wo_a + lean, never
+    # small_stages (_SS).  The K35 "no composite carries small_stages" invariant is
+    # still enforced by the general _SS loop below, which now also covers this arm.
     ssf = presets["small_stages_fused"]
     assert ssf[_SS] == "1" and ssf[_SK] == "1", "small_stages_fused missing its keys"
     assert all(v is None for k, v in ssf.items() if k not in (_SS, _SK)), (
@@ -1140,4 +1141,25 @@ def test_cell16k_ring_composite_arms(env_levers):
         k: v for k, v in presets["cell16k_ring_lean_k29"].items() if v != ring.get(k)
     } == {_WOAC: "1", _ALC: "1", _DAK: "1"}, (
         "cell16k_ring_lean_k29 must touch only wo_a + lean-casts + K29 keys"
+    )
+
+    # W101 K36 fused-projection-chain arms (ROUNDING-CLASS -- fused rmsnorm
+    # reassociates the fp32 sum; the o-LoRA einsum reads bf16 wo_a; flagged in the
+    # byte-identity summary).  The lever is in the master list.
+    assert _AFP in env_levers.ALL_LEVER_ENVS
+    # isolation arm: ONLY selected_keys + attn_fused_proj (hermetic; core stays
+    # eager -- fused-proj is INDEPENDENT of K29).
+    afp = presets["attn_fused_proj"]
+    assert afp[_SEL] == "1" and afp[_AFP] == "1", "attn_fused_proj missing its keys"
+    assert all(v is None for k, v in afp.items() if k not in (_SEL, _AFP)), (
+        "attn_fused_proj must set ONLY selected_keys + attn_fused_proj (hermetic)"
+    )
+    # cell16k_ring_fused = cell16k_ring + wo_a cache + lean casts + K29 + fused proj
+    # (the FULL attention dispatch stack: qkv/out glue fused, core -> 1 via K29,
+    # per-token dequant + redundant casts gone).
+    assert "cell16k_ring_fused" in presets, "cell16k_ring_fused arm missing"
+    assert {
+        k: v for k, v in presets["cell16k_ring_fused"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _ALC: "1", _DAK: "1", _AFP: "1"}, (
+        "cell16k_ring_fused must touch only wo_a + lean-casts + K29 + fused-proj keys"
     )
