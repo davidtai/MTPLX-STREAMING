@@ -450,48 +450,54 @@ def _bounded_latent_cap(maxkv: Optional[int]) -> Optional[int]:
 def kv_bytes_breakdown_at_max_kv(
     config, max_kv: int, *, batch: int = 1,
     max_verify: int = 8, slack: int = 8, headroom: int = 64,
-    window_dtype_bytes: int = 2, compress_dtype_bytes: int = 2,
-    index_dtype_bytes: int = 2, latent_dtype_bytes: int = 4,
+    model_dtype_bytes: int = 2, store_dtype_bytes: int = 4,
 ) -> dict:
     """Per-lane preallocated KV bytes for a bounded cache at ``max_kv`` (W107).
 
     A pure function of the model ``config`` (``num_hidden_layers``, ``window_size``,
     ``head_dim``, ``index_head_dim``, ``compress_ratios``, ``kv_source_layer_ids``)
-    and ``max_kv``, matching exactly what :class:`LayerAttentionCache` preallocates
-    under ``MTPLX_DSV41_KV_BOUNDED``.  W106 uses :func:`kv_bytes_at_max_kv` (the
-    ``total``) in the memory-plan derivation; this returns the breakdown behind it.
+    and ``max_kv``, matching what :class:`LayerAttentionCache` preallocates under
+    ``MTPLX_DSV41_KV_BOUNDED``.  W106 uses :func:`kv_bytes_at_max_kv` (the ``total``)
+    in the memory-plan derivation; this returns the breakdown behind it.  The ab
+    receipt gate ``kv_bounded.formula_matches_alloc`` verifies this against the live
+    ``alloc_bytes`` so a drift in the dtype model is caught at runtime.
+
+    **Per-layer store dtypes (review MEDIUM-A -- measured, not assumed).** Only the
+    layer-0 window store is the model's compute dtype (bf16); every other store is
+    **fp32**, because layer 0's post-attention o-LoRA einsum promotes the residual to
+    fp32 (``_o_lora_down``: ``o.astype(mx.float32)``, deepseek_v41.py) and it stays
+    fp32 down the stack, so layers 1..N-1's window KV and every kv-source layer's
+    compress/index/frontier are fp32.  (An all-fp32 run -- e.g. an fp32 tiny model --
+    is just ``model_dtype_bytes == store_dtype_bytes == 4``.)  No cast is added at any
+    append site (that would change bytes vs the shipped path); the formula models what
+    the runtime already stores.
 
     Formula (bytes), summed over layers ``L`` (batch ``B``):
 
       * **window** (every layer, the bounded SWA ring): two ping-pong buffers of
         ``phys_cap = window_size + max_verify + slack + headroom`` rows ::
 
-            2 * B * phys_cap * head_dim * window_dtype_bytes
+            2 * B * phys_cap * head_dim * (model_dtype_bytes if L == 0 else store_dtype_bytes)
 
-        Bounded and INDEPENDENT of ``max_kv`` (the win: the window does not grow with
-        context).  (A prefill chunk wider than ``phys_cap`` grows it transiently; the
-        decode-steady size compacts back to this, so the steady bound is this value.)
-      * **compress_kv** / **index_k** (``kv_source`` layers only): one row per
-        completed group, ``comp_cap = ceil(max_kv / ratio) + COMP_SLACK`` rows.
-        **Per-layer dtype (review MEDIUM-2):** on ``ratio > 1`` source layers the
-        compressor pools in fp32 (``Compressor.pool`` casts to float32) and
-        RMSNorm / RoPE / the indexer preserve dtype, so these stores are **fp32** and
-        use ``latent_dtype_bytes``; only ``ratio == 1`` layers are a plain per-token
-        projection that follows ``x``'s dtype (bf16) and use ``compress_dtype_bytes``
-        / ``index_dtype_bytes`` ::
+        Bounded and INDEPENDENT of ``max_kv``.  (A prefill chunk wider than ``phys_cap``
+        grows it transiently; the decode-steady size compacts back -- review MEDIUM-1 --
+        so this is the steady bound; the cumulative ``alloc_bytes`` counter also counts
+        the transient, hence ``formula_matches_alloc`` is exact only when
+        ``kv_realloc_window == 1``.)
+      * **compress_kv** / **index_k** (``kv_source`` layers, all fp32): one row per
+        completed group, ``comp_cap = ceil(max_kv / ratio) + COMP_SLACK`` rows ::
 
-            B * comp_cap * head_dim       * (latent_dtype_bytes if ratio>1 else compress_dtype_bytes)
-            B * comp_cap * index_head_dim * (latent_dtype_bytes if ratio>1 else index_dtype_bytes)
+            B * comp_cap * head_dim       * store_dtype_bytes
+            B * comp_cap * index_head_dim * store_dtype_bytes
       * **latent** frontier (``kv_source`` + ``ratio > 1`` layers, the "main latent
         KV"): the two fp32 raw arrays (kv + gate score), ``latent_cap =
         max_kv + LATENT_SLACK`` rows ::
 
-            2 * B * latent_cap * head_dim * latent_dtype_bytes
+            2 * B * latent_cap * head_dim * store_dtype_bytes
 
-    ``*_dtype_bytes`` default to the streaming runtime's dtypes (bf16 post-RoPE
-    stores that follow ``x``, fp32 compressor frontier + fp32 ratio>1 compress/index);
-    pass the measured widths to match a specific build.  ``COMP_SLACK`` /
-    ``LATENT_SLACK`` are :data:`_BOUNDED_COMP_SLACK` / :data:`_BOUNDED_LATENT_SLACK`.
+    ``model_dtype_bytes`` defaults to 2 (the released bf16 model); ``store_dtype_bytes``
+    to 4 (fp32).  ``COMP_SLACK`` / ``LATENT_SLACK`` are :data:`_BOUNDED_COMP_SLACK` /
+    :data:`_BOUNDED_LATENT_SLACK`.
     """
     max_kv = int(max_kv)
     B = int(batch)
@@ -506,29 +512,27 @@ def kv_bytes_breakdown_at_max_kv(
 
     phys_cap = window_size + int(max_verify) + int(slack) + int(headroom)
     latent_cap = _bounded_latent_cap(max_kv)
+    m_bytes = int(model_dtype_bytes)
+    s_bytes = int(store_dtype_bytes)
 
     window_bytes = 0
     compress_bytes = 0
     index_bytes = 0
     latent_bytes = 0
     for L in range(n_layers):
-        # every layer keeps a window ring (two ping-pong buffers)
-        window_bytes += 2 * B * phys_cap * head_dim * int(window_dtype_bytes)
+        # window: layer 0 follows the model compute dtype; layers 1+ store the fp32
+        # residual (o-LoRA einsum promotes it at layer 0) -- review MEDIUM-A.
+        w_bytes = m_bytes if L == 0 else s_bytes
+        window_bytes += 2 * B * phys_cap * head_dim * w_bytes
         if L in kv_sources:
             ratio = int(ratios[L])
             cc = _bounded_comp_cap(max_kv, ratio)
+            # compress/index are fp32 on every kv-source layer: ratio>1 pools in fp32,
+            # ratio==1 follows the fp32 residual (kv-source layers are all L>0).
+            compress_bytes += B * cc * head_dim * s_bytes
+            index_bytes += B * cc * index_head_dim * s_bytes
             if ratio > 1:
-                # W107 MEDIUM-2: ratio>1 source layers pool in fp32 (Compressor.pool
-                # casts to float32; rmsnorm/rope/indexer preserve dtype) -> fp32 stores.
-                c_bytes = int(latent_dtype_bytes)
-                i_bytes = int(latent_dtype_bytes)
-                latent_bytes += 2 * B * latent_cap * head_dim * int(latent_dtype_bytes)
-            else:
-                # ratio==1: plain per-token projection follows x's dtype (bf16).
-                c_bytes = int(compress_dtype_bytes)
-                i_bytes = int(index_dtype_bytes)
-            compress_bytes += B * cc * head_dim * c_bytes
-            index_bytes += B * cc * index_head_dim * i_bytes
+                latent_bytes += 2 * B * latent_cap * head_dim * s_bytes
     total = window_bytes + compress_bytes + index_bytes + latent_bytes
     return {
         "window": int(window_bytes),

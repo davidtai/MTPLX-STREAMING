@@ -119,10 +119,10 @@ def test_kv_bytes_formula_matches_preallocation(monkeypatch):
     # one prefill append per lane allocates every bounded buffer at its cap
     _prefill_all_lanes(cache, cfg, n=20)  # 20 < window phys_cap (88) => no transient grow
 
-    # the pure formula (all lanes fp32 == 4 bytes here) equals the bytes allocated
+    # this direct-cache prefill feeds fp32 rows through EVERY window (incl. layer 0),
+    # so the whole cache is fp32 -> model_dtype_bytes == store_dtype_bytes == 4.
     expected = C.kv_bytes_at_max_kv(
-        cfg, max_kv, window_dtype_bytes=4, compress_dtype_bytes=4,
-        index_dtype_bytes=4, latent_dtype_bytes=4)
+        cfg, max_kv, model_dtype_bytes=4, store_dtype_bytes=4)
     stats = C.kv_bounded_stats()
     assert stats["alloc_bytes"] == expected, (
         f"alloc_bytes {stats['alloc_bytes']} != kv_bytes_at_max_kv {expected}")
@@ -154,31 +154,31 @@ def test_kv_bytes_breakdown_scales_with_max_kv():
     assert big["window"] == small["window"], "window must not grow with max_kv"
     assert big["total"] == big["window"] + big["compress"] + big["index"] + big["latent"]
     assert C.kv_bytes_at_max_kv(cfg, 4096) == big["total"]
-    # window is bf16 (follows x) -> all-fp32 doubles it; latent is already fp32.
-    f32 = C.kv_bytes_breakdown_at_max_kv(
-        cfg, 4096, window_dtype_bytes=4, compress_dtype_bytes=4, index_dtype_bytes=4,
-        latent_dtype_bytes=4)
-    assert f32["window"] == 2 * big["window"]     # bf16 -> fp32
-    assert f32["latent"] == big["latent"]         # latent already fp32 by default
+    # defaults: layer-0 window bf16 (2), everything else fp32 (4). An all-fp32 run
+    # (model_dtype_bytes=4) only widens layer 0's window (one layer, 2->4).
+    f32 = C.kv_bytes_breakdown_at_max_kv(cfg, 4096, model_dtype_bytes=4)
+    phys = big["phys_cap"]
+    assert f32["window"] - big["window"] == 2 * phys * cfg.head_dim * (4 - 2)
+    assert f32["compress"] == big["compress"]     # already fp32
+    assert f32["latent"] == big["latent"]         # already fp32
 
 
-def test_medium2_ratio_gt1_compress_index_are_fp32():
-    """Review MEDIUM-2: compress/index on ratio>1 source layers are fp32 (the
-    compressor pools in fp32), only ratio==1 follows x's bf16.  _Cfg has kv_source
-    [2, 5] with ratios {2: 2, 5: 1}."""
+def test_medium_a_all_kv_source_compress_index_fp32():
+    """Review MEDIUM-A: compress/index are fp32 on EVERY kv-source layer -- ratio>1
+    pools in fp32, ratio==1 follows the fp32 residual (kv-source layers are all L>0).
+    (This supersedes MEDIUM-2's ratio==1==bf16 model.)  _Cfg kv_source [2, 5]."""
     cfg = _Cfg()
     max_kv = 4096
-    bd = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv)  # defaults: bf16=2, fp32=4
-    cc2 = C._bounded_comp_cap(max_kv, 2)              # layer 2 (ratio 2, fp32)
-    cc1 = C._bounded_comp_cap(max_kv, 1)              # layer 5 (ratio 1, bf16)
+    bd = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv)  # defaults: model 2, store 4
+    cc2 = C._bounded_comp_cap(max_kv, 2)              # layer 2 (ratio 2)
+    cc1 = C._bounded_comp_cap(max_kv, 1)              # layer 5 (ratio 1)
     hd, ihd = cfg.head_dim, cfg.index_head_dim
-    exp_compress = cc2 * hd * 4 + cc1 * hd * 2       # fp32 + bf16
-    exp_index = cc2 * ihd * 4 + cc1 * ihd * 2
-    assert bd["compress"] == exp_compress, (bd["compress"], exp_compress)
-    assert bd["index"] == exp_index, (bd["index"], exp_index)
-    # overriding latent_dtype_bytes moves the ratio>1 stores (they share the fp32 width)
-    bd_bf16 = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv, latent_dtype_bytes=2)
-    assert bd_bf16["compress"] == cc2 * hd * 2 + cc1 * hd * 2
+    assert bd["compress"] == (cc2 + cc1) * hd * 4    # both fp32
+    assert bd["index"] == (cc2 + cc1) * ihd * 4
+    # window: layer 0 is model dtype (bf16=2), layers 1..N-1 fp32 (4)
+    phys = bd["phys_cap"]
+    exp_window = 2 * phys * hd * 2 + (cfg.num_hidden_layers - 1) * 2 * phys * hd * 4
+    assert bd["window"] == exp_window
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +761,7 @@ def test_window_formula_matches_steady_allocation_after_chunked_prefill(monkeypa
     live_window = sum(int(lc._window._bufs[0].nbytes) + int(lc._window._bufs[1].nbytes)
                       for lc in cache.layers)
     formula_window = C.kv_bytes_breakdown_at_max_kv(
-        cfg, 4096, window_dtype_bytes=4)["window"]
+        cfg, 4096, model_dtype_bytes=4, store_dtype_bytes=4)["window"]
     assert live_window == formula_window, (
         f"steady window bytes {live_window} != formula {formula_window}")
 
@@ -907,3 +907,44 @@ def test_full_trim_to_zero_no_realloc_via_cache(monkeypatch):
     for ln in ("compress", "index", "latent"):
         assert C.kv_bounded_stats()[f"kv_realloc_{ln}"] == reallocs[ln], (
             f"{ln} reallocated on trim-to-0")
+
+
+# ---------------------------------------------------------------------------
+# Review MEDIUM-A: the formula (defaults) matches alloc_bytes on a bf16 model
+# (layer-0 window bf16, everything else fp32) -- and the ab receipt gate.
+# ---------------------------------------------------------------------------
+def _tiny_model_bf16():
+    from mlx.utils import tree_flatten, tree_unflatten
+    model = _tiny_model()
+    new = [(n, a.astype(mx.bfloat16)) for n, a in tree_flatten(model.parameters())]
+    model.update(tree_unflatten(new))
+    mx.eval(model.parameters())
+    return model
+
+
+def test_medium_a_formula_matches_alloc_on_bf16_model(monkeypatch):
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "256")
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    model = _tiny_model_bf16()
+    C.reset_kv_bounded_stats()
+    cache = model.make_cache()
+    logits = model(mx.array([list(range(20))]), cache=cache); mx.eval(logits)
+    tok = int(mx.argmax(logits[0, -1]).item())
+    for _ in range(10):
+        logits = model(mx.array([[tok]]), cache=cache); mx.eval(logits)
+        tok = int(mx.argmax(logits[0, -1]).item())
+
+    alloc = C.kv_bounded_stats()["alloc_bytes"]
+    # DEFAULTS model the bf16 reality: layer-0 window bf16 (2), everything else fp32 (4)
+    formula = C.kv_bytes_at_max_kv(model.args, 256)
+    assert alloc == formula, f"alloc {alloc} != formula {formula} (bf16 model)"
+    # the ab-receipt gate is this equality (exact here: prefill 20 < window phys_cap,
+    # so no transient window grow -> exactly one ring init per layer, no compaction
+    # realloc; the counter is process-global across layers).
+    assert C.kv_bounded_stats()["kv_realloc_window"] == len(cache.layers)
+    # and the layer-0 window really is the only bf16 store
+    assert cache.layers[0]._window.raw_backing().dtype == mx.bfloat16
+    assert cache.layers[1]._window.raw_backing().dtype == mx.float32
+    assert cache.layers[2]._compress_kv.raw_backing().dtype == mx.float32

@@ -24,12 +24,14 @@ Cell dims (from the released config, `DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4`
 `num_hidden_layers=40`, `head_dim=512` (1 shared KV latent head), `sliding_window=128`,
 `index_head_dim=128`, `compress_ratios ∈ {0,1,2}`, `kv_source_layer_ids=[2,8,14,20]`
 with ratios `{2:2, 8:2, 14:2, 20:1}` (so **3** layers carry a ratio>1 compressor
-frontier; layer 20 is ratio 1). Per-lane dtype (review MEDIUM-2): the window store
-is bf16 (post-RoPE, follows `x`); the compressor frontier is **fp32** (`wkv`/`wgate`
-projected in fp32); and **compress_kv / index_k are fp32 on the ratio>1 source
-layers** (2/8/14 — the compressor pools in fp32 and RMSNorm/RoPE/the indexer preserve
-dtype) and bf16 only on the ratio==1 layer (20, a plain per-token projection that
-follows `x`).
+frontier; layer 20 is ratio 1). Per-lane dtype (review MEDIUM-A, measured on the
+bf16 model): **only the layer-0 window store is bf16**; every other store is **fp32**.
+Layer 0's post-attention o-LoRA einsum promotes the residual to fp32 (`_o_lora_down`:
+`o.astype(mx.float32)`) and it stays fp32 down the stack, so layers 1..39's window KV,
+every kv-source layer's compress_kv/index_k (ratio>1 pools in fp32; ratio==1 follows
+the now-fp32 residual), and the compressor frontier are all fp32. (This supersedes the
+round-1 MEDIUM-2 wording, which wrongly costed layers 1+ window and the ratio==1
+compress/index at bf16.)
 
 The five lanes David named map to the cache like this. "Growth strategy today" is
 what the **`cell16k_ring` arm actually runs** (W80 window ring on; W73 chunk-grow
@@ -38,17 +40,18 @@ off; the compressor frontier untouched by W80). "control" (shipped) is `_grow`
 
 | Lane | Cache field | Rows at cell | Bytes @ max_kv (bounded) | Growth **today** (cell16k_ring) | Per-token write | Alias that defeats donation |
 |------|-------------|--------------|--------------------------|--------------------------------|-----------------|-----------------------------|
-| **SWA ring** (window) | `LayerAttentionCache._window` | bounded to `cap_keep`=window+mv+slack ≈ 144 (phys_cap 208) | `2×208×512×2` ×40 = **17.0 MB** | W80 `_WindowRing`: bounded ping-pong, `slice_update` | **in place** (O(1)/tok) | `window_all = layer_cache.window` = `buf[:, :len]` **view**, held across the forward; on Metal a live view keeps `_buf` non-uniquely-referenced → `slice_update` copies instead of donating |
-| **compress store** | `LayerAttentionCache._compress_kv` (fp32 r2 / bf16 r1) | `ceil(max_kv/ratio)`: 8712 (r2) / 17416 (r1) | r2 **fp32** 17.8 MB ×3 + r1 bf16 17.8 MB = **71.4 MB** | W80 `_GrowBuffer` but `maxkv` **unset** in the arm → `init_cap=256` → **geometric doubling** | in place between doublings; each doubling copies the whole prefix (O(cap), O(log T) times) | `shared.compress_kv = layer_cache.compress_kv` (view) published to the group's Reuse/Reindex/Full layers; the indexer's full-store read holds it live |
-| **index store** | `LayerAttentionCache._index_k` (fp32 r2 / bf16 r1) | same rows as compress | r2 **fp32** 4.5 MB ×3 + r1 bf16 4.5 MB = **17.8 MB** | same as compress (geometric doubling) | same as compress | `shared.index_k = layer_cache.index_k` (view) |
+| **SWA ring** (window) | `LayerAttentionCache._window` (L0 bf16 / L1+ fp32) | bounded to `cap_keep`=window+mv+slack ≈ 144 (phys_cap 208) | L0 `2×208×512×2` + L1..39 `2×208×512×4` = **33.7 MB** | W80 `_WindowRing`: bounded ping-pong, `slice_update` | **in place** (O(1)/tok) | `window_all = layer_cache.window` = `buf[:, :len]` **view**, held across the forward; on Metal a live view keeps `_buf` non-uniquely-referenced → `slice_update` copies instead of donating |
+| **compress store** | `LayerAttentionCache._compress_kv` (fp32, all kv-src) | `ceil(max_kv/ratio)`: 8712 (r2) / 17416 (r1) | r2 **fp32** 17.8 MB ×3 + r1 fp32 35.7 MB = **89.2 MB** | W80 `_GrowBuffer` but `maxkv` **unset** in the arm → `init_cap=256` → **geometric doubling** | in place between doublings; each doubling copies the whole prefix (O(cap), O(log T) times) | `shared.compress_kv = layer_cache.compress_kv` (view) published to the group's Reuse/Reindex/Full layers; the indexer's full-store read holds it live |
+| **index store** | `LayerAttentionCache._index_k` (fp32, all kv-src) | same rows as compress | r2 **fp32** 4.5 MB ×3 + r1 fp32 8.9 MB = **22.3 MB** | same as compress (geometric doubling) | same as compress | `shared.index_k = layer_cache.index_k` (view) |
 | **main latent KV** (compressor frontier) | `CompressorState.raw_kv` / `raw_score` (fp32) | `n_fed` = **every fed token** (up to max_kv) | `2×17416×512×4` ×3 = **214.0 MB** | **`_grow` (concatenate) EVERY token** — untouched by W80 | **COPY, O(n_fed)/tok** = O(T²) over the cell (≈33.5 MB copied per token per layer at T=16384) | n/a — it is a genuine `concatenate`, not a `slice_update` at all |
 | **DSpark verify rows** | (write *pattern* into the four lanes above) | K+1 rows appended in one verify forward | — | one `append` of `n=K+1` rows via the lanes above | in place (ring/`_GrowBuffer` slice_update `n` rows) if the buffer has room; `concatenate` under the plain latent | inherits the source lane's alias |
 
-**Total bounded KV @ max_kv = 320.2 MB per sequence** (window 17.0 + compress 71.4 +
-index 17.8 + latent 214.0; fp32 latent + fp32 ratio>1 compress/index) — corrected
-from the pre-review 286.8 MB, which wrongly costed the ratio>1 compress/index at bf16
-(review MEDIUM-2). Storing the latent frontier bf16 would cut it to ~185.9 MB.
-Negligible vs the 110 GB box budget.
+**Total bounded KV @ max_kv = 359.2 MB per sequence** (window 33.7 + compress 89.2 +
+index 22.3 + latent 214.0; only layer-0 window is bf16, everything else fp32) —
+corrected across two review rounds from the original 286.8 MB (MEDIUM-2: ratio>1
+compress/index fp32) → 320.2 MB → **359.2 MB** (MEDIUM-A: layers 1+ window and
+ratio==1 compress/index are also fp32, from the fp32 residual). Storing every store
+bf16 would cut it to ~179.8 MB. Negligible vs the 110 GB box budget.
 
 **Findings.**
 1. The **main latent KV** (compressor frontier) is the one lane W80 never bounded:
@@ -152,45 +155,47 @@ the model config and `max_kv`, matching exactly what a bounded cache preallocate
 Formula (bytes, batch `B`, summed over layers `L`; `COMP_SLACK`/`LATENT_SLACK` = 8):
 
 ```
-window   (every layer)              2 · B · phys_cap · head_dim · window_dtype_bytes
+# per-layer store dtype (review MEDIUM-A, MEASURED): only layer-0 window is the
+# model compute dtype (bf16); every other store is fp32 (layer 0's o-LoRA einsum
+# promotes the residual to fp32 and it stays fp32 down the stack).
+w_bytes(L) = model_dtype_bytes if L == 0 else store_dtype_bytes
+window   (every layer)              2 · B · phys_cap · head_dim · w_bytes(L)
    phys_cap = window_size + max_verify + slack + headroom      # bounded, ⟂ max_kv
                                                                # (decode-steady; a wide
                                                                #  prefill chunk grows it
                                                                #  transiently then shrinks
                                                                #  back — review MEDIUM-1)
-comp_cap = ceil(max_kv / ratio) + COMP_SLACK
-   # per-layer store dtype (review MEDIUM-2): ratio>1 source layers pool in fp32, so
-   # their compress/index are fp32 (latent_dtype_bytes); ratio==1 follows x (bf16).
-   c_bytes = latent_dtype_bytes if ratio>1 else compress_dtype_bytes
-   i_bytes = latent_dtype_bytes if ratio>1 else index_dtype_bytes
-compress (kv_source L)              B · comp_cap · head_dim       · c_bytes
-index    (kv_source L)              B · comp_cap · index_head_dim · i_bytes
-latent   (kv_source L, ratio>1)     2 · B · latent_cap · head_dim · latent_dtype_bytes
+comp_cap = ceil(max_kv / ratio) + COMP_SLACK                   # compress/index all fp32
+compress (kv_source L)              B · comp_cap · head_dim       · store_dtype_bytes
+index    (kv_source L)              B · comp_cap · index_head_dim · store_dtype_bytes
+latent   (kv_source L, ratio>1)     2 · B · latent_cap · head_dim · store_dtype_bytes
    latent_cap = max_kv + LATENT_SLACK
 total = Σ_L (window + compress + index + latent)
 ```
 
-`*_dtype_bytes` default to the runtime dtypes (bf16 stores = 2 that follow `x`, fp32
-compressor frontier + fp32 ratio>1 compress/index = 4); pass measured widths for a
-specific build. The window term is **independent of `max_kv`** — the win of the
-sliding-window ring: KV does not grow with context except through the
-compress/index/latent lanes.
+`model_dtype_bytes` defaults to 2 (the released bf16 model); `store_dtype_bytes` to 4
+(fp32). An all-fp32 run is just `model_dtype_bytes == store_dtype_bytes == 4`. The
+window term is **independent of `max_kv`** — the win of the sliding-window ring: KV
+does not grow with context except through the compress/index/latent lanes.
 
 At the cell (`max_kv=17408`, default dtypes):
 
 | Lane | Bytes |
 |------|-------|
-| window | 17.0 MB |
-| compress | 71.4 MB |
-| index | 17.8 MB |
+| window (L0 bf16, L1..39 fp32) | 33.7 MB |
+| compress (fp32) | 89.2 MB |
+| index (fp32) | 22.3 MB |
 | latent (fp32) | 214.0 MB |
-| **total** | **320.2 MB** |
+| **total** | **359.2 MB** |
 
-(latent stored bf16 would drop the total to ~185.9 MB — a future lever, §6.)
+(every store bf16 would drop the total to ~179.8 MB — a future lever, §6.)
 
 The test asserts this formula equals the bytes the bounded cache actually allocates
-(`alloc_bytes`), lane for lane, and that the decode-steady window allocation (after
-the MEDIUM-1 shrink-back) equals the formula's window term (§5).
+(`alloc_bytes`) on a **bf16 tiny model** with the defaults (review MEDIUM-A), lane for
+lane; the ab receipt stamps `kv_bounded.formula_matches_alloc` so a dtype-model drift
+is caught at runtime (exact iff `kv_realloc_window == num_layers`, i.e. no transient
+prefill grow — a chunked prefill grows-then-shrinks the window, MEDIUM-1, so the
+cumulative `alloc_bytes` then exceeds the steady formula).
 
 ---
 
