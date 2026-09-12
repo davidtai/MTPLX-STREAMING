@@ -4806,6 +4806,14 @@ class ExpertStreamingRuntime:
         _awaited = int(cache.get("prefetch_awaited_inflight", 0))
         _committed_settled = _committed + _awaited
         _hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        # W95g (review MEDIUM-2): ``prefetch_hit_on_true_route`` counts EVERY
+        # consumption of a prefetched record, so a resident ring record re-consumed
+        # across tokens makes ``prefetch_hit_rate`` (hit / committed+awaited) exceed
+        # 1.0. ``prefetch_first_consumption_hits`` counts each record's hit at most
+        # once, and ``prefetch_first_hit_rate`` = it / records ISSUED is bounded
+        # [0,1]. Both keys are ADDED; ``prefetch_hit_rate`` keeps its meaning.
+        _first_hit = int(cache.get("prefetch_first_consumption_hits", 0))
+        _issued = int(cache.get("prefetch_issued", 0))
         # per-decode-token normalisations. ``decode_steps`` is the W87 decode-step
         # index (one full routed-layer sweep == one token under --decode-mode ar).
         _steps = int(cold_start.get("decode_steps_observed", 0))
@@ -4843,17 +4851,26 @@ class ExpertStreamingRuntime:
             "hit_rate": float(cache.get("hit_rate", 0.0)),
             "demand_bytes_read": _demand,
             "speculative_bytes_read": _spec,
-            "prefetch_issued": int(cache.get("prefetch_issued", 0)),
+            "prefetch_issued": _issued,
             "prefetch_hit_on_true_route": _hit,
             "prefetch_wasted": int(cache.get("prefetch_wasted", 0)),
             "prefetch_bytes": int(cache.get("prefetch_bytes", 0)),
             "pool_promotions": int(cache.get("promotions", 0)),
             "pool_loads": int(cache.get("pool_loads", 0)),
             # committed+awaited denominator + the derived prefetch hit rate.
+            # NOTE (W95g MEDIUM-2): this key counts every consumption in the
+            # numerator and CAN exceed 1.0; use ``prefetch_first_hit_rate`` below for
+            # the bounded [0,1] rate. Kept unchanged for continuity (existing key).
             "prefetch_committed": _committed_settled,
             "prefetch_awaited_inflight": _awaited,
             "prefetch_hit_rate": (
                 _hit / _committed_settled if _committed_settled else 0.0
+            ),
+            # W95g (review MEDIUM-2): first-consumption hits (each prefetched record
+            # counted at most once) and the bounded [0,1] rate over records issued.
+            "prefetch_first_consumption_hits": _first_hit,
+            "prefetch_first_hit_rate": (
+                _first_hit / _issued if _issued else 0.0
             ),
             # per-decode-token normalisations (the window targets are per token).
             "decode_steps": _steps,
@@ -4883,6 +4900,11 @@ class ExpertStreamingRuntime:
         committed = int(cache.get("prefetch_committed", 0))
         awaited = int(cache.get("prefetch_awaited_inflight", 0))
         hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        issued = int(cache.get("prefetch_issued", 0))
+        # W95g (review MEDIUM-2): first-consumption hits (each record at most once).
+        # ``hit_rate`` below counts every consumption in its numerator and can exceed
+        # 1.0; ``first_hit_rate`` = first_consumption_hits / issued is bounded [0,1].
+        first_hit = int(cache.get("prefetch_first_consumption_hits", 0))
         bytes_prefetched = int(cache.get("prefetch_bytes", 0))
         # W93 MED-b: an awaited-inflight commit is a ring read that SETTLED and
         # PUBLISHED — the demand route blocked on the in-flight read and committed
@@ -4912,9 +4934,10 @@ class ExpertStreamingRuntime:
             "k": int(self.config.prefetch_slots),
             "min_layer": min_layer,
             "predicted": int(cache.get("prefetch_predicted", 0)),
-            "issued": int(cache.get("prefetch_issued", 0)),
+            "issued": issued,
             "committed": committed_settled,
             "hit_on_true_route": hit,
+            "first_consumption_hits": first_hit,
             "wasted": int(cache.get("prefetch_wasted", 0)),
             "awaited_inflight": awaited,
             "dropped_no_slot": dropped_no_slot,
@@ -4922,12 +4945,15 @@ class ExpertStreamingRuntime:
             "skipped_backlog": skipped_backlog,
             "bytes_prefetched": bytes_prefetched,
             "hit_rate": (hit / committed_settled) if committed_settled else 0.0,
+            "first_hit_rate": (first_hit / issued) if issued else 0.0,
         }
         per_layer: dict[str, Any] = {}
         for layer, lc in cache_by_layer.items():
             lcommitted = int(lc.get("prefetch_committed", 0))
             lawaited = int(lc.get("prefetch_awaited_inflight", 0))
             lhit = int(lc.get("prefetch_hit_on_true_route", 0))
+            lfirst_hit = int(lc.get("prefetch_first_consumption_hits", 0))
+            lissued = int(lc.get("prefetch_issued", 0))
             ldropped = int(skips["dropped_no_slot"].get(int(layer), 0))
             lskip_lock = int(skips["skipped_lock_held"].get(int(layer), 0))
             lskip_backlog = int(skips["skipped_backlog"].get(int(layer), 0))
@@ -4943,21 +4969,24 @@ class ExpertStreamingRuntime:
             lcommitted_settled = lcommitted + lawaited
             per_layer[str(layer)] = {
                 "predicted": int(lc.get("prefetch_predicted", 0)),
-                "issued": int(lc.get("prefetch_issued", 0)),
+                "issued": lissued,
                 "committed": lcommitted_settled,
                 "hit_on_true_route": lhit,
+                "first_consumption_hits": lfirst_hit,
                 "wasted": int(lc.get("prefetch_wasted", 0)),
                 "awaited_inflight": lawaited,
                 "dropped_no_slot": ldropped,
                 "skipped_lock_held": lskip_lock,
                 "skipped_backlog": lskip_backlog,
                 "hit_rate": (lhit / lcommitted_settled) if lcommitted_settled else 0.0,
+                "first_hit_rate": (lfirst_hit / lissued) if lissued else 0.0,
             }
         block["per_layer"] = per_layer
         block["census"] = (
             f"gate_prefetch k={block['k']} min_layer={min_layer}: "
             f"predicted={block['predicted']} issued={block['issued']} "
             f"committed={committed_settled} hit={hit} (rate {block['hit_rate']:.3f}) "
+            f"first_hit={first_hit} (rate {block['first_hit_rate']:.3f}) "
             f"wasted={block['wasted']} awaited={awaited} "
             f"dropped={dropped_no_slot} skipped_lock={skipped_lock_held} "
             f"skipped_backlog={skipped_backlog} "

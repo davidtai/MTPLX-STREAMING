@@ -552,6 +552,37 @@ reference's by the same) so both plans size the identical `slots_per_layer`.
 planner — should be ~0 except at the boundary); decode hit rate first-64 vs steady (W87
 `cold_start`). One flush = one batched `mx.eval` (assert the "+1").
 
+#### 6.5.1 Definitions — prefetch hit accounting (W95g, review MEDIUM-2)
+
+One definition per metric, defined once. A committed ring record stays published
+across tokens, so `RoutePlan.published` re-lists it on every routing step that needs
+it; the two hit counters differ in whether a re-consumption of the *same* resident
+record is re-counted.
+
+- **`prefetch_issued`** — speculative reads started for the ring (records handed to
+  the ring that issued a read). The denominator of `prefetch_first_hit_rate`.
+- **`prefetch_hit_on_true_route`** (runner block; `hit_on_true_route` in the
+  `gate_prefetch` block) — the number of *consumptions* of a ring record by a true
+  route, counted **every** time (a record routed on N tokens counts N). Unchanged
+  from W93. Because a committed record commits once but can be consumed many times,
+  this **can exceed** the records committed/issued.
+- **`prefetch_hit_rate`** (runner block; `hit_rate` in `gate_prefetch`) —
+  `prefetch_hit_on_true_route / (prefetch_committed + prefetch_awaited_inflight)`.
+  Unchanged existing key; with the every-consumption numerator it **can exceed 1.0**
+  (the MEDIUM-2 finding). Retained for continuity — do not read it as a bounded rate.
+- **`prefetch_first_consumption_hits`** (runner; `first_consumption_hits` in
+  `gate_prefetch`) — *new.* Consumptions counted at most **once per prefetched
+  record**: a record's hit is counted the first routing step it is consumed and never
+  again until it is evicted/invalidated (which requires a re-commit, i.e. a fresh
+  `prefetch_issued`, to be consumable again).
+- **`prefetch_first_hit_rate`** (runner; `first_hit_rate` in `gate_prefetch`) —
+  *new.* `prefetch_first_consumption_hits / prefetch_issued`, **bounded [0, 1]** by
+  construction (each issued record yields at most one first-consumption hit). This is
+  the metric to read for prefetch precision; `prefetch_hit_rate` above is not bounded.
+
+The `gate_prefetch` block reports `first_consumption_hits` / `first_hit_rate` per
+layer as well, and its `census` line prints `first_hit=<n> (rate <r>)`.
+
 ### 6.6 Integration/sequencing note (must resolve before coding)
 
 The four W93 lanes (A/B/C/D) are committed on `a5e162ee5` — a **rewrite** of
@@ -619,3 +650,20 @@ of real kernel work that drains during them); **60–110 ms** is serialized SSD 
 serialization (D2), and stops discarding 68% of the bytes (D5) — these are the recoverable
 ms behind the AR 2.2 → ~4–6 tok/s and the DSpark verify collapse. The kernel work and the
 compulsory bytes are the floor (§7).
+
+---
+
+## Review-fix changelog (W95F/W95G, adversarial re-review — MERGE WITH FIXES)
+
+- **HIGH-1 (byte budget throttling).** Speculative-byte budget = per-token share `f`
+  with a floor (default `f=0.85`, floor 8 records; `MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET=0`
+  disables). See the §1.3 budget paragraph. (b9d3b0a3f)
+- **MEDIUM-1 (reset window).** `reset()` zeroes the demand/speculative byte window and
+  the budget-skip / prefetch-call counters, then re-marks the window. (e8e79da97)
+- **MEDIUM-2 (hit rate > 1.0).** `prefetch_hit_on_true_route` counts every consumption
+  of a resident ring record, so `prefetch_hit_rate` could exceed 1.0. Added a
+  first-consumption counter (`prefetch_first_consumption_hits`, each prefetched record
+  counted at most once) and a bounded [0,1] `prefetch_first_hit_rate = first-consumption
+  hits / prefetch_issued`, on both the runner and `gate_prefetch` receipt blocks (and
+  per-layer). The existing `prefetch_hit_rate` / `prefetch_hit_on_true_route` keys are
+  kept unchanged for continuity. Definitions in §6.5.1.

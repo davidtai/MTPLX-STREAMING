@@ -829,3 +829,120 @@ def test_v2_receipt_survives_malformed_margin(monkeypatch, tmp_path):
         assert rt.snapshot()["runner"]["prefetch_margin"] == _RUNNER_V2_GATE_PREFETCH_MARGIN
     finally:
         rt.close()
+
+
+# ---------------------------------------------------------------------------
+# E. review MEDIUM-2: first-consumption prefetch hit rate (bounded [0,1])
+# ---------------------------------------------------------------------------
+def _warm_ring_two_records(tmp_path):
+    """Open a v2 runtime, warm two persistent residents, then issue + settle two
+    speculative reads (experts 6, 7) so a later route of {6, 7} is a RING hit.
+    Returns (rt, spec, layer)."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, resident_slots=2, transient=8, prefetch=6
+    )
+    _route_once(rt, spec, [0, 1])                       # warm two pool residents
+    layer = spec.routed_layer_start
+    rt.prefetch_experts(layer, [6, 7])                  # issue two speculative reads
+    _settle_prefetch(rt)
+    return rt, spec, layer
+
+
+def test_v2_prefetch_first_hit_rate_bounded_under_repeat(tmp_path):
+    """Review MEDIUM-2: ``prefetch_hit_on_true_route`` counts EVERY consumption of a
+    prefetched record, so routing the same two ring-resident experts N times makes
+    the every-consumption ``prefetch_hit_rate`` (hit / committed+awaited) climb well
+    past 1.0.  The added first-consumption counter counts each record's hit AT MOST
+    ONCE, so ``prefetch_first_hit_rate`` (first-consumption hits / records issued)
+    stays in [0, 1] no matter how often the same record is re-consumed."""
+    rt, spec, _ = _warm_ring_two_records(tmp_path)
+    try:
+        sw = _switch(rt, spec)
+        N = 5
+        for _ in range(N):
+            x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+            _REAL_EVAL(sw(x, idx))                      # ring hit on {6, 7}
+            rt.flush_deferred_slot_releases(evaluate=True)
+        c = rt.counters
+        # every-consumption numerator grew with N (2 records x N routes)...
+        assert c.prefetch_hit_on_true_route == 2 * N
+        # ...but first-consumption counts each of the 2 records exactly once.
+        assert c.prefetch_first_consumption_hits == 2
+        assert c.prefetch_first_consumption_hits <= c.prefetch_issued  # bound holds
+        assert c.prefetch_hit_on_true_route > c.prefetch_first_consumption_hits
+
+        block = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        # the OLD key is the MEDIUM-2 pathology -- it exceeds 1.0 here (kept as-is)...
+        assert block["prefetch_hit_rate"] > 1.0
+        # ...the NEW key is bounded [0, 1] by construction.
+        assert 0.0 <= block["prefetch_first_hit_rate"] <= 1.0
+        assert block["prefetch_first_hit_rate"] == 1.0        # 2 first-hits / 2 issued
+        # the gate_prefetch block carries the same fix.
+        gp = rt.resource_telemetry_snapshot(mx_module=mx)["gate_prefetch"]
+        assert gp["hit_rate"] > 1.0
+        assert 0.0 <= gp["first_hit_rate"] <= 1.0
+    finally:
+        rt.close()
+
+
+def test_v2_prefetch_first_consumption_counted_once(tmp_path):
+    """First-consumption counting: the first route of a ring-resident record bumps
+    ``prefetch_first_consumption_hits``; every LATER route of the SAME resident
+    record bumps only the every-consumption ``prefetch_hit_on_true_route`` and
+    leaves the first-consumption counter unchanged."""
+    rt, spec, _ = _warm_ring_two_records(tmp_path)
+    try:
+        sw = _switch(rt, spec)
+        # first consumption of {6, 7}.
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+        _REAL_EVAL(sw(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        first_after_1 = rt.counters.prefetch_first_consumption_hits
+        every_after_1 = rt.counters.prefetch_hit_on_true_route
+        assert first_after_1 == 2          # both records first-consumed once
+        assert every_after_1 == 2
+
+        # second consumption of the SAME records: every-consumption grows,
+        # first-consumption does NOT (the record was already marked used).
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+        _REAL_EVAL(sw(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        assert rt.counters.prefetch_first_consumption_hits == first_after_1  # unchanged
+        assert rt.counters.prefetch_hit_on_true_route == every_after_1 + 2   # grew
+    finally:
+        rt.close()
+
+
+def test_v2_receipt_has_first_hit_stamps(tmp_path):
+    """The runner and gate_prefetch receipt blocks (and the served daemon's
+    stream-counter passthrough) carry the review MEDIUM-2 additions -- the
+    first-consumption hit counter and the bounded [0, 1] first-hit rate -- as NEW
+    keys alongside the unchanged every-consumption ``hit_rate``."""
+    from mtplx.serve_stream_counters import snapshot_stream_counters
+
+    rt, spec, _ = _warm_ring_two_records(tmp_path)
+    try:
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+        _REAL_EVAL(_switch(rt, spec)(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+
+        snap = rt.resource_telemetry_snapshot(mx_module=mx)
+        runner = snap["runner"]
+        for key in ("prefetch_first_consumption_hits", "prefetch_first_hit_rate"):
+            assert key in runner, f"runner block missing {key}"
+        assert "prefetch_hit_rate" in runner  # old key kept (distinct semantics)
+        assert 0.0 <= runner["prefetch_first_hit_rate"] <= 1.0
+
+        gp = snap["gate_prefetch"]
+        for key in ("first_consumption_hits", "first_hit_rate"):
+            assert key in gp, f"gate_prefetch block missing {key}"
+        assert "hit_rate" in gp  # old key kept
+        assert 0.0 <= gp["first_hit_rate"] <= 1.0
+        assert "first_hit=" in gp["census"]  # self-describing census line
+
+        # the daemon's stream-counter path surfaces the new keys on both blocks.
+        ssc = snapshot_stream_counters(rt)
+        assert "prefetch_first_hit_rate" in ssc["runner"]
+        assert "first_hit_rate" in ssc["gate_prefetch"]
+    finally:
+        rt.close()
