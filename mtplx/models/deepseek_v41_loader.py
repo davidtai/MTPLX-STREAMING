@@ -370,11 +370,10 @@ def build_streaming_config(
     # config fields, so open-time verification stays on regardless
     # (docs/deepseek-v41/W110_DECODE_RECORD_HASH.md).
     _vrh_env = os.environ.get("MTPLX_DSV41_VERIFY_RECORD_HASHES")
-    if _vrh_env is not None and _vrh_env != "":
-        overrides["verify_record_hashes"] = _vrh_env not in (
+    if _vrh_env is not None and _vrh_env.strip() != "":
+        overrides["verify_record_hashes"] = _vrh_env.strip().lower() not in (
             "0",
             "false",
-            "False",
             "no",
             "off",
         )

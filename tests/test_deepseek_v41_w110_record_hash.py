@@ -143,6 +143,26 @@ def test_env_empty_string_is_treated_as_unset(monkeypatch):
     assert _cfg().verify_record_hashes is True
 
 
+def test_env_whitespace_only_is_treated_as_unset(monkeypatch):
+    monkeypatch.setenv(_VRH_ENV, "   ")
+    assert _cfg(verify_record_hashes=True).verify_record_hashes is True
+    assert _cfg(verify_record_hashes=False).verify_record_hashes is False
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("0", False), ("FALSE", False), (" False ", False), ("No", False), ("OFF", False),
+        ("1", True), ("TRUE", True), (" true ", True), ("Yes", True), ("on", True),
+    ],
+)
+def test_env_parse_is_case_insensitive_and_stripped(monkeypatch, raw, expected):
+    monkeypatch.setenv(_VRH_ENV, raw)
+    # env is authoritative and parsed .strip().lower(), so it overrides the opposite
+    # explicit caller value regardless of case/whitespace.
+    assert _cfg(verify_record_hashes=not expected).verify_record_hashes is expected
+
+
 def test_lever_does_not_touch_admission_open_integrity_fields(monkeypatch):
     """The lever is DECODE-path only: with hashing forced off, the open/admission
     integrity fields (verify_artifact_headers / verify_sidecar_hash_at_open) keep
