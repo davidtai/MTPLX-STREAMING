@@ -37,6 +37,14 @@
 # which reaps the process group and leaves qwen down.  Do NOT stop the launching
 # agent mid-window (it kills this wrapper AND its lock holder).
 #
+# W106 MEDIUM-3 launcher pattern: chain multiple windows / arms with `&&`, NEVER
+# `;`.  A step that aborts exits non-zero (the ab harness exits 4 at the FIRST arm
+# that aborts); with `;` the chain would re-open a window and re-abort every later
+# step, and the launcher would report only the LAST rc.  With `&&` the first
+# non-zero rc stops the chain and is the reported rc.  To abort a running window by
+# hand, `kill -TERM` the pid this wrapper prints at start ("abort:" line) -- the
+# bash gpu_window.sh, NOT its parent python lock-holder (which ignores signals).
+#
 # Borrowed shape:
 #   - lock path + fcntl advisory lock:     mtplx/qwen_guard.py:27,408 (LOCK_EX)
 #   - bootout (not kickstart) / bootstrap: mtplx/qwen_guard.py:1136,1078
