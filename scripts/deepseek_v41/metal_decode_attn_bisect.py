@@ -1207,7 +1207,7 @@ def print_in_model(receipt: dict) -> None:
 
 
 def _unfenced_decode_pass(*, ab, model, ops, prompt_ids, steps, warmup_steps=8,
-                          cooldown_s=0.0, util_sampler=None):
+                          cooldown_s=0.0, util_sampler=None, arm_route_probe=False):
     """One UNFENCED in-situ decode pass.
 
     Prefill once (untimed for the per-step table -- its wall is TTFT), then run
@@ -1218,7 +1218,19 @@ def _unfenced_decode_pass(*, ab, model, ops, prompt_ids, steps, warmup_steps=8,
     perturbs the measurement), the decoded ids, the decode-scoped expert-streaming
     counter delta (prefill excluded), and -- via ``util_sampler`` entered over the
     decode loop -- the macmon telemetry.  Mirrors ab._generate's classic argmax loop
-    exactly, so pass (1)'s ids are the served-path ids."""
+    exactly, so pass (1)'s ids are the served-path ids.
+
+    ``arm_route_probe`` (window-94, pass (1) only): arm the route-stage probe over
+    the decode loop so the pass records the DECODE ``mx.eval(indices)`` barrier time
+    DIRECTLY -- the ``hot.eval_indices`` sum the ledger prices at ~40/token -- so
+    window-38's receipt carries the eval(indices) time.  The probe's ``bracket``
+    only wraps the ``mx.eval`` the production switch already runs with a
+    ``perf_counter`` (it does NOT add a fence), so the frame wall is unperturbed, and
+    it does NOT force the eager path (that is gated on ``stime.recording()``, not the
+    route probe).  Cleared HERE, immediately before the before-snapshot and nowhere
+    between it and the after-snapshot, so the recorded sums/counts ARE the exact
+    decode deltas (baseline 0), never negative -- the same discipline as the
+    ab_decode_env_levers._generate fix."""
     from mtplx.models import deepseek_v41_stage_timing as stime
     # No stage session may be armed: an armed probe forces the eager attention / HC
     # path (recording() gates _attn_use_compile / _hc_use_compile), which would
@@ -1238,22 +1250,49 @@ def _unfenced_decode_pass(*, ab, model, ops, prompt_ids, steps, warmup_steps=8,
     if cooldown_s and float(cooldown_s) > 0:
         cooldown_block = ab._macmon().cooldown(float(cooldown_s), label="w94-unfenced")
 
+    # W94: arm + CLEAR the route-stage probe here -- immediately before the
+    # before-snapshot and nowhere between it and the after-snapshot -- so the decode
+    # route_probe sums/counts are the exact decode deltas (baseline 0, no negatives).
+    _rp = None
+    _rp_prev_enabled = None
+    route_probe_counts = None
+    route_probe_sums_ns = None
+    if arm_route_probe:
+        try:
+            from mtplx import expert_route_probe as _rp
+            _rp_prev_enabled = _rp.ENABLED
+            _rp.ENABLED = True
+            _rp._SUMS.clear()
+            _rp._COUNTS.clear()
+        except Exception:
+            _rp = None
+
     # Decode-scoped expert-streaming counter bracket (prefill excluded, so the hit
     # rate / bytes are the DECODE traffic, not the cold prefill first-touch).
     sc_before = ab._stream_counters_snapshot(model)
 
     _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
     step_ns: List[int] = []
-    with _util_cm:  # macmon sampled over the DECODE loop only
-        decode_start = time.perf_counter()
-        for _ in range(int(steps)):
-            s0 = time.perf_counter_ns()
-            logits = model(ops.input([[token]]), cache=cache)
-            ops.sync(logits)                 # the one production per-token eval
-            token = ops.argmax_last(logits)  # host read of the next-token id
-            step_ns.append(time.perf_counter_ns() - s0)
-            generated.append(token)
-        decode_wall_s = time.perf_counter() - decode_start
+    try:
+        with _util_cm:  # macmon sampled over the DECODE loop only
+            decode_start = time.perf_counter()
+            for _ in range(int(steps)):
+                s0 = time.perf_counter_ns()
+                logits = model(ops.input([[token]]), cache=cache)
+                ops.sync(logits)                 # the one production per-token eval
+                token = ops.argmax_last(logits)  # host read of the next-token id
+                step_ns.append(time.perf_counter_ns() - s0)
+                generated.append(token)
+            decode_wall_s = time.perf_counter() - decode_start
+    finally:
+        # Baseline was cleared before the before-snapshot, so these ARE the exact
+        # decode deltas.  Restore ENABLED even if the decode raised (never leave the
+        # module armed for the rest of the process).
+        if _rp is not None:
+            route_probe_counts = {k: int(v) for k, v in dict(_rp._COUNTS).items()}
+            route_probe_sums_ns = {k: int(v) for k, v in dict(_rp._SUMS).items()}
+            if _rp_prev_enabled is not None:
+                _rp.ENABLED = bool(_rp_prev_enabled)
     sc_after = ab._stream_counters_snapshot(model)
 
     stream = None
@@ -1274,6 +1313,8 @@ def _unfenced_decode_pass(*, ab, model, ops, prompt_ids, steps, warmup_steps=8,
         "stream": stream,
         "cooldown": cooldown_block,
         "warmup_steps": int(warmup_steps),
+        "route_probe_counts": route_probe_counts,
+        "route_probe_sums_ns": route_probe_sums_ns,
     }
 
 
@@ -1365,6 +1406,11 @@ def _unfenced_attribution(passes: dict, *, ssd_bandwidth_gibs: float) -> dict:
         "switch_total_ms_per_token": switch_total,
         "switch_ssd_bound_ms_per_token": ssd_bound,
         "switch_sync_barrier_ms_per_token": sync_barrier,
+        # W94: the eval(indices) barrier time measured DIRECTLY on pass (1) (route
+        # probe hot.eval_indices sum / steps) -- an independent cross-check of the
+        # sync/barrier delta (2)-(4).  None off the streamed runtime (e.g. --tiny).
+        "eval_indices_ms_per_token_measured": full_summary.get("eval_indices_ms_per_token"),
+        "eval_indices_barriers_per_token": full_summary.get("eval_indices_barriers_per_token"),
         "small_stages_floor_ms_per_token": small_stages,
         "sum_of_parts_ms_per_token": sop,
         "unattributed_residual_ms_per_token": residual,
@@ -1408,17 +1454,31 @@ def run_in_model_unfenced(cfg: dict) -> dict:
     util_on = bool(cfg.get("utilization", False))
     util_interval_ms = int(cfg.get("util_interval_ms", 2000))
 
-    def _run_pass(label, *, cooldown_s=0.0):
+    def _run_pass(label, *, cooldown_s=0.0, arm_route_probe=False):
         sampler = (ab._macmon().UtilizationSampler(interval_ms=util_interval_ms)
                    if util_on else None)
         data = _unfenced_decode_pass(
             ab=ab, model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
             warmup_steps=warmup_steps, cooldown_s=cooldown_s, util_sampler=sampler,
+            arm_route_probe=arm_route_probe,
         )
         util_summary = sampler.summarize() if sampler is not None else None
         if sampler is not None:
             print(f"[w94-unfenced] {label}: {sampler.census()}", flush=True)
         summary = _unfenced_pass_summary(data, util_summary, ssd_bandwidth_gibs=ssd_bw)
+        # W94: the DECODE eval(indices) barrier time (hot.eval_indices sum), summed
+        # over the pass and divided by steps -- the per-token routing-barrier time,
+        # measured directly (armed on pass (1) only).
+        sums = data.get("route_probe_sums_ns") or {}
+        counts = data.get("route_probe_counts") or {}
+        eval_ns = sums.get("hot.eval_indices")
+        summary["eval_indices_ms_per_token"] = (
+            (eval_ns / 1e6 / max(1, int(steps))) if isinstance(eval_ns, (int, float)) else None
+        )
+        summary["eval_indices_barriers_per_token"] = (
+            (counts.get("hot.eval_indices") / max(1, int(steps)))
+            if isinstance(counts.get("hot.eval_indices"), (int, float)) else None
+        )
         return {
             "label": label,
             "summary": summary,
@@ -1429,6 +1489,9 @@ def run_in_model_unfenced(cfg: dict) -> dict:
             ).hexdigest(),
             "n_token_ids": len(data["generated"]),
             "token_ids": list(data["generated"]),
+            # W94: exact decode-scoped route-stage deltas (pass (1) only; None else).
+            "route_probe_counts": data.get("route_probe_counts"),
+            "route_probe_sums_ns": data.get("route_probe_sums_ns"),
         }
 
     passes: Dict[str, dict] = {}
@@ -1442,8 +1505,14 @@ def run_in_model_unfenced(cfg: dict) -> dict:
             saved.append(_apply_stub(model, "attn"))
         try:
             # Pass (1) alone carries the cooldown before its timed decode (matching
-            # the fenced full pass); the stub passes reuse the already-warm state.
-            passes[key] = _run_pass(label, cooldown_s=(cooldown_s if key == "full" else 0.0))
+            # the fenced full pass) AND arms the route probe to record the eval(indices)
+            # barrier time directly; the stub passes reuse the already-warm state and
+            # never run the real switch, so its barrier is theirs to skip.
+            passes[key] = _run_pass(
+                label,
+                cooldown_s=(cooldown_s if key == "full" else 0.0),
+                arm_route_probe=(key == "full"),
+            )
         finally:
             for s in reversed(saved):
                 _restore_stub(s)
@@ -1477,6 +1546,10 @@ def run_in_model_unfenced(cfg: dict) -> dict:
         "token_ids_sha256": passes["full"].get("token_ids_sha256"),
         "n_token_ids": passes["full"].get("n_token_ids"),
         "token_ids": passes["full"].get("token_ids"),
+        # W94: pass (1)'s exact decode-scoped route-stage deltas (cleared before the
+        # before-snapshot, so non-negative) -- window-38's eval(indices) time direct.
+        "route_probe_counts": passes["full"].get("route_probe_counts"),
+        "route_probe_sums_ns": passes["full"].get("route_probe_sums_ns"),
         "passes": passes,
         "attribution": attribution,
     }
@@ -1526,7 +1599,9 @@ def print_in_model_unfenced(receipt: dict) -> None:
           f"= bytes/tok {_f(a['bytes_read_per_token'], '{:.0f}')} / {a['ssd_bandwidth_gibs']} GiB/s;"
           f" misses/tok={_f(a['misses_per_token'], '{:.2f}')} hit={_f(a['hit_rate'], '{:.3f}')}]")
     print(f"    of which sync/barrier (2)-(4) = {_f(a['switch_sync_barrier_ms_per_token'], '{:.3f}')}"
-          f"   (~40 host syncs/token)")
+          f"   (~40 host syncs/token; eval(indices) measured direct on (1) = "
+          f"{_f(a.get('eval_indices_ms_per_token_measured'), '{:.3f}')} ms/tok over "
+          f"{_f(a.get('eval_indices_barriers_per_token'), '{:.1f}')} barriers/tok)")
     print(f"  small stages floor     (5)     = {_f(a['small_stages_floor_ms_per_token'], '{:.3f}')}")
     print("  " + "-" * 44)
     print(f"  sum of parts (attn+switch+floor) = {_f(a['sum_of_parts_ms_per_token'], '{:.3f}')}")

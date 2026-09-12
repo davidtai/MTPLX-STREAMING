@@ -1443,17 +1443,20 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     cooldown_block = None
     if cooldown_s and float(cooldown_s) > 0:
         cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
-    # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
-    # excluded so the hit rate is the decode hit rate).
-    _sc_after_prefill = _stream_counters_snapshot(model)
-    extra_forward_steps = 0
-
     # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
     # loop (prefill excluded) so the receipt reports per-layer host syncs
     # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
     # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
     # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
-    # module even if the launch env did not; counters cleared to scope to decode.
+    # module even if the launch env did not.
+    # W94: clear the probe counters HERE -- immediately BEFORE the after_prefill
+    # ("before") snapshot below, and NOWHERE between it and the end snapshot -- so the
+    # DECODE-scoped route_probe_counts / route_probe_sums_ns delta (end - after_prefill,
+    # computed in _stream_counters_block via serve_stream_counters.stream_counters_delta)
+    # is EXACT.  The old order cleared AFTER the before-snapshot, so "before" still held
+    # the prefill accumulation while "after" held decode-only; stages the prefill
+    # dominates (e.g. hot.begin_split_route) then deltaed NEGATIVE, making the
+    # "eval(indices) time" a lower bound only (window-37 ar-ring-ref sums_ns).
     _route_probe = None
     _route_prev_enabled = None
     if stage_timing:
@@ -1466,6 +1469,12 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             _route_probe._COUNTS.clear()
         except Exception:
             _route_probe = None
+
+    # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
+    # excluded so the hit rate is the decode hit rate).  Taken AFTER the route-probe
+    # clear above, so its route_probe_* baseline is zero and the decode delta is exact.
+    _sc_after_prefill = _stream_counters_snapshot(model)
+    extra_forward_steps = 0
 
     _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
     # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
