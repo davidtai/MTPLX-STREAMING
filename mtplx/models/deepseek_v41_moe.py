@@ -117,7 +117,7 @@ def _gate_prefix(gate):
     return _compiled(key, lambda: (lambda x, weight, bias: _gate_prefix_impl(x, weight, bias, temp, sf)))
 
 
-def gate_predict_topk(gate: "Gate", x: mx.array, k: int) -> mx.array:
+def gate_predict_topk(gate: "Gate", x: mx.array, k: int, margin: float = 0.0) -> mx.array:
     """W93 gate-oracle prefetch prediction: the SET of the top-``k`` expert ids
     layer L's router assigns to input ``x``, using the port's EXACT routing
     transform.
@@ -169,8 +169,23 @@ def gate_predict_topk(gate: "Gate", x: mx.array, k: int) -> mx.array:
         )
     width = int(biased.shape[-1])
     k = max(1, min(int(k), width))
-    part = mx.argpartition(-biased, kth=k - 1, axis=-1)[..., :k]
-    return part.astype(mx.int32)
+    part = mx.argpartition(-biased, kth=k - 1, axis=-1)[..., :k].astype(mx.int32)
+    if margin:
+        # W95 confidence gate (retune): keep only candidates whose score is
+        # >= (the top-6 boundary score) - ``margin``, where the boundary is the
+        # 6th-highest score (DSV4.1 routes top-6).  ``margin`` < 0 TRIMS to the
+        # confident subset (threshold ABOVE the 6th -> raises the issued-set
+        # precision, cutting the wasted speculative reads that made k=12 net-slower
+        # in window 39); ``margin`` > 0 WIDENS below the boundary.  Gated-out
+        # entries become -1 (the issue site drops them).  Purely a read of ``x`` +
+        # the frozen gate weights -> never an ancestor of the routed output, so
+        # this only changes WHICH experts are pre-warmed, never a logit.
+        boundary_rank = min(6, k)
+        boundary = mx.sort(biased, axis=-1)[..., -boundary_rank]  # [n] 6th-highest
+        threshold = (boundary - float(margin))[..., None]         # [n, 1]
+        part_scores = mx.take_along_axis(biased, part, axis=-1)   # [n, k]
+        part = mx.where(part_scores >= threshold, part, mx.array(-1, dtype=mx.int32))
+    return part
 
 
 def _moe_combine_impl(routed, weights, shared):

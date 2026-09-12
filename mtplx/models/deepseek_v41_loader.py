@@ -297,12 +297,21 @@ def resolve_gate_prefetch_ring_slots(current: int = 0) -> int:
     ``2*k`` to double-buffer one layer ahead (W93_GATE_PREFETCH.md §4). Returns
     ``current`` unchanged when the flag is off (shipped profile byte-identical)."""
 
-    from .deepseek_v41 import _resolve_gate_prefetch_k
+    from .deepseek_v41 import (
+        _resolve_gate_prefetch_k,
+        _runner_v2_enabled,
+        _RUNNER_V2_RING_SLOTS,
+    )
 
     k = _resolve_gate_prefetch_k()
     if k <= 0:
         return int(current or 0)
-    return max(int(current or 0), min(_GATE_PREFETCH_RING_CAP, 2 * k))
+    ring = min(_GATE_PREFETCH_RING_CAP, 2 * k)
+    # W95: v2 sizes the ring to double-buffer the DSpark verify's ~24-expert/layer
+    # union (2 x 24 = 48) one layer ahead; this also amply covers the AR k=6.
+    if _runner_v2_enabled():
+        ring = max(ring, _RUNNER_V2_RING_SLOTS)
+    return max(int(current or 0), ring)
 
 
 def build_streaming_config(

@@ -2510,7 +2510,34 @@ _GATE_PREFETCH_MIN_LAYER_DEFAULT = 4
 _RUNNER_ENV = "MTPLX_DSV41_RUNNER"
 #: v2's default gate-oracle prefetch width when the user set no explicit
 #: ``MTPLX_DSV41_GATE_PREFETCH`` (W89: one-layer-ahead missRed@12 0.766; ring 2*k=24 <= 32).
-_RUNNER_V2_GATE_PREFETCH_K = 12
+#: v2 AR prefetch width. Window-39 RETUNE: k=12 over-issued (164 speculative
+#: reads/token -> SSD 20%->70% busy, speculative contending with demand -> net -6%).
+#: The offline precision table (scripts/deepseek_v41/w95_prefetch_precision.py, W89
+#: one-ahead gate oracle) maximises (hits - 0.67*wasted) at k=6 + a small trim
+#: margin: k=6 halves the candidate width and the margin trims to the confident
+#: subset (precision 0.65 -> 0.78, issued ~4/layer).
+_RUNNER_V2_GATE_PREFETCH_K = 6
+#: v2 confidence-gate margin (W95 retune): issue a predicted expert iff its gate
+#: score >= (6th-highest score) - margin.  NEGATIVE trims to the confident subset
+#: (threshold ABOVE the 6th).  Offline max-objective pick on the W89 trace:
+#: -0.05 (score units; = -0.03 x the s1-s6 gap) -> precision 0.78, issued ~4/layer,
+#: objective 2.588.  Env MTPLX_DSV41_GATE_PREFETCH_MARGIN overrides; 0.0 = no gate
+#: (the top-k as-is, the lane-D / GATE_PREFETCH-only behaviour).
+_GATE_PREFETCH_MARGIN_ENV = "MTPLX_DSV41_GATE_PREFETCH_MARGIN"
+_RUNNER_V2_GATE_PREFETCH_MARGIN = -0.05
+#: v2 DSpark-verify prefetch (W95). At layer L-1 of a T=(K+1)-row verify the residual
+#: entering L-1 is available for ALL rows, so predict gate_L per row and prefetch the
+#: UNION of the per-row top-``_RUNNER_V2_VERIFY_K_PER_ROW`` for layer L (W89 one-ahead,
+#: applied to the verify's ~20-expert/layer union; window 31: ~8 misses/layer-verify).
+#: Gated on RUNNER=v2, so an AR-only MTPLX_DSV41_GATE_PREFETCH stays inert on T>1
+#: (the lane-D multi-row contract). ``_RUNNER_V2_VERIFY_MAX_ROWS`` bounds it to the
+#: verify shape (never a prefill). The union rides the verify's existing per-layer
+#: routing eval and dedups at the issue site; the global ring is sized to
+#: ``_RUNNER_V2_RING_SLOTS`` (2 x ~24) to double-buffer the union one layer ahead
+#: (also amply covers the AR k=12).
+_RUNNER_V2_VERIFY_K_PER_ROW = 8
+_RUNNER_V2_VERIFY_MAX_ROWS = 8
+_RUNNER_V2_RING_SLOTS = 48
 
 
 def _runner_v2_enabled() -> bool:
@@ -2547,6 +2574,19 @@ def _resolve_gate_prefetch_min_layer(raw=None) -> int:
         return max(0, int(raw))
     except (TypeError, ValueError):
         return _GATE_PREFETCH_MIN_LAYER_DEFAULT
+
+
+def _resolve_gate_prefetch_margin() -> float:
+    """The W95 confidence-gate margin for the prefetch prediction (score units).
+    ``MTPLX_DSV41_GATE_PREFETCH_MARGIN`` overrides; else the v2 default when the
+    runner is armed, else 0.0 (no gate -- the lane-D / GATE_PREFETCH-only path)."""
+    raw = os.environ.get(_GATE_PREFETCH_MARGIN_ENV)
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    return _RUNNER_V2_GATE_PREFETCH_MARGIN if _runner_v2_enabled() else 0.0
 
 
 class _GatePrefetchLink:
@@ -2847,8 +2887,18 @@ class DecoderLayer(nn.Module):
         link = getattr(self.mlp, "_mtplx_gate_prefetch_next", None)
         if link is None:
             return
-        # single-token AR decode only: h is [B, T, hc_mult, dim]; T == 1.
-        if h.ndim != 4 or int(h.shape[1]) != 1:
+        # h is [B, T, hc_mult, dim]. AR decode (T==1) always; the DSpark verify row
+        # batch (T = K+1, 2..MAX) only under the v2 runner -- an AR-only
+        # MTPLX_DSV41_GATE_PREFETCH stays inert on T>1 (the lane-D multi-row
+        # contract); prefill (large T) never predicts.
+        if h.ndim != 4:
+            return
+        _T = int(h.shape[1])
+        if _T == 1:
+            _verify = False
+        elif _runner_v2_enabled() and 2 <= _T <= _RUNNER_V2_VERIFY_MAX_ROWS:
+            _verify = True
+        else:
             return
         switch = getattr(self.mlp, "switch_mlp", None)
         runtime = getattr(switch, "runtime", None)
@@ -2860,6 +2910,10 @@ class DecoderLayer(nn.Module):
         k = _resolve_gate_prefetch_k()
         if k <= 0:
             return
+        # AR predicts ``k`` for the single row; the verify predicts a per-row width
+        # and UNIONs across the K+1 rows (the union dedups + is confidence-gated at
+        # the issue site). Both are confidence-margin trimmed (W95 retune).
+        k_eff = _RUNNER_V2_VERIFY_K_PER_ROW if _verify else k
         # EXACTLY the collector's ``layer_in`` (scripts/deepseek_v41/collect_route
         # _traces.py:175): mean over the hc copies with the f32 upcast BEFORE the
         # mean.  (Collapsing in bf16 first would differ at the bf16 ULP on the real
@@ -2873,7 +2927,9 @@ class DecoderLayer(nn.Module):
         # Round-trip through bf16 so the predictor scores the bit-identical tensor
         # the gate oracle was measured on (``bf16_bits`` -> ``bf16_to_f32`` == this).
         collapsed = collapsed.astype(mx.bfloat16).astype(mx.float32)
-        predicted = gate_predict_topk(link.next_gate, collapsed, k)
+        predicted = gate_predict_topk(
+            link.next_gate, collapsed, k_eff, margin=_resolve_gate_prefetch_margin()
+        )
         # LOW-3 (W93 review): stash on the plain `_GatePrefetchLink` (which exposes
         # the (next_layer, pending_ids) sequence interface) rather than setting a
         # raw `(int, mx.array)` tuple on the switch nn.Module -- a tuple would be

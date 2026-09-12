@@ -2132,6 +2132,24 @@ class ExpertStreamingRuntime:
         # route had to stream it on the demand path instead.
         self.speculative_bytes_read = 0
         self.demand_bytes_read = 0
+        # W95 retune: strict demand priority via a cumulative speculative-byte
+        # BUDGET. Window 39: k=12 pushed the drive to 70% busy (speculative
+        # contending with demand -> net -6%). Cap cumulative speculative bytes at
+        # (budget x cumulative demand bytes); ``prefetch_experts`` skips issuing
+        # once exceeded, so demand reads always win the drive.
+        # MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET overrides; default 0.5 under the v2
+        # runner, else 0.0 (no budget -- the pre-retune / GATE_PREFETCH-only path).
+        _budget_raw = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET")
+        if _budget_raw is not None:
+            try:
+                self._prefetch_byte_budget = max(0.0, float(_budget_raw))
+            except (TypeError, ValueError):
+                self._prefetch_byte_budget = 0.0
+        elif os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
+            self._prefetch_byte_budget = 0.5
+        else:
+            self._prefetch_byte_budget = 0.0
+        self._prefetch_budget_skips = 0
         # W93 lane C (MED-a): bound the wait ``_reconcile_prefetch_for_route`` holds
         # under the layer lock on an in-flight speculative read. Default 2.0 s;
         # configurable via MTPLX_DSV41_GATE_PREFETCH_RECONCILE_TIMEOUT_S (read at
@@ -4136,6 +4154,21 @@ class ExpertStreamingRuntime:
         executor = self._prefetch_executor
         if executor is None:
             return 0
+        # W95 retune: strict demand priority. Skip speculation once cumulative
+        # speculative bytes reach (budget x cumulative demand bytes) -- so a
+        # gate-oracle burst can never crowd the drive out of demand reads (window
+        # 39: k=12 -> 70% busy, net -6%). Cheap counter read; skipped calls do not
+        # drain other layers' completions, but a later within-budget call does, and
+        # the budget is exceeded only while speculation is already heavy (exactly
+        # when backing off is correct). Off (budget 0) -> pre-retune behaviour.
+        if (
+            self._prefetch_byte_budget > 0.0
+            and self.demand_bytes_read > 0
+            and self.speculative_bytes_read
+            >= self._prefetch_byte_budget * self.demand_bytes_read
+        ):
+            self._prefetch_budget_skips += 1
+            return 0
         # W93 HIGH-2 (self-starving ring): a speculative read that settles AFTER
         # its own layer's reconcile stays queued as an unapplied completion, and
         # its ring slot stays inflight (so unrecyclable) until that layer is
@@ -4616,16 +4649,30 @@ class ExpertStreamingRuntime:
         # tokens for the per-token window targets (misses/token & bytes/token DOWN,
         # prefetch hit UP vs the paired cell16k_ring reference).
         if os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
+            _k_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH")
+            _m_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_MARGIN")
             snapshot["runner"] = {
                 "mode": "v2",
                 "single_pool": bool(getattr(self, "_single_slot_pool", False)),
                 "overlap_miss_reads": bool(
                     getattr(self.config, "overlap_miss_reads", False)
                 ),
-                "gate_prefetch_k": int(getattr(self.config, "prefetch_slots", 0)),
+                # the retuned prefetch knobs (W95): AR predict width, confidence
+                # margin, global ring size, and the demand-priority byte budget.
+                "prefetch_k": int(_k_env) if (_k_env or "").lstrip("-").isdigit() else 6,
+                "prefetch_margin": float(_m_env) if _m_env else -0.05,
+                "ring_slots": int(getattr(self.config, "prefetch_slots", 0)),
+                "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+                "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),
+                # SSD read (window target: misses/token & bytes/token DOWN, prefetch
+                # hit UP; demand vs speculative split shows the drive contention).
                 "expert_misses": int(cache.get("expert_misses", 0)),
                 "bytes_read": int(cache.get("bytes_read", 0)),
                 "hit_rate": float(cache.get("hit_rate", 0.0)),
+                "demand_bytes_read": int(getattr(self, "demand_bytes_read", 0)),
+                "speculative_bytes_read": int(
+                    getattr(self, "speculative_bytes_read", 0)
+                ),
                 "prefetch_issued": int(cache.get("prefetch_issued", 0)),
                 "prefetch_hit_on_true_route": int(
                     cache.get("prefetch_hit_on_true_route", 0)
