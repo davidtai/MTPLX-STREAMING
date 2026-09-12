@@ -140,6 +140,7 @@ def test_default_headroom_zero_is_today() -> None:
     assert report == {
         "applied": True,
         "limit": plan_limit,
+        "limit_source": "plan",
         "wired_limit_applied": True,
         "wired_limit_bytes": plan_limit,
         "wired_limit_api": "mx.set_wired_limit",
@@ -172,6 +173,7 @@ def test_headroom_raises_only_the_allocator_limit() -> None:
     assert report == {
         "applied": True,
         "limit": plan_limit + 8 * GIB,
+        "limit_source": "plan",
         "wired_limit_applied": True,
         "wired_limit_bytes": plan_limit + 8 * GIB,
         "wired_limit_api": "mx.set_wired_limit",

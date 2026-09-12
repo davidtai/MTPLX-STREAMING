@@ -1739,6 +1739,96 @@ def resolve_mlx_limit_headroom_bytes(env: Mapping[str, str] | None = None) -> in
     return int(round(value * _MLX_LIMIT_HEADROOM_GIB))
 
 
+# W121: target-based MLX allocator limit.  David's directive after window 47 proved
+# the mechanism: with set_memory_limit ABOVE the steady active peak the freed-buffer
+# LRU HOLDS across misses (decode 2.99 -> 5.49; cache_at_decode_end 0 -> 5.0 GiB),
+# whereas at-the-plan it clears on every miss.  Instead of a hand-picked headroom, the
+# allocator limit is derived from David's TOTAL box target so box_used stays <= target
+# BY CONSTRUCTION: the box holds macOS+agent (the baseline, measured once with the
+# resident agent booted out) plus this process, so the process may use
+#   mlx_limit = box_target - baseline
+# and box_used = baseline + process(active + cache) <= baseline + mlx_limit = box_target.
+# Units: box_target and baseline are DECIMAL GB (David reads "100 GB used"); the MLX
+# limit is bytes.  Activated by MTPLX_DSV41_BOX_TARGET_GB (the bench/profile stamps it,
+# default 100); unset keeps the legacy plan_limit(+headroom) path so non-DSV41 callers
+# are unchanged.  MTPLX_MEMORY_LIMIT_BYTES / --memory-limit-gib remain an explicit
+# override of the engine budget; MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB stays as an
+# explicit override added on top but is no longer needed for correctness.
+BOX_TARGET_ENV = "MTPLX_DSV41_BOX_TARGET_GB"
+BOX_BASELINE_ENV = "MTPLX_DSV41_BOX_BASELINE_GB"
+DEFAULT_BOX_TARGET_GB = 100.0  # decimal GB; box hard-panics ~110, 100 keeps the margin
+_DECIMAL_GB = 1_000_000_000
+
+
+def _env_pos_float(env: Mapping[str, str], key: str) -> float | None:
+    raw = env.get(key)
+    if raw is None or str(raw).strip() == "" or str(raw).strip().lower() == "default":
+        return None
+    stripped = str(raw).strip()
+    if "_" in stripped:
+        raise ExpertStreamingConfigurationError(
+            f"{key} must be a plain number, got {raw!r} (underscores not allowed)"
+        )
+    try:
+        value = float(stripped)
+    except (TypeError, ValueError) as exc:
+        raise ExpertStreamingConfigurationError(
+            f"{key} must be a number, got {raw!r}"
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ExpertStreamingConfigurationError(f"{key} must be finite and positive, got {value}")
+    return value
+
+
+def resolve_box_target_mlx_limit_bytes(
+    env: Mapping[str, str] | None = None,
+    *,
+    baseline_bytes: int | None = None,
+) -> dict[str, Any] | None:
+    """Resolve the target-based MLX allocator limit, or ``None`` when the target path
+    is not armed (``MTPLX_DSV41_BOX_TARGET_GB`` unset).
+
+    ``mlx_limit_bytes = box_target_bytes - baseline_bytes`` (both DECIMAL GB).  The
+    baseline is ``MTPLX_DSV41_BOX_BASELINE_GB`` (the bench measures wired+anon+comp
+    with the resident agent booted out and stamps it) or the ``baseline_bytes``
+    argument.  Returns the limit and its components for the memory report; raises when
+    the target is armed but no baseline is available, or the derived limit is <= 0."""
+
+    source = os.environ if env is None else env
+    target_gb = _env_pos_float(source, BOX_TARGET_ENV)
+    if target_gb is None:
+        # The env may be set to a bare marker meaning "use the default target".  Only
+        # arm when the key is present at all; absent -> legacy path (return None).
+        if BOX_TARGET_ENV not in source:
+            return None
+        target_gb = DEFAULT_BOX_TARGET_GB
+    baseline_gb = _env_pos_float(source, BOX_BASELINE_ENV)
+    if baseline_gb is not None:
+        baseline_b = int(round(baseline_gb * _DECIMAL_GB))
+    elif baseline_bytes is not None:
+        baseline_b = int(baseline_bytes)
+        baseline_gb = baseline_b / _DECIMAL_GB
+    else:
+        raise ExpertStreamingConfigurationError(
+            f"{BOX_TARGET_ENV} is set but no baseline is available: set "
+            f"{BOX_BASELINE_ENV} (decimal GB, measured wired+anon+comp with the "
+            "resident agent booted out) or pass baseline_bytes"
+        )
+    target_b = int(round(target_gb * _DECIMAL_GB))
+    mlx_limit = target_b - baseline_b
+    if mlx_limit <= 0:
+        raise ExpertStreamingConfigurationError(
+            f"{BOX_TARGET_ENV} {target_gb:g} GB minus baseline {baseline_gb:.4g} GB "
+            f"leaves no MLX budget ({mlx_limit} bytes)"
+        )
+    return {
+        "mlx_limit_bytes": mlx_limit,
+        "box_target_gb": target_gb,
+        "box_baseline_gb": baseline_gb,
+        "box_baseline_bytes": baseline_b,
+    }
+
+
 def apply_mlx_memory_cap(
     plan: ExpertMemoryPlan,
     *,
@@ -1761,7 +1851,32 @@ def apply_mlx_memory_cap(
     # plan (and thus bytes/routing) would change.
     target_env["MTPLX_MEMORY_LIMIT_BYTES"] = str(plan_limit)
     headroom = resolve_mlx_limit_headroom_bytes(target_env)
-    limit = plan_limit + headroom
+    # W121: when the box target is armed, set the allocator limit from the target
+    # (box_target - baseline) instead of the plan.  This keeps the limit ABOVE the
+    # steady active peak so the freed-buffer LRU holds across misses (window 47:
+    # decode 2.99 -> 5.49), and keeps box_used <= target by construction.  The engine
+    # budget (MTPLX_MEMORY_LIMIT_BYTES, above) is UNCHANGED, so residents / KV / slot
+    # count and therefore every byte of output are identical -- only the soft
+    # allocator ceiling moves.  Headroom stays an explicit add-on override (default 0).
+    box_target = None
+    try:
+        box_target = resolve_box_target_mlx_limit_bytes(target_env)
+    except ExpertStreamingConfigurationError:
+        raise
+    if box_target is not None:
+        base_limit = box_target["mlx_limit_bytes"]
+        limit_source = "box_target"
+        if base_limit < plan_limit:
+            raise ExpertStreamingConfigurationError(
+                f"{BOX_TARGET_ENV} derives an MLX limit of {base_limit} bytes, BELOW "
+                f"the engine budget {plan_limit} (residents + KV + expert slots do not "
+                f"fit under the target); raise {BOX_TARGET_ENV} or lower --max-kv / "
+                "the expert-cache budget"
+            )
+    else:
+        base_limit = plan_limit
+        limit_source = "plan"
+    limit = base_limit + headroom
     if mx_module is None:
         try:
             import mlx.core as mx
@@ -1823,7 +1938,17 @@ def apply_mlx_memory_cap(
             "wired_limit_applied": False,
             "wired_limit_reason": "set_wired_limit_unavailable",
         }
-    return {"applied": True, "limit": limit, **wired_report}
+    report: dict[str, Any] = {
+        "applied": True,
+        "limit": limit,
+        "limit_source": limit_source,
+        **wired_report,
+    }
+    if box_target is not None:
+        report["box_target_gb"] = box_target["box_target_gb"]
+        report["box_baseline_gb"] = round(box_target["box_baseline_gb"], 6)
+        report["box_target_mlx_limit_bytes"] = int(box_target["mlx_limit_bytes"])
+    return report
 
 
 def mlx_memory_telemetry(mx_module: Any | None = None) -> dict[str, int | str]:

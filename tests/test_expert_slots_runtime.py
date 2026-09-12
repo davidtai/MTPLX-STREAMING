@@ -5178,6 +5178,7 @@ def test_memory_cap_reconciliation_and_fake_mlx_application() -> None:
     assert report == {
         "applied": True,
         "limit": expected,
+        "limit_source": "plan",
         "wired_limit_applied": True,
         "wired_limit_bytes": expected,
         "wired_limit_api": "mx.set_wired_limit",
