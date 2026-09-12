@@ -314,10 +314,15 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
-# W110: gate the per-record sha256 re-check on the DECODE/verify streaming path.
-# "0" drops the io-thread hash (~174-226 ms/verify, W109 §1.b); byte-identical
-# (hashing never changes the bytes). Admission/open integrity is untouched (separate
-# config fields). Read at use in build_streaming_config (env-authoritative when set).
+# W110 (BENCH-ONLY DIAGNOSTIC -- not a perf lever): gate the per-record sha256
+# re-check on the DECODE/verify streaming path. Decode-path hashing has been OFF on
+# every ab/bench path (arg default False) and OFF in the served profile
+# (deepseek-v41-mxfp4-75: verify_record_hashes=false), so there is nothing to REMOVE.
+# The salvaged value runs the OTHER direction: "1" turns hashing ON to MEASURE its
+# io-thread cost (arm cell16k_ring_v2_hash), with the records_hashed / hash_thread_ns
+# counters. Honoured only by the loader/bench builder (build_streaming_config); the
+# served profile builder (expert_profiles.build_expert_streaming_config) deliberately
+# does NOT read it, so this env is NOT registered as a served lever. See W110 doc.
 VERIFY_RECORD_HASHES_ENV = "MTPLX_DSV41_VERIFY_RECORD_HASHES"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
@@ -380,8 +385,11 @@ ALL_LEVER_ENVS = (
     # W107 (appended; coordinate with any concurrent list extension):
     KV_BOUNDED_ENV,
     KV_BOUNDED_MAXKV_ENV,
-    # W110 (appended; coordinate with any concurrent list extension):
-    VERIFY_RECORD_HASHES_ENV,
+    # NOTE: VERIFY_RECORD_HASHES_ENV is DELIBERATELY NOT in this list. It is a
+    # BENCH-ONLY diagnostic env (honoured on the loader/bench builder, NOT on the
+    # served profile builder) -- keeping it out of ALL_LEVER_ENVS also keeps it out
+    # of the served-log lever snapshot (openai._DSV41_LEVER_ENV_KEYS, which must be a
+    # superset), where it would be a DEAD served lever. See W110 doc + _preset.
 )
 
 
@@ -889,29 +897,21 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
     ),
-    # W110: cell16k_ring_v2 + the per-record sha256 lever OFF on the DECODE/verify
-    # path (MTPLX_DSV41_VERIFY_RECORD_HASHES=0).  Exact key set of cell16k_ring_v2
-    # plus the one env; the paired A/B vs cell16k_ring_v2 (RUN CONTROL WITH
-    # --verify-record-hashes so its hashing is ON; the env forces this arm's OFF
-    # regardless) isolates the io-thread hashing cost W109 §1.b measured at
-    # ~174-226 ms/verify.  Byte-identical to control's class by construction:
-    # hashing never changes the bytes read into the slot, so token_ids_sha256 must
-    # match.  Admission/open integrity is untouched (separate config fields).
-    "cell16k_ring_v2_nohash": _preset(
+    # W110 (BENCH-ONLY DIAGNOSTIC): cell16k_ring_v2 + decode-path per-record sha256
+    # turned ON (MTPLX_DSV41_VERIFY_RECORD_HASHES=1, env-authoritative over the ab
+    # harness's --verify-record-hashes default False).  This is NOT a perf lever:
+    # decode hashing is already OFF on every ab/bench path and OFF in the served
+    # profile, so there was nothing to remove.  The A/B cell16k_ring_v2_hash vs
+    # cell16k_ring_v2 MEASURES the io-thread cost of hashing (records_hashed /
+    # hash_thread_ns) should a future policy ever require it -- the reverse of the
+    # withdrawn W109 §1.b "drop hashing" framing.  Byte-identical class either way
+    # (hashing never changes bytes, so token_ids_sha256 must match); the
+    # resolved_plan.verify_record_hashes stamp proves the two arms actually differ.
+    "cell16k_ring_v2_hash": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2", verify_record_hashes="0",
-    ),
-    # W110: cell16k_ring_v2_draft + VERIFY_RECORD_HASHES=0.  The draft-head levers
-    # touch only the DSpark draft head, so they compose with the verify-hash drop;
-    # the direct A/B vs cell16k_ring_v2_draft (control run WITH --verify-record-hashes)
-    # isolates the decode-path hashing cost on the standard draft-head-on cell.
-    "cell16k_ring_v2_draft_nohash": _preset(
-        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
-        head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2", draft="1", draft_head_bf16="1", verify_record_hashes="0",
+        runner="v2", verify_record_hashes="1",
     ),
 }
 
@@ -1875,6 +1875,10 @@ def _resolved_plan(runtime, args) -> dict | None:
         "gate_prefetch_k": gate_k,
         "gate_prefetch_env": gate_env,
         "gate_prefetch_ring_bytes": prefetch_slots * record_bytes,
+        # W110 (guard/stamp): the ACTUAL decode-path per-record sha256 state the
+        # runtime ran, so a hash-vs-parent A/B can never be control-vs-control
+        # silently (parent stamps False, cell16k_ring_v2_hash stamps True).
+        "verify_record_hashes": bool(getattr(config, "verify_record_hashes", False)),
         "source": (
             "explicit" if getattr(args, "transient_slots", None) is not None
             else f"profile:{getattr(args, 'expert_profile', 'none')}"

@@ -354,17 +354,20 @@ def build_streaming_config(
     ):
         overrides["overlap_miss_reads"] = True
 
-    # W110: MTPLX_DSV41_VERIFY_RECORD_HASHES gates the per-record sha256 re-check on
-    # the DECODE/verify streaming path (the io-thread hash after each read, serialized
-    # before the slot is ready -- ~174-226 ms/verify on the DSpark cell, W109 §1.b).
-    # Read AT USE here (env read at config build, not at import; cf. MEMORY
-    # env-flags-read-at-use). AUTHORITATIVE when set (0/1): it OVERRIDES an explicit
-    # caller ``verify_record_hashes`` so an A/B arm (cell16k_ring_v2_nohash) can force
-    # decode-path hashing off even though the ab harness passes an explicit value.
-    # UNSET leaves current behaviour (the caller value, else the config default True).
-    # DECODE PATH ONLY: this never touches ``verify_artifact_headers`` /
-    # ``verify_sidecar_hash_at_open`` (the admission/open integrity checks), which are
-    # separate config fields, so open-time verification stays on regardless
+    # W110 (BENCH-ONLY DIAGNOSTIC hook -- NOT a served lever): read
+    # MTPLX_DSV41_VERIFY_RECORD_HASHES here to gate the per-record sha256 re-check on
+    # the DECODE/verify streaming path. Read AT USE (env at config build, not import).
+    # AUTHORITATIVE when set (0/1): overrides an explicit caller value so the bench
+    # arm cell16k_ring_v2_hash can force hashing ON to MEASURE its io-thread cost
+    # (decode hashing is already OFF everywhere -- ab arg default False AND the served
+    # profile deepseek-v41-mxfp4-75 pins verify_record_hashes=false -- so there is
+    # nothing to remove; the diagnostic runs the ON direction). UNSET leaves current
+    # behaviour (caller value, else config default). This is the LOADER/BENCH builder
+    # only; the served profile builder (expert_profiles.build_expert_streaming_config)
+    # deliberately does NOT carry this hook, so the env cannot affect a served daemon.
+    # DECODE PATH ONLY: never touches verify_artifact_headers /
+    # verify_sidecar_hash_at_open (the admission/open integrity checks) -- separate
+    # config fields, so open-time verification stays on regardless
     # (docs/deepseek-v41/W110_DECODE_RECORD_HASH.md).
     _vrh_env = os.environ.get("MTPLX_DSV41_VERIFY_RECORD_HASHES")
     if _vrh_env is not None and _vrh_env != "":

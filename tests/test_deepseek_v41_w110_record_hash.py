@@ -358,3 +358,40 @@ def test_stream_counters_delta_reports_hashing_off_window():
     assert io["records_unhashed"] == 90
     assert io["hash_fraction"] == 0.0
     assert io["hash_ms"] == 0.0
+
+
+# ==========================================================================
+# 6. Bench-only diagnostic arm + de-registration (W110 salvage).
+# ==========================================================================
+def test_verify_env_is_bench_only_not_a_served_lever():
+    """Decode hashing is already OFF everywhere, so this is a bench-only diagnostic,
+    not a served perf lever: absent from the ab lever set AND the served-log lever
+    snapshot (so never a dead served lever), and the W90 superset guard still holds."""
+    ab = _load_ab()
+    from mtplx.server import openai as srv
+
+    assert ab.VERIFY_RECORD_HASHES_ENV not in ab.ALL_LEVER_ENVS
+    assert "MTPLX_DSV41_VERIFY_RECORD_HASHES" not in srv._DSV41_LEVER_ENV_KEYS
+    assert set(ab.ALL_LEVER_ENVS) <= set(srv._DSV41_LEVER_ENV_KEYS)
+
+
+def test_diagnostic_hash_arm_present_and_nohash_arms_removed():
+    ab = _load_ab()
+    assert "cell16k_ring_v2_nohash" not in ab.ARM_PRESETS
+    assert "cell16k_ring_v2_draft_nohash" not in ab.ARM_PRESETS
+    hash_arm = ab.ARM_PRESETS["cell16k_ring_v2_hash"]
+    assert hash_arm[ab.VERIFY_RECORD_HASHES_ENV] == "1"  # turns hashing ON
+    # the parent force-unsets it (None) so its config default holds -> the A/B stamps
+    # differ and cannot be control-vs-control.
+    assert ab.ARM_PRESETS["cell16k_ring_v2"][ab.VERIFY_RECORD_HASHES_ENV] is None
+
+
+def test_resolved_plan_stamps_actual_verify_record_hashes(monkeypatch):
+    ab = _load_ab()
+    monkeypatch.delenv(ab.GATE_PREFETCH_ENV, raising=False)
+    rt = _stub_runtime(48, {"prefetch_k": 6})
+    rt.config.verify_record_hashes = True
+    assert ab._resolved_plan(rt, _STUB_ARGS)["verify_record_hashes"] is True
+    rt_off = _stub_runtime(0, None)
+    rt_off.config.verify_record_hashes = False
+    assert ab._resolved_plan(rt_off, _STUB_ARGS)["verify_record_hashes"] is False
