@@ -1,0 +1,50 @@
+# arm: cell16k_ring
+# stream: ar
+# token_ids_sha256: 2d39390f5686f4b3962ed3d453bec59a6c9b9c64553b55865889f09ac38bfb6c
+# decode_tok_s: 2.167192959412526
+# divergence: none
+
+<｜end▁of▁sentence｜># file_0.py
+from __future__ import annotations
+
+import dataclasses
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+@dataclasses.dataclass(frozen=True)
+class RequestState:
+    request_id: str
+    prompt_tokens: int
+    started_at: float
+    metadata: dict[str, Any]
+
+def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    out.setdefault('created_at', time.time())
+    out.setdefault('source', 'prefill-ladder')
+    return out
+
+
+# file_1.py
+from __future__ import annotations
+
+import dataclasses
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+@dataclasses.dataclass(frozen=True)
+class RequestState:
+    request_id: str
+    prompt_tokens: int
+    started_at: float
+    metadata: dict[str, Any]
+
+def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    out.setdefault('created_at', time.time())
+    out.setdefault('source', 'prefill-ladder')
+
