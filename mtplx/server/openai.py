@@ -3240,6 +3240,12 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_ATTN_CORE_COMPILE",
     "MTPLX_DSV41_ATTN_LEAN_CASTS",
     "MTPLX_DSV41_ATTN_FUSED_PROJ",
+    # W115 (appended -- coordinate with any concurrent list extension): the verify-
+    # attention fast path lever + row cap.  The served DSpark verify runs the same
+    # target forward, so arming it on the server speeds the served verify too; kept
+    # here so the served-log snapshot stays a superset of ALL_LEVER_ENVS (drift guard).
+    "MTPLX_DSV41_VERIFY_ATTN_FASTPATH",
+    "MTPLX_DSV41_VERIFY_ATTN_MAX_ROWS",
     # NOTE (W110): MTPLX_DSV41_VERIFY_RECORD_HASHES is intentionally NOT here. The
     # served profile builder (expert_profiles.build_expert_streaming_config) does not
     # read it, so it would be a DEAD served lever; it is a bench-only diagnostic env
