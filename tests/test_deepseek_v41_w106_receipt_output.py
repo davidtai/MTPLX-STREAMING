@@ -264,3 +264,29 @@ def test_receipt_stem_strips_jsonl(tmp_path):
     assert mod._receipt_stem(tmp_path / "x.jsonl") == tmp_path / "x"
     assert mod._receipt_stem(tmp_path / "x.json") == tmp_path / "x"
     assert mod._receipt_stem(tmp_path / "x.log") == tmp_path / "x.log"
+
+
+class _SpecialsOnlyTok:
+    """decode(ids) -> '' (specials skipped), decode(ids, skip_special_tokens=False)
+    -> the special-token rendering. Models an all-EOS/pad stream (LOW round 4)."""
+
+    def decode(self, ids, skip_special_tokens=True):
+        return "" if skip_special_tokens else "<|eos|>" * len(ids)
+
+
+def test_decode_ids_special_tokens_only_is_not_an_error():
+    mod = _mod()
+    text, err = mod._decode_ids(_SpecialsOnlyTok(), [7, 7, 7])
+    # legit empty under skip_special_tokens -> surface the with-specials rendering,
+    # NOT an error.
+    assert err is None
+    assert text == "<|eos|>" * 3
+
+
+def test_decode_ids_truly_empty_still_errors():
+    mod = _mod()
+    # _EmptyTok.decode() takes no skip_special_tokens kwarg -> the retry raises ->
+    # both empty -> genuine error.
+    text, err = mod._decode_ids(_EmptyTok(), [1, 2, 3])
+    assert text is None
+    assert "returned empty for 3 ids" in err

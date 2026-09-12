@@ -3161,10 +3161,14 @@ _DIVERGENCE_CONTEXT_CHARS = 200
 def _decode_ids(tok, ids):
     """Decode token ids to text.  Returns ``(text_or_None, error_or_None)``: never a
     SILENT empty string.  Tries the tokenizer's ``decode`` then the underlying HF
-    ``_tokenizer.decode``; a raise records its repr, and an EMPTY result for a
-    non-empty id list is itself recorded as an error (window 43: the decode was
-    skipped entirely because --prompt-ids-file left the tokenizer None; now the
-    caller always supplies an output tokenizer and any failure is loud + recorded)."""
+    ``_tokenizer.decode``; a raise records its repr.
+
+    LOW (round 4): an empty result is only an ERROR when it is a genuine decode
+    failure.  If ``decode(ids)`` is empty but ``decode(ids, skip_special_tokens=
+    False)`` is NON-empty, the ids render only as SPECIAL tokens (e.g. an
+    all-EOS/pad stream) -- a LEGITIMATELY empty decoded text, not a failure: return
+    that with-specials rendering (so the audit shows what was produced) and no
+    error.  Only when BOTH are empty is it recorded as an error."""
 
     if ids is None:
         return None, "no ids"
@@ -3186,8 +3190,15 @@ def _decode_ids(tok, ids):
             continue
         if text:  # non-empty string -> success
             return text, None
-        # An empty result for a non-empty id list is suspicious: record it and try
-        # the next method (never return a silent '').
+        # Empty: distinguish a LEGITIMATE special-tokens-only decode from a broken
+        # one.  If the with-specials rendering is non-empty, the ids are special
+        # tokens -> legit empty; surface that rendering, no error.
+        try:
+            with_specials = fn(ids_int, skip_special_tokens=False)
+        except Exception:
+            with_specials = None
+        if with_specials:
+            return with_specials, None
         last_err = f"{label} returned empty for {len(ids_int)} ids"
     return None, (last_err or "no usable decode method on the tokenizer")
 

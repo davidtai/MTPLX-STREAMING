@@ -128,7 +128,10 @@ _require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
 # break the arithmetic; refuse either.
 CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"
 _require_int GPU_WINDOW_CHILD_RSS_CAP_BYTES "${CHILD_RSS_CAP_BYTES}" $(( 1024 * 1024 * 1024 )) || exit 2
-RSS_POLL_SECONDS="$(_int_or_default "${GPU_WINDOW_RSS_POLL_SECONDS:-1}" 1 GPU_WINDOW_RSS_POLL_SECONDS)"  # MEDIUM-1: default 1s (streaming grows fast)
+# MEDIUM-1: default 1s (streaming grows fast).  LOW (round 4): REFUSE 0 -- `sleep 0`
+# is a busy-loop that pins a core and inflates the host-encode-sensitive window.
+RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-1}"
+_require_int GPU_WINDOW_RSS_POLL_SECONDS "${RSS_POLL_SECONDS}" 1 || exit 2
 # W106 MEDIUM-1: the child-tree cap compares `ps` RSS, which UNDERCOUNTS unified
 # Metal memory by ~18 GiB (window 43: tree RSS 51.2 vs system-baseline 69.5), so it
 # could never fire before the (accurate, vm_stat-based) system ceiling. Lower the
@@ -305,14 +308,18 @@ _resolve_restore_plist() {
 # is already loaded now.  On failure it prints the exact manual command.
 _do_restore() {
   local was_loaded="${1:-0}" discovered="${2:-}"
+  # LOW (round 4): if the service is ALREADY loaded now, there is nothing to
+  # restore -- for BOTH branches (a bootout that failed and never stopped it, or a
+  # retry).  Short-circuit so a spurious "service already loaded" bootstrap failure
+  # never prints a false "may be DOWN".
+  if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
+    log "restore: ${QWEN_LABEL} already loaded; nothing to do"
+    return 0
+  fi
   local want=0
   if (( was_loaded == 1 )); then
     want=1
   elif [[ "${RESTORE_QWEN_ALWAYS}" == "1" ]]; then
-    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
-      log "restore: ${QWEN_LABEL} already loaded; nothing to do (RESTORE_QWEN_ALWAYS=1)"
-      return 0
-    fi
     want=1
     log "restore: ${QWEN_LABEL} was NOT loaded at entry, but GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 -> bootstrapping anyway (guards against a cascaded prior failure)"
   else
@@ -601,7 +608,11 @@ restore_qwen() {
 
 teardown() {
   local ec=$?
-  trap - EXIT INT TERM
+  # LOW (round 4): IGNORE further INT/TERM during teardown (do not reset to the
+  # DEFAULT disposition -- a second TERM mid-restore would kill the process and
+  # leave the agent down).  Remove only the EXIT trap so teardown does not re-enter.
+  trap - EXIT
+  trap '' INT TERM
   # W106 item 4: a TERM/INT to the wrapper (or any non-abort exit with the step
   # still running) tree-kills the WHOLE step process tree, not just STEP_PID, so a
   # `bash -c` chain never starts its next step and no python descendant survives.

@@ -211,5 +211,14 @@ else
   bad "MEDIUM-1 dead-step zero ORPHAN" "rc=${DEAD_RC}; $(grep 'ORPHAN' "${DEAD_LOG}" || echo none)"
 fi
 
+# W106 LOW (round 4): teardown must IGNORE (not default) INT/TERM so a second
+# signal mid-restore cannot kill it and leave the agent down.  Deterministic source
+# guard for the exact disposition (a behaviour race-test would be flaky).
+if grep -q "trap '' INT TERM" "${SCRIPT}"; then
+  ok "LOW: teardown ignores further INT/TERM (trap '' INT TERM), not reset to default"
+else
+  bad "LOW teardown trap ''" "no \"trap '' INT TERM\" in gpu_window.sh"
+fi
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [[ "${FAIL}" -eq 0 ]]
