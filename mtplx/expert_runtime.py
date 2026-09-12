@@ -2079,6 +2079,24 @@ class ExpertStreamingRuntime:
         # miss read never queues behind a burst of predictions at the
         # SSD. Concurrency floors at one read (speculation is throttled,
         # never starved) and the ring width still bounds it above.
+        #
+        # W93 lane C (HIGH-3): the fraction budget above can still resolve to a
+        # large executor (~12 reads == ~216 MiB in flight on the 75 GiB profile),
+        # which -- on its own bypass-admission executor -- let a prediction burst
+        # race the current layer's demand misses. Cap the ABSOLUTE number of
+        # concurrent speculative reads (executor max_workers, and thus in-flight
+        # single-record reads) to a small, strictly-smaller-than-demand bound,
+        # default 4. Configurable via MTPLX_DSV41_GATE_PREFETCH_MAX_INFLIGHT, read
+        # here at construction (use, not import); floored at 1 so speculation is
+        # throttled, never starved. The demand-miss executor (_split_executor,
+        # max_workers=transient_slots) is not bounded by this cap.
+        _spec_cap_raw = os.environ.get(
+            "MTPLX_DSV41_GATE_PREFETCH_MAX_INFLIGHT", "4"
+        )
+        try:
+            _spec_inflight_cap = max(1, int(_spec_cap_raw))
+        except (TypeError, ValueError):
+            _spec_inflight_cap = 4
         if config.prefetch_slots > 0:
             inflight_budget = (
                 config.max_inflight_io_bytes
@@ -2090,7 +2108,11 @@ class ExpertStreamingRuntime:
             ) // max(1, spec.expert_record_bytes)
             self._prefetch_max_reads = max(
                 1,
-                min(budget_reads, max(1, plan.prefetch_ring_slots)),
+                min(
+                    budget_reads,
+                    max(1, plan.prefetch_ring_slots),
+                    _spec_inflight_cap,
+                ),
             )
         else:
             self._prefetch_max_reads = 0
@@ -2102,6 +2124,27 @@ class ExpertStreamingRuntime:
             if config.prefetch_slots > 0
             else None
         )
+        # W93 lane C: split I/O-byte accounting for the receipt (lane B's snapshot
+        # block reads these by name). ``speculative_bytes_read`` is bumped by the
+        # speculative executor (``_run_speculative_load``); ``demand_bytes_read``
+        # by the reconcile fallback (``_reconcile_prefetch_for_route``) when a
+        # gate-predicted expert's speculative read timed out or failed and the
+        # route had to stream it on the demand path instead.
+        self.speculative_bytes_read = 0
+        self.demand_bytes_read = 0
+        # W93 lane C (MED-a): bound the wait ``_reconcile_prefetch_for_route`` holds
+        # under the layer lock on an in-flight speculative read. Default 2.0 s;
+        # configurable via MTPLX_DSV41_GATE_PREFETCH_RECONCILE_TIMEOUT_S (read at
+        # construction). On timeout the route falls back to a demand load.
+        _reconcile_timeout_raw = os.environ.get(
+            "MTPLX_DSV41_GATE_PREFETCH_RECONCILE_TIMEOUT_S", "2.0"
+        )
+        try:
+            self._prefetch_reconcile_timeout_s = max(
+                0.0, float(_reconcile_timeout_raw)
+            )
+        except (TypeError, ValueError):
+            self._prefetch_reconcile_timeout_s = 2.0
 
     @classmethod
     def open(
@@ -3995,7 +4038,12 @@ class ExpertStreamingRuntime:
         ``_run_speculative_load`` takes the layer lock only advisorily
         (``blocking=False``) and reads through the slot state machine's own locks,
         never this layer lock. Inert unless the ring is armed, so the shipped
-        demand path is byte-identical with the flag off."""
+        demand path is byte-identical with the flag off.
+
+        MED-a: the await is BOUNDED (``_prefetch_reconcile_timeout_s``, default
+        2.0 s). On timeout -- or on a failed read -- the ticket is invalidated and
+        the route falls back to a demand load, so a stuck speculative read never
+        parks the generation thread under the layer lock for the whole route."""
 
         if self.config.prefetch_slots <= 0:
             return
@@ -4005,7 +4053,9 @@ class ExpertStreamingRuntime:
         # The common case: the read finished during the one-layer overlap window
         # and only needs publishing (cheap, non-blocking) -> it becomes a hit.
         self._apply_prefetch_completions(layer, bank)
+        record_bytes = self._record_bytes_for_layer(layer)
         awaited = 0
+        fell_back = 0
         for expert in dict.fromkeys(int(value) for value in expert_ids):
             # A committed expert already hit-resolves; only a still-INFLIGHT ring
             # read has a live ticket here.
@@ -4016,8 +4066,18 @@ class ExpertStreamingRuntime:
                 future = self._prefetch_inflight_futures.get((layer, expert))
             if future is None:
                 continue
+            # MED-a: bound the wait held under the layer lock. An unbounded
+            # ``future.result()`` parked the generation thread on a stuck
+            # speculative read for the whole route. With a timeout, ``result``
+            # raises on timeout OR read failure; either way ``ok`` is False and we
+            # fall back to a DEMAND load -- invalidate the ring ticket so the
+            # route's own planner (``_plan_route_transaction``, next, still under
+            # this layer lock) sees the expert as a normal miss and streams it on
+            # the demand path. A speculative read still running after a timeout is
+            # later ticket-refused (a wasted read, never corruption: ring and
+            # transient slots are physically disjoint).
             try:
-                future.result()
+                future.result(timeout=self._prefetch_reconcile_timeout_s)
                 ok = True
             except BaseException:
                 ok = False
@@ -4028,13 +4088,20 @@ class ExpertStreamingRuntime:
                 if bank.commit_prefetch(expert, ticket=ticket):
                     awaited += 1
             elif not ok:
+                # Timed out or failed: drop the speculative ticket and let the
+                # demand planner stream it. Account those bytes on the DEMAND side
+                # of the demand/speculative split (this expert is read on demand).
                 bank.invalidate_prefetch(expert, ticket=ticket)
+                fell_back += 1
         # Catch any reads that settled while we awaited above.
         self._apply_prefetch_completions(layer, bank)
-        if awaited:
+        if awaited or fell_back:
             with self._counter_lock:
-                self.counters.prefetch_awaited_inflight += awaited
-                self._layer_counters[layer].prefetch_awaited_inflight += awaited
+                if awaited:
+                    self.counters.prefetch_awaited_inflight += awaited
+                    self._layer_counters[layer].prefetch_awaited_inflight += awaited
+                if fell_back:
+                    self.demand_bytes_read += fell_back * record_bytes
 
     def prefetch_experts(self, layer: int, expert_ids: Iterable[int]) -> int:
         """Speculatively load predicted experts into the layer's ring tier.
@@ -4210,6 +4277,12 @@ class ExpertStreamingRuntime:
             if not live:
                 return
         self.slots.load_speculative(layer, load)
+        # W93 lane C: this speculative read actually touched the SSD -- account its
+        # bytes on the speculative side of the demand/speculative split (the early
+        # ``return`` above skips reads whose assignment already recycled).
+        record_bytes = self._record_bytes_for_layer(layer)
+        with self._counter_lock:
+            self.speculative_bytes_read += record_bytes
 
     def _finish_prefetch_load(
         self,
