@@ -3791,10 +3791,20 @@ def _issue_gate_prefetch(runtime: Any, pending: tuple) -> None:
     prefetch = getattr(runtime, "prefetch_experts", None)
     if prefetch is None:
         return
-    ids = [int(value) for value in predicted.reshape(-1).tolist()]
+    # W95: drop the confidence-gated -1 sentinels (rank 6..k below the margin
+    # threshold are trimmed to -1 by ``gate_predict_topk``) and dedup across the
+    # verify's per-row union, preserving first-seen order. Without the drop the
+    # ring's ``_key`` rejects -1 (``expert id must be at least 0``) and kills the
+    # decode step; ``prefetch_experts`` further skips already-resident ids, so the
+    # issued speculative set is {gated, non-resident} experts.
+    ids = list(
+        dict.fromkeys(
+            v for v in (int(value) for value in predicted.reshape(-1).tolist()) if v >= 0
+        )
+    )
     note = getattr(runtime, "note_gate_prefetch_predicted", None)
     if callable(note):
-        note(next_layer, len(set(ids)))
+        note(next_layer, len(ids))
     prefetch(next_layer, ids)
 
 

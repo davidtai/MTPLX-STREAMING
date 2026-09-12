@@ -454,3 +454,53 @@ def test_runner_v2_verify_forward_predicts_union(monkeypatch):
     pred = model.model.layers[stashed[0]].mlp.switch_mlp._mtplx_gate_prefetch_pending[1]
     _REAL_EVAL(pred)
     assert pred.shape[0] == 6, "verify prediction must be per-row (T=6)"
+
+
+def test_v2_issue_site_drops_sentinels_no_crash(tmp_path):
+    """W95f CRITICAL regression: under v2 the retuned margin (-0.05) trims rank
+    6..k of EVERY row to the -1 sentinel (gate_predict_topk: the threshold sits
+    ABOVE the 6th score, so the 6th-ranked candidate is always trimmed).  The
+    real issue site (_issue_gate_prefetch -> runtime.prefetch_experts ->
+    GlobalPrefetchRing._key) rejects -1 ("expert id must be at least 0") and
+    would kill the decode step on the first issued prediction.  The fix drops the
+    sentinels (and dedups the verify's per-row union) before the ring sees them.
+
+    The W93 predict suite faked prefetch_experts with a lambda, so it never
+    reached the ring -- this drives the REAL ring on a real streamed runtime."""
+    from mtplx.models.deepseek_v41_moe import gate_predict_topk
+    from mtplx.models.expert_mlx import _issue_gate_prefetch
+    from tests.models.test_deepseek_v41_w93_lane_d_predictor import _make_gate
+
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=12,
+    )
+    try:
+        layer = spec.routed_layer_start
+        # 1. the retuned margin really produces sentinels, every row, and a real
+        #    margin-trimmed prediction issues through the real ring without raising
+        #    (this is exactly the array shape the DSpark verify hands the issue
+        #    site; at HEAD prefetch_experts ValueErrors on the -1).
+        gate = _make_gate(dim=32, n_routed=spec.expert_count, topk=6, seed=3)
+        mx.random.seed(7)
+        gx = (0.5 * mx.random.normal((4, 32))).astype(mx.bfloat16)
+        _REAL_EVAL(gx)
+        real_pred = gate_predict_topk(
+            gate, gx, 6, margin=_RUNNER_V2_GATE_PREFETCH_MARGIN
+        )
+        _REAL_EVAL(real_pred)
+        rp = np.array(real_pred)
+        assert (rp < 0).any(), "margin -0.05 produced no sentinel to regress on"
+        assert int((rp < 0).sum(axis=1).min()) >= 1, "every row must carry >=1 sentinel"
+        _issue_gate_prefetch(rt, (layer, real_pred))  # must NOT raise
+
+        # 2. deterministic count: [6, 7, -1, -1, -1, -1] -> ids {6, 7} -> 2.
+        before = int(rt.counters.prefetch_predicted)
+        pred = mx.array([[6, 7, -1, -1, -1, -1]], dtype=mx.int32)
+        _issue_gate_prefetch(rt, (layer, pred))  # must NOT raise
+        assert int(rt.counters.prefetch_predicted) - before == 2, (
+            rt.counters.prefetch_predicted
+        )
+        _settle_prefetch(rt)
+    finally:
+        rt.close()
