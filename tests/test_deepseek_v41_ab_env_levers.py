@@ -1002,6 +1002,107 @@ def test_prefill_stage_timing_pass_small_real_forward(env_levers, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# W94: the untimed decode pass (_generate) must clear the route probe IMMEDIATELY
+# before the after_prefill ("before") snapshot, so the DECODE-scoped route_probe
+# delta (end - after_prefill) is exact and never negative.  Regression: the clear
+# used to run AFTER the before-snapshot, leaving prefill totals in "before" and
+# decode-only in "after" -> prefill-dominated stages (hot.begin_split_route)
+# deltaed NEGATIVE (window-37 ar-ring-ref sums_ns = -3.8e8).
+# --------------------------------------------------------------------------
+class _FakeRuntimeWithCache:
+    """A minimal streamed-runtime double so _stream_counters_snapshot returns a real
+    dict (not None): snapshot() yields the expert_cache block, and the route probe
+    counts come from the module globals (independent of the runtime)."""
+
+    def snapshot(self):
+        return {"cache": {"expert_hits": 1, "expert_misses": 0, "bytes_read": 0,
+                          "persistent_loads": 0, "transient_loads": 0}}
+
+
+class _RouteBumpModel:
+    """Fake model whose forward bumps a route-probe counter: a lot on the (first)
+    prefill forward, a little on each decode forward -- so a delta that failed to
+    exclude the prefill accumulation would go negative for the prefill-heavy stage."""
+
+    _mtplx_expert_runtime = _FakeRuntimeWithCache()
+
+    def __init__(self, rp, stage, barrier, prefill_bump, per_step_bump):
+        self._rp = rp
+        self._stage = stage
+        self._barrier = barrier
+        self._prefill_bump = prefill_bump
+        self._per_step = per_step_bump
+        self._did_prefill = False
+
+    def make_cache(self):
+        return {}
+
+    def __call__(self, ids, cache=None):
+        n = int(ids.shape[-1])
+        bump = self._prefill_bump if not self._did_prefill else self._per_step
+        # exercise both counter kinds: count()-only stage + a sums-bearing barrier.
+        self._rp._COUNTS[self._stage] += bump
+        self._rp._COUNTS[self._barrier] += bump
+        self._rp._SUMS[self._barrier] += bump * 1000
+        self._did_prefill = True
+        return mx.zeros((1, n, 8))
+
+
+class _ZeroMemProbe:
+    def reset_peak(self):
+        return None
+
+    def peak_bytes(self):
+        return 0
+
+
+def test_generate_route_probe_delta_is_exact_and_non_negative(env_levers, monkeypatch):
+    """The decode-scoped route_probe_counts / route_probe_sums_ns delta equals the
+    direct DECODE count (prefill excluded) and is never negative -- the clear runs
+    before the before-snapshot."""
+    from mtplx import expert_route_probe as rp
+    from mtplx.serve_stream_counters import stream_counters_delta
+
+    STAGE = "hot.begin_split_route"   # the stage the buggy order deltaed negative
+    BARRIER = "hot.eval_indices"
+    PREFILL_BUMP = 500                # prefill accumulates a lot
+    PER_STEP = 8
+    STEPS = 6
+
+    # Arm the probe as the launcher (MTPLX_ROUTE_STAGE_PROBE=1) does, so prefill
+    # accumulates and BOTH snapshots include route_probe (the env-armed path).
+    monkeypatch.setattr(rp, "ENABLED", True)
+    rp._SUMS.clear()
+    rp._COUNTS.clear()
+    try:
+        run = env_levers._generate(
+            model=_RouteBumpModel(rp, STAGE, BARRIER, PREFILL_BUMP, PER_STEP),
+            ops=_Ops(), mem_probe=_ZeroMemProbe(),
+            prompt_ids=list(range(4)), steps=STEPS, stage_timing=True,
+        )
+        before = run["stream_after_prefill"]
+        after = run["stream_end"]
+
+        # The clear ran BEFORE the before-snapshot -> its route_probe baseline is
+        # empty (the fix's signature; the buggy order left PREFILL_BUMP here).
+        assert before.get("route_probe_counts", {}) == {}
+        assert before.get("route_probe_sums_ns", {}) == {}
+
+        d = stream_counters_delta(before, after, tokens=STEPS)
+        counts = d["route_probe_counts"]
+        sums = d["route_probe_sums_ns"]
+        # delta == the direct DECODE count (prefill 500 excluded), NON-NEGATIVE.
+        assert counts[STAGE] == STEPS * PER_STEP
+        assert counts[BARRIER] == STEPS * PER_STEP
+        assert sums[BARRIER] == STEPS * PER_STEP * 1000
+        assert all(v >= 0 for v in counts.values()), counts
+        assert all(v >= 0 for v in sums.values()), sums
+    finally:
+        rp._SUMS.clear()
+        rp._COUNTS.clear()
+
+
+# --------------------------------------------------------------------------
 # W81: two composite stacking arms for window 34. Each must be EXACTLY the merged
 # cell16k_ring key set plus one intended lever group, so a later edit to
 # cell16k_ring propagates and no stray key drifts into the stack.

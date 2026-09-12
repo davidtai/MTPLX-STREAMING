@@ -75,6 +75,24 @@ measures latency that appears only when the components coexist. The SSD-bound es
 `bytes_read_per_token ÷ --ssd-bandwidth-gibs` (default 4.4 GiB/s, the measured M5 Max SSD threshold);
 the receipt carries `misses_per_token` and `bytes_read_per_token` so any bandwidth can be re-applied.
 
+### eval(indices) time, measured directly (pass 1)
+
+Pass (1) also arms the route-stage probe over its decode loop, so the receipt carries the
+`hot.eval_indices` barrier time **directly** (`route_probe_sums_ns` / `route_probe_counts`, surfaced as
+`attribution.eval_indices_ms_per_token_measured`). The probe's `bracket` only wraps the `mx.eval(indices)`
+the production switch already runs with a `perf_counter` — it adds **no** fence and does not force the
+eager path — so the frame wall is unperturbed. This is an independent cross-check of the `(2)-(4)`
+sync/barrier delta.
+
+The counters are cleared **immediately before** the pass's before-snapshot and nowhere between it and
+the after-snapshot, so the recorded sums/counts are the exact decode deltas (baseline 0, never
+negative). This is the same discipline as the companion fix in `ab_decode_env_levers.py::_generate`:
+that function used to clear the route probe *after* its `after_prefill` snapshot, so the decode
+`route_probe_sums_ns` delta (`end - after_prefill`) subtracted the prefill accumulation and went
+**negative** for prefill-heavy stages (window-37 `ar-ring-ref` had `hot.begin_split_route` sum
+`-3.8e8`), making the "≥315 ms of the token inside `mx.eval(indices)`" figure only a lower bound. With
+the clear moved before the before-snapshot, that delta is exact.
+
 ## Exact GPU-window command (16,384-token cell)
 
 60 GiB plan, `--max-kv 17408`, `cell16k_ring` arm — the standard 16K cell. Run through the flock
@@ -105,14 +123,18 @@ comparable to an ab `cell16k_ring` receipt run at `--decode-tokens 64`.
 ```
 worker "W94" · mode "in_model_unfenced" · device · tiny · arm · steps · warmup_steps
 ssd_bandwidth_gibs · dims · prompt · memory{active_end_gib, peak_gib}
-utilization · cooldown · token_ids_sha256 · n_token_ids            # pass (1) hoisted
+utilization · cooldown · token_ids_sha256 · n_token_ids · token_ids   # pass (1) hoisted
+route_probe_counts · route_probe_sums_ns                              # pass (1), exact decode deltas
 passes.<key>.summary  { mean_ms_per_token, median_ms_per_token, tok_s, steps,
                         warmup_steps, measured_steps, decode_wall_s, decode_wall_tok_s,
                         ttft_s, gpu_busy_pct, gpu_freq_mhz, gpu_power_w,
                         misses_per_token, bytes_read_per_token, records_streamed_per_token,
-                        hit_rate, ssd_bound_estimate_ms }
-passes.<key>.{ utilization, cooldown, token_ids_sha256, n_token_ids }
+                        hit_rate, ssd_bound_estimate_ms,
+                        eval_indices_ms_per_token, eval_indices_barriers_per_token }
+passes.<key>.{ utilization, cooldown, token_ids_sha256, n_token_ids, token_ids,
+               route_probe_counts, route_probe_sums_ns }   # route_probe: pass (1) only, else null
 attribution { full, attention, switch_total, switch_ssd_bound, switch_sync_barrier,
+              eval_indices_ms_per_token_measured, eval_indices_barriers_per_token,
               small_stages_floor, sum_of_parts, unattributed_residual,
               ssd_bound_independent_estimate_ms, misses_per_token, bytes_read_per_token,
               hit_rate, ssd_bandwidth_gibs }   (all …_ms_per_token)
@@ -126,3 +148,9 @@ per-layer `mx.eval(indices)`. Covered by `tests/models/test_metal_decode_attn_bi
 (`test_unfenced_*`, `test_zeroswitch_*`, `test_apply_stub_barrier_flag_propagates`). CPU magnitudes are
 meaningless (the CPU backend does not reproduce Metal latency); the GPU window measures the real
 in-situ frame walls.
+
+The companion `_generate` route-probe delta fix is covered by
+`tests/test_deepseek_v41_ab_env_levers.py::test_generate_route_probe_delta_is_exact_and_non_negative`:
+a fake model bumps a route counter heavily on prefill and lightly per decode step; the test asserts the
+`after_prefill` route-probe baseline is empty (the clear ran before it) and the decode delta equals the
+direct decode count and is non-negative for every stage.
