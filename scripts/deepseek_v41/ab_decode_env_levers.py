@@ -51,6 +51,15 @@ DEFAULT_MODEL = Path(
 GIB = 1024 ** 3
 DEFAULT_BOS_ID = 0
 
+# W113: repo-root-relative path to the standard chat-templated 16K cell ids file
+# (schema mtplx-server-cell-prompt-ids-v1, cell=sweep, target_tokens=16384,
+# seed=20260829).  The cell-prompt guard defaults --prompt-ids-file to this and
+# refuses to MEASURE a 16K cell on the raw builder without it (see the W113 block).
+STANDARD_CELL16K_PROMPT_IDS = (
+    "docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/"
+    "prompt-ids-deepseek-v41.json"
+)
+
 # W106 item 3: derive the MLX plan limit from David's TOTAL box budget while
 # COMPENSATING for the non-Metal requirements (the box has a 110 GB hard ceiling
 # and his budget is 100 GB TOTAL for everything):
@@ -1641,6 +1650,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
     )
     p.add_argument("--seed", type=int, default=0)
+    # W113: cell-prompt guard + EOS surfacing.
+    p.add_argument(
+        "--allow-raw-prompt",
+        action="store_true",
+        default=False,
+        help="ESCAPE HATCH (diagnostics): let a cell16k_* arm / --context-tokens "
+        "16384 run MEASURE the RAW prefill_bench builder prompt instead of the "
+        "standard chat-templated cell. Skips BOTH the W113 guard refusal and the "
+        "ctx-16384 --prompt-ids-file auto-default; stamps prompt_source='raw-"
+        "builder' loudly. The raw prompt's greedy first token is EOS, so a served "
+        "path returns EMPTY.",
+    )
+    p.add_argument(
+        "--stop-on-eos",
+        action="store_true",
+        default=False,
+        help="served-parity: stop the AR decode (and, in --decode-mode dspark, the "
+        "speculative decode) at the EOS id and report decode_tok_s over the tokens "
+        "ACTUALLY generated. Default OFF keeps the full fixed-step decode so the "
+        "throughput numbers are unchanged. Mirrors the serve_bench_1k W18 guard.",
+    )
+    p.add_argument(
+        "--eos-id",
+        type=int,
+        default=None,
+        help="override the EOS token id used by --stop-on-eos and the EOS-surfacing "
+        "receipt fields (default: resolve from the tokenizer files, no model load).",
+    )
     return p
 
 
@@ -1652,6 +1689,269 @@ def _apply_arm_env(arm: str) -> None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+
+
+# --------------------------------------------------------------------------
+# W113 cell-prompt guard + prompt provenance + EOS surfacing
+# --------------------------------------------------------------------------
+# Windows 39-42 MEASURED the RAW prefill_bench builder prompt (BOS + a 96x
+# ``# file_N.py`` filler ladder + DEFAULT_FINAL_REQUEST = 16,385 tokens, no chat
+# template, no generation prompt) whose greedy first token is EOS (id 1); the
+# classic/device decode loops had no EOS check, so 256 FORCED post-EOS filler
+# tokens were timed and a served (EOS-honouring) path would have returned an
+# EMPTY answer.  The standard 16K cell is the chat-templated ids file
+# STANDARD_CELL16K_PROMPT_IDS, reached ONLY via --prompt-ids-file
+# (bench._prompt_ids_override: exactly 16,384 ids, ending <｜Assistant｜></think>,
+# no BOS re-prepend).  A receipt tells the two apart by ``prompt_source`` /
+# ``prompt_tokens`` (16,384 file vs 16,385 raw+BOS) / ``prompt_chat_templated``.
+# The guard (real-measurement path) refuses to run a cell16k_* arm or a
+# --context-tokens 16384 run on the raw builder unless --allow-raw-prompt, and
+# defaults --prompt-ids-file to the standard file so launchers get the cell.
+
+
+def _repo_root() -> Path:
+    """Repo/worktree root: ``scripts/deepseek_v41/<this>.py`` -> ``parents[2]``."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _standard_cell16k_prompt_path() -> Path:
+    """Absolute path to the standard 16K cell ids file (repo-root relative)."""
+    return _repo_root() / STANDARD_CELL16K_PROMPT_IDS
+
+
+def _cell16k_arm(name) -> bool:
+    """True for the standard-cell arms (names start ``cell16k_``)."""
+    return str(name).startswith("cell16k_")
+
+
+_SPECIAL_IDS_CACHE: dict = {}
+
+
+def _special_token_ids(model_path) -> dict:
+    """Resolve special-token ids from the tokenizer files WITHOUT a model/MLX.
+
+    Reads ``tokenizer_config.json`` (bos/eos/pad token contents) and
+    ``tokenizer.json`` (the ``added_tokens`` content->id map) under ``model_path``
+    and returns ``{bos, eos, pad, assistant, user, system, think, end_think}`` for
+    the ids that resolve.  CPU-only, read-only, cached by path; ``{}`` if the files
+    cannot be read (best-effort -- callers degrade to ``None`` flags).  This is the
+    "detect via tokenizer special ids, no model" path W113 needs when
+    --prompt-ids-file skips the tokenizer load.
+    """
+    key = str(model_path)
+    if key in _SPECIAL_IDS_CACHE:
+        return _SPECIAL_IDS_CACHE[key]
+    out: dict = {}
+    try:
+        base = Path(model_path).expanduser()
+        cfg = json.loads((base / "tokenizer_config.json").read_text())
+        tok = json.loads((base / "tokenizer.json").read_text())
+
+        def _content(v):
+            return v.get("content") if isinstance(v, dict) else v
+
+        by_content: dict = {}
+        for t in (tok.get("added_tokens") or []):
+            c = t.get("content")
+            if c is not None and t.get("id") is not None:
+                by_content[c] = int(t["id"])
+        wanted = {
+            "bos": _content(cfg.get("bos_token")),
+            "eos": _content(cfg.get("eos_token")),
+            "pad": _content(cfg.get("pad_token")),
+            "assistant": "<｜Assistant｜>",
+            "user": "<｜User｜>",
+            "system": "<｜System｜>",
+            "think": "<think>",
+            "end_think": "</think>",
+        }
+        for name, content in wanted.items():
+            if content is not None and content in by_content:
+                out[name] = by_content[content]
+        # config-level id fields win when present (both None for this model).
+        if cfg.get("eos_token_id") is not None:
+            out["eos"] = int(cfg["eos_token_id"])
+        if cfg.get("bos_token_id") is not None:
+            out["bos"] = int(cfg["bos_token_id"])
+    except Exception:  # pragma: no cover - defensive (missing/unreadable files)
+        out = {}
+    _SPECIAL_IDS_CACHE[key] = out
+    return out
+
+
+def _resolve_eos_id(args):
+    """The EOS token id: ``--eos-id`` override, else the tokenizer-file eos id,
+    else ``None`` (EOS surfacing then records ``None`` best-effort)."""
+    ov = getattr(args, "eos_id", None)
+    if ov is not None:
+        return int(ov)
+    eid = _special_token_ids(getattr(args, "model", None)).get("eos")
+    return int(eid) if eid is not None else None
+
+
+def _prompt_chat_templated(prompt_ids, special):
+    """Best-effort: is ``prompt_ids`` chat-templated WITH a generation prompt?
+
+    ``True`` when the ids contain the ``<｜Assistant｜>`` special id AND end with a
+    generation prompt -- nothing follows the final assistant marker except the
+    think open/close markers (the assistant turn is opened but not yet answered,
+    e.g. ``... <｜Assistant｜></think>``).  ``False`` for the raw builder prompt (no
+    assistant marker) or a prompt whose assistant turn already has content after
+    the marker.  ``None`` when the assistant special id is unavailable.
+    """
+    assistant = (special or {}).get("assistant")
+    if assistant is None:
+        return None
+    ids = [int(t) for t in prompt_ids]
+    if assistant not in ids:
+        return False
+    last = max(i for i, t in enumerate(ids) if t == assistant)
+    opener = {
+        x
+        for x in ((special or {}).get("think"), (special or {}).get("end_think"))
+        if x is not None
+    }
+    return all(t in opener for t in ids[last + 1:])
+
+
+def _prompt_provenance(args, prompt_ids, prompt_meta) -> dict:
+    """The W113 receipt stamps that tell the standard cell from the raw builder.
+
+    ``prompt_source`` is ``"prompt-ids-file"`` when --prompt-ids-file fed the exact
+    served ids, else ``"raw-builder"`` (the prefill_bench builder).
+    ``prompt_ids_sha256`` is the sha of the PROMPT ids (NOT the generated ids --
+    that is ``token_ids_sha256``).  ``prompt_chat_templated`` is detected from the
+    tokenizer special ids (no model).  ``prompt_build`` carries the resolver's own
+    metadata block (its native ``prompt_source`` field is "prefill_bench"/"literal"
+    for the builder or "prompt-ids-file" for the override -- a finer label than the
+    two-value top-level one).
+    """
+    src = (
+        "prompt-ids-file"
+        if getattr(args, "prompt_ids_file", None)
+        else "raw-builder"
+    )
+    special = _special_token_ids(getattr(args, "model", None))
+    ids_sha = hashlib.sha256(
+        json.dumps([int(t) for t in prompt_ids]).encode("utf-8")
+    ).hexdigest()
+    return {
+        "prompt_source": src,
+        "prompt_ids_file": getattr(args, "prompt_ids_file", None),
+        "prompt_ids_sha256": ids_sha,
+        "prompt_seed": getattr(args, "prompt_seed", None),
+        "prompt_tokens": len(prompt_ids),
+        "prompt_chat_templated": _prompt_chat_templated(prompt_ids, special),
+        "allow_raw_prompt": bool(getattr(args, "allow_raw_prompt", False)),
+        "prompt_build": prompt_meta,
+    }
+
+
+def _eos_surfacing(generated_ids, eos_id, *, n=None) -> dict:
+    """EOS surfacing over a generated id stream (W113).
+
+    ``first_token_eos`` -- the FIRST generated token is EOS (a served path would
+    then return an EMPTY answer).  ``eos_index`` -- the first position of the EOS
+    id in the stream, or ``None``.  ``tokens_before_eos`` -- ``eos_index`` if
+    present, else the whole stream length.  ``answer_valid`` -- ``True`` when EOS
+    never appears OR appears past the halfway point (``eos_index > 0.5 * N``): the
+    model produced a substantial answer before stopping.  ``N`` is the number of
+    generated tokens recorded in the stream (defaults to ``len(generated_ids)``;
+    for the AR pass that is ``decode_tokens + 1`` -- the prefill argmax token plus
+    the decode loop).  All fields are ``None`` when ``eos_id`` is unknown.
+    """
+    ids = [int(t) for t in (generated_ids or [])]
+    total = len(ids)
+    n_eff = int(n) if n is not None else total
+    if eos_id is None:
+        return {
+            "first_token_eos": None,
+            "eos_index": None,
+            "tokens_before_eos": None,
+            "answer_valid": None,
+            "eos_id": None,
+            "n_generated": total,
+        }
+    eos_id = int(eos_id)
+    eos_index = next((i for i, t in enumerate(ids) if t == eos_id), None)
+    return {
+        "first_token_eos": bool(ids and ids[0] == eos_id),
+        "eos_index": eos_index,
+        "tokens_before_eos": int(eos_index if eos_index is not None else total),
+        "answer_valid": bool(
+            eos_index is None or (n_eff > 0 and eos_index > 0.5 * n_eff)
+        ),
+        "eos_id": eos_id,
+        "n_generated": total,
+    }
+
+
+def _warn_if_first_token_eos(arm, lane, surf) -> None:
+    """The loud W113 warning when the first generated token is EOS."""
+    if surf.get("first_token_eos"):
+        print(
+            "[ab] " + "!" * 8 + " WARNING: first generated token is EOS -- answer "
+            "would be EMPTY on a served path " + "!" * 8
+            + f" (arm {arm!r}, {lane})",
+            flush=True,
+        )
+
+
+def _apply_cell_prompt_guard(args) -> None:
+    """W113 cell-prompt guard for the REAL measurement path (see the block note).
+
+    - Auto-default --prompt-ids-file to the standard 16K cell file when
+      --context-tokens 16384 and that file exists (repo-root relative), so a
+      launcher gets the standard cell without passing the path.
+    - REFUSE to run any ``cell16k_*`` arm or any --context-tokens 16384 run without
+      --prompt-ids-file (raise ``SystemExit`` naming the standard file).
+    - --allow-raw-prompt is the loud diagnostics escape hatch: it skips BOTH the
+      refusal and the auto-default and runs the raw builder.
+
+    Precedence: an explicit --prompt-ids-file wins over everything; then
+    --allow-raw-prompt (raw builder, loud); then the ctx-16384 auto-default; then
+    the refusal.  No-op when the run is neither a cell16k_* arm nor 16384-ctx.
+    """
+    ctx16k = int(getattr(args, "context_tokens", 0) or 0) == 16384
+    cell_arms = [a for a in (getattr(args, "arms", None) or []) if _cell16k_arm(a)]
+    if not (ctx16k or cell_arms):
+        return
+    if getattr(args, "prompt_ids_file", None):  # explicit file always wins
+        return
+    if getattr(args, "allow_raw_prompt", False):
+        print(
+            "[ab] " + "!" * 8 + " --allow-raw-prompt: measuring the RAW builder "
+            "prompt on a 16K cell " + "!" * 8 + "\n"
+            "[ab] WARNING: this is the DIAGNOSTIC raw prefill_bench prompt (no chat "
+            "template, no generation prompt); its greedy first token is EOS so a "
+            "served path returns EMPTY. NOT the standard cell. prompt_source is "
+            "stamped 'raw-builder'.",
+            flush=True,
+        )
+        return
+    std = _standard_cell16k_prompt_path()
+    if ctx16k and std.exists():
+        args.prompt_ids_file = str(std)
+        print(
+            f"[ab] W113: defaulted --prompt-ids-file to the standard 16K cell {std} "
+            "(pass --prompt-seed 20260829; --allow-raw-prompt for the raw builder)",
+            flush=True,
+        )
+        return
+    reason = []
+    if cell_arms:
+        reason.append(f"cell16k_* arms {cell_arms}")
+    if ctx16k:
+        reason.append("--context-tokens 16384")
+    raise SystemExit(
+        "[ab] REFUSED (W113 cell-prompt guard): " + " and ".join(reason) + " require "
+        "the standard chat-templated 16K cell prompt, but --prompt-ids-file was not "
+        f"given and the standard file was not found at {std}. Pass --prompt-ids-file "
+        f"<{STANDARD_CELL16K_PROMPT_IDS}> --prompt-seed 20260829 (schema "
+        "mtplx-server-cell-prompt-ids-v1, cell=sweep, target_tokens=16384), or "
+        "--allow-raw-prompt to measure the diagnostic raw builder (its greedy first "
+        "token is EOS -> empty served answer)."
+    )
 
 
 def _arm_env_snapshot() -> dict:
@@ -1703,8 +2003,12 @@ def _dry_run_arm(args, arm, bench) -> dict:
         "device_sample": _device_sample_resolved(args),
         "context_tokens": int(args.context_tokens),
         "decode_tokens": int(args.decode_tokens),
-        "prompt_tokens": len(prompt_ids),
-        "prompt_build": prompt_meta,
+        # W113 prompt provenance stamps (prompt_source / prompt_ids_file /
+        # prompt_ids_sha256 / prompt_seed / prompt_tokens / prompt_chat_templated /
+        # allow_raw_prompt / prompt_build).  In --dry-run this is always the raw
+        # builder (the guard/auto-default run only on the real path), so
+        # prompt_source == "raw-builder" and prompt_chat_templated is False.
+        **_prompt_provenance(args, prompt_ids, prompt_meta),
         # W37 pass toggles resolved offline (no model / MLX): proves the flags
         # thread through argument resolution before a GPU window burns on them.
         "stage_timing": bool(getattr(args, "stage_timing", False)),
@@ -2834,8 +3138,18 @@ def _macmon():
 
 def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
               mem_profile_every=64, device_sample=False, cooldown_s=0.0,
-              util_sampler=None, stage_timing=False):
+              util_sampler=None, stage_timing=False, stop_on_eos=False,
+              eos_id=None):
     """Greedy prefill + ``steps`` decode; captures the decoded token ids.
+
+    W113: ``stop_on_eos`` (default off) stops the decode at ``eos_id`` for a
+    served-parity run and returns ``decode_steps_run`` = the number of DECODE
+    tokens actually generated (excludes the prefill argmax token that begins
+    ``generated``), so the caller can report decode_tok_s over the tokens actually
+    produced.  Default off runs the full fixed ``steps`` decode (numbers
+    unchanged) and ``decode_steps_run == steps``.  When the prefill's own first
+    token is already EOS and ``stop_on_eos``, the decode loop is skipped entirely
+    (a served path would emit nothing), so ``decode_steps_run == 0``.
 
     W90: ``cooldown_s`` idles AFTER prefill and BEFORE the timed decode (TTFT, from
     the prefill, is unaffected); ``util_sampler`` (a ``util_macmon.UtilizationSampler``
@@ -2878,6 +3192,11 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         # excluded so the hit rate is the decode hit rate).
         _sc_after_prefill = _stream_counters_snapshot(model)
         extra_forward_steps = 0
+        # W113: DECODE tokens actually generated (excludes the prefill argmax token
+        # that begins ``generated``).  == steps on the default full run; fewer under
+        # --stop-on-eos.
+        decode_steps_run = 0
+        _stop_eos = int(eos_id) if (stop_on_eos and eos_id is not None) else None
 
         # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
         # loop (prefill excluded) so the receipt reports per-layer host syncs
@@ -2917,18 +3236,28 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
                         first_token=int(token),
                         n_more=int(steps),
                         sampler=None,  # greedy (byte-identical to the classic argmax loop)
-                        stop_ids=set(),
+                        # W113: served-parity early stop (default off -> empty set ->
+                        # full fixed-step decode, byte-identical to the classic loop).
+                        stop_ids=({_stop_eos} if _stop_eos is not None else set()),
                     )
                     generated.extend(int(t) for t in more)
+                    decode_steps_run = len(more)
                 else:
                     every = max(1, int(mem_profile_every))
-                    for step in range(int(steps)):
-                        logits = model(ops.input([[token]]), cache=cache)
-                        ops.sync(logits)
-                        token = ops.argmax_last(logits)
-                        generated.append(token)
-                        if mem_profile is not None and (step + 1) % every == 0:
-                            mem_profile("decode", token=step + 1)
+                    # W113: when the prefill's own first token is already EOS, a served
+                    # path emits nothing -- skip the decode loop entirely.
+                    if not (_stop_eos is not None and int(token) == _stop_eos):
+                        for step in range(int(steps)):
+                            logits = model(ops.input([[token]]), cache=cache)
+                            ops.sync(logits)
+                            token = ops.argmax_last(logits)
+                            generated.append(token)
+                            decode_steps_run += 1
+                            if mem_profile is not None and (step + 1) % every == 0:
+                                mem_profile("decode", token=step + 1)
+                            # W113: served-parity early stop at EOS (default off).
+                            if _stop_eos is not None and int(token) == _stop_eos:
+                                break
             finally:
                 # W92: restore the probe ENABLED flag even if the decode loop raised, so
                 # a failed arm never leaves the module armed for the rest of the process
@@ -3005,6 +3334,8 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         # the whole-box used-memory peak the gpu_window.sh guard aborts on).
         "memory": mem_probe.memory_block(_mem_sampler),
         "extra_forward_steps": int(extra_forward_steps),
+        # W113: DECODE tokens actually generated (== steps unless --stop-on-eos).
+        "decode_steps_run": int(decode_steps_run),
         "stream_after_prefill": _sc_after_prefill,
         "stream_end": _sc_end,
         # W95f: the v2 runner + gate_prefetch receipt blocks (present only when armed).
@@ -3104,7 +3435,7 @@ def _dspark_decode_wall_accounting(
 
 
 def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
-                     stage_timing=False, ar_reference=None):
+                     stage_timing=False, ar_reference=None, stop_ids=None):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
     per-cycle accept + phase-timing statistics.  Total tokens == steps + 1 to match
     ``_generate`` (prefill token + ``steps`` decode tokens).
@@ -3166,6 +3497,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             stats=stats,
             divergence_capture=capture,
             prefill_callback=_stream_prefill_cb,
+            stop_ids=stop_ids,  # W113: served-parity early stop (--stop-on-eos)
         )
         _sc["end"] = _stream_counters_snapshot(model)
         # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
@@ -3210,6 +3542,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
                 seed=0,
                 speculative_depth=int(depth),
                 stats=DSparkDecodeStats(),
+                stop_ids=stop_ids,  # W113: match the headline pass
             )
             report = model.stage_timing_report()
         finally:
@@ -3652,6 +3985,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
     prompt_ids, prompt_meta = bench._resolve_prompt(
         args, _tok, build_prompt, args.context_tokens
     )
+    # W113: resolve the EOS id (tokenizer files, no model) for the EOS-surfacing
+    # receipt fields and the optional --stop-on-eos served-parity early stop.
+    eos_id = _resolve_eos_id(args)
+    stop_on_eos = bool(getattr(args, "stop_on_eos", False))
     resident = _load_model(args, bench, mx)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime", None)
@@ -3736,10 +4073,19 @@ def _run_arm(args, arm, bench, mx) -> dict:
             cooldown_s=float(getattr(args, "cooldown_s", 0.0) or 0.0),
             util_sampler=util_sampler,
             stage_timing=bool(getattr(args, "stage_timing", False)),
+            stop_on_eos=stop_on_eos,
+            eos_id=eos_id,
         )
         if util_sampler is not None:
             print(f"[ab] {arm}: {util_sampler.census()}", flush=True)
         ids = run["generated"]
+        # W113: the number of DECODE tokens actually generated (excludes the prefill
+        # argmax token).  == args.decode_tokens on the default full fixed-step run;
+        # fewer only under --stop-on-eos.  decode_tok_s is reported over it so a
+        # served-parity run's rate reflects the tokens actually produced.
+        _decode_generated = int(run.get("decode_steps_run", args.decode_tokens))
+        _ar_eos = _eos_surfacing(ids, eos_id)
+        _warn_if_first_token_eos(arm, "AR", _ar_eos)
         receipt = {
             "arm": arm,
             # W97 (review item 7): True when this arm's tokens are EXPECTED to differ
@@ -3760,14 +4106,18 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "device_sample_extra_forwards": int(run.get("extra_forward_steps", 0)),
             "context_tokens": int(args.context_tokens),
             "decode_tokens": int(args.decode_tokens),
+            # W113: DECODE tokens actually generated (== decode_tokens unless
+            # --stop-on-eos stopped early); decode_tok_s is reported over it.
+            "decode_tokens_generated": _decode_generated,
+            "stop_on_eos": stop_on_eos,
             "prompt_tokens": len(prompt_ids),
             "ttft_s": run["ttft_s"],
             "prefill_tok_s": (len(prompt_ids) / run["ttft_s"])
             if run["ttft_s"] > 0
             else None,
             "decode_wall_s": run["decode_wall_s"],
-            "decode_tok_s": (args.decode_tokens / run["decode_wall_s"])
-            if run["decode_wall_s"] > 0
+            "decode_tok_s": (_decode_generated / run["decode_wall_s"])
+            if (run["decode_wall_s"] > 0 and _decode_generated > 0)
             else None,
             # peak_gb is the MLX allocator peak ONLY (kept as-is for old receipts'
             # comparability); peak_process_gb is the whole-PROCESS peak RSS incl.
@@ -3839,6 +4189,17 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # W92 switch-dispatch census (present only with --stage-timing): per-layer
             # host syncs + all-hit fences deferred vs synced + gather_qmm/switch-call.
             "switch_dispatch": run.get("switch_dispatch"),
+            # W113 EOS surfacing (AR top level): first_token_eos / eos_index /
+            # tokens_before_eos / answer_valid / eos_id / n_generated (see
+            # _eos_surfacing).  A first_token_eos=True means a served path returns
+            # an EMPTY answer -- the loud warning above fires too.
+            **_ar_eos,
+            # W113 prompt provenance stamps (prompt_source / prompt_ids_file /
+            # prompt_ids_sha256 [PROMPT ids, not the generated token_ids_sha256] /
+            # prompt_seed / prompt_tokens / prompt_chat_templated / allow_raw_prompt
+            # / prompt_build).  Tells the standard chat-templated cell apart from the
+            # raw builder that windows 39-42 measured.
+            **_prompt_provenance(args, prompt_ids, prompt_meta),
         }
         if mem_profile_snaps is not None:
             from mtplx.deepseek_v41_memory_profile import (
@@ -3868,8 +4229,15 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 depth=args.dspark_depth,
                 stage_timing=bool(getattr(args, "stage_timing", False)),
                 ar_reference=ids,
+                # W113: under --stop-on-eos both lanes stop at EOS so the AR-vs-
+                # DSpark byte-identity comparison stays like-for-like (default off
+                # -> stop_ids None -> full fixed-step decode, numbers unchanged).
+                stop_ids=({int(eos_id)} if (stop_on_eos and eos_id is not None)
+                          else None),
             )
             dsp_ids = dsp["generated"]
+            _dsp_eos = _eos_surfacing(dsp_ids, eos_id)
+            _warn_if_first_token_eos(arm, "DSpark", _dsp_eos)
             byte_identical = dsp_ids == ids
             st = dsp["stats"]
             receipt["dspark"] = {
@@ -3907,6 +4275,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "token_ids_sha256": hashlib.sha256(
                     json.dumps(dsp_ids).encode()
                 ).hexdigest(),
+                # W113 EOS surfacing (dspark block): first_token_eos / eos_index /
+                # tokens_before_eos / answer_valid / eos_id / n_generated over the
+                # DSpark stream (see _eos_surfacing).
+                **_dsp_eos,
             }
             # W106 output persistence: the FULL DSpark stream (ids + decoded text)
             # AND the AR comparison stream it is verified against, both under the
@@ -4431,6 +4803,15 @@ def main(argv=None) -> int:
 
     if args.dry_run:
         return _run_dry(args, bench)
+
+    # W113 cell-prompt guard: refuse to MEASURE a 16K cell (any cell16k_* arm or
+    # --context-tokens 16384) on the raw builder, and default --prompt-ids-file to
+    # the standard chat-templated cell so launchers get it.  Real path only -- the
+    # --dry-run resolution double never measures throughput (it exercises the raw
+    # builder with the fake tokenizer on purpose), so it is exempt.  May raise
+    # SystemExit (a clear error naming the standard file) or set
+    # args.prompt_ids_file before any arm/model load.
+    _apply_cell_prompt_guard(args)
 
     if args.syncs > 0 or args.stage_timing or args.prefill_stage_timing:
         # The route-stage probe reads its ENABLED flag at import, so arm it before
