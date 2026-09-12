@@ -36,20 +36,25 @@ def _resolve_bin(macmon_bin: Optional[str] = None) -> str:
         return macmon_bin
     return os.environ.get("MTPLX_MACMON_BIN") or MACMON
 
-#: The utilization fields the W90 discriminator needs, per macmon sample.  Names
-#: follow the coordinator's ``macmon pipe`` schema; read with fallbacks so a macmon
-#: version that spells a field differently (e.g. ``gpu_active_ratio``) still lands.
+#: The utilization fields the W90 discriminator needs, per macmon sample.
+#: ``gpu_usage_ratio`` and ``gpu_active_ratio`` are DIFFERENT macmon metrics (not
+#: spelling variants -- e.g. 0.070 vs 0.198 in one sample), so both are recorded;
+#: the census "busy%" prints ``gpu_usage_ratio`` (the metric the coordinator's live
+#: read "~45% busy" came from, via ``macmon pipe``).
 _FIELDS = (
-    "gpu_freq_mhz", "gpu_power_w", "gpu_busy_ratio",
-    "cpu_busy_ratio", "gpu_temp_c", "cpu_temp_c",
+    "gpu_freq_mhz", "gpu_power_w", "gpu_usage_ratio", "gpu_active_ratio",
+    "cpu_usage_ratio", "gpu_temp_c", "cpu_temp_c",
 )
+
+#: The field the one-line census reports as "busy %".
+_CENSUS_BUSY_FIELD = "gpu_usage_ratio"
 
 
 def parse_macmon_payload(payload: dict) -> dict:
     """Extract the W90 utilization fields from one macmon JSON sample as floats.
 
-    Robust to field-name drift across macmon versions (``gpu_usage_ratio`` vs
-    ``gpu_active_ratio``) and to missing fields (0.0)."""
+    ``gpu_usage_ratio`` (scheduler occupancy) and ``gpu_active_ratio`` (a separate
+    macmon metric) are kept SEPARATE; missing fields read 0.0."""
     temp = payload.get("temp") or {}
 
     def _f(*keys, src=payload) -> float:
@@ -67,8 +72,9 @@ def parse_macmon_payload(payload: dict) -> dict:
         "gpu_power_w": _f("gpu_power"),
         "cpu_power_w": _f("cpu_power"),
         "all_power_w": _f("all_power"),
-        "gpu_busy_ratio": _f("gpu_usage_ratio", "gpu_active_ratio"),
-        "cpu_busy_ratio": _f("cpu_usage_ratio", "cpu_active_ratio"),
+        "gpu_usage_ratio": _f("gpu_usage_ratio"),
+        "gpu_active_ratio": _f("gpu_active_ratio"),
+        "cpu_usage_ratio": _f("cpu_usage_ratio"),
         "gpu_temp_c": _f("gpu_temp_avg", src=temp),
         "cpu_temp_c": _f("cpu_temp_avg", src=temp),
     }
@@ -102,13 +108,13 @@ def census_line(summary: dict) -> str:
     def _n(v, fmt):
         return fmt.format(v) if isinstance(v, (int, float)) else "?"
 
-    gb = _m("gpu_busy_ratio")
+    gb = _m(_CENSUS_BUSY_FIELD)  # busy% == gpu_usage_ratio (the macmon scheduler metric)
     return (
         f"utilization[n={summary['samples']}]: "
         f"gpu {_n(_m('gpu_power_w'), '{:.1f}')} W / "
         f"{_n(_m('gpu_freq_mhz'), '{:.0f}')} MHz / "
         f"{_n(gb * 100 if isinstance(gb, (int, float)) else None, '{:.0f}')}% busy "
-        f"(freq {_n(_m('gpu_freq_mhz', 'min'), '{:.0f}')}-"
+        f"(usage_ratio; freq {_n(_m('gpu_freq_mhz', 'min'), '{:.0f}')}-"
         f"{_n(_m('gpu_freq_mhz', 'max'), '{:.0f}')} MHz), "
         f"gpu {_n(_m('gpu_temp_c'), '{:.0f}')}C cpu {_n(_m('cpu_temp_c'), '{:.0f}')}C"
     )
@@ -200,14 +206,21 @@ def read_once(macmon_bin: Optional[str] = None) -> dict:
         )
     except OSError:
         return {}
+    # ``-s 1`` emits one sample then exits; communicate() with a timeout bounds the
+    # read so a stalled macmon can never hang the cooldown (a bare readline could).
+    line = ""
     try:
-        line = proc.stdout.readline() if proc.stdout else ""
-    finally:
-        proc.terminate()
+        out, _ = proc.communicate(timeout=3)
+        line = (out or "").splitlines()[0] if out else ""
+    except subprocess.TimeoutExpired:
+        proc.kill()
         try:
-            proc.wait(timeout=2)
+            proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            pass
+        return {}
+    except (OSError, ValueError):
+        return {}
     if not line:
         return {}
     try:

@@ -1,18 +1,23 @@
 """W90 -- MTPLX_DSV41_ATTN_SHAPE_STABLE: shared selected-compressed-KV gather.
 
-W90 pinned the in-situ decode-attention overhead (in-model reuse 6.96 ms/layer vs
-the isolated microbench 2.0 ms/layer flat, ~5 ms/layer) as the per-layer decode
-gather REFERENCING O(T) source buffers: every Reuse / Reindex / Full layer of a
-group gathers ``index_topk`` rows out of the SHARED ``compress_kv`` store
-``[b, n_comp, hd]`` (``n_comp ~ T/2``).  Only a bounded slice is read, but on Metal
-each tiny B=1 dispatch pays a residency/encode cost that scales with the referenced
-SOURCE size -- invisible on the CPU (W90 E5/E6: host wall + per-fn time FLAT in T)
-and not reproduced by unreferenced ballast (window 31).  ``MTPLX_DSV41_ATTN_SHAPE_
-STABLE`` gathers the selected compressed KV ONCE per ``(compress_kv, selected_idx)``
-source and shares the bounded ``[b, s, k, hd]`` result down the group, so only the
-first layer references the O(T) store.
+A DISPATCH-COUNT cleanup, NOT the in-situ decode-floor fix.  All Reuse / Reindex /
+Full layers of a group read the SAME ``(compress_kv, selected_idx)`` pair, so the
+shipped K30 path issues the compressed-lane gather (~3 tiny host dispatches) once per
+layer; ``MTPLX_DSV41_ATTN_SHAPE_STABLE`` gathers it ONCE per source and shares the
+bounded ``[b, s, k, hd]`` result down the group, so only the first layer of a group
+issues it (est. ~38 -> ~8 compress gathers/token on the real backbone; 6 -> 3 on this
+tiny config; <= ~1% of the token).  Small-M gated (decode/verify only; a prefill-
+chunk cache would pin ~17 GB at the 16K cell).
 
-This lever is a pure caching of the already-deterministic K30 gather, so it is
+This does NOT explain the mode-independent ~4 ms/layer in-situ floor: the earlier
+"O(T) source reference" claim is FALSIFIED -- ``docs/deepseek-v41/receipts/gpu-
+windows/window-34/w78-in-model.json`` shows ``attn.swa_only`` (no ``compress_kv``)
+at 7.447 ms/layer vs ``attn.reuse`` 6.960 (swa costs MORE while referencing no
+compressed store), and the isolated bench references O(T) per dispatch yet is flat.
+The floor tracks GPU DVFS (macmon: 71 C not-thermal, ~45% busy, 580-1381 MHz);
+``swa_only`` is the decisive per-mode control (see ``W90_ATTN_IN_SITU.md``).
+
+The lever is a pure caching of the already-deterministic K30 gather, so it is
 BYTE-IDENTICAL to the shipped selected-key path.  These tests prove, on a tiny CPU
 config (no artifact):
 

@@ -487,9 +487,15 @@ def decode_step_peeled(attn: Attention, cache: LayerAttentionCache,
         t["gather_iso"] += time.perf_counter_ns() - t0
 
     # -- attend (gather + score + softmax + PV; the production entry) --
+    # W90: mirror Attention._attend exactly -- pass shared (so the W90 shared-gather
+    # lever is exercised on the peeled path too) and the window drop_offset (0 on the
+    # plain/grow backing, the ring's _drop under WINDOW_RING).
     t0 = time.perf_counter_ns()
     if use_selected:
-        o = attn._sparse_attend_selected(q, window_all, sel_compress_kv, sel_comp_idx, positions)
+        o = attn._sparse_attend_selected(
+            q, window_all, sel_compress_kv, sel_comp_idx, positions,
+            cache.window_drop_offset, shared=shared,
+        )
     else:
         o = attn._sparse_attend(q, KV, attend)
     _fence(o)

@@ -42,15 +42,16 @@ dispatch-count cleanup, not the floor fix.
 
 - **O(T) source-buffer reference (the earlier W90 claim) — FALSIFIED.** The gather
   does reference O(T) sources (`window_all [1,T,hd]`, shared `compress_kv
-  [1,~T/2,hd]`; E3 confirms the shapes scale with T). But: (a) the integration-
-  worktree census (`../deepseek-v41`, read-only, not in this tree; windows 30/31/33/34)
-  shows **`attn.swa_only`** — a layer with **no `compress_kv` at all** and only a
-  ~5 MB window under the ring — costs **the same in situ as `attn.reuse`**; (b) the
+  [1,~T/2,hd]`; E3 confirms the shapes scale with T). But: (a) the in-model census
+  `docs/deepseek-v41/receipts/gpu-windows/window-34/w78-in-model.json` shows
+  **`attn.swa_only` at 7.447 ms/layer vs `attn.reuse` 6.960** — swa_only, a layer
+  with **no `compress_kv` at all** and only a ~5 MB window under the ring, costs
+  **more** in situ than reuse (which references the O(T) `compress_kv`); (b) the
   isolated microbench **already references O(T) sources per dispatch** yet is flat;
   (c) MLX 0.32.2 residency is per-allocation (ResidencySets), not per-referenced-
   byte; (d) the W80 ring bounded the *larger* (window) lane for only ~0.2–0.5 ms/
-  layer. A per-dispatch cost that scaled with referenced source size would not
-  produce swa_only ≈ reuse. So the O(T) reference is not the floor.
+  layer. A per-dispatch cost that scaled with referenced source size would not put
+  swa_only ≥ reuse. So the O(T) reference is not the floor.
 
 - **#1 compile retrace per token — RULED OUT (E1).** The K22 attention tapes
   (`_attn_qkv_prep`/`_attn_out_prep`) take only `s==1`-shaped inputs and are keyed
@@ -120,8 +121,10 @@ that snapshot.
 ## Telemetry added (window 36)
 
 - `util_macmon.py` (shared, mockable): `macmon pipe` background sampler →
-  `utilization` block (min/mean/max + per-sample series of gpu freq/power/busy, cpu
-  busy, temps) + a one-line census. Sudo-free (reuses `/opt/homebrew/bin/macmon` like
+  `utilization` block (min/mean/max + per-sample series of gpu freq/power, the two
+  distinct macmon occupancy metrics `gpu_usage_ratio` and `gpu_active_ratio`, cpu
+  usage, temps; the census "busy %" is `gpu_usage_ratio`) + a one-line census.
+  Sudo-free (reuses `/opt/homebrew/bin/macmon` like
   `server_cell_bench.py`), graceful no-op when macmon is absent, `MTPLX_MACMON_BIN`
   override for tests. Unit-tested with the reader mocked.
 - `--utilization` + `--util-interval-ms` + `--cooldown-s` on BOTH

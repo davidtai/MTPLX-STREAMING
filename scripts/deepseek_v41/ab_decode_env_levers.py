@@ -215,21 +215,25 @@ WINDOW_RING_SLACK_ENV = "MTPLX_DSV41_WINDOW_RING_SLACK"            # safety marg
 WINDOW_RING_HEADROOM_ENV = "MTPLX_DSV41_WINDOW_RING_HEADROOM"      # appends per compaction
 WINDOW_RING_MAXKV_ENV = "MTPLX_DSV41_WINDOW_RING_MAXKV"            # compress/index prealloc
 ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K35: shared selected-
-# compress gather.  W90 pinned the in-situ decode-attention overhead (in-model reuse
-# 6.96 ms/layer vs the isolated 2.0 ms/layer flat, ~5 ms/layer) as the per-layer
-# decode gather REFERENCING O(T) source buffers: every Reuse/Reindex/Full layer of a
-# group gathers index_topk rows out of the SHARED compress_kv store [b, n_comp, hd]
-# (n_comp ~ T/2), and on Metal each tiny B=1 dispatch pays a residency/encode cost
-# scaling with the referenced source size -- the W78/W80 "resident churn", invisible
-# on the CPU (host wall + per-fn time FLAT in T, W90 E5/E6) and NOT reproduced by
-# unreferenced ballast (window 31).  The W80 ring bounds the OTHER O(T) reference
-# (the per-layer window store); this bounds the compressed lane the ring can't touch
-# (the indexer needs compress_kv in full).  It gathers the selected compressed KV
-# ONCE per (compress_kv, selected_idx) source and shares the bounded [b,s,k,hd]
-# result, so only the first layer of a group references the O(T) store (~34 -> ~3
-# O(T) compress references/token).  BYTE-IDENTICAL (same rows, same order; a pure
-# caching of the already-deterministic K30 gather) -- the byte-identity summary must
-# show it clean.  A DECODE-shape lever; composes with the ring (cell16k_ring_stable).
+# compress gather -- a DISPATCH-COUNT cleanup, NOT the in-situ floor fix.  All
+# Reuse/Reindex/Full layers of a group read the SAME (compress_kv, selected_idx)
+# pair, so the shipped K30 path issues the compressed-lane gather (~3 tiny host
+# dispatches) once per layer; this gathers it ONCE per source and shares the bounded
+# [b,s,k,hd] result, so only the first layer of a group issues it (est. ~38 -> ~8
+# compress gathers/token on the real backbone; tiny config 6 -> 3).  Expected <= ~1%
+# of the token.  BYTE-IDENTICAL (a pure caching of the deterministic K30 gather; same
+# rows, same order) -- the byte-identity summary must show it clean.  Small-M gated
+# (decode/verify only; a prefill-chunk cache would pin ~17 GB at 16K).  Composes with
+# the ring (cell16k_ring_stable).
+#
+# NOT the fix for the mode-independent ~4 ms/layer in-situ decode floor.  The earlier
+# "O(T) source reference" claim is FALSIFIED: window-34/w78-in-model.json shows
+# attn.swa_only (no compress_kv) at 7.447 ms/layer vs attn.reuse 6.960 -- swa costs
+# MORE while referencing no compressed store -- and the isolated bench references O(T)
+# per dispatch yet is flat.  macmon on a live 16K decode read 71 C (NOT thermal),
+# ~45% GPU-busy (gpu_usage_ratio), freq swinging 580-1381 MHz: the GPU DVFS-downclocks
+# in the gaps between B=1 bursts.  The decisive per-mode control is swa_only; see
+# docs/deepseek-v41/W90_ATTN_IN_SITU.md and the --utilization telemetry.
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -616,29 +620,27 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         pin_working_set="all", device_route="1", device_route_pinned="1",
     ),
-    # W90 / K35: the shared selected-compress gather in ISOLATION, with selected keys
-    # on so the K30 gather path (the one this lever shares) is the one measured.  Every
-    # Reuse/Reindex/Full layer of a group reads the SAME (compress_kv, selected_idx)
-    # source; the shipped path re-gathers index_topk rows out of the O(T) compress_kv
-    # store per layer (~34 O(T) compress references/token at 16K), while this gathers
-    # once per source and shares the bounded [b,s,k,hd] operand (~3 references/token).
-    # W90 pinned that O(T) SOURCE reference as the in-situ decode-attention overhead
-    # (in-model reuse 6.96 vs isolated 2.0 ms/layer): host-side FLAT in T on the CPU
-    # (W90 E5/E6), so the cost is the Metal per-B=1-dispatch residency/encode over the
-    # referenced source (the W80 "resident churn" the ring left in the compress lane).
-    # BYTE-IDENTICAL to selected-keys control (a pure caching of the deterministic K30
-    # gather -- same rows, same order); the byte-identity summary must show it clean.
+    # W90 / K35: the shared selected-compress gather in ISOLATION (selected keys on so
+    # the shared K30 gather path is the one measured).  A DISPATCH-COUNT cleanup: all
+    # Reuse/Reindex/Full layers of a group read the SAME (compress_kv, selected_idx)
+    # pair; the shipped path re-issues the compressed-lane gather (~3 tiny host
+    # dispatches) once per layer, this issues it once per source and shares the bounded
+    # [b,s,k,hd] operand (est. ~38 -> ~8 compress gathers/token real; tiny config 6->3;
+    # <= ~1% of the token).  NOT the in-situ floor fix -- that floor is mode-independent
+    # (window-34: swa_only 7.447 >= reuse 6.960 ms/layer, and swa has no compress_kv)
+    # and tracks GPU DVFS (macmon: 71 C, ~45% busy, 580-1381 MHz), not this reference;
+    # the decisive control is swa_only + the --utilization trace.  BYTE-IDENTICAL to
+    # selected-keys control (a pure caching of the deterministic K30 gather).
     "attn_shape_stable": _preset(selected_keys="1", attn_shape_stable="1"),
-    # W90 / K35: cell16k_ring + the shared selected-compress gather -- bounds BOTH O(T)
-    # source references the W90 mechanism identified.  The ring bounds the per-layer
-    # window store (~0.7 GB -> ~5.5 MB, recovered only ~12 ms/tok because it leaves the
-    # compress/index lane full); this arm additionally shares the compressed-lane gather
-    # so the ~34 non-swa layers stop referencing the O(T) compress_kv store, targeting
-    # the residual the ring could not.  Exact key set of cell16k_ring plus
-    # attn_shape_stable="1".  BYTE-IDENTICAL to cell16k_ring (both run selected keys;
-    # the shared gather adds no new lossiness), so the byte-identity summary must show
-    # it matching cell16k_ring's class (lossy vs control ONLY through head=bf16 + the
-    # dense/lean prefill reassoc, cf. cell16k).
+    # W90 / K35: cell16k_ring + the shared selected-compress gather.  The ring bounds
+    # the per-layer window store; this shares the compressed-lane gather so the non-swa
+    # layers stop re-issuing it.  Both are byte-identical dispatch/residency cleanups --
+    # NOT the mode-independent in-situ floor (that is GPU DVFS-downclock between B=1
+    # bursts; see docs/deepseek-v41/W90_ATTN_IN_SITU.md).  Exact key set of cell16k_ring
+    # plus attn_shape_stable="1".  BYTE-IDENTICAL to cell16k_ring (both run selected
+    # keys; the shared gather adds no new lossiness), so the byte-identity summary must
+    # show it matching cell16k_ring's class (lossy vs control ONLY through head=bf16 +
+    # the dense/lean prefill reassoc, cf. cell16k).
     "cell16k_ring_stable": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
@@ -1326,8 +1328,10 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     extra_forward_steps = 0
 
     _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
-    decode_start = time.perf_counter()
+    # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
+    # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
     with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
+        decode_start = time.perf_counter()
         if device_sample:
             from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
 
@@ -1353,7 +1357,7 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
                 generated.append(token)
                 if mem_profile is not None and (step + 1) % every == 0:
                     mem_profile("decode", token=step + 1)
-    decode_wall_s = time.perf_counter() - decode_start
+        decode_wall_s = time.perf_counter() - decode_start
     _sc_end = _stream_counters_snapshot(model)
     return {
         "generated": [int(t) for t in generated],
@@ -1922,9 +1926,22 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 if args.stage_timing_steps is not None
                 else int(args.decode_tokens)
             )
+            # W90: the fenced stage-timing pass gets the same cooldown + a FRESH
+            # sampler (a UtilizationSampler is single-use, so it cannot be the one
+            # _generate consumed); its utilization/cooldown ride in the report dict
+            # under __w90_utilization / __w90_cooldown.
+            st_sampler = None
+            if getattr(args, "utilization", False):
+                st_sampler = _macmon().UtilizationSampler(
+                    interval_ms=int(getattr(args, "util_interval_ms", 2000))
+                )
             receipt["stage_timing"] = _stage_timing_pass(
                 model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
+                cooldown_s=float(getattr(args, "cooldown_s", 0.0) or 0.0),
+                util_sampler=st_sampler,
             )
+            if st_sampler is not None:
+                print(f"[ab] {arm} stage_timing: {st_sampler.census()}", flush=True)
             _print_decode_stage_summary(
                 arm, int(args.context_tokens), receipt["stage_timing"]
             )
