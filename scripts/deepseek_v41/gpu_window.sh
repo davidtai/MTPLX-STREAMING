@@ -371,17 +371,37 @@ while True:
         time.sleep(0.5)
 log(f"acquired exclusive GPU lock: {lock_path}")
 
-# Ignore signals here so a group Ctrl-C reaches the child, which does the ordered
-# teardown (restore qwen) before we release the lock.
-for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+# Ignore signals HERE (in the lock holder) so a group Ctrl-C / a TERM to the holder
+# does not kill it before the child bash has restored qwen and released the lock.
+_ABORT_SIGS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+for signum in _ABORT_SIGS:
     try:
         signal.signal(signum, signal.SIG_IGN)
     except (ValueError, OSError):
         pass
 
+
+# W106 abort fix (real-window incident, window 42): a signal that is SIG_IGN at
+# bash startup CANNOT be trapped ("signals ignored on entry to a non-interactive
+# shell cannot be trapped or reset") -- so the child bash, inheriting the holder's
+# SIG_IGN, silently ignored TERM and its teardown trap never fired.  RESET
+# INT/TERM/HUP to SIG_DFL in the child (after fork, before exec) so the child bash
+# starts with the default disposition and its `trap` installs.  The holder itself
+# stays ignoring them (above), so the operator TERMs the child bash (the abort
+# recipe prints its pid), not the holder.
+def _reset_child_signals():  # runs in the child between fork and exec
+    for _s in _ABORT_SIGS:
+        try:
+            signal.signal(_s, signal.SIG_DFL)
+        except (ValueError, OSError):
+            pass
+
+
 env = dict(os.environ)
 env["_GPU_WINDOW_LOCKED"] = "1"
-child = subprocess.Popen(["/bin/bash", script, *step], env=env)
+child = subprocess.Popen(
+    ["/bin/bash", script, *step], env=env, preexec_fn=_reset_child_signals
+)
 try:
     rc = child.wait()
 finally:
@@ -497,7 +517,29 @@ teardown() {
   restore_qwen
   exit "${ec}"
 }
-trap teardown EXIT INT TERM
+
+# W106 abort item (a): INT/TERM must actually abort while bash is in the phase-4
+# poll loop.  bash DEFERS a heavy trap until the running foreground command
+# (`sleep`, `wait`) returns, so the old `trap teardown INT TERM` could sit for
+# many seconds while the step kept loading.  Instead the signal handler only SETS A
+# FLAG (async-safe, instant); the phase-3/4 loops check it every poll and abort
+# promptly.  teardown still runs from the EXIT trap (so restore always happens).
+_ABORT_SIGNAL=0
+_on_abort_signal() {
+  _ABORT_SIGNAL=1
+  log "abort: INT/TERM received; aborting at the next poll (<= ${RSS_POLL_SECONDS}s)"
+}
+trap teardown EXIT
+trap _on_abort_signal INT TERM
+
+# Called at the top of the phase-3/4 loops: if an abort signal came in, kill the
+# step tree (if any) and exit -> the EXIT trap restores the agent + releases the lock.
+_check_abort() {
+  (( _ABORT_SIGNAL )) || return 0
+  err "phase 4: abort requested (INT/TERM); killing the step tree and restoring"
+  _kill_step_tree
+  exit 9
+}
 
 # W106 (real-window incident): print the ABORT RECIPE + restore plist up front, so
 # an operator aborting by hand signals the RIGHT pid.  The trap owner is THIS bash
@@ -556,6 +598,7 @@ if (( WAS_LOADED == 1 )); then
   pid_gone=0
   freed=0
   while (( $(date +%s) < deadline )); do
+    _check_abort   # W106 (a): abort promptly even during the bootout wait
     if (( pid_gone == 0 )); then
       if [[ -z "${QWEN_PID}" ]] || ! kill -0 "${QWEN_PID}" 2>/dev/null; then
         pid_gone=1
@@ -626,6 +669,7 @@ if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
 fi
 _last_mem_sample=0  # 0 => the first poll logs an envelope sample immediately
 while :; do
+  _check_abort   # W106 (a): abort promptly on a queued INT/TERM (not deferred)
   # Loop terminates when STEP_PID is gone or a zombie (same condition as before);
   # RSS is now measured over its whole tree, not this one (near-empty) pid.
   step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"
