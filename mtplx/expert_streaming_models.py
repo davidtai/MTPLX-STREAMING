@@ -356,6 +356,12 @@ class ExpertMemoryPlan:
     mmap_islands_wired: bool = True
     miss_shadow: str | None = None
     shadow_bytes: int = 0
+    # W87: the single-fence wave width (route_waves max_unique / the verify gate) --
+    # ``service_slots`` (== transient_slots) on both paths.  The merged-capacity
+    # widening was retired (review HIGH-1: a wider prefill wave is unserviceable once
+    # slots are protected/pinned, and DSV4.1 top_k=6 verify already fits it).
+    # Allocation-neutral.  0 = a plan built before W87 (consumers fall back).
+    batch_admission_slots: int = 0
 
     @property
     def fixed_bytes(self) -> int:
@@ -1128,4 +1134,7 @@ def plan_expert_memory(
         prefetch_bytes=prefetch_bytes,
         miss_shadow=miss_shadow,
         shadow_bytes=shadow_bytes,
+        # W87: single-fence wave width = service_slots (transient) on both paths
+        # (the merged-capacity widening was retired, review HIGH-1).
+        batch_admission_slots=service_slots,
     )

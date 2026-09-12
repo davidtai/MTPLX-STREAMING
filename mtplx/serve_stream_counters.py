@@ -41,6 +41,9 @@ _EXPERT_CACHE_KEYS = (
     "bytes_read",
     "prefetch_issued",
     "prefetch_committed",
+    "pool_loads",
+    "scan_inserts",
+    "promotions",
 )
 
 
@@ -76,7 +79,18 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
     # 1. Expert streaming cache + incremental miss structure.
     snap = None
     try:
-        snap = rt.expert_streaming_snapshot()
+        # W87 HIGH-1: the served daemon passes an MTPLXRuntime
+        # (expert_streaming_snapshot()); the DSV4.1 in-process bench passes the BARE
+        # ExpertStreamingRuntime (snapshot()) the loader attaches as
+        # model._mtplx_expert_runtime.  Prefer the MTPLXRuntime accessor (served
+        # path unchanged), else resolve the streaming runtime and snapshot it --
+        # otherwise every bench receipt silently loses its expert_cache/cold_start.
+        getter = getattr(rt, "expert_streaming_snapshot", None)
+        if callable(getter):
+            snap = getter()
+        else:
+            es = getattr(rt, "expert_streaming", None) or rt
+            snap = es.snapshot()
     except Exception:
         snap = None
     if isinstance(snap, dict):
@@ -113,6 +127,13 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
                 "barrier_free_layers": int(drp.get("barrier_free_layers", 0) or 0),
                 "recovered_layers": int(drp.get("recovered_layers", 0) or 0),
             }
+
+        # W87 cold-start decode telemetry: pass through so the DELTA can compute
+        # the first-N-token vs steady-state decode hit rate (always on -- both the
+        # two-tier and single-slot-pool paths populate the same fields).
+        cs = snap.get("cold_start")
+        if isinstance(cs, dict):
+            out["cold_start"] = {str(k): v for k, v in cs.items()}
 
     # 2. Engram row cache (per-layer NGramRowCache stats, summed).
     engram = _engram_row_cache_totals(rt)
@@ -224,6 +245,40 @@ def stream_counters_delta(
             "barrier_free_layers": bfree,
             "recovered_layers": recovered,
             "barrier_free_layers_per_flush": round(bfree / flushes, 6) if flushes else None,
+        }
+
+    # W87 cold-start decode telemetry (always on -- both slot-pool paths populate
+    # it, so cell16k_ring vs cell16k_ring_pool read the first-N-token hit rate from
+    # the SAME receipt field).
+    b_cs, a_cs = before.get("cold_start"), after.get("cold_start")
+    if isinstance(a_cs, dict):
+        b_cs = b_cs if isinstance(b_cs, dict) else {}
+        d_fh = int(a_cs.get("first_64_steps_hits", 0)) - int(
+            b_cs.get("first_64_steps_hits", 0)
+        )
+        d_fr = int(a_cs.get("first_64_steps_requests", 0)) - int(
+            b_cs.get("first_64_steps_requests", 0)
+        )
+        d_sh = int(a_cs.get("steady_hits", 0)) - int(b_cs.get("steady_hits", 0))
+        d_sr = int(a_cs.get("steady_requests", 0)) - int(
+            b_cs.get("steady_requests", 0)
+        )
+        out["cold_start"] = {
+            "single_slot_pool": bool(a_cs.get("single_slot_pool", False)),
+            "measurement_basis": a_cs.get("measurement_basis"),
+            "cold_start_decode_steps": int(a_cs.get("cold_start_decode_steps", 0)),
+            "decode_steps_observed": int(a_cs.get("decode_steps_observed", 0))
+            - int(b_cs.get("decode_steps_observed", 0)),
+            "first_64_steps_hits": d_fh,
+            "first_64_steps_requests": d_fr,
+            "steady_hits": d_sh,
+            "steady_requests": d_sr,
+            "decode_hit_rate_first_64_steps": (
+                round(d_fh / d_fr, 6) if d_fr else None
+            ),
+            "decode_hit_rate_steady_state": (
+                round(d_sh / d_sr, 6) if d_sr else None
+            ),
         }
 
     a_rc = after.get("route_probe_counts")

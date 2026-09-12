@@ -76,6 +76,7 @@ _DAK = "MTPLX_DSV41_DECODE_ATTN_KERNEL"  # W60 / K29: fused decode/verify MLA at
 _MLXBUF = "MLX_MAX_MB_PER_BUFFER"        # K14 / W63: MLX command-buffer MB cap passthrough
 _PWS = "MTPLX_DSV41_PIN_WORKING_SET"     # W64 / R3-pin: post-prefill pinned working set
 _DRP = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 / K24 revived: pinned device route
+_SSP = "MTPLX_DSV41_SINGLE_SLOT_POOL"     # W87: merged scan-resistant slot pool
 _KCG = "MTPLX_DSV41_KV_CHUNK_GROW"       # W73 / K32: chunk-grown KV append backing
 _SS = "MTPLX_DSV41_SMALL_STAGES_FUSED"   # W91 / K35: fused per-layer small stages
 _HPK = "MTPLX_DSV41_HC_PREMIX_KERNEL"    # W91 / K35: GPU-only fused HC-premix kernel
@@ -1006,7 +1007,7 @@ def test_prefill_stage_timing_pass_small_real_forward(env_levers, monkeypatch):
 # --------------------------------------------------------------------------
 def test_cell16k_ring_composite_arms(env_levers):
     presets = env_levers.ARM_PRESETS
-    for name in ("cell16k_ring_draft", "cell16k_ring_pinned"):
+    for name in ("cell16k_ring_draft", "cell16k_ring_pinned", "cell16k_ring_pool"):
         assert name in presets, f"{name} arm missing from ARM_PRESETS"
     ring = presets["cell16k_ring"]
 
@@ -1046,3 +1047,16 @@ def test_cell16k_ring_composite_arms(env_levers):
     assert _SS in env_levers.ALL_LEVER_ENVS and _HPK in env_levers.ALL_LEVER_ENVS
     for name, preset in presets.items():
         assert preset.get(_HPK) is None, f"{name} must not arm HC_PREMIX_KERNEL"
+
+    # W87: cell16k_ring_pool = cell16k_ring + the single-slot pool only.  A pure
+    # residency change (allocation identical); the direct A/B vs cell16k_ring
+    # isolates the cold-start recovery.
+    expected_pool = dict(ring)
+    expected_pool[_SSP] = "1"
+    assert presets["cell16k_ring_pool"] == expected_pool, (
+        "cell16k_ring_pool must equal cell16k_ring + MTPLX_DSV41_SINGLE_SLOT_POOL=1"
+    )
+    # It differs from cell16k_ring ONLY by the single-slot-pool key.
+    assert {
+        k: v for k, v in presets["cell16k_ring_pool"].items() if v != ring.get(k)
+    } == {_SSP: "1"}, "cell16k_ring_pool must touch only the single-slot-pool key"

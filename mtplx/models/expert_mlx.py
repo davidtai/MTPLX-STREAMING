@@ -3026,9 +3026,17 @@ class HotExpertSwitchGLU(nn.Module):
             ) and callable(
                 getattr(self.runtime, "flush_deferred_slot_releases", None)
             )
-            _capacity = int(
-                getattr(getattr(self.runtime, "plan", None), "transient_slots", 0) or 0
-            )
+            # W87: the LIVE single-fence capacity -- runtime._batch_admission_slots()
+            # is transient + non-pinned persistent capacity under the single slot
+            # pool (shrinking with pins / a lowered derived cap), else the transient
+            # scratch bound.  Falls back to plan.transient_slots on a runtime double
+            # without the seam (byte-identical off).
+            _bas = getattr(self.runtime, "_batch_admission_slots", None)
+            if callable(_bas):
+                _capacity = int(_bas())
+            else:
+                _plan_obj = getattr(self.runtime, "plan", None)
+                _capacity = int(getattr(_plan_obj, "transient_slots", 0) or 0)
             if _verify_can_defer and _capacity >= 1:
                 # Identical partition to the bounded loop (DECODE: sort_unique off);
                 # unique <= capacity yields a single wave (the W66 fast path).
