@@ -315,6 +315,40 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
 
+# W97: cache the dequantized grouped o-LoRA (wo_a) weight per layer instead of
+# re-issuing mx.dequantize(wo_a) every decode token (the released wo_a is 8x1024x4096
+# = 33.55M params).  mx.dequantize returns bf16 for BOTH codecs (67 MB); _o_lora_down
+# then promotes it to a fresh 134 MB f32 array per token per layer.  The lever caches
+# that f32 promotion once (bf16->f32 is lossless), so the reference dequantizes it
+# ONCE at convert (docs/deepseek-v41/W97_ATTENTION_291MS.md).  BYTE-IDENTICAL (the
+# cached f32 array is the exact promotion of the dequantize output; the einsum's
+# per-token .astype(f32) becomes a no-op) -> the byte-identity summary must show it
+# clean.  Read at use (never import-frozen), so it works regardless of the lazy dsv41
+# import.  Holds a dense f32 wo_a copy resident per layer (40 x 134 MB ~= 5.4 GB for
+# BOTH codecs), so it is opt-in AND priced into the memory plan (deepseek_v41_loader).
+WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
+
+# W97: fixed-shape mx.compile of the decode-attention CORE (QK + mask + sink softmax
+# + PV over the gathered [b,s,k,hd] operand) -- one geometry-keyed tape at decode/
+# small-M verify, the scattered elementwise fused (~13 -> ~8 kernels; the gather
+# stays outside; docs/deepseek-v41/W97_ATTENTION_291MS.md).  ROUNDING-CLASS, NOT
+# byte-identical: the n=1 compile reassociates the fp32 einsum/reductions (the K35
+# lesson; measured max|Δ| ~9e-10 on CPU), so its arms are flagged in the byte-
+# identity summary and gated separately from the exact levers.  The K29 fused decode
+# kernel (DECODE_ATTN_KERNEL) collapses the SAME core to ONE dispatch on the GPU and
+# wins the early return before this path -- it is the lower-dispatch option; this is
+# the portable (CPU+GPU) fallback / A-B.  Read at use (never import-frozen).
+ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
+
+# W99: lean the decode-attention casts -- BYTE-IDENTICAL removal of the two genuinely
+# redundant f32 casts (the eager core casts KVg to f32 twice -> once; the per-head
+# sink is re-cast per token -> cached) plus the per-token numpy->device relift of the
+# layer's RoPE inv_freq (cached).  The bulk of the casts are reference f32 numerics
+# and the concatenates are structural RoPE (interleave + head-rejoin) -- NOT reducible
+# byte-identically (docs/deepseek-v41/W97_ATTENTION_291MS.md §8).  Read at use; OFF by
+# default.  Composes with the wo_a cache as the byte-identical cell16k_ring_lean stack.
+ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
+
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
 # prior arm in the same process left set -- the arms are independent. The eight
@@ -375,6 +409,11 @@ ALL_LEVER_ENVS = (
     # W107 (appended; coordinate with any concurrent list extension):
     KV_BOUNDED_ENV,
     KV_BOUNDED_MAXKV_ENV,
+    # W97 (appended; coordinate with any concurrent list extension):
+    WO_A_CACHE_ENV,
+    ATTN_CORE_COMPILE_ENV,
+    # W99 (appended):
+    ATTN_LEAN_CASTS_ENV,
 )
 
 
@@ -399,6 +438,8 @@ def _preset(
     gate_prefetch_min_layer=None,
     runner=None,
     kv_bounded=None, kv_bounded_maxkv=None,
+    wo_a_cache=None, attn_core_compile=None,
+    attn_lean_casts=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -460,6 +501,9 @@ def _preset(
         RUNNER_ENV: runner,
         KV_BOUNDED_ENV: kv_bounded,
         KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
+        WO_A_CACHE_ENV: wo_a_cache,
+        ATTN_CORE_COMPILE_ENV: attn_core_compile,
+        ATTN_LEAN_CASTS_ENV: attn_lean_casts,
     }
 
 
@@ -787,6 +831,98 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         single_slot_pool="1",
     ),
+    # W97: cache the dequantized grouped o-LoRA wo_a per layer instead of re-issuing
+    # mx.dequantize(wo_a) every decode token (the largest per-token attention traffic
+    # item: 304 MB/layer q8 / 420 MB mxfp4; the reference dequantizes it once at
+    # convert).  ISOLATION arm (selected_keys on so the decode attention path is the
+    # shipped one).  BYTE-IDENTICAL to selected-keys control (the cached array is
+    # exactly the dequantize output; the einsum's .astype(f32) is unchanged) -- the
+    # byte-identity summary must show it clean.  Holds a dense wo_a copy resident per
+    # layer (q8 ~5.4 GB / native ~2.7 GB across 40), so mind the memory limit.
+    "wo_a_cache": _preset(selected_keys="1", wo_a_cache="1"),
+    # W97: cell16k_ring + the wo_a-dequant cache ONLY.  Exact key set of cell16k_ring
+    # plus wo_a_cache="1"; the direct A/B vs cell16k_ring isolates the per-token
+    # mx.dequantize(wo_a) + f32-astype cost (40 dequant dispatches + the ~10.7 GB/token
+    # f32 astype write+read the earlier bf16 cache left in place, BOTH codecs).
+    # BYTE-IDENTICAL to cell16k_ring -- the byte-identity summary must show it clean.
+    # The f32 cache is ~5.4 GB resident (40 x 134 MB, both codecs), priced into the
+    # memory plan (deepseek_v41_loader reserves it as fixed resident when armed, so the
+    # expert-cache allowance shrinks by it).  Watch peak memory: cell16k_ring already
+    # peaks ~65 GB at the 16K cell, so run this arm at a SMALLER cell if it OOMs -- do
+    # NOT raise --memory-limit-gib, which would raise the expert allowance by the same
+    # amount and re-open the overshoot.
+    "cell16k_ring_wo_a_cache": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1",
+    ),
+    # W97: fixed-shape mx.compile of the decode-attention core in ISOLATION
+    # (selected_keys on so _sparse_attend_selected -- and thus the core -- is the
+    # path).  ROUNDING-CLASS (n=1 compile reassociates the fp32 einsum/reductions),
+    # so the byte-identity summary MUST flag it (token-id sha differs vs control on a
+    # greedy near-tie flip -- [[dsv41-inexact-ok-if-tie-flips]]); the direct A/B vs
+    # selected_keys isolates the core-tape dispatch collapse (13 -> 8 kernels).
+    "attn_core_compile": _preset(selected_keys="1", attn_core_compile="1"),
+    # W97: cell16k_ring + the core compile ONLY.  Exact key set of cell16k_ring plus
+    # attn_core_compile="1".  ROUNDING-CLASS (adds the n=1 core reassociation on top
+    # of cell16k_ring's head=bf16 loss), so NOT byte-identical -- expected; the A/B vs
+    # cell16k_ring isolates the core collapse.  The K29 fused decode kernel
+    # (decode_attn_kernel) is the lower-dispatch alternative (core -> 1 dispatch) and,
+    # if also armed, wins the early return before this path.
+    "cell16k_ring_attn_core": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        attn_core_compile="1",
+    ),
+    # W97: cell16k_ring + the wo_a-dequant cache (exact) + the core compile (rounding-
+    # class) stacked -- the full W97 attention-dispatch program.  ROUNDING-CLASS via
+    # the core compile; the wo_a cache is byte-identical on its own.  Watch peak
+    # memory (the wo_a cache holds a dense wo_a copy resident per layer, ~5.4/2.7 GB).
+    "cell16k_ring_wo_a_core": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_core_compile="1",
+    ),
+    # W97 follow-on: cell16k_ring + the wo_a-dequant cache (exact) + the K29 FUSED
+    # decode-attention kernel (decode_attn_kernel="1"): the SINGLE-DISPATCH core
+    # (score+mask+sink softmax+PV in one metal_kernel) instead of the mx.compile core.
+    # K29 is ROUNDING-CLASS (its tile reduction reassociates the fp32 softmax), so the
+    # byte-identity summary flags it (token-id sha differs on a greedy tie flip); this
+    # arm lets window 40/41 measure the 1-dispatch core against the ~8-kernel compile
+    # core (cell16k_ring_wo_a_core) and the eager baseline (cell16k_ring_wo_a_cache).
+    "cell16k_ring_wo_a_k29": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", decode_attn_kernel="1",
+    ),
+    # W99: lean the decode-attention casts in ISOLATION (selected_keys on so the eager
+    # core -- where the redundant KVg double-cast lives -- is the path).  BYTE-IDENTICAL
+    # to selected_keys control (dedupes the KVg f32 cast, caches the f32 sink + the
+    # device inv_freq); the byte-identity summary must show it clean.
+    "attn_lean_casts": _preset(selected_keys="1", attn_lean_casts="1"),
+    # W99: cell16k_ring + the wo_a cache + lean casts -- the BYTE-IDENTICAL W97/W99
+    # attention stack (both levers are exact; the only loss vs control is
+    # cell16k_ring's own head=bf16).  A/B vs cell16k_ring isolates the exact-lever
+    # dispatch savings (wo_a per-token dequant removed + KVg/sink/inv_freq casts leaned).
+    "cell16k_ring_lean": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1",
+    ),
+    # W99: cell16k_ring_lean + the K29 fused decode core (1-dispatch score+softmax+PV).
+    # ROUNDING-CLASS via K29 (flagged in the byte-identity summary); the lowest-dispatch
+    # attention arm (exact wo_a cache + lean casts + the fused core).
+    "cell16k_ring_lean_k29": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
+    ),
     # W92 (switch dispatch census): the minimal AR-decode host-sync-reduction arm in
     # ISOLATION -- the K23 variant-B fast-path (defer + async submit) plus verify
     # single-barrier (default ON, pinned explicit).  Window 33 (arm cell16k_ring)
@@ -881,6 +1017,67 @@ ARM_PRESETS = {
         runner="v2", draft="1", draft_head_bf16="1",
     ),
 }
+
+# W97 (review item 7): the rounding-class env keys, documented in ONE place with the
+# reason.  An arm whose preset arms ANY of these keys has decoded tokens that are
+# EXPECTED to differ from control by rounding (the lever reassociates the fp32
+# attention core / softmax, so a greedy near-tie can flip -- [[dsv41-inexact-ok-if-
+# tie-flips]]).  A token-id sha mismatch on such an arm is "expected (rounding-class)",
+# NOT a broken exact lever, so the byte-identity summary must not FAIL it; every other
+# arm keeps the FAIL (an exact lever that changed the tokens is a bug).
+#
+# ROUNDING_CLASS_ARMS is DERIVED from ARM_PRESETS (not a hand list), so a new arm is
+# classified automatically the moment its preset names one of these keys.  Each key's
+# reason (why reassociation, not a bug):
+#   DECODE_ATTN_KERNEL (K29): the fused decode/verify MLA kernel's online-softmax tile
+#       reduction reorders the fp32 softmax -- greedy-identical <=1e-6, NOT byte-ident
+#       (W60; GPU-only, CPU falls back to the eager one-shot).
+#   ATTN_CORE_COMPILE (W97): the n=1 fixed-shape mx.compile of the decode-attention
+#       core reassociates the fp32 einsum/reductions (the K35 lesson; measured max|Δ|
+#       ~9e-10 on CPU) -- NOT byte-identical, on CPU AND GPU.
+#   SMALL_STAGES_FUSED (K35): the fused per-layer small-stage graphs reassociate the
+#       fp32 GEMM/reductions on Metal (window-37: token-id sha DIFFERS on GPU;
+#       byte-identical only within the CPU mx.compile bit-exact regime).
+#   HC_PREMIX_KERNEL (K35): the fused HC-premix Sinkhorn kernel (rounding-class 1e-6,
+#       argmax-exact); pinned force-unset by every preset today, listed so a future
+#       arm that turns it on is classified automatically.
+#   MTPLX_DSV41_DRAFT_HEAD_BF16: a bf16 DSpark draft head would round the draft logits;
+#       no current preset arms it (no such constant yet), listed by name so a future
+#       arm classifies without a code change.
+# DELIBERATELY EXCLUDED (kept FAIL so a genuine exact-lever regression is caught):
+#   HC_COMPILE (K4) and SINKHORN_METAL (K3) are classed byte-identical execution
+#       reorders on this CPU A/B path (K4 is a byte-identical HC-premix compile; K3
+#       falls back to eager on CPU), and MANY exact composite arms carry sinkhorn="1"
+#       (cell16k_ring_wo_a_cache, cell16k_ring_lean, stack_*) -- excusing them would
+#       mask a real exact-lever divergence.  HEAD_MODE=bf16/mxfp8/q8 is a LOSSY-by-
+#       design LOAD-TIME codec, a different class (flagged separately, W40_HEAD_LEVER),
+#       not a rounding reorder -- so head=bf16 on an otherwise-exact arm is NOT what
+#       makes it rounding-class.  ATTN_LEAN_CASTS (W99) is a byte-identical cast dedupe.
+ROUNDING_CLASS_ENVS = (
+    DECODE_ATTN_KERNEL_ENV,
+    ATTN_CORE_COMPILE_ENV,
+    SMALL_STAGES_FUSED_ENV,
+    HC_PREMIX_KERNEL_ENV,
+    "MTPLX_DSV41_DRAFT_HEAD_BF16",
+)
+
+
+def _rounding_class_keys(arm: str) -> list:
+    """The rounding-class env keys (see ``ROUNDING_CLASS_ENVS``) an arm's preset
+    actually arms -- the reason its tokens are EXPECTED to differ from control by
+    rounding.  Empty list for an exact arm.  Derived from ``ARM_PRESETS``, never
+    hand-listed, so a new rounding-class arm is classified automatically."""
+    preset = ARM_PRESETS.get(arm, {})
+    return [k for k in ROUNDING_CLASS_ENVS if preset.get(k) not in (None, "")]
+
+
+def _is_rounding_class(arm: str) -> bool:
+    """True when ``arm`` arms any rounding-class env key (see ``_rounding_class_keys``)."""
+    return bool(_rounding_class_keys(arm))
+
+
+# Derived, not hand-listed: every arm whose preset arms a rounding-class env key.
+ROUNDING_CLASS_ARMS = frozenset(a for a in ARM_PRESETS if _is_rounding_class(a))
 
 
 def _load_bench_module():
@@ -1268,6 +1465,10 @@ def _dry_run_arm(args, arm, bench) -> dict:
     return {
         "arm": arm,
         "dry_run": True,
+        # W97 (review item 7): rounding-class flag + the reason keys the arm arms
+        # (see ROUNDING_CLASS_ENVS).  True => a token-id sha mismatch is EXPECTED.
+        "rounding_class": _is_rounding_class(arm),
+        "rounding_class_keys": _rounding_class_keys(arm),
         "overlap_env": os.environ.get(OVERLAP_ENV),
         "arm_env": _arm_env_snapshot(),
         # K14 (W63): the MLX command-buffer MB cap this arm pins (None = MLX
@@ -1822,6 +2023,30 @@ def _load_model(args, bench, mx):
     _bt = getattr(args, "_dsv41_budget_total", None)
     if _bt is not None and _bt.source == "budget":
         print("[ab] budget-total derivation: " + _bt.formula(), flush=True)
+    # W97: the fixed resident reserve the plan prices (SWA window + the f32 wo_a
+    # cache when MTPLX_DSV41_ATTN_WO_A_CACHE is armed).  The arm env is already set
+    # (_apply_arm_env ran), so this reflects THIS arm; the expert-cache allowance
+    # shrinks by the reserve rather than the process running over plan.
+    try:
+        from mtplx.models.deepseek_v41_loader import (
+            SWA_WINDOW_BYTES as _swa_bytes,
+            deepseek_v41_additional_resident_bytes as _addl_resident,
+        )
+
+        _addl = _addl_resident()
+        _wo_a_reserve = _addl - _swa_bytes
+        print(
+            f"[ab] additional resident reserve: SWA {_swa_bytes / GIB:.3f} GiB"
+            + (
+                f" + wo_a f32 cache {_wo_a_reserve / GIB:.3f} GiB"
+                if _wo_a_reserve
+                else ""
+            )
+            + f" = {_addl / GIB:.3f} GiB (priced into the plan)",
+            flush=True,
+        )
+    except Exception:  # pragma: no cover - display only, never fail the run
+        pass
     # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
     # (with_mtp=True) and reprices the MTP residents against the expert cache so
     # the plan still fits.
@@ -2864,6 +3089,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # receipt reports THIS arm's real fused-layer forwards vs eager fallbacks.
         _dsv41._reset_small_stages_calls()
         _dsv41._reset_hc_premix_kernel_calls()
+        # W97 (review item 3): zero the decode-attention-core compile engagement so
+        # the receipt reports THIS arm's compiled-tape calls vs eager fallbacks.
+        _dsv41._reset_attn_core_compile_calls()
     except Exception:  # pragma: no cover - defensive
         _dsv41 = None
     # W60/K29 engagement: zero the fused-decode-attention counters after model load
@@ -2925,6 +3153,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
         ids = run["generated"]
         receipt = {
             "arm": arm,
+            # W97 (review item 7): True when this arm's tokens are EXPECTED to differ
+            # from control by rounding (a rounding-class attention lever), so the
+            # byte-identity summary reads a sha mismatch as "expected", not FAIL.
+            # ``rounding_class_keys`` are the reason keys (see ROUNDING_CLASS_ENVS).
+            "rounding_class": _is_rounding_class(arm),
+            "rounding_class_keys": _rounding_class_keys(arm),
             "overlap_env": os.environ.get(OVERLAP_ENV),
             "arm_env": _arm_env_snapshot(),
             # K14 (W63): the MLX command-buffer MB cap in effect for this arm
@@ -2988,6 +3222,14 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # means the kernel never ran (all eager) rather than ran-and-was-slow.
             "decode_attn_kernel_engagement": (
                 _k29.engagement() if _k29 is not None else None
+            ),
+            # W97 (review item 3): decode-attention-core compile engagement --
+            # ``compiled`` selected-key core calls that ran the fixed-shape mx.compile
+            # tape vs ``eager`` calls (lever off / above the small-M cap).  compiled 0
+            # on an attn_core_compile arm means the tape never ran (all eager), so a
+            # measured delta cannot be credited to it -- proves the tape engaged.
+            "attn_core_compile_engagement": (
+                _dsv41._attn_core_compile_calls() if _dsv41 is not None else None
             ),
             # W81: the ACTUAL slot plan this arm ran (transient/persistent slot
             # counts + bytes + source), so an A/B is attributable to a capacity and
@@ -3612,10 +3854,43 @@ def main(argv=None) -> int:
                 else f"[ab] {cand['arm']} vs {base['arm']}: byte_identical={identical}"
             )
             if not identical:
-                print(
-                    f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
-                    "(the lever must be a pure execution reorder)"
-                )
+                # W97 (review item 7): a rounding-class attention lever (the n=1 core
+                # compile / K29 tile reduction reassociates the fp32 softmax) can flip
+                # a greedy near-tie -- that is EXPECTED, not a broken exact lever, so
+                # it must not read as FAIL.  Every other arm keeps the FAIL.  Read the
+                # machine label off the receipt (fall back to deriving it, so an older
+                # receipt without the field still classifies).
+                cand_rc = cand.get("rounding_class")
+                if cand_rc is None:
+                    cand_rc = _is_rounding_class(cand["arm"])
+                if cand_rc:
+                    # Name the reason keys so the label is machine-checkable, not a
+                    # bare "expected".
+                    keys = cand.get("rounding_class_keys") or _rounding_class_keys(
+                        cand["arm"]
+                    )
+                    keys_str = ", ".join(keys) if keys else "?"
+                    # When the receipt already classified a divergence (the dspark
+                    # decode path records one), add the first divergence index and the
+                    # control top-2 logit margin there -- a tiny margin corroborates a
+                    # rounding tie ([[dsv41-inexact-ok-if-tie-flips]]).
+                    div = (cand.get("dspark") or {}).get("divergence")
+                    div_str = ""
+                    if isinstance(div, dict) and div.get("divergence_index") is not None:
+                        div_str = (
+                            f"; first divergence @ {div['divergence_index']}, "
+                            f"control top-2 logit margin {_fmt(div.get('ar_top2_margin'))} "
+                            f"(cand {_fmt(div.get('dspark_top2_margin'))})"
+                        )
+                    print(
+                        f"[ab] {cand['arm']}: token-id sha differs -- expected "
+                        f"(rounding-class: {keys_str}){div_str}"
+                    )
+                else:
+                    print(
+                        f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
+                        "(the lever must be a pure execution reorder)"
+                    )
     return 0
 
 

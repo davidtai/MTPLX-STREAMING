@@ -78,6 +78,9 @@ _MLXBUF = "MLX_MAX_MB_PER_BUFFER"        # K14 / W63: MLX command-buffer MB cap 
 _PWS = "MTPLX_DSV41_PIN_WORKING_SET"     # W64 / R3-pin: post-prefill pinned working set
 _DRP = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 / K24 revived: pinned device route
 _SSP = "MTPLX_DSV41_SINGLE_SLOT_POOL"     # W87: merged scan-resistant slot pool
+_WOAC = "MTPLX_DSV41_ATTN_WO_A_CACHE"     # W97: cached dequantized o-LoRA wo_a
+_ACC = "MTPLX_DSV41_ATTN_CORE_COMPILE"    # W97: fixed-shape core compile (rounding-class)
+_ALC = "MTPLX_DSV41_ATTN_LEAN_CASTS"      # W99: byte-identical cast lean
 _KCG = "MTPLX_DSV41_KV_CHUNK_GROW"       # W73 / K32: chunk-grown KV append backing
 _SS = "MTPLX_DSV41_SMALL_STAGES_FUSED"   # W91 / K35: fused per-layer small stages
 _HPK = "MTPLX_DSV41_HC_PREMIX_KERNEL"    # W91 / K35: GPU-only fused HC-premix kernel
@@ -1097,3 +1100,184 @@ def test_cell16k_ring_composite_arms(env_levers):
     assert {
         k: v for k, v in presets["cell16k_ring_pool"].items() if v != ring.get(k)
     } == {_SSP: "1"}, "cell16k_ring_pool must touch only the single-slot-pool key"
+
+    # W97: cell16k_ring_wo_a_cache = cell16k_ring + the wo_a-dequant cache ONLY.
+    assert "cell16k_ring_wo_a_cache" in presets, "cell16k_ring_wo_a_cache arm missing"
+    expected_woac = dict(ring)
+    expected_woac[_WOAC] = "1"
+    assert presets["cell16k_ring_wo_a_cache"] == expected_woac, (
+        "cell16k_ring_wo_a_cache must equal cell16k_ring + MTPLX_DSV41_ATTN_WO_A_CACHE=1"
+    )
+    assert {
+        k: v for k, v in presets["cell16k_ring_wo_a_cache"].items() if v != ring.get(k)
+    } == {_WOAC: "1"}, "cell16k_ring_wo_a_cache must touch only the wo_a-cache key"
+    # The standalone isolation arm sets ONLY selected_keys + wo_a_cache (hermetic).
+    assert "wo_a_cache" in presets, "wo_a_cache isolation arm missing"
+    woac = presets["wo_a_cache"]
+    assert woac[_SEL] == "1" and woac[_WOAC] == "1", "wo_a_cache missing its keys"
+    assert all(v is None for k, v in woac.items() if k not in (_SEL, _WOAC)), (
+        "wo_a_cache must set ONLY selected_keys + wo_a_cache (hermetic)"
+    )
+    # W97 lever is in the master list (receipt arm_env + hermetic clear).
+    assert _WOAC in env_levers.ALL_LEVER_ENVS
+
+    # W97 core-compile arms (ROUNDING-CLASS -- not byte-identical; flagged elsewhere).
+    assert _ACC in env_levers.ALL_LEVER_ENVS
+    # isolation arm: ONLY selected_keys + attn_core_compile (hermetic).
+    acc = presets["attn_core_compile"]
+    assert acc[_SEL] == "1" and acc[_ACC] == "1", "attn_core_compile missing its keys"
+    assert all(v is None for k, v in acc.items() if k not in (_SEL, _ACC)), (
+        "attn_core_compile must set ONLY selected_keys + attn_core_compile (hermetic)"
+    )
+    # cell16k_ring_attn_core = cell16k_ring + attn_core_compile ONLY.
+    expected_core = dict(ring)
+    expected_core[_ACC] = "1"
+    assert presets["cell16k_ring_attn_core"] == expected_core, (
+        "cell16k_ring_attn_core must equal cell16k_ring + MTPLX_DSV41_ATTN_CORE_COMPILE=1"
+    )
+    assert {
+        k: v for k, v in presets["cell16k_ring_attn_core"].items() if v != ring.get(k)
+    } == {_ACC: "1"}, "cell16k_ring_attn_core must touch only the core-compile key"
+    # cell16k_ring_wo_a_core = cell16k_ring + wo_a cache + core compile (the two W97
+    # attention-dispatch levers stacked).
+    expected_stack = dict(ring)
+    expected_stack[_WOAC] = "1"
+    expected_stack[_ACC] = "1"
+    assert presets["cell16k_ring_wo_a_core"] == expected_stack, (
+        "cell16k_ring_wo_a_core must equal cell16k_ring + wo_a_cache + attn_core_compile"
+    )
+    assert {
+        k: v for k, v in presets["cell16k_ring_wo_a_core"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _ACC: "1"}, "cell16k_ring_wo_a_core must touch only the two W97 keys"
+
+    # W97 follow-on: cell16k_ring_wo_a_k29 = cell16k_ring + wo_a cache + K29 fused core.
+    assert {
+        k: v for k, v in presets["cell16k_ring_wo_a_k29"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _DAK: "1"}, "cell16k_ring_wo_a_k29 must touch only wo_a + K29 keys"
+
+    # W99 lean-casts arms (attn_lean_casts is BYTE-IDENTICAL; _ALC in the master list).
+    assert _ALC in env_levers.ALL_LEVER_ENVS
+    alc = presets["attn_lean_casts"]
+    assert alc[_SEL] == "1" and alc[_ALC] == "1", "attn_lean_casts missing its keys"
+    assert all(v is None for k, v in alc.items() if k not in (_SEL, _ALC)), (
+        "attn_lean_casts must set ONLY selected_keys + attn_lean_casts (hermetic)"
+    )
+    # cell16k_ring_lean = cell16k_ring + wo_a cache + lean casts (byte-identical stack).
+    assert {
+        k: v for k, v in presets["cell16k_ring_lean"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _ALC: "1"}, "cell16k_ring_lean must touch only wo_a + lean-casts keys"
+    # cell16k_ring_lean_k29 = the above + K29 (rounding-class via K29).
+    assert {
+        k: v for k, v in presets["cell16k_ring_lean_k29"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _ALC: "1", _DAK: "1"}, (
+        "cell16k_ring_lean_k29 must touch only wo_a + lean-casts + K29 keys"
+    )
+
+
+# --------------------------------------------------------------------------
+# W97 (review item 7): rounding-class arm labelling.  A rounding-class attention
+# lever (the n=1 core compile / K29 fused decode kernel / K35 fused small stages)
+# reassociates the fp32 attention core, so a greedy near-tie can flip -- a token-id
+# sha mismatch on such an arm is EXPECTED, not a broken exact lever.  The label is
+# DERIVED from the arm's env keys (ROUNDING_CLASS_ENVS), never hand-listed, and
+# written into every receipt as ``rounding_class`` + the reason ``rounding_class_keys``
+# so the byte-identity summary can tell a rounding tie from a genuine exact-lever bug.
+# --------------------------------------------------------------------------
+def test_rounding_class_envs_documented_keys(env_levers):
+    envs = set(env_levers.ROUNDING_CLASS_ENVS)
+    # The K29 fused decode kernel, the W97 fixed-shape core compile, and the two K35
+    # compile levers (fused small stages + the GPU HC-premix kernel) are rounding-class.
+    assert _DAK in envs, "K29 decode-attention kernel must be rounding-class"
+    assert _ACC in envs, "W97 core compile must be rounding-class"
+    assert _SS in envs, "K35 fused small stages must be rounding-class"
+    assert _HPK in envs, "K35 HC-premix kernel must be rounding-class"
+    # The bf16 DSpark draft head is named by key so a future arm classifies for free.
+    assert "MTPLX_DSV41_DRAFT_HEAD_BF16" in envs
+    # DELIBERATELY EXCLUDED so a genuine exact-lever divergence still FAILs: K4 HC
+    # compile + K3 Sinkhorn (byte-identical execution reorders on this CPU A/B path,
+    # and carried by exact composite arms), the lossy-by-design head codec, and the
+    # W99 byte-identical cast dedupe.
+    for k in (_HC, _SK, _HM, _ALC):
+        assert k not in envs, f"{k} must NOT be rounding-class (kept FAIL)"
+
+
+def test_rounding_class_derived_not_hand_listed(env_levers):
+    presets = env_levers.ARM_PRESETS
+    # ROUNDING_CLASS_ARMS is exactly the arms whose preset arms a rounding-class key.
+    derived = {
+        a for a, p in presets.items()
+        if any(p.get(k) not in (None, "") for k in env_levers.ROUNDING_CLASS_ENVS)
+    }
+    assert set(env_levers.ROUNDING_CLASS_ARMS) == derived
+    # _is_rounding_class / _rounding_class_keys agree with membership for EVERY arm.
+    for arm in presets:
+        keys = env_levers._rounding_class_keys(arm)
+        assert env_levers._is_rounding_class(arm) == (arm in env_levers.ROUNDING_CLASS_ARMS)
+        assert bool(keys) == (arm in env_levers.ROUNDING_CLASS_ARMS)
+        # Every reason key an arm reports is one it actually arms (not None/"").
+        for k in keys:
+            assert presets[arm].get(k) not in (None, ""), (arm, k)
+
+
+# Exact arms whose tokens must match control by construction -> rounding_class False,
+# so a sha mismatch on them stays a LOUD FAIL (an exact lever that flips is a bug).
+# Includes arms that carry head=bf16/sinkhorn (lossy/GPU-rounding, but a DIFFERENT
+# class than the rounding-class attention reorders item 7 covers).
+_ROUNDING_CLASS_FALSE_ARMS = (
+    "control", "cell16k_ring", "cell16k_ring_wo_a_cache", "cell16k_ring_lean",
+    "attn_lean_casts", "wo_a_cache", "stack_a", "stack_b", "hc_compile",
+    "sinkhorn_metal", "head_bf16", "cell16k_ring_switch",
+)
+# Rounding-class arms (K29 fused kernel / W97 core compile / K35 fused small stages)
+# -> rounding_class True with the reason key(s).
+_ROUNDING_CLASS_TRUE_ARMS = {
+    "attn_core_compile": _ACC,
+    "cell16k_ring_attn_core": _ACC,
+    "cell16k_ring_wo_a_core": _ACC,
+    "cell16k_ring_wo_a_k29": _DAK,
+    "cell16k_ring_lean_k29": _DAK,
+    "decode_attn_kernel": _DAK,
+    "small_stages_fused": _SS,
+}
+
+
+def test_rounding_class_flag_per_arm(env_levers):
+    for arm in _ROUNDING_CLASS_FALSE_ARMS:
+        assert env_levers._is_rounding_class(arm) is False, arm
+        assert env_levers._rounding_class_keys(arm) == [], arm
+        assert arm not in env_levers.ROUNDING_CLASS_ARMS, arm
+    for arm, key in _ROUNDING_CLASS_TRUE_ARMS.items():
+        assert env_levers._is_rounding_class(arm) is True, arm
+        assert key in env_levers._rounding_class_keys(arm), (arm, key)
+        assert arm in env_levers.ROUNDING_CLASS_ARMS, arm
+
+
+def test_dry_run_receipt_carries_rounding_class_label(env_levers, tmp_path):
+    # The label + reason keys must be written into every receipt (dry-run path), so
+    # the byte-identity summary and downstream census can read them off the receipt.
+    out = tmp_path / "rc.jsonl"
+    arms = ["control", "cell16k_ring_wo_a_cache", "attn_core_compile",
+            "cell16k_ring_wo_a_k29", "small_stages_fused"]
+    rc = env_levers.main(
+        ["--dry-run", "--context-tokens", "1024", "--arms", *arms, "--out", str(out)]
+    )
+    assert rc == 0
+    receipts = {
+        json.loads(line)["arm"]: json.loads(line)
+        for line in out.read_text().splitlines() if line
+    }
+    for arm in arms:
+        r = receipts[arm]
+        assert "rounding_class" in r, f"{arm}: rounding_class label missing"
+        assert "rounding_class_keys" in r, f"{arm}: rounding_class_keys missing"
+        assert r["rounding_class"] == env_levers._is_rounding_class(arm), arm
+        assert r["rounding_class_keys"] == env_levers._rounding_class_keys(arm), arm
+    # Exact arms are False; the K29 / core-compile / K35 arms are True with a reason.
+    assert receipts["control"]["rounding_class"] is False
+    assert receipts["cell16k_ring_wo_a_cache"]["rounding_class"] is False
+    assert receipts["attn_core_compile"]["rounding_class"] is True
+    assert _ACC in receipts["attn_core_compile"]["rounding_class_keys"]
+    assert receipts["cell16k_ring_wo_a_k29"]["rounding_class"] is True
+    assert _DAK in receipts["cell16k_ring_wo_a_k29"]["rounding_class_keys"]
+    assert receipts["small_stages_fused"]["rounding_class"] is True
+    assert _SS in receipts["small_stages_fused"]["rounding_class_keys"]

@@ -610,9 +610,12 @@ def _compress_inv_freq(args: ModelArgs) -> mx.array:
 def _cos_sin(inv_freq, positions: mx.array):
     """``cos``/``sin`` tables ``[len(positions), rope_head_dim//2]`` in fp32.
 
-    ``inv_freq`` is a numpy constant (kept off the parameter tree); it is lifted
-    to MLX here."""
-    freq = mx.array(np.asarray(inv_freq, dtype=np.float32))
+    ``inv_freq`` is a numpy constant (kept off the parameter tree), lifted to MLX
+    here -- or, under W99 lean casts, an already-lifted ``mx.array`` passed straight
+    through (the caller cached it once per layer, so the per-token numpy->device
+    upload is skipped; the values are identical, so cos/sin are byte-identical)."""
+    freq = inv_freq if isinstance(inv_freq, mx.array) \
+        else mx.array(np.asarray(inv_freq, dtype=np.float32))
     ang = positions.astype(mx.float32)[:, None] * freq[None, :]
     return mx.cos(ang), mx.sin(ang)
 
@@ -857,6 +860,28 @@ class Attention(nn.Module):
             self.inv_freq = np.asarray(_compress_inv_freq(args), dtype=np.float32)
         else:
             self.inv_freq = np.asarray(_swa_inv_freq(args), dtype=np.float32)
+        # W99 lean-casts: lazily-cached device lifts of the per-layer RoPE inv_freq
+        # and the f32 attention sink, so the hot path skips the per-token numpy->device
+        # relift / sink cast (byte-identical; see MTPLX_DSV41_ATTN_LEAN_CASTS).
+        self._inv_freq_mx_cache = None
+        self._attn_sink_f32_cache = None
+
+    def _lean_inv_freq(self):
+        """The layer's RoPE ``inv_freq`` lifted to a device ``mx.array`` ONCE and
+        cached (W99).  Same values as the per-token ``mx.array(np.asarray(...))`` in
+        :func:`_cos_sin`, so cos/sin are byte-identical."""
+        if self._inv_freq_mx_cache is None:
+            self._inv_freq_mx_cache = mx.array(np.asarray(self.inv_freq, dtype=np.float32))
+        return self._inv_freq_mx_cache
+
+    def _lean_sink_f32(self):
+        """The per-head value-0 attention sink cast to f32 ONCE and cached (W99) --
+        the same array ``self.attn_sink.astype(mx.float32)`` produces each token."""
+        sink = self._attn_sink_f32_cache
+        if sink is None or sink[0] is not self.attn_sink:
+            sink = (self.attn_sink, self.attn_sink.astype(mx.float32))
+            self._attn_sink_f32_cache = sink
+        return sink[1]
 
     def _sparse_attend(self, q, KV, attend):
         """One softmax over the concatenated KV with a per-head sink (value 0),
@@ -1174,15 +1199,45 @@ class Attention(nn.Module):
             )
             return out.reshape(b, s, H, hd)
         scale = self.softmax_scale
+        # W97: fixed-shape mx.compile of the whole core (QK + mask + sink softmax +
+        # PV) at decode / small-M verify -- one geometry-keyed tape, the scattered
+        # elementwise runs fused into ~3 Compiled nodes (~13 -> ~8 kernels).
+        # ROUNDING-CLASS vs the eager block below (n=1 compile reassociates the fp32
+        # einsum/reductions), gated separately; the gather stayed OUTSIDE.
+        # W97 (review item 4): gate on rows = b*s (NOT s alone -- batched decode at
+        # b>1 was admitting one tape per b), and force eager during a TIMED prefill
+        # session (``_stime.is_prefill()``) so the prefill stage census stays
+        # fine-grained (mirrors ``_attn_use_compile``).  The cap covers M=1 decode +
+        # the K+1 verify batch (b*s <= 8).  CAVEAT: there is no UNTIMED decode/verify-
+        # phase signal at this call site, so a <=8-row untimed prefill (a <=8-token
+        # prompt, or a <=8-row prefill tail chunk under fine chunking) still routes
+        # through this rounding-class tape -- keep prompts/prefill chunks > the cap
+        # for byte-identical prefill, or accept prefill as rounding-class there.
+        rows = b * s
+        if (_resolve_attn_core_compile() and rows <= _ATTN_CORE_COMPILE_MAX_ROWS
+                and not _stime.is_prefill()):
+            _note_attn_core_call(True)
+            with _stime.stage_attn("attn." + mode + ".score.core_compiled") as _st:
+                o = _attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, self.attn_sink)
+                _st.add(o)
+            return o
+        _note_attn_core_call(False)
+        # W99 lean casts (byte-identical): cast KVg to f32 ONCE (reused by QK^T and
+        # PV, which otherwise re-cast the same array) and use the per-layer cached f32
+        # sink instead of re-casting attn_sink every token.
+        lean = _resolve_attn_lean_casts()
+        KVg_f32 = KVg.astype(mx.float32) if lean else None
         with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
             scores = mx.einsum(
-                "bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)
+                "bshd,bskd->bshk", q.astype(mx.float32),
+                KVg_f32 if lean else KVg.astype(mx.float32),
             ) * scale                                       # [b,s,H,k]
             _st.add(scores)
         with _stime.stage_attn("attn." + mode + ".score.scale_mask_sink") as _st:
             scores = mx.where(valid[:, :, None, :], scores, float("-inf"))
             _st.add(scores)
-        sink = self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1)
+        sink = (self._lean_sink_f32() if lean
+                else self.attn_sink.astype(mx.float32)).reshape(1, 1, H, 1)
         with _stime.stage_attn("attn." + mode + ".score.softmax") as _st:
             # reference _k_sparse_attn L149-153: value-0 sink in the denominator,
             # a finite max floor so an all-invalid row yields all-zero (not NaN).
@@ -1191,7 +1246,9 @@ class Attention(nn.Module):
             denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
             _st.add(ex, denom)
         with _stime.stage_attn("attn." + mode + ".score.pv_matmul") as _st:
-            o = mx.einsum("bshk,bskd->bshd", ex, KVg.astype(mx.float32)) / denom
+            o = mx.einsum(
+                "bshk,bskd->bshd", ex, KVg_f32 if lean else KVg.astype(mx.float32)
+            ) / denom
             _st.add(o)
         return o
 
@@ -1303,9 +1360,24 @@ class Attention(nn.Module):
                 # K30 (W59): publish the selection as gather indices too, once per
                 # index source (the Reuse layers below reuse it, like topk_mask).
                 if _resolve_selected_keys():
-                    shared.selected_idx = _mask_to_topk_idx(
-                        mask, min(self.indexer.index_topk, n_comp)
+                    # W97 (review item 5): when a FIXED-SHAPE consumer is armed (the
+                    # core-compile tape or the K29 kernel), pad the selection to the
+                    # FULL index_topk so k = window + index_topk is context-independent.
+                    # Otherwise k = window + min(index_topk, n_comp) grows every token
+                    # until the indexer saturates (~index_topk tokens), so a prompt
+                    # shorter than that retraces the compile tape / re-specialises the
+                    # kernel for its whole warmup (~index_topk distinct k).  The
+                    # ``valid`` mask already drops the -1 pads; greedy-identical (the
+                    # extra masked rows contribute exp(-inf)=0), rounding-class vs the
+                    # unpadded selection (the softmax sum reassociates over the pads),
+                    # so it is gated to those already-rounding-class consumers and the
+                    # default selected-keys path stays byte-identical.
+                    topk = (
+                        self.indexer.index_topk
+                        if (_resolve_attn_core_compile() or _resolve_decode_attn_kernel())
+                        else min(self.indexer.index_topk, n_comp)
                     )
+                    shared.selected_idx = _mask_to_topk_idx(mask, topk)
             else:  # Reuse: read the source's selection
                 mask = shared.topk_mask
             # W76: fence ``mask`` always; additionally fence the K30
@@ -1341,7 +1413,10 @@ class Attention(nn.Module):
         b, s, _ = x.shape
         H, hd, rd = self.n_heads, self.head_dim, self.rope_head_dim
         mode = self.mode
-        qcos, qsin = _cos_sin(self.inv_freq, positions)
+        # W99 lean casts: pass the once-lifted device inv_freq (byte-identical cos/sin,
+        # skips the per-token numpy->device relift in _cos_sin).
+        _inv_freq = self._lean_inv_freq() if _resolve_attn_lean_casts() else self.inv_freq
+        qcos, qsin = _cos_sin(_inv_freq, positions)
 
         # K22 attention-chain compile: the pure projection/norm/rope prep that
         # produces (q, qr, kv_new) is one compiled tape at decode/verify row
@@ -1457,19 +1532,65 @@ class Attention(nn.Module):
         f32-castable array -- dequantized when q8/native-resident, else the raw
         ``nn.Linear`` weight.  Extracted so :meth:`_o_lora_down` (eager) and the K22
         compiled output tape derive the einsum weight through the *identical* path
-        (bit-exact either way): the dequant is weight-only, no dependence on ``o``."""
+        (bit-exact either way): the dequant is weight-only, no dependence on ``o``.
+
+        W97: under ``MTPLX_DSV41_ATTN_WO_A_CACHE`` the dequantized array is computed
+        once, promoted to f32 and reused across decode tokens, keyed on the
+        ``(weight, scales, biases)`` packed-array identities so a re-quantize /
+        reload that swaps ANY of the three rebuilds it (the dequant output depends on
+        all three, not the weight alone).  BYTE-IDENTICAL
+        to the per-token dequant: ``mx.dequantize`` returns bf16 (both q8 and the
+        native codecs) and ``_o_lora_down`` / the K22 out tape promote it to f32 with
+        ``.astype(mx.float32)``; the cache stores that exact f32 promotion (bf16->f32
+        is lossless), so the per-token ``.astype(mx.float32)`` becomes a no-op and no
+        fp math is reordered.  Off (default) the dequant is re-issued every layer
+        every token (docs/deepseek-v41/W97_ATTENTION_291MS.md)."""
         wo = self.wo_a
-        if isinstance(wo, nn.QuantizedLinear):
-            # Mode-aware: affine q8 carries biases; the native float codecs
-            # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
-            # the mode and a ``None`` bias directly.
-            w = mx.dequantize(
-                wo.weight, wo.scales, wo.biases,
-                group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
-            )
-        else:
-            w = wo.weight
-        return w.reshape(self.n_groups, self.o_lora_rank, -1)
+        if not isinstance(wo, nn.QuantizedLinear):
+            return wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)
+        use_cache = _resolve_wo_a_cache()
+        if use_cache:
+            # Key on all three packed arrays' identities, not the weight alone: the
+            # dequant output is a function of (weight, scales, biases), so a reload
+            # or re-quantize that swaps the scales or biases (keeping the weight
+            # buffer) must invalidate the cache.  ``biases`` is None for the native
+            # float codecs; ``None is None`` matches, so the check is codec-safe.
+            cached = getattr(self, "_wo_a_dense_cache", None)
+            if (
+                cached is not None
+                and cached[0] is wo.weight
+                and cached[1] is wo.scales
+                and cached[2] is wo.biases
+            ):
+                return cached[3]
+        # Mode-aware: affine q8 carries biases; the native float codecs
+        # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
+        # the mode and a ``None`` bias directly.
+        w = mx.dequantize(
+            wo.weight, wo.scales, wo.biases,
+            group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
+        ).reshape(self.n_groups, self.o_lora_rank, -1)
+        if use_cache:
+            # W97 (adversarial-review fix): ``mx.dequantize`` returns the SCALE
+            # dtype -- bf16 for BOTH the affine-q8 (bf16 scales/biases) and the
+            # native mxfp4/mxfp8/nvfp4 codecs (probe: [8192,4096] q8 gs64 -> bf16,
+            # 67.1 MB).  Caching that bf16 array left the per-token consumers
+            # (``_o_lora_down`` below and the K22 out tape) still running
+            # ``w.astype(mx.float32)`` EVERY token -- re-materialising the 134 MB
+            # f32 array per layer (~10.7 GB/token of write+read over 40 layers).
+            # Cache the f32 array once (bf16->f32 is exact, so byte-identical) so
+            # that per-token ``.astype(mx.float32)`` is a graph no-op (verified: 0
+            # AsType on the weight leg).  f32 cache = n_layers * [8192,4096]*4
+            # ~= 5.4 GB for BOTH codecs; priced into the memory plan when armed
+            # (mtplx/models/deepseek_v41_loader.py).
+            w = w.astype(mx.float32)
+            # Materialise once so later tokens reference the buffer, not a lazy
+            # dequantize node that would recompute on every ``mx.eval``.
+            mx.eval(w)
+            # Store the (weight, scales, biases) identities the dequant read plus
+            # the f32 result, so the lookup above invalidates on any of the three.
+            self._wo_a_dense_cache = (wo.weight, wo.scales, wo.biases, w)
+        return w
 
     def _o_lora_down(self, o):
         """Grouped ``wo_a`` down-projection: reshape the [out=n_groups*o_lora_rank,
@@ -1748,13 +1869,27 @@ def _mask_to_topk_idx(mask: mx.array, k: int) -> mx.array:
     Position order within the row is irrelevant to the softmax; ascending is chosen
     to match the reference.  One argsort over ``n`` per row -- run once per index
     source (published on ``shared.selected_idx``, reused down the stack), O(n) in
-    memory and ~n/(H*head_dim) cheaper than the score it replaces."""
+    memory and ~n/(H*head_dim) cheaper than the score it replaces.
+
+    ``k > n`` is supported (W97 item 5: pad the width to a FIXED ``index_topk`` even
+    before the compressed history has ``index_topk`` rows), producing ``[b, s, k]``
+    with ``-1`` in the surplus columns; the ``valid`` mask (``count`` True per row,
+    ``count <= n < k``) already drops them, so the gathered key set is unchanged."""
     b, s, n = mask.shape
     ar = mx.arange(n)
     # True positions sort by their own index (0..n-1); False positions by n+index,
     # so every True lands ahead of every False.  All keys distinct -> deterministic.
     keys = mx.where(mask, ar.reshape(1, 1, n), (n + ar).reshape(1, 1, n))
-    order = mx.argsort(keys, axis=-1)[..., :k].astype(mx.int32)   # [b, s, k]
+    order = mx.argsort(keys, axis=-1).astype(mx.int32)            # [b, s, n]
+    if k <= n:
+        order = order[..., :k]                                   # [b, s, k]
+    else:
+        # Pad the width to k > n with -1 (surplus columns); the valid mask below
+        # (count <= n < k) drops them, so this is byte-identical for the k <= n case
+        # and shape-stabilises the k > n case.
+        order = mx.concatenate(
+            [order, mx.full((b, s, k - n), -1, dtype=mx.int32)], axis=-1
+        )                                                        # [b, s, k]
     count = mx.sum(mask.astype(mx.int32), axis=-1, keepdims=True)  # [b, s, 1]
     valid = mx.arange(k).reshape(1, 1, k) < count
     return mx.where(valid, order, mx.array(-1, dtype=mx.int32))
@@ -1895,7 +2030,12 @@ _DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"
 
 #: Max query rows (``b*s``) the decode kernel serves: M=1 decode and the ``K+1``
 #: verify batch (8 covers MTP depth up to 7).  Above it the eager prefill score
-#: path runs (W58/W59's domain) -- the hook never diverts prefill.
+#: path runs (W58/W59's domain).  CAVEAT (review item 4): the cap is the ONLY
+#: guard -- there is no decode/verify-phase signal here, so a <=8-row prefill (a
+#: <=8-token prompt or a <=8-row prefill tail chunk) is also diverted to the
+#: kernel; it is rounding-class like decode, so this changes prefill numerics in
+#: that regime (the K29 kernel is SHELVED, so this is documentation, not a live
+#: path -- see the SHELVED verdict above).
 _DECODE_ATTN_KERNEL_MAX_ROWS = 8
 
 
@@ -1935,6 +2075,226 @@ def _decode_attn_kernel_use(q) -> bool:
     except Exception:
         return False
     return rows <= _DECODE_ATTN_KERNEL_MAX_ROWS
+
+
+# --- W97: cache the dequantized grouped o-LoRA (``wo_a``) weight per layer ----
+#: The grouped ``wo_a`` down-projection is applied as an einsum, not a
+#: ``quantized_matmul``, so :meth:`Attention._o_lora_dense_weight` calls
+#: ``mx.dequantize(wo_a)`` to materialise the dense ``[g, o_lora_rank,
+#: in_per_group]`` weight.  With the flag OFF (default) that dequantize is
+#: re-issued as a graph node **every layer every decode token** (W96 as-is audit
+#: finding L9): at the released dims (``wo_a`` = 8x1024x4096 = 33.55M params) it
+#: writes a fresh 134 MB f32 (q8 gs64) / 67 MB bf16 (native mxfp4/mxfp8) array per
+#: token per backbone layer -- ~= 5.4 / 2.7 GB of dequant writes per token across
+#: the 40 layers, plus 40 extra dispatches the isolated bench (dense bf16 ``wo_a``,
+#: no dequant) never issues (docs/deepseek-v41/W97_ATTENTION_291MS.md).  The
+#: reference (model.py L784-787) dequantizes ``wo_a`` ONCE at convert time to bf16;
+#: the weight is a per-forward constant with no dependence on the activation, so
+#: caching the dequantized array is a pure host-dispatch + write-traffic cut.
+#:
+#: With the flag ON the dequantized array is computed once, promoted to f32 and
+#: reused (keyed on the packed-weight array identity, so a re-quantize / reload
+#: rebuilds it).  It is BYTE-IDENTICAL to control: ``mx.dequantize`` returns bf16
+#: for BOTH the affine-q8 (bf16 scales/biases) and the native mxfp4/mxfp8/nvfp4
+#: codecs, and both ``_o_lora_down`` and the K22 out tape then promote it to f32
+#: with ``.astype(mx.float32)``.  The cache stores that exact f32 promotion (bf16->
+#: f32 is lossless), so the per-token cast is a graph no-op and no fp math is
+#: reordered.  (The earlier lever cached the bf16 dequant and left the per-token
+#: f32 materialisation in place -- ~10.7 GB/token of write+read traffic; fixed
+#: here.)  Read at use, never frozen at import
+#: ([[env-flags-read-at-use-not-import]]).  Default OFF: the win is a GPU-window
+#: measurement AND the f32 cache holds a dense copy of every layer's ``wo_a``
+#: resident (40 x [8192,4096]*4 = 40 x 134 MB ~= 5.4 GB for BOTH codecs), so it is
+#: opt-in AND priced into the memory plan when armed
+#: (mtplx/models/deepseek_v41_loader.py) ([[never-exceed-the-memory-knob]]).
+_ATTN_WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
+
+
+def _resolve_wo_a_cache(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_WO_A_CACHE`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other DSV4.1
+    levers."""
+    val = os.environ.get(_ATTN_WO_A_CACHE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_WO_A_CACHE_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the per-token dequantize)"
+    )
+
+
+# --- W97: fixed-shape mx.compile of the decode attention CORE -----------------
+#: The selected-key attention core -- QK^T score, CSA/causal mask, per-head value-0
+#: sink, f32 softmax, PV -- over the gathered ``[b,s,k,hd]`` operand.  At decode
+#: (T==1) / small-M verify the shapes are FIXED (k = window + index_topk = 640,
+#: hd 512, H 64), so the whole eager chain (~13 tiny kernels: 2 matmuls + the
+#: scattered scale/where/max/exp/sum/exp/add/divide) is one geometry-keyed
+#: ``mx.compile`` tape whose elementwise runs fuse into ~3 ``Compiled`` nodes ->
+#: ~8 kernels (W97 census: core 13 -> 8; docs/deepseek-v41/W97_ATTENTION_291MS.md).
+#: The gather (data-dependent indices) stays OUTSIDE the tape.
+#:
+#: ROUNDING-CLASS, not byte-identical (like K35): the n=1 compile reassociates the
+#: fp32 einsum/reductions (measured max|Δ| ~9e-10 on CPU vs eager) -- greedy-argmax
+#: identical but the bytes differ, so it is gated SEPARATELY from the exact levers
+#: and its arms are flagged in the byte-identity summary.  The K29 fused decode
+#: kernel (MTPLX_DSV41_DECODE_ATTN_KERNEL) collapses the SAME core to ONE dispatch
+#: and, when armed on a GPU, wins the early return in ``_sparse_attend_selected``
+#: before this path (so the two never both apply).  K29 = 1 dispatch but was
+#: measured -38% at 1K (decode_attn_kernel 3.71 vs stack_a 6.01 tok/s, window-27,
+#: SHELVED -- docs/deepseek-v41/W60_FUSED_DECODE_ATTENTION.md) with a coarser
+#: Delta ~1e-3 (bf16/fast-transcendental class), NOT the 9.3e-10 f32-reassociation
+#: Delta of this compile core; so K29 is the lower-DISPATCH but not the faster
+#: option, and this compile core is the UNMEASURED candidate (fewer dispatches is
+#: not the win at M=1 -- the big-kernel chain dominates).  Its engagement is
+#: recorded in the ab receipt (``attn_core_compile_engagement``) so a window can
+#: prove the tape actually ran vs fell through to eager.
+#: Read at use, never frozen at import ([[env-flags-read-at-use-not-import]]).
+#: Default OFF (the win is a GPU-window measurement).
+_ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
+#: Max query rows (b*s) the core tape serves: M=1 decode + the K+1 verify batch,
+#: mirroring the K29 decode-kernel cap; above it the eager core runs (prefill).
+_ATTN_CORE_COMPILE_MAX_ROWS = 8
+#: One compiled core tape per (geometry, dtype, scale) signature.  Module global so
+#: tests can inspect its growth and clear it between configs.  W97 (review item 5):
+#: the tape count is bounded to ONE per distinct ``(b*s, CSA-mode k)`` -- NOT one per
+#: distinct ``k`` -- because arming the tape pads the selected keys to the full
+#: ``index_topk`` (see ``_compressed``), so ``k = window + index_topk`` is fixed
+#: instead of ``window + min(index_topk, n_comp)`` growing every token until the
+#: indexer saturates (~index_topk tokens).  Without the padding a prompt shorter than
+#: ratio*index_topk retraced the tape for its whole warmup (~index_topk tapes).
+_ATTN_CORE_COMPILED: dict = {}
+
+#: W97 (adversarial review, item 3) engagement counters for the decode-attention
+#: core: selected-key core calls that ran the fixed-shape ``mx.compile`` tape
+#: (``compiled``) vs calls that ran the eager core (``eager`` -- lever off, or above
+#: the small-M cap).  Recorded in the ab receipt as ``attn_core_compile_engagement``
+#: (mirroring K29's ``decode_attn_kernel_engagement``), so a GPU window can prove the
+#: tape actually ran (compiled > 0) rather than silently falling through to eager.
+_ATTN_CORE_COMPILE_CALLS = 0
+_ATTN_CORE_EAGER_CALLS = 0
+
+
+def _reset_attn_core_compile_calls() -> None:
+    """Zero the compiled/eager decode-attention-core counters (call before each A/B arm)."""
+    global _ATTN_CORE_COMPILE_CALLS, _ATTN_CORE_EAGER_CALLS
+    _ATTN_CORE_COMPILE_CALLS = 0
+    _ATTN_CORE_EAGER_CALLS = 0
+
+
+def _note_attn_core_call(compiled: bool) -> None:
+    """Record one selected-key attention-core call as compiled-tape or eager."""
+    global _ATTN_CORE_COMPILE_CALLS, _ATTN_CORE_EAGER_CALLS
+    if compiled:
+        _ATTN_CORE_COMPILE_CALLS += 1
+    else:
+        _ATTN_CORE_EAGER_CALLS += 1
+
+
+def _attn_core_compile_calls() -> dict:
+    """Counters since the last reset: ``compiled`` (selected-key core calls that ran
+    the fixed-shape mx.compile tape) and ``eager`` (calls that ran the eager core --
+    lever off, or above the small-M cap ``_ATTN_CORE_COMPILE_MAX_ROWS``)."""
+    return {
+        "compiled": int(_ATTN_CORE_COMPILE_CALLS),
+        "eager": int(_ATTN_CORE_EAGER_CALLS),
+    }
+
+
+def _resolve_attn_core_compile(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_CORE_COMPILE`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_CORE_COMPILE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_CORE_COMPILE_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager core)"
+    )
+
+
+# --- W99: lean the decode-attention casts (byte-identical redundant-cast removal) --
+#: The W97 dispatch census (docs/deepseek-v41/W97_ATTENTION_291MS.md §7) shows the
+#: decode attention layer issues 15-25 ``AsType`` (f32 cast) kernels; W99 traced each:
+#: almost all are LOAD-BEARING reference f32 (rmsnorm normalises in f32, the softmax
+#: core runs in f32, cos/sin are f32, the interleaved RoPE rotates in f32 then stores
+#: at the model dtype, the o-LoRA einsum is f32) -- removing those would change the
+#: numerics, so they stay.  Two are genuinely REDUNDANT and removed here, byte-
+#: identically:
+#:   * the eager selected-key core casts ``KVg`` to f32 TWICE (once for QK^T, once for
+#:     PV) -- compute it ONCE and reuse (same values -> same bytes); and the per-head
+#:     value-0 ``sink`` is re-cast to f32 every token -- cache the f32 vector per layer;
+#:   * ``_cos_sin`` re-lifts the layer's numpy ``inv_freq`` to a fresh device array
+#:     every token (a host->device upload on the hot path) -- lift it ONCE and cache
+#:     the ``mx.array`` per layer (same constant -> same cos/sin bytes).
+#: BYTE-IDENTICAL by construction (no fp math reordered): tested bit-for-bit over 64
+#: decode steps, eager AND compiled.  Composes with the wo_a cache (also byte-
+#: identical) as the byte-identical ``cell16k_ring_lean`` stack.  The bulk of the
+#: casts (reference f32) and the structural RoPE concatenates are NOT reducible byte-
+#: identically; the ~13-kernel core (its casts included) collapses to ONE dispatch
+#: only via the K29 fused kernel (rounding-class).  Read at use; default OFF.
+_ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
+
+
+def _resolve_attn_lean_casts(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_LEAN_CASTS`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_LEAN_CASTS_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_LEAN_CASTS_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the per-token casts)"
+    )
+
+
+def _attn_core_impl(q, KVg, valid, sink, scale):
+    """The selected-key attention core (gathered operand -> [b,s,H,hd] output):
+    QK^T, mask, per-head value-0 sink, f32 softmax, PV -- the reference
+    ``_k_sparse_attn`` value-0 sink form (max includes the sink, normalize after
+    PV), all f32.  BYTE-for-byte the eager block in :meth:`Attention._sparse_attend_selected`
+    when run eagerly; under ``mx.compile`` the fp32 einsum/reductions reassociate
+    (rounding-class).  Pure (no ``self``, no env, no stage brackets) so
+    ``mx.compile`` traces one fixed-shape tape."""
+    H = q.shape[2]
+    scores = mx.einsum("bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)) * scale
+    scores = mx.where(valid[:, :, None, :], scores, float("-inf"))
+    sink = sink.astype(mx.float32).reshape(1, 1, H, 1)
+    m = mx.maximum(mx.max(scores, axis=-1, keepdims=True), sink)
+    ex = mx.exp(scores - m)
+    denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
+    return mx.einsum("bshk,bskd->bshd", ex, KVg.astype(mx.float32)) / denom
+
+
+def _attn_core_compiled(q, KVg, valid, scale):
+    """The geometry-keyed compiled core tape for these operand shapes/dtypes and
+    ``scale``.  Cached in :data:`_ATTN_CORE_COMPILED` so 64 decode steps at one
+    geometry build ONE tape (no per-token retrace); ``scale`` is baked into the
+    traced closure and is part of the key."""
+    sig = (
+        tuple(int(d) for d in q.shape), tuple(int(d) for d in KVg.shape),
+        tuple(int(d) for d in valid.shape),
+        str(q.dtype), str(KVg.dtype), str(valid.dtype), float(scale),
+    )
+    fn = _ATTN_CORE_COMPILED.get(sig)
+    if fn is None:
+        fn = mx.compile(lambda q, KVg, valid, sink: _attn_core_impl(q, KVg, valid, sink, scale))
+        _ATTN_CORE_COMPILED[sig] = fn
+    return fn
 
 
 def _lin_desc(linear):
