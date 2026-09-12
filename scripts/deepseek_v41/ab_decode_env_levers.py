@@ -1143,6 +1143,7 @@ ROUNDING_CLASS_ENVS = (
     SMALL_STAGES_FUSED_ENV,
     HC_PREMIX_KERNEL_ENV,
     "MTPLX_DSV41_DRAFT_HEAD_BF16",
+    ATTN_FUSED_PROJ_ENV,  # W101: metal_kernel glue + cached pre-transposed wo_a (GPU numerics: rounding-class, 0 greedy flips / 65)
 )
 
 
