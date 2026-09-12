@@ -104,7 +104,7 @@ def test_floor_refusal_raises_clear_error():
         )
     msg = str(exc.value)
     assert "below the floor" in msg.lower()
-    assert "--memory-budget-total-gb" in msg  # actionable
+    assert "--memory-budget-total-gib" in msg  # actionable
 
 
 def test_negative_term_rejected():
@@ -310,7 +310,7 @@ def _budget_args(mod, tmp_path, **over):
     argv = [
         "--out", str(tmp_path / "out.jsonl"),
         "--model", str(tmp_path),
-        "--memory-budget-total-gb", "100",
+        "--memory-budget-total-gib", "100",
         "--max-kv", "1000",
     ]
     args = mod.build_parser().parse_args(argv)
@@ -349,14 +349,14 @@ def test_resolve_derivation_budget_overrides_memory_limit(tmp_path):
     args._dsv41_system_used_at_start_bytes = int(20 * GIB)
     bench = _FakeBench(int(20 * GIB))
     derivation = mod._resolve_derivation(args, bench=bench, max_kv=1000)
-    # --memory-budget-total-gb overrides --memory-limit-gib (derives, not literal).
+    # --memory-budget-total-gib overrides --memory-limit-gib (derives, not literal).
     assert args._dsv41_budget_total.source == "budget"
     assert derivation.plan_gib != pytest.approx(42.0)
 
 
 def test_resolve_derivation_explicit_path(tmp_path):
     mod = _mod()
-    args = _budget_args(mod, tmp_path, memory_budget_total_gb=None, memory_limit_gib=70.0)
+    args = _budget_args(mod, tmp_path, memory_budget_total_gib=None, memory_limit_gib=70.0)
     derivation = mod._resolve_derivation(args, bench=None, max_kv=None)
     assert derivation.plan_gib == pytest.approx(70.0)
     bt = args._dsv41_budget_total
@@ -370,7 +370,7 @@ def test_resolve_derivation_explicit_path(tmp_path):
 def test_resolve_derivation_floor_refusal_propagates(tmp_path):
     mod = _mod()
     # budget 40 - 20 - 10 - kv - 3 < 20 floor -> refuse.
-    args = _budget_args(mod, tmp_path, memory_budget_total_gb=40.0)
+    args = _budget_args(mod, tmp_path, memory_budget_total_gib=40.0)
     args._dsv41_system_used_at_start_bytes = int(20 * GIB)
     bench = _FakeBench(int(20 * GIB))
     with pytest.raises(ValueError, match="(?i)below the floor"):
@@ -519,3 +519,60 @@ def test_memory_block_extra_keys_explicit_still_has_note():
     extra = mod._memory_block_extra_keys(args)
     assert extra["memory_plan_source"] == "explicit"
     assert "rss_semantics_note" in extra
+
+
+# --------------------------------------------------------------------------
+# MEDIUM-1: flags are GiB (-gib canonical); -gb is a deprecated alias that
+# converts decimal GB -> GiB at the boundary.
+# --------------------------------------------------------------------------
+
+
+def test_gb_to_gib_conversion():
+    mod = _mod()
+    # 100 decimal GB = 100e9 bytes = 100e9 / 2**30 GiB ~= 93.13 GiB.
+    assert mod._gb_to_gib(100.0) == pytest.approx(93.1322574, abs=1e-4)
+
+
+def test_deprecated_gb_alias_converts(tmp_path):
+    mod = _mod()
+    cfg = {"num_hidden_layers": 1, "head_dim": 512, "qk_rope_head_dim": 64,
+           "index_head_dim": 128, "sliding_window": 128, "compress_ratios": [0],
+           "kv_source_layer_ids": []}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--memory-budget-total-gb", "100", "--max-kv", "1000"]
+    args = mod.build_parser().parse_args(argv)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    # the -gb 100 is decimal GB -> ~93.13 GiB (NOT 100 GiB).
+    assert args._dsv41_budget_total.budget_total_gb == pytest.approx(93.1322574, abs=1e-3)
+
+
+def test_gib_and_gb_both_set_refused(tmp_path):
+    mod = _mod()
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"num_hidden_layers": 1, "kv_source_layer_ids": []}))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--memory-budget-total-gib", "93", "--memory-budget-total-gb", "100",
+            "--max-kv", "1000"]
+    args = mod.build_parser().parse_args(argv)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    with pytest.raises(ValueError, match="only one of"):
+        mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+
+
+def test_safety_and_overhead_gib_flags(tmp_path):
+    mod = _mod()
+    cfg = {"num_hidden_layers": 1, "kv_source_layer_ids": [], "compress_ratios": [0],
+           "head_dim": 512, "qk_rope_head_dim": 64, "index_head_dim": 128,
+           "sliding_window": 128}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--memory-budget-total-gib", "100", "--max-kv", "1000",
+            "--memory-safety-gib", "5", "--non-metal-overhead-gib", "8"]
+    args = mod.build_parser().parse_args(argv)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    bt = args._dsv41_budget_total
+    assert bt.safety_gb == pytest.approx(5.0)
+    assert bt.non_metal_overhead_gb == pytest.approx(8.0)

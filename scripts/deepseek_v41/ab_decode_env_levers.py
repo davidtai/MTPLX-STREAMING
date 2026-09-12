@@ -1121,46 +1121,69 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOTAL box-use budget GiB the plan is derived from (default: "
         "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
     )
-    # W106 item 3: derive the plan limit from the TOTAL box budget while
-    # COMPENSATING for the non-Metal requirements.  When given this OVERRIDES
-    # --memory-limit-gib (derive, don't take it literally); see the W106 doc.
+    # W106 item 3 / MEDIUM-1: derive the plan limit from the TOTAL box budget while
+    # COMPENSATING for the non-Metal requirements.  Canonical flags are GiB
+    # (`-gib`); the `-gb` spellings are DEPRECATED aliases that convert decimal GB
+    # -> GiB at the boundary (see _resolve_gib_flag).  When given, --memory-budget-
+    # total-* OVERRIDES --memory-limit-gib (derive, don't take it literally).
     p.add_argument(
-        "--memory-budget-total-gb",
+        "--memory-budget-total-gib",
         type=float,
         default=None,
-        metavar="N",
-        help="TOTAL box budget GiB for EVERYTHING; derive the MLX plan limit as "
+        metavar="GIB",
+        help="TOTAL box budget in GiB for EVERYTHING; derive the MLX plan limit as "
         "total - system_used_at_start - non_metal_overhead - kv_growth_to_max_kv "
         "- safety (compensates for the non-Metal requirements). Overrides "
         "--memory-limit-gib. Refuses to start if the derived limit is below "
         "--memory-budget-floor-gib.",
     )
     p.add_argument(
+        "--memory-budget-total-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --memory-budget-total-gib; the value is decimal "
+        "GB and is converted to GiB (x1e9/2^30).",
+    )
+    p.add_argument(
+        "--memory-safety-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=f"safety headroom in GiB subtracted in the budget derivation (default "
+        f"{DEFAULT_MEMORY_SAFETY_GIB:g}).",
+    )
+    p.add_argument(
         "--memory-safety-gb",
         type=float,
-        default=DEFAULT_MEMORY_SAFETY_GIB,
+        default=None,
         metavar="GB",
-        help=f"safety headroom GiB subtracted in the --memory-budget-total-gb "
-        f"derivation (default {DEFAULT_MEMORY_SAFETY_GIB:g}).",
+        help="DEPRECATED alias of --memory-safety-gib (decimal GB -> GiB).",
     )
     p.add_argument(
         "--memory-budget-floor-gib",
         type=float,
         default=DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
-        metavar="GB",
-        help=f"refuse to start if the --memory-budget-total-gb derived plan limit "
-        f"is below this floor (default {DEFAULT_MEMORY_BUDGET_FLOOR_GIB:g}).",
+        metavar="GIB",
+        help=f"refuse to start if the budget-derived plan limit is below this floor "
+        f"in GiB (default {DEFAULT_MEMORY_BUDGET_FLOOR_GIB:g}).",
+    )
+    p.add_argument(
+        "--non-metal-overhead-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="conservative pre-load estimate in GiB of the non-Metal process "
+        "overhead (python heap + expert-reader buffers + engram LRU + tokenizer) "
+        f"used in the budget derivation (default {DEFAULT_NON_METAL_OVERHEAD_GIB:g}); "
+        "the real value is re-measured after load (and aborts if it blows budget).",
     )
     p.add_argument(
         "--non-metal-overhead-gb",
         type=float,
         default=None,
         metavar="GB",
-        help="conservative pre-load estimate GiB of the non-Metal process overhead "
-        "(python heap + expert-reader buffers + engram LRU + tokenizer) used in "
-        f"the --memory-budget-total-gb derivation (default "
-        f"{DEFAULT_NON_METAL_OVERHEAD_GIB:g}); the real value is re-measured after "
-        "load and the MLX limit lowered if it exceeds this.",
+        help="DEPRECATED alias of --non-metal-overhead-gib (decimal GB -> GiB).",
     )
     p.add_argument(
         "--memory-profile",
@@ -1427,14 +1450,14 @@ def derive_budget_total_plan(
     )
     if plan_limit < float(floor_gib):
         raise ValueError(
-            f"--memory-budget-total-gb {budget_total_gb:.4g} derives a plan limit "
+            f"--memory-budget-total-gib {budget_total_gb:.4g} derives a plan limit "
             f"of {plan_limit:.4g} GiB, BELOW the floor of {floor_gib:.4g} GiB: "
             f"plan_limit = {budget_total_gb:.4g} "
             f"- system_used_at_start {system_used_at_start_gb:.4g} "
             f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
             f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
-            f"- safety {safety_gb:.4g}. Raise --memory-budget-total-gb, lower "
-            f"--memory-safety-gb / --non-metal-overhead-gb, reduce --max-kv, or "
+            f"- safety {safety_gb:.4g}. Raise --memory-budget-total-gib, lower "
+            f"--memory-safety-gib / --non-metal-overhead-gib, reduce --max-kv, or "
             f"lower --memory-budget-floor-gib (default "
             f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
         )
@@ -1567,6 +1590,38 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
     return int(total)
 
 
+def _gb_to_gib(gb: float) -> float:
+    """Decimal GB -> GiB (the boundary conversion for the deprecated ``-gb``
+    aliases). 1 GB = 1e9 bytes; 1 GiB = 2**30 bytes."""
+
+    return float(gb) * 1_000_000_000 / GIB
+
+
+def _resolve_gib_flag(args, gib_attr, gb_attr, default, flag_label):
+    """Resolve a GiB quantity from the canonical ``-gib`` flag, else the deprecated
+    ``-gb`` alias (decimal GB, converted to GiB with a warning), else ``default``.
+    Refuses if BOTH are set (ambiguous)."""
+
+    gib = getattr(args, gib_attr, None)
+    gb = getattr(args, gb_attr, None)
+    if gib is not None and gb is not None:
+        raise ValueError(
+            f"pass only one of {flag_label}-gib / {flag_label}-gb (the -gb form is "
+            "a deprecated alias); got both"
+        )
+    if gib is not None:
+        return float(gib)
+    if gb is not None:
+        conv = _gb_to_gib(float(gb))
+        print(
+            f"[ab] WARN: {flag_label}-gb is DEPRECATED (decimal GB); converting "
+            f"{float(gb):g} GB -> {conv:.4g} GiB. Use {flag_label}-gib.",
+            flush=True,
+        )
+        return conv
+    return default
+
+
 def _measure_system_used_at_start_bytes(args, bench) -> int:
     """The system-wide used-memory baseline (vm_stat, the SAME formula the
     gpu_window.sh guard uses -- factored in bench._system_used_bytes).  Measured
@@ -1581,16 +1636,62 @@ def _measure_system_used_at_start_bytes(args, bench) -> int:
     return used
 
 
+def _budget_total_gib(args):
+    """The resolved TOTAL box budget in GiB from --memory-budget-total-gib (or the
+    deprecated -gb alias), or None when neither is set."""
+
+    return _resolve_gib_flag(
+        args, "memory_budget_total_gib", "memory_budget_total_gb", None,
+        "--memory-budget-total",
+    )
+
+
+def _derive_budget_total(args, bench, max_kv):
+    """Compute the item-3 ``BudgetTotalDerivation`` from the resolved flags + the
+    measured system-used baseline + the KV estimate, or return None when no budget
+    flag was given.  Shared by ``_resolve_derivation`` and the pre-flight."""
+
+    budget_total = _budget_total_gib(args)
+    if budget_total is None:
+        return None
+    if bench is None or max_kv is None:
+        raise ValueError(
+            "--memory-budget-total-gib needs the bench module and resolved max_kv "
+            "to price the KV growth"
+        )
+    system_used_gb = _measure_system_used_at_start_bytes(args, bench) / GIB
+    non_metal_gb = _resolve_gib_flag(
+        args, "non_metal_overhead_gib", "non_metal_overhead_gb",
+        DEFAULT_NON_METAL_OVERHEAD_GIB, "--non-metal-overhead",
+    )
+    safety_gb = _resolve_gib_flag(
+        args, "memory_safety_gib", "memory_safety_gb",
+        DEFAULT_MEMORY_SAFETY_GIB, "--memory-safety",
+    )
+    floor_gib = float(
+        getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
+    )
+    dims = _read_kv_config_dims(getattr(args, "model", None))
+    kv_growth_gb = _kv_bytes_at_max_kv(dims, int(max_kv)) / GIB
+    return derive_budget_total_plan(
+        budget_total_gb=float(budget_total),
+        system_used_at_start_gb=system_used_gb,
+        non_metal_overhead_gb=non_metal_gb,
+        kv_growth_to_max_kv_gb=kv_growth_gb,
+        safety_gb=safety_gb,
+        floor_gib=floor_gib,
+    )
+
+
 def _resolve_derivation(args, *, bench=None, max_kv=None):
     """The plan->limit derivation for this run.
 
     Precedence:
-      1. ``--memory-budget-total-gb`` -> derive the plan limit from the TOTAL box
-         budget, COMPENSATING for the non-Metal requirements (item 3).  This
-         OVERRIDES ``--memory-limit-gib`` (derive instead of taking it literally).
+      1. ``--memory-budget-total-gib`` (or the deprecated -gb alias) -> derive the
+         plan limit from the TOTAL box budget, COMPENSATING for the non-Metal
+         requirements (item 3).  This OVERRIDES ``--memory-limit-gib``.
       2. ``--memory-limit-gib`` -> explicit plan (source "explicit").
-      3. otherwise the legacy W62 --box-budget derivation (source "explicit" from
-         the item-3 receipt's point of view: the new budget formula did not run).
+      3. otherwise the legacy W62 --box-budget derivation (source "explicit").
 
     Returns the W62 ``BudgetDerivation`` (its memory_limit_bytes/reserve/cache
     plumb into the loader unchanged); the item-3 ``BudgetTotalDerivation`` is
@@ -1599,33 +1700,8 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
-    budget_total = getattr(args, "memory_budget_total_gb", None)
-    if budget_total is not None:
-        if bench is None or max_kv is None:
-            raise ValueError(
-                "--memory-budget-total-gb needs the bench module and resolved "
-                "max_kv to price the KV growth"
-            )
-        system_used_gb = (
-            _measure_system_used_at_start_bytes(args, bench) / GIB
-        )
-        non_metal_gb = float(
-            getattr(args, "non_metal_overhead_gb", None)
-            if getattr(args, "non_metal_overhead_gb", None) is not None
-            else DEFAULT_NON_METAL_OVERHEAD_GIB
-        )
-        dims = _read_kv_config_dims(getattr(args, "model", None))
-        kv_growth_gb = _kv_bytes_at_max_kv(dims, int(max_kv)) / GIB
-        bt = derive_budget_total_plan(
-            budget_total_gb=float(budget_total),
-            system_used_at_start_gb=system_used_gb,
-            non_metal_overhead_gb=non_metal_gb,
-            kv_growth_to_max_kv_gb=kv_growth_gb,
-            safety_gb=float(getattr(args, "memory_safety_gb", DEFAULT_MEMORY_SAFETY_GIB)),
-            floor_gib=float(
-                getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
-            ),
-        )
+    bt = _derive_budget_total(args, bench, max_kv)
+    if bt is not None:
         args._dsv41_budget_total = bt
         override = bt.plan_limit_gib
     else:
