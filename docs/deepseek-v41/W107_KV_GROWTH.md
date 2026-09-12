@@ -24,8 +24,12 @@ Cell dims (from the released config, `DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4`
 `num_hidden_layers=40`, `head_dim=512` (1 shared KV latent head), `sliding_window=128`,
 `index_head_dim=128`, `compress_ratios ∈ {0,1,2}`, `kv_source_layer_ids=[2,8,14,20]`
 with ratios `{2:2, 8:2, 14:2, 20:1}` (so **3** layers carry a ratio>1 compressor
-frontier; layer 20 is ratio 1). Post-RoPE stores are bf16; the compressor frontier
-is **fp32** (the reference projects `wkv`/`wgate` in fp32).
+frontier; layer 20 is ratio 1). Per-lane dtype (review MEDIUM-2): the window store
+is bf16 (post-RoPE, follows `x`); the compressor frontier is **fp32** (`wkv`/`wgate`
+projected in fp32); and **compress_kv / index_k are fp32 on the ratio>1 source
+layers** (2/8/14 — the compressor pools in fp32 and RMSNorm/RoPE/the indexer preserve
+dtype) and bf16 only on the ratio==1 layer (20, a plain per-token projection that
+follows `x`).
 
 The five lanes David named map to the cache like this. "Growth strategy today" is
 what the **`cell16k_ring` arm actually runs** (W80 window ring on; W73 chunk-grow
@@ -35,13 +39,16 @@ off; the compressor frontier untouched by W80). "control" (shipped) is `_grow`
 | Lane | Cache field | Rows at cell | Bytes @ max_kv (bounded) | Growth **today** (cell16k_ring) | Per-token write | Alias that defeats donation |
 |------|-------------|--------------|--------------------------|--------------------------------|-----------------|-----------------------------|
 | **SWA ring** (window) | `LayerAttentionCache._window` | bounded to `cap_keep`=window+mv+slack ≈ 144 (phys_cap 208) | `2×208×512×2` ×40 = **17.0 MB** | W80 `_WindowRing`: bounded ping-pong, `slice_update` | **in place** (O(1)/tok) | `window_all = layer_cache.window` = `buf[:, :len]` **view**, held across the forward; on Metal a live view keeps `_buf` non-uniquely-referenced → `slice_update` copies instead of donating |
-| **compress store** | `LayerAttentionCache._compress_kv` | `ceil(max_kv/ratio)`: 8712 (r2) / 17416 (r1) | ratio2 8.9 MB ×3 + r1 17.8 MB = **44.6 MB** | W80 `_GrowBuffer` but `maxkv` **unset** in the arm → `init_cap=256` → **geometric doubling** | in place between doublings; each doubling copies the whole prefix (O(cap), O(log T) times) | `shared.compress_kv = layer_cache.compress_kv` (view) published to the group's Reuse/Reindex/Full layers; the indexer's full-store read holds it live |
-| **index store** | `LayerAttentionCache._index_k` | same rows as compress | ratio2 2.2 MB ×3 + r1 4.5 MB = **11.1 MB** | same as compress (geometric doubling) | same as compress | `shared.index_k = layer_cache.index_k` (view) |
+| **compress store** | `LayerAttentionCache._compress_kv` (fp32 r2 / bf16 r1) | `ceil(max_kv/ratio)`: 8712 (r2) / 17416 (r1) | r2 **fp32** 17.8 MB ×3 + r1 bf16 17.8 MB = **71.4 MB** | W80 `_GrowBuffer` but `maxkv` **unset** in the arm → `init_cap=256` → **geometric doubling** | in place between doublings; each doubling copies the whole prefix (O(cap), O(log T) times) | `shared.compress_kv = layer_cache.compress_kv` (view) published to the group's Reuse/Reindex/Full layers; the indexer's full-store read holds it live |
+| **index store** | `LayerAttentionCache._index_k` (fp32 r2 / bf16 r1) | same rows as compress | r2 **fp32** 4.5 MB ×3 + r1 bf16 4.5 MB = **17.8 MB** | same as compress (geometric doubling) | same as compress | `shared.index_k = layer_cache.index_k` (view) |
 | **main latent KV** (compressor frontier) | `CompressorState.raw_kv` / `raw_score` (fp32) | `n_fed` = **every fed token** (up to max_kv) | `2×17416×512×4` ×3 = **214.0 MB** | **`_grow` (concatenate) EVERY token** — untouched by W80 | **COPY, O(n_fed)/tok** = O(T²) over the cell (≈33.5 MB copied per token per layer at T=16384) | n/a — it is a genuine `concatenate`, not a `slice_update` at all |
 | **DSpark verify rows** | (write *pattern* into the four lanes above) | K+1 rows appended in one verify forward | — | one `append` of `n=K+1` rows via the lanes above | in place (ring/`_GrowBuffer` slice_update `n` rows) if the buffer has room; `concatenate` under the plain latent | inherits the source lane's alias |
 
-**Total bounded KV @ max_kv = 286.8 MB per sequence** (fp32 latent) / 179.8 MB if
-the latent frontier were stored bf16 — negligible vs the 110 GB box budget.
+**Total bounded KV @ max_kv = 320.2 MB per sequence** (window 17.0 + compress 71.4 +
+index 17.8 + latent 214.0; fp32 latent + fp32 ratio>1 compress/index) — corrected
+from the pre-review 286.8 MB, which wrongly costed the ratio>1 compress/index at bf16
+(review MEDIUM-2). Storing the latent frontier bf16 would cut it to ~185.9 MB.
+Negligible vs the 110 GB box budget.
 
 **Findings.**
 1. The **main latent KV** (compressor frontier) is the one lane W80 never bounded:
@@ -69,14 +76,23 @@ One switch that bounds/preallocates every lane. Precedence: **KV_BOUNDED > WINDO
 key — never frozen at import). When on, `LayerAttentionCache` builds:
 
 - **window** → `_WindowRing` (the W80 bounded sliding-window ring; genuine sliding
-  window, so bounded to `cap_keep`, independent of `max_kv`).
+  window, so bounded to `cap_keep`, independent of `max_kv`). A prefill chunk wider
+  than the base ping-pong buffers grows them transiently; the ring then **shrinks back
+  to its base `phys_cap`** once decode compactions no longer need the extra width
+  (review MEDIUM-1), so the decode-steady window allocation matches the §4 formula.
+  Rollback of the window lane is bounded to the resident sliding window: a rollback
+  that would need rows already compacted away **raises** rather than silently reading
+  masked rows (review MEDIUM-3) — shallow verify/device-route rollbacks are always safe.
 - **compress / index** → `_GrowBuffer(bounded_cap = ceil(max_kv/ratio) + slack)`,
   preallocated at the first (prefill) append. No geometric doubling — one allocation,
-  then every write is a donated `slice_update` of just the new rows.
+  then every write is a donated `slice_update` of just the new rows. Trim/rollback
+  truncate **length-only** (they keep the preallocated buffer — review HIGH-1), so a
+  rejected verify cycle never reallocates.
 - **latent frontier** → `CompressorState(bounded=True, maxkv)`: `raw_kv` / `raw_score`
   become `_GrowBuffer(bounded_cap = max_kv + slack)`. This removes the last per-token
-  `concatenate`. It is preallocated to `max_kv` (not shrunk to a verify-depth ring)
-  so arbitrary-depth trim/rollback stays exact — see §6.
+  `concatenate`. It is preallocated to `max_kv` (not shrunk to a verify-depth ring),
+  keeping full history, so the **latent** lane's trim/rollback is exact to any depth
+  (unlike the window ring, whose depth is bounded by its resident window — see §6).
 
 `max_kv` reaches the cache via `MTPLX_DSV41_KV_BOUNDED_MAXKV` (the harness stamps it
 from the resolved cell `max_kv` after `_apply_arm_env`, before `make_cache`; it falls
@@ -109,12 +125,17 @@ already proven by W80's drop_offset seam. Verified end-to-end in §5.
 - `kv_inplace_writes_<lane>` — appends that wrote in place into an existing buffer
   (donated `slice_update` of the new rows, or a ping-pong compaction) — the
   O(new-rows) decode path.
-- `kv_realloc_<lane>` — appends that **allocated** a buffer. In a truly
-  preallocated-bounded arm this is the one-time prefill count (window 1, compress 1,
-  index 1, latent 2 = kv+score) and **stays there**; `> 1` growing over the cell means
-  the lane was not preallocated (max_kv unset, or a prefill chunk wider than the cap).
+- `kv_realloc_<lane>` — appends that **allocated** a buffer. For compress/index/latent
+  in a truly preallocated arm this is the one-time prefill count (compress 1, index 1,
+  latent 2 = kv+score) and **stays there** across decode and across rejected verify
+  cycles (trim/rollback truncate length-only — review HIGH-1); `> 1` growing over
+  *decode* means the lane was not preallocated (max_kv unset). The **window** lane's
+  count can legitimately exceed 1: it counts the prefill init plus any transient
+  grow for a wide prefill chunk plus the one shrink-back to base (review MEDIUM-1);
+  what matters is that it stops growing once decode reaches steady state.
 - `rows_<lane>` — logical rows written; `layers_bounded` — engagement; `maxkv` — the
-  resolved cap; `alloc_bytes` — total buffer bytes allocated (≈ `kv_bytes_at_max_kv`).
+  resolved cap; `alloc_bytes` — total buffer bytes allocated (≈ `kv_bytes_at_max_kv`
+  once the window has shrunk back to base).
 
 The stamping follows the existing `prefetch_issued_verify` / `kv_chunk_grow` /
 `window_ring` pattern (`_run_arm` resets after model load; the receipt snapshots after
@@ -133,17 +154,26 @@ Formula (bytes, batch `B`, summed over layers `L`; `COMP_SLACK`/`LATENT_SLACK` =
 ```
 window   (every layer)              2 · B · phys_cap · head_dim · window_dtype_bytes
    phys_cap = window_size + max_verify + slack + headroom      # bounded, ⟂ max_kv
-compress (kv_source L)              B · comp_cap · head_dim       · compress_dtype_bytes
-index    (kv_source L)              B · comp_cap · index_head_dim · index_dtype_bytes
-   comp_cap = ceil(max_kv / ratio) + COMP_SLACK
+                                                               # (decode-steady; a wide
+                                                               #  prefill chunk grows it
+                                                               #  transiently then shrinks
+                                                               #  back — review MEDIUM-1)
+comp_cap = ceil(max_kv / ratio) + COMP_SLACK
+   # per-layer store dtype (review MEDIUM-2): ratio>1 source layers pool in fp32, so
+   # their compress/index are fp32 (latent_dtype_bytes); ratio==1 follows x (bf16).
+   c_bytes = latent_dtype_bytes if ratio>1 else compress_dtype_bytes
+   i_bytes = latent_dtype_bytes if ratio>1 else index_dtype_bytes
+compress (kv_source L)              B · comp_cap · head_dim       · c_bytes
+index    (kv_source L)              B · comp_cap · index_head_dim · i_bytes
 latent   (kv_source L, ratio>1)     2 · B · latent_cap · head_dim · latent_dtype_bytes
    latent_cap = max_kv + LATENT_SLACK
 total = Σ_L (window + compress + index + latent)
 ```
 
-`*_dtype_bytes` default to the runtime dtypes (bf16 stores = 2, fp32 latent = 4); pass
-measured widths for a specific build. The window term is **independent of `max_kv`** —
-the win of the sliding-window ring: KV does not grow with context except through the
+`*_dtype_bytes` default to the runtime dtypes (bf16 stores = 2 that follow `x`, fp32
+compressor frontier + fp32 ratio>1 compress/index = 4); pass measured widths for a
+specific build. The window term is **independent of `max_kv`** — the win of the
+sliding-window ring: KV does not grow with context except through the
 compress/index/latent lanes.
 
 At the cell (`max_kv=17408`, default dtypes):
@@ -151,54 +181,57 @@ At the cell (`max_kv=17408`, default dtypes):
 | Lane | Bytes |
 |------|-------|
 | window | 17.0 MB |
-| compress | 44.6 MB |
-| index | 11.1 MB |
+| compress | 71.4 MB |
+| index | 17.8 MB |
 | latent (fp32) | 214.0 MB |
-| **total** | **286.8 MB** |
+| **total** | **320.2 MB** |
 
-(latent stored bf16 would drop the total to 179.8 MB — a future lever, §6.)
+(latent stored bf16 would drop the total to ~185.9 MB — a future lever, §6.)
 
 The test asserts this formula equals the bytes the bounded cache actually allocates
-(`alloc_bytes`), lane for lane (§5).
+(`alloc_bytes`), lane for lane, and that the decode-steady window allocation (after
+the MEDIUM-1 shrink-back) equals the formula's window term (§5).
 
 ---
 
 ## §5 — Test evidence (CPU only)
 
-`tests/test_deepseek_v41_w107_kv_growth.py` — 14 tests, `mx.set_default_device(mx.cpu)`,
-tiny synthetic dims, run under `nice -n 19`, one file per process (no `-n auto`):
+`tests/test_deepseek_v41_w107_kv_growth.py` — 29 tests, `mx.set_default_device(mx.cpu)`,
+tiny synthetic dims, run under `nice -n 19`, one file per process (no `-n auto`).
+Original coverage: `test_kv_bytes_formula_matches_preallocation` (`alloc_bytes` ==
+`kv_bytes_at_max_kv` == summed live raw-backing bytes); `..._scales_with_max_kv`;
+`test_append_beyond_max_kv_raises_{grow_buffer,latent_frontier,via_cache}`;
+`test_inplace_stable_no_realloc_flat_memory`; `test_plain_grow_memory_grows_unlike_bounded`;
+`test_model_bounded_bit_identical_vs_legacy_selected_path` and `..._vs_window_ring`;
+`test_bounded_trim_rollback_parity` / `..._trim_parity`; counters/engagement/fallback.
 
-- `test_kv_bytes_formula_matches_preallocation` — `alloc_bytes` == `kv_bytes_at_max_kv`
-  == summed live raw-backing bytes.
-- `test_kv_bytes_breakdown_scales_with_max_kv` — compress/index/latent scale with
-  max_kv; window does not; dtype widths scale correctly.
-- `test_append_beyond_max_kv_raises_{grow_buffer,latent_frontier,via_cache}` — clean
-  `ValueError` past the cap (no silent growth).
-- `test_inplace_stable_no_realloc_flat_memory` — across 64 decode steps: `kv_realloc_*`
-  flat (data pointer stable), raw-backing shapes stable, `get_peak_memory` flat.
-- `test_plain_grow_memory_grows_unlike_bounded` — control: the shipped `_grow` frontier's
-  active memory grows with N; the bounded one does not.
-- `test_model_bounded_bit_identical_vs_legacy_selected_path` — a tiny-model
-  prefill+decode (T≈200, ring drops) is **bit-identical** bounded vs shipped.
-- `test_model_bounded_bit_identical_vs_window_ring` — bounded vs the W80 ring arm is
-  bit-identical (isolates the prealloc/in-place changes).
-- `test_bounded_trim_rollback_parity`, `test_bounded_trim_parity` — trim/rollback of
-  every lane (incl. the frontier) matches the shipped path.
-- `test_counters_increment_and_reset`, `test_bounded_engages_when_env_set_after_import`,
-  `test_bounded_maxkv_falls_back_to_window_ring_maxkv`.
+Review-fix regression tests (one per finding):
+- HIGH-1 `test_dspark_trim_no_realloc_compress_index`, `test_rollback_no_realloc_compress_index`
+  — 8 verify cycles keep `kv_realloc_compress/index` flat, backing capacity + `alloc_bytes` stable.
+- HIGH-2 `test_server_registers_kv_bounded_lever_keys`, `test_server_plumbed_maxkv_bounds_the_cache`,
+  `test_server_setdefault_lets_explicit_cap_win`.
+- MEDIUM-1 `test_window_ring_shrinks_back_after_chunked_prefill`,
+  `test_window_formula_matches_steady_allocation_after_chunked_prefill`.
+- MEDIUM-2 `test_medium2_ratio_gt1_compress_index_are_fp32`.
+- MEDIUM-3 `test_window_ring_deep_rollback_across_compaction_raises`,
+  `test_layer_cache_deep_rollback_across_compaction_raises`, `test_shallow_rollback_over_ring_is_safe`.
+- LOW-1 `test_assert_can_admit_raises_without_mutating`,
+  `test_over_cap_model_forward_raises_and_leaves_cache_clean`.
+- LOW-2 `test_truncate_to_zero_keeps_prealloc`, `test_full_trim_to_zero_no_realloc_via_cache`.
 
-Real pytest tails (this window):
+Real pytest tails (post-review):
 
 ```
-tests/test_deepseek_v41_w107_kv_growth.py ............                    [100%]
-14 passed, 2 warnings in 8.52s
+tests/test_deepseek_v41_w107_kv_growth.py .............................   [100%]
+29 passed, 2 warnings in 8.16s
 
-# no regression in the cache/ring suites or the ab-harness suite:
-tests/models/test_deepseek_v41_chunk_grow.py ...... 13 passed, 2 warnings in 1.43s
-tests/models/test_deepseek_v41_window_ring.py ..... 15 passed, 2 warnings in 13.46s
-tests/test_deepseek_v41_w93_lane_b_ring.py ........ 8 passed, 2 warnings in 1.03s
-tests/test_deepseek_v41_ab_env_levers.py .......... 65 passed, 2 warnings in 0.78s
+# no regression in the cache/ring suites, the ab-harness suite, or the parity suites:
+tests/models/test_deepseek_v41_chunk_grow.py ...... 13 passed in 1.28s
+tests/models/test_deepseek_v41_window_ring.py ..... 15 passed in 12.86s
+tests/test_deepseek_v41_w93_lane_b_ring.py ........ 8 passed in 1.03s
+tests/test_deepseek_v41_ab_env_levers.py .......... 65 passed in 0.78s
 ```
+(final consolidated tails are re-captured at the end of this window in the worker report.)
 
 ---
 
@@ -221,11 +254,14 @@ loaded the real model. Left for a GPU window:
    `cache_append` census stage drops from O(T) to O(1) — needs the GPU census.
    Placeholder: `<PENDING GPU: cache_append census stage O(T)? with KV_BOUNDED on>`.
 3. **latent frontier lever (deferred).** The frontier is preallocated to `max_kv`
-   (214 MB fp32) to keep arbitrary-depth trim/rollback exact. In the served cell,
-   rollback is only verify-depth, so the frontier could shrink to a verify-depth ring
-   (older rows are already pooled into compress_kv and never re-read) and/or store
-   bf16 (total 287→180 MB). Both would break the whole-sequence deep-trim used by the
-   unit tests / bare-forward path, so they are deferred behind their own lever.
+   (214 MB fp32) so the **latent** lane's trim/rollback is exact to any depth. (The
+   **window** lane is a genuine ring — its rollback is bounded to the resident sliding
+   window and raises past that; review MEDIUM-3. Shallow verify/device-route rollbacks
+   are always safe on both.) In the served cell, rollback is only verify-depth, so the
+   frontier could shrink to a verify-depth ring (older rows are already pooled into
+   compress_kv and never re-read) and/or store bf16 (total 320→~186 MB). Both would
+   break the whole-sequence deep-trim used by the unit tests / bare-forward path, so
+   they are deferred behind their own lever.
 
 ### GPU A/B to run later (do NOT run now)
 
@@ -244,7 +280,41 @@ python scripts/deepseek_v41/ab_decode_env_levers.py \
 # candidate = cell16k_ring as-is (KV_BOUNDED=1 by default, max_kv auto-stamped 17408)
 ```
 
-Read on the receipt: `kv_bounded` block (`kv_realloc_* == 1/1/1/2` and staying there;
-`kv_inplace_writes_*` = decode steps; `alloc_bytes ≈ 286.8 MB`), the `cache_append` /
-`compress_append` stage-timing ms/tok delta, decode tok/s, peak GB, and
-`byte_identical_vs_ar` (must hold — pure prealloc).
+Read on the receipt: `kv_bounded` block (compress/index/latent `kv_realloc_* ==
+1/1/2` and staying there across decode + rejected verify cycles; `kv_realloc_window`
+settles once the window shrinks back to base; `kv_inplace_writes_*` = decode steps;
+`alloc_bytes ≈ 320.2 MB`), the `cache_append` / `compress_append` stage-timing ms/tok
+delta, decode tok/s, peak GB, and `byte_identical_vs_ar` (must hold — pure prealloc).
+
+---
+
+## §7 — Review fixes (post-adversarial-review; verdict MERGE WITH FIXES)
+
+Each fix is its own commit with a regression test in `test_deepseek_v41_w107_kv_growth.py`.
+
+- **HIGH-1** — DSpark trim/rollback reallocated the "preallocated" compress/index
+  lanes every rejected cycle (`= _truncate(...)` → property setter → `_GrowBuffer.set()`
+  = fresh `mx.zeros` + full copy; repro `kv_realloc 1→9`). Fixed with
+  `LayerAttentionCache._lane_truncate` (length-only `truncate_to` for `_GrowBuffer`
+  lanes in trim & rollback).
+- **HIGH-2** — the served path never bounded the lanes (only the ab harness stamped
+  `MTPLX_DSV41_KV_BOUNDED_MAXKV`). The server now plumbs it from
+  `max_live_kv_tokens` at KV-window setup (via `os.environ.setdefault`, mirroring the
+  adjacent `MTPLX_CONTEXT_WINDOW_TOKENS`) and registers both keys in
+  `_DSV41_LEVER_ENV_KEYS`.
+- **MEDIUM-1** — the window ring's `phys_cap` only ever grew, so a chunked prefill
+  left it inflated (~114 MB, disagreeing with the formula's 17 MB). It now shrinks
+  back to its base `phys_cap` after prefill; the §4 window term is the decode-steady
+  bound.
+- **MEDIUM-2** — compress/index on the ratio>1 source layers are **fp32** (the
+  formula defaulted 2 bytes). Per-layer dtype fixed; cell total 286.8 → **320.2 MB**;
+  §1 dtype wording corrected. No append-site cast added (would change bytes vs shipped).
+- **MEDIUM-3** — window-ring rollback across a compaction silently masked in-window
+  rows. `truncate_to_length` now raises when the rollback reaches below the drop
+  frontier; the "arbitrary depth" claim is dropped for the window lane (the latent
+  lane keeps full history and stays exact to any depth).
+- **LOW-1** — an over-cap forward left the cache half-updated. A whole-cache
+  `assert_can_admit(n)` pre-check runs at the top of `_forward_span` /
+  `_forward_layer_major`, failing before any lane is written.
+- **LOW-2** — `_GrowBuffer.truncate_to(0)` dropped the prealloc; it now keeps the
+  buffer (length-only).
