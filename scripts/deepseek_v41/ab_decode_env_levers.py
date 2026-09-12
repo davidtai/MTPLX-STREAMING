@@ -1832,24 +1832,37 @@ def _load_model(args, bench, mx):
         )
     # W106 item 3 (two-phase): the plan limit had to be fixed BEFORE load with the
     # conservative non_metal_overhead estimate; now the model is resident, re-MEASURE
-    # the real non-Metal overhead (process RSS - mx active) and record it.  If it
-    # exceeds the estimate, lower the MLX active-allocation limit by the overage so
-    # the TOTAL still fits the budget -- then record both figures on the derivation.
-    _remeasure_non_metal_overhead(args, bench, mx, derivation)
+    # the real non-Metal overhead from the CURRENT process footprint and record
+    # estimate-vs-measured.  HIGH-1 fix: NEVER call mx.set_memory_limit post-load --
+    # residents are already allocated so it cannot shrink anything, and a limit
+    # below active memory would silently perturb the measured decode.  If the
+    # measured overhead blows the budget, ABORT here (before decode) instead.
+    _remeasure_non_metal_overhead(args, mx)
     return resident
 
 
-def _remeasure_non_metal_overhead(args, bench, mx, derivation) -> None:
-    """Phase 2 of the item-3 budget derivation: measure the real non-Metal process
-    overhead after load and, when it overshoots the pre-load estimate, lower the
-    MLX active limit so the box budget still holds.  Best-effort + guarded: it
-    never crashes the harness (records what it can and returns)."""
+def _remeasure_non_metal_overhead(args, mx) -> None:
+    """Phase 2 of the item-3 budget derivation.  Measure the real non-Metal process
+    overhead as ``current process footprint (phys_footprint, mach task_info) - mx
+    active memory`` (NOT ru_maxrss, which is a lifetime high-water incl. load
+    transients and earlier arms), record estimate-vs-measured on the derivation,
+    and:
+      * NEVER call ``mx.set_memory_limit`` (residents are allocated; it cannot
+        shrink, and a limit below active memory routes every later allocation onto
+        the over-limit path -- silent perturbation of the measured decode), and
+      * ABORT (raise, before the decode starts) when the measured overhead exceeds
+        the pre-load estimate by more than the tolerance, because the real total
+        footprint would then exceed the budget.
+    Measurement itself is guarded (a mach/read failure records None, no abort)."""
 
     bt = getattr(args, "_dsv41_budget_total", None)
     if bt is None or bt.source != "budget" or mx is None:
         return
     try:
-        rss = int(bench._process_rss_bytes())
+        from mtplx.deepseek_v41_memory_profile import process_rss_snapshot
+
+        snap = process_rss_snapshot()
+        footprint = snap.get("phys_footprint_bytes") or snap.get("resident_bytes")
         active = 0
         for owner in (mx, getattr(mx, "metal", None)):
             getter = getattr(owner, "get_active_memory", None)
@@ -1859,41 +1872,47 @@ def _remeasure_non_metal_overhead(args, bench, mx, derivation) -> None:
                     break
                 except Exception:
                     active = 0
-        measured_gb = max(0.0, (rss - active) / GIB)
     except Exception:  # pragma: no cover - defensive
         return
 
-    effective_gib = bt.plan_limit_gib
-    overage_gb = measured_gb - bt.non_metal_overhead_gb
-    if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:
-        effective_gib = max(0.0, bt.plan_limit_gib - overage_gb)
+    if footprint is None:
+        # No current-footprint figure (non-darwin / mach unavailable): keep the
+        # estimate, record None, do NOT abort.
         print(
-            f"[ab] budget-total re-measure: non_metal_overhead measured "
-            f"{measured_gb:.2f} GiB > estimate {bt.non_metal_overhead_gb:.2f} GiB "
-            f"(+{overage_gb:.2f}); lowering MLX active limit "
-            f"{bt.plan_limit_gib:.2f} -> {effective_gib:.2f} GiB to hold the budget",
+            "[ab] budget-total re-measure: process footprint unavailable "
+            "(non-darwin / mach); keeping the pre-load estimate, MLX limit unchanged",
             flush=True,
         )
-        setter = getattr(mx, "set_memory_limit", None) or getattr(
-            getattr(mx, "metal", None), "set_memory_limit", None
+        args._dsv41_budget_total = bt.replace(
+            non_metal_overhead_measured_gb=None,
+            plan_limit_gib_effective=bt.plan_limit_gib,
         )
-        if callable(setter):
-            try:
-                setter(int(round(effective_gib * GIB)))
-            except Exception:  # pragma: no cover - defensive
-                pass
-    else:
-        print(
-            f"[ab] budget-total re-measure: non_metal_overhead measured "
-            f"{measured_gb:.2f} GiB (estimate {bt.non_metal_overhead_gb:.2f} GiB); "
-            f"plan limit unchanged at {effective_gib:.2f} GiB",
-            flush=True,
-        )
+        return
 
+    measured_gb = max(0.0, (int(footprint) - int(active)) / GIB)
+    overage_gb = measured_gb - bt.non_metal_overhead_gb
+    # plan_limit is NEVER lowered post-load (HIGH-1).
     args._dsv41_budget_total = bt.replace(
         non_metal_overhead_measured_gb=measured_gb,
-        plan_limit_gib_effective=effective_gib,
+        plan_limit_gib_effective=bt.plan_limit_gib,
     )
+    print(
+        f"[ab] budget-total re-measure: non_metal_overhead measured "
+        f"{measured_gb:.2f} GiB (phys_footprint {int(footprint) / GIB:.2f} - mx "
+        f"active {int(active) / GIB:.2f}); estimate {bt.non_metal_overhead_gb:.2f} "
+        f"GiB; MLX limit unchanged (set_memory_limit is NOT called post-load)",
+        flush=True,
+    )
+    if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:
+        raise RuntimeError(
+            "budget-total re-measure ABORT (before decode): measured non-Metal "
+            f"overhead {measured_gb:.2f} GiB exceeds the pre-load estimate "
+            f"{bt.non_metal_overhead_gb:.2f} GiB by {overage_gb:.2f} GiB, so the real "
+            f"footprint would exceed --memory-budget-total-gib "
+            f"{bt.budget_total_gb:.4g} by ~{overage_gb:.2f} GiB. Re-run with "
+            f"--non-metal-overhead-gib >= {measured_gb:.2f}, a lower --max-kv, or a "
+            "higher budget; refusing to run the decode over budget."
+        )
 
 
 def _memory_profile_collector(args, mx, runtime, resident):

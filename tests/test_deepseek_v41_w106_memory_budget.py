@@ -375,3 +375,115 @@ def test_resolve_derivation_floor_refusal_propagates(tmp_path):
     bench = _FakeBench(int(20 * GIB))
     with pytest.raises(ValueError, match="(?i)below the floor"):
         mod._resolve_derivation(args, bench=bench, max_kv=1000)
+
+
+# --------------------------------------------------------------------------
+# HIGH-1: _remeasure_non_metal_overhead must NEVER call mx.set_memory_limit
+# post-load, must measure the CURRENT footprint (phys_footprint), and must ABORT
+# (not lower the limit) when the measured overhead blows the budget.
+# --------------------------------------------------------------------------
+
+
+class _FakeMx:
+    def __init__(self, active_bytes):
+        self._active = int(active_bytes)
+        self.set_memory_limit_calls = []
+        self.metal = None
+
+    def get_active_memory(self):
+        return self._active
+
+    def set_memory_limit(self, n):  # must NEVER be called post-load
+        self.set_memory_limit_calls.append(int(n))
+        return 0
+
+
+def _budget_bt(mod, *, estimate_gib):
+    return mod.BudgetTotalDerivation(
+        source="budget",
+        budget_total_gb=93.0,
+        system_used_at_start_gb=20.0,
+        non_metal_overhead_gb=float(estimate_gib),
+        kv_growth_to_max_kv_gb=2.0,
+        safety_gb=3.0,
+        floor_gib=20.0,
+        plan_limit_gib=50.0,
+    )
+
+
+def _patch_footprint(mod, monkeypatch, footprint_gib):
+    import mtplx.deepseek_v41_memory_profile as mp
+
+    monkeypatch.setattr(
+        mp, "process_rss_snapshot",
+        lambda: {"phys_footprint_bytes": int(footprint_gib * GIB),
+                 "resident_bytes": int(footprint_gib * GIB),
+                 "peak_maxrss_bytes": int(footprint_gib * GIB)},
+    )
+
+
+def test_remeasure_never_calls_set_memory_limit_and_aborts_over_budget(monkeypatch):
+    mod = _mod()
+    # active 70 GiB, footprint 90 GiB -> measured overhead 20 GiB, estimate 10 ->
+    # overage 10 GiB > tolerance -> ABORT, and set_memory_limit NEVER called.
+    _patch_footprint(mod, monkeypatch, 90.0)
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    with pytest.raises(RuntimeError, match="(?i)ABORT .*before decode"):
+        mod._remeasure_non_metal_overhead(args, mx)
+    assert mx.set_memory_limit_calls == []  # the core HIGH-1 assertion
+
+
+def test_remeasure_within_tolerance_records_measured_no_limit_change(monkeypatch):
+    mod = _mod()
+    # active 70 GiB, footprint 80 GiB -> measured 10 == estimate 10 -> no abort.
+    _patch_footprint(mod, monkeypatch, 80.0)
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # no raise
+    bt = args._dsv41_budget_total
+    assert bt.non_metal_overhead_measured_gb == pytest.approx(10.0, abs=0.01)
+    assert bt.plan_limit_gib_effective == pytest.approx(50.0)  # NEVER lowered
+    assert mx.set_memory_limit_calls == []
+
+
+def test_remeasure_footprint_unavailable_keeps_estimate(monkeypatch):
+    mod = _mod()
+    import mtplx.deepseek_v41_memory_profile as mp
+    monkeypatch.setattr(mp, "process_rss_snapshot",
+                        lambda: {"phys_footprint_bytes": None, "resident_bytes": None})
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # no raise, no crash
+    bt = args._dsv41_budget_total
+    assert bt.non_metal_overhead_measured_gb is None
+    assert bt.plan_limit_gib_effective == pytest.approx(50.0)
+    assert mx.set_memory_limit_calls == []
+
+
+def test_remeasure_noop_for_explicit_plan():
+    mod = _mod()
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = mod._explicit_plan_derivation(50.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # explicit -> noop
+    assert mx.set_memory_limit_calls == []
