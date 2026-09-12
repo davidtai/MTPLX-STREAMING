@@ -69,6 +69,39 @@ SLIDING_WINDOW = 128
 KV_LATENT_DIM = 512
 SWA_WINDOW_BYTES = NUM_TEXT_LAYERS * SLIDING_WINDOW * (KV_LATENT_DIM * 2)
 
+# W97 wo_a f32 cache reserve (MTPLX_DSV41_ATTN_WO_A_CACHE). With the lever armed,
+# every backbone layer caches the dequantized o-LoRA ``wo_a`` weight materialised to
+# f32 -- released dims [o_groups*o_lora_rank, n_heads*head_dim//o_groups] =
+# [8192, 4096] -- so the per-token .astype(f32) becomes a no-op (see
+# Attention._o_lora_dense_weight). mx.dequantize returns bf16 for BOTH resident
+# codecs, so the cached f32 size is codec-independent: 40 * 8192 * 4096 * 4
+# ~= 5.4 GB. Priced as a FIXED resident reserve when armed (mirroring
+# SWA_WINDOW_BYTES) so the streamed expert-cache allowance shrinks by it -- the
+# cache is materialised lazily at the first decode token, AFTER the plan is fixed,
+# so an unpriced cache runs the process ~5.4 GB over plan.
+WO_A_DENSE_ROWS = 8192          # o_groups (8) * o_lora_rank (1024), released dims
+WO_A_DENSE_COLS = 4096          # n_heads (64) * head_dim (512) // o_groups (8)
+WO_A_DENSE_F32_BYTES = WO_A_DENSE_ROWS * WO_A_DENSE_COLS * 4   # 134.2 MB / layer
+WO_A_CACHE_RESIDENT_BYTES = NUM_TEXT_LAYERS * WO_A_DENSE_F32_BYTES  # ~5.4 GB
+
+
+def deepseek_v41_additional_resident_bytes() -> int:
+    """Fixed resident reserve priced into the memory plan: the SWA window plus, when
+    ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense cache
+    (``WO_A_CACHE_RESIDENT_BYTES``).
+
+    ``derived_expert_cache_allowance_bytes`` subtracts ``plan.fixed_bytes`` (which is
+    spec-derived from ``additional_resident_bytes``) to size the streamed expert
+    cache.  The wo_a cache is materialised lazily at the first decode token, after
+    ``build_streaming_config`` and the W62 budget derivation have fixed the plan, so
+    unless it is reserved here the expert cache keeps its full allowance and the
+    process runs ~5.4 GB over plan.  Read at use so the arm's env is honoured at
+    open() time (the ab bench arms the lever before load)."""
+    from .deepseek_v41 import _resolve_wo_a_cache
+
+    extra = WO_A_CACHE_RESIDENT_BYTES if _resolve_wo_a_cache() else 0
+    return SWA_WINDOW_BYTES + extra
+
 # Default runtime reserve: the promoted streaming profiles reserve exactly
 # 7 GiB (docs/advanced/ssd-streamed-moe.md); the ExpertStreamingConfig default
 # is 16 GiB, so pass this explicitly.
@@ -324,7 +357,9 @@ def open_deepseek_v41_runtime(
 ) -> ExpertStreamingRuntime:
     """Construct the ExpertStreamingRuntime from ``expert-manifest.json``.
 
-    The SWA window is priced as a fixed ``additional_resident_bytes`` reserve.
+    The SWA window (and, when ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32
+    ``wo_a`` cache) is priced as a fixed ``additional_resident_bytes`` reserve
+    (:func:`deepseek_v41_additional_resident_bytes`).
     Bank I/O is lazy: opening the runtime reads the manifest JSON and (with the
     default header verification) size-checks ``experts.bin`` only -- it never
     reads or hashes the 169 GiB bank.  ``spec`` defaults to the pinned
@@ -359,7 +394,7 @@ def open_deepseek_v41_runtime(
         config,
         spec=spec,
         buffer_allocator=buffer_allocator,
-        additional_resident_bytes=SWA_WINDOW_BYTES,
+        additional_resident_bytes=deepseek_v41_additional_resident_bytes(),
         apply_memory_cap=apply_memory_cap,
         mx_module=mx_module,
         expert_admission_receipt=admission_receipt,
@@ -396,7 +431,8 @@ def _component_bank_allocator_for(
 
     The plan handed to the allocator is built the same way
     ``ExpertStreamingRuntime.open`` builds its own (island placement resolved,
-    the SWA window priced as ``additional_resident_bytes``, the resident-quant
+    the SWA window + f32 wo_a cache priced as ``additional_resident_bytes`` via the
+    shared :func:`deepseek_v41_additional_resident_bytes`, the resident-quant
     discounts applied, mixed-official per-layer record sizes when applicable),
     so the allocator's per-bank capacities match the slot pool's plan exactly.
     """
@@ -417,7 +453,7 @@ def _component_bank_allocator_for(
     resolved_config = resolve_island_placement(config, artifact_root, spec=spec)
     plan = resolved_config.memory_plan(
         spec,
-        additional_resident_bytes=SWA_WINDOW_BYTES,
+        additional_resident_bytes=deepseek_v41_additional_resident_bytes(),
         # This allocator sizes the component-bank per-layer capacities; its
         # resident discount MUST equal the one ``ExpertStreamingRuntime.open``
         # applies to its own pool plan (proj_quant + proj_requant + the

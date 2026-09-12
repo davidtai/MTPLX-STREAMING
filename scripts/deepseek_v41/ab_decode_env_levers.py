@@ -769,8 +769,11 @@ ARM_PRESETS = {
     # f32 astype write+read the earlier bf16 cache left in place, BOTH codecs).
     # BYTE-IDENTICAL to cell16k_ring -- the byte-identity summary must show it clean.
     # The f32 cache is ~5.4 GB resident (40 x 134 MB, both codecs), priced into the
-    # memory plan.  Watch peak memory: cell16k_ring already peaks ~65 GB at the 16K cell, so
-    # run this arm at a higher --memory-limit-gib or a smaller cell.
+    # memory plan (deepseek_v41_loader reserves it as fixed resident when armed, so the
+    # expert-cache allowance shrinks by it).  Watch peak memory: cell16k_ring already
+    # peaks ~65 GB at the 16K cell, so run this arm at a SMALLER cell if it OOMs -- do
+    # NOT raise --memory-limit-gib, which would raise the expert allowance by the same
+    # amount and re-open the overshoot.
     "cell16k_ring_wo_a_cache": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
@@ -1354,6 +1357,30 @@ def _load_model(args, bench, mx):
     )
     derivation = _resolve_derivation(args)
     print("[ab] memory derivation: " + derivation.formula(), flush=True)
+    # W97: the fixed resident reserve the plan prices (SWA window + the f32 wo_a
+    # cache when MTPLX_DSV41_ATTN_WO_A_CACHE is armed).  The arm env is already set
+    # (_apply_arm_env ran), so this reflects THIS arm; the expert-cache allowance
+    # shrinks by the reserve rather than the process running over plan.
+    try:
+        from mtplx.models.deepseek_v41_loader import (
+            SWA_WINDOW_BYTES as _swa_bytes,
+            deepseek_v41_additional_resident_bytes as _addl_resident,
+        )
+
+        _addl = _addl_resident()
+        _wo_a_reserve = _addl - _swa_bytes
+        print(
+            f"[ab] additional resident reserve: SWA {_swa_bytes / GIB:.3f} GiB"
+            + (
+                f" + wo_a f32 cache {_wo_a_reserve / GIB:.3f} GiB"
+                if _wo_a_reserve
+                else ""
+            )
+            + f" = {_addl / GIB:.3f} GiB (priced into the plan)",
+            flush=True,
+        )
+    except Exception:  # pragma: no cover - display only, never fail the run
+        pass
     # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
     # (with_mtp=True) and reprices the MTP residents against the expert cache so
     # the plan still fits.
