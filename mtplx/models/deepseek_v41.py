@@ -1927,7 +1927,13 @@ _HC_COMPILE = (os.environ.get(_HC_COMPILE_ENV) or "").strip().lower() not in (
 #: the matmul/mean reductions reassociate ~1e-6 and per-primitive overhead is
 #: already amortised over real work) on the eager path.  Module global so tests
 #: can retarget it.
-_HC_COMPILE_MAX_ROWS = 32
+#:
+#: K4 review (W91): the compiled HC segments are ``mx.array_equal`` with eager
+#: only at <= 7 rows; the ``flat @ fn.T`` matmul + RMS/HC-mix mean reductions
+#: reassociate ~1e-6 from 8 rows up.  So the cap is 7 (the same bit-exact ceiling
+#: W91 set for the K35 small-stage compile ``_SMALL_STAGES_MAX_ROWS``), NOT 32 --
+#: 32 admitted the non-bit-exact 8..32-row band.
+_HC_COMPILE_MAX_ROWS = 7
 
 
 def _hc_mixes_split(x, fn, base, scale, hc, iters, norm_eps, hc_eps):
