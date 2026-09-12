@@ -3186,6 +3186,32 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_SELECTED_KEYS",
     "MTPLX_DSV41_KV_CHUNK_GROW",
     "MTPLX_DSV41_LAYOUT_FIX",
+    # W90: the served-log lever snapshot must capture EVERY A/B lever
+    # (ab_decode_env_levers.ALL_LEVER_ENVS); a test asserts that subset relation, so
+    # a new lever cannot ship without appearing here.  Added the levers that had
+    # drifted out of this snapshot (SELECT_FENCE / WINDOW_RING* / DECODE_ATTN_KERNEL
+    # / the prefill-dense + score knobs / pin + route knobs) plus W90's own key.
+    "MTPLX_DSV41_DRAFT_COMPILE",
+    "MTPLX_DSV41_VERIFY_SINGLE_BARRIER",
+    "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS",
+    "MTPLX_DSV41_PREFILL_DENSE_BATCH",
+    "MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE",
+    "MTPLX_DSV41_PREFILL_SCORE_DTYPE",
+    "MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK",
+    "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL",
+    "MTPLX_DSV41_DECODE_ATTN_KERNEL",
+    "MTPLX_DSV41_DOWN_K_PAD",
+    "MTPLX_DSV41_PIN_WORKING_SET",
+    "MTPLX_DSV41_PIN_REFRESH_TOKENS",
+    "MLX_MAX_MB_PER_BUFFER",
+    "MTPLX_DSV41_DEVICE_ROUTE_PINNED",
+    "MTPLX_DSV41_SELECT_FENCE",
+    "MTPLX_DSV41_WINDOW_RING",
+    "MTPLX_DSV41_WINDOW_RING_MAX_VERIFY",
+    "MTPLX_DSV41_WINDOW_RING_SLACK",
+    "MTPLX_DSV41_WINDOW_RING_HEADROOM",
+    "MTPLX_DSV41_WINDOW_RING_MAXKV",
+    "MTPLX_DSV41_ATTN_SHAPE_STABLE",
 )
 
 

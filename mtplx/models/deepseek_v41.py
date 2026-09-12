@@ -1505,27 +1505,31 @@ def _resolve_select_fence(raw=None) -> bool:
     return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
 
 
-#: W90: shape-stable selected-key gather.  The W90 CPU reproduction pinned the
-#: in-situ decode-attention overhead (in-model reuse 6.96 ms/layer vs the isolated
-#: 2.0 ms/layer flat, ~5 ms/layer) as the per-layer decode gather REFERENCING O(T)
-#: source buffers: every Reuse / Reindex / Full layer's ``_sparse_attend_selected``
-#: gathers ``index_topk`` rows out of the SHARED ``compress_kv`` store ``[b, n_comp,
-#: hd]`` (n_comp ~ T/2) -- only a bounded slice is read, but the tiny B=1 dispatch
-#: pays a Metal residency/encode cost that scales with the referenced source size
-#: (the W78/W80 "resident churn"), invisible on the CPU (host wall + per-fn time are
-#: FLAT in T -- W90 E6/E5) and NOT reproduced by unreferenced ballast (window 31).
-#: All ~34 non-swa layers of a group reuse the SAME (compress_kv, selected_idx)
-#: pair, so the K30 gather is recomputed ~34x/token against the O(T) store.  This
-#: lever gathers the selected compressed KV ONCE per (compress_kv, selected_idx)
-#: source and shares the BOUNDED ``[b, s, k, hd]`` result down the stack, so only
-#: the first layer of a group references the O(T) store and every reuse references
-#: the bounded operand -- cutting the compressed-lane O(T) references from ~34 to
-#: ~3/token.  BYTE-IDENTICAL: the shared gather is the same rows in the same order
-#: as the per-layer gather (a pure caching of an already-deterministic result); the
-#: only difference on any host is which layer issues the physical gather.  The W80
-#: window ring bounds the OTHER O(T) reference (the per-layer window store), so
-#: ``cell16k_ring`` + this lever bounds both lanes.  Read at use, never frozen at
-#: import ([[env-flags-read-at-use-not-import]]).
+#: W90: shape-stable selected-key gather -- a DISPATCH-COUNT reduction (default OFF).
+#: All Reuse/Reindex/Full layers of a group read the SAME (compress_kv,
+#: selected_idx) pair, so the shipped K30 path issues the compressed-lane gather (~3
+#: tiny host dispatches) once per layer.  This lever gathers it ONCE per source and
+#: shares the bounded ``[b, s, k, hd]`` result (identity-keyed on the per-forward
+#: ``shared`` runtime), so only the first layer of a group issues it -- the
+#: token-total tiny-gather dispatches drop by ~the reuse-layer count (<= ~1% of the
+#: token).  BYTE-IDENTICAL: a pure caching of an already-deterministic gather (same
+#: rows, same order); the only difference is which layer issues the physical gather.
+#: Small-M gated (rows == b*s <= 8): armed at decode/verify only, never at a prefill
+#: chunk (a per-chunk cache would pin every chunk's operand -> ~17 GB at 16K -- see
+#: :func:`_selected_compress_gather`).
+#:
+#: NOT the fix for the mode-independent ~4 ms/layer in-situ decode floor.  W90 CPU
+#: reproduction RULED OUT the host candidates (retrace/memo/Python all FLAT in T,
+#: E1/E2/E5/E6); the earlier "O(T) source reference" claim is FALSIFIED by the
+#: receipts -- ``attn.swa_only`` (no ``compress_kv``, ~5 MB window under the ring)
+#: costs the same in situ as ``attn.reuse``, and the isolated bench already
+#: references O(T) per dispatch yet is flat.  The floor tracks GPU DVFS: macmon
+#: during a live 16K decode read 71 C (NOT thermal), ~45% GPU-busy, freq swinging
+#: 580-1381 MHz -- the GPU downclocks in the sync/latency gaps between B=1 bursts,
+#: so each post-gap burst runs slow (the isolated bench keeps the GPU awake).  See
+#: ``docs/deepseek-v41/W90_ATTN_IN_SITU.md``; decisive check = per-mode census with
+#: ``swa_only`` control + the ``utilization`` telemetry.  Read at use, never frozen
+#: at import ([[env-flags-read-at-use-not-import]]).
 _ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"
 
 
@@ -1586,23 +1590,44 @@ def _selected_compress_gather(compress_kv: mx.array, comp_idx: mx.array, shared)
     """W90: gather the ``index_topk`` selected rows out of ``compress_kv`` into a
     bounded ``[b, s, k, hd]`` operand plus its ``[b, s, k]`` valid mask, sharing the
     result across every layer of a group that reuses the SAME (``compress_kv``,
-    ``comp_idx``) source under ``MTPLX_DSV41_ATTN_SHAPE_STABLE``.
+    ``comp_idx``) source under ``MTPLX_DSV41_ATTN_SHAPE_STABLE`` (default OFF).
 
     Returns ``(kvg_cmp, comp_valid)``, byte-for-byte identical to the per-layer
-    ``_gather_rows(compress_kv, comp_idx, comp_idx >= 0)``.  W90 mechanism: the
-    per-layer decode gather references the O(T) ``compress_kv`` store (``n_comp ~
-    T/2``) once per Reuse/Reindex/Full layer (~34/token), and on Metal each tiny B=1
-    dispatch pays a residency/encode cost scaling with that referenced source size.
-    Caching the gather on the per-forward ``shared`` runtime (keyed by the identity
-    of the two source arrays, both held so an id can't be recycled) means only the
-    FIRST layer of a group references the O(T) store; the rest reference the bounded
-    gathered operand.  ``shared`` is fresh per forward (``new_shared_runtime``), so
-    the cache never leaks across tokens; a second source (a new ``kv_source`` /
-    ``index_source``) publishes new arrays whose identity misses the cache and
-    recomputes.  With the lever off (or no ``shared``) this is the plain per-layer
-    gather -- unchanged shipped behaviour."""
+    ``_gather_rows(compress_kv, comp_idx, comp_idx >= 0)`` -- a pure caching of an
+    already-deterministic gather.  All Reuse/Reindex/Full layers of a group read the
+    SAME ``(compress_kv, selected_idx)`` pair, so the shipped path issues that gather
+    (~3 tiny host dispatches) once per layer; caching it on the per-forward
+    ``shared`` runtime (keyed by the IDENTITY of the two source arrays, both held so
+    an id can't be recycled) means only the FIRST layer of a group issues it and the
+    Reuse layers reuse the bounded operand.
+
+    **Scope of the win.**  This is a per-token DISPATCH-COUNT reduction (a handful of
+    host encodes per Reuse/Reindex layer -> the token-total drops by ~the reuse-layer
+    count), expected small (<= ~1% of the token).  It is NOT the fix for the
+    mode-independent ~4 ms/layer in-situ decode floor: the repo receipts show
+    ``attn.swa_only`` (no ``compress_kv`` at all) costs the SAME in situ as
+    ``attn.reuse``, and the isolated bench already references O(T) sources per
+    dispatch yet is flat -- so the floor is not this O(T) reference (see
+    ``docs/deepseek-v41/W90_ATTN_IN_SITU.md``; the decisive check is a per-mode
+    census with ``swa_only`` as the control, and the ``utilization`` telemetry --
+    the GPU DVFS-downclocks between B=1 bursts).
+
+    **Small-M gate (rows == b*s <= 8).**  Armed ONLY for the decode (s == 1) and
+    ``K+1`` verify (s <= 8) regime.  Under layer-major CHUNKED PREFILL (rows ==
+    chunk >> 8) each per-chunk ``SharedAttentionRuntime`` would pin its chunk's
+    ``[chunk, k, hd]`` gathered operand for the whole group; summed over chunks that
+    is a full ``[s, k, hd]`` held resident (~17 GB at the 16,384 cell, OOM at 64K).
+    So at prefill row counts this ALWAYS falls back to the plain per-layer transient
+    gather (freed after the layer) -- byte-identical, and identical to the ``off``
+    path for prefill.  ``shared`` is fresh per forward, so the decode cache never
+    leaks across tokens; a new source publishes new arrays whose identity misses and
+    recomputes.  Lever off / no ``shared`` -> the plain per-layer gather, unchanged."""
     comp_valid = comp_idx >= 0
-    if shared is None or not _resolve_attn_shape_stable():
+    # rows = b*s from the selection ([b, s, k]); share only in the small-M
+    # decode/verify regime (W90 target), never at a prefill chunk (pinning/OOM).
+    rows = int(comp_idx.shape[0]) * int(comp_idx.shape[1])
+    if (shared is None or rows > _DECODE_ATTN_KERNEL_MAX_ROWS
+            or not _resolve_attn_shape_stable()):
         return _gather_rows(compress_kv, comp_idx, comp_valid), comp_valid
     cache = getattr(shared, "_sel_cmp_kvg", None)
     if cache is not None and cache[0] is compress_kv and cache[1] is comp_idx:

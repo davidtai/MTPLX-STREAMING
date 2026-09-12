@@ -290,3 +290,154 @@ def test_helper_matches_plain_gather(monkeypatch):
     assert np.array_equal(
         np.array(kvg3), np.array(dv41._gather_rows(compress_kv, comp_idx2, comp_idx2 >= 0))
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. (review) verify-shaped forward (rows>1, s<=8) is byte-identical ON vs OFF
+# ---------------------------------------------------------------------------
+def _run_with_verify(stable, monkeypatch, *, window_ring="0", layer_major="0",
+                     kv_chunk_grow="0"):
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    monkeypatch.setenv("MTPLX_DSV41_ATTN_SHAPE_STABLE", stable)
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING", window_ring)
+    monkeypatch.setenv("MTPLX_DSV41_PREFILL_LAYER_MAJOR", layer_major)
+    monkeypatch.setenv("MTPLX_DSV41_KV_CHUNK_GROW", kv_chunk_grow)
+    model, args = _new_model(seed=1)
+    cache, token = _prefill(model, args, s=48, seed=0, chunk=16)
+    dec = _decode(model, cache, token, 16)[1]
+    # a small-M verify-shaped forward (s=4 rows > 1) on the live cache
+    vids = mx.array(np.random.RandomState(7).randint(0, args.vocab_size, size=(1, 4)))
+    vlog = model(vids, cache=cache)
+    mx.eval(vlog)
+    tok = int(mx.argmax(vlog[0, -1]).item())
+    dec2 = _decode(model, cache, tok, 8)[1]
+    return dec, np.array(vlog), dec2
+
+
+def test_verify_shaped_forward_byte_identical(monkeypatch):
+    d_off, v_off, d2_off = _run_with_verify("0", monkeypatch)
+    d_on, v_on, d2_on = _run_with_verify("1", monkeypatch)
+    assert np.array_equal(v_off, v_on), "s=4 verify forward differs"
+    for i, (a, b) in enumerate(zip(d_off, d_on)):
+        assert np.array_equal(a, b), f"pre-verify decode {i} differs"
+    for i, (a, b) in enumerate(zip(d2_off, d2_on)):
+        assert np.array_equal(a, b), f"post-verify decode {i} differs"
+
+
+def test_byte_identical_ring_and_layer_major(monkeypatch):
+    for combo in (
+        {"window_ring": "1"},
+        {"window_ring": "1", "layer_major": "1"},
+        {"layer_major": "1"},
+        {"kv_chunk_grow": "1", "layer_major": "1"},
+    ):
+        d_off, v_off, d2_off = _run_with_verify("0", monkeypatch, **combo)
+        d_on, v_on, d2_on = _run_with_verify("1", monkeypatch, **combo)
+        assert np.array_equal(v_off, v_on), combo
+        assert all(np.array_equal(a, b) for a, b in zip(d_off, d_on)), combo
+        assert all(np.array_equal(a, b) for a, b in zip(d2_off, d2_on)), combo
+
+
+# ---------------------------------------------------------------------------
+# 8. (review) exact hit-count: hits == #Reuse, misses == #Full+#Reindex per token
+# ---------------------------------------------------------------------------
+def _hit_miss_per_token(monkeypatch, *, window_ring="0", kv_chunk_grow="0"):
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    monkeypatch.setenv("MTPLX_DSV41_ATTN_SHAPE_STABLE", "1")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING", window_ring)
+    monkeypatch.setenv("MTPLX_DSV41_KV_CHUNK_GROW", kv_chunk_grow)
+    model, args = _new_model(seed=1)
+    cache, token = _prefill(model, args, s=64, seed=0, chunk=16)
+
+    stats = {"hit": 0, "miss": 0}
+    orig = dv41._selected_compress_gather
+
+    def spy(compress_kv, comp_idx, shared):
+        c = getattr(shared, "_sel_cmp_kvg", None)
+        if c is not None and c[0] is compress_kv and c[1] is comp_idx:
+            stats["hit"] += 1
+        else:
+            stats["miss"] += 1
+        return orig(compress_kv, comp_idx, shared)
+
+    dv41._selected_compress_gather = spy
+    try:
+        _decode(model, cache, token, 4)  # 4 decode tokens
+    finally:
+        dv41._selected_compress_gather = orig
+    modes = args.layer_modes
+    n_reuse = modes.count("reuse")
+    n_src = modes.count("full") + modes.count("reindex")  # layers that (re)publish a selection
+    return stats, n_reuse, n_src
+
+
+def test_exact_hit_miss_counts_ring(monkeypatch):
+    stats, n_reuse, n_src = _hit_miss_per_token(monkeypatch, window_ring="1")
+    # per token: every Reuse layer hits the shared cache; every Full/Reindex layer
+    # (re)publishes a selection -> a fresh (compress_kv|selected_idx) identity -> miss.
+    assert stats["hit"] == n_reuse * 4, (stats, n_reuse)
+    assert stats["miss"] == n_src * 4, (stats, n_src)
+
+
+def test_exact_hit_miss_counts_chunk_grow(monkeypatch):
+    stats, n_reuse, n_src = _hit_miss_per_token(monkeypatch, kv_chunk_grow="1")
+    assert stats["hit"] == n_reuse * 4, (stats, n_reuse)
+    assert stats["miss"] == n_src * 4, (stats, n_src)
+
+
+# ---------------------------------------------------------------------------
+# 9. (review) small-M gate: a prefill chunk (rows > 8) NEVER caches (no pinning)
+# ---------------------------------------------------------------------------
+def _run_gate_probe(monkeypatch, *, prefill_s, chunk, layer_major="0", decode_n=2):
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    monkeypatch.setenv("MTPLX_DSV41_ATTN_SHAPE_STABLE", "1")
+    monkeypatch.setenv("MTPLX_DSV41_PREFILL_LAYER_MAJOR", layer_major)
+    model, args = _new_model(seed=1)
+    seen = {"prefill_calls": 0, "prefill_cached": 0, "peak_pinned_bytes": 0,
+            "decode_cached": 0}
+    live: dict = {}
+    orig = dv41._selected_compress_gather
+
+    def spy(compress_kv, comp_idx, shared):
+        rows = int(comp_idx.shape[0]) * int(comp_idx.shape[1])
+        out = orig(compress_kv, comp_idx, shared)
+        c = None if shared is None else getattr(shared, "_sel_cmp_kvg", None)
+        cached = c is not None
+        if rows > dv41._DECODE_ATTN_KERNEL_MAX_ROWS:  # a prefill chunk
+            seen["prefill_calls"] += 1
+            if cached:
+                seen["prefill_cached"] += 1
+                live[id(shared)] = c[2].nbytes
+                seen["peak_pinned_bytes"] = max(seen["peak_pinned_bytes"],
+                                                 sum(live.values()))
+        elif cached:  # decode / verify
+            seen["decode_cached"] += 1
+        return out
+
+    dv41._selected_compress_gather = spy
+    try:
+        cache, token = _prefill(model, args, s=prefill_s, seed=0, chunk=chunk)
+        _decode(model, cache, token, decode_n)
+    finally:
+        dv41._selected_compress_gather = orig
+    return seen
+
+
+def test_prefill_chunk_never_caches_small_m_gate(monkeypatch):
+    # one-shot prefill (rows = 40 > 8): gathers, but the small-M gate never caches
+    seen = _run_gate_probe(monkeypatch, prefill_s=40, chunk=0)
+    assert seen["prefill_calls"] > 0
+    assert seen["prefill_cached"] == 0            # nothing pinned at prefill
+    assert seen["peak_pinned_bytes"] == 0
+    assert seen["decode_cached"] > 0              # decode (rows=1) still shares
+
+
+def test_layer_major_chunked_prefill_pins_nothing(monkeypatch):
+    # the review's pin scenario: layer-major CHUNKED prefill (chunk=16 > 8).  Without
+    # the small-M gate each per-chunk shared runtime would pin its [chunk,k,hd] operand
+    # for the whole group (OOM at 16K/64K); the gate must keep the pinned bytes at 0.
+    seen = _run_gate_probe(monkeypatch, prefill_s=64, chunk=16, layer_major="1")
+    assert seen["prefill_calls"] > 0
+    assert seen["prefill_cached"] == 0
+    assert seen["peak_pinned_bytes"] == 0
+    assert seen["decode_cached"] > 0

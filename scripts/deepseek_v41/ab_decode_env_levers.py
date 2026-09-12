@@ -33,6 +33,7 @@ with the standard-shape receipts.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -668,6 +669,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     p.add_argument("--context-tokens", type=int, default=1024, choices=(1024, 16384))
     p.add_argument("--decode-tokens", type=int, default=256)
+    # W90: GPU DVFS / utilization telemetry + post-prefill cooldown.
+    p.add_argument(
+        "--utilization", action="store_true",
+        help="sample macmon (gpu freq/power/busy, temps) in a background thread over "
+             "the timed DECODE and write a 'utilization' block (min/mean/max + series) "
+             "+ a one-line census (W90: the GPU DVFS-downclock floor discriminator).",
+    )
+    p.add_argument(
+        "--util-interval-ms", type=int, default=2000,
+        help="macmon sampling interval in ms for --utilization (default 2000, ~2 s).",
+    )
+    p.add_argument(
+        "--cooldown-s", type=float, default=0.0,
+        help="idle N seconds AFTER prefill and BEFORE the timed decode (TTFT, from "
+             "the prefill, is unaffected); logged as a 'cooldown' block (W90).",
+    )
     p.add_argument(
         "--decode-mode",
         choices=("ar", "dspark"),
@@ -1248,9 +1265,35 @@ def _stream_counters_block(run, decode_tokens, resolved_plan):
         return None
 
 
+_MACMON_MOD = None
+
+
+def _macmon():
+    """Load the shared W90 macmon sampler (``util_macmon.py``, same dir) once.
+
+    Loaded by file path so it works whether this script is run directly or imported
+    by a test (``scripts/`` is not a package)."""
+    global _MACMON_MOD
+    if _MACMON_MOD is None:
+        import importlib.util
+
+        path = Path(__file__).resolve().parent / "util_macmon.py"
+        spec = importlib.util.spec_from_file_location("dsv41_util_macmon", path)
+        _MACMON_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_MACMON_MOD)
+    return _MACMON_MOD
+
+
 def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
-              mem_profile_every=64, device_sample=False):
+              mem_profile_every=64, device_sample=False, cooldown_s=0.0,
+              util_sampler=None):
     """Greedy prefill + ``steps`` decode; captures the decoded token ids.
+
+    W90: ``cooldown_s`` idles AFTER prefill and BEFORE the timed decode (TTFT, from
+    the prefill, is unaffected); ``util_sampler`` (a ``util_macmon.UtilizationSampler``
+    or ``None``) samples macmon in a background thread over the DECODE loop only.
+    Both land in the returned dict (``cooldown`` / ``utilization``) -- the W90
+    discriminator for the GPU DVFS-downclock floor.
 
     ``mem_profile`` (optional) is a ``callable(phase, token=None)`` that captures
     a W62 memory snapshot; it is called ``after_prefill`` and every
@@ -1273,37 +1316,43 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     generated = [token]
     if mem_profile is not None:
         mem_profile("after_prefill")
+    # W90: idle after prefill, before the timed decode (TTFT already captured).
+    cooldown_block = None
+    if cooldown_s and float(cooldown_s) > 0:
+        cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
     # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
     # excluded so the hit rate is the decode hit rate).
     _sc_after_prefill = _stream_counters_snapshot(model)
     extra_forward_steps = 0
 
+    _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
     decode_start = time.perf_counter()
-    if device_sample:
-        from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+    with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
+        if device_sample:
+            from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
 
-        def _forward_row(ids):
-            # ids is a device-side [1, 1] token-id array; the model's embedding
-            # lookup consumes it directly (mx.take) -- no host round trip.
-            return model(ids, cache=cache)[0, -1]
+            def _forward_row(ids):
+                # ids is a device-side [1, 1] token-id array; the model's embedding
+                # lookup consumes it directly (mx.take) -- no host round trip.
+                return model(ids, cache=cache)[0, -1]
 
-        more, _finish, extra_forward_steps = run_device_sample_decode(
-            forward_row=_forward_row,
-            first_token=int(token),
-            n_more=int(steps),
-            sampler=None,  # greedy (byte-identical to the classic argmax loop)
-            stop_ids=set(),
-        )
-        generated.extend(int(t) for t in more)
-    else:
-        every = max(1, int(mem_profile_every))
-        for step in range(int(steps)):
-            logits = model(ops.input([[token]]), cache=cache)
-            ops.sync(logits)
-            token = ops.argmax_last(logits)
-            generated.append(token)
-            if mem_profile is not None and (step + 1) % every == 0:
-                mem_profile("decode", token=step + 1)
+            more, _finish, extra_forward_steps = run_device_sample_decode(
+                forward_row=_forward_row,
+                first_token=int(token),
+                n_more=int(steps),
+                sampler=None,  # greedy (byte-identical to the classic argmax loop)
+                stop_ids=set(),
+            )
+            generated.extend(int(t) for t in more)
+        else:
+            every = max(1, int(mem_profile_every))
+            for step in range(int(steps)):
+                logits = model(ops.input([[token]]), cache=cache)
+                ops.sync(logits)
+                token = ops.argmax_last(logits)
+                generated.append(token)
+                if mem_profile is not None and (step + 1) % every == 0:
+                    mem_profile("decode", token=step + 1)
     decode_wall_s = time.perf_counter() - decode_start
     _sc_end = _stream_counters_snapshot(model)
     return {
@@ -1314,6 +1363,10 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         "extra_forward_steps": int(extra_forward_steps),
         "stream_after_prefill": _sc_after_prefill,
         "stream_end": _sc_end,
+        "cooldown": cooldown_block,
+        "utilization": (
+            util_sampler.summarize() if util_sampler is not None else None
+        ),
     }
 
 
@@ -1648,6 +1701,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
             args, mx, runtime, resident
         )
         device_sample = _device_sample_resolved(args)
+        # W90: macmon utilization over the decode + optional post-prefill cooldown.
+        util_sampler = None
+        if getattr(args, "utilization", False):
+            util_sampler = _macmon().UtilizationSampler(
+                interval_ms=int(getattr(args, "util_interval_ms", 2000))
+            )
         run = _generate(
             model=model,
             ops=ops,
@@ -1657,7 +1716,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
             mem_profile=mem_profile_cb,
             mem_profile_every=int(getattr(args, "memory_profile_every", 64)),
             device_sample=device_sample,
+            cooldown_s=float(getattr(args, "cooldown_s", 0.0) or 0.0),
+            util_sampler=util_sampler,
         )
+        if util_sampler is not None:
+            print(f"[ab] {arm}: {util_sampler.census()}", flush=True)
         ids = run["generated"]
         receipt = {
             "arm": arm,
@@ -1683,6 +1746,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
             if run["decode_wall_s"] > 0
             else None,
             "peak_gb": run["peak_gb"],
+            # W90: GPU DVFS/utilization over the decode + optional post-prefill
+            # cooldown (the discriminator for the mode-independent in-situ floor).
+            "utilization": run.get("utilization"),
+            "cooldown": run.get("cooldown"),
             "token_ids_sha256": hashlib.sha256(
                 json.dumps(ids).encode()
             ).hexdigest(),
@@ -2042,7 +2109,8 @@ def _print_decode_stage_summary(arm: str, context_tokens: int, report: dict) -> 
         pass
 
 
-def _stage_timing_pass(*, model, ops, prompt_ids, steps) -> dict:
+def _stage_timing_pass(*, model, ops, prompt_ids, steps, cooldown_s=0.0,
+                       util_sampler=None) -> dict:
     """W37 fenced decode pass -> ``model.stage_timing_report()``.
 
     Prefill once (probe unarmed -> untouched), then arm the stage-timing session
@@ -2051,13 +2119,22 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps) -> dict:
     (when ``MTPLX_ROUTE_STAGE_PROBE`` is armed) are cleared before the loop so the
     merged ``route_stage`` census reflects this window, not the prefill + prior
     passes.  Fences inflate absolute time, so nothing here feeds the reported
-    tok/s."""
+    tok/s.
+
+    W90: ``cooldown_s`` idles after the prefill and before the decode loop;
+    ``util_sampler`` (a ``util_macmon.UtilizationSampler`` or ``None``) samples
+    macmon over the decode loop only.  A ``__w90_cooldown`` / ``__w90_utilization``
+    key is stashed on the returned report dict for the receipt."""
     from mtplx.models import deepseek_v41_stage_timing as stime
 
     cache = model.make_cache()
     logits = model(ops.input([list(prompt_ids)]), cache=cache)
     ops.sync(logits)
     token = ops.argmax_last(logits)
+    # W90: idle after prefill, before the fenced decode loop.
+    cooldown_block = None
+    if cooldown_s and float(cooldown_s) > 0:
+        cooldown_block = _macmon().cooldown(float(cooldown_s), label="w78-in-model")
     # Reset the route probe window (best-effort; its snapshot is cumulative).
     try:
         from mtplx import expert_route_probe as route_probe
@@ -2067,15 +2144,22 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps) -> dict:
             route_probe._COUNTS.clear()
     except Exception:
         pass
+    _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
     stime.begin()
-    for _ in range(int(steps)):
-        with stime.frame():
-            logits = model(ops.input([[token]]), cache=cache)
-            with stime.stage("sample"):
-                token = ops.argmax_last(logits)
+    with _util_cm:  # W90: macmon utilization over the fenced decode loop only
+        for _ in range(int(steps)):
+            with stime.frame():
+                logits = model(ops.input([[token]]), cache=cache)
+                with stime.stage("sample"):
+                    token = ops.argmax_last(logits)
     report = model.stage_timing_report()
     stime.end()
-    return report if report is not None else {"enabled": False}
+    report = report if report is not None else {"enabled": False}
+    if cooldown_block is not None:
+        report["__w90_cooldown"] = cooldown_block
+    if util_sampler is not None:
+        report["__w90_utilization"] = util_sampler.summarize()
+    return report
 
 
 def _prefill_stage_timing_pass(*, model, ops, prompt_ids) -> dict:
