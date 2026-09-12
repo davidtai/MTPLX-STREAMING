@@ -327,6 +327,13 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+# W107 round-3: the KV append WRITE PRIMITIVE.  The bounded lanes default to the
+# donating in-place __setitem__ (mx.slice_update is an O(T) COPY even on CPU -- the GPU
+# window-42 finding + kv_donation_probe.py).  This env OVERRIDES either way to isolate
+# the write primitive within a bounded arm: "0" forces slice_update (the copy), "1"
+# forces in-place.  Unset => construction default (bounded lanes in-place; the frozen
+# window_ring/chunk-grow lanes slice_update).  Logged in the receipt arm_env.
+KV_INPLACE_WRITE_ENV = "MTPLX_DSV41_KV_INPLACE_WRITE"
 # W110 (BENCH-ONLY DIAGNOSTIC -- not a perf lever): gate the per-record sha256
 # re-check on the DECODE/verify streaming path. Decode-path hashing has been OFF on
 # every ab/bench path (arg default False) and OFF in the served profile
@@ -447,6 +454,8 @@ ALL_LEVER_ENVS = (
     ATTN_LEAN_CASTS_ENV,
     # W101 (appended):
     ATTN_FUSED_PROJ_ENV,
+    # W107 round-3 (appended):
+    KV_INPLACE_WRITE_ENV,
     # NOTE: VERIFY_RECORD_HASHES_ENV is DELIBERATELY NOT in this list. It is a
     # BENCH-ONLY diagnostic env (honoured on the loader/bench builder, NOT on the
     # served profile builder) -- keeping it out of ALL_LEVER_ENVS also keeps it out
@@ -475,7 +484,7 @@ def _preset(
     gate_prefetch=None,
     gate_prefetch_min_layer=None,
     runner=None,
-    kv_bounded=None, kv_bounded_maxkv=None,
+    kv_bounded=None, kv_bounded_maxkv=None, kv_inplace_write=None,
     wo_a_cache=None, attn_core_compile=None,
     attn_lean_casts=None, attn_fused_proj=None,
     verify_record_hashes=None,
@@ -540,6 +549,7 @@ def _preset(
         RUNNER_ENV: runner,
         KV_BOUNDED_ENV: kv_bounded,
         KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
+        KV_INPLACE_WRITE_ENV: kv_inplace_write,
         WO_A_CACHE_ENV: wo_a_cache,
         ATTN_CORE_COMPILE_ENV: attn_core_compile,
         ATTN_LEAN_CASTS_ENV: attn_lean_casts,
@@ -784,9 +794,34 @@ ARM_PRESETS = {
     # (both run selected keys), so the byte-identity summary must show it matching
     # cell16k's class (cell16k itself is lossy vs control ONLY through head=bf16 +
     # the dense/lean prefill reassoc; the ring adds NO new lossiness).
+    # W107 (review round-2 finding 2): cell16k_ring is THE paired CONTROL in every
+    # window (39-42), so its env set is FROZEN -- it must NOT carry kv_bounded (a
+    # round-1 mistake defaulted it on, changing the timing basis vs windows 39-41 even
+    # though the lever is byte-identical).  The bounded lever is a CANDIDATE
+    # (cell16k_ring_bounded below); this control matches window-39's arm_env exactly.
     "cell16k_ring": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+    ),
+    # W107 (review round-2): the CLEAN bounded-KV candidate -- cell16k_ring's EXACT key
+    # set plus kv_bounded="1".  This is the paired candidate for the bounded lever
+    # (A/B: cell16k_ring vs cell16k_ring_bounded), replacing the round-1 "flip
+    # KV_BOUNDED=0 on the control" A/B (the control is now frozen without the lever).
+    "cell16k_ring_bounded": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+    ),
+    # W107 round-3: the bounded lanes with the write primitive FORCED to slice_update
+    # (kv_inplace_write="0"), so the pair (cell16k_ring_bounded vs
+    # cell16k_ring_bounded_copy) ISOLATES the donating in-place __setitem__ from the
+    # functional slice_update copy.  Byte-identical output; the receipt line that
+    # proves the fix is cache_append ms/tok DOWN on cell16k_ring_bounded with
+    # kv_realloc_* flat (see W107_KV_GROWTH.md §6).
+    "cell16k_ring_bounded_copy": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1", kv_inplace_write="0",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
     # W104 (was W81): cell16k_ring + BOTH DSpark draft-head levers -- K33 draft-block
@@ -800,7 +835,7 @@ ARM_PRESETS = {
     # isolation is still the standalone ``draft_compile`` arm.
     "cell16k_ring_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         draft="1", draft_head_bf16="1",
     ),
@@ -812,7 +847,7 @@ ARM_PRESETS = {
     # the profile transient_slots measures the barrier-free decode route at 16K.
     "cell16k_ring_pinned": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         pin_working_set="all", device_route="1", device_route_pinned="1",
     ),
@@ -839,7 +874,7 @@ ARM_PRESETS = {
     # the dense/lean prefill reassoc, cf. cell16k).
     "cell16k_ring_stable": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
     ),
@@ -868,7 +903,7 @@ ARM_PRESETS = {
     # (decode_hit_rate_first_64_steps vs steady_state, populated by BOTH arms).
     "cell16k_ring_pool": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         single_slot_pool="1",
     ),
@@ -894,7 +929,7 @@ ARM_PRESETS = {
     # amount and re-open the overshoot.
     "cell16k_ring_wo_a_cache": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1",
     ),
@@ -913,7 +948,7 @@ ARM_PRESETS = {
     # if also armed, wins the early return before this path.
     "cell16k_ring_attn_core": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_core_compile="1",
     ),
@@ -923,7 +958,7 @@ ARM_PRESETS = {
     # memory (the wo_a cache holds a dense wo_a copy resident per layer, ~5.4/2.7 GB).
     "cell16k_ring_wo_a_core": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_core_compile="1",
     ),
@@ -936,7 +971,7 @@ ARM_PRESETS = {
     # core (cell16k_ring_wo_a_core) and the eager baseline (cell16k_ring_wo_a_cache).
     "cell16k_ring_wo_a_k29": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", decode_attn_kernel="1",
     ),
@@ -951,7 +986,7 @@ ARM_PRESETS = {
     # dispatch savings (wo_a per-token dequant removed + KVg/sink/inv_freq casts leaned).
     "cell16k_ring_lean": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_lean_casts="1",
     ),
@@ -960,7 +995,7 @@ ARM_PRESETS = {
     # attention arm (exact wo_a cache + lean casts + the fused core).
     "cell16k_ring_lean_k29": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
     ),
@@ -981,7 +1016,7 @@ ARM_PRESETS = {
     # wo_a copy resident per layer (~2.7 GB) -- watch peak memory at the 16K cell.
     "cell16k_ring_fused": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
         attn_fused_proj="1",
@@ -1017,7 +1052,7 @@ ARM_PRESETS = {
     # 16, ab-1024-fastpath-b.json), not 16K.  Primarily a host-sync-hygiene lever.
     "cell16k_ring_switch": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         fastpath="1", submit="1", verify_single="1",
     ),
@@ -1040,7 +1075,7 @@ ARM_PRESETS = {
     # cell16k_ring's class.
     "cell16k_ring_prefetch": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         gate_prefetch="10",
     ),
@@ -1060,7 +1095,7 @@ ARM_PRESETS = {
     # + dense/lean prefill reassoc; the runner adds NO new lossiness).
     "cell16k_ring_v2": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2",
     ),
@@ -1075,7 +1110,7 @@ ARM_PRESETS = {
     # docs/deepseek-v41/W104_DRAFT_RESIDENT_MOE.md.)
     "cell16k_ring_v2_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
     ),
@@ -1096,7 +1131,7 @@ ARM_PRESETS = {
     # fused path each hold a per-layer wo_a copy resident at the 16K cell).
     "cell16k_ring_v2_attn": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2",
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
@@ -1112,6 +1147,32 @@ ARM_PRESETS = {
     # in cell16k_ring_v2_attn.  The direct A/B vs cell16k_ring_v2_draft isolates the
     # W97/W99/W101 attention stack under the DSpark decode lane.
     "cell16k_ring_v2_draft_attn": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W107F pair for window 44: cell16k_ring_v2_attn + kv_bounded="1" (the
+    # dedicated bounded variant, per the W107 round-3 policy that composites do
+    # NOT carry kv_bounded -- it lives only in *_bounded arms).  EXACT KEY SET =
+    # cell16k_ring_v2_attn (layer_major, prefill_dense, score_path=lean,
+    # selected_keys, window_ring, layout_fix, head=bf16, sinkhorn, attn, win_memo,
+    # runner=v2, wo_a_cache, attn_lean_casts, attn_fused_proj) PLUS kv_bounded="1".
+    # Pairs A/B against cell16k_ring_v2_attn to isolate the bounded-KV lever on
+    # top of the full attention stack.
+    "cell16k_ring_v2_attn_bounded": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W107F pair for window 44 (DSpark): cell16k_ring_v2_draft_attn + kv_bounded="1".
+    # EXACT KEY SET = cell16k_ring_v2_draft_attn (its 16 keys incl. runner=v2,
+    # draft, draft_head_bf16, wo_a_cache, attn_lean_casts, attn_fused_proj) PLUS
+    # kv_bounded="1".  Pairs A/B against cell16k_ring_v2_draft_attn under DSpark.
+    "cell16k_ring_v2_draft_attn_bounded": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
@@ -1130,7 +1191,7 @@ ARM_PRESETS = {
     # resolved_plan.verify_record_hashes stamp proves the two arms actually differ.
     "cell16k_ring_v2_hash": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1",
+        window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", verify_record_hashes="1",
     ),
@@ -4046,6 +4107,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 bstats = bounded_stats_fn()
                 bstats["env"] = os.environ.get(KV_BOUNDED_ENV)
                 bstats["maxkv_env"] = os.environ.get(KV_BOUNDED_MAXKV_ENV)
+                # W107 round-3: which append write primitive the lanes used (in-place
+                # donating __setitem__ vs slice_update copy); unset => bounded default
+                # (in-place).  Pair cell16k_ring_bounded vs cell16k_ring_bounded_copy.
+                bstats["inplace_write_env"] = os.environ.get(KV_INPLACE_WRITE_ENV)
                 # W107 (review MEDIUM-A): receipt gate -- compare the memory-plan
                 # formula W106 will use against the bytes actually allocated, so a
                 # dtype-model drift is caught at runtime.  Exact when the window did

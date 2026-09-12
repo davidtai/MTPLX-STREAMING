@@ -3240,6 +3240,9 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_ATTN_CORE_COMPILE",
     "MTPLX_DSV41_ATTN_LEAN_CASTS",
     "MTPLX_DSV41_ATTN_FUSED_PROJ",
+    # W107 round-3 (appended): the KV append write primitive (in-place donating vs
+    # slice_update copy) -- a served lever in ALL_LEVER_ENVS, so kept here too.
+    "MTPLX_DSV41_KV_INPLACE_WRITE",
     # NOTE (W110): MTPLX_DSV41_VERIFY_RECORD_HASHES is intentionally NOT here. The
     # served profile builder (expert_profiles.build_expert_streaming_config) does not
     # read it, so it would be a DEAD served lever; it is a bench-only diagnostic env
