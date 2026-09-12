@@ -77,7 +77,7 @@ process-tree RSS (in the `gpu_window.sh` log).
   at process start (`bench._system_used_bytes`, the wrapper's formula).
 - **`budget_non_metal_overhead_gb`** — the process footprint *above* the MLX
   allocator (Python heap + expert-reader buffers + engram LRU + tokenizer). Used
-  as a **conservative pre-load estimate** (default 10 GiB,
+  as a pre-load estimate (default **3 GiB** — the real value is ~1–2 GiB;
   `--non-metal-overhead-gib`) because the plan must be fixed before the model
   loads; see the two-phase note.
 - **`budget_non_metal_overhead_measured_gb`** — the same overhead **re-measured
@@ -137,8 +137,8 @@ run refuses to start with a clear, actionable error (naming every term). Use
 
 **Two-phase non-Metal overhead (HIGH-1).** The plan limit must be fixed *before*
 the model loads. So:
-1. **Estimate** — derive with the conservative `--non-metal-overhead-gib` estimate
-   (default 10 GiB) and fix the plan.
+1. **Estimate** — derive with the `--non-metal-overhead-gib` estimate
+   (default 3 GiB — MEDIUM-2, the real value is ~1–2 GiB) and fix the plan.
 2. **Load** the model.
 3. **Re-measure** the real overhead as `current phys_footprint (mach task_info) −
    mx active − mx CACHE` and record it (`budget_non_metal_overhead_measured_gb` +
@@ -206,7 +206,7 @@ held by another worktree). Canonical GiB form (~100 GB budget):
 
 (`--memory-budget-total-gb 100` — the decimal-GB alias — resolves to the same
 ~93.13 GiB. `--memory-safety-gib` / `--memory-budget-floor-gib` /
-`--non-metal-overhead-gib` / `--plan-overshoot-gib` default to 3 / 20 / 10 / 6 GiB.
+`--non-metal-overhead-gib` / `--plan-overshoot-gib` default to 3 / 20 / 3 / 6 GiB.
 Add `--memory-plan-preflight` to check the derivation and exit without loading the
 model.)
 

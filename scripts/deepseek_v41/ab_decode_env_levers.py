@@ -64,14 +64,14 @@ DEFAULT_BOS_ID = 0
 # Every term lands in the receipt ``memory`` block.  See docs/deepseek-v41/
 # W106_WINDOW_MEMORY_ACCOUNTING.md for the once-only definition of each term.
 #
-# Conservative pre-load estimate of the non-Metal process overhead (Python heap +
-# positional-expert bank read buffers + engram host-side row LRU + tokenizer).
-# The plan limit must be fixed BEFORE the model loads (the loader takes it), so
-# the derivation uses this estimate first, then re-measures the real overhead
-# after load (process RSS - mx active) and lowers the MLX active limit if the
-# measurement exceeds it (two-phase).  Mirrors the W62 profile constant
-# HOST_OVERHEAD_GIB (mtplx.deepseek_v41_memory_profile.HOST_OVERHEAD_GIB = 10).
-DEFAULT_NON_METAL_OVERHEAD_GIB = 10.0
+# Pre-load estimate of the non-Metal process overhead (Python heap + positional-
+# expert bank read buffers + engram host-side row LRU + tokenizer).  The plan limit
+# must be fixed BEFORE the model loads (the loader takes it), so the derivation uses
+# this estimate first, then re-measures the real overhead after load (round-4 MEDIUM-2:
+# the REAL value is ~1-2 GiB; default 3, not 10 -- the plan overshoot is now a
+# separate term, so a 10 GiB overhead + 6 GiB overshoot double-counted and left the
+# plan ~63 GiB / peak ~86 GB, under-using the budget).
+DEFAULT_NON_METAL_OVERHEAD_GIB = 3.0
 # Safety headroom subtracted from the budget (flag --memory-safety-gb).
 DEFAULT_MEMORY_SAFETY_GIB = 3.0
 # W106 HIGH-1 (budget re-review): the MLX allocator PEAK overshoots the plan's

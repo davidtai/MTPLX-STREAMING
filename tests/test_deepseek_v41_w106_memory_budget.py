@@ -373,7 +373,7 @@ def test_resolve_derivation_budget_path(tmp_path):
     # kv growth for a single window-only layer at max_kv 1000: 1000*512*2 bytes.
     kv_gb = (1000 * 512 * 2) / GIB
     # non_metal_overhead default = 10, safety default = 3.
-    expected = 100.0 - 20.0 - 10.0 - kv_gb - 3.0 - 6.0  # incl. default overshoot 6
+    expected = 100.0 - 20.0 - 3.0 - kv_gb - 3.0 - 6.0  # default overhead 3 (MEDIUM-2) + overshoot 6
     assert bt.plan_limit_gib == pytest.approx(expected)
     # the W62 derivation the loader consumes uses the derived limit as its plan.
     assert derivation.plan_gib == pytest.approx(expected)
@@ -833,18 +833,18 @@ def test_floor_refusal_exception_is_tagged_budget_derivation():
 
 def test_high1_forecast_system_peak_within_budget():
     mod = _mod()
-    # reviewer's numbers: total 93, baseline 10.2, overhead 2, kv 0.36, safety 3,
+    # reviewer's numbers: total 93, baseline 10.2, overhead 2, kv 0.72 (real config), safety 3,
     # overshoot 6 -> forecast = baseline + plan + overshoot + overhead <= 93.
     d = mod.derive_budget_total_plan(
         budget_total_gb=93.0,
         system_used_at_start_gb=10.2,
         non_metal_overhead_gb=2.0,
-        kv_growth_to_max_kv_gb=0.36,
+        kv_growth_to_max_kv_gb=0.72,
         safety_gb=3.0,
         plan_overshoot_gib=6.0,
         floor_gib=20.0,
     )
-    assert d.plan_limit_gib == pytest.approx(93 - 10.2 - 2 - 0.36 - 3 - 6)
+    assert d.plan_limit_gib == pytest.approx(93 - 10.2 - 2 - 0.72 - 3 - 6)
     fc = d.forecast_system_peak_gib()
     assert fc == pytest.approx(10.2 + d.plan_limit_gib + 6 + 2)
     assert fc <= 93.0  # the HIGH-1 invariant
@@ -900,7 +900,7 @@ def test_high2_pinned_plan_survives_serialization(tmp_path):
     mod = _mod()
     d = mod.derive_budget_total_plan(
         budget_total_gb=93.0, system_used_at_start_gb=10.2, non_metal_overhead_gb=2.0,
-        kv_growth_to_max_kv_gb=0.36, safety_gb=3.0, plan_overshoot_gib=6.0, floor_gib=20.0,
+        kv_growth_to_max_kv_gb=0.72, safety_gb=3.0, plan_overshoot_gib=6.0, floor_gib=20.0,
     )
     path = tmp_path / "derived-plan.json"
     path.write_text(json.dumps(d.to_plan_dict()))
