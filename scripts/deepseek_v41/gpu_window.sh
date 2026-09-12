@@ -74,6 +74,17 @@ QWEN_LABEL="${GPU_WINDOW_QWEN_LABEL:-com.tea.qwen}"
 WIRED_CAP_MB="${GPU_WINDOW_WIRED_CAP_MB:-102400}"     # 100 GiB, never exceeded/raised
 STOP_TIMEOUT="${GPU_WINDOW_STOP_TIMEOUT:-180}"        # seconds to confirm the stop
 RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm restore
+# W106 restore hardening (real-window incident, windows 42/43): the plist that
+# `launchctl print` reports for a running com.tea.qwen is often a TRANSIENT guard-dir
+# copy (~/.mtplx-qwen-guard-<rand>/com.tea.qwen.plist) written by mtplx.qwen_guard
+# when IT bootstrapped the agent; that dir is gone by restore time, so `bootstrap`
+# FAILS and David's agent is left DOWN.  CANONICAL_PLIST is the DURABLE fallback
+# (~/Library/LaunchAgents/<label>.plist).  RESTORE_QWEN_ALWAYS bootstraps it at exit
+# even if the agent was not loaded at entry, so a previous failed restore cannot
+# cascade.  LAUNCHCTL_CMD is overridable so restore is unit-testable with a fake.
+CANONICAL_PLIST="${GPU_WINDOW_QWEN_PLIST:-${HOME}/Library/LaunchAgents/${QWEN_LABEL}.plist}"
+RESTORE_QWEN_ALWAYS="${GPU_WINDOW_RESTORE_QWEN_ALWAYS:-1}"   # default ON on this box
+LAUNCHCTL_CMD="${GPU_WINDOW_LAUNCHCTL_CMD:-/bin/launchctl}"  # overridable for tests
 MIN_AVAIL_GB="$(_int_or_default "${GPU_WINDOW_MIN_AVAIL_GB:-100}" 100 GPU_WINDOW_MIN_AVAIL_GB)"  # GiB the step needs available after the stop
 # W106 HIGH-2: all guard caps are GiB (bytes = N * 1024^3), stated explicitly.
 # Default child-tree RSS cap = 93 GiB ~= 100 GB (David's "100 GB total for
@@ -219,6 +230,72 @@ _step_tree_pids() {
   '
 }
 
+# W106 restore hardening: choose a plist that EXISTS at restore time.  Prefer the
+# launchctl-discovered path ($1) if it still exists, else the durable canonical
+# plist ($2); echo the chosen path (empty if neither exists).  Defined before the
+# selftest block so `--selftest restore-plist` can exercise it hermetically.
+_resolve_restore_plist() {
+  local discovered="${1:-}" canonical="${2:-}"
+  if [[ -n "${discovered}" && -f "${discovered}" ]]; then
+    printf '%s' "${discovered}"
+  elif [[ -n "${canonical}" && -f "${canonical}" ]]; then
+    printf '%s' "${canonical}"
+  else
+    printf ''
+  fi
+}
+
+# Core of the resident-agent restore (bootstrap), split out so a fake ${LAUNCHCTL_CMD}
+# can unit-test it.  $1 = was_loaded (1/0), $2 = the launchctl-discovered plist path
+# (may be a vanished guard-dir copy).  Bootstraps a plist that EXISTS, falling back to
+# ${CANONICAL_PLIST}; with RESTORE_QWEN_ALWAYS=1 it bootstraps even when the agent was
+# not loaded at entry (so a previous failed restore cannot cascade), unless the agent
+# is already loaded now.  On failure it prints the exact manual command.
+_do_restore() {
+  local was_loaded="${1:-0}" discovered="${2:-}"
+  local want=0
+  if (( was_loaded == 1 )); then
+    want=1
+  elif [[ "${RESTORE_QWEN_ALWAYS}" == "1" ]]; then
+    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
+      log "restore: ${QWEN_LABEL} already loaded; nothing to do (RESTORE_QWEN_ALWAYS=1)"
+      return 0
+    fi
+    want=1
+    log "restore: ${QWEN_LABEL} was NOT loaded at entry, but GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 -> bootstrapping anyway (guards against a cascaded prior failure)"
+  else
+    log "restore: ${QWEN_LABEL} was not loaded at entry; leaving it stopped (as found)"
+    return 0
+  fi
+
+  local plist
+  plist="$(_resolve_restore_plist "${discovered}" "${CANONICAL_PLIST}")"
+  if [[ -n "${discovered}" && "${discovered}" != "${plist}" ]]; then
+    log "restore: discovered plist '${discovered}' is gone; falling back to '${plist:-<none>}'"
+  fi
+  if [[ -z "${plist}" ]]; then
+    err "restore: NO plist file exists to bootstrap (discovered '${discovered}' gone, canonical '${CANONICAL_PLIST}' missing); ${QWEN_LABEL} may be DOWN -- manual recovery: ${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST}"
+    return 1
+  fi
+
+  log "restore: launchctl bootstrap ${DOMAIN} ${plist}"
+  if ! "${LAUNCHCTL_CMD}" bootstrap "${DOMAIN}" "${plist}"; then
+    err "restore: 'launchctl bootstrap ${DOMAIN} ${plist}' FAILED; ${QWEN_LABEL} may be DOWN on :8080 -- manual recovery: ${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST}"
+    return 1
+  fi
+  local deadline
+  deadline=$(( $(date +%s) + RESTORE_TIMEOUT ))
+  while (( $(date +%s) < deadline )); do
+    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
+      log "restore: ${QWEN_LABEL} is loaded again (launchctl service present); /health may still be warming"
+      return 0
+    fi
+    sleep 1
+  done
+  err "restore: ${QWEN_LABEL} did not reappear within ${RESTORE_TIMEOUT}s; verify :8080 manually (${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST})"
+  return 1
+}
+
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 # ---- test/introspection hooks (no GPU, no lock, no launchctl) ----------------
@@ -239,7 +316,15 @@ if [[ "${1:-}" == "--selftest" ]]; then
       ;;
     heavy-workers)  list_heavy_foreign_workers ;;
     tree-pids)      _step_tree_pids "${2:-}" ; echo ;;   # W106 item 4: tree walk
-    *) err "unknown --selftest target: ${1:-} (used-mem-bytes|used-mem-gib|over-ceiling|heavy-workers|tree-pids)"; exit 2 ;;
+    restore-plist)  _resolve_restore_plist "${2:-}" "${3:-}" ; echo ;;  # discovered, canonical
+    restore-run)
+      # W106 restore test: run _do_restore against a fake ${LAUNCHCTL_CMD} with
+      # env-injected inputs, then exit with its status.  $2 = was_loaded (1/0),
+      # $3 = discovered plist path (may be a vanished guard-dir copy).
+      _do_restore "${2:-0}" "${3:-}"
+      exit $?
+      ;;
+    *) err "unknown --selftest target: ${1:-} (used-mem-bytes|used-mem-gib|over-ceiling|heavy-workers|tree-pids|restore-plist|restore-run)"; exit 2 ;;
   esac
   exit 0
 fi
@@ -385,27 +470,18 @@ PLIST=""
 QWEN_PID=""
 
 restore_qwen() {
+  # Teardown entry: guard against double-restore + TEST MODE (never touch launchctl
+  # in tests), then delegate to _do_restore, which chooses a plist that EXISTS
+  # (falling back to the durable CANONICAL_PLIST when the launchctl-discovered guard
+  # -dir copy is gone) and, with RESTORE_QWEN_ALWAYS=1, bootstraps even if the agent
+  # was not loaded at entry so a prior failed restore cannot cascade.
   if (( RESTORED == 1 )); then return; fi
   RESTORED=1
-  if (( WAS_LOADED == 0 )); then
-    log "restore: ${QWEN_LABEL} was not loaded at entry; leaving it stopped (as found)"
+  if [[ "${GPU_WINDOW_TEST_MODE}" == "1" ]]; then
+    log "restore: TEST MODE -- skipping (no launchctl)"
     return
   fi
-  log "restore: launchctl bootstrap ${DOMAIN} ${PLIST}"
-  if ! /bin/launchctl bootstrap "${DOMAIN}" "${PLIST}"; then
-    err "restore: 'launchctl bootstrap ${DOMAIN} ${PLIST}' FAILED; ${QWEN_LABEL} may be DOWN on :8080 -- manual recovery required"
-    return
-  fi
-  local deadline
-  deadline=$(( $(date +%s) + RESTORE_TIMEOUT ))
-  while (( $(date +%s) < deadline )); do
-    if /bin/launchctl print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
-      log "restore: ${QWEN_LABEL} is loaded again (launchctl service present); /health may still be warming"
-      return
-    fi
-    sleep 1
-  done
-  err "restore: ${QWEN_LABEL} did not reappear within ${RESTORE_TIMEOUT}s; verify :8080 manually"
+  _do_restore "${WAS_LOADED}" "${PLIST}"
 }
 
 teardown() {
@@ -422,6 +498,13 @@ teardown() {
   exit "${ec}"
 }
 trap teardown EXIT INT TERM
+
+# W106 (real-window incident): print the ABORT RECIPE + restore plist up front, so
+# an operator aborting by hand signals the RIGHT pid.  The trap owner is THIS bash
+# gpu_window.sh process ($$); its parent (the python fcntl lock-holder) IGNORES
+# INT/TERM/HUP by design, so `kill -TERM <parent>` does nothing.
+log "abort: to abort this window cleanly, kill -TERM $$ (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores ${QWEN_LABEL}."
+log "restore: on exit ${QWEN_LABEL} is bootstrapped from ${CANONICAL_PLIST} (RESTORE_QWEN_ALWAYS=${RESTORE_QWEN_ALWAYS}); a vanished launchctl-discovered guard-dir plist falls back to this path."
 
 if [[ "${GPU_WINDOW_TEST_MODE}" == "1" ]]; then
   log "TEST MODE: skipping phases 1-3 (wired-knob sysctl read, launchctl inspect/bootout) and the resident-agent restore; lock=${LOCK_PATH}"
