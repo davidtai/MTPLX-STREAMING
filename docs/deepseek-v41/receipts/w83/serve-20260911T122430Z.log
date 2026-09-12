@@ -1,0 +1,4 @@
+usage: mtplx [-h] [--no-color] [--version]
+             {help,advanced,hardware,start,setup,status,stop,settings,ask,quickstart,quick-start,connect,openwebui,models,env,doctor,tune,report,trace,inspect,forge,init,profiles,pull,list,remove,run,chat,serve,bench-preflight,inspect-model,bench,qa,profile,thermal,max,debug,metrics,dashboard,integrate,model,config,runtime-smoke,probe-contract,verify-ratio,verify-profile,verify-qmm-probe,multi-qmv-probe,batch-equivalence,capture-commit-equivalence,mtp1-greedy-gate,mtp1-sampler-smoke,mtp-depth-sweep,mtp-chain-probe,mtp-tree-probe,mtp-depth-grid,mtp-adaptive,dflash-mlx-baseline,ddtree-mlx-baseline,truth-report,session-bank}
+             ...
+mtplx: error: unrecognized arguments: --memory-budget 60GiB
