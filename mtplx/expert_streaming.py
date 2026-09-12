@@ -137,6 +137,15 @@ class CacheCounters:
     bytes_read: int = 0
     prefetch_issued: int = 0
     prefetch_committed: int = 0
+    # W100: the DSpark-verify slice of the gate-oracle prefetch. ``prefetch_issued``
+    # / ``prefetch_committed`` above merge the AR (M=1) and verify (M=K+1) phases,
+    # so a window cannot tell whether the multi-row verify actually engaged the
+    # prefetch. These count ONLY the verify-phase (RoutingPhase.DECODE, 2..8-row)
+    # issues/commits, threaded from the switch's issue site via
+    # ``prefetch_experts(..., verify=True)`` -- so verify engagement is provable
+    # independent of the AR total. Never gate the math; scheduling telemetry only.
+    prefetch_issued_verify: int = 0
+    prefetch_committed_verify: int = 0
     # W87 single-pool (0 on the two-tier path): pool_loads = misses admitted into
     # the merged resident pool; scan_inserts = of those, the prefill/scan-resistant
     # inserts; promotions = probationary->protected transitions on a later hit.
@@ -198,6 +207,8 @@ class CacheCounters:
             "bytes_read": self.bytes_read,
             "prefetch_issued": self.prefetch_issued,
             "prefetch_committed": self.prefetch_committed,
+            "prefetch_issued_verify": self.prefetch_issued_verify,
+            "prefetch_committed_verify": self.prefetch_committed_verify,
             "pool_loads": self.pool_loads,
             "scan_inserts": self.scan_inserts,
             "promotions": self.promotions,

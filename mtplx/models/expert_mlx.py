@@ -2697,7 +2697,17 @@ class HotExpertSwitchGLU(nn.Module):
             if _gate_prefetch_pending is None or _gate_prefetch_issued:
                 return
             _gate_prefetch_issued = True
-            _issue_gate_prefetch(self.runtime, _gate_prefetch_pending)
+            # W100: this route is a DSpark verify when it is a small-M (2..8-row)
+            # DECODE forward -- the same shape ``_maybe_stash_gate_prefetch``
+            # stashed the per-row union for. Tag the issue so the runtime can
+            # prove verify-phase engagement apart from the AR (M=1) total. ``phase``
+            # / ``tokens`` are bound above before any call site.
+            _verify_phase = (
+                phase is RoutingPhase.DECODE and 2 <= int(tokens.shape[0]) <= 8
+            )
+            _issue_gate_prefetch(
+                self.runtime, _gate_prefetch_pending, verify=_verify_phase
+            )
         # Batch size is not a generation phase. A batched decode has shape
         # ``[B, 1, H]`` and must still train/use the persistent decode hot set;
         # only the sequence length distinguishes prefill from decode here.
@@ -3779,13 +3789,18 @@ def run_switch_with_shared_overlap(
     return switch_mlp(x, indices), shared_work()
 
 
-def _issue_gate_prefetch(runtime: Any, pending: tuple) -> None:
+def _issue_gate_prefetch(runtime: Any, pending: tuple, *, verify: bool = False) -> None:
     """Hand a stashed W93 gate-oracle prediction to the speculative ring.
 
     ``pending`` is ``(next_layer, predicted_ids_array)``; the array was already
     materialized on the switch's indices barrier, so ``.tolist()`` here is a host
     read with no new sync. Best-effort: a runtime without the ring (or a
-    prediction the ring drops as resident/inflight) costs only the prediction."""
+    prediction the ring drops as resident/inflight) costs only the prediction.
+
+    ``verify`` (W100) marks a DSpark verify-phase issue so the runtime attributes
+    ``prefetch_issued_verify`` / ``prefetch_committed_verify`` separately from the
+    AR (M=1) total -- the caller (the switch) knows the phase; this only forwards
+    the flag, it never changes which ids issue."""
 
     next_layer, predicted = pending
     prefetch = getattr(runtime, "prefetch_experts", None)
@@ -3805,7 +3820,13 @@ def _issue_gate_prefetch(runtime: Any, pending: tuple) -> None:
     note = getattr(runtime, "note_gate_prefetch_predicted", None)
     if callable(note):
         note(next_layer, len(ids))
-    prefetch(next_layer, ids)
+    try:
+        prefetch(next_layer, ids, verify=verify)
+    except TypeError:
+        # A runtime whose prefetch_experts predates the W100 verify kwarg (older
+        # build / minimal fake): fall back to the phase-agnostic call so the
+        # gate-oracle prefetch still issues; only the verify attribution is lost.
+        prefetch(next_layer, ids)
 
 
 def bind_streamed_switches(model: Any, runtime: ExpertStreamingRuntime) -> int:

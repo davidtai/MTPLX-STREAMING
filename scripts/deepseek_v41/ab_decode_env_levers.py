@@ -1775,6 +1775,40 @@ def _ar_logits_row_at_index(*, model, ops, mx, prompt_ids, ar_tokens, index):
     return np.asarray(logits[0, -1].astype(mx.float32)).reshape(-1)
 
 
+def _dspark_decode_wall_accounting(
+    *, pass_start: float, decode_start: "float | None", pass_end: float,
+    generated_tokens: int,
+) -> dict:
+    """Split a DSpark pass's wall clock into the re-prefill and the decode loop.
+
+    ``dspark_generate`` re-prefills the prompt and then runs the decode cycles in
+    one call, so timing the whole call folds the re-prefill (the pass's TTFT) into
+    what was reported as ``decode_wall_s`` -- W100: window 39 divided 257 tokens by
+    a 297 s wall (0.86 tok/s) whose decode phase was only ~93 s (2.75 tok/s). This
+    helper takes ``pass_start`` (before ``dspark_generate``), ``decode_start`` (the
+    instant the prefill callback fired -- prefill done, before the first draft), and
+    ``pass_end`` (after the call), and returns the DECODE-ONLY wall plus the full
+    pass wall so nothing is lost:
+
+    * ``pass_wall_s`` -- the whole call (prefill + decode), the old ``decode_wall_s``.
+    * ``decode_wall_s`` -- ``pass_end - decode_start`` (excludes the re-prefill);
+      falls back to the full pass wall when no prefill callback fired.
+    * ``decode_tok_s`` -- ``generated_tokens / decode_wall_s`` (None if the wall is
+      non-positive).
+    """
+    pass_wall_s = max(0.0, pass_end - pass_start)
+    if decode_start is None:
+        decode_wall_s = pass_wall_s
+    else:
+        decode_wall_s = max(0.0, pass_end - decode_start)
+    decode_tok_s = (generated_tokens / decode_wall_s) if decode_wall_s > 0 else None
+    return {
+        "pass_wall_s": pass_wall_s,
+        "decode_wall_s": decode_wall_s,
+        "decode_tok_s": decode_tok_s,
+    }
+
+
 def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
                      stage_timing=False, ar_reference=None):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
@@ -1811,6 +1845,9 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
 
     def _stream_prefill_cb(_info):
         _sc["after_prefill"] = _stream_counters_snapshot(model)
+        # W100: mark the prefill->decode boundary so decode_wall_s can exclude the
+        # re-prefill (this callback fires after prefill, before the decode cycles).
+        _sc["decode_start"] = time.perf_counter()
 
     # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
     # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
@@ -1831,7 +1868,14 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         prefill_callback=_stream_prefill_cb,
     )
     _sc["end"] = _stream_counters_snapshot(model)
-    wall = time.perf_counter() - t0
+    # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
+    # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
+    _wall_acct = _dspark_decode_wall_accounting(
+        pass_start=t0,
+        decode_start=_sc.get("decode_start"),
+        pass_end=time.perf_counter(),
+        generated_tokens=len(toks),
+    )
     peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
     report = None
     w61 = None
@@ -1926,7 +1970,11 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         route_probe.ENABLED = bool(route_prev_enabled)
     out = {
         "generated": [int(t) for t in toks],
-        "decode_wall_s": wall,
+        # W100: decode-only wall (re-prefill excluded); pass_wall_s keeps the old
+        # whole-call figure; decode_tok_s = generated / decode_wall_s.
+        "decode_wall_s": _wall_acct["decode_wall_s"],
+        "pass_wall_s": _wall_acct["pass_wall_s"],
+        "decode_tok_s": _wall_acct["decode_tok_s"],
         "peak_gb": peak_gb,  # W91: headline (untimed) peak, not the timed 2nd pass
         "stats": stats.to_dict(),
         "stream_after_prefill": _sc.get("after_prefill"),
@@ -2212,12 +2260,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "headline_pass": "untimed",
                 "cold_reset_before_pass": _dspark_cold_reset,
                 "byte_identical_vs_ar": byte_identical,
+                # W100: decode-only wall + rate (re-prefill excluded); pass_wall_s
+                # is the whole-call figure the pre-W100 decode_wall_s reported.
                 "decode_wall_s": dsp["decode_wall_s"],
-                "decode_tok_s": (
-                    (len(dsp_ids) / dsp["decode_wall_s"])
-                    if dsp["decode_wall_s"] > 0
-                    else None
-                ),
+                "pass_wall_s": dsp.get("pass_wall_s"),
+                "decode_tok_s": dsp.get("decode_tok_s"),
                 "peak_gb": dsp["peak_gb"],
                 "tokens_per_cycle": st["tokens_per_cycle"],
                 "accept_rate": st["accept_rate"],
