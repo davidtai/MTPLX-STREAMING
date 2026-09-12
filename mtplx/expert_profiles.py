@@ -382,6 +382,19 @@ def build_expert_streaming_config(
         **profile.config,
         **normalized_overrides,
     }
+    # W93 (review CRITICAL): the served DeepSeek-V4.1 path never carries the
+    # loader's env hook, so arm the GLOBAL gate-oracle prefetch ring here when
+    # MTPLX_DSV41_GATE_PREFETCH is set. The env is AUTHORITATIVE (max(existing,
+    # 2*k)): the profile seeds an explicit prefetch_slots=0, which must not disable
+    # an armed ring, or the lever measures control-vs-control. Gated to DeepSeek-
+    # V4.1 profiles so the DSV4.1-named env never arms another model's ring (e.g.
+    # hy3's lookahead, which shares prefetch_slots). Off -> values unchanged.
+    if profile.model_key.startswith("deepseek-v41"):
+        from .models.deepseek_v41_loader import resolve_gate_prefetch_ring_slots
+
+        resolved_ring = resolve_gate_prefetch_ring_slots(values.get("prefetch_slots", 0))
+        if resolved_ring:
+            values["prefetch_slots"] = resolved_ring
     config = ExpertStreamingConfig(**values)
     if config.model_key != profile.model_key:
         raise ValueError(

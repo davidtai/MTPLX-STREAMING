@@ -94,8 +94,15 @@ warming) and is never read by any compute that produces a logit. Therefore:
 * the prediction's own matvec is a dead branch of the graph as far as the model
   output is concerned.
 
-So logits/tokens are `mx.array_equal` with the flag on vs off, for AR and for a
-DSpark verify (M=4) sequence with rejections. Proven in
+**Scope: AR only (review MEDIUM-c).** The predictor engages ONLY on single-token
+AR decode (`T == 1`). On any multi-row forward — prefill, or the DSpark M=4 verify
+batch — `_maybe_stash_gate_prefetch` returns early, so the verify is untouched and
+byte-identical on/off by construction; predicting the verify's route (from its
+row-0 residual) is a distinct design, out of scope here. A DSpark sequence is
+therefore byte-identical on/off because its verify steps are inert and its
+draft/AR steps gather on the true route regardless of the warmed ring.
+
+So logits/tokens are `mx.array_equal` with the flag on vs off. Proven in
 `tests/test_deepseek_v41_w93_gate_prefetch_reconcile.py` (switch-level: the
 gather output is bit-identical with the ring warmed vs cold, at M=1 and M=4,
 all-hit / split / all-miss) and
@@ -156,9 +163,8 @@ guard).
 exactly one step ahead, so at any instant the ring holds at most two layers'
 predictions: layer L's committed hits still resolving while layer L+1's `k`
 predictions fill. `2·k` slots double-buffer that; sharing one ring across layers
-means the resident ring is `2·k` records **total**, a small fixed reserve like
-the transient scratch pool — not `k × n_layers` carved out of the persistent LRU
-budget:
+means the resident ring is `2·k` records **total** — not `k × n_layers` carved out
+of the persistent LRU:
 
 ```
 record (AR, mxfp4)              = 17.93 MiB
@@ -168,11 +174,21 @@ GLOBAL ring, 2·k = 32 cap       = 32 × 17.93 MiB = 573.8 MiB
 ```
 
 Contrast the naive per-layer ring: `k × R_routed × record = 10 × 40 × 17.93 MiB
-= 7.0 GiB`, ~20% of the 60 GiB plan's expert cache, which would shrink the LRU
-and its hit rate. The global ring is **~20× smaller** and comes out of the fixed
-reserve (`ExpertMemoryPlan.prefetch_bytes = prefetch_ring_slots ×
-expert_record_bytes`, subtracted alongside the transient scratch before the
-persistent budget), so the LRU is untouched. Physically it is one shared
+= 7.0 GiB`, ~20% of the 60 GiB plan's expert cache. The global ring is **~20×
+smaller** (`ExpertMemoryPlan.prefetch_bytes = prefetch_ring_slots ×
+expert_record_bytes`, ~0.36 GiB).
+
+**Budget honesty (review MEDIUM-d).** That 0.36 GiB is NOT free reserve — it is
+part of `fixed_bytes`, so it reduces the `available_bytes` that seeds the
+persistent budget: at the `-75` profile the persistent budget goes **34.79 →
+34.44 GiB**. But `slots_per_layer = persistent_budget // (R_routed · record)`
+floor-divides, and the ~0.35 GiB lost is absorbed by that floor-division slack, so
+`slots_per_layer` stays **49** (unchanged) — the LRU keeps the same resident count
+in this profile. This is not free-lunch; it holds only because the profile is not
+on a floor-division boundary. The ab receipt header prints `slots_per_layer` and
+`slots_per_layer_no_ring` (a re-plan with the ring off) so the delta is auditable
+per run; if a future profile sits on the boundary the operator sees the value
+drop and can widen the budget. Physically the ring is one shared
 component bank of `2·k` buffers (`global-prefetch-{i}` labels), resolved by slot
 index like the shared transient tier — never per-layer buffers. Entries are keyed
 by `(layer, expert)`; round-robin replacement spans the whole ring, so layer
