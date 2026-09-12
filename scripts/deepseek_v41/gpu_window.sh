@@ -72,6 +72,19 @@ TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
 FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # refuse to start if another mtplx/python worker exceeds this RSS
 VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
 PS_CMD="${GPU_WINDOW_PS_CMD:-/bin/ps}"                           # overridable for the foreign-worker scan unit test
+                                                                # (also used for the phase-4 step-tree RSS walk below)
+
+# W106 hermetic test mode: GPU_WINDOW_TEST_MODE=1 skips phases 1-3 (the wired-knob
+# sysctl read, the launchctl inspect + bootout) and the resident-agent restore --
+# i.e. it touches NO sysctl and NO launchctl -- and defaults the exclusive lock to
+# a throwaway temp path so tests/test_gpu_window_memory_accounting.sh can exercise
+# the phase-4 process-tree RSS accounting against a fake step without touching the
+# real GPU lock or the resident agent.  Phase 4 (the polling loop under test) still
+# runs.  An explicit MTPLX_GPU_LOCK still wins over the temp default.
+GPU_WINDOW_TEST_MODE="${GPU_WINDOW_TEST_MODE:-}"
+if [[ "${GPU_WINDOW_TEST_MODE}" == "1" && -z "${MTPLX_GPU_LOCK:-}" ]]; then
+  LOCK_PATH="${TMPDIR:-/tmp}/gpu_window_testmode.lock"
+fi
 
 UID_NUM="$(id -u)"
 DOMAIN="gui/${UID_NUM}"
@@ -120,6 +133,35 @@ list_heavy_foreign_workers() {
       if (index(self, " " pid " ") > 0) next;
       lc = tolower(cmd);
       if (lc ~ /python|mtplx|mlx/) printf "%s %.1fGiB %s\n", pid, rss / 1048576, cmd;
+    }
+  '
+}
+
+# Walk the process tree rooted at $1 (that pid AND every descendant) from a SINGLE
+# `ps` snapshot and print "<sum_rss_kb> <max_rss_kb>": the SUM of RSS across the
+# whole tree, and the MAX single-process RSS.  The phase-4 step is launched as a
+# `bash -c "..."` chain whose own RSS is a few MB while the python benchmark
+# underneath it holds ~65-70 GiB, so polling STEP_PID alone (pre-W106) logged
+# "peak step RSS 0.0 GiB" and the child cap could never fire.  A `seen` guard makes
+# the walk robust against pid reuse cycles.
+_step_tree_rss() {
+  local root="${1:-}"
+  if [[ -z "${root}" ]]; then printf '0 0'; return; fi
+  "${PS_CMD}" -axo pid=,ppid=,rss= 2>/dev/null | awk -v root="${root}" '
+    { pid = $1 + 0; ppid = $2 + 0; rss = $3 + 0; RSS[pid] = rss; kids[ppid] = kids[ppid] " " pid }
+    END {
+      head = 1; tail = 0; wl[++tail] = root + 0; sum = 0; maxp = 0;
+      while (head <= tail) {
+        p = wl[head]; head++;
+        if (p in seen) continue;
+        seen[p] = 1;
+        if (p in RSS) { sum += RSS[p]; if (RSS[p] > maxp) maxp = RSS[p]; }
+        if (p in kids) {
+          n = split(kids[p], cc, " ");
+          for (i = 1; i <= n; i++) if (cc[i] != "") wl[++tail] = cc[i] + 0;
+        }
+      }
+      printf "%d %d", sum, maxp;
     }
   '
 }
@@ -248,7 +290,9 @@ _kill_step_child() {
 WAS_LOADED=0
 RESTORED=0
 STEP_PID=""
-PEAK_RSS_BYTES=0
+PEAK_TREE_RSS_BYTES=0       # running peak of the SUM of RSS across the step process tree
+PEAK_MAX_PROC_RSS_BYTES=0   # running peak of the MAX single-process RSS in that tree
+PEAK_SYSTEM_USED_BYTES=0    # running peak of system used memory (NOT the value at exit)
 PLIST=""
 QWEN_PID=""
 
@@ -297,6 +341,9 @@ teardown() {
 }
 trap teardown EXIT INT TERM
 
+if [[ "${GPU_WINDOW_TEST_MODE}" == "1" ]]; then
+  log "TEST MODE: skipping phases 1-3 (wired-knob sysctl read, launchctl inspect/bootout) and the resident-agent restore; lock=${LOCK_PATH}"
+else
 # ---------------- phase 1: verify the wired-memory knob (read only) -----------
 log "phase 1: verifying iogpu.wired_limit_mb is in (0, ${WIRED_CAP_MB}] MB (<= 100 GiB); never raising it"
 WIRED_MB="$(/usr/sbin/sysctl -n iogpu.wired_limit_mb 2>/dev/null || true)"
@@ -324,6 +371,8 @@ if (( WAS_LOADED == 0 )); then
 else
   log "phase 2: ${QWEN_LABEL} loaded (pid=${QWEN_PID:-unknown}); plist=${PLIST}"
 fi
+fi  # end phases 1-2 (skipped whole in GPU_WINDOW_TEST_MODE=1; phase 3 below is
+    # then auto-skipped because WAS_LOADED stays 0, as is restore_qwen)
 
 # ---------------- phase 3: bootout + confirm the release ----------------------
 if (( WAS_LOADED == 1 )); then
@@ -384,39 +433,65 @@ fi
 USED_START="$(used_mem_bytes)"
 log "phase 4: system used memory at start: $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB)"
 
-log "phase 4: starting GPU step under child RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
+log "phase 4: starting GPU step under child-tree RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
 "$@" &
 STEP_PID=$!
+# Seed the system-used running peak with the at-start reading so PEAK_SYSTEM_USED
+# is a true max over the window (the pre-W106 exit line re-read used_mem_bytes and
+# reported the value AT EXIT, not the peak).
+if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
+  PEAK_SYSTEM_USED_BYTES="${USED_START}"
+fi
+_last_mem_sample=0  # 0 => the first poll logs an envelope sample immediately
 while :; do
-  read -r rss_kb state < <(ps -o rss=,state= -p "${STEP_PID}" 2>/dev/null || true)
-  if [[ -z "${state:-}" || "${state}" == Z* ]]; then
+  # Loop terminates when STEP_PID is gone or a zombie (same condition as before);
+  # RSS is now measured over its whole tree, not this one (near-empty) pid.
+  step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"
+  if [[ -z "${step_state}" || "${step_state}" == Z* ]]; then
     break
   fi
-  if [[ "${rss_kb:-}" =~ ^[0-9]+$ ]]; then
-    rss_bytes=$(( rss_kb * 1024 ))
-    if (( rss_bytes > PEAK_RSS_BYTES )); then
-      PEAK_RSS_BYTES=${rss_bytes}
-    fi
-    if (( rss_bytes > CHILD_RSS_CAP_BYTES )); then
-      err "phase 4: step child RSS $(gib "${rss_bytes}") GiB exceeded cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB; killing child and restoring"
-      _kill_step_child
-      exit 6
-    fi
+  # Walk STEP_PID + all descendants: SUM RSS across the tree (the python benchmark
+  # under the bash-c chain) and the MAX single process.  The cap applies to the SUM.
+  read -r tree_kb max_kb < <(_step_tree_rss "${STEP_PID}")
+  tree_bytes=$(( ${tree_kb:-0} * 1024 ))
+  max_bytes=$(( ${max_kb:-0} * 1024 ))
+  if (( tree_bytes > PEAK_TREE_RSS_BYTES )); then
+    PEAK_TREE_RSS_BYTES=${tree_bytes}
+  fi
+  if (( max_bytes > PEAK_MAX_PROC_RSS_BYTES )); then
+    PEAK_MAX_PROC_RSS_BYTES=${max_bytes}
+  fi
+  if (( tree_bytes > CHILD_RSS_CAP_BYTES )); then
+    err "phase 4: step tree RSS $(gib "${tree_bytes}") GiB (max single process $(gib "${max_bytes}") GiB) exceeded cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB; killing child and restoring"
+    _kill_step_child
+    exit 6
   fi
   # System-wide guard: a runaway allocation anywhere on the box (not only this
   # child) that crosses the ceiling aborts the step and restores the agent.
   used_now="$(used_mem_bytes)"
-  if [[ "${used_now:-}" =~ ^[0-9]+$ ]] && (( used_now > TOTAL_MEM_CEILING_BYTES )); then
-    err "phase 4: SYSTEM used memory $(gib "${used_now}") GiB exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB (child RSS $(gib "${PEAK_RSS_BYTES}") GiB); killing child and restoring"
-    _kill_step_child
-    exit 8
+  if [[ "${used_now:-}" =~ ^[0-9]+$ ]]; then
+    if (( used_now > PEAK_SYSTEM_USED_BYTES )); then
+      PEAK_SYSTEM_USED_BYTES=${used_now}
+    fi
+    if (( used_now > TOTAL_MEM_CEILING_BYTES )); then
+      err "phase 4: SYSTEM used memory $(gib "${used_now}") GiB exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB (step tree RSS $(gib "${PEAK_TREE_RSS_BYTES}") GiB); killing child and restoring"
+      _kill_step_child
+      exit 8
+    fi
+  fi
+  # One memory-envelope sample every 30 s (and once on the first poll) so the log
+  # shows the real footprint of the step as it runs, not just the exit summary.
+  _now_epoch="$(date +%s)"
+  if (( _now_epoch - _last_mem_sample >= 30 )); then
+    log "phase 4: mem sample -- step tree RSS $(gib "${tree_bytes}") GiB (max single process $(gib "${max_bytes}") GiB), system used $(gib "${used_now:-0}") GiB"
+    _last_mem_sample=${_now_epoch}
   fi
   sleep "${RSS_POLL_SECONDS}"
 done
 wait "${STEP_PID}"
 step_rc=$?
 STEP_PID=""
-log "phase 4: GPU step exited with code ${step_rc}; peak step RSS $(gib "${PEAK_RSS_BYTES}") GiB, peak system used $(gib "$(used_mem_bytes)") GiB"
+log "phase 4: GPU step exited with code ${step_rc}; peak step tree RSS $(gib "${PEAK_TREE_RSS_BYTES}") GiB (max single process $(gib "${PEAK_MAX_PROC_RSS_BYTES}") GiB), peak system used $(gib "${PEAK_SYSTEM_USED_BYTES}") GiB"
 
 # phase 5 (restore + lock release) runs in the teardown trap on this exit.
 exit "${step_rc}"
