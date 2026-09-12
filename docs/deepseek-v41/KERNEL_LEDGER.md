@@ -226,6 +226,43 @@ tune the compute.**
   per-layer streamed-switch barrier, the (fenced-default) all-hit/split wave fence above, and (in
   chunked prefill) `_eval_cache_state` per chunk.
 
+### 4a — ⚠️ Fenced per-stage ms are LATENCY, not compute (ratios only) — W94 unfenced attribution
+
+> **Do not read the fenced per-stage census (`deepseek_v41_stage_timing`, the W37 decode census,
+> `--stage-timing`) absolute ms as a stage's in-situ cost.** Each stage bracket ends in an `mx.eval`
+> that drains and refills the GPU pipeline, so a bracket's wall is that stage's dispatch **plus a full
+> pipeline stall**. Measured evidence: the fenced in-model census reads **~8 ms for every attention
+> bracket in every configuration** (1K/16K, selected-keys on/off, hot/cooled, 700–1,000 MHz; windows
+> 36–37) while the same kernels cost **~2 ms isolated**, and the fenced frame wall (~700 ms/token @16K)
+> runs well over the **unfenced ~460 ms/token** the served loop actually pays (window 37 `ar-ring-ref`
+> 2.17 tok/s). Compare stages to each other (which is bigger); never quote a fenced stage's absolute ms.
+
+For the TRUE in-situ cost of a component (attention, the routed switch, the ~40 host-sync barriers,
+the small per-layer stages), run the **unfenced whole-token attribution**: it drops every per-stage
+fence and times the whole-token frame wall with components stubbed out, so `full − stubbed` is the
+component's real cost including the latency it causes (the DVFS downclock in the sync gap, the SSD
+wait) but excluding probe latency. Five passes decompose the token:
+`switch total (1)-(4) = SSD-bound (1)-(2) + sync/barrier (2)-(4)`; `attention (1)-(3)`; small-stages
+floor (5); sum-of-parts vs full + residual.
+
+Exact GPU-window command for the **16,384-token cell (60 GiB plan, `--max-kv 17408`, `cell16k_ring`)**,
+run through the flock like every Metal exec on this box (`$PY` = the venv python3, `$MODEL` = the
+streaming artifact, `$OUT` = the window receipt dir):
+
+```bash
+exec bash scripts/deepseek_v41/gpu_window.sh bash -c "
+  export PYTHONPATH=\$WT
+  nice -n 19 \$PY scripts/deepseek_v41/metal_decode_attn_bisect.py \
+    --in-model --unfenced --gpu --model \$MODEL --arms cell16k_ring \
+    --context-tokens 16384 --memory-limit-gib 60 --max-kv 17408 \
+    --in-model-steps 64 --utilization \
+    --out \$OUT/in-model-16k-unfenced.json"
+```
+
+(No `--prompt-ids-file`: the standard-cell builder resolves the same 16,384-token prompt the
+`cell16k_ring` AR reference uses, so pass (1)'s token sha is comparable to that AR receipt run at
+`--decode-tokens 64`. Full method + receipt schema: `docs/deepseek-v41/W94_UNFENCED_ATTRIBUTION.md`.)
+
 ---
 
 ## 5. Candidate list (kernel / byte / fusion), ranked by GPU-visible EV

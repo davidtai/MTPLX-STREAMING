@@ -47,6 +47,37 @@ whether the async expert-gather drain is what lands in the attention fence.  It 
 a GPU-window mode (``--in-model --gpu``); ``--in-model --tiny`` validates the stub
 plumbing on a fake CPU model.
 
+``--in-model --unfenced`` (window-94) is the UNFENCED attribution.  The fenced
+per-stage census above brackets each stage with ``mx.eval``, so every bracket's
+wall is a GPU pipeline drain + refill -- ~8 ms per attention bracket in EVERY config
+(window 36/37) while the same kernels cost ~2 ms isolated: those absolute per-stage
+numbers are LATENCY, not compute (ratios only).  This mode drops all per-stage
+fences and measures the WHOLE-TOKEN frame wall (the only ``mx.eval`` per token is
+the production loop's own sampler / next-token id) with components stubbed out, so
+the delta full - stubbed is a component's TRUE in-situ cost -- including whatever
+latency it causes (the DVFS downclock in the sync gap, the SSD wait) but excluding
+probe latency.  Five passes: (1) full; (2) switch stubbed with the routing barrier
+KEPT; (3) attention stubbed; (4) switch stubbed with the barrier REMOVED; (5)
+attention AND switch stubbed (the small-per-layer-stages floor).  Derived: switch
+total (1)-(4) = SSD-bound (1)-(2) + sync/barrier (2)-(4); attention (1)-(3); small
+stages (5); sum-of-parts vs full + residual.  ``--tiny`` validates all five passes
+on CPU.
+
+Exact GPU-window command for the 16,384-token cell (60 GiB plan, --max-kv 17408,
+cell16k_ring arm), run through the flock (scripts/deepseek_v41/gpu_window.sh) like
+every Metal exec on this box.  With PY the venv python3 and MODEL the streaming
+artifact, the invocation is:
+
+    nice -n 19 $PY scripts/deepseek_v41/metal_decode_attn_bisect.py
+      --in-model --unfenced --gpu --model $MODEL --arms cell16k_ring
+      --context-tokens 16384 --memory-limit-gib 60 --max-kv 17408
+      --in-model-steps 64 --utilization --out $OUT/in-model-16k-unfenced.json
+
+(No --prompt-ids-file: the standard-cell builder resolves the same 16,384-token
+prompt the ab cell16k_ring reference uses, so pass (1)'s token sha is comparable to
+that AR receipt run at --decode-tokens 64.  The fully-escaped gpu_window.sh wrapper
+is in docs/deepseek-v41/W94_UNFENCED_ATTRIBUTION.md.)
+
 Default device is **CPU** (so an accidental worker run never touches the Metal
 GPU during a benchmark window); pass ``--gpu`` in the exclusive GPU window.  The
 ``--tiny`` mode (tiny dims, CPU, T in {256,1024}) is the unit-test path that proves
@@ -58,9 +89,12 @@ freed sequentially; a 16K real-dim cache is ~120 MB/layer).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gc
+import hashlib
 import json
 import os
+import statistics
 import sys
 import time
 from typing import Dict, List, Optional
@@ -767,9 +801,31 @@ class _ZeroSwitch:
     returns the unweighted per-expert output as zeros ``[n, top_k, dim]``, so the
     MoE combine yields just the shared expert (routed contribution zeroed).  Skips
     the expensive routed gather + gather_qmm entirely.  cell16k does not use the
-    shared-overlap path, so the plain ``(xf, indices)`` call is the only one."""
+    shared-overlap path, so the plain ``(xf, indices)`` call is the only one.
+
+    ``keep_routing_barrier`` (window-94): the REAL streamed switch pays a per-layer
+    host round-trip -- ``mx.eval(indices)`` (expert_mlx.py: the ``hot.eval_indices``
+    barrier the ledger prices at ~40/token) -- to read the route before it can
+    stream.  The zeros return alone NEVER touches ``indices`` on host (only its
+    static ``shape[-1]``), so a plain stub silently drops that barrier along with
+    the gather.  The unfenced attribution needs to SPLIT those: pass 2 keeps the
+    barrier (``keep_routing_barrier=True`` -> the SSD/gather cost is what the
+    full-vs-2 delta then isolates) and pass 4 drops it (``False`` -> the 2-vs-4
+    delta is the ~40 host syncs alone).  Default ``False`` so the fenced 3-pass
+    mode's ``_ZeroSwitch()`` is byte-for-byte the pre-window-94 stub (that mode
+    already owns the barrier at the ``moe.gate_topk`` fence)."""
+
+    __slots__ = ("keep_routing_barrier",)
+
+    def __init__(self, keep_routing_barrier: bool = False):
+        self.keep_routing_barrier = bool(keep_routing_barrier)
 
     def __call__(self, x, indices, *args, **kwargs):
+        if self.keep_routing_barrier:
+            # The per-layer routing host-sync the streamed switch pays, kept while
+            # the SSD gather + gather_qmm are skipped.  Faithful to the production
+            # barrier: one host round-trip per streamed layer per token.
+            mx.eval(indices)
         return mx.zeros((x.shape[0], indices.shape[-1], x.shape[-1]), dtype=x.dtype)
 
 
@@ -784,14 +840,16 @@ class _ZeroAttn:
         return mx.zeros_like(x)
 
 
-def _apply_stub(model, which: str):
+def _apply_stub(model, which: str, *, keep_routing_barrier: bool = False):
     """Swap in the expert / attention stub on every backbone layer; returns a
-    restore list.  ``which`` in {"experts", "attn"}."""
+    restore list.  ``which`` in {"experts", "attn"}.  ``keep_routing_barrier``
+    (experts only) controls whether the expert stub keeps the per-layer
+    ``mx.eval(indices)`` routing barrier (window-94; ignored for "attn")."""
     saved = []
     for layer in model.layers:
         if which == "experts":
             saved.append((layer.mlp, "switch_mlp", layer.mlp.switch_mlp))
-            layer.mlp.switch_mlp = _ZeroSwitch()
+            layer.mlp.switch_mlp = _ZeroSwitch(keep_routing_barrier=keep_routing_barrier)
         elif which == "attn":
             saved.append((layer, "attn", layer.attn))
             layer.attn = _ZeroAttn()
@@ -946,12 +1004,17 @@ def _resolve_in_model_prompt(ab, bench, args):
     return bench._resolve_prompt(args, tokenizer, build_prompt, args.context_tokens)
 
 
-def run_in_model(cfg: dict) -> dict:
-    """The three in-situ passes on the real (or tiny) model.  Reuses the ab loader
-    + census pass; applies the expert / attention stubs around passes (2) / (3)."""
+def _in_model_setup(cfg: dict, steps: int) -> dict:
+    """Load the model + resolve the standard cell prompt for an in-model run.
+
+    Shared by both in-model modes -- the fenced 3-pass census (:func:`run_in_model`)
+    and the unfenced 5-pass attribution (:func:`run_in_model_unfenced`) -- so both
+    drive the SAME loader, arm env, prompt and ops (window-94 refactor; the fenced
+    mode is byte-for-byte unchanged).  ``--tiny`` builds the fake CPU model with the
+    clean stage-timing config; ``--gpu`` loads the real streaming artifact via the
+    ab loader under the requested arm.  Returns the handles both modes need."""
     ab = _load_ab_module()
     tiny = cfg.get("tiny", False)
-    steps = int(cfg.get("steps", 4 if tiny else 30))
     arm = cfg.get("arms", "cell16k")
 
     if tiny:
@@ -992,6 +1055,22 @@ def run_in_model(cfg: dict) -> dict:
         dims = {"hidden": args.context_tokens, "context_tokens": args.context_tokens,
                 "max_kv": args.max_kv, "memory_limit_gib": cfg.get("memory_limit_gib", 60.0)}
         device = "gpu"
+
+    return {"ab": ab, "tiny": tiny, "arm": arm, "model": model, "ops": ops,
+            "prompt_ids": prompt_ids, "prompt_meta": prompt_meta, "dims": dims,
+            "device": device}
+
+
+def run_in_model(cfg: dict) -> dict:
+    """The three in-situ passes on the real (or tiny) model.  Reuses the ab loader
+    + census pass; applies the expert / attention stubs around passes (2) / (3)."""
+    tiny = cfg.get("tiny", False)
+    steps = int(cfg.get("steps", 4 if tiny else 30))
+    setup = _in_model_setup(cfg, steps)
+    ab, arm = setup["ab"], setup["arm"]
+    model, ops = setup["model"], setup["ops"]
+    prompt_ids, prompt_meta = setup["prompt_ids"], setup["prompt_meta"]
+    dims, device = setup["dims"], setup["device"]
 
     cooldown_s = float(cfg.get("cooldown_s", 0.0) or 0.0)
     util_on = bool(cfg.get("utilization", False))
@@ -1094,6 +1173,367 @@ def print_in_model(receipt: dict) -> None:
         print(lbl.ljust(16) + cells)
 
 
+# ===========================================================================
+# --in-model --unfenced: whole-token frame-wall attribution (window 94)
+# ===========================================================================
+# The FENCED per-stage census (run_in_model / deepseek_v41_stage_timing) brackets
+# each stage with mx.eval, so every bracket's wall is a GPU pipeline drain + refill
+# -- ~8 ms per attention bracket in EVERY config (window 36/37) while the same
+# kernels cost ~2 ms isolated.  Those absolute per-stage numbers are LATENCY, not
+# compute (ratios only).  This mode drops all per-stage fences and measures the
+# WHOLE-TOKEN frame wall with components stubbed out, so the delta full - stubbed is
+# a component's TRUE in-situ cost -- including whatever latency it causes (the DVFS
+# downclock in the sync gap, the SSD wait) but excluding probe latency.  The only
+# mx.eval per token is the production decode loop's own (the sampler / next-token
+# id), exactly ab_decode_env_levers._generate's classic argmax loop.
+#
+# Five passes (mean/median ms/token over the steps, first `warmup_steps` excluded):
+#   (1) full            -- the served decode.
+#   (2) expert_stub     -- routed switch stubbed, routing barrier KEPT
+#                          (_ZeroSwitch(keep_routing_barrier=True): the per-layer
+#                          mx.eval(indices) host sync stays; SSD gather + gather_qmm
+#                          skipped).  (1)-(2) = the switch's SSD/gather cost.
+#   (3) attn_stub       -- attention stubbed (zeros; KV offset still advances).
+#                          (1)-(3) = attention incl. any latency it causes.
+#   (4) expert_stub_nobarrier -- routed switch stubbed, barrier REMOVED
+#                          (_ZeroSwitch(keep_routing_barrier=False), the stub never
+#                          touches indices on host).  (2)-(4) = the ~40 host syncs
+#                          alone; (1)-(4) = the whole switch (SSD + gather + syncs).
+#   (5) small_stages_floor -- attention zeros AND switch stubbed no-barrier: the
+#                          floor of the small per-layer stages (norms / HC / Sinkhorn
+#                          / gate / shared / combine) + head + sample.
+# Derived: switch total (1)-(4) = SSD-bound (1)-(2) + sync (2)-(4); attention (1)-(3);
+# small stages (5); sum-of-parts (attn+switch+floor) vs full, and the residual.
+
+
+def _unfenced_decode_pass(*, ab, model, ops, prompt_ids, steps, warmup_steps=8,
+                          cooldown_s=0.0, util_sampler=None):
+    """One UNFENCED in-situ decode pass.
+
+    Prefill once (untimed for the per-step table -- its wall is TTFT), then run
+    ``steps`` production decode steps with NO stage recorder armed and NO per-stage
+    fences: the only ``mx.eval`` per token is the production loop's own
+    (``ops.sync`` + the argmax host read = the sampler / next-token id).  Records the
+    per-step wall (``perf_counter_ns`` only -- no GPU sync of its own, so it never
+    perturbs the measurement), the decoded ids, the decode-scoped expert-streaming
+    counter delta (prefill excluded), and -- via ``util_sampler`` entered over the
+    decode loop -- the macmon telemetry.  Mirrors ab._generate's classic argmax loop
+    exactly, so pass (1)'s ids are the served-path ids."""
+    from mtplx.models import deepseek_v41_stage_timing as stime
+    # No stage session may be armed: an armed probe forces the eager attention / HC
+    # path (recording() gates _attn_use_compile / _hc_use_compile), which would
+    # change the code path away from the served (compiled) one.
+    if stime.is_active():
+        stime.end()
+
+    cache = model.make_cache()
+    t0 = time.perf_counter()
+    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    ops.sync(logits)
+    ttft_s = time.perf_counter() - t0
+    token = ops.argmax_last(logits)
+    generated = [token]
+
+    cooldown_block = None
+    if cooldown_s and float(cooldown_s) > 0:
+        cooldown_block = ab._macmon().cooldown(float(cooldown_s), label="w94-unfenced")
+
+    # Decode-scoped expert-streaming counter bracket (prefill excluded, so the hit
+    # rate / bytes are the DECODE traffic, not the cold prefill first-touch).
+    sc_before = ab._stream_counters_snapshot(model)
+
+    _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
+    step_ns: List[int] = []
+    with _util_cm:  # macmon sampled over the DECODE loop only
+        decode_start = time.perf_counter()
+        for _ in range(int(steps)):
+            s0 = time.perf_counter_ns()
+            logits = model(ops.input([[token]]), cache=cache)
+            ops.sync(logits)                 # the one production per-token eval
+            token = ops.argmax_last(logits)  # host read of the next-token id
+            step_ns.append(time.perf_counter_ns() - s0)
+            generated.append(token)
+        decode_wall_s = time.perf_counter() - decode_start
+    sc_after = ab._stream_counters_snapshot(model)
+
+    stream = None
+    try:
+        from mtplx.serve_stream_counters import stream_counters_delta
+        if sc_before is not None and sc_after is not None:
+            stream = stream_counters_delta(
+                sc_before, sc_after, tokens=int(steps), phase="decode"
+            )
+    except Exception:
+        stream = None
+
+    return {
+        "step_ms": [ns / 1e6 for ns in step_ns],
+        "ttft_s": ttft_s,
+        "decode_wall_s": decode_wall_s,
+        "generated": generated,
+        "stream": stream,
+        "cooldown": cooldown_block,
+        "warmup_steps": int(warmup_steps),
+    }
+
+
+def _unfenced_pass_summary(pass_data: dict, util_summary: Optional[dict], *,
+                           ssd_bandwidth_gibs: float) -> dict:
+    """Fold one pass's raw per-step walls + telemetry into the summary row: mean /
+    median ms/token over the post-warmup steps, tok/s (from the post-warmup mean),
+    the macmon busy% / MHz, and the decode-scoped stream counters (misses / bytes /
+    hit-rate per token) with an independent SSD-bound time estimate."""
+    step_ms = pass_data.get("step_ms") or []
+    wu = int(pass_data.get("warmup_steps", 8))
+    warm = step_ms[wu:] if len(step_ms) > wu else list(step_ms)
+    if not warm:
+        warm = list(step_ms) or [0.0]
+    mean_ms = statistics.fmean(warm)
+    median_ms = statistics.median(warm)
+    tok_s = (1000.0 / mean_ms) if mean_ms > 0 else None
+    decode_wall_s = pass_data.get("decode_wall_s", 0.0)
+    n = len(step_ms)
+    decode_wall_tok_s = (n / decode_wall_s) if decode_wall_s > 0 else None
+
+    def _u(field, key="mean"):
+        d = (util_summary or {}).get(field)
+        return d.get(key) if isinstance(d, dict) else None
+
+    busy = _u("gpu_usage_ratio")
+    gpu_busy_pct = busy * 100.0 if isinstance(busy, (int, float)) else None
+
+    ec = ((pass_data.get("stream") or {}).get("expert_cache")) or {}
+    bytes_per_tok = ec.get("bytes_read_per_token")
+    ssd_est_ms = None
+    if isinstance(bytes_per_tok, (int, float)) and bytes_per_tok > 0 and ssd_bandwidth_gibs > 0:
+        ssd_est_ms = (bytes_per_tok / (ssd_bandwidth_gibs * (1024 ** 3))) * 1000.0
+
+    return {
+        "mean_ms_per_token": mean_ms,
+        "median_ms_per_token": median_ms,
+        "tok_s": tok_s,
+        "steps": n,
+        "warmup_steps": wu,
+        "measured_steps": len(warm),
+        "decode_wall_s": decode_wall_s,
+        "decode_wall_tok_s": decode_wall_tok_s,
+        "ttft_s": pass_data.get("ttft_s"),
+        "gpu_busy_pct": gpu_busy_pct,
+        "gpu_freq_mhz": _u("gpu_freq_mhz"),
+        "gpu_power_w": _u("gpu_power_w"),
+        "misses_per_token": ec.get("misses_per_token"),
+        "bytes_read_per_token": bytes_per_tok,
+        "records_streamed_per_token": ec.get("records_streamed_per_token"),
+        "hit_rate": ec.get("hit_rate"),
+        "ssd_bound_estimate_ms": ssd_est_ms,
+    }
+
+
+def _unfenced_attribution(passes: dict, *, ssd_bandwidth_gibs: float) -> dict:
+    """The delta attribution over the five unfenced frame walls (ms/token).
+
+    switch total (1)-(4) = SSD-bound (1)-(2) + sync/barrier (2)-(4); attention is
+    (1)-(3); the small-stages floor is pass (5).  The sum-of-parts is
+    attention + switch-total + floor, and the residual is full minus that sum (the
+    interaction / overlap that only appears when the components coexist -- 0 under
+    perfect additivity)."""
+    def _ms(key):
+        return (passes.get(key, {}).get("summary") or {}).get("mean_ms_per_token")
+
+    p1, p2, p3, p4, p5 = (
+        _ms("full"), _ms("expert_stub"), _ms("attn_stub"),
+        _ms("expert_stub_nobarrier"), _ms("small_stages_floor"),
+    )
+
+    def _sub(a, b):
+        return (a - b) if isinstance(a, (int, float)) and isinstance(b, (int, float)) else None
+
+    attention = _sub(p1, p3)
+    switch_total = _sub(p1, p4)
+    ssd_bound = _sub(p1, p2)
+    sync_barrier = _sub(p2, p4)
+    small_stages = p5
+    sop = None
+    if all(isinstance(x, (int, float)) for x in (attention, switch_total, small_stages)):
+        sop = attention + switch_total + small_stages
+    residual = _sub(p1, sop)
+
+    full_summary = passes.get("full", {}).get("summary") or {}
+    return {
+        "full_ms_per_token": p1,
+        "attention_ms_per_token": attention,
+        "switch_total_ms_per_token": switch_total,
+        "switch_ssd_bound_ms_per_token": ssd_bound,
+        "switch_sync_barrier_ms_per_token": sync_barrier,
+        "small_stages_floor_ms_per_token": small_stages,
+        "sum_of_parts_ms_per_token": sop,
+        "unattributed_residual_ms_per_token": residual,
+        "ssd_bound_independent_estimate_ms": full_summary.get("ssd_bound_estimate_ms"),
+        "misses_per_token": full_summary.get("misses_per_token"),
+        "bytes_read_per_token": full_summary.get("bytes_read_per_token"),
+        "hit_rate": full_summary.get("hit_rate"),
+        "ssd_bandwidth_gibs": ssd_bandwidth_gibs,
+    }
+
+
+#: (receipt key, pass label, which-stub, keep_routing_barrier, also-stub-attn).
+_UNFENCED_PASSES = [
+    ("full", "full_model", None, False, False),
+    ("expert_stub", "expert_switch_stubbed_barrier", "experts", True, False),
+    ("attn_stub", "attention_stubbed", "attn", False, False),
+    ("expert_stub_nobarrier", "expert_switch_stubbed_no_barrier", "experts", False, False),
+    ("small_stages_floor", "small_stages_floor", "experts", False, True),
+]
+
+
+def run_in_model_unfenced(cfg: dict) -> dict:
+    """The five UNFENCED whole-token frame-wall passes on the real (or tiny) model.
+
+    Reuses the shared loader (:func:`_in_model_setup`); each pass swaps in the
+    relevant stub, runs :func:`_unfenced_decode_pass` (a fresh macmon sampler per
+    pass so the single-use sampler is never reused), restores the stub, and folds the
+    telemetry into a summary row.  Only pass (1) carries the cooldown before its timed
+    decode and its token sha is the served-path comparison."""
+    tiny = cfg.get("tiny", False)
+    steps = int(cfg.get("steps", 8 if tiny else 64))
+    warmup_steps = int(cfg.get("warmup_steps", 2 if tiny else 8))
+    ssd_bw = float(cfg.get("ssd_bandwidth_gibs", 4.4) or 4.4)
+    setup = _in_model_setup(cfg, steps)
+    ab = setup["ab"]
+    model, ops = setup["model"], setup["ops"]
+    prompt_ids, prompt_meta = setup["prompt_ids"], setup["prompt_meta"]
+    dims, device, arm = setup["dims"], setup["device"], setup["arm"]
+
+    cooldown_s = float(cfg.get("cooldown_s", 0.0) or 0.0)
+    util_on = bool(cfg.get("utilization", False))
+    util_interval_ms = int(cfg.get("util_interval_ms", 2000))
+
+    def _run_pass(label, *, cooldown_s=0.0):
+        sampler = (ab._macmon().UtilizationSampler(interval_ms=util_interval_ms)
+                   if util_on else None)
+        data = _unfenced_decode_pass(
+            ab=ab, model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
+            warmup_steps=warmup_steps, cooldown_s=cooldown_s, util_sampler=sampler,
+        )
+        util_summary = sampler.summarize() if sampler is not None else None
+        if sampler is not None:
+            print(f"[w94-unfenced] {label}: {sampler.census()}", flush=True)
+        summary = _unfenced_pass_summary(data, util_summary, ssd_bandwidth_gibs=ssd_bw)
+        return {
+            "label": label,
+            "summary": summary,
+            "utilization": util_summary,
+            "cooldown": data.get("cooldown"),
+            "token_ids_sha256": hashlib.sha256(
+                json.dumps(data["generated"]).encode()
+            ).hexdigest(),
+            "n_token_ids": len(data["generated"]),
+            "token_ids": list(data["generated"]),
+        }
+
+    passes: Dict[str, dict] = {}
+    for key, label, which, keep_barrier, stub_attn in _UNFENCED_PASSES:
+        saved = []
+        if which == "experts":
+            saved.append(_apply_stub(model, "experts", keep_routing_barrier=keep_barrier))
+        elif which == "attn":
+            saved.append(_apply_stub(model, "attn"))
+        if stub_attn:
+            saved.append(_apply_stub(model, "attn"))
+        try:
+            # Pass (1) alone carries the cooldown before its timed decode (matching
+            # the fenced full pass); the stub passes reuse the already-warm state.
+            passes[key] = _run_pass(label, cooldown_s=(cooldown_s if key == "full" else 0.0))
+        finally:
+            for s in reversed(saved):
+                _restore_stub(s)
+
+    attribution = _unfenced_attribution(passes, ssd_bandwidth_gibs=ssd_bw)
+
+    receipt = {
+        "worker": "W94",
+        "script": "scripts/deepseek_v41/metal_decode_attn_bisect.py",
+        "mode": "in_model_unfenced",
+        "device": device,
+        "tiny": tiny,
+        "arm": arm,
+        "steps": steps,
+        "warmup_steps": warmup_steps,
+        "ssd_bandwidth_gibs": ssd_bw,
+        "dims": dims,
+        "prompt": prompt_meta,
+        "ballast_gib": 0.0,
+        "memory": {
+            "active_end_gib": _mem_gib("get_active_memory"),
+            "peak_gib": _mem_gib("get_peak_memory"),
+        },
+        # Pass-1 telemetry hoisted to the top for the receipt reader.
+        "utilization": passes["full"].get("utilization"),
+        "cooldown": passes["full"].get("cooldown"),
+        # Pass (1) only: the served-path token ids + sha.  The sha is over
+        # [prefill argmax] + `steps` decode ids, so it matches an ab receipt run at
+        # --decode-tokens `steps`; the raw ids let a longer ab receipt be compared by
+        # prefix (greedy is deterministic).  Stub-pass ids are garbage (not the model).
+        "token_ids_sha256": passes["full"].get("token_ids_sha256"),
+        "n_token_ids": passes["full"].get("n_token_ids"),
+        "token_ids": passes["full"].get("token_ids"),
+        "passes": passes,
+        "attribution": attribution,
+    }
+    return receipt
+
+
+def print_in_model_unfenced(receipt: dict) -> None:
+    print(f"\n=== W94 --in-model --unfenced [{receipt['device']}, arm={receipt['arm']}, "
+          f"steps={receipt['steps']} warmup={receipt['warmup_steps']}] ===")
+    print(f"dims: {receipt['dims']}   prompt: {receipt['prompt']}")
+    mem = receipt.get("memory", {})
+    print(f"active_end={mem.get('active_end_gib')} peak={mem.get('peak_gib')} GiB")
+    print(f"pass(1) token_ids_sha256={receipt.get('token_ids_sha256')}  "
+          f"({receipt.get('n_token_ids')} ids = 1 prefill + {receipt['steps']} decode; "
+          f"compare vs an ab receipt run at --decode-tokens {receipt['steps']})")
+
+    order = [("full", "(1) full"),
+             ("expert_stub", "(2) switch-stub +barrier"),
+             ("attn_stub", "(3) attn-stub"),
+             ("expert_stub_nobarrier", "(4) switch-stub no-barrier"),
+             ("small_stages_floor", "(5) small-stages floor")]
+
+    def _f(v, fmt):
+        return fmt.format(v) if isinstance(v, (int, float)) else "-"
+
+    hdr = ("pass".ljust(28) + f"{'ms/tok(mean)':>13}{'ms/tok(med)':>13}"
+           f"{'tok/s':>9}{'busy%':>8}{'MHz':>8}{'miss/tok':>10}")
+    print("\n-- unfenced whole-token frame wall (no per-stage fences; the signal) --")
+    print(hdr)
+    print("-" * len(hdr))
+    for key, lbl in order:
+        s = receipt["passes"][key]["summary"]
+        print(lbl.ljust(28)
+              + f"{_f(s.get('mean_ms_per_token'), '{:.3f}'):>13}"
+              + f"{_f(s.get('median_ms_per_token'), '{:.3f}'):>13}"
+              + f"{_f(s.get('tok_s'), '{:.3f}'):>9}"
+              + f"{_f(s.get('gpu_busy_pct'), '{:.0f}'):>8}"
+              + f"{_f(s.get('gpu_freq_mhz'), '{:.0f}'):>8}"
+              + f"{_f(s.get('misses_per_token'), '{:.2f}'):>10}")
+
+    a = receipt["attribution"]
+    print("\n-- derived attribution (delta of unfenced frame walls, ms/token) --")
+    print(f"  attention              (1)-(3) = {_f(a['attention_ms_per_token'], '{:.3f}')}")
+    print(f"  switch total           (1)-(4) = {_f(a['switch_total_ms_per_token'], '{:.3f}')}")
+    print(f"    of which SSD-bound   (1)-(2) = {_f(a['switch_ssd_bound_ms_per_token'], '{:.3f}')}"
+          f"   [indep. est {_f(a['ssd_bound_independent_estimate_ms'], '{:.3f}')} ms "
+          f"= bytes/tok {_f(a['bytes_read_per_token'], '{:.0f}')} / {a['ssd_bandwidth_gibs']} GiB/s;"
+          f" misses/tok={_f(a['misses_per_token'], '{:.2f}')} hit={_f(a['hit_rate'], '{:.3f}')}]")
+    print(f"    of which sync/barrier (2)-(4) = {_f(a['switch_sync_barrier_ms_per_token'], '{:.3f}')}"
+          f"   (~40 host syncs/token)")
+    print(f"  small stages floor     (5)     = {_f(a['small_stages_floor_ms_per_token'], '{:.3f}')}")
+    print("  " + "-" * 44)
+    print(f"  sum of parts (attn+switch+floor) = {_f(a['sum_of_parts_ms_per_token'], '{:.3f}')}")
+    print(f"  full (1)                         = {_f(a['full_ms_per_token'], '{:.3f}')}")
+    print(f"  unattributed residual (1 - sum)  = {_f(a['unattributed_residual_ms_per_token'], '{:.3f}')}")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1127,6 +1567,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="measure the attention ops in situ on the real loaded model "
                         "(three passes: full / expert-stub / attn-stub). GPU-window "
                         "mode; --tiny validates the plumbing on a fake CPU model.")
+    p.add_argument("--unfenced", action="store_true",
+                   help="--in-model: run the FIVE unfenced whole-token frame-wall "
+                        "passes (window 94) instead of the three fenced per-stage "
+                        "passes -- no stage recorder, no per-stage fences (only the "
+                        "production per-token sampler eval); delta full-stubbed is the "
+                        "component's true in-situ cost. GPU-window mode; --tiny validates.")
+    p.add_argument("--warmup-steps", type=int, default=None,
+                   help="--in-model --unfenced: decode steps excluded as warmup from "
+                        "the mean/median ms/token (default 8 gpu / 2 tiny)")
+    p.add_argument("--ssd-bandwidth-gibs", type=float, default=4.4,
+                   help="--in-model --unfenced: SSD read bandwidth (GiB/s) for the "
+                        "independent SSD-bound estimate bytes/tok / BW (default 4.4, the "
+                        "measured M5 Max SSD threshold; the receipt carries misses+bytes "
+                        "so any bandwidth can be re-applied)")
     p.add_argument("--model", type=str, default=None,
                    help="--in-model --gpu: the streaming artifact path "
                         "(default: ~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4)")
@@ -1143,7 +1597,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-kv", type=int, default=17408,
                    help="--in-model --gpu: max live KV tokens (default 17408)")
     p.add_argument("--in-model-steps", type=int, default=None,
-                   help="--in-model: decode steps per pass (default 30 gpu / 4 tiny)")
+                   help="--in-model: decode steps per pass (fenced default 30 gpu / 4 "
+                        "tiny; unfenced default 64 gpu / 8 tiny)")
     # W90: post-prefill cooldown + macmon utilization telemetry (--in-model).
     p.add_argument("--cooldown-s", type=float, default=0.0,
                    help="--in-model: idle N s AFTER prefill, BEFORE the timed decode "
@@ -1172,9 +1627,13 @@ def _in_model_cfg(a) -> dict:
         "cooldown_s": a.cooldown_s,
         "utilization": a.utilization,
         "util_interval_ms": a.util_interval_ms,
+        "unfenced": getattr(a, "unfenced", False),
+        "ssd_bandwidth_gibs": getattr(a, "ssd_bandwidth_gibs", 4.4),
     }
     if a.in_model_steps is not None:
         cfg["steps"] = a.in_model_steps
+    if getattr(a, "warmup_steps", None) is not None:
+        cfg["warmup_steps"] = a.warmup_steps
     return cfg
 
 
@@ -1182,14 +1641,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = build_parser()
     a = p.parse_args(argv)
 
+    if getattr(a, "unfenced", False) and not a.in_model:
+        p.error("--unfenced is an --in-model mode; pass --in-model --unfenced")
+
     if a.in_model:
         if not (a.gpu or a.tiny):
             p.error("--in-model requires --gpu (real model) or --tiny (CPU fake model)")
         if a.gpu and a.tiny:
             p.error("--in-model: choose --gpu OR --tiny, not both")
         cfg = _in_model_cfg(a)
-        receipt = run_in_model(cfg)
-        print_in_model(receipt)
+        if getattr(a, "unfenced", False):
+            receipt = run_in_model_unfenced(cfg)
+            print_in_model_unfenced(receipt)
+        else:
+            receipt = run_in_model(cfg)
+            print_in_model(receipt)
         if a.out:
             os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
             with open(a.out, "w") as f:

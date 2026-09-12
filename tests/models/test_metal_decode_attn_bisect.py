@@ -285,6 +285,219 @@ def test_in_model_tiny_1k_no_prompt_ids_file(tmp_path):
     assert set(receipt["passes"]) == {"full", "expert_stub", "attn_stub"}
 
 
+# ---------------------------------------------------------------------------
+# --in-model --unfenced (window 94): the FIVE unfenced whole-token frame-wall
+# passes on the tiny FAKE full model (CPU).  Plumbing + attribution-identity
+# checks only -- the magnitudes are meaningless on CPU (the GPU window measures
+# the real in-situ frame walls); this proves all five passes run, the table's
+# fields are present, the derived attribution obeys its identities, and the stub
+# barrier flag actually gates the per-layer mx.eval(indices).
+# ---------------------------------------------------------------------------
+_UNFENCED_PASSES = ["full", "expert_stub", "attn_stub",
+                    "expert_stub_nobarrier", "small_stages_floor"]
+
+
+def test_zeroswitch_barrier_flag_shape_and_zeros():
+    """The expert stub returns zeros [n, top_k, dim] for both barrier settings, and
+    records the flag it was built with."""
+    x = mx.zeros((3, 4), dtype=mx.float32)
+    idx = mx.array([[0, 1], [2, 3], [1, 0]])
+    for keep in (False, True):
+        stub = _MOD._ZeroSwitch(keep_routing_barrier=keep)
+        assert stub.keep_routing_barrier is keep
+        out = stub(x, idx)
+        assert out.shape == (3, 2, 4)  # [n, top_k, dim]
+        assert float(mx.abs(out).sum().item()) == 0.0
+
+
+def test_zeroswitch_keep_barrier_gates_eval(monkeypatch):
+    """keep_routing_barrier=True fires exactly one mx.eval(indices) (the per-layer
+    routing host sync the streamed switch pays); =False fires none.  This is the
+    difference pass (2) vs pass (4) isolates as the ~40 host syncs/token."""
+    calls = {"n": 0}
+    real_eval = mx.eval
+
+    def counting_eval(*a, **k):
+        calls["n"] += 1
+        return real_eval(*a, **k)
+
+    monkeypatch.setattr(_MOD.mx, "eval", counting_eval)
+    x = mx.zeros((2, 4), dtype=mx.float32)
+    idx = mx.array([[0, 1], [2, 3]])
+
+    n0 = calls["n"]
+    _MOD._ZeroSwitch(keep_routing_barrier=True)(x, idx)
+    assert calls["n"] == n0 + 1, "barrier-kept stub must eval(indices) once"
+
+    n1 = calls["n"]
+    _MOD._ZeroSwitch(keep_routing_barrier=False)(x, idx)
+    assert calls["n"] == n1, "no-barrier stub must not eval(indices)"
+
+
+def test_apply_stub_barrier_flag_propagates():
+    """_apply_stub(experts, keep_routing_barrier=...) builds the stub with that flag
+    on every backbone layer, and restore puts the originals back."""
+    model, _args = _MOD._build_tiny_full_model(seed=1)
+    originals = [layer.mlp.switch_mlp for layer in model.layers]
+    saved = _MOD._apply_stub(model, "experts", keep_routing_barrier=True)
+    try:
+        for layer in model.layers:
+            assert isinstance(layer.mlp.switch_mlp, _MOD._ZeroSwitch)
+            assert layer.mlp.switch_mlp.keep_routing_barrier is True
+    finally:
+        _MOD._restore_stub(saved)
+    for layer, orig in zip(model.layers, originals):
+        assert layer.mlp.switch_mlp is orig
+
+
+@pytest.fixture(scope="module")
+def unfenced_receipt():
+    return _MOD.run_in_model_unfenced({
+        "tiny": True, "steps": 12, "warmup_steps": 4, "prompt_len": 40,
+        "ssd_bandwidth_gibs": 4.4,
+    })
+
+
+def test_unfenced_tiny_five_passes(unfenced_receipt):
+    r = unfenced_receipt
+    assert mx.default_device() == mx.cpu
+    assert r["device"] == "cpu" and r["tiny"] is True
+    assert r["mode"] == "in_model_unfenced"
+    assert set(r["passes"]) == set(_UNFENCED_PASSES)
+    assert r["steps"] == 12 and r["warmup_steps"] == 4
+    # every pass carries a real per-token mean/median + tok/s and the warmup-excluded
+    # measured-step count (12 - 4 = 8).
+    for key in _UNFENCED_PASSES:
+        s = r["passes"][key]["summary"]
+        assert isinstance(s["mean_ms_per_token"], float) and s["mean_ms_per_token"] > 0.0
+        assert isinstance(s["median_ms_per_token"], float) and s["median_ms_per_token"] > 0.0
+        assert isinstance(s["tok_s"], float) and s["tok_s"] > 0.0
+        assert s["steps"] == 12 and s["warmup_steps"] == 4 and s["measured_steps"] == 8
+        # tok/s is derived from the post-warmup mean ms/token
+        assert abs(s["tok_s"] - 1000.0 / s["mean_ms_per_token"]) < 1e-6
+
+
+def test_unfenced_tiny_pass1_token_sha(unfenced_receipt):
+    r = unfenced_receipt
+    import hashlib as _h
+    sha = r["token_ids_sha256"]
+    assert isinstance(sha, str) and len(sha) == 64
+    assert r["passes"]["full"]["token_ids_sha256"] == sha
+    # 1 prefill argmax token + `steps` decode tokens
+    assert r["n_token_ids"] == 1 + r["steps"]
+
+
+def test_unfenced_attribution_identities(unfenced_receipt):
+    """switch total (1)-(4) == SSD-bound (1)-(2) + sync (2)-(4); and the sum-of-parts
+    is exactly attention + switch-total + floor (residual = full - sum-of-parts)."""
+    a = unfenced_receipt["attribution"]
+    st = a["switch_total_ms_per_token"]
+    ssd = a["switch_ssd_bound_ms_per_token"]
+    syn = a["switch_sync_barrier_ms_per_token"]
+    assert abs(st - (ssd + syn)) < 1e-9, (st, ssd, syn)
+    attn = a["attention_ms_per_token"]
+    floor = a["small_stages_floor_ms_per_token"]
+    sop = a["sum_of_parts_ms_per_token"]
+    assert abs(sop - (attn + st + floor)) < 1e-9, (sop, attn, st, floor)
+    resid = a["unattributed_residual_ms_per_token"]
+    assert abs(resid - (a["full_ms_per_token"] - sop)) < 1e-9
+    # the deltas are computed against the per-pass means
+    def _mean(k):
+        return unfenced_receipt["passes"][k]["summary"]["mean_ms_per_token"]
+    assert abs(attn - (_mean("full") - _mean("attn_stub"))) < 1e-9
+    assert abs(st - (_mean("full") - _mean("expert_stub_nobarrier"))) < 1e-9
+    assert abs(ssd - (_mean("full") - _mean("expert_stub"))) < 1e-9
+    assert abs(syn - (_mean("expert_stub") - _mean("expert_stub_nobarrier"))) < 1e-9
+    assert a["ssd_bandwidth_gibs"] == 4.4
+
+
+def test_unfenced_tiny_stream_counters_absent_on_fake_model(unfenced_receipt):
+    """The tiny fake model has no expert-streaming runtime, so misses/bytes are None
+    (the block is omitted) -- and the SSD-bound independent estimate is then None,
+    while the measured (1)-(2) delta is still a real number."""
+    s = unfenced_receipt["passes"]["full"]["summary"]
+    assert s["misses_per_token"] is None
+    assert s["bytes_read_per_token"] is None
+    assert s["ssd_bound_estimate_ms"] is None
+    a = unfenced_receipt["attribution"]
+    assert a["ssd_bound_independent_estimate_ms"] is None
+    assert isinstance(a["switch_ssd_bound_ms_per_token"], float)
+
+
+def test_unfenced_warmup_guard_short_run():
+    """steps <= warmup_steps must not divide-by-empty: the summary falls back to all
+    steps (measured_steps == steps)."""
+    r = _MOD.run_in_model_unfenced({
+        "tiny": True, "steps": 3, "warmup_steps": 8, "prompt_len": 32,
+    })
+    for key in _UNFENCED_PASSES:
+        s = r["passes"][key]["summary"]
+        assert s["measured_steps"] == 3
+        assert isinstance(s["mean_ms_per_token"], float) and s["mean_ms_per_token"] > 0.0
+
+
+def test_unfenced_main_writes_json(tmp_path):
+    """main() --in-model --unfenced --tiny runs all five passes and writes a receipt."""
+    import json
+    out = tmp_path / "unfenced-tiny.json"
+    rc = _MOD.main([
+        "--in-model", "--unfenced", "--tiny",
+        "--context-tokens", "512",
+        "--in-model-steps", "6", "--warmup-steps", "2",
+        "--ssd-bandwidth-gibs", "3.0",
+        "--out", str(out),
+    ])
+    assert rc == 0
+    receipt = json.loads(out.read_text())
+    assert receipt["mode"] == "in_model_unfenced"
+    assert receipt["device"] == "cpu" and receipt["tiny"] is True
+    assert set(receipt["passes"]) == set(_UNFENCED_PASSES)
+    assert receipt["steps"] == 6 and receipt["warmup_steps"] == 2
+    assert receipt["ssd_bandwidth_gibs"] == 3.0
+    assert isinstance(receipt["token_ids_sha256"], str)
+
+
+def test_unfenced_cli_flags_parse():
+    """--unfenced / --warmup-steps / --ssd-bandwidth-gibs parse and reach the cfg."""
+    a = _MOD.build_parser().parse_args([
+        "--in-model", "--unfenced", "--gpu",
+        "--model", "/nonexistent/model", "--arms", "cell16k_ring",
+        "--context-tokens", "16384", "--memory-limit-gib", "60", "--max-kv", "17408",
+        "--in-model-steps", "64", "--warmup-steps", "8",
+        "--ssd-bandwidth-gibs", "4.4", "--utilization",
+    ])
+    assert a.unfenced is True
+    assert a.warmup_steps == 8
+    assert abs(a.ssd_bandwidth_gibs - 4.4) < 1e-9
+    cfg = _MOD._in_model_cfg(a)
+    assert cfg["unfenced"] is True
+    assert cfg["warmup_steps"] == 8
+    assert cfg["steps"] == 64
+    assert cfg["ssd_bandwidth_gibs"] == 4.4
+    assert cfg["arms"] == "cell16k_ring"
+
+
+def test_unfenced_tiny_utilization_plumbing(monkeypatch):
+    """--utilization runs a fresh (mocked) macmon sampler PER pass (single-use) and
+    the block lands on every pass + hoisted to the receipt top."""
+    monkeypatch.setenv("MTPLX_MACMON_BIN", "/nonexistent/macmon-w94-test")
+    r = _MOD.run_in_model_unfenced({
+        "tiny": True, "steps": 4, "warmup_steps": 1, "prompt_len": 32,
+        "utilization": True, "util_interval_ms": 10, "cooldown_s": 0.02,
+    })
+    assert set(r["passes"]) == set(_UNFENCED_PASSES)
+    for key in _UNFENCED_PASSES:
+        util = r["passes"][key]["utilization"]
+        assert isinstance(util, dict) and util.get("samples") == 0  # mocked -> 0 samples
+    assert r["utilization"] == r["passes"]["full"]["utilization"]
+    # cooldown runs before pass (1) only (matches the fenced full pass), and is
+    # hoisted to the receipt top; the mocked reader gives empty start/end readings.
+    cd = r["cooldown"]
+    assert isinstance(cd, dict) and cd["seconds"] == 0.02
+    assert r["passes"]["full"]["cooldown"] == cd
+    assert r["passes"]["attn_stub"]["cooldown"] is None  # stub passes reuse warm state
+
+
 def test_launcher_in_model_1k_argv_parses_and_resolves_prompt(monkeypatch, tmp_path):
     """The exact launch-window-35.sh step-1 in-model argv (T=1024, NO
     --prompt-ids-file) parses, and the no-ids prompt path resolves a real prompt
