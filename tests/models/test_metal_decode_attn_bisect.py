@@ -588,6 +588,35 @@ def test_attn_subops_cost_is_full_minus_stub(subops_receipt):
         assert abs(cost - (full - stubbed)) < 1e-9, (sub, cost, full, stubbed)
 
 
+def test_attn_subops_records_switch_workload_and_flags_token_change(subops_receipt):
+    """W97 review item 6: each pass records its switch workload (misses/bytes per
+    token + the route-stage hot counters) and its token sha; the attribution flags
+    any sub-op whose sha != full -- the zero-returning stubs (attn_core/qkv_proj/
+    out_proj) change routing so ``full - stub`` is contaminated, while the
+    byte-identical wo_a_dequant stub (it just precomputes the same dense weight) is
+    NOT flagged.  The route probe is off by default, so route_stage is None here."""
+    r = subops_receipt
+    for key in ["full", *_MOD._ATTN_SUBOPS]:
+        sw = r["passes"][key]["switch_workload"]
+        assert {"misses_per_token", "bytes_read_per_token", "hit_rate",
+                "route_stage", "route_probe_enabled"} <= set(sw)
+        assert sw["route_probe_enabled"] is False   # MTPLX_ROUTE_STAGE_PROBE unset
+        assert sw["route_stage"] is None            # so no per-pass hot-counter delta
+
+    subs = r["attribution"]["subops"]
+    # zero-returning stubs change the decoded tokens (different routing/misses).
+    for sub in ("qkv_proj", "attn_core", "out_proj"):
+        assert subs[sub]["token_sha_differs_from_full"] is True, sub
+    # wo_a_dequant returns the SAME dense weight the eager path computes -> tokens
+    # unchanged -> the one uncontaminated sub-op cost.
+    assert subs["wo_a_dequant"]["token_sha_differs_from_full"] is False
+    # every sub-op carries the switch delta keys (values may be None on the fake CPU
+    # model that has no expert-streaming runtime; the flag is the always-on signal).
+    for sub in _MOD._ATTN_SUBOPS:
+        assert set(subs[sub]["switch_delta"]) == {"d_misses_per_token", "d_bytes_read_per_token"}
+        assert isinstance(subs[sub]["token_sha_differs_from_full"], bool)
+
+
 def test_attn_subops_runs_with_compile_forced_off():
     """The sub-op microscope forces the attention compile tapes off for its passes
     (the tiny loader also sets it off), and the receipt records that it did so."""

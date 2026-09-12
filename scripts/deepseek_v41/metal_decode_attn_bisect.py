@@ -1571,13 +1571,30 @@ def print_in_model_unfenced(receipt: dict) -> None:
 #   qkv_proj      -- q down/up (wq_a,wq_b) + kv (wkv) projections zeroed.
 #   attn_core     -- the selected-key gather + QK^T + sink softmax + PV (the whole
 #                    _sparse_attend[_selected]) -> zeros.
-#   wo_a_dequant  -- _o_lora_dense_weight precomputed once and returned (the exact
-#                    MTPLX_DSV41_ATTN_WO_A_CACHE fix): full - this = the per-token
-#                    mx.dequantize(wo_a) cost.
+#   wo_a_dequant  -- _o_lora_dense_weight precomputed once and returned: full - this
+#                    = the per-token mx.dequantize(wo_a) DISPATCH cost.  NOTE (review
+#                    item 6): the stub returns the PRE-ASTYPE array -- with the
+#                    WO_A_CACHE lever off (the default here) _o_lora_dense_weight
+#                    returns the bf16 dequant, and _o_lora_down still runs
+#                    .astype(f32) EVERY token, so this stub is BLIND to the f32
+#                    astype (the ~10.7 GB/token write+read the WO_A_CACHE lever, which
+#                    caches the f32 array, also removes -- review item 1).  To bench
+#                    the whole wo_a fix (dequant + astype) arm MTPLX_DSV41_ATTN_WO_A_CACHE
+#                    on the arm instead of relying on this stub.
 #   out_proj      -- the whole output projection (grouped wo_a einsum + wo_b) zeroed
 #                    (includes the dequant); full - out_proj minus full - wo_a_dequant
 #                    isolates the einsum+wo_b from the dequant.
 #   rope          -- _rope_last (q rope + inverse output rope) -> identity.
+#
+# CONTAMINATION (review item 6): the zero-returning stubs (attn_core / qkv_proj /
+# out_proj, and the inherited W94 _ZeroAttn) CHANGE the decoded tokens, so a stubbed
+# pass routes DIFFERENT experts than full -> different misses / SSD bytes.  Since the
+# unfenced frame wall is switch/SSD dominated, ``full - <subop>`` then mixes the
+# sub-op's own cost with a changed switch workload.  Each pass therefore records its
+# switch workload (misses/bytes per token, + the route-stage hot counters under
+# MTPLX_ROUTE_STAGE_PROBE=1) and its token sha; the attribution flags any sub-op whose
+# sha != full and prints the switch delta beside its cost so a contaminated row is
+# visible, not silently credited to attention.
 #
 # Run with the attention compile tapes forced OFF: the compiled qkv/out tapes
 # evaluate their weight-array inputs (``_lin_arrays``/``_o_lora_dense_weight``) at
@@ -1586,6 +1603,13 @@ def print_in_model_unfenced(receipt: dict) -> None:
 # dispatch count is exactly what surfaces each sub-op's exposed host-encode.  The
 # 5-pass compiled arm still owns the absolute 291 ms; this locates where it sits.
 _ATTN_SUBOPS = ["qkv_proj", "attn_core", "wo_a_dequant", "out_proj", "rope"]
+
+# W97 (review item 6): the per-layer expert-switch hot-path route-probe events whose
+# per-pass delta attributes the switch workload (all_hit waves / split-route
+# admissions / eval_indices routing barriers).  Populated only under
+# MTPLX_ROUTE_STAGE_PROBE=1 (the probe adds per-bracket timing and would perturb the
+# unfenced wall, so it is off by default; the misses/bytes per token are always on).
+_ROUTE_STAGE_EVENTS = ("hot.all_hit", "hot.begin_split_route", "hot.eval_indices")
 
 
 def _apply_attn_subop_stub(model, which: str):
@@ -1654,20 +1678,52 @@ def run_in_model_attn_subops(cfg: dict) -> dict:
     def _run_pass(label):
         sampler = (ab._macmon().UtilizationSampler(interval_ms=util_interval_ms)
                    if util_on else None)
+        # W97 (review item 6): the sub-op stubs (attn_core/qkv_proj/out_proj return
+        # zeros) CHANGE the decoded tokens, so ``full - <subop>`` also folds in a
+        # changed expert-streaming workload (different routing -> different misses /
+        # SSD bytes; the unfenced frame wall is switch/SSD dominated).  Capture the
+        # route-stage hot counters (all_hit / split_route / eval_indices) around this
+        # pass so the switch workload is attributable -- best-effort, populated only
+        # under MTPLX_ROUTE_STAGE_PROBE=1 (the probe adds per-bracket timing, so it is
+        # off by default and would perturb the wall; the decode-scoped misses/bytes
+        # per token in the summary are the always-available switch signal).
+        try:
+            from mtplx import expert_route_probe as _rp
+            _rp_enabled = bool(getattr(_rp, "ENABLED", False))
+            _before = ({k: _rp.peek(k) for k in _ROUTE_STAGE_EVENTS}
+                       if _rp_enabled else None)
+        except Exception:
+            _rp, _rp_enabled, _before = None, False, None
         data = _unfenced_decode_pass(
             ab=ab, model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
             warmup_steps=warmup_steps, cooldown_s=0.0, util_sampler=sampler,
         )
+        route_stage = None
+        if _rp_enabled and _before is not None:
+            route_stage = {k: int(_rp.peek(k) - _before[k]) for k in _ROUTE_STAGE_EVENTS}
         util_summary = sampler.summarize() if sampler is not None else None
         if sampler is not None:
             print(f"[w97-subops] {label}: {sampler.census()}", flush=True)
+        summary = _unfenced_pass_summary(data, util_summary, ssd_bandwidth_gibs=ssd_bw)
         return {
             "label": label,
-            "summary": _unfenced_pass_summary(data, util_summary, ssd_bandwidth_gibs=ssd_bw),
+            "summary": summary,
             "utilization": util_summary,
             "token_ids_sha256": hashlib.sha256(
                 json.dumps(data["generated"]).encode()).hexdigest(),
             "n_token_ids": len(data["generated"]),
+            # The switch workload this pass actually ran (item 6): the decode-scoped
+            # miss/byte counters are the always-available signal; ``route_stage`` (the
+            # hot.all_hit / split_route / eval_indices deltas) is present only with the
+            # route probe armed.  full vs a stub differing here means ``full - stub``
+            # is contaminated by a changed switch/SSD workload, not pure attention.
+            "switch_workload": {
+                "misses_per_token": summary.get("misses_per_token"),
+                "bytes_read_per_token": summary.get("bytes_read_per_token"),
+                "hit_rate": summary.get("hit_rate"),
+                "route_stage": route_stage,
+                "route_probe_enabled": _rp_enabled,
+            },
         }
 
     # Force the attention compile tapes OFF for the whole sub-op microscope so every
@@ -1690,13 +1746,30 @@ def run_in_model_attn_subops(cfg: dict) -> dict:
         return (passes.get(key, {}).get("summary") or {}).get("mean_ms_per_token")
 
     full = _ms("full")
+    full_sha = passes.get("full", {}).get("token_ids_sha256")
+    full_sw = (passes.get("full", {}).get("switch_workload") or {})
+
+    def _dsw(sub_sw, key):
+        a, b = sub_sw.get(key), full_sw.get(key)
+        return (a - b) if isinstance(a, (int, float)) and isinstance(b, (int, float)) else None
+
     attribution = {"full_eager_ms_per_token": full, "subops": {}}
     for sub in _ATTN_SUBOPS:
         v = _ms(sub)
+        sub_sha = passes.get(sub, {}).get("token_ids_sha256")
+        sub_sw = (passes.get(sub, {}).get("switch_workload") or {})
+        # W97 (review item 6): the stub changed the tokens iff its sha != full's;
+        # when it did, the ``cost`` also includes a changed switch/SSD workload, so
+        # record the switch delta (misses/bytes per token) next to the cost.
         attribution["subops"][sub] = {
             "stubbed_ms_per_token": v,
             "cost_ms_per_token": (full - v) if isinstance(full, (int, float))
             and isinstance(v, (int, float)) else None,
+            "token_sha_differs_from_full": (sub_sha != full_sha),
+            "switch_delta": {
+                "d_misses_per_token": _dsw(sub_sw, "misses_per_token"),
+                "d_bytes_read_per_token": _dsw(sub_sw, "bytes_read_per_token"),
+            },
         }
 
     return {
@@ -1735,12 +1808,26 @@ def print_in_model_attn_subops(receipt: dict) -> None:
               + f"{_f(s.get('gpu_busy_pct'), '{:.0f}'):>8}"
               + f"{_f(s.get('gpu_freq_mhz'), '{:.0f}'):>8}")
     a = receipt["attribution"]
+    full_sha = (receipt["passes"].get("full") or {}).get("token_ids_sha256")
     print("\n-- within-attention sub-op cost (full - <subop stubbed>, ms/token) --")
-    print(f"  full (eager attention)   = {_f(a['full_eager_ms_per_token'], '{:.3f}')}")
+    print(f"  full (eager attention)   = {_f(a['full_eager_ms_per_token'], '{:.3f}')}"
+          f"   [token sha {str(full_sha)[:10]}]")
+    print("  cost / Δmiss/tok / Δbytes/tok vs full  (item 6: a stub that CHANGED the "
+          "tokens also changed the switch/SSD workload -> cost is contaminated)")
     for sub in _ATTN_SUBOPS:
-        print(f"  {sub:16s} cost = {_f(a['subops'][sub]['cost_ms_per_token'], '{:.3f}')}")
+        d = a["subops"][sub]
+        sw = d.get("switch_delta") or {}
+        changed = d.get("token_sha_differs_from_full")
+        flag = "  <-- TOKENS CHANGED: cost includes a changed switch workload" if changed else ""
+        print(f"  {sub:16s} cost = {_f(d['cost_ms_per_token'], '{:.3f}')}"
+              f"   Δmiss/tok={_f(sw.get('d_misses_per_token'), '{:+.2f}')}"
+              f"   Δbytes/tok={_f(sw.get('d_bytes_read_per_token'), '{:+.3e}')}"
+              f"{flag}")
     print("  (out_proj cost - wo_a_dequant cost = the grouped wo_a einsum + wo_b; "
           "K/V up-projection N/A -- this port is MLA-absorbed)")
+    print("  (wo_a_dequant stub returns the PRE-ASTYPE bf16 array, so its cost is the "
+          "per-token dequant DISPATCH only -- NOT the f32 astype; arm "
+          "MTPLX_DSV41_ATTN_WO_A_CACHE to bench the whole wo_a fix)")
 
 
 # ---------------------------------------------------------------------------
