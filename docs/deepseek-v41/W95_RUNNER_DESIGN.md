@@ -246,6 +246,33 @@ wasted read (evicted at lowest priority); a true-route expert the prefetch **mis
 demand read (identical to today). The gather always uses the **true** `indices`. So prefetch
 only warms the cache — **it never changes a result** (§4).
 
+**Demand-priority speculative-byte budget (W95f → W95g).** Speculation shares one drive with
+the demand reads, so a gate-oracle burst must not crowd demand off the SSD. The throttle
+lives in `prefetch_experts` and keys off a per-decode-token window (`speculative_bytes_read`
+/ `demand_bytes_read` deltas since the last token boundary, re-marked at each boundary and at
+`reset`). **W95f** capped *cumulative* speculative bytes at `budget × demand` with
+`budget = 0.5` under v2. That was wrong twice over: cumulatively it latched off for the life
+of the process after the first demand fallback (spec ≫ demand, never recovering — the reason
+W95f added the recovering window), and even per-token the `spec ≥ 0.5 × demand` form is
+algebraically `spec/(spec+demand) ≤ 1/3` with negative feedback — every *hidden* miss (a
+prefetch that paid off) never grows the demand denominator, so the denominator only shrinks
+relative to speculation. A real-runtime probe showed the first `prefetch_experts` call in a
+token issuing 4 ids and every later call skipping; simulated on the 40-layer cell it yields
+**~16–25 issued/token, far below the ~149/token** the §5 prefetch-coverage rows (r ≈
+0.65–0.75 at k = 12) imply.
+
+**W95g** replaces this with a per-token **share** `f` plus a **floor**: skip only when
+`spec_window > f × (spec_window + demand_window) + floor_records × record_bytes`. `f`
+(default **0.85** under v2) is the fraction of the token's *total* SSD bytes speculation may
+hold — an honest cap on drive share rather than a ratio-to-demand — and the floor (default
+**8 records**) means a token's first prefetch calls always issue even at zero demand, so
+speculation can never be latched off by one early call. `MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET`
+keeps its name but now sets `f`; **`0` disables the budget entirely, which every live window
+runs with right now** — so **no window has yet measured a live budget**. The receipt block
+prints `byte_budget` (f), `byte_floor_records`, `budget_skips` and `prefetch_calls`, so the
+first window to arm a non-zero share can read the skips/calls throttle fraction directly.
+`MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR` overrides the floor.
+
 ### 1.4 Eviction / promotion only at token boundaries
 
 Under the epoch (§1.2), no LRU eviction or protected-promotion happens *during* a token.
@@ -525,6 +552,55 @@ reference's by the same) so both plans size the identical `slots_per_layer`.
 planner — should be ~0 except at the boundary); decode hit rate first-64 vs steady (W87
 `cold_start`). One flush = one batched `mx.eval` (assert the "+1").
 
+#### 6.5.1 Definitions — prefetch hit accounting (W95g, review MEDIUM-2)
+
+One definition per metric, defined once. A committed ring record stays published
+across tokens, so `RoutePlan.published` re-lists it on every routing step that needs
+it; the two hit counters differ in whether a re-consumption of the *same* resident
+record is re-counted.
+
+- **`prefetch_issued`** — speculative reads started for the ring (records handed to
+  the ring that issued a read). The denominator of `prefetch_first_hit_rate`.
+- **`prefetch_hit_on_true_route`** (runner block; `hit_on_true_route` in the
+  `gate_prefetch` block) — the number of *consumptions* of a ring record by a true
+  route, counted **every** time (a record routed on N tokens counts N). Unchanged
+  from W93. Because a committed record commits once but can be consumed many times,
+  this **can exceed** the records committed/issued.
+- **`prefetch_hit_rate`** (runner block; `hit_rate` in `gate_prefetch`) —
+  `prefetch_hit_on_true_route / (prefetch_committed + prefetch_awaited_inflight)`.
+  Unchanged existing key; with the every-consumption numerator it **can exceed 1.0**
+  (the MEDIUM-2 finding). Retained for continuity — do not read it as a bounded rate.
+- **`prefetch_first_consumption_hits`** (runner; `first_consumption_hits` in
+  `gate_prefetch`) — *new.* Consumptions counted at most **once per prefetched
+  record**: a record's hit is counted the first routing step it is consumed and never
+  again until it is evicted/invalidated (which requires a re-commit, i.e. a fresh
+  `prefetch_issued`, to be consumable again).
+- **`prefetch_first_hit_rate`** (runner; `first_hit_rate` in `gate_prefetch`) —
+  *new.* `prefetch_first_consumption_hits / prefetch_issued`, **bounded [0, 1]** by
+  construction (each issued record yields at most one first-consumption hit). This is
+  the metric to read for prefetch precision; `prefetch_hit_rate` above is not bounded.
+
+The `gate_prefetch` block reports `first_consumption_hits` / `first_hit_rate` per
+layer as well, and its `census` line prints `first_hit=<n> (rate <r>)`.
+
+#### 6.5.2 Definitions — verify-phase prefetch gate stamp (W95g, review LOW-1)
+
+The runner block carries a **`verify_prefetch`** sub-block so a receipt self-describes
+the DSpark verify-phase prefetch gate (the verify predicts the per-row UNION of the
+next layer's gate one layer ahead, `_maybe_stash_gate_prefetch`), defined once:
+
+- **`verify_prefetch.enabled`** — the gate will speculate on a verify: `v2` armed AND
+  predict width > 0 AND a ring is configured (`prefetch_slots > 0`).
+- **`verify_prefetch.max_rows`** — `_RUNNER_V2_VERIFY_MAX_ROWS`; the verify predicts
+  only on a DECODE-phase batch of at most this many rows (never a prefill of any T).
+- **`verify_prefetch.k`** / **`verify_prefetch.margin`** — the per-row predict width
+  and confidence-gate margin; equal to the AR `prefetch_k` / `prefetch_margin` by
+  construction (the verify reuses the resolved AR values).
+- **`verify_prefetch.byte_budget`** / **`verify_prefetch.byte_floor_records`** — the
+  verify shares the one speculative-byte throttle with the AR path, so these mirror
+  the runner-level `byte_budget` / `byte_floor_records`; stamped here so the verify
+  gate is fully described in one place.
+
 ### 6.6 Integration/sequencing note (must resolve before coding)
 
 The four W93 lanes (A/B/C/D) are committed on `a5e162ee5` — a **rewrite** of
@@ -592,3 +668,25 @@ of real kernel work that drains during them); **60–110 ms** is serialized SSD 
 serialization (D2), and stops discarding 68% of the bytes (D5) — these are the recoverable
 ms behind the AR 2.2 → ~4–6 tok/s and the DSpark verify collapse. The kernel work and the
 compulsory bytes are the floor (§7).
+
+---
+
+## Review-fix changelog (W95F/W95G, adversarial re-review — MERGE WITH FIXES)
+
+- **HIGH-1 (byte budget throttling).** Speculative-byte budget = per-token share `f`
+  with a floor (default `f=0.85`, floor 8 records; `MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET=0`
+  disables). See the §1.3 budget paragraph. (b9d3b0a3f)
+- **MEDIUM-1 (reset window).** `reset()` zeroes the demand/speculative byte window and
+  the budget-skip / prefetch-call counters, then re-marks the window. (e8e79da97)
+- **MEDIUM-2 (hit rate > 1.0).** `prefetch_hit_on_true_route` counts every consumption
+  of a resident ring record, so `prefetch_hit_rate` could exceed 1.0. Added a
+  first-consumption counter (`prefetch_first_consumption_hits`, each prefetched record
+  counted at most once) and a bounded [0,1] `prefetch_first_hit_rate = first-consumption
+  hits / prefetch_issued`, on both the runner and `gate_prefetch` receipt blocks (and
+  per-layer). The existing `prefetch_hit_rate` / `prefetch_hit_on_true_route` keys are
+  kept unchanged for continuity. Definitions in §6.5.1.
+- **LOW-1 (receipt not self-describing).** The runner receipt now stamps a
+  `verify_prefetch` sub-block — the verify-phase prefetch gate enabled/disabled, its
+  row bound, and its width/margin/byte-budget values — alongside the existing runner
+  counters, so a receipt fully describes what the verify speculated. Definitions in
+  §6.5.2.

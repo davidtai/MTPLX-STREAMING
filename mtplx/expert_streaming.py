@@ -81,6 +81,15 @@ class RoutePlan:
     # ``hit_on_true_route`` distinctly from the persistent-tier hits it is folded
     # into. Empty on every non-ring path (byte-identical to the pre-W93 plan).
     prefetch_hits: tuple[int, ...] = ()
+    # W95g (review MEDIUM-2): the subset of ``prefetch_hits`` this route consumes
+    # for the FIRST time -- ring entries not yet marked used since they were
+    # committed. ``prefetch_hits`` re-lists a resident ring record on every token
+    # that routes it (so ``prefetch_hit_on_true_route`` counts every consumption
+    # and can exceed the number of records committed/issued); ``prefetch_first_hits``
+    # counts each prefetched record's hit AT MOST ONCE, giving the bounded [0,1]
+    # ``prefetch_first_hit_rate = first-consumption hits / prefetch_issued``. Empty
+    # on every non-ring path.
+    prefetch_first_hits: tuple[int, ...] = ()
 
 
 class RoutePolicyTxn:
@@ -163,6 +172,14 @@ class CacheCounters:
     prefetch_wasted: int = 0
     prefetch_awaited_inflight: int = 0
     prefetch_bytes: int = 0
+    # W95g (review MEDIUM-2): first-consumption prefetch hits. ``hit_on_true_route``
+    # accrues ``len(plan.prefetch_hits)`` on EVERY route, so a resident ring record
+    # re-consumed across N tokens is counted N times and ``hit_on_true_route`` can
+    # exceed the records committed/issued (an unbounded rate). This accrues
+    # ``len(plan.prefetch_first_hits)`` -- each prefetched record's hit at most once
+    # -- and is the numerator of the bounded ``prefetch_first_hit_rate`` (over
+    # ``prefetch_issued``).
+    prefetch_first_consumption_hits: int = 0
 
     def observe(self, plan: RoutePlan, *, expert_record_bytes: int) -> None:
         expert_record_bytes = _integer(
@@ -185,7 +202,11 @@ class CacheCounters:
         self.scan_inserts += plan.scan_inserts
         self.promotions += plan.promotions
         # W93: a prefetch-ring commit consumed by this true route (unique experts).
+        # Every consumption counts (can exceed committed/issued -- see the field doc).
         self.prefetch_hit_on_true_route += len(plan.prefetch_hits)
+        # W95g (review MEDIUM-2): only FIRST consumptions -- each prefetched record's
+        # hit at most once -- so first-consumption hits / prefetch_issued is <= 1.
+        self.prefetch_first_consumption_hits += len(plan.prefetch_first_hits)
 
     @property
     def hit_rate(self) -> float:
@@ -217,6 +238,7 @@ class CacheCounters:
             "prefetch_wasted": self.prefetch_wasted,
             "prefetch_awaited_inflight": self.prefetch_awaited_inflight,
             "prefetch_bytes": self.prefetch_bytes,
+            "prefetch_first_consumption_hits": self.prefetch_first_consumption_hits,
         }
 
 
@@ -459,6 +481,23 @@ class GlobalPrefetchRing:
         layer = int(layer)
         for expert in experts:
             self._used.add((layer, int(expert)))
+
+    def first_consumption(self, layer: int, experts: Iterable[int]) -> frozenset[int]:
+        """W95g (review MEDIUM-2): of ``experts`` (already published/hit-eligible
+        for ``layer``), those this layer has NOT yet consumed as a hit since they
+        were committed -- i.e. not in ``_used``. Non-mutating; call :meth:`mark_used`
+        to record the consumption. A committed entry stays published across tokens,
+        so :meth:`published` re-lists it every routing step; this bounds the hit to
+        the FIRST such step. ``_used`` is cleared for a key only on eviction /
+        invalidation (which drop it from ``_key_to_slot`` too), so a record must be
+        re-committed -- and thus re-issued -- to be first-consumed again."""
+
+        layer = int(layer)
+        return frozenset(
+            int(expert)
+            for expert in experts
+            if (layer, int(expert)) not in self._used
+        )
 
     def consume_wasted(self) -> int:
         """Return and zero the TOTAL wasted-read count across all layers.
@@ -1231,8 +1270,14 @@ class LayerExpertSlotBank:
         for expert in prefetch_hits:
             resolved[expert] = ring_published[expert]
         # Mark these ring commits consumed, so a later round-robin eviction is not
-        # miscounted as wasted.
+        # miscounted as wasted. W95g (review MEDIUM-2): capture the FIRST-consumption
+        # subset (not yet marked used) BEFORE marking, so a resident ring record
+        # re-consumed on a later token counts a hit at most once.
+        prefetch_first_hits: frozenset[int] = frozenset()
         if prefetch_hits and self._prefetch_ring is not None:
+            prefetch_first_hits = self._prefetch_ring.first_consumption(
+                self._layer_id, prefetch_hits
+            )
             self._prefetch_ring.mark_used(self._layer_id, prefetch_hits)
         hit_set |= prefetch_hits
         loads: list[SlotLoad] = []
@@ -1386,6 +1431,7 @@ class LayerExpertSlotBank:
             scan_inserts=scan_inserts,
             promotions=promotions,
             prefetch_hits=tuple(prefetch_hits),
+            prefetch_first_hits=tuple(prefetch_first_hits),
         )
 
     def plan_transaction(

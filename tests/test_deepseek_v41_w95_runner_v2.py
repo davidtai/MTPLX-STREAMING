@@ -288,7 +288,9 @@ def test_runner_v2_receipt_block(tmp_path):
         assert block["expert_misses"] >= 1  # experts 6,7 were streamed
         assert block["prefetch_k"] == _RUNNER_V2_GATE_PREFETCH_K  # 6 (retuned)
         assert block["prefetch_margin"] == _RUNNER_V2_GATE_PREFETCH_MARGIN  # -0.05
-        assert block["byte_budget"] == 0.5  # v2 default demand-priority budget
+        assert block["byte_budget"] == 0.85  # v2 default speculative SHARE f (W95g)
+        assert block["byte_floor_records"] == 8  # W95g default floor (records)
+        assert "prefetch_calls" in block  # W95g: budget_skips/prefetch_calls ratio
     finally:
         rt_v2.close()
 
@@ -623,6 +625,9 @@ def test_v2_byte_budget_recovers_after_latch(tmp_path):
         layer = spec.routed_layer_start
         rec = rt._record_bytes_for_layer(layer)
         # emulate one fallback then heavy speculation: demand = 1 record, spec = 10x.
+        # W95g: drop the floor so the SHARE alone decides (10rec > 0.85*11rec -> skip);
+        # the recovery behaviour under test is independent of the floor.
+        rt._prefetch_byte_floor_records = 0
         rt.demand_bytes_read = rec
         rt.speculative_bytes_read = 10 * rec
         skips0 = rt._prefetch_budget_skips
@@ -641,6 +646,100 @@ def test_v2_byte_budget_recovers_after_latch(tmp_path):
         assert issued > 0, "budget stayed latched after a decode-token boundary"
     finally:
         rt.close()
+
+
+def test_v2_reset_zeros_byte_window_and_skips(tmp_path):
+    """W95g (MEDIUM-1): reset() zeros demand_bytes_read / speculative_bytes_read /
+    budget_skips (and re-marks the byte window) alongside the counters it already
+    rebuilt.  At HEAD they stayed cumulative, so ``_runner_snapshot`` divided bytes
+    read across the AR pass + prefill by the POST-reset decode-step count -- the
+    DSpark block's per-token figures folded in the earlier phases.  After reset the
+    runner block reports 0/0/0."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        layer = spec.routed_layer_start
+        rec = rt._record_bytes_for_layer(layer)
+        # real demand bytes (cold-miss route) + real speculative bytes (a prefetch).
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [8, 9])
+        _REAL_EVAL(_switch(rt, spec)(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        rt.prefetch_experts(layer, [10, 11])
+        _settle_prefetch(rt)
+        # force one budget skip so _prefetch_budget_skips is non-zero.
+        rt._prefetch_byte_floor_records = 0
+        rt._demand_bytes_at_token_start = 0
+        rt._speculative_bytes_at_token_start = 0
+        rt.speculative_bytes_read = 100 * rec
+        assert rt.prefetch_experts(layer, [12, 13]) == 0
+        before = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        assert before["demand_bytes_read"] > 0
+        assert before["speculative_bytes_read"] > 0
+        assert before["budget_skips"] > 0
+
+        rt.reset()
+
+        after = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        assert after["demand_bytes_read"] == 0
+        assert after["speculative_bytes_read"] == 0
+        assert after["budget_skips"] == 0
+    finally:
+        rt.close()
+
+
+def test_v2_byte_budget_share_with_floor(tmp_path):
+    """W95g (HIGH-1): the speculative-byte budget is a per-token SHARE with a floor,
+    not a cumulative spec>=(0.5 x demand) cap.  With f=0.85 and an 8-record floor,
+    four prefetch calls of 4/2/2/2 ids against a 3-record demand window all issue
+    (10 speculative reads, ZERO budget skips) -- the old rule (spec/(spec+demand) <=
+    1/3, negative feedback) let only the first call issue and skipped the rest. A
+    tight share (0.1) with a zero floor still skips once speculation dominates."""
+    rt, spec = _open_runtime(
+        tmp_path / "share", runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=16,
+    )
+    try:
+        layer = spec.routed_layer_start
+        rec = rt._record_bytes_for_layer(layer)
+        assert rt._prefetch_byte_budget == 0.85  # v2 default share f
+        assert rt._prefetch_byte_floor_records == 8  # v2 default floor
+        # a 3-record demand window for this token; the marks sit at 0 (no route yet).
+        rt._demand_bytes_at_token_start = 0
+        rt._speculative_bytes_at_token_start = 0
+        rt.demand_bytes_read = 3 * rec
+        skips0 = rt._prefetch_budget_skips
+        total = 0
+        for ids in ([4, 5, 6, 7], [8, 9], [10, 11], [12, 13]):
+            issued = rt.prefetch_experts(layer, ids)
+            _settle_prefetch(rt)  # speculative_bytes_read grows on completion
+            total += issued
+        assert total == 10, total
+        assert rt._prefetch_budget_skips == skips0  # zero skips at the default share
+        assert rt._prefetch_calls >= 4  # every call reached the budget decision
+    finally:
+        rt.close()
+
+    rt2, spec2 = _open_runtime(
+        tmp_path / "tight", runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        layer = spec2.routed_layer_start
+        rec = rt2._record_bytes_for_layer(layer)
+        rt2._prefetch_byte_budget = 0.1  # tight share
+        rt2._prefetch_byte_floor_records = 0  # no floor
+        rt2._demand_bytes_at_token_start = 0
+        rt2._speculative_bytes_at_token_start = 0
+        rt2.demand_bytes_read = rec
+        rt2.speculative_bytes_read = 10 * rec  # spec already dominates
+        skips0 = rt2._prefetch_budget_skips
+        # 10rec > 0.1*(10rec + 1rec) + 0 = 1.1rec  ->  skip.
+        assert rt2.prefetch_experts(layer, [8, 9]) == 0
+        assert rt2._prefetch_budget_skips == skips0 + 1
+    finally:
+        rt2.close()
 
 
 def test_v2_receipt_blocks_reach_harness_and_daemon(tmp_path):
@@ -729,4 +828,181 @@ def test_v2_receipt_survives_malformed_margin(monkeypatch, tmp_path):
         # the served daemon's stream-counter source must survive it too.
         assert rt.snapshot()["runner"]["prefetch_margin"] == _RUNNER_V2_GATE_PREFETCH_MARGIN
     finally:
+        rt.close()
+
+
+# ---------------------------------------------------------------------------
+# E. review MEDIUM-2: first-consumption prefetch hit rate (bounded [0,1])
+# ---------------------------------------------------------------------------
+def _warm_ring_two_records(tmp_path):
+    """Open a v2 runtime, warm two persistent residents, then issue + settle two
+    speculative reads (experts 6, 7) so a later route of {6, 7} is a RING hit.
+    Returns (rt, spec, layer)."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, resident_slots=2, transient=8, prefetch=6
+    )
+    _route_once(rt, spec, [0, 1])                       # warm two pool residents
+    layer = spec.routed_layer_start
+    rt.prefetch_experts(layer, [6, 7])                  # issue two speculative reads
+    _settle_prefetch(rt)
+    return rt, spec, layer
+
+
+def test_v2_prefetch_first_hit_rate_bounded_under_repeat(tmp_path):
+    """Review MEDIUM-2: ``prefetch_hit_on_true_route`` counts EVERY consumption of a
+    prefetched record, so routing the same two ring-resident experts N times makes
+    the every-consumption ``prefetch_hit_rate`` (hit / committed+awaited) climb well
+    past 1.0.  The added first-consumption counter counts each record's hit AT MOST
+    ONCE, so ``prefetch_first_hit_rate`` (first-consumption hits / records issued)
+    stays in [0, 1] no matter how often the same record is re-consumed."""
+    rt, spec, _ = _warm_ring_two_records(tmp_path)
+    try:
+        sw = _switch(rt, spec)
+        N = 5
+        for _ in range(N):
+            x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+            _REAL_EVAL(sw(x, idx))                      # ring hit on {6, 7}
+            rt.flush_deferred_slot_releases(evaluate=True)
+        c = rt.counters
+        # every-consumption numerator grew with N (2 records x N routes)...
+        assert c.prefetch_hit_on_true_route == 2 * N
+        # ...but first-consumption counts each of the 2 records exactly once.
+        assert c.prefetch_first_consumption_hits == 2
+        assert c.prefetch_first_consumption_hits <= c.prefetch_issued  # bound holds
+        assert c.prefetch_hit_on_true_route > c.prefetch_first_consumption_hits
+
+        block = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        # the OLD key is the MEDIUM-2 pathology -- it exceeds 1.0 here (kept as-is)...
+        assert block["prefetch_hit_rate"] > 1.0
+        # ...the NEW key is bounded [0, 1] by construction.
+        assert 0.0 <= block["prefetch_first_hit_rate"] <= 1.0
+        assert block["prefetch_first_hit_rate"] == 1.0        # 2 first-hits / 2 issued
+        # the gate_prefetch block carries the same fix.
+        gp = rt.resource_telemetry_snapshot(mx_module=mx)["gate_prefetch"]
+        assert gp["hit_rate"] > 1.0
+        assert 0.0 <= gp["first_hit_rate"] <= 1.0
+    finally:
+        rt.close()
+
+
+def test_v2_prefetch_first_consumption_counted_once(tmp_path):
+    """First-consumption counting: the first route of a ring-resident record bumps
+    ``prefetch_first_consumption_hits``; every LATER route of the SAME resident
+    record bumps only the every-consumption ``prefetch_hit_on_true_route`` and
+    leaves the first-consumption counter unchanged."""
+    rt, spec, _ = _warm_ring_two_records(tmp_path)
+    try:
+        sw = _switch(rt, spec)
+        # first consumption of {6, 7}.
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+        _REAL_EVAL(sw(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        first_after_1 = rt.counters.prefetch_first_consumption_hits
+        every_after_1 = rt.counters.prefetch_hit_on_true_route
+        assert first_after_1 == 2          # both records first-consumed once
+        assert every_after_1 == 2
+
+        # second consumption of the SAME records: every-consumption grows,
+        # first-consumption does NOT (the record was already marked used).
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+        _REAL_EVAL(sw(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+        assert rt.counters.prefetch_first_consumption_hits == first_after_1  # unchanged
+        assert rt.counters.prefetch_hit_on_true_route == every_after_1 + 2   # grew
+    finally:
+        rt.close()
+
+
+def test_v2_receipt_has_first_hit_stamps(tmp_path):
+    """The runner and gate_prefetch receipt blocks (and the served daemon's
+    stream-counter passthrough) carry the review MEDIUM-2 additions -- the
+    first-consumption hit counter and the bounded [0, 1] first-hit rate -- as NEW
+    keys alongside the unchanged every-consumption ``hit_rate``."""
+    from mtplx.serve_stream_counters import snapshot_stream_counters
+
+    rt, spec, _ = _warm_ring_two_records(tmp_path)
+    try:
+        x, idx = _inputs(1, spec.top_k, spec.hidden_size, [6, 7])
+        _REAL_EVAL(_switch(rt, spec)(x, idx))
+        rt.flush_deferred_slot_releases(evaluate=True)
+
+        snap = rt.resource_telemetry_snapshot(mx_module=mx)
+        runner = snap["runner"]
+        for key in ("prefetch_first_consumption_hits", "prefetch_first_hit_rate"):
+            assert key in runner, f"runner block missing {key}"
+        assert "prefetch_hit_rate" in runner  # old key kept (distinct semantics)
+        assert 0.0 <= runner["prefetch_first_hit_rate"] <= 1.0
+
+        gp = snap["gate_prefetch"]
+        for key in ("first_consumption_hits", "first_hit_rate"):
+            assert key in gp, f"gate_prefetch block missing {key}"
+        assert "hit_rate" in gp  # old key kept
+        assert 0.0 <= gp["first_hit_rate"] <= 1.0
+        assert "first_hit=" in gp["census"]  # self-describing census line
+
+        # the daemon's stream-counter path surfaces the new keys on both blocks.
+        ssc = snapshot_stream_counters(rt)
+        assert "prefetch_first_hit_rate" in ssc["runner"]
+        assert "first_hit_rate" in ssc["gate_prefetch"]
+    finally:
+        rt.close()
+
+
+# ---------------------------------------------------------------------------
+# F. review LOW-1: verify-phase prefetch gate stamp (self-describing receipt)
+# ---------------------------------------------------------------------------
+def test_v2_receipt_stamps_verify_prefetch_gate(tmp_path):
+    """Review LOW-1: the runner receipt carries a ``verify_prefetch`` sub-block --
+    the DSpark verify-phase prefetch gate enabled/disabled, its row bound, and its
+    width / margin / speculative-byte-budget values -- so a receipt self-describes
+    what the verify speculated.  It reuses the AR width/margin and shares the AR
+    speculative-byte throttle, so those mirror the runner-level keys."""
+    from mtplx.serve_stream_counters import snapshot_stream_counters
+    from mtplx.models.deepseek_v41 import _RUNNER_V2_VERIFY_MAX_ROWS
+
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, resident_slots=2, transient=8, prefetch=6
+    )
+    try:
+        block = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        assert "verify_prefetch" in block, "runner block missing verify_prefetch"
+        vp = block["verify_prefetch"]
+        for key in (
+            "enabled", "max_rows", "k", "margin", "byte_budget",
+            "byte_floor_records",
+        ):
+            assert key in vp, f"verify_prefetch missing {key}"
+        # v2 armed + width>0 + ring present => the verify gate speculates.
+        assert vp["enabled"] is True
+        assert vp["max_rows"] == _RUNNER_V2_VERIFY_MAX_ROWS
+        # the verify reuses the AR width / margin and shares the byte throttle.
+        assert vp["k"] == block["prefetch_k"]
+        assert vp["margin"] == block["prefetch_margin"]
+        assert vp["byte_budget"] == block["byte_budget"]
+        assert vp["byte_floor_records"] == block["byte_floor_records"]
+
+        # the served daemon's stream-counter path carries it too.
+        ssc = snapshot_stream_counters(rt)
+        assert "verify_prefetch" in ssc["runner"]
+        assert ssc["runner"]["verify_prefetch"]["enabled"] is True
+    finally:
+        rt.close()
+
+
+def test_v2_verify_prefetch_disabled_when_width_zero(tmp_path):
+    """``verify_prefetch.enabled`` reflects the resolved gate: an explicit
+    ``MTPLX_DSV41_GATE_PREFETCH=0`` under v2 resolves width 0, so the verify gate
+    cannot speculate and the stamp reports disabled -- the receipt still describes
+    the (off) gate rather than omitting it."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, resident_slots=2, transient=8, prefetch=6
+    )
+    try:
+        os.environ["MTPLX_DSV41_GATE_PREFETCH"] = "0"   # explicit width 0 wins
+        block = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        vp = block["verify_prefetch"]
+        assert vp["k"] == 0
+        assert vp["enabled"] is False
+    finally:
+        os.environ.pop("MTPLX_DSV41_GATE_PREFETCH", None)
         rt.close()

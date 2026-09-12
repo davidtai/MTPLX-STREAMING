@@ -2139,13 +2139,20 @@ class ExpertStreamingRuntime:
         # route had to stream it on the demand path instead.
         self.speculative_bytes_read = 0
         self.demand_bytes_read = 0
-        # W95 retune: strict demand priority via a cumulative speculative-byte
-        # BUDGET. Window 39: k=12 pushed the drive to 70% busy (speculative
-        # contending with demand -> net -6%). Cap cumulative speculative bytes at
-        # (budget x cumulative demand bytes); ``prefetch_experts`` skips issuing
-        # once exceeded, so demand reads always win the drive.
-        # MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET overrides; default 0.5 under the v2
-        # runner, else 0.0 (no budget -- the pre-retune / GATE_PREFETCH-only path).
+        # W95g (HIGH-1 re-review): strict demand priority via a per-token
+        # speculative SHARE with a floor -- NOT a cumulative spec<=(budget x demand)
+        # cap. The old rule (budget 0.5, cumulative) combined with the recovering
+        # window and the negative feedback of every hidden miss shrinking the demand
+        # denominator settled to spec/(spec+demand) <= 1/3, so a real-runtime probe
+        # showed only the first call in a token issuing and every later call
+        # skipped, throttling to ~16-25 issued/token vs the ~149 the design cost
+        # model (§5) needs. The rule is now: skip only when this token's speculative
+        # bytes exceed a SHARE ``f`` of the token's total (spec+demand) SSD bytes,
+        # PLUS a floor of ``floor_records`` records so early speculation (small or
+        # zero demand) is never throttled. ``MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET``
+        # keeps its name but now sets the share ``f``; 0 disables the budget
+        # entirely (what the live windows use right now). Default f = 0.85 under the
+        # v2 runner, else 0.0 (no budget -- the GATE_PREFETCH-only path).
         _budget_raw = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET")
         if _budget_raw is not None:
             try:
@@ -2153,10 +2160,25 @@ class ExpertStreamingRuntime:
             except (TypeError, ValueError):
                 self._prefetch_byte_budget = 0.0
         elif os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
-            self._prefetch_byte_budget = 0.5
+            self._prefetch_byte_budget = 0.85
         else:
             self._prefetch_byte_budget = 0.0
+        # W95g: the floor (in expert records) below which speculation is never
+        # throttled regardless of the share -- so a token's first prefetch calls
+        # always issue. Env-overridable (MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR);
+        # default 8 records.
+        _floor_raw = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR")
+        if _floor_raw is not None:
+            try:
+                self._prefetch_byte_floor_records = max(0, int(_floor_raw))
+            except (TypeError, ValueError):
+                self._prefetch_byte_floor_records = 8
+        else:
+            self._prefetch_byte_floor_records = 8
         self._prefetch_budget_skips = 0
+        # W95g: prefetch_experts calls that reached the budget decision, so the
+        # receipt exposes budget_skips / prefetch_calls (the visible throttle ratio).
+        self._prefetch_calls = 0
         # W95f: the speculative-byte BUDGET is a RECOVERING per-decode-token window,
         # not a cumulative-since-open latch. ``demand_bytes_read`` and
         # ``speculative_bytes_read`` stay cumulative (the receipt reports them and
@@ -4220,34 +4242,40 @@ class ExpertStreamingRuntime:
         executor = self._prefetch_executor
         if executor is None:
             return 0
-        # W95 retune: strict demand priority. Skip speculation once this token's
-        # speculative bytes reach (budget x this token's demand bytes) -- so a
-        # gate-oracle burst can never crowd the drive out of demand reads (window
-        # 39: k=12 -> 70% busy, net -6%). Cheap counter read; skipped calls do not
-        # drain other layers' completions, but a later within-budget call does, and
-        # the budget is exceeded only while speculation is already heavy (exactly
-        # when backing off is correct). Off (budget 0) -> pre-retune behaviour.
+        # W95g (HIGH-1 re-review): per-token speculative SHARE with a floor (see the
+        # __init__ budget note). Skip only when this token's speculative bytes exceed
+        # a share ``f`` of the token's total (spec+demand) SSD bytes PLUS a floor of
+        # ``floor_records`` records -- so a token's first prefetch calls always issue
+        # (small/zero demand no longer latches speculation off after one call), while
+        # a sustained speculative burst that dominates the drive still backs off. The
+        # previous rule (spec >= budget x demand) settled to spec/(spec+demand) <= 1/3
+        # -- every hidden miss shrank the demand denominator -- so a probe issued 4 on
+        # the first call and skipped every later one, ~16-25 issued/token vs the ~149
+        # the design table needs. ``prefetch_calls`` counts every call reaching this
+        # decision so budget_skips/prefetch_calls is the visible throttle fraction.
+        # Off (share 0) -> no budget (what the live windows use).
         #
-        # W95f: compare the RECOVERING per-decode-token window (bytes since the last
-        # token boundary), not the cumulative-since-open totals. The demand
-        # denominator now advances on every cold miss (plan site), and the marks
-        # re-snapshot at each token boundary (``_observe_cold_start_unlocked``), so a
-        # token that ran speculation ahead backs off for the rest of THAT token
-        # while the NEXT token issues again. At HEAD the cumulative form latched off
-        # for the life of the process after the first fallback (spec >> demand, no
-        # reset). The ``> 0`` guard still short-circuits before this token's first
-        # demand miss -- correct: nothing to prioritise yet, and it cannot latch.
+        # W95f: the windows are RECOVERING per-decode-token deltas (bytes since the
+        # last token boundary), not cumulative-since-open. The demand denominator
+        # advances on every cold miss (plan site), and the marks re-snapshot at each
+        # token boundary (``_observe_cold_start_unlocked``) / at ``reset``, so a token
+        # that ran speculation ahead races demand afresh next token; the budget can
+        # never latch off for the life of the process.
+        self._prefetch_calls += 1
         _demand_window = self.demand_bytes_read - self._demand_bytes_at_token_start
         _spec_window = (
             self.speculative_bytes_read - self._speculative_bytes_at_token_start
         )
-        if (
-            self._prefetch_byte_budget > 0.0
-            and _demand_window > 0
-            and _spec_window >= self._prefetch_byte_budget * _demand_window
-        ):
-            self._prefetch_budget_skips += 1
-            return 0
+        if self._prefetch_byte_budget > 0.0:
+            _record_bytes = self._record_bytes_for_layer(layer)
+            _floor_bytes = self._prefetch_byte_floor_records * _record_bytes
+            _share_cap = (
+                self._prefetch_byte_budget * (_spec_window + _demand_window)
+                + _floor_bytes
+            )
+            if _spec_window > _share_cap:
+                self._prefetch_budget_skips += 1
+                return 0
         # W93 HIGH-2 (self-starving ring): a speculative read that settles AFTER
         # its own layer's reconcile stays queued as an unapplied completion, and
         # its ring slot stays inflight (so unrecyclable) until that layer is
@@ -4565,9 +4593,17 @@ class ExpertStreamingRuntime:
                 self._steady_decode_hits = 0
                 self._steady_decode_requests = 0
                 self._saw_decode_since_prefill = False
-                # W95f: demand/speculative byte totals are cumulative-since-open (not
-                # reset here), so re-mark the budget window origin to the current
-                # totals -> an empty window right after reset.
+                # W95g (MEDIUM-1): zero the demand/speculative byte totals and the
+                # budget-skip / prefetch-call counters HERE, matching ``counters``.
+                # Leaving them cumulative made ``_runner_snapshot`` divide bytes
+                # accrued across the AR pass + prefill by the post-reset decode step
+                # count, so the DSpark block's per-token figures folded in the prior
+                # phases. Then re-mark the budget window origin (now 0) -> an empty
+                # window right after reset.
+                self.demand_bytes_read = 0
+                self.speculative_bytes_read = 0
+                self._prefetch_budget_skips = 0
+                self._prefetch_calls = 0
                 self._snapshot_prefetch_byte_window()
             if self.config.trace_routes:
                 with self._route_trace_lock:
@@ -4796,16 +4832,25 @@ class ExpertStreamingRuntime:
         # import keeps this low-level module free of the deepseek_v41 import cycle
         # (see the single_slot_pool note in ``open``); a resolver failure falls back
         # to the v2 defaults rather than dropping the receipt.
+        # W95g (review LOW-1): also resolve the DSpark verify-phase prefetch gate so
+        # the receipt stamps whether the verify speculates and its row bound -- a
+        # self-describing receipt (the verify shares the AR width/margin and the
+        # speculative-byte throttle, stamped in ``verify_prefetch`` below).
         try:
             from mtplx.models.deepseek_v41 import (
                 _resolve_gate_prefetch_k,
                 _resolve_gate_prefetch_margin,
+                _runner_v2_enabled,
+                _RUNNER_V2_VERIFY_MAX_ROWS,
             )
 
             _k_resolved = int(_resolve_gate_prefetch_k())
             _margin_resolved = float(_resolve_gate_prefetch_margin())
+            _v2_on = bool(_runner_v2_enabled())
+            _verify_max_rows = int(_RUNNER_V2_VERIFY_MAX_ROWS)
         except Exception:
             _k_resolved, _margin_resolved = 6, -0.05
+            _v2_on, _verify_max_rows = True, 8
         # committed+awaited denominator: a settled ring read is counted in
         # prefetch_committed XOR prefetch_awaited_inflight (the demand-await publish
         # path), so their sum is the settled+published total and a prefetch hit rate
@@ -4814,6 +4859,14 @@ class ExpertStreamingRuntime:
         _awaited = int(cache.get("prefetch_awaited_inflight", 0))
         _committed_settled = _committed + _awaited
         _hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        # W95g (review MEDIUM-2): ``prefetch_hit_on_true_route`` counts EVERY
+        # consumption of a prefetched record, so a resident ring record re-consumed
+        # across tokens makes ``prefetch_hit_rate`` (hit / committed+awaited) exceed
+        # 1.0. ``prefetch_first_consumption_hits`` counts each record's hit at most
+        # once, and ``prefetch_first_hit_rate`` = it / records ISSUED is bounded
+        # [0,1]. Both keys are ADDED; ``prefetch_hit_rate`` keeps its meaning.
+        _first_hit = int(cache.get("prefetch_first_consumption_hits", 0))
+        _issued = int(cache.get("prefetch_issued", 0))
         # per-decode-token normalisations. ``decode_steps`` is the W87 decode-step
         # index (one full routed-layer sweep == one token under --decode-mode ar).
         _steps = int(cold_start.get("decode_steps_observed", 0))
@@ -4836,15 +4889,45 @@ class ExpertStreamingRuntime:
             "prefetch_k": _k_resolved,
             "prefetch_margin": _margin_resolved,
             "ring_slots": int(getattr(self.config, "prefetch_slots", 0)),
+            # W95g: byte_budget is now the per-token speculative SHARE f (0 = off),
+            # with a floor of byte_floor_records records; budget_skips / prefetch_calls
+            # is the visible throttle fraction.
             "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+            "byte_floor_records": int(
+                getattr(self, "_prefetch_byte_floor_records", 0)
+            ),
             "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),
+            "prefetch_calls": int(getattr(self, "_prefetch_calls", 0)),
+            # W95g (review LOW-1): the DSpark verify-phase prefetch gate, stamped so
+            # the receipt self-describes what the verify did. The verify predicts the
+            # per-row UNION of gate_L one layer ahead ONLY under v2, on a
+            # <= ``max_rows`` batch in the DECODE routing phase; it reuses the AR
+            # predict width (``k`` == prefetch_k) + confidence ``margin`` (==
+            # prefetch_margin) and shares the same speculative-byte throttle
+            # (``byte_budget`` / ``byte_floor_records`` == the runner-level keys
+            # above, by construction). ``enabled`` = the gate will speculate on a
+            # verify (v2 armed, width > 0, ring present).
+            "verify_prefetch": {
+                "enabled": bool(
+                    _v2_on
+                    and _k_resolved > 0
+                    and int(getattr(self.config, "prefetch_slots", 0)) > 0
+                ),
+                "max_rows": _verify_max_rows,
+                "k": _k_resolved,
+                "margin": _margin_resolved,
+                "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+                "byte_floor_records": int(
+                    getattr(self, "_prefetch_byte_floor_records", 0)
+                ),
+            },
             # SSD read (demand vs speculative split shows the drive contention).
             "expert_misses": _misses,
             "bytes_read": _bytes_read,
             "hit_rate": float(cache.get("hit_rate", 0.0)),
             "demand_bytes_read": _demand,
             "speculative_bytes_read": _spec,
-            "prefetch_issued": int(cache.get("prefetch_issued", 0)),
+            "prefetch_issued": _issued,
             # W100: the DSpark verify-phase slice, so the paired window can prove
             # the multi-row verify engaged the prefetch independent of the AR total
             # (prefetch_issued above merges AR M=1 and verify M=K+1).
@@ -4858,10 +4941,19 @@ class ExpertStreamingRuntime:
             "pool_promotions": int(cache.get("promotions", 0)),
             "pool_loads": int(cache.get("pool_loads", 0)),
             # committed+awaited denominator + the derived prefetch hit rate.
+            # NOTE (W95g MEDIUM-2): this key counts every consumption in the
+            # numerator and CAN exceed 1.0; use ``prefetch_first_hit_rate`` below for
+            # the bounded [0,1] rate. Kept unchanged for continuity (existing key).
             "prefetch_committed": _committed_settled,
             "prefetch_awaited_inflight": _awaited,
             "prefetch_hit_rate": (
                 _hit / _committed_settled if _committed_settled else 0.0
+            ),
+            # W95g (review MEDIUM-2): first-consumption hits (each prefetched record
+            # counted at most once) and the bounded [0,1] rate over records issued.
+            "prefetch_first_consumption_hits": _first_hit,
+            "prefetch_first_hit_rate": (
+                _first_hit / _issued if _issued else 0.0
             ),
             # per-decode-token normalisations (the window targets are per token).
             "decode_steps": _steps,
@@ -4891,6 +4983,11 @@ class ExpertStreamingRuntime:
         committed = int(cache.get("prefetch_committed", 0))
         awaited = int(cache.get("prefetch_awaited_inflight", 0))
         hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        issued = int(cache.get("prefetch_issued", 0))
+        # W95g (review MEDIUM-2): first-consumption hits (each record at most once).
+        # ``hit_rate`` below counts every consumption in its numerator and can exceed
+        # 1.0; ``first_hit_rate`` = first_consumption_hits / issued is bounded [0,1].
+        first_hit = int(cache.get("prefetch_first_consumption_hits", 0))
         bytes_prefetched = int(cache.get("prefetch_bytes", 0))
         # W93 MED-b: an awaited-inflight commit is a ring read that SETTLED and
         # PUBLISHED — the demand route blocked on the in-flight read and committed
@@ -4920,9 +5017,10 @@ class ExpertStreamingRuntime:
             "k": int(self.config.prefetch_slots),
             "min_layer": min_layer,
             "predicted": int(cache.get("prefetch_predicted", 0)),
-            "issued": int(cache.get("prefetch_issued", 0)),
+            "issued": issued,
             "committed": committed_settled,
             "hit_on_true_route": hit,
+            "first_consumption_hits": first_hit,
             "wasted": int(cache.get("prefetch_wasted", 0)),
             "awaited_inflight": awaited,
             "dropped_no_slot": dropped_no_slot,
@@ -4930,12 +5028,15 @@ class ExpertStreamingRuntime:
             "skipped_backlog": skipped_backlog,
             "bytes_prefetched": bytes_prefetched,
             "hit_rate": (hit / committed_settled) if committed_settled else 0.0,
+            "first_hit_rate": (first_hit / issued) if issued else 0.0,
         }
         per_layer: dict[str, Any] = {}
         for layer, lc in cache_by_layer.items():
             lcommitted = int(lc.get("prefetch_committed", 0))
             lawaited = int(lc.get("prefetch_awaited_inflight", 0))
             lhit = int(lc.get("prefetch_hit_on_true_route", 0))
+            lfirst_hit = int(lc.get("prefetch_first_consumption_hits", 0))
+            lissued = int(lc.get("prefetch_issued", 0))
             ldropped = int(skips["dropped_no_slot"].get(int(layer), 0))
             lskip_lock = int(skips["skipped_lock_held"].get(int(layer), 0))
             lskip_backlog = int(skips["skipped_backlog"].get(int(layer), 0))
@@ -4951,21 +5052,24 @@ class ExpertStreamingRuntime:
             lcommitted_settled = lcommitted + lawaited
             per_layer[str(layer)] = {
                 "predicted": int(lc.get("prefetch_predicted", 0)),
-                "issued": int(lc.get("prefetch_issued", 0)),
+                "issued": lissued,
                 "committed": lcommitted_settled,
                 "hit_on_true_route": lhit,
+                "first_consumption_hits": lfirst_hit,
                 "wasted": int(lc.get("prefetch_wasted", 0)),
                 "awaited_inflight": lawaited,
                 "dropped_no_slot": ldropped,
                 "skipped_lock_held": lskip_lock,
                 "skipped_backlog": lskip_backlog,
                 "hit_rate": (lhit / lcommitted_settled) if lcommitted_settled else 0.0,
+                "first_hit_rate": (lfirst_hit / lissued) if lissued else 0.0,
             }
         block["per_layer"] = per_layer
         block["census"] = (
             f"gate_prefetch k={block['k']} min_layer={min_layer}: "
             f"predicted={block['predicted']} issued={block['issued']} "
             f"committed={committed_settled} hit={hit} (rate {block['hit_rate']:.3f}) "
+            f"first_hit={first_hit} (rate {block['first_hit_rate']:.3f}) "
             f"wasted={block['wasted']} awaited={awaited} "
             f"dropped={dropped_no_slot} skipped_lock={skipped_lock_held} "
             f"skipped_backlog={skipped_backlog} "
