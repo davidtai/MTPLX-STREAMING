@@ -122,30 +122,51 @@ def gate_predict_topk(gate: "Gate", x: mx.array, k: int) -> mx.array:
     layer L's router assigns to input ``x``, using the port's EXACT routing
     transform.
 
-    This is the shipped :meth:`Gate.__call__` scoring (model.py L810-822 via
-    :func:`_gate_prefix_impl`: score GEMM / gate_temp, ``sqrtsoftplus``, +
-    ``e_score_correction_bias``) truncated to the top ``k`` of ``(scores +
-    bias)``.  ``k`` is the prefetch width (10/12), WIDER than the gate's shipped
-    top-6; prefetch needs the SET, not ``torch.topk``'s descending order or the
-    routing weights, so the ``argsort`` and weight gather that :meth:`Gate.
-    __call__` performs (L823-824) are deliberately dropped.  A pure read of ``x``
-    and the (frozen) gate weights: it has no side effect and is never an ancestor
-    of the layer's own output, so evaluating it can only warm the expert cache,
-    never change a logit (W93_GATE_PREFETCH.md §2).
+    This is the shipped :meth:`Gate.__call__` scoring (model.py L810-822: score
+    GEMM / gate_temp, ``sqrtsoftplus``, + ``e_score_correction_bias``) truncated
+    to the top ``k`` of ``(scores + bias)``.  ``k`` is the prefetch width (10/12),
+    WIDER than the gate's shipped top-6; prefetch needs the SET, not
+    ``torch.topk``'s descending order or the routing weights, so the ``argsort``
+    and weight gather that :meth:`Gate.__call__` performs (L823-824) are
+    deliberately dropped.  A pure read of ``x`` and the (frozen) gate weights: it
+    has no side effect and is never an ancestor of the layer's own output, so
+    evaluating it can only warm the expert cache, never change a logit
+    (W93_GATE_PREFETCH.md §2).
 
-    Returns ``[n, k]`` int32.  Eager on purpose (no ``mx.compile`` dispatch): at
-    decode row counts the compiled prefix is byte-identical to this eager body
-    (K22), and the prediction's exactness never matters -- only which reads it
-    issues.
+    Scoring goes through the SAME code path :meth:`Gate.__call__` takes for this
+    row count (W93 review LOW-1): the shared K22 compiled ``_gate_prefix`` tape
+    when the router would compile (``_attn_compile_gate`` -> ``ATTN_COMPILE`` armed,
+    decode/verify rows), else the eager ``_gate_prefix_impl``.  Two payoffs:
+
+    * **exact alignment with the router (a'=1.0).**  Because the ``biased`` scores
+      here are produced by the byte-for-byte same (compiled *or* eager) prefix the
+      router runs, the predicted top-``k`` SET is bit-identical to the router's own
+      selection on the same input in *every* regime -- not merely byte-equal via
+      the K22 compiled==eager claim.  At ``k == gate.topk`` this reproduces
+      :meth:`Gate.__call__`'s ``indices`` set exactly.
+    * **no redundant f32 weight copy.**  The old body called ``_gate_prefix_impl``
+      unconditionally, so even inside a compile-armed decode window it eagerly
+      materialised a ``[n_routed, dim]`` f32 copy of the gate weight
+      (384x5120 -> 7.9 MiB) *per layer per token*.  Riding the router's compiled
+      tape fuses that upcast into the score GEMM (and reuses the single cached
+      tape the router already built -- same ``("gate_prefix", score_func,
+      gate_temp)`` key), so the predictor allocates no standalone f32 weight copy.
+
+    Returns ``[n, k]`` int32.
     """
     xf = x.reshape(-1, gate.dim)
-    _scores, biased = _gate_prefix_impl(
-        xf,
-        gate.weight,
-        gate.e_score_correction_bias,
-        float(gate.gate_temp),
-        str(gate.score_func),
-    )
+    if _attn_compile_gate(int(xf.shape[0])):
+        _scores, biased = _gate_prefix(gate)(
+            xf, gate.weight, gate.e_score_correction_bias
+        )
+    else:
+        _scores, biased = _gate_prefix_impl(
+            xf,
+            gate.weight,
+            gate.e_score_correction_bias,
+            float(gate.gate_temp),
+            str(gate.score_func),
+        )
     width = int(biased.shape[-1])
     k = max(1, min(int(k), width))
     part = mx.argpartition(-biased, kth=k - 1, axis=-1)[..., :k]

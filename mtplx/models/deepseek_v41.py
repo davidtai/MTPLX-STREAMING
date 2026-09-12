@@ -2094,17 +2094,56 @@ def _resolve_gate_prefetch_min_layer(raw=None) -> int:
 
 
 class _GatePrefetchLink:
-    """Plain (non-Module) holder for the NEXT routed layer's gate, so binding it
-    on a :class:`MoE` does not re-register the sibling gate's parameters under a
-    second path in the module tree (``nn.Module.__setattr__`` registers
-    array/dict/list/tuple/Module values as children; a plain ``__slots__`` object
-    rides outside the tree -- mirrors ``lookahead_prefetch.LookaheadRouters``)."""
+    """Plain (non-Module) holder for the NEXT routed layer's gate AND the pending
+    one-layer-ahead prediction, so binding it on a :class:`MoE` / the streamed
+    switch does not re-register anything under the module tree.
 
-    __slots__ = ("next_layer", "next_gate")
+    ``nn.Module.__setattr__`` registers ``array``/``dict``/``list``/``tuple``/
+    ``Module`` values as children; a plain ``__slots__`` object rides outside the
+    tree (mirrors ``lookahead_prefetch.LookaheadRouters``).
 
-    def __init__(self, next_layer: int, next_gate) -> None:
+    LOW-3 (W93 review): the stash used to be a raw ``(int, mx.array)`` tuple set
+    as an nn.Module attribute on the switch.  Under mlx 0.32.2
+    ``Module.__setattr__`` a ``tuple`` goes into the *if* branch and is registered
+    as a module child (``self[key] = val``), so between stash and consume the
+    predicted-id array lived inside ``switch.parameters()`` -- a latent corruption
+    of the param tree (any ``tree_flatten`` / ``mx.eval(module)`` / save in that
+    window would have seen a bogus ``(int, array)`` child); the ``= None`` clear
+    only ``pop``ed it back out.  Carrying the stash on THIS plain object keeps the
+    array out of every module's parameter tree entirely: the switch stores a plain
+    ``_GatePrefetchLink`` reference (``__setattr__`` *else* branch), never an array
+    or tuple.
+
+    The 2-element ``(next_layer, pending_ids)`` sequence interface
+    (``__getitem__`` / ``__iter__`` / ``__len__``) is the stash's public shape, so
+    the streamed switch's consume site reads it exactly as it read the old tuple
+    (``pending[1]`` for the ids, ``next_layer, ids = pending`` to unpack) with no
+    change required there -- while attribute access (``.pending_ids`` /
+    ``.next_layer``) is available for a cleaner consumer."""
+
+    __slots__ = ("next_layer", "next_gate", "pending_ids")
+
+    def __init__(self, next_layer: int, next_gate=None, pending_ids=None) -> None:
         self.next_layer = int(next_layer)
         self.next_gate = next_gate
+        self.pending_ids = pending_ids
+
+    # -- stash sequence interface: (next_layer, pending_ids) --------------------
+    def __getitem__(self, i):
+        return (self.next_layer, self.pending_ids)[i]
+
+    def __iter__(self):
+        yield self.next_layer
+        yield self.pending_ids
+
+    def __len__(self) -> int:
+        return 2
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid only
+        return (
+            f"_GatePrefetchLink(next_layer={self.next_layer}, "
+            f"pending_ids={'set' if self.pending_ids is not None else None})"
+        )
 
 
 def install_gate_prefetch_links(model, runtime) -> int:
@@ -2114,11 +2153,24 @@ def install_gate_prefetch_links(model, runtime) -> int:
     Idempotent and DSV4.1-specific: a layer is linked only when its target
     ``L = prev+1`` is a routed streamed layer with a DSV4.1 :class:`~mtplx.models.
     deepseek_v41_moe.Gate`, ``L >= MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER`` (W89's
-    early floor) and ``L`` is not the last routed layer (skipped per the brief).
+    early floor), ``L`` is not the last routed layer (skipped per the brief), AND
+    the SOURCE layer ``prev`` is a *streamed* switch that takes the ``mx.eval(
+    indices)`` routing barrier the prediction rides (W93_GATE_PREFETCH.md §3).
     Non-DSV4.1 models (hy3/glm share ``bind_streamed_switches``) carry no such
     gate and are left untouched. Returns the number of links installed. Safe to
     call with the flag off -- the links are inert until the flag arms the ring;
-    the eligibility bakes the layer skip in so the hot path never re-checks it."""
+    the eligibility bakes the layer skip in so the hot path never re-checks it.
+
+    LOW-3 (W93 review): a ``DenseIslandSwitchGLU`` source is skipped.  A dense
+    island layer holds its experts resident and issues its wave with *zero host
+    asks* -- it never runs the ``mx.eval(indices)`` barrier the one-ahead
+    prediction is designed to piggyback (§3) and its ``_run`` is not the streamed
+    consume site that reads the stash, so a link on such a source would compute a
+    prediction every decode token that nothing ever evaluates or issues.  Linking
+    only streamed sources keeps the predictor off the resident-island path
+    entirely.  ``install`` runs after ``bind_streamed_switches`` has replaced each
+    routed layer's ``switch_mlp`` with its concrete type, so the source type is
+    final here."""
 
     layers = getattr(getattr(model, "model", None), "layers", None)
     if layers is None:
@@ -2128,6 +2180,12 @@ def install_gate_prefetch_links(model, runtime) -> int:
     routed = tuple(getattr(runtime.spec, "routed_layer_indices", ()))
     if len(routed) < 2:
         return 0
+    # Lazy import (no module-load cycle): install is called from within
+    # expert_mlx.bind_streamed_switches, so expert_mlx is fully imported here.
+    try:
+        from .expert_mlx import DenseIslandSwitchGLU as _DenseIslandSwitchGLU
+    except Exception:  # pragma: no cover - expert_mlx always importable in practice
+        _DenseIslandSwitchGLU = ()
     last_routed = routed[-1]
     min_layer = _resolve_gate_prefetch_min_layer()
     installed = 0
@@ -2141,6 +2199,10 @@ def install_gate_prefetch_links(model, runtime) -> int:
         prev_mlp = getattr(layers[prev], "mlp", None)
         nxt_mlp = getattr(layers[nxt], "mlp", None)
         if prev_mlp is None or nxt_mlp is None:
+            continue
+        # Streamed SOURCE only: a dense-island source has no `mx.eval(indices)`
+        # barrier to ride and never consumes the stash, so linking it is dead work.
+        if isinstance(getattr(prev_mlp, "switch_mlp", None), _DenseIslandSwitchGLU):
             continue
         next_gate = getattr(nxt_mlp, "gate", None)
         # DSV4.1 gate only (the port's `_gate_prefix` scoring); other trunks skip.
@@ -2311,14 +2373,28 @@ class DecoderLayer(nn.Module):
             return
         # EXACTLY the collector's ``layer_in`` (scripts/deepseek_v41/collect_route
         # _traces.py:175): mean over the hc copies with the f32 upcast BEFORE the
-        # mean, so the predicted route matches the W89 gate-oracle that measured
-        # missRed@10 0.736 on this tensor. (Casting after the mean would differ at
-        # the bf16 ULP on the real bf16 residual.)
+        # mean.  (Collapsing in bf16 first would differ at the bf16 ULP on the real
+        # bf16 residual.)
         collapsed = mx.mean(h.astype(mx.float32), axis=2)
+        # LOW-2 (W93 review): W89's evaluator scored the STORED trace tensor, which
+        # the collector wrote through ``bf16_bits`` (`li_u = bf16_bits(li)`,
+        # collect_route_traces.py:180) -- i.e. the f32 mean ROUNDED to bf16 and
+        # upcast back to f32.  Scoring the un-rounded f32 mean is a different tensor
+        # at the bf16 ULP, so the measured missRed@10 0.736 would not apply exactly.
+        # Round-trip through bf16 so the predictor scores the bit-identical tensor
+        # the gate oracle was measured on (``bf16_bits`` -> ``bf16_to_f32`` == this).
+        collapsed = collapsed.astype(mx.bfloat16).astype(mx.float32)
         predicted = gate_predict_topk(link.next_gate, collapsed, k)
-        # Stash for the switch's barrier to materialize + issue. NOT an ancestor
-        # of this layer's output, so it rides the switch's existing indices eval.
-        switch._mtplx_gate_prefetch_pending = (link.next_layer, predicted)
+        # LOW-3 (W93 review): stash on the plain `_GatePrefetchLink` (which exposes
+        # the (next_layer, pending_ids) sequence interface) rather than setting a
+        # raw `(int, mx.array)` tuple on the switch nn.Module -- a tuple would be
+        # registered into `switch.parameters()` by mlx 0.32.2 `Module.__setattr__`.
+        # The switch holds only a plain-object reference (`__setattr__` else
+        # branch), so the predicted-id array never enters any module's param tree.
+        # NOT an ancestor of this layer's output, so it rides the switch's existing
+        # indices eval.
+        link.pending_ids = predicted
+        switch._mtplx_gate_prefetch_pending = link
 
     def __call__(self, h, pre_mix, positions, layer_cache, shared):
         # W93 gate-oracle prefetch: predict the next layer's route from the
