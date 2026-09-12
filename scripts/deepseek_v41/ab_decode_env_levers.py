@@ -1397,7 +1397,7 @@ class BudgetTotalDerivation:
         "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
         "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
         "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
-        "rss_semantics",
+        "rss_semantics", "system_used_live_gb",
     )
 
     def __init__(
@@ -1415,6 +1415,7 @@ class BudgetTotalDerivation:
         non_metal_overhead_measured_gb=None,
         plan_limit_gib_effective=None,
         rss_semantics="unmeasured",
+        system_used_live_gb=None,
     ):
         self.source = source
         self.budget_total_gb = budget_total_gb
@@ -1431,6 +1432,9 @@ class BudgetTotalDerivation:
         # mx active -> Metal not in phys_footprint, overhead unmeasurable), or
         # "unmeasured" (pre-load / footprint unavailable).
         self.rss_semantics = rss_semantics
+        # HIGH (round 4): the LIVE system-used baseline measured when a pinned plan
+        # is validated (None unless this run pinned a sidecar).
+        self.system_used_live_gb = system_used_live_gb
 
     def replace(self, **changes) -> "BudgetTotalDerivation":
         """A copy with the named fields overridden (dataclasses.replace-style)."""
@@ -1451,7 +1455,7 @@ class BudgetTotalDerivation:
             "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
             "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
             "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
-            "rss_semantics",
+            "rss_semantics", "system_used_live_gb",
         }
         return BudgetTotalDerivation(**{k: v for k, v in d.items() if k in fields})
 
@@ -1508,6 +1512,10 @@ class BudgetTotalDerivation:
             "budget_forecast_system_peak_gb": (None if fc is None else round(fc, 4)),
             "budget_floor_gib": round(self.floor_gib, 4),
             "rss_semantics": self.rss_semantics,
+            "budget_system_used_live_gb": (
+                None if self.system_used_live_gb is None
+                else round(self.system_used_live_gb, 4)
+            ),
         }
 
 
@@ -1863,18 +1871,44 @@ def _derived_plan_sidecar_path(args):
     return Path(out).parent / "derived-plan.json"
 
 
-def _write_derived_plan_sidecar(args, bt) -> None:
-    """Persist the derived budget plan so later A/B arms can PIN it (HIGH-2).
-    Atomic (tmp + rename); guarded."""
+def _config_sha(model_path):
+    """A cheap sha256 of the artifact's config.json (keys the artifact without
+    hashing the 269 GiB bank).  None on any failure."""
+    try:
+        raw = (Path(model_path).expanduser() / "config.json").read_bytes()
+        return hashlib.sha256(raw).hexdigest()
+    except (OSError, TypeError):
+        return None
+
+
+def _plan_stamp(args, max_kv) -> dict:
+    """The identity keys stamped into (and re-validated against) a pinned plan
+    sidecar (round-4 HIGH): a pin must NOT be reused across a different model /
+    shape / budget."""
+    return {
+        "model_path": str(getattr(args, "model", "")),
+        "config_sha": _config_sha(getattr(args, "model", None)),
+        "max_kv": int(max_kv) if max_kv is not None else None,
+        "context_tokens": int(getattr(args, "context_tokens", 0) or 0),
+        "budget_total_gb": _budget_total_gib(args),
+    }
+
+
+def _write_derived_plan_sidecar(args, bt, max_kv) -> None:
+    """Persist the derived budget plan + its identity STAMP so later A/B arms can
+    PIN it, and only if it still matches (round-4 HIGH).  Atomic; guarded."""
     path = _derived_plan_sidecar_path(args)
     if path is None or bt is None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = bt.to_plan_dict()
+        payload["_stamp"] = _plan_stamp(args, max_kv)
+        payload["_written_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         payload["_note"] = (
-            "W106 HIGH-2 pinned plan; pass --memory-plan-from this file to later "
-            "A/B arms so every arm uses the SAME plan_limit (reproducible residency)."
+            "W106 pinned plan; pass --memory-plan-from this file to later A/B arms "
+            "in the SAME window (same model/shape/budget) so every arm uses the SAME "
+            "plan_limit. The pin is re-validated (stamp + live over-budget) on load."
         )
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2))
@@ -1885,9 +1919,60 @@ def _write_derived_plan_sidecar(args, bt) -> None:
 
 
 def _load_pinned_plan(path):
-    """Load a BudgetTotalDerivation from a --memory-plan-from sidecar (HIGH-2)."""
+    """Load ``(BudgetTotalDerivation, stamp)`` from a --memory-plan-from sidecar."""
     data = json.loads(Path(path).read_text())
-    return BudgetTotalDerivation.from_plan_dict(data)
+    return BudgetTotalDerivation.from_plan_dict(data), (data.get("_stamp") or {})
+
+
+def _validate_pinned_plan(args, bench, max_kv, bt, stamp):
+    """Round-4 HIGH: refuse a pinned plan (raise ValueError, stage pin_validation)
+    that does NOT match the current run, or whose live footprint would exceed the
+    budget.  Returns the LIVE system-used baseline (GiB) it measured, recorded on
+    the derivation as ``budget_system_used_live_gb``."""
+    cur = _plan_stamp(args, max_kv)
+    mismatches = []
+    for key in ("config_sha", "max_kv", "context_tokens"):
+        want = stamp.get(key)
+        got = cur.get(key)
+        # A stale sidecar without the stamp (want None) is itself a mismatch.
+        if want != got:
+            mismatches.append(f"{key}: sidecar={want!r} run={got!r}")
+    # budget_total only conflicts if the run ALSO passed one and it differs.
+    if cur.get("budget_total_gb") is not None and \
+            stamp.get("budget_total_gb") != cur.get("budget_total_gb"):
+        mismatches.append(
+            f"budget_total_gb: sidecar={stamp.get('budget_total_gb')!r} "
+            f"run={cur.get('budget_total_gb')!r}"
+        )
+    if mismatches:
+        exc = ValueError(
+            "--memory-plan-from sidecar does not match this run; refusing to pin a "
+            "stale plan: " + "; ".join(mismatches)
+            + ". Re-derive with --memory-budget-total-gib in this window."
+        )
+        exc.dsv41_stage = "pin_validation"
+        raise exc
+
+    # Live over-budget check: the pinned plan + the CURRENT live baseline must fit.
+    live_gb = _measure_system_used_at_start_bytes(args, bench) / GIB if bench else 0.0
+    budget = stamp.get("budget_total_gb") or bt.budget_total_gb
+    if budget is not None:
+        forecast = (
+            live_gb + bt.plan_limit_gib + bt.plan_overshoot_gib
+            + bt.non_metal_overhead_gb
+        )
+        if forecast > float(budget):
+            exc = ValueError(
+                f"--memory-plan-from would exceed the budget under the CURRENT live "
+                f"baseline: forecast {forecast:.4g} = live {live_gb:.4g} + plan "
+                f"{bt.plan_limit_gib:.4g} + overshoot {bt.plan_overshoot_gib:.4g} + "
+                f"overhead {bt.non_metal_overhead_gb:.4g} > budget {float(budget):.4g}. "
+                "The box is more loaded than when the plan was derived; free memory "
+                "or re-derive."
+            )
+            exc.dsv41_stage = "pin_validation"
+            raise exc
+    return live_gb
 
 
 def _preflight_memory_plan(args, bench) -> int:
@@ -1904,6 +1989,28 @@ def _preflight_memory_plan(args, bench) -> int:
     baseline.  Both baselines are printed; the real in-window derivation (measured
     after bootout) is authoritative."""
 
+    max_kv = bench.resolve_max_kv(
+        [args.context_tokens], args.decode_tokens, args.max_kv
+    )
+
+    # Round-4 HIGH: if pinning, VALIDATE the pin file here (stamp + live over-budget)
+    # so a stale/over-budget pin is caught BEFORE the guarded window opens.
+    pin_path = getattr(args, "memory_plan_from", None)
+    if pin_path:
+        try:
+            bt, stamp = _load_pinned_plan(pin_path)
+            live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
+        except (ValueError, OSError, json.JSONDecodeError) as exc:
+            print(f"[ab] memory-plan preflight: PIN REFUSED -- {exc}", flush=True)
+            return 3
+        print(
+            f"[ab] memory-plan preflight: PIN OK ({pin_path}); plan_limit "
+            f"{bt.plan_limit_gib:.4g} GiB, live baseline {live_gb:.2f} GiB; "
+            f"{bt.formula()}",
+            flush=True,
+        )
+        return 0
+
     # LOW: a both-set flag error must exit 3, not traceback.
     try:
         budget = _budget_total_gib(args)
@@ -1918,9 +2025,6 @@ def _preflight_memory_plan(args, bench) -> int:
         )
         return 0
 
-    max_kv = bench.resolve_max_kv(
-        [args.context_tokens], args.decode_tokens, args.max_kv
-    )
     used_now_gb = int(bench._system_used_bytes()) / GIB
 
     # Resolve how much the window will free by booting out the resident agent.
@@ -1982,12 +2086,16 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     pin_path = getattr(args, "memory_plan_from", None)
     if pin_path:
-        # HIGH-2: PIN the plan from a sidecar written by an earlier arm, so every
-        # A/B arm uses the SAME plan_limit (no per-process vm_stat drift).
-        bt = _load_pinned_plan(pin_path)
+        # HIGH-2 + round-4 HIGH: PIN the plan from a sidecar an earlier arm wrote, so
+        # every A/B arm uses the SAME plan_limit -- but RE-VALIDATE it (stamp match +
+        # live over-budget) and refuse (exit 3, before load) a stale/over-budget pin.
+        bt, stamp = _load_pinned_plan(pin_path)
+        live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
+        bt = bt.replace(system_used_live_gb=live_gb)
         print(
             f"[ab] memory plan PINNED from {pin_path}: plan_limit "
-            f"{bt.plan_limit_gib:.4g} GiB ({bt.formula()})",
+            f"{bt.plan_limit_gib:.4g} GiB, live baseline {live_gb:.2f} GiB "
+            f"({bt.formula()})",
             flush=True,
         )
         args._dsv41_budget_total = bt
@@ -1997,7 +2105,7 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
         if bt is not None:
             args._dsv41_budget_total = bt
             override = bt.plan_limit_gib
-            _write_derived_plan_sidecar(args, bt)  # so later arms can pin it
+            _write_derived_plan_sidecar(args, bt, max_kv)  # so later arms can pin it
         else:
             override = getattr(args, "memory_limit_gib", None)
             args._dsv41_budget_total = None

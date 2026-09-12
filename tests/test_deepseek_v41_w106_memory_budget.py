@@ -52,6 +52,7 @@ _EXPECTED_MEMORY_KEYS = {
     "budget_forecast_system_peak_gb",
     "budget_floor_gib",
     "rss_semantics",
+    "budget_system_used_live_gb",
 }
 
 
@@ -883,14 +884,16 @@ def test_high2_derive_writes_sidecar_and_pin_round_trips(tmp_path):
     assert sidecar.exists(), "budget path must write derived-plan.json"
     plan1 = args1._dsv41_budget_total.plan_limit_gib
 
-    # Arm 2: a DIFFERENT live baseline, but PINNED from the sidecar -> same plan.
+    # Arm 2: a DIFFERENT-but-valid live baseline, PINNED from the sidecar -> the
+    # SAME plan (not re-derived), and the live baseline is recorded.
     args2 = _budget_args(mod, tmp_path)
     args2.memory_plan_from = sidecar
-    args2._dsv41_system_used_at_start_bytes = int(55 * GIB)  # would derive a smaller plan
-    mod._resolve_derivation(args2, bench=_FakeBench(int(55 * GIB)), max_kv=1000)
+    args2._dsv41_system_used_at_start_bytes = int(22 * GIB)  # differs from arm 1's 20
+    mod._resolve_derivation(args2, bench=_FakeBench(int(22 * GIB)), max_kv=1000)
     plan2 = args2._dsv41_budget_total.plan_limit_gib
     assert plan2 == pytest.approx(plan1)  # pinned, not re-derived from the new baseline
     assert args2._dsv41_budget_total.source == "budget"
+    assert args2._dsv41_budget_total.system_used_live_gb == pytest.approx(22.0)
 
 
 def test_high2_pinned_plan_survives_serialization(tmp_path):
@@ -901,7 +904,7 @@ def test_high2_pinned_plan_survives_serialization(tmp_path):
     )
     path = tmp_path / "derived-plan.json"
     path.write_text(json.dumps(d.to_plan_dict()))
-    loaded = mod._load_pinned_plan(path)
+    loaded, _stamp = mod._load_pinned_plan(path)  # now returns (bt, stamp)
     assert loaded.plan_limit_gib == pytest.approx(d.plan_limit_gib)
     assert loaded.plan_overshoot_gib == pytest.approx(6.0)
     assert loaded.forecast_system_peak_gib() == pytest.approx(d.forecast_system_peak_gib())
@@ -924,3 +927,92 @@ def test_medium2_partial_inversion_footprint_lt_active_plus_cache(monkeypatch):
     assert bt.non_metal_overhead_measured_gb is None
     assert bt.rss_semantics == "inverted"
     assert mx.set_memory_limit_calls == []
+
+
+# --------------------------------------------------------------------------
+# Round-4 HIGH: --memory-plan-from re-validates the sidecar (stamp + live budget).
+# --------------------------------------------------------------------------
+
+
+def _write_sidecar(mod, tmp_path, *, model_dir, max_kv, context_tokens,
+                   budget_total_gb, plan_limit_gib=50.0, overshoot=6.0,
+                   overhead=3.0):
+    bt = mod.BudgetTotalDerivation(
+        source="budget", budget_total_gb=budget_total_gb,
+        system_used_at_start_gb=20.0, non_metal_overhead_gb=overhead,
+        kv_growth_to_max_kv_gb=0.72, safety_gb=3.0, plan_overshoot_gib=overshoot,
+        floor_gib=20.0, plan_limit_gib=plan_limit_gib,
+    )
+    payload = bt.to_plan_dict()
+    payload["_stamp"] = {
+        "model_path": str(model_dir),
+        "config_sha": mod._config_sha(model_dir),
+        "max_kv": max_kv,
+        "context_tokens": context_tokens,
+        "budget_total_gb": budget_total_gb,
+    }
+    side = tmp_path / "derived-plan.json"
+    side.write_text(json.dumps(payload))
+    return side, bt
+
+
+def _pin_args(mod, tmp_path, model_dir, side, **over):
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(model_dir),
+            "--context-tokens", "16384", "--decode-tokens", "256",
+            "--max-kv", "17408", "--memory-plan-from", str(side)]
+    args = mod.build_parser().parse_args(argv)
+    for k, v in over.items():
+        setattr(args, k, v)
+    return args
+
+
+def test_pin_refuses_stale_or_over_budget_sidecar(tmp_path):
+    mod = _mod()
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text(json.dumps(
+        {"num_hidden_layers": 40, "kv_source_layer_ids": [2, 8, 14, 20]}))
+
+    # (1) a MATCHING sidecar under a modest live baseline -> pin OK, live recorded.
+    side, _ = _write_sidecar(mod, tmp_path, model_dir=model, max_kv=17408,
+                             context_tokens=16384, budget_total_gb=93.0,
+                             plan_limit_gib=50.0)
+    args = _pin_args(mod, tmp_path, model, side)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=17408)
+    assert args._dsv41_budget_total.plan_limit_gib == pytest.approx(50.0)
+    assert args._dsv41_budget_total.system_used_live_gb == pytest.approx(20.0)
+
+    # (2) STALE: different max_kv -> refuse (exit-3 class ValueError, stage tagged).
+    args_bad = _pin_args(mod, tmp_path, model, side)
+    args_bad.max_kv = 4096  # run resolves a different max_kv
+    with pytest.raises(ValueError, match="does not match") as exc:
+        mod._resolve_derivation(args_bad, bench=_FakeBench(int(20 * GIB)), max_kv=4096)
+    assert getattr(exc.value, "dsv41_stage", None) == "pin_validation"
+
+    # (3) STALE: different model (config sha) -> refuse.
+    model2 = tmp_path / "model2"
+    model2.mkdir()
+    (model2 / "config.json").write_text(json.dumps({"num_hidden_layers": 999}))
+    args_m = _pin_args(mod, tmp_path, model2, side)
+    with pytest.raises(ValueError, match="does not match"):
+        mod._resolve_derivation(args_m, bench=_FakeBench(int(20 * GIB)), max_kv=17408)
+
+    # (4) OVER BUDGET under the CURRENT live baseline -> refuse.
+    # live 80 + plan 50 + overshoot 6 + overhead 3 = 139 > 93.
+    args_ob = _pin_args(mod, tmp_path, model, side)
+    with pytest.raises(ValueError, match="(?i)exceed the budget") as exc2:
+        mod._resolve_derivation(args_ob, bench=_FakeBench(int(80 * GIB)), max_kv=17408)
+    assert getattr(exc2.value, "dsv41_stage", None) == "pin_validation"
+
+
+def test_derive_writes_stamped_sidecar(tmp_path):
+    mod = _mod()
+    args = _budget_args(mod, tmp_path)  # writes to tmp_path/config.json model dir
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    side = tmp_path / "derived-plan.json"
+    data = json.loads(side.read_text())
+    assert "_stamp" in data and "_written_at" in data
+    assert data["_stamp"]["max_kv"] == 1000
+    assert data["_stamp"]["config_sha"] is not None
+    assert data["_stamp"]["context_tokens"] == 1024  # _budget_args default
