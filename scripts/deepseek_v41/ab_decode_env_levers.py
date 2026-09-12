@@ -2905,29 +2905,52 @@ _DIVERGENCE_CONTEXT_CHARS = 200
 
 
 def _decode_ids(tok, ids):
-    """Decode token ids to text with the bench's already-loaded tokenizer.  Guarded:
-    returns None on any failure or when no tokenizer is available (e.g.
-    --prompt-ids-file), so a decode never kills a run."""
+    """Decode token ids to text.  Returns ``(text_or_None, error_or_None)``: never a
+    SILENT empty string.  Tries the tokenizer's ``decode`` then the underlying HF
+    ``_tokenizer.decode``; a raise records its repr, and an EMPTY result for a
+    non-empty id list is itself recorded as an error (window 43: the decode was
+    skipped entirely because --prompt-ids-file left the tokenizer None; now the
+    caller always supplies an output tokenizer and any failure is loud + recorded)."""
 
-    if tok is None or ids is None:
-        return None
-    decode = getattr(tok, "decode", None)
-    if not callable(decode):
-        return None
-    try:
-        return decode([int(t) for t in ids])
-    except Exception as exc:  # pragma: no cover - defensive
-        print(f"[ab] WARN: token decode failed ({exc!r}); text output omitted",
-              flush=True)
-        return None
+    if ids is None:
+        return None, "no ids"
+    if tok is None:
+        return None, "no tokenizer available for output decode"
+    ids_int = [int(t) for t in ids]
+    last_err = None
+    candidates = (
+        ("decode", getattr(tok, "decode", None)),
+        ("_tokenizer.decode", getattr(getattr(tok, "_tokenizer", None), "decode", None)),
+    )
+    for label, fn in candidates:
+        if not callable(fn):
+            continue
+        try:
+            text = fn(ids_int)
+        except Exception as exc:
+            last_err = f"{label} raised {exc!r}"
+            continue
+        if text:  # non-empty string -> success
+            return text, None
+        # An empty result for a non-empty id list is suspicious: record it and try
+        # the next method (never return a silent '').
+        last_err = f"{label} returned empty for {len(ids_int)} ids"
+    return None, (last_err or "no usable decode method on the tokenizer")
 
 
 def _text_output_fields(tok, ids) -> dict:
     """The receipt text-audit fields for one id stream: the FULL id list, the full
-    decoded text, and its head/tail (first/last 600 chars)."""
+    decoded text + head/tail (first/last 600 chars), and ``decoded_text_error`` (the
+    reason decode produced no text, or None on success).  A failure is LOUD."""
 
     ids_list = [int(t) for t in (ids or [])]
-    text = _decode_ids(tok, ids_list)
+    text, err = _decode_ids(tok, ids_list)
+    if err is not None:
+        print(
+            f"[ab] WARN: output decode produced no text ({err}); "
+            f"token_ids present ({len(ids_list)}), decoded_text_error recorded",
+            flush=True,
+        )
     if text is None:
         head = tail = None
     else:
@@ -2938,6 +2961,7 @@ def _text_output_fields(tok, ids) -> dict:
         "decoded_text": text,
         "decoded_text_head": head,
         "decoded_text_tail": tail,
+        "decoded_text_error": err,
     }
 
 
@@ -2946,10 +2970,10 @@ def _divergence_context(tok, ids, token_index, span=_DIVERGENCE_CONTEXT_CHARS):
     divergence TOKEN index maps to (decode the prefix to find the offset).  None
     when the stream cannot be decoded."""
 
-    full = _decode_ids(tok, ids)
+    full, _ = _decode_ids(tok, ids)
     if full is None:
         return None
-    prefix = _decode_ids(tok, list(ids)[: max(0, int(token_index))])
+    prefix, _ = _decode_ids(tok, list(ids)[: max(0, int(token_index))])
     offset = len(prefix) if prefix is not None else 0
     return full[max(0, offset - span): offset + span]
 
@@ -3135,6 +3159,21 @@ def _run_arm(args, arm, bench, mx) -> dict:
     prompt_ids, prompt_meta = bench._resolve_prompt(
         args, _tok, build_prompt, args.context_tokens
     )
+    # W106 output persistence (window-43 fix): the prompt path leaves _tok None when
+    # --prompt-ids-file supplies the prompt ids -- but the OUTPUT still needs a
+    # tokenizer to be decoded for the audit.  Always obtain one for decoding
+    # (reusing _tok when present), guarded, so a decode is never silently skipped.
+    _out_tok = _tok
+    if _out_tok is None:
+        try:
+            _out_tok = _tokenizer(args, bench)
+        except Exception as exc:  # pragma: no cover - defensive
+            _out_tok = None
+            print(
+                "[ab] WARN: could not load a tokenizer for OUTPUT decode "
+                f"({exc!r}); receipts will carry decoded_text_error",
+                flush=True,
+            )
     resident = _load_model(args, bench, mx)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime", None)
@@ -3253,7 +3292,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # head/tail) for the AR pass, so a rounding-class result is text-
             # auditable, not just sha-comparable. Decoded with the loaded bench
             # tokenizer; None if unavailable (guarded).
-            **_text_output_fields(_tok, ids),
+            **_text_output_fields(_out_tok, ids),
             "overlap_telemetry": _overlap_telemetry(runtime)
             if runtime is not None
             else None,
@@ -3358,8 +3397,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # W106 output persistence: the FULL DSpark stream (ids + decoded text)
             # AND the AR comparison stream it is verified against, both under the
             # dspark block so the divergence is text-auditable from the receipt.
-            receipt["dspark"].update(_text_output_fields(_tok, dsp_ids))
-            receipt["dspark"]["ar_reference"] = _text_output_fields(_tok, ids)
+            receipt["dspark"].update(_text_output_fields(_out_tok, dsp_ids))
+            receipt["dspark"]["ar_reference"] = _text_output_fields(_out_tok, ids)
             if dsp.get("verify_stage_timing") is not None:
                 # W37 internal breakdown of the verify forward (attention +
                 # moe.routed_switch): the census that shows the routing phase.
@@ -3395,8 +3434,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 # W106: the decoded text ~200 chars either side of the divergence
                 # point, for BOTH streams, so the flip is readable in the receipt.
                 receipt["dspark"]["divergence_context"] = {
-                    "ar": _divergence_context(_tok, ids, first),
-                    "dspark": _divergence_context(_tok, dsp_ids, first),
+                    "ar": _divergence_context(_out_tok, ids, first),
+                    "dspark": _divergence_context(_out_tok, dsp_ids, first),
                 }
                 ar_tok = ids[first] if first < len(ids) else None
                 dsp_tok = dsp_ids[first] if first < len(dsp_ids) else None
