@@ -3221,10 +3221,9 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # W93: gate-oracle one-layer-ahead expert prefetch (width k + target floor).
     "MTPLX_DSV41_GATE_PREFETCH",
     "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER",
-    # W107: bounded/preallocated KV growth levers (ab_decode_env_levers added these
-    # to ALL_LEVER_ENVS at the W107 merge).  The w107/kv-growth-bounded follow-up
-    # fix also adds these two keys here; when that branch is re-merged, resolve the
-    # add/add on this hunk by keeping a single copy of each.
+    # W107 (appended -- coordinate with any concurrent list extension): the bounded/
+    # preallocated KV master switch + its preallocation cap (MAXKV is server-plumbed
+    # from max_live_kv_tokens below, mirroring MTPLX_CONTEXT_WINDOW_TOKENS).
     "MTPLX_DSV41_KV_BOUNDED",
     "MTPLX_DSV41_KV_BOUNDED_MAXKV",
     # W95 / W104: the served path must also stamp the runner + draft-head-bf16
@@ -3872,6 +3871,17 @@ class ServerState:
                 )
             self.context_window = min(
                 int(self.context_window), _max_live_kv_tokens
+            )
+            # W107 (review HIGH-2): plumb the bounded-KV preallocation cap from the
+            # streamed runtime's hard live-KV ceiling, so a served MTPLX_DSV41_KV_BOUNDED
+            # run preallocates every KV lane to max_live_kv_tokens (the ab harness
+            # stamps this from --max-kv; the server had no path, so bounded lanes fell
+            # back to geometric growth).  Env is the plumbing for the SAME reason as
+            # MTPLX_CONTEXT_WINDOW_TOKENS below: make_cache reaches the cache through
+            # mlx_lm.make_prompt_cache(model) with no handle to pass a parameter.
+            # setdefault so an explicit operator cap wins.
+            os.environ.setdefault(
+                "MTPLX_DSV41_KV_BOUNDED_MAXKV", str(int(_max_live_kv_tokens))
             )
         if (
             scheduler_config.mode == SchedulerMode.MTP_BATCH

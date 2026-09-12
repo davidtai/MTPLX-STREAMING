@@ -154,14 +154,31 @@ def test_kv_bytes_breakdown_scales_with_max_kv():
     assert big["window"] == small["window"], "window must not grow with max_kv"
     assert big["total"] == big["window"] + big["compress"] + big["index"] + big["latent"]
     assert C.kv_bytes_at_max_kv(cfg, 4096) == big["total"]
-    # dtype widths scale the per-lane bytes: all-fp32 (4) doubles the default bf16 (2)
-    # stores and leaves the already-fp32 latent frontier unchanged.
+    # window is bf16 (follows x) -> all-fp32 doubles it; latent is already fp32.
     f32 = C.kv_bytes_breakdown_at_max_kv(
         cfg, 4096, window_dtype_bytes=4, compress_dtype_bytes=4, index_dtype_bytes=4,
         latent_dtype_bytes=4)
     assert f32["window"] == 2 * big["window"]     # bf16 -> fp32
-    assert f32["compress"] == 2 * big["compress"]
     assert f32["latent"] == big["latent"]         # latent already fp32 by default
+
+
+def test_medium2_ratio_gt1_compress_index_are_fp32():
+    """Review MEDIUM-2: compress/index on ratio>1 source layers are fp32 (the
+    compressor pools in fp32), only ratio==1 follows x's bf16.  _Cfg has kv_source
+    [2, 5] with ratios {2: 2, 5: 1}."""
+    cfg = _Cfg()
+    max_kv = 4096
+    bd = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv)  # defaults: bf16=2, fp32=4
+    cc2 = C._bounded_comp_cap(max_kv, 2)              # layer 2 (ratio 2, fp32)
+    cc1 = C._bounded_comp_cap(max_kv, 1)              # layer 5 (ratio 1, bf16)
+    hd, ihd = cfg.head_dim, cfg.index_head_dim
+    exp_compress = cc2 * hd * 4 + cc1 * hd * 2       # fp32 + bf16
+    exp_index = cc2 * ihd * 4 + cc1 * ihd * 2
+    assert bd["compress"] == exp_compress, (bd["compress"], exp_compress)
+    assert bd["index"] == exp_index, (bd["index"], exp_index)
+    # overriding latent_dtype_bytes moves the ratio>1 stores (they share the fp32 width)
+    bd_bf16 = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv, latent_dtype_bytes=2)
+    assert bd_bf16["compress"] == cc2 * hd * 2 + cc1 * hd * 2
 
 
 # ---------------------------------------------------------------------------
@@ -561,3 +578,332 @@ def test_bounded_maxkv_falls_back_to_window_ring_maxkv(monkeypatch):
     assert C._kv_bounded_maxkv() == 96
     monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "77")   # explicit wins
     assert C._kv_bounded_maxkv() == 77
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH-1: DSpark trim/rollback must NOT reallocate the preallocated
+# compress/index lanes (length-only truncate, stable backing).
+# ---------------------------------------------------------------------------
+def _drive_verify_cycle(lc, cfg, k_plus_1):
+    """One DSpark-style verify block: append K+1 rows through window + compressor +
+    compress/index, advance."""
+    lc.append_window(_row(k_plus_1, cfg.head_dim))
+    p = lc.comp_state.push(_row(k_plus_1, cfg.head_dim), _row(k_plus_1, cfg.head_dim))
+    if p.shape[1] > 0:
+        lc.append_compress(_row(p.shape[1], cfg.head_dim))
+        lc.append_index_k(_row(p.shape[1], cfg.index_head_dim))
+    lc.advance(k_plus_1)
+
+
+def test_dspark_trim_no_realloc_compress_index(monkeypatch):
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=512)
+    C.reset_kv_bounded_stats()
+    lc = C.LayerAttentionCache(window_size=cfg.window_size, compress_ratio=2,
+                               is_kv_source=True)
+    # prefill 40 rows (fills the buffers once)
+    lc.append_window(_row(40, cfg.head_dim))
+    lc.comp_state.push(_row(40, cfg.head_dim), _row(40, cfg.head_dim))
+    lc.append_compress(_row(20, cfg.head_dim))
+    lc.append_index_k(_row(20, cfg.index_head_dim))
+    lc.advance(40)
+
+    s0 = C.kv_bounded_stats()
+    realloc_c0, realloc_i0 = s0["kv_realloc_compress"], s0["kv_realloc_index"]
+    alloc0 = s0["alloc_bytes"]
+    # backing capacity (shape) is the stable-buffer proxy: mx.slice_update returns a
+    # new mx.array WRAPPER each in-place write (functional API) even when it donates
+    # the same memory, so id() is not stable; a fresh mx.zeros (a realloc) would
+    # change the shape and bump kv_realloc_* / alloc_bytes -- those are the invariants.
+    shape_c0 = tuple(lc._compress_kv.raw_backing().shape)
+    shape_i0 = tuple(lc._index_k.raw_backing().shape)
+
+    # 8 rejected DSpark cycles: append K+1=4, then trim 2 (reject 2 of the block)
+    for _ in range(8):
+        _drive_verify_cycle(lc, cfg, k_plus_1=4)
+        lc.trim(2)
+
+    s1 = C.kv_bounded_stats()
+    assert s1["kv_realloc_compress"] == realloc_c0, (
+        f"compress reallocated over verify cycles "
+        f"({realloc_c0} -> {s1['kv_realloc_compress']})")
+    assert s1["kv_realloc_index"] == realloc_i0, (
+        f"index reallocated over verify cycles "
+        f"({realloc_i0} -> {s1['kv_realloc_index']})")
+    # the backing capacity is unchanged (length-only truncate, not a fresh set())
+    assert tuple(lc._compress_kv.raw_backing().shape) == shape_c0
+    assert tuple(lc._index_k.raw_backing().shape) == shape_i0
+    # alloc_bytes did not grow with the cycles (no fresh mx.zeros per reject)
+    assert s1["alloc_bytes"] == alloc0, (
+        f"alloc_bytes grew over verify cycles ({alloc0} -> {s1['alloc_bytes']})")
+
+
+def test_rollback_no_realloc_compress_index(monkeypatch):
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=512)
+    C.reset_kv_bounded_stats()
+    lc = C.LayerAttentionCache(window_size=cfg.window_size, compress_ratio=2,
+                               is_kv_source=True)
+    lc.append_window(_row(40, cfg.head_dim))
+    lc.comp_state.push(_row(40, cfg.head_dim), _row(40, cfg.head_dim))
+    lc.append_compress(_row(20, cfg.head_dim))
+    lc.append_index_k(_row(20, cfg.index_head_dim))
+    lc.advance(40)
+
+    realloc_c0 = C.kv_bounded_stats()["kv_realloc_compress"]
+    shape_c0 = tuple(lc._compress_kv.raw_backing().shape)
+
+    for _ in range(8):
+        m = lc.mark()
+        _drive_verify_cycle(lc, cfg, k_plus_1=4)
+        lc.rollback(m)
+
+    s1 = C.kv_bounded_stats()
+    assert s1["kv_realloc_compress"] == realloc_c0
+    assert tuple(lc._compress_kv.raw_backing().shape) == shape_c0
+    # rollback restored the exact pre-cycle group count
+    assert int(lc.compress_kv.shape[1]) == 20
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH-2: the served path must give the bounded lanes a max_kv.
+# ---------------------------------------------------------------------------
+def test_server_registers_kv_bounded_lever_keys():
+    """The two W107 lever env keys are in the served-log snapshot list (a merge
+    worker adds RUNNER/DRAFT_HEAD_BF16 to the same list -- ours must survive)."""
+    from mtplx.server import openai as O
+    assert "MTPLX_DSV41_KV_BOUNDED" in O._DSV41_LEVER_ENV_KEYS
+    assert "MTPLX_DSV41_KV_BOUNDED_MAXKV" in O._DSV41_LEVER_ENV_KEYS
+    resolved = O._dsv41_resolved_lever_env(
+        {"MTPLX_DSV41_KV_BOUNDED": "1", "MTPLX_DSV41_KV_BOUNDED_MAXKV": "17408"})
+    assert resolved["MTPLX_DSV41_KV_BOUNDED"] == "1"
+    assert resolved["MTPLX_DSV41_KV_BOUNDED_MAXKV"] == "17408"
+
+
+def test_server_plumbed_maxkv_bounds_the_cache(monkeypatch):
+    """The env the server stamps from max_live_kv_tokens is honoured at cache
+    construction: every lane preallocates to that cap (this is what the served path
+    now delivers -- before HIGH-2 the server stamped nothing and the lanes fell back
+    to geometric growth)."""
+    _clear_kv_envs(monkeypatch)
+    # what the server writes at setup: KV_BOUNDED on + MAXKV == max_live_kv_tokens
+    served_max_live_kv = 4096
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(served_max_live_kv))
+    assert C._kv_bounded_maxkv() == served_max_live_kv
+
+    cache = _make_cache(_Cfg())
+    assert all(lc._kv_bounded for lc in cache.layers)
+    # a ratio-2 kv-source layer preallocates compress to ceil(max_kv/2)+slack and the
+    # latent frontier to max_kv+slack -- i.e. it is bounded, not geometric-from-256.
+    lc = cache.layers[2]
+    lc.append_compress(_row(1, _Cfg.head_dim))
+    assert int(lc._compress_kv.raw_backing().shape[1]) == \
+        C._bounded_comp_cap(served_max_live_kv, 2)
+    lc.comp_state.push(_row(1, _Cfg.head_dim), _row(1, _Cfg.head_dim))
+    assert int(lc.comp_state.raw_backings()[0].shape[1]) == \
+        C._bounded_latent_cap(served_max_live_kv)
+
+
+def test_server_setdefault_lets_explicit_cap_win(monkeypatch):
+    """The server stamps MAXKV with setdefault, so an explicit operator cap wins --
+    mirrors the ``os.environ.setdefault`` in the server's KV-window setup."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "999")   # explicit operator cap
+    # the server's stamp is a setdefault, so it does NOT override an explicit value
+    import os as _os
+    _os.environ.setdefault("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(4096))
+    assert C._kv_bounded_maxkv() == 999
+
+
+# ---------------------------------------------------------------------------
+# Review MEDIUM-1: the window ring must shrink back to its base phys_cap after a
+# chunked prefill inflates it (formula and steady allocation must agree).
+# ---------------------------------------------------------------------------
+def test_window_ring_shrinks_back_after_chunked_prefill():
+    ring = C._WindowRing(8, 8, 8, 64)          # base_phys_cap = 8+8+8+64 = 88
+    base = ring._base_phys_cap
+    assert base == 88
+    rng = np.random.default_rng(1)
+    # chunked prefill: 2048 rows in 256-row chunks -> inflates phys_cap transiently
+    for _ in range(8):
+        ring.append(mx.array(rng.standard_normal((1, 256, 16)).astype(np.float32)))
+    assert ring.phys_cap > base, "prefill should transiently grow the ping-pong buffers"
+    # decode steps: the ring must SHRINK back to base (old bug: phys_cap stuck at ~263)
+    for _ in range(300):
+        ring.append(mx.array(rng.standard_normal((1, 1, 16)).astype(np.float32)))
+    assert ring.phys_cap == base, f"ring did not shrink back: phys_cap={ring.phys_cap}"
+    assert int(ring.raw_backing().shape[1]) == base
+    # live window bytes now match the formula's window term (2 x base x head_dim x dtype)
+    live_window = int(ring._bufs[ring._cur].nbytes)
+    assert live_window == base * 16 * 4                     # fp32 rows here
+
+
+def test_window_formula_matches_steady_allocation_after_chunked_prefill(monkeypatch):
+    """End to end: after a chunked prefill the summed live window bytes equal the
+    kv_bytes formula's window term (the doc §4 number), not the inflated transient."""
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=4096)
+    C.reset_kv_bounded_stats()
+    cache = _make_cache(cfg)
+    rng = np.random.default_rng(2)
+    # prefill the window lane of every layer in 64-row chunks (> base phys_cap 88? no;
+    # use 128-row chunks to exceed base and force a transient grow)
+    for _ in range(6):
+        for lc in cache.layers:
+            lc.append_window(mx.array(rng.standard_normal((1, 128, cfg.head_dim)).astype(np.float32)))
+    # decode until every ring compacts back to base
+    for _ in range(400):
+        for lc in cache.layers:
+            lc.append_window(mx.array(rng.standard_normal((1, 1, cfg.head_dim)).astype(np.float32)))
+    for lc in cache.layers:
+        assert lc._window.phys_cap == lc._window._base_phys_cap
+    live_window = sum(int(lc._window._bufs[0].nbytes) + int(lc._window._bufs[1].nbytes)
+                      for lc in cache.layers)
+    formula_window = C.kv_bytes_breakdown_at_max_kv(
+        cfg, 4096, window_dtype_bytes=4)["window"]
+    assert live_window == formula_window, (
+        f"steady window bytes {live_window} != formula {formula_window}")
+
+
+# ---------------------------------------------------------------------------
+# Review MEDIUM-3: rollback across a ring compaction must fail loud, not silently
+# lose in-window rows (pre-existing W80 divergence).
+# ---------------------------------------------------------------------------
+def test_window_ring_deep_rollback_across_compaction_raises():
+    ring = C._WindowRing(8, 2, 1, 2)   # window_size 8, cap_keep 11, phys_cap 13
+    rng = np.random.default_rng(4)
+    for _ in range(100):
+        ring.append(mx.array(rng.standard_normal((1, 1, 16)).astype(np.float32)))
+    assert ring.drop_offset > 0, "need a compaction to have advanced the drop frontier"
+    L = ring.logical_len()
+    # a shallow rollback within the resident window is fine (DSpark 1 cycle / device
+    # route depth 1) -- the raise fires BEFORE any mutation, so state is intact.
+    ring.truncate_to_length(L - 1)
+    assert ring.rows() == 12
+    # a deep rollback whose window reaches below the drop frontier must RAISE
+    with pytest.raises(ValueError, match="below the drop frontier"):
+        ring.truncate_to_length(20)
+    # full reset to 0 is allowed (no history needed)
+    ring.truncate_to_length(0)
+    assert ring.rows() == 0 and ring.drop_offset == 0
+
+
+def test_layer_cache_deep_rollback_across_compaction_raises(monkeypatch):
+    """The trim/rollback seam surfaces the raise: a mark, then enough decode to
+    compact past the mark's window, then rollback -> ValueError (not silent)."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "4096")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_HEADROOM", "2")   # tiny -> compaction fast
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_MAX_VERIFY", "2")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_SLACK", "1")
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=0, is_kv_source=False)
+    for _ in range(20):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    m = lc.mark()                       # mark at offset 20
+    for _ in range(60):                 # decode far past the mark's window -> compactions
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    assert lc._window.drop_offset > 20
+    with pytest.raises(ValueError, match="below the drop frontier"):
+        lc.rollback(m)
+
+
+def test_shallow_rollback_over_ring_is_safe(monkeypatch):
+    """A depth-1 rollback (DSpark accept/reject one cycle) never trips MEDIUM-3."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "4096")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_HEADROOM", "2")
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=0, is_kv_source=False)
+    for _ in range(60):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    m = lc.mark()
+    lc.append_window(_row(1, 16)); lc.advance(1)   # one speculative step
+    lc.rollback(m)                                  # reject it -- must not raise
+    assert lc.offset == 60
+
+
+# ---------------------------------------------------------------------------
+# Review LOW-1: an over-cap forward must fail BEFORE touching any lane (no
+# half-updated cache).
+# ---------------------------------------------------------------------------
+def test_assert_can_admit_raises_without_mutating(monkeypatch):
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=64)
+    cache = _make_cache(cfg)
+    _prefill_all_lanes(cache, cfg, n=20)          # offset 20 on every entry
+    offs = [lc.offset for lc in cache.layers]
+    wlens = [lc.window_len() for lc in cache.layers]
+    clens = [_r(lc.compress_kv) for lc in cache.layers]
+    # 60 more tokens overflows the latent cap (64 + slack 8 = 72 < 20 + 60 = 80)
+    with pytest.raises(ValueError, match="cannot admit"):
+        cache.assert_can_admit(60)
+    # nothing moved -- the pre-check touched no lane
+    assert [lc.offset for lc in cache.layers] == offs
+    assert [lc.window_len() for lc in cache.layers] == wlens
+    assert [_r(lc.compress_kv) for lc in cache.layers] == clens
+    # a within-cap admission does not raise
+    cache.assert_can_admit(40)                     # 20 + 40 = 60 <= 72
+
+
+def _r(a):
+    return 0 if a is None else int(a.shape[1])
+
+
+def test_over_cap_model_forward_raises_and_leaves_cache_clean(monkeypatch):
+    """An over-cap prefill fails via the backbone pre-check with the cache untouched
+    (offset 0, no lanes written) -- not half-updated."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "16")   # tiny cap
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    model = _tiny_model()
+    cache = model.make_cache()
+    prompt = mx.array([list(range(40))])           # 40 > 16 + slack -> over-cap
+    with pytest.raises(ValueError, match="cannot admit"):
+        model(prompt, cache=cache)
+    # the pre-check ran before any layer appended: every entry is still empty
+    assert all(lc.offset == 0 for lc in cache.layers)
+    assert all(lc.window_len() == 0 for lc in cache.layers)
+
+
+# ---------------------------------------------------------------------------
+# Review LOW-2: truncate_to(0) must keep the preallocated buffer (no realloc on
+# the next append).
+# ---------------------------------------------------------------------------
+def test_truncate_to_zero_keeps_prealloc():
+    gb = C._GrowBuffer(bounded_cap=32, counter_lane="compress")
+    C.reset_kv_bounded_stats()
+    gb.append(_row(10, 8))                       # one prealloc
+    assert C.kv_bounded_stats()["kv_realloc_compress"] == 1
+    cap_shape = tuple(gb.raw_backing().shape)
+    gb.truncate_to(0)                            # rollback to empty
+    assert gb.rows() == 0
+    assert gb.raw_backing() is not None          # buffer kept (LOW-2)
+    assert tuple(gb.raw_backing().shape) == cap_shape
+    gb.append(_row(5, 8))                        # next append must reuse, not realloc
+    s = C.kv_bounded_stats()
+    assert s["kv_realloc_compress"] == 1, "truncate_to(0) dropped the prealloc"
+    assert s["kv_inplace_writes_compress"] >= 1
+    assert gb.rows() == 5
+
+
+def test_full_trim_to_zero_no_realloc_via_cache(monkeypatch):
+    """A whole-entry trim to offset 0 keeps every bounded lane's prealloc."""
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=256)
+    C.reset_kv_bounded_stats()
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=2, is_kv_source=True)
+    lc.append_window(_row(20, 16))
+    lc.comp_state.push(_row(20, 16), _row(20, 16))
+    lc.append_compress(_row(10, 16))
+    lc.append_index_k(_row(10, 12))
+    lc.advance(20)
+    reallocs = {ln: C.kv_bounded_stats()[f"kv_realloc_{ln}"]
+                for ln in ("compress", "index", "latent")}
+    lc.trim(20)                                  # trim the whole entry to empty
+    assert lc.offset == 0
+    for ln in ("compress", "index", "latent"):
+        assert C.kv_bounded_stats()[f"kv_realloc_{ln}"] == reallocs[ln], (
+            f"{ln} reallocated on trim-to-0")
