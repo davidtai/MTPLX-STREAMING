@@ -697,3 +697,53 @@ def test_server_setdefault_lets_explicit_cap_win(monkeypatch):
     import os as _os
     _os.environ.setdefault("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(4096))
     assert C._kv_bounded_maxkv() == 999
+
+
+# ---------------------------------------------------------------------------
+# Review MEDIUM-1: the window ring must shrink back to its base phys_cap after a
+# chunked prefill inflates it (formula and steady allocation must agree).
+# ---------------------------------------------------------------------------
+def test_window_ring_shrinks_back_after_chunked_prefill():
+    ring = C._WindowRing(8, 8, 8, 64)          # base_phys_cap = 8+8+8+64 = 88
+    base = ring._base_phys_cap
+    assert base == 88
+    rng = np.random.default_rng(1)
+    # chunked prefill: 2048 rows in 256-row chunks -> inflates phys_cap transiently
+    for _ in range(8):
+        ring.append(mx.array(rng.standard_normal((1, 256, 16)).astype(np.float32)))
+    assert ring.phys_cap > base, "prefill should transiently grow the ping-pong buffers"
+    # decode steps: the ring must SHRINK back to base (old bug: phys_cap stuck at ~263)
+    for _ in range(300):
+        ring.append(mx.array(rng.standard_normal((1, 1, 16)).astype(np.float32)))
+    assert ring.phys_cap == base, f"ring did not shrink back: phys_cap={ring.phys_cap}"
+    assert int(ring.raw_backing().shape[1]) == base
+    # live window bytes now match the formula's window term (2 x base x head_dim x dtype)
+    live_window = int(ring._bufs[ring._cur].nbytes)
+    assert live_window == base * 16 * 4                     # fp32 rows here
+
+
+def test_window_formula_matches_steady_allocation_after_chunked_prefill(monkeypatch):
+    """End to end: after a chunked prefill the summed live window bytes equal the
+    kv_bytes formula's window term (the doc §4 number), not the inflated transient."""
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=4096)
+    C.reset_kv_bounded_stats()
+    cache = _make_cache(cfg)
+    rng = np.random.default_rng(2)
+    # prefill the window lane of every layer in 64-row chunks (> base phys_cap 88? no;
+    # use 128-row chunks to exceed base and force a transient grow)
+    for _ in range(6):
+        for lc in cache.layers:
+            lc.append_window(mx.array(rng.standard_normal((1, 128, cfg.head_dim)).astype(np.float32)))
+    # decode until every ring compacts back to base
+    for _ in range(400):
+        for lc in cache.layers:
+            lc.append_window(mx.array(rng.standard_normal((1, 1, cfg.head_dim)).astype(np.float32)))
+    for lc in cache.layers:
+        assert lc._window.phys_cap == lc._window._base_phys_cap
+    live_window = sum(int(lc._window._bufs[0].nbytes) + int(lc._window._bufs[1].nbytes)
+                      for lc in cache.layers)
+    formula_window = C.kv_bytes_breakdown_at_max_kv(
+        cfg, 4096, window_dtype_bytes=4)["window"]
+    assert live_window == formula_window, (
+        f"steady window bytes {live_window} != formula {formula_window}")

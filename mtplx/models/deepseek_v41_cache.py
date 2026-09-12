@@ -660,7 +660,7 @@ class _WindowRing:
     """
 
     __slots__ = (
-        "window_size", "cap_keep", "phys_cap",
+        "window_size", "cap_keep", "phys_cap", "_base_phys_cap",
         "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail", "_lane",
     )
 
@@ -669,6 +669,12 @@ class _WindowRing:
         self.window_size = int(window_size)
         self.cap_keep = int(window_size) + int(max_verify) + int(slack)
         self.phys_cap = self.cap_keep + int(headroom)
+        #: W107 (review MEDIUM-1): the constructed (steady) ping-pong capacity.  A
+        #: prefill chunk wider than this grows ``phys_cap`` transiently; once decode
+        #: compactions no longer need the extra width the ring SHRINKS back to this,
+        #: so the decode-steady allocation matches :func:`kv_bytes_at_max_kv` (the
+        #: window term is ``2 * _base_phys_cap * head_dim``, independent of max_kv).
+        self._base_phys_cap = self.phys_cap
         self._bufs = [None, None]
         self._cur = 0
         self._len = 0
@@ -707,7 +713,7 @@ class _WindowRing:
         self._dtype = new.dtype
         self._tail = tuple(new.shape[2:])
         n = int(new.shape[1])
-        cap = max(self.phys_cap, n)
+        cap = max(self._base_phys_cap, n)  # W107 MEDIUM-1: base, not a stale inflated cap
         self.phys_cap = cap
         self._bufs[0] = self._alloc(cap)
         self._bufs[1] = self._alloc(cap)
@@ -747,25 +753,26 @@ class _WindowRing:
         new_drop = L_new - keep
         retained = L - new_drop            # old rows carried over (>= 0)
         src = self._bufs[self._cur]        # read the retained suffix from OLD buffer
-        target_cap = self.phys_cap
-        if keep > target_cap:
-            # transient grow for a prefill chunk wider than the ping-pong buffers
-            # (allowed off the decode path; decode/verify appends never trip this)
-            target_cap = keep
-            _RING_STATS["reallocs"] += 1
+        # W107 (review MEDIUM-1): target the BASE cap, growing only for a prefill
+        # chunk wider than it and SHRINKING back to it once a decode compaction no
+        # longer needs the transient width -- so the decode-steady phys_cap returns
+        # to base (the old code set phys_cap = keep and only ever grew, leaving the
+        # window inflated by the widest prefill chunk for the rest of the sequence).
+        target_cap = max(self._base_phys_cap, keep)
         dst_idx = 1 - self._cur
         dst = self._bufs[dst_idx]
         _grew = False
         if dst is None or int(dst.shape[1]) != target_cap:
-            dst = self._alloc(target_cap)  # only when growing (else reuse ping-pong)
+            dst = self._alloc(target_cap)  # only on a size change (else reuse ping-pong)
             _grew = True
         if retained > 0:
             head = src[:, self._len - retained: self._len]   # OLD buffer != dst
             dst = self._write(dst, head, 0)
         dst = self._write(dst, new, retained)
         if target_cap != self.phys_cap:
-            self.phys_cap = target_cap
+            self.phys_cap = target_cap      # grow OR shrink back toward base
             self._bufs = [None, None]      # other slot re-allocated at next compaction
+            _RING_STATS["reallocs"] += 1
             _RING_STATS["phys_capacity"] = self.phys_cap
         self._bufs[dst_idx] = dst
         self._cur = dst_idx
@@ -800,6 +807,7 @@ class _WindowRing:
         self._cur = 0
         self._len = 0
         self._drop = 0
+        self.phys_cap = self._base_phys_cap  # W107 MEDIUM-1: don't carry a stale inflated cap
         if arr is not None:
             self.append(arr)
 
