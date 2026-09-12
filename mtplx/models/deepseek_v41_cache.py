@@ -833,12 +833,26 @@ class _WindowRing:
 
     def truncate_to_length(self, logical_len: int) -> None:
         """Drop back to logical length ``logical_len`` (trim/rollback).  ``_drop``
-        stays where it is (advanced by any compaction since the mark -- those rows
-        are unrecoverable but always beyond the window, so the reachable state is
-        exact); only the resident count shrinks."""
+        stays where it is (advanced by any compaction since the mark) and only the
+        resident count shrinks.
+
+        W107 (review MEDIUM-3, pre-existing W80): a rollback that pulls the frontier
+        back far enough that the newest retained / next query's causal window reaches
+        BELOW the drop frontier would silently read masked (dropped) rows -> silent
+        divergence.  Raise instead of corrupting.  Shallow rollbacks (DSpark one
+        cycle, device-route depth 1) stay within the resident window and never trip
+        this; ``logical_len == 0`` is a full reset (no history needed) and is allowed.
+        """
         logical_len = max(0, int(logical_len))
+        if logical_len > 0 and (logical_len - self.window_size + 1) < self._drop:
+            raise ValueError(
+                f"window ring cannot roll back to logical length {logical_len}: its "
+                f"causal window reaches below the drop frontier {self._drop} "
+                f"(window_size {self.window_size}) -- those rows were compacted away "
+                f"and cannot be restored (deeper than the resident sliding window)"
+            )
         if logical_len <= self._drop:
-            # trimming at/under the drop frontier: nothing resident remains reachable
+            # full reset (logical_len == 0): nothing resident remains, start fresh
             self._len = 0
             self._drop = logical_len
             return

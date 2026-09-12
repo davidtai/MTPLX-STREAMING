@@ -764,3 +764,61 @@ def test_window_formula_matches_steady_allocation_after_chunked_prefill(monkeypa
         cfg, 4096, window_dtype_bytes=4)["window"]
     assert live_window == formula_window, (
         f"steady window bytes {live_window} != formula {formula_window}")
+
+
+# ---------------------------------------------------------------------------
+# Review MEDIUM-3: rollback across a ring compaction must fail loud, not silently
+# lose in-window rows (pre-existing W80 divergence).
+# ---------------------------------------------------------------------------
+def test_window_ring_deep_rollback_across_compaction_raises():
+    ring = C._WindowRing(8, 2, 1, 2)   # window_size 8, cap_keep 11, phys_cap 13
+    rng = np.random.default_rng(4)
+    for _ in range(100):
+        ring.append(mx.array(rng.standard_normal((1, 1, 16)).astype(np.float32)))
+    assert ring.drop_offset > 0, "need a compaction to have advanced the drop frontier"
+    L = ring.logical_len()
+    # a shallow rollback within the resident window is fine (DSpark 1 cycle / device
+    # route depth 1) -- the raise fires BEFORE any mutation, so state is intact.
+    ring.truncate_to_length(L - 1)
+    assert ring.rows() == 12
+    # a deep rollback whose window reaches below the drop frontier must RAISE
+    with pytest.raises(ValueError, match="below the drop frontier"):
+        ring.truncate_to_length(20)
+    # full reset to 0 is allowed (no history needed)
+    ring.truncate_to_length(0)
+    assert ring.rows() == 0 and ring.drop_offset == 0
+
+
+def test_layer_cache_deep_rollback_across_compaction_raises(monkeypatch):
+    """The trim/rollback seam surfaces the raise: a mark, then enough decode to
+    compact past the mark's window, then rollback -> ValueError (not silent)."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "4096")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_HEADROOM", "2")   # tiny -> compaction fast
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_MAX_VERIFY", "2")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_SLACK", "1")
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=0, is_kv_source=False)
+    for _ in range(20):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    m = lc.mark()                       # mark at offset 20
+    for _ in range(60):                 # decode far past the mark's window -> compactions
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    assert lc._window.drop_offset > 20
+    with pytest.raises(ValueError, match="below the drop frontier"):
+        lc.rollback(m)
+
+
+def test_shallow_rollback_over_ring_is_safe(monkeypatch):
+    """A depth-1 rollback (DSpark accept/reject one cycle) never trips MEDIUM-3."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "4096")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_HEADROOM", "2")
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=0, is_kv_source=False)
+    for _ in range(60):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    m = lc.mark()
+    lc.append_window(_row(1, 16)); lc.advance(1)   # one speculative step
+    lc.rollback(m)                                  # reject it -- must not raise
+    assert lc.offset == 60
