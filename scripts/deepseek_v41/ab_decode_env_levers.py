@@ -4882,7 +4882,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # be its one-time prealloc count (window 1, compress 1, index 1, latent 2
             # == kv+score) and STAY there -- a growing ``kv_realloc_*`` over the cell
             # means the lane was not preallocated (max_kv unset / prefill chunk wider
-            # than the cap).  ``kv_inplace_writes_<lane>`` is the O(new-rows) decode
+            # than the cap).  ``kv_appends_<lane>`` is the O(new-rows) decode
             # path; ``alloc_bytes`` should ~= kv_bytes_at_max_kv(config, max_kv).
             bounded_stats_fn = getattr(_dsv41_cache, "kv_bounded_stats", None)
             if callable(bounded_stats_fn):
@@ -4926,7 +4926,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                         bstats["formula_matches_alloc"] = None
                 bstats["note"] = (
                     "cumulative over this arm; kv_realloc_<lane> == one-time prealloc "
-                    "(>1 growing == not preallocated-bounded); kv_inplace_writes_<lane> "
+                    "(>1 growing == not preallocated-bounded); kv_appends_<lane> "
                     "== O(new-rows) decode path; formula_matches_alloc exact iff "
                     "kv_realloc_window == num_layers (no transient prefill grow)"
                 )

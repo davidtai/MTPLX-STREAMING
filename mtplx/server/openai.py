@@ -3511,6 +3511,19 @@ class ServerState:
         _stream_kwargs = getattr(self, "expert_streaming_load_kwargs", None) or {}
         _stream_cfg = _stream_kwargs.get("expert_streaming_config")
         if "deepseek-v41" in str(getattr(_stream_cfg, "model_key", "") or ""):
+            # W107F: plumb the bounded-KV preallocation cap from the streamed config's
+            # hard live-KV ceiling HERE -- BEFORE the decode-levers log below -- so the
+            # logged resolved env shows the ACTUAL MTPLX_DSV41_KV_BOUNDED_MAXKV the cache
+            # will preallocate to, not a stale/unset value.  The authoritative hard-set
+            # runs again at runtime install (idempotent); this early call is guarded and
+            # never raises -- the install-time call validates and raises on a bad ceiling.
+            _early_mlkt = getattr(_stream_cfg, "max_live_kv_tokens", None)
+            if (
+                isinstance(_early_mlkt, int)
+                and not isinstance(_early_mlkt, bool)
+                and _early_mlkt > 0
+            ):
+                _plumb_kv_bounded_maxkv(_early_mlkt)
             _startup_line(
                 "[4/6] DeepSeek-V4.1 decode levers (resolved env): "
                 + _format_dsv41_lever_env(_dsv41_resolved_lever_env(os.environ))

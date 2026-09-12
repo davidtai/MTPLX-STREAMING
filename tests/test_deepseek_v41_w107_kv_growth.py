@@ -265,7 +265,7 @@ def test_inplace_stable_no_realloc_flat_memory(monkeypatch):
         assert stats[f"kv_realloc_{ln}"] == reallocs_before[ln], (
             f"lane {ln} reallocated during decode "
             f"({reallocs_before[ln]} -> {stats[f'kv_realloc_{ln}']})")
-        assert stats[f"kv_inplace_writes_{ln}"] > 0
+        assert stats[f"kv_appends_{ln}"] > 0
 
     # (b) raw-backing capacity (shape) is unchanged -- same physical buffer.
     for L, lc in enumerate(cache.layers):
@@ -517,7 +517,7 @@ def test_counters_increment_and_reset(monkeypatch):
     z = C.kv_bounded_stats()
     assert z["enabled"] is False and z["layers_bounded"] == 0
     for ln in ("window", "compress", "index", "latent"):
-        assert z[f"kv_inplace_writes_{ln}"] == 0 and z[f"kv_realloc_{ln}"] == 0
+        assert z[f"kv_appends_{ln}"] == 0 and z[f"kv_realloc_{ln}"] == 0
 
     cache = _make_cache(cfg)
     _prefill_all_lanes(cache, cfg, n=16)
@@ -543,10 +543,15 @@ def test_counters_increment_and_reset(monkeypatch):
     assert s["maxkv"] == 256
     assert s["alloc_bytes"] > 0
     # every lane engaged: one-time prealloc (realloc) + in-place decode writes
-    assert s["kv_inplace_writes_window"] > 0 and s["kv_realloc_window"] >= 1
-    assert s["kv_inplace_writes_compress"] > 0 and s["kv_realloc_compress"] >= 1
-    assert s["kv_inplace_writes_index"] > 0 and s["kv_realloc_index"] >= 1
-    assert s["kv_inplace_writes_latent"] > 0 and s["kv_realloc_latent"] >= 1
+    assert s["kv_appends_window"] > 0 and s["kv_realloc_window"] >= 1
+    assert s["kv_appends_compress"] > 0 and s["kv_realloc_compress"] >= 1
+    assert s["kv_appends_index"] > 0 and s["kv_realloc_index"] >= 1
+    assert s["kv_appends_latent"] > 0 and s["kv_realloc_latent"] >= 1
+    # W107F rename: the per-lane append counter is ``kv_appends_<lane>`` now; the old
+    # ``kv_inplace_writes_<lane>`` name must be GONE from the stats snapshot.
+    for ln in ("window", "compress", "index", "latent"):
+        assert f"kv_appends_{ln}" in s
+        assert f"kv_inplace_writes_{ln}" not in s
     for ln in ("window", "compress", "index", "latent"):
         assert s[f"rows_{ln}"] > 0
 
@@ -890,7 +895,7 @@ def test_truncate_to_zero_keeps_prealloc():
     gb.append(_row(5, 8))                        # next append must reuse, not realloc
     s = C.kv_bounded_stats()
     assert s["kv_realloc_compress"] == 1, "truncate_to(0) dropped the prealloc"
-    assert s["kv_inplace_writes_compress"] >= 1
+    assert s["kv_appends_compress"] >= 1
     assert gb.rows() == 5
 
 

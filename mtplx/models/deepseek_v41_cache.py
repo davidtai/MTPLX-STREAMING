@@ -620,7 +620,7 @@ def window_ring_stats() -> dict:
 #: bounded lanes.  For each lane (``window`` == the SWA ring, ``compress`` ==
 #: compress_kv, ``index`` == index_k, ``latent`` == the compressor frontier /
 #: "main latent KV"):
-#:   * ``kv_inplace_writes_<lane>`` -- appends that wrote in place into an existing
+#:   * ``kv_appends_<lane>`` -- appends that wrote in place into an existing
 #:     preallocated buffer (a donated ``mx.slice_update`` of just the new rows, or a
 #:     ping-pong compaction that reused a buffer): the O(new-rows) decode path.
 #:   * ``kv_realloc_<lane>`` -- appends that ALLOCATED a buffer.  In a truly bounded
@@ -637,7 +637,7 @@ _BOUNDED_LANES = ("window", "compress", "index", "latent")
 _BOUNDED_STATS = {"layers_bounded": 0, "maxkv": 0, "alloc_bytes": 0,
                   "ptr_samples": 0}
 for _ln in _BOUNDED_LANES:
-    _BOUNDED_STATS[f"kv_inplace_writes_{_ln}"] = 0
+    _BOUNDED_STATS[f"kv_appends_{_ln}"] = 0
     _BOUNDED_STATS[f"kv_realloc_{_ln}"] = 0
     _BOUNDED_STATS[f"rows_{_ln}"] = 0
     #: W107 round-4 DONATION GATE: buffer data-pointer FLIPS per lane across decode
@@ -672,7 +672,7 @@ def _note_bounded(lane: Optional[str], *, inplace: bool = False,
     if lane is None:
         return
     if inplace:
-        _BOUNDED_STATS[f"kv_inplace_writes_{lane}"] += 1
+        _BOUNDED_STATS[f"kv_appends_{lane}"] += 1
     if realloc:
         _BOUNDED_STATS[f"kv_realloc_{lane}"] += 1
     if rows:

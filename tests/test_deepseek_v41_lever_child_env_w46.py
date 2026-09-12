@@ -249,6 +249,47 @@ def test_served_startup_log_resolver_reports_every_lever() -> None:
     assert "SWITCH_FASTPATH=<unset>" in line
 
 
+def test_plumb_kv_bounded_maxkv_surfaces_in_resolved_lever_env(monkeypatch) -> None:
+    # W107F: after the served-path _plumb hard-sets MTPLX_DSV41_KV_BOUNDED_MAXKV from
+    # the streamed config's live-KV ceiling, the decode-levers log resolver (what the
+    # "[4/6] decode levers" line formats) surfaces that value.
+    from mtplx.server.openai import (
+        _plumb_kv_bounded_maxkv,
+        _dsv41_resolved_lever_env,
+    )
+
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "__probe__")
+    _plumb_kv_bounded_maxkv(17408)
+    resolved = _dsv41_resolved_lever_env(os.environ)
+    assert resolved["MTPLX_DSV41_KV_BOUNDED_MAXKV"] == "17408"
+
+
+def test_kv_bounded_maxkv_plumbed_before_decode_levers_log() -> None:
+    # W107F: the served-path _plumb_kv_bounded_maxkv call must run BEFORE the
+    # "[4/6] DeepSeek-V4.1 decode levers (resolved env)" startup log, so the logged
+    # snapshot carries the ACTUAL preallocation cap the cache will use, not a
+    # stale/unset value.
+    import inspect
+    import re
+
+    from mtplx.server import openai as srv
+
+    src = inspect.getsource(srv)
+    # Call sites of the helper (exclude its own ``def`` line).
+    calls = [
+        m.start()
+        for m in re.finditer(r"_plumb_kv_bounded_maxkv\(", src)
+        if not src[: m.start()].rstrip().endswith("def")
+    ]
+    assert calls, "no _plumb_kv_bounded_maxkv call site found"
+    log_idx = src.find("[4/6] DeepSeek-V4.1 decode levers (resolved env)")
+    assert log_idx != -1, "decode-levers startup log line not found"
+    assert min(calls) < log_idx, (
+        "_plumb_kv_bounded_maxkv must be called BEFORE the decode-levers startup log "
+        "so the logged resolved env carries the plumbed MTPLX_DSV41_KV_BOUNDED_MAXKV"
+    )
+
+
 def test_served_log_snapshot_covers_every_ab_lever() -> None:
     """W90 drift guard: the served-log lever snapshot (``_DSV41_LEVER_ENV_KEYS``)
     must be a SUPERSET of every A/B lever env (``ab_decode_env_levers.ALL_LEVER_ENVS``),

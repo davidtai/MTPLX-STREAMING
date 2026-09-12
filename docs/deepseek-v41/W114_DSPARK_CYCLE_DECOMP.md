@@ -272,7 +272,9 @@ draft-window prefetch. **All of #1–#7 together still land under the ~6 tok/s c
   RSS, no GPU).
 - **Files:** `mtplx/models/deepseek_v41_loader.py` (`build_streaming_config`: gate
   `verify_record_hashes` off for the decode arm), `scripts/deepseek_v41/
-  ab_decode_env_levers.py` (new `cell16k_ring_v2_nohash` arm + lift `reader_pool`/`io`
+  ab_decode_env_levers.py` (~~new `cell16k_ring_v2_nohash` arm~~ SUPERSEDED by W110 —
+  landed as `cell16k_ring_v2_hash`, which turns hashing ON to MEASURE its io-thread
+  cost; the `_nohash`/`_draft_nohash` arms were never created + lift `reader_pool`/`io`
   into `_runner_receipt_blocks` — W109 §1.d groundwork), and a CPU-pinned
   fake-runtime byte-identity test asserting hashing on/off yields identical slot bytes
   (hashing is integrity-only, byte-neutral).
