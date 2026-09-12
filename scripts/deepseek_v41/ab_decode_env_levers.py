@@ -37,6 +37,7 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import time
@@ -97,10 +98,128 @@ DEFAULT_MEMORY_SAFETY_GIB = 3.0
 # this explicitly so it is not silently absorbed by an inflated non_metal_overhead
 # (which would invite lowering the overhead into the window-41c pressure regime).
 DEFAULT_PLAN_OVERSHOOT_GIB = 6.0
+# W118 (H7, review HIGH-1): the MLX allocator freed-buffer cache ceiling
+# (mx.set_cache_limit; mtplx.deepseek_v41_memory_profile.ALLOCATOR_CACHE_LIMIT_GIB).
+# It bounds how much retained cache can sit ABOVE the active peak, so it caps the
+# extra box-peak the headroom can add (see _headroom_forecast_extra_gib).
+DEFAULT_ALLOCATOR_CACHE_LIMIT_GIB = 6.0
 # HIGH-1: the real non-Metal overhead is ~1-2 GiB (system_used_peak - mlx_peak -
 # baseline); clamp the estimate to at least this so it never goes to zero once the
 # overshoot is a separate term.
 _MIN_NON_METAL_OVERHEAD_GIB = 2.0
+
+
+def _headroom_forecast_extra_gib(
+    plan_overshoot_gib: float, headroom_gib: float, cache_limit_gib: float
+) -> float:
+    """W118 review HIGH-1: the GiB the MLX allocator footprint lands ABOVE the plan,
+    given the allocator-limit headroom.
+
+    Per mlx 0.32.2 ``allocator.cpp``: the footprint = ``max(active_peak,
+    min(limit, active_peak + cache_limit))`` where ``limit = plan + headroom`` and the
+    active peak = ``plan + plan_overshoot``.  Subtracting the plan gives the extra term:
+
+        extra = max(plan_overshoot, min(headroom, plan_overshoot + cache_limit))
+
+    NOT ``plan_overshoot + headroom`` (which double-counts: raising the limit lets the
+    allocator RETAIN cache instead of clearing it on a miss -- it does not add a fresh
+    ``headroom`` GiB on top of the overshoot).  With headroom 0 this reduces to
+    ``plan_overshoot`` (today's forecast), so the lever-off path is unchanged."""
+
+    return max(
+        float(plan_overshoot_gib),
+        min(float(headroom_gib), float(plan_overshoot_gib) + float(cache_limit_gib)),
+    )
+
+
+# --------------------------------------------------------------------------
+# W118 review MEDIUM-2: allocator readback proof helpers.  Read on the MAIN thread,
+# OUTSIDE the timed region, so they never perturb tok/s.  MLX-optional (a fake mx in
+# tests): every getter returns None when the accessor is missing.
+# --------------------------------------------------------------------------
+
+
+def _mlx_getter(mx, name):
+    """The first callable ``name`` on ``mx`` or ``mx.metal`` (accessor moved between
+    the two across MLX versions), else None."""
+    for owner in (mx, getattr(mx, "metal", None)):
+        fn = getattr(owner, name, None)
+        if callable(fn):
+            return fn
+    return None
+
+
+def _mlx_call_int(mx, name):
+    fn = _mlx_getter(mx, name)
+    if fn is None:
+        return None
+    try:
+        return int(fn())
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _device_max_working_set_bytes(mx):
+    """``max_recommended_working_set_size`` from ``mx.metal.device_info()`` (bytes),
+    or None -- the ceiling the allocator's gc_limit_ is min()'d against (0.95x)."""
+    fn = _mlx_getter(mx, "device_info")
+    if fn is None:
+        return None
+    try:
+        info = fn()
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if not isinstance(info, dict):
+        return None
+    for key in (
+        "max_recommended_working_set_size",
+        "max_recommended_working_set",
+        "recommended_max_working_set_size",
+    ):
+        val = info.get(key)
+        if val:
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _mlx_headroom_readback_keys(
+    mx, *, mlx_peak_bytes, active_start_bytes, active_end_bytes, cache_end_bytes
+):
+    """W118 review MEDIUM-2: the allocator readback proof keys merged into the receipt
+    ``memory`` block.  ``mlx_limit_gib_readback`` = mx.get_memory_limit() (what
+    apply_mlx_memory_cap actually set); ``mlx_gc_limit_gib_effective`` = min(readback,
+    0.95 x device max_recommended_working_set_size) -- the gc_limit_ the allocator
+    clears the cache against on a miss; ``mlx_peak_over_limit_gb`` = mlx_peak - readback
+    (POSITIVE means the run went over the soft limit).  The thrash signature is
+    ``mlx_active_gb_at_decode_end`` >= gc_limit - ~1 with ``mlx_cache_gb_at_decode_end``
+    ~ 0 (the cache is being cleared on every miss)."""
+
+    readback = _mlx_call_int(mx, "get_memory_limit")
+    max_wss = _device_max_working_set_bytes(mx)
+    gc_limit = None
+    if readback is not None:
+        gc_limit = readback if max_wss is None else min(readback, int(0.95 * max_wss))
+
+    def _gib(b):
+        return None if b is None else int(b) / GIB
+
+    return {
+        "mlx_limit_gib_readback": _gib(readback),
+        "mlx_gc_limit_gib_effective": _gib(gc_limit),
+        "mlx_active_gb_at_decode_start": _gib(active_start_bytes),
+        "mlx_active_gb_at_decode_end": _gib(active_end_bytes),
+        "mlx_cache_gb_at_decode_end": _gib(cache_end_bytes),
+        "mlx_peak_over_limit_gb": (
+            None
+            if (readback is None or mlx_peak_bytes is None)
+            else (int(mlx_peak_bytes) - readback) / GIB
+        ),
+    }
+
+
 # Floor below which a derived plan limit is refused (flag --memory-budget-floor-gib).
 DEFAULT_MEMORY_BUDGET_FLOOR_GIB = 20.0
 # If the post-load re-measured overhead exceeds the pre-load estimate by more than
@@ -2212,6 +2331,9 @@ class BudgetTotalDerivation:
         # (mx.set_memory_limit = plan + headroom).  It does NOT change plan_limit_gib
         # (residents/slots unchanged) but DOES count toward the forecast box peak.
         "mlx_limit_headroom_gib",
+        # W118 review HIGH-1: the allocator cache ceiling (mx.set_cache_limit); caps
+        # the extra box-peak the headroom can add (see _headroom_forecast_extra_gib).
+        "cache_limit_gib",
     )
 
     def __init__(
@@ -2232,6 +2354,7 @@ class BudgetTotalDerivation:
         rss_semantics="unmeasured",
         system_used_live_gb=None,
         mlx_limit_headroom_gib=0.0,
+        cache_limit_gib=DEFAULT_ALLOCATOR_CACHE_LIMIT_GIB,
     ):
         self.source = source
         self.budget_total_gb = budget_total_gb
@@ -2260,6 +2383,13 @@ class BudgetTotalDerivation:
         # forecast box peak (forecast += headroom) so the budget guard stays honest;
         # NEVER subtracted from plan_limit_gib on the pinned path (residents unchanged).
         self.mlx_limit_headroom_gib = float(mlx_limit_headroom_gib or 0.0)
+        # W118 review HIGH-1: the allocator cache ceiling used to price the headroom's
+        # extra box-peak (mx.set_cache_limit; default 6 GiB, the served/CLI tier).
+        self.cache_limit_gib = (
+            DEFAULT_ALLOCATOR_CACHE_LIMIT_GIB
+            if cache_limit_gib is None
+            else float(cache_limit_gib)
+        )
 
     def replace(self, **changes) -> "BudgetTotalDerivation":
         """A copy with the named fields overridden (dataclasses.replace-style)."""
@@ -2281,35 +2411,56 @@ class BudgetTotalDerivation:
             "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
             "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
             "rss_semantics", "system_used_live_gb", "mlx_limit_headroom_gib",
+            "cache_limit_gib",
         }
         return BudgetTotalDerivation(**{k: v for k, v in d.items() if k in fields})
 
+    def headroom_forecast_extra_gib(self) -> float:
+        """W118 review HIGH-1: the GiB the MLX allocator footprint lands ABOVE the
+        plan = ``max(plan_overshoot, min(headroom, plan_overshoot + cache_limit))``.
+        Reduces to ``plan_overshoot`` when the headroom is 0 (today's forecast)."""
+        return _headroom_forecast_extra_gib(
+            self.plan_overshoot_gib, self.mlx_limit_headroom_gib, self.cache_limit_gib
+        )
+
     def forecast_system_peak_gib(self):
-        """HIGH-1: the forecast whole-box peak = baseline + plan + plan_overshoot +
-        non_metal_overhead + mlx_limit_headroom (W118).  With the plan derived by
-        subtracting overshoot/kv/safety/headroom too, this stays <= budget_total (the
-        invariant the derivation guarantees).  The headroom term prices the extra bytes
-        the raised mx.set_memory_limit lets the allocator retain ABOVE the plan."""
+        """The forecast whole-box peak = baseline + plan + non_metal_overhead + the
+        allocator extra term (W118 review HIGH-1).  The extra term is
+        ``max(plan_overshoot, min(headroom, plan_overshoot + cache_limit))`` -- NOT
+        ``plan_overshoot + headroom`` (raising the soft limit lets the allocator RETAIN
+        cache, it does not add a fresh headroom GiB on top of the overshoot).  With the
+        plan derived by subtracting kv/safety + this extra term, the forecast stays
+        <= budget_total (the invariant the derivation guarantees)."""
         if self.budget_total_gb is None:
             return None
         return (
             self.system_used_at_start_gb + self.plan_limit_gib
-            + self.plan_overshoot_gib + self.non_metal_overhead_gb
-            + self.mlx_limit_headroom_gib
+            + self.non_metal_overhead_gb + self.headroom_forecast_extra_gib()
         )
 
     def formula(self) -> str:
         fc = self.forecast_system_peak_gib()
         hr = self.mlx_limit_headroom_gib
+        extra = self.headroom_forecast_extra_gib()
+        extra_desc = (
+            f"allocator_extra({extra:.4g}"
+            + (
+                f"=max(overshoot {self.plan_overshoot_gib:.4g}, "
+                f"min(headroom {hr:.4g}, overshoot+cache "
+                f"{self.plan_overshoot_gib + self.cache_limit_gib:.4g}))"
+                if hr
+                else f"=overshoot {self.plan_overshoot_gib:.4g}"
+            )
+            + ")"
+        )
         return (
             f"plan_limit = budget_total({self.budget_total_gb:.4g}) "
             f"- system_used_at_start({self.system_used_at_start_gb:.4g}) "
             f"- non_metal_overhead({self.non_metal_overhead_gb:.4g}) "
             f"- kv_growth_to_max_kv({self.kv_growth_to_max_kv_gb:.4g}) "
             f"- safety({self.safety_gb:.4g}) "
-            f"- plan_overshoot({self.plan_overshoot_gib:.4g}) "
-            + (f"- mlx_limit_headroom({hr:.4g}) " if hr else "")
-            + f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g}; "
+            f"- {extra_desc} "
+            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g}; "
             f"mlx_set_limit {self.plan_limit_gib + hr:.4g}; "
             f"forecast_system_peak {fc:.4g} <= budget)"
         )
@@ -2344,6 +2495,13 @@ class BudgetTotalDerivation:
             "mlx_limit_gib_effective": round(
                 _plan_eff + self.mlx_limit_headroom_gib, 4
             ),
+            # W118 review HIGH-1: the allocator cache ceiling + the priced extra term
+            # (max(overshoot, min(headroom, overshoot+cache))) so the forecast is
+            # self-describing -- forecast rises by (extra - overshoot), not by headroom.
+            "budget_cache_limit_gib": round(self.cache_limit_gib, 4),
+            "budget_headroom_forecast_extra_gib": round(
+                self.headroom_forecast_extra_gib(), 4
+            ),
             "budget_system_used_at_start_gb": round(self.system_used_at_start_gb, 4),
             "budget_non_metal_overhead_gb": round(self.non_metal_overhead_gb, 4),
             "budget_non_metal_overhead_measured_gb": (
@@ -2375,24 +2533,28 @@ def derive_budget_total_plan(
     floor_gib: float = DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
     kv_estimator: str | None = None,
     mlx_limit_headroom_gib: float = 0.0,
+    cache_limit_gib: float = DEFAULT_ALLOCATOR_CACHE_LIMIT_GIB,
 ) -> BudgetTotalDerivation:
     """Derive the MLX plan limit from David's TOTAL box budget, compensating for
     the non-Metal requirements.  All measurements are injected (pure math):
 
+        allocator_extra = max(plan_overshoot,
+                              min(mlx_limit_headroom, plan_overshoot + cache_limit))
         plan_limit = total - system_used_at_start - non_metal_overhead
-                           - kv_growth_to_max_kv - safety - plan_overshoot
-                           - mlx_limit_headroom
+                           - kv_growth_to_max_kv - safety - allocator_extra
 
     ``plan_overshoot`` (HIGH-1) prices the MLX allocator peak that lands OVER the
-    plan's expert-cache ceiling (KV + prefill transients), so the forecast box peak
-    = baseline + plan + overshoot + overhead + headroom stays <= budget.
-    ``mlx_limit_headroom`` (W118 / H7) reserves the extra GiB the raised
-    mx.set_memory_limit lets the allocator retain above the plan: on THIS
-    derive-from-budget path it comes off the plan (fewer residents under a fixed
-    budget) so the forecast still fits; on the PINNED-plan A/B path the plan is fixed
-    and the headroom is added at set_memory_limit time (see forecast_system_peak_gib).
-    Raises ``ValueError`` (actionable) when the derived plan limit is below
-    ``floor_gib``.
+    plan's expert-cache ceiling (KV + prefill transients).  ``mlx_limit_headroom``
+    (W118 / H7) raises the mx.set_memory_limit SOFT cap above the plan; per mlx 0.32.2
+    allocator.cpp that lets the allocator RETAIN freed buffers up to the cache limit
+    instead of clearing on a miss -- so the extra box-peak it can add is bounded by
+    ``max(plan_overshoot, min(headroom, plan_overshoot + cache_limit))`` (review
+    HIGH-1), NOT ``plan_overshoot + headroom`` (which double-counts and refused the
+    documented window-46 run).  On THIS derive-from-budget path the extra term comes
+    off the plan (fewer residents under a fixed budget) so the forecast still fits; on
+    the PINNED-plan A/B path the plan is fixed and the headroom is added at
+    set_memory_limit time (see forecast_system_peak_gib).  Raises ``ValueError``
+    (actionable) when the derived plan limit is below ``floor_gib``.
     """
 
     for name, value in (
@@ -2404,18 +2566,21 @@ def derive_budget_total_plan(
         ("plan_overshoot_gib", plan_overshoot_gib),
         ("floor_gib", floor_gib),
         ("mlx_limit_headroom_gib", mlx_limit_headroom_gib),
+        ("cache_limit_gib", cache_limit_gib),
     ):
         if value < 0:
             raise ValueError(f"{name} must be non-negative, got {value!r}")
 
+    allocator_extra = _headroom_forecast_extra_gib(
+        plan_overshoot_gib, mlx_limit_headroom_gib, cache_limit_gib
+    )
     plan_limit = (
         float(budget_total_gb)
         - float(system_used_at_start_gb)
         - float(non_metal_overhead_gb)
         - float(kv_growth_to_max_kv_gb)
         - float(safety_gb)
-        - float(plan_overshoot_gib)
-        - float(mlx_limit_headroom_gib)
+        - float(allocator_extra)
     )
     if plan_limit < float(floor_gib):
         exc = ValueError(
@@ -2425,8 +2590,9 @@ def derive_budget_total_plan(
             f"- system_used_at_start {system_used_at_start_gb:.4g} "
             f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
             f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
-            f"- safety {safety_gb:.4g} - plan_overshoot {plan_overshoot_gib:.4g} "
-            f"- mlx_limit_headroom {mlx_limit_headroom_gib:.4g}. "
+            f"- safety {safety_gb:.4g} - allocator_extra {allocator_extra:.4g} "
+            f"(overshoot {plan_overshoot_gib:.4g}, headroom "
+            f"{mlx_limit_headroom_gib:.4g}, cache {cache_limit_gib:.4g}). "
             f"Raise --memory-budget-total-gib, lower --memory-safety-gib / "
             f"--non-metal-overhead-gib / --plan-overshoot-gib / "
             f"--mlx-limit-headroom-gib, reduce --max-kv, or "
@@ -2447,6 +2613,7 @@ def derive_budget_total_plan(
         plan_limit_gib=plan_limit,
         kv_estimator=kv_estimator,
         mlx_limit_headroom_gib=float(mlx_limit_headroom_gib),
+        cache_limit_gib=float(cache_limit_gib),
     )
 
 
@@ -2663,26 +2830,85 @@ def _budget_total_gib(args):
     )
 
 
+def _parse_headroom_gib_value(raw, *, source_label: str) -> float:
+    """W118 review MEDIUM-3: parse a headroom GiB value (a flag float or an env/preset
+    string) and REJECT non-finite (nan/inf), negative, and underscore-obfuscated
+    ("1_0") values with a clear ValueError.  ``float("nan") < 0`` is False, so nan/inf
+    would otherwise pass validation and crash in-window; ``float("1_0")`` is 10.0 under
+    PEP 515, which silently misreads an operator typo."""
+
+    if isinstance(raw, str):
+        s = raw.strip()
+        if "_" in s:
+            raise ValueError(
+                f"{source_label} must be a plain number, got {raw!r} "
+                "(underscores are not allowed)"
+            )
+        value = float(s)  # ValueError on 'abc'
+    else:
+        value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError(f"{source_label} must be finite, got {raw!r}")
+    if value < 0:
+        raise ValueError(f"{source_label} must be non-negative, got {value}")
+    return value
+
+
 def _resolve_mlx_limit_headroom_gib(args) -> float:
     """W118 (H7): the MLX allocator-limit headroom in GiB for THIS arm.
 
     Precedence: the explicit ``--mlx-limit-headroom-gib`` flag, else the env the arm
     preset stamps (``MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB``, read at use -- the runtime
-    reads the SAME env in apply_mlx_memory_cap), else 0 (today).  Refuses a negative
-    value.  Read at use so it reflects the arm whose env is currently applied."""
+    reads the SAME env in apply_mlx_memory_cap), else 0 (today).  Read at use so it
+    reflects the arm whose env is currently applied.  A bad value (negative / nan /
+    inf / "1_0" / "abc") raises a CLEAN SystemExit (MEDIUM-3), so it fails before the
+    in-window crash rather than after."""
 
     flag = getattr(args, "mlx_limit_headroom_gib", None)
-    if flag is not None:
-        value = float(flag)
-    else:
+    try:
+        if flag is not None:
+            return _parse_headroom_gib_value(
+                flag, source_label="--mlx-limit-headroom-gib"
+            )
         raw = os.environ.get(MLX_LIMIT_HEADROOM_ENV)
-        value = float(raw) if raw not in (None, "") else 0.0
-    if value < 0:
-        raise ValueError(
-            f"--mlx-limit-headroom-gib / {MLX_LIMIT_HEADROOM_ENV} must be "
-            f"non-negative, got {value}"
-        )
-    return value
+        if raw in (None, ""):
+            return 0.0
+        return _parse_headroom_gib_value(raw, source_label=MLX_LIMIT_HEADROOM_ENV)
+    except ValueError as exc:
+        raise SystemExit(f"[ab] {exc}") from None
+
+
+def _preflight_headroom_gib(args) -> float:
+    """W118 review HIGH-2: the pre-flight runs BEFORE ``_run_arm`` applies the arm
+    presets, so the env the resolver reads is not yet set for a preset-carried headroom
+    (the *_hr8 arms).  Price the WORST case = max(explicit flag, max preset headroom
+    over the arms this run will execute), so the pre-flight over-budget check is not
+    blind to a preset that will raise the allocator limit in-window.  Bad values raise
+    a clean SystemExit (MEDIUM-3)."""
+
+    values = [0.0]
+    flag = getattr(args, "mlx_limit_headroom_gib", None)
+    try:
+        if flag is not None:
+            values.append(
+                _parse_headroom_gib_value(
+                    flag, source_label="--mlx-limit-headroom-gib"
+                )
+            )
+        for arm in getattr(args, "arms", None) or []:
+            preset = ARM_PRESETS.get(arm)
+            if not preset:
+                continue
+            raw = preset.get(MLX_LIMIT_HEADROOM_ENV)
+            if raw not in (None, ""):
+                values.append(
+                    _parse_headroom_gib_value(
+                        raw, source_label=f"arm {arm!r} preset {MLX_LIMIT_HEADROOM_ENV}"
+                    )
+                )
+    except ValueError as exc:
+        raise SystemExit(f"[ab] {exc}") from None
+    return max(values)
 
 
 def _detect_qwen_rss_bytes(label="com.tea.qwen"):
@@ -2716,12 +2942,13 @@ def _detect_qwen_rss_bytes(label="com.tea.qwen"):
         return None
 
 
-def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
+def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None, headroom_gib=None):
     """Compute the item-3 ``BudgetTotalDerivation`` from the resolved flags + the
     measured system-used baseline + the KV estimate, or return None when no budget
     flag was given.  Shared by ``_resolve_derivation`` and the pre-flight.
     ``system_used_gb`` overrides the measured baseline (the pre-flight passes a
-    freed-adjusted value)."""
+    freed-adjusted value).  ``headroom_gib`` overrides the resolved arm headroom (the
+    pre-flight passes the preset-aware worst case, HIGH-2)."""
 
     budget_total = _budget_total_gib(args)
     if budget_total is None:
@@ -2759,6 +2986,16 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
     floor_gib = float(
         getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
     )
+    # W118 review HIGH-1: the allocator cache ceiling that bounds the headroom's extra
+    # box-peak.  Mirror the runtime's resolution (deepseek_v41_memory_profile
+    # ENV_CACHE_LIMIT, default 6 GiB) so the forecast uses the SAME cache limit the
+    # loader hands mx.set_cache_limit.
+    _cache_raw = os.environ.get("MTPLX_DSV41_MLX_CACHE_LIMIT_GB")
+    cache_limit_gib = (
+        float(_cache_raw)
+        if _cache_raw not in (None, "")
+        else DEFAULT_ALLOCATOR_CACHE_LIMIT_GIB
+    )
     dims = _read_kv_config_dims(getattr(args, "model", None))
     # W97F Fix 1 (preserved through the W106 refactor): price the KV growth with the
     # EXACT W107 per-lane helper (deepseek_v41_cache.kv_bytes_at_max_kv) when it can be
@@ -2778,8 +3015,15 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
         kv_estimator=kv_estimator,
         # W118 (H7): reserve the allocator headroom off the plan on the derive-from-
         # budget path so the forecast box peak still fits (the pinned A/B path keeps
-        # the plan and adds the headroom at set_memory_limit time instead).
-        mlx_limit_headroom_gib=_resolve_mlx_limit_headroom_gib(args),
+        # the plan and adds the headroom at set_memory_limit time instead).  The
+        # pre-flight passes the preset-aware worst case (HIGH-2) since the arm presets
+        # are not applied yet on that path.
+        mlx_limit_headroom_gib=(
+            _resolve_mlx_limit_headroom_gib(args)
+            if headroom_gib is None
+            else float(headroom_gib)
+        ),
+        cache_limit_gib=cache_limit_gib,
     )
 
 
@@ -2877,22 +3121,21 @@ def _validate_pinned_plan(args, bench, max_kv, bt, stamp):
     live_gb = _measure_system_used_at_start_bytes(args, bench) / GIB if bench else 0.0
     budget = stamp.get("budget_total_gb") or bt.budget_total_gb
     if budget is not None:
-        # W118 (H7): the raised mx.set_memory_limit lets the allocator retain
-        # bt.mlx_limit_headroom_gib ABOVE the pinned plan, so it counts toward the
-        # forecast box peak the pin must fit under.
+        # W118 review HIGH-1: the raised mx.set_memory_limit lets the allocator RETAIN
+        # freed buffers up to the cache limit ABOVE the pinned plan; the extra box-peak
+        # it can add is max(overshoot, min(headroom, overshoot + cache_limit)) -- NOT
+        # overshoot + headroom (which double-counts and refused the window-46 run).
+        extra = bt.headroom_forecast_extra_gib()
         headroom = bt.mlx_limit_headroom_gib
-        forecast = (
-            live_gb + bt.plan_limit_gib + bt.plan_overshoot_gib
-            + bt.non_metal_overhead_gb + headroom
-        )
+        forecast = live_gb + bt.plan_limit_gib + bt.non_metal_overhead_gb + extra
         if forecast > float(budget):
             exc = ValueError(
                 f"--memory-plan-from would exceed the budget under the CURRENT live "
                 f"baseline: forecast {forecast:.4g} = live {live_gb:.4g} + plan "
-                f"{bt.plan_limit_gib:.4g} + overshoot {bt.plan_overshoot_gib:.4g} + "
-                f"overhead {bt.non_metal_overhead_gb:.4g}"
-                + (f" + mlx_limit_headroom {headroom:.4g}" if headroom else "")
-                + f" > budget {float(budget):.4g}. "
+                f"{bt.plan_limit_gib:.4g} + overhead {bt.non_metal_overhead_gb:.4g} + "
+                f"allocator_extra {extra:.4g} (overshoot {bt.plan_overshoot_gib:.4g}, "
+                f"headroom {headroom:.4g}, cache {bt.cache_limit_gib:.4g}) "
+                f"> budget {float(budget):.4g}. "
                 "The box is more loaded than when the plan was derived (or the "
                 "headroom does not fit); free memory, lower --mlx-limit-headroom-gib, "
                 "or re-derive."
@@ -2926,11 +3169,10 @@ def _preflight_memory_plan(args, bench) -> int:
     if pin_path:
         try:
             bt, stamp = _load_pinned_plan(pin_path)
-            # W118 (H7): price THIS run's headroom flag against the pin's budget (the
-            # preset env is not applied on the pre-flight path, so only the flag).
-            bt = bt.replace(
-                mlx_limit_headroom_gib=_resolve_mlx_limit_headroom_gib(args)
-            )
+            # W118 review HIGH-2: price the preset-aware worst-case headroom (the arm
+            # presets are not applied on the pre-flight path, so a preset-carried
+            # *_hr8 would otherwise read as 0 and the over-budget check be blind).
+            bt = bt.replace(mlx_limit_headroom_gib=_preflight_headroom_gib(args))
             live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(f"[ab] memory-plan preflight: PIN REFUSED -- {exc}", flush=True)
@@ -2983,7 +3225,8 @@ def _preflight_memory_plan(args, bench) -> int:
 
     try:
         bt = _derive_budget_total(
-            args, bench, max_kv, system_used_gb=baseline_in_window
+            args, bench, max_kv, system_used_gb=baseline_in_window,
+            headroom_gib=_preflight_headroom_gib(args),  # HIGH-2: preset-aware
         )
     except ValueError as exc:
         print(f"[ab] memory-plan preflight: REFUSED -- {exc}", flush=True)
@@ -3017,6 +3260,21 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
     pin_path = getattr(args, "memory_plan_from", None)
+    # W118 review MEDIUM-1: on the derive path, auto-pin every arm AFTER the first to
+    # arm 1's sidecar (written below), so every arm in a single invocation runs the
+    # SAME plan_limit.  Without this, a per-arm re-derive drops the plan by the
+    # allocator_extra on an hr arm (e.g. base plan 79, hr8 plan 77) -> different
+    # residency -> the A/B is confounded (previously only a post-hoc WARN).  An
+    # explicit --memory-plan-from always wins over the auto-pin.
+    _autopin = getattr(args, "_dsv41_autopin_sidecar", None)
+    if not pin_path and _autopin:
+        pin_path = _autopin
+        print(
+            f"[ab] MEDIUM-1 auto-pin: this arm pins arm-1 sidecar {pin_path} so every "
+            "arm in this invocation runs the SAME plan_limit (pass --memory-plan-from "
+            "to override).",
+            flush=True,
+        )
     if pin_path:
         # HIGH-2 + round-4 HIGH: PIN the plan from a sidecar an earlier arm wrote, so
         # every A/B arm uses the SAME plan_limit -- but RE-VALIDATE it (stamp match +
@@ -3044,6 +3302,11 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
             args._dsv41_budget_total = bt
             override = bt.plan_limit_gib
             _write_derived_plan_sidecar(args, bt, max_kv)  # so later arms can pin it
+            # MEDIUM-1: record the sidecar this (arm-1) derive wrote so subsequent arms
+            # in THIS invocation auto-pin it instead of re-deriving a shifted plan.
+            _sc = _derived_plan_sidecar_path(args)
+            if _sc is not None and Path(_sc).exists():
+                args._dsv41_autopin_sidecar = _sc
         else:
             override = getattr(args, "memory_limit_gib", None)
             args._dsv41_budget_total = None
@@ -3691,10 +3954,15 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         # clear above, so its route_probe_* baseline is zero and the decode delta is exact.
         _sc_after_prefill = _stream_counters_snapshot(model)
 
+        # W118 review MEDIUM-2: allocator active/cache readback around the timed decode
+        # (main thread, OUTSIDE the timed region: active_start just before the timer
+        # starts, active/cache_end just after it stops).
+        _active_start_bytes = _active_end_bytes = _cache_end_bytes = None
         _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
         # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
         # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
         with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
+            _active_start_bytes = _mlx_call_int(getattr(mem_probe, "_mx", None), "get_active_memory")
             decode_start = time.perf_counter()
             try:  # W92: restore the probe ENABLED flag even if the decode loop raises
                 if device_sample:
@@ -3739,6 +4007,9 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
                 if _route_probe is not None and _route_prev_enabled is not None:
                     _route_probe.ENABLED = bool(_route_prev_enabled)
             decode_wall_s = time.perf_counter() - decode_start
+            # W118 review MEDIUM-2: active/cache at decode end (timer stopped).
+            _active_end_bytes = _mlx_call_int(getattr(mem_probe, "_mx", None), "get_active_memory")
+            _cache_end_bytes = _mlx_call_int(getattr(mem_probe, "_mx", None), "get_cache_memory")
         _sc_end = _stream_counters_snapshot(model)
         switch_dispatch = None
         if _route_probe is not None:
@@ -3805,8 +4076,19 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         "decode_wall_s": decode_wall_s,
         "peak_gb": mem_probe.peak_bytes() / GIB,
         # W106: full memory envelope (mlx_peak_gb == peak_gb, + process RSS peak and
-        # the whole-box used-memory peak the gpu_window.sh guard aborts on).
-        "memory": mem_probe.memory_block(_mem_sampler),
+        # the whole-box used-memory peak the gpu_window.sh guard aborts on).  W118
+        # review MEDIUM-2: merge the allocator readback proof keys (limit readback,
+        # gc_limit, active/cache at decode start/end, peak-over-limit).
+        "memory": {
+            **mem_probe.memory_block(_mem_sampler),
+            **_mlx_headroom_readback_keys(
+                getattr(mem_probe, "_mx", None),
+                mlx_peak_bytes=mem_probe.peak_bytes(),
+                active_start_bytes=_active_start_bytes,
+                active_end_bytes=_active_end_bytes,
+                cache_end_bytes=_cache_end_bytes,
+            ),
+        },
         "extra_forward_steps": int(extra_forward_steps),
         # W113: DECODE tokens actually generated (== steps unless --stop-on-eos).
         "decode_steps_run": int(decode_steps_run),
@@ -3935,6 +4217,8 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     # optional timed stage-timing pass, so the memory block matches that peak_gb.
     _mem_sampler = mem_probe.new_sampler()
     _mem_sampler.start()
+    # W118 review MEDIUM-2: allocator active/cache readback around the timed pass.
+    _active_start_bytes = _active_end_bytes = _cache_end_bytes = None
     try:
         stats = DSparkDecodeStats()
         # W77: when an AR reference is supplied, capture (zero extra forwards) the
@@ -3960,6 +4244,8 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
         # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
         # per-stage attribution is a SECOND, timed pass below.
+        # W118 review MEDIUM-2: allocator active readback just before the timed pass.
+        _active_start_bytes = _mlx_call_int(mx, "get_active_memory")
         t0 = time.perf_counter()
         toks = dspark_generate(
             model,
@@ -3974,6 +4260,9 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             stop_ids=stop_ids,  # W113: served-parity early stop (--stop-on-eos)
         )
         _sc["end"] = _stream_counters_snapshot(model)
+        # W118 review MEDIUM-2: active/cache at decode end (timed pass complete).
+        _active_end_bytes = _mlx_call_int(mx, "get_active_memory")
+        _cache_end_bytes = _mlx_call_int(mx, "get_cache_memory")
         # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
         # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
         _wall_acct = _dspark_decode_wall_accounting(
@@ -3989,7 +4278,17 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
     finally:
         _mem_sampler.stop()
-    _dspark_memory_block = mem_probe.memory_block(_mem_sampler)
+    # W118 review MEDIUM-2: merge the allocator readback proof keys into the block.
+    _dspark_memory_block = {
+        **mem_probe.memory_block(_mem_sampler),
+        **_mlx_headroom_readback_keys(
+            mx,
+            mlx_peak_bytes=mem_probe.peak_bytes(),
+            active_start_bytes=_active_start_bytes,
+            active_end_bytes=_active_end_bytes,
+            cache_end_bytes=_cache_end_bytes,
+        ),
+    }
     report = None
     w61 = None
     if stage_timing:
@@ -4479,6 +4778,17 @@ def _run_arm(args, arm, bench, mx) -> dict:
     # harness prices into the forecast.  Unset flag -> the preset/env value stands.
     _hr_flag = getattr(args, "mlx_limit_headroom_gib", None)
     if _hr_flag is not None:
+        # LOW: warn when the flag overrides a preset that did NOT arm the headroom, so
+        # a mismatched-arm run (e.g. --arms cell16k_ring_v2_attn --mlx-limit-headroom-gib
+        # 8) is not silently a different lever set than the named arm implies.
+        _preset_hr = ARM_PRESETS.get(arm, {}).get(MLX_LIMIT_HEADROOM_ENV)
+        if _preset_hr in (None, ""):
+            print(
+                f"[ab] WARN: --mlx-limit-headroom-gib {float(_hr_flag):g} overrides arm "
+                f"{arm!r} which does NOT arm the headroom (preset value None); this arm "
+                "is no longer byte-identical to the same-named arm at headroom 0.",
+                flush=True,
+            )
         os.environ[MLX_LIMIT_HEADROOM_ENV] = f"{float(_hr_flag):g}"
     # W107: a bounded arm that did not pin an explicit MTPLX_DSV41_KV_BOUNDED_MAXKV
     # (the presets do not know the CLI --max-kv) preallocates every KV lane to the

@@ -3244,7 +3244,11 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # allocator-limit headroom lever.  It is read on the served path too
     # (expert_runtime.apply_mlx_memory_cap, called from ExpertStreamingRuntime.open),
     # so it is a LIVE served lever -- kept here so the served-log snapshot stays a
-    # superset of ALL_LEVER_ENVS (the W46/W90 drift guard).
+    # superset of ALL_LEVER_ENVS (the W46/W90 drift guard).  BOX-FIT NOTE (W118 review
+    # LOW): the served daemon does NOT run the W106 budget forecast, so on serve the
+    # headroom is unpriced against the box budget; the exposure is bounded by the served
+    # cache limit (the allocator can retain at most ~cache_limit above the active peak),
+    # and it is off (0) by default.  See docs/deepseek-v41/W118_MLX_LIMIT_HEADROOM.md.
     "MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB",
     # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
     # in-place write was reverted to slice_update + a donation gate), so it is gone from

@@ -13,6 +13,7 @@ script (``scripts/`` is not a package), mirroring the W46/W90 drift-guard test.
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 import types
 from pathlib import Path
 
@@ -252,46 +253,59 @@ def test_derive_default_headroom_zero_unchanged() -> None:
     ab = _load_ab_module()
     bt = _derive(ab, 0.0)
     assert bt.mlx_limit_headroom_gib == 0.0
-    # plan = 100 - 6 - 2 - 4 - 3 - 6 - 0 = 79
+    # headroom 0 -> allocator_extra = max(overshoot 6, min(0, 6+cache 6)) = 6, so the
+    # lever-off derivation is unchanged: plan = 100 - 6 - 2 - 4 - 3 - 6 = 79.
     assert bt.plan_limit_gib == pytest.approx(79.0)
-    # forecast = baseline + plan + overshoot + overhead + headroom = 6+79+6+2+0 = 93
+    # forecast = baseline + plan + overhead + allocator_extra = 6+79+2+6 = 93.
     assert bt.forecast_system_peak_gib() == pytest.approx(93.0)
     keys = bt.memory_keys()
     assert keys["mlx_limit_headroom_gib"] == pytest.approx(0.0)
     assert keys["mlx_limit_gib_effective"] == pytest.approx(79.0)
+    assert keys["budget_headroom_forecast_extra_gib"] == pytest.approx(6.0)
+    assert keys["budget_cache_limit_gib"] == pytest.approx(6.0)
 
 
 def test_derive_prices_headroom_into_forecast_and_keys() -> None:
     ab = _load_ab_module()
     bt = _derive(ab, 8.0)
-    # On the derive-from-budget path the headroom comes OFF the plan so the forecast
-    # still fits: plan = 100 - 6 - 2 - 4 - 3 - 6 - 8 = 71.
-    assert bt.plan_limit_gib == pytest.approx(71.0)
+    # review HIGH-1: allocator_extra = max(overshoot 6, min(headroom 8, 6+cache 6=12))
+    # = 8 (NOT overshoot + headroom = 14).  On the derive path the extra term comes off
+    # the plan: plan = 100 - 6 - 2 - 4 - 3 - allocator_extra(8) = 77 (drops by 2, not 8).
+    assert bt.plan_limit_gib == pytest.approx(77.0)
     assert bt.mlx_limit_headroom_gib == pytest.approx(8.0)
-    # forecast = 6 + 71 + 6 + 2 + 8 = 93 = budget - kv - safety (invariant preserved).
+    assert bt.headroom_forecast_extra_gib() == pytest.approx(8.0)
+    # forecast = 6 + 77 + 2 + allocator_extra(8) = 93 = budget - kv - safety (invariant).
     assert bt.forecast_system_peak_gib() == pytest.approx(93.0)
     assert bt.forecast_system_peak_gib() <= 100.0
     keys = bt.memory_keys()
     assert keys["mlx_limit_headroom_gib"] == pytest.approx(8.0)
-    # effective allocator limit = plan_eff + headroom = 71 + 8 = 79.
-    assert keys["mlx_limit_gib_effective"] == pytest.approx(79.0)
+    # effective allocator limit handed to set_memory_limit = plan_eff + headroom = 85.
+    assert keys["mlx_limit_gib_effective"] == pytest.approx(85.0)
     assert keys["budget_forecast_system_peak_gb"] == pytest.approx(93.0)
-    # "mlx_limit_headroom" appears in the human formula only when non-zero.
-    assert "mlx_limit_headroom(8" in bt.formula()
+    assert keys["budget_headroom_forecast_extra_gib"] == pytest.approx(8.0)
+    # the human formula shows the allocator_extra term (not overshoot + headroom).
+    assert "allocator_extra(8" in bt.formula()
+    assert "headroom 8" in bt.formula()
 
 
-def test_forecast_rises_by_headroom_on_a_pinned_plan() -> None:
-    """The PINNED-plan A/B path keeps plan_limit fixed and ADDS the headroom on top:
-    the forecast box peak then rises by exactly the headroom (what the pin validator
-    checks against the budget)."""
+def test_forecast_rises_by_extra_minus_overshoot_on_a_pinned_plan() -> None:
+    """The PINNED-plan A/B path keeps plan_limit fixed and ADDS the headroom on top.
+    review HIGH-1: the forecast box peak then rises by (allocator_extra - overshoot),
+    NOT by the full headroom -- raising the soft limit lets the allocator RETAIN cache,
+    it does not add a fresh headroom GiB.  With overshoot 6, cache 6, headroom 8 the
+    extra term is 8, so the rise is 8 - 6 = 2 (forecast 93 -> 95)."""
 
     ab = _load_ab_module()
-    base = _derive(ab, 0.0)  # plan 79, forecast 93
+    base = _derive(ab, 0.0)  # plan 79, forecast 93, allocator_extra 6
     pinned_hr = base.replace(mlx_limit_headroom_gib=8.0)
     # plan_limit UNCHANGED (residents identical -> byte-identical A/B) ...
     assert pinned_hr.plan_limit_gib == pytest.approx(79.0)
-    # ... but the forecast rises by the headroom.
-    assert pinned_hr.forecast_system_peak_gib() == pytest.approx(93.0 + 8.0)
+    assert pinned_hr.headroom_forecast_extra_gib() == pytest.approx(8.0)
+    # ... the forecast rises by extra - overshoot = 2 (NOT the full headroom 8).
+    assert pinned_hr.forecast_system_peak_gib() == pytest.approx(95.0)
+    assert pinned_hr.forecast_system_peak_gib() == pytest.approx(
+        base.forecast_system_peak_gib() + 2.0
+    )
     keys = pinned_hr.memory_keys()
     # plan_limit_gib_effective is equal for control vs hr8 (the plan-equality guard);
     # only mlx_limit_gib_effective differs.
@@ -357,8 +371,274 @@ def test_resolve_arm_headroom_default_zero(monkeypatch) -> None:
 
 
 def test_resolve_arm_headroom_rejects_negative() -> None:
+    # MEDIUM-3: the harness resolver raises a CLEAN SystemExit (not a traceback) so a
+    # bad value fails before the in-window crash.
     ab = _load_ab_module()
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(SystemExit):
         ab._resolve_mlx_limit_headroom_gib(
             types.SimpleNamespace(mlx_limit_headroom_gib=-2.0)
         )
+
+
+# --------------------------------------------------------------------------
+# Part F: review HIGH-1 -- window-44 pin accepts hr8 at budget 93 (no double-count)
+# --------------------------------------------------------------------------
+
+
+def _pinned_bt(ab, *, headroom):
+    """A window-44-shaped pinned derivation (plan 69, budget 93)."""
+    return ab.BudgetTotalDerivation(
+        source="budget",
+        budget_total_gb=93.0,
+        system_used_at_start_gb=8.7,
+        non_metal_overhead_gb=6.0,
+        kv_growth_to_max_kv_gb=0.72,
+        safety_gb=3.0,
+        plan_overshoot_gib=6.0,
+        floor_gib=20.0,
+        plan_limit_gib=69.0,
+        cache_limit_gib=6.0,
+        mlx_limit_headroom_gib=headroom,
+    )
+
+
+def test_w44_pin_accepts_hr8_at_budget_93() -> None:
+    """review HIGH-1: at the pinned window-44 plan (69) and budget 93, the hr8 forecast
+    with the CORRECT allocator extra term is 91.7 <= 93 (ACCEPTED); the old
+    overshoot+headroom double-count was 97.7 > 93 and would have REFUSED the documented
+    run.  Also exercises _validate_pinned_plan end-to-end (no raise)."""
+
+    ab = _load_ab_module()
+    bt = _pinned_bt(ab, headroom=8.0)
+    # extra = max(6, min(8, 6+6)) = 8; forecast = 8.7 + 69 + 6.0 + 8 = 91.7 <= 93.
+    assert bt.headroom_forecast_extra_gib() == pytest.approx(8.0)
+    assert bt.forecast_system_peak_gib() == pytest.approx(91.7)
+    assert bt.forecast_system_peak_gib() <= 93.0
+    # the OLD (double-counting) forecast would have been over budget:
+    naive = 8.7 + 69.0 + 6.0 + 6.0 + 8.0  # baseline + plan + overshoot + overhead + hr
+    assert naive == pytest.approx(97.7)
+    assert naive > 93.0
+
+    # End-to-end: _validate_pinned_plan ACCEPTS the pin (returns the live baseline).
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as d:
+        model = Path(d)
+        (model / "config.json").write_text(_json.dumps({"num_hidden_layers": 1}))
+        args = ab.build_parser().parse_args([
+            "--out", str(model / "out.jsonl"),
+            "--model", str(model),
+            "--memory-budget-total-gib", "93",
+            "--context-tokens", "16384",
+            "--max-kv", "16704",
+        ])
+        args._dsv41_system_used_at_start_bytes = int(8.7 * GIB)  # live baseline = 8.7
+        stamp = {
+            "config_sha": ab._config_sha(model),
+            "max_kv": 16704,
+            "context_tokens": 16384,
+            "budget_total_gb": 93.0,
+        }
+        live = ab._validate_pinned_plan(
+            args, types.SimpleNamespace(), 16704, bt, stamp
+        )
+        assert live == pytest.approx(8.7)
+
+
+def test_w44_pin_refuses_hr_that_does_not_fit() -> None:
+    """A headroom large enough to push the forecast over budget IS refused (the guard
+    still fires -- the fix removed the double-count, not the guard)."""
+
+    ab = _load_ab_module()
+    import json as _json
+
+    bt = _pinned_bt(ab, headroom=20.0)  # extra = max(6, min(20, 12)) = 12 -> forecast +12
+    with tempfile.TemporaryDirectory() as d:
+        model = Path(d)
+        (model / "config.json").write_text(_json.dumps({"num_hidden_layers": 1}))
+        args = ab.build_parser().parse_args([
+            "--out", str(model / "out.jsonl"),
+            "--model", str(model),
+            "--memory-budget-total-gib", "93",
+            "--context-tokens", "16384",
+            "--max-kv", "16704",
+        ])
+        args._dsv41_system_used_at_start_bytes = int(8.7 * GIB)
+        stamp = {
+            "config_sha": ab._config_sha(model),
+            "max_kv": 16704,
+            "context_tokens": 16384,
+            "budget_total_gb": 93.0,
+        }
+        # forecast = 8.7 + 69 + 6 + 12 = 95.7 > 93 -> refuse.
+        with pytest.raises(ValueError, match="would exceed the budget"):
+            ab._validate_pinned_plan(args, types.SimpleNamespace(), 16704, bt, stamp)
+
+
+# --------------------------------------------------------------------------
+# Part G: review MEDIUM-3 finite guards (runtime raises config error, harness SysExit)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "1_0", "abc"])
+def test_runtime_resolver_rejects_nonfinite_and_obfuscated(bad) -> None:
+    with pytest.raises(ExpertStreamingConfigurationError):
+        resolve_mlx_limit_headroom_bytes(env={_HEADROOM_ENV: bad})
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "1_0", "abc", "-1"])
+def test_harness_resolver_systemexit_on_bad_env(monkeypatch, bad) -> None:
+    ab = _load_ab_module()
+    monkeypatch.setenv(_HEADROOM_ENV, bad)
+    with pytest.raises(SystemExit):
+        ab._resolve_mlx_limit_headroom_gib(
+            types.SimpleNamespace(mlx_limit_headroom_gib=None)
+        )
+
+
+def test_harness_resolver_systemexit_on_nan_flag() -> None:
+    ab = _load_ab_module()
+    with pytest.raises(SystemExit):
+        ab._resolve_mlx_limit_headroom_gib(
+            types.SimpleNamespace(mlx_limit_headroom_gib=float("nan"))
+        )
+
+
+# --------------------------------------------------------------------------
+# Part H: review MEDIUM-2 allocator readback proof keys (fake mx)
+# --------------------------------------------------------------------------
+
+
+def test_readback_keys_from_fake_mx() -> None:
+    ab = _load_ab_module()
+
+    class _Metal:
+        @staticmethod
+        def device_info():
+            return {"max_recommended_working_set_size": int(80 * GIB)}
+
+    class _MX:
+        metal = _Metal()
+
+        @staticmethod
+        def get_memory_limit():
+            return int(90 * GIB)
+
+    keys = ab._mlx_headroom_readback_keys(
+        _MX(),
+        mlx_peak_bytes=int(94 * GIB),
+        active_start_bytes=int(70 * GIB),
+        active_end_bytes=int(75 * GIB),
+        cache_end_bytes=int(1 * GIB),
+    )
+    assert keys["mlx_limit_gib_readback"] == pytest.approx(90.0)
+    # gc_limit = min(readback 90, 0.95 * 80 = 76) = 76.
+    assert keys["mlx_gc_limit_gib_effective"] == pytest.approx(76.0)
+    assert keys["mlx_active_gb_at_decode_start"] == pytest.approx(70.0)
+    assert keys["mlx_active_gb_at_decode_end"] == pytest.approx(75.0)
+    assert keys["mlx_cache_gb_at_decode_end"] == pytest.approx(1.0)
+    # peak_over_limit = peak 94 - readback 90 = 4 (POSITIVE -> went over the soft limit).
+    assert keys["mlx_peak_over_limit_gb"] == pytest.approx(4.0)
+
+
+def test_readback_keys_none_when_getters_absent() -> None:
+    ab = _load_ab_module()
+    keys = ab._mlx_headroom_readback_keys(
+        types.SimpleNamespace(),  # no getters at all
+        mlx_peak_bytes=int(10 * GIB),
+        active_start_bytes=None,
+        active_end_bytes=None,
+        cache_end_bytes=None,
+    )
+    assert keys["mlx_limit_gib_readback"] is None
+    assert keys["mlx_gc_limit_gib_effective"] is None
+    assert keys["mlx_peak_over_limit_gb"] is None
+
+
+# --------------------------------------------------------------------------
+# Part I: review HIGH-2 preflight prices preset-carried headroom
+# --------------------------------------------------------------------------
+
+
+def test_preflight_headroom_reads_preset_carried_value() -> None:
+    ab = _load_ab_module()
+    # The preset carries 8 on the hr8 arm; the pre-flight (which runs BEFORE the preset
+    # env is applied) must price max(flag, max preset headroom over the arms) = 8.
+    args = types.SimpleNamespace(
+        mlx_limit_headroom_gib=None,
+        arms=["cell16k_ring_v2_attn", "cell16k_ring_v2_attn_hr8"],
+    )
+    assert ab._preflight_headroom_gib(args) == pytest.approx(8.0)
+
+
+def test_preflight_headroom_flag_beats_preset() -> None:
+    ab = _load_ab_module()
+    args = types.SimpleNamespace(
+        mlx_limit_headroom_gib=12.0,
+        arms=["cell16k_ring_v2_attn_hr8"],
+    )
+    assert ab._preflight_headroom_gib(args) == pytest.approx(12.0)
+
+
+def test_preflight_headroom_zero_when_no_hr_arm() -> None:
+    ab = _load_ab_module()
+    args = types.SimpleNamespace(
+        mlx_limit_headroom_gib=None,
+        arms=["cell16k_ring_v2_attn"],
+    )
+    assert ab._preflight_headroom_gib(args) == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
+# Part J: review MEDIUM-1 auto-pin arms >=2 to arm-1's sidecar (same plan_limit)
+# --------------------------------------------------------------------------
+
+
+class _FakeBench:
+    def __init__(self, system_used_bytes: int):
+        self._sys = int(system_used_bytes)
+
+    def _system_used_bytes(self) -> int:
+        return self._sys
+
+
+def test_multiarm_derive_autopins_second_arm_to_first_plan(monkeypatch) -> None:
+    """review MEDIUM-1: two arms in ONE invocation on the derive path must run the SAME
+    plan_limit.  Arm 1 (control, headroom 0) derives + writes the sidecar; arm 2 (hr8)
+    auto-pins it, so arm 2's plan_limit == arm 1's even though its headroom differs (a
+    per-arm re-derive would have shifted the plan and confounded the A/B)."""
+
+    import json as _json
+
+    ab = _load_ab_module()
+    with tempfile.TemporaryDirectory() as d:
+        model = Path(d)
+        (model / "config.json").write_text(_json.dumps(
+            {"num_hidden_layers": 1, "head_dim": 512, "qk_rope_head_dim": 64,
+             "index_head_dim": 128, "sliding_window": 128, "compress_ratios": [0]}
+        ))
+        args = ab.build_parser().parse_args([
+            "--out", str(model / "out.jsonl"),
+            "--model", str(model),
+            "--memory-budget-total-gib", "100",
+            "--context-tokens", "16384",
+            "--max-kv", "1000",
+        ])
+        args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+        bench = _FakeBench(int(20 * GIB))
+
+        # Arm 1 (control): derives + writes the sidecar, records it for auto-pin.
+        monkeypatch.delenv(_HEADROOM_ENV, raising=False)
+        ab._resolve_derivation(args, bench=bench, max_kv=1000)
+        p0 = args._dsv41_budget_total.plan_limit_gib
+        assert args._dsv41_budget_total.mlx_limit_headroom_gib == pytest.approx(0.0)
+        assert getattr(args, "_dsv41_autopin_sidecar", None) is not None
+
+        # Arm 2 (hr8): the preset would set the env in-window; simulate it here.
+        monkeypatch.setenv(_HEADROOM_ENV, "8")
+        ab._resolve_derivation(args, bench=bench, max_kv=1000)
+        bt2 = args._dsv41_budget_total
+        # SAME plan_limit as arm 1 (auto-pinned, residents identical) ...
+        assert bt2.plan_limit_gib == pytest.approx(p0)
+        # ... but this arm carries its own headroom (applied at set_memory_limit).
+        assert bt2.mlx_limit_headroom_gib == pytest.approx(8.0)

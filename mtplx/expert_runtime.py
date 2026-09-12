@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import threading
@@ -1684,11 +1685,19 @@ def reconcile_mlx_memory_cap(
 # the residency plan WITHOUT changing the plan (residents, expert-cache slots, prefetch
 # ring) or the ``MTPLX_MEMORY_LIMIT_BYTES`` engine budget -- so bytes/routing/outputs
 # stay byte-identical.  The finding (W112 receipt window-44b): every real window runs
-# the model OVER its own MLX limit (plan 69.2 -> mlx_peak 74.3), and MLX 0.32.2 treats
-# set_memory_limit as a SOFT limit -- allocations beyond it take the over-limit path
-# (cache release / scheduler wait), the (f) allocator-pressure regime (5.2x in-model
-# attention).  Raising ONLY the limit above the steady-state peak leaves that regime
-# without touching what is resident.
+# the model OVER its own MLX limit (plan 69.2 -> mlx_peak 74.3).
+#
+# Mechanism (mlx 0.32.2 allocator.cpp): set_memory_limit sets block_limit_ and
+# gc_limit_ = min(limit, 0.95 x recommendedMaxWorkingSetSize).  On a cache MISS with
+# active + cache + size >= gc_limit_, MetalAllocator::malloc calls
+# release_cached_buffers(...); once active >= gc_limit_ the release argument exceeds the
+# pool, so the ENTIRE buffer cache is cleared, and every later allocation is a fresh
+# newBuffer (page zero-fill) + residency-set insert.  There is NO scheduler wait and NO
+# error -- it is cache-clear-on-miss thrash, the (f) allocator-pressure regime (5.2x
+# in-model attention).  Raising ONLY the limit above the steady-state peak lifts
+# gc_limit_ so the miss path stops clearing the cache, without touching what is
+# resident.  (Proven for prefill, where mlx_peak > limit; whether decode is also over
+# the limit is what window 46 measures -- see W118_MLX_LIMIT_HEADROOM.md.)
 MLX_LIMIT_HEADROOM_ENV = "MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB"
 _MLX_LIMIT_HEADROOM_GIB = 1024**3
 
@@ -1703,12 +1712,26 @@ def resolve_mlx_limit_headroom_bytes(env: Mapping[str, str] | None = None) -> in
     raw = source.get(MLX_LIMIT_HEADROOM_ENV)
     if raw is None or str(raw).strip() == "":
         return 0
+    stripped = str(raw).strip()
+    # W118 review MEDIUM-3: reject underscore-obfuscated values ("1_0" is 10.0 under
+    # PEP 515, which silently misreads an operator typo) BEFORE float().
+    if "_" in stripped:
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be a plain number of GiB, got {raw!r} "
+            "(underscores are not allowed)"
+        )
     try:
-        value = float(str(raw).strip())
+        value = float(stripped)
     except (TypeError, ValueError) as exc:
         raise ExpertStreamingConfigurationError(
             f"{MLX_LIMIT_HEADROOM_ENV} must be a number of GiB, got {raw!r}"
         ) from exc
+    # W118 review MEDIUM-3: nan/inf must be rejected -- ``float('nan') < 0`` is False,
+    # so a non-finite value would otherwise pass and crash in-window.
+    if not math.isfinite(value):
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be finite, got {raw!r}"
+        )
     if value < 0:
         raise ExpertStreamingConfigurationError(
             f"{MLX_LIMIT_HEADROOM_ENV} must be non-negative, got {value}"
