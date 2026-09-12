@@ -2598,6 +2598,164 @@ def _memory_headline(receipt) -> str:
     )
 
 
+# --------------------------------------------------------------------------
+# W106 output persistence (David: "store the output so we can audit it").  Every
+# bench run persists the FULL generated output -- in the receipt (token_ids +
+# decoded_text + head/tail) and as a text sidecar next to the receipt -- so a
+# rounding-class result can be text-spot-checked, not just compared by sha.
+# Decoding reuses the ALREADY-LOADED bench tokenizer and is fully guarded: a
+# tokenizer failure records None and never kills the measured run.
+# --------------------------------------------------------------------------
+_TEXT_HEAD_CHARS = 600
+_TEXT_TAIL_CHARS = 600
+_DIVERGENCE_CONTEXT_CHARS = 200
+
+
+def _decode_ids(tok, ids):
+    """Decode token ids to text with the bench's already-loaded tokenizer.  Guarded:
+    returns None on any failure or when no tokenizer is available (e.g.
+    --prompt-ids-file), so a decode never kills a run."""
+
+    if tok is None or ids is None:
+        return None
+    decode = getattr(tok, "decode", None)
+    if not callable(decode):
+        return None
+    try:
+        return decode([int(t) for t in ids])
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: token decode failed ({exc!r}); text output omitted",
+              flush=True)
+        return None
+
+
+def _text_output_fields(tok, ids) -> dict:
+    """The receipt text-audit fields for one id stream: the FULL id list, the full
+    decoded text, and its head/tail (first/last 600 chars)."""
+
+    ids_list = [int(t) for t in (ids or [])]
+    text = _decode_ids(tok, ids_list)
+    if text is None:
+        head = tail = None
+    else:
+        head = text[:_TEXT_HEAD_CHARS]
+        tail = text[-_TEXT_TAIL_CHARS:]
+    return {
+        "token_ids": ids_list,
+        "decoded_text": text,
+        "decoded_text_head": head,
+        "decoded_text_tail": tail,
+    }
+
+
+def _divergence_context(tok, ids, token_index, span=_DIVERGENCE_CONTEXT_CHARS):
+    """The decoded text ``span`` chars either side of the character offset that the
+    divergence TOKEN index maps to (decode the prefix to find the offset).  None
+    when the stream cannot be decoded."""
+
+    full = _decode_ids(tok, ids)
+    if full is None:
+        return None
+    prefix = _decode_ids(tok, list(ids)[: max(0, int(token_index))])
+    offset = len(prefix) if prefix is not None else 0
+    return full[max(0, offset - span): offset + span]
+
+
+def _receipt_stem(out_path) -> Path:
+    """The receipt path with a trailing ``.jsonl``/``.json`` stripped, so
+    ``<stem>.output.txt`` sits beside the receipt."""
+
+    p = Path(out_path)
+    if p.suffix in (".jsonl", ".json"):
+        return p.with_suffix("")
+    return p
+
+
+def _nonclobber_write(desired: Path, content: str):
+    """Write ``content`` to ``desired`` (or ``-2``/``-3``... when taken) ATOMICALLY
+    (tmp + rename) and NEVER overwrite an existing sidecar
+    (memory/never-overwrite-a-measurement).  Returns the path written, or None on
+    failure (guarded)."""
+
+    try:
+        n = 1
+        target = None
+        while n < 10000:
+            cand = (
+                desired if n == 1
+                else desired.with_name(f"{desired.stem}-{n}{desired.suffix}")
+            )
+            try:
+                fd = os.open(cand, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                n += 1
+                continue
+            os.close(fd)  # reserve the name (empty) so no concurrent run reuses it
+            target = cand
+            break
+        if target is None:
+            return None
+        tmp = target.with_name(target.name + ".tmp")
+        with open(tmp, "w") as fh:
+            fh.write(content)
+        os.replace(tmp, target)  # atomic swap over the reserved empty file
+        return target
+    except OSError as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: output sidecar write failed ({exc!r})", flush=True)
+        return None
+
+
+def _emit_sidecar(path: Path, *, arm, kind, stream, divergence) -> None:
+    sha = stream.get("token_ids_sha256")
+    tok_s = stream.get("decode_tok_s")
+    text = stream.get("decoded_text")
+    header = "\n".join(
+        [
+            f"# arm: {arm}",
+            f"# stream: {kind}",
+            f"# token_ids_sha256: {sha}",
+            f"# decode_tok_s: {tok_s}",
+            f"# divergence: "
+            + (json.dumps(divergence) if divergence is not None else "none"),
+            "",
+            "",
+        ]
+    )
+    body = (
+        text if text is not None
+        else "<decode unavailable (no tokenizer / decode failed)>"
+    )
+    written = _nonclobber_write(path, header + body + "\n")
+    if written is not None:
+        print(f"[ab] output sidecar: {written}", flush=True)
+
+
+def _write_output_sidecars(out_path, receipt) -> None:
+    """Persist the FULL decoded output beside the receipt: ``<stem>.output.txt`` for
+    the measured stream and, for a DSpark run, ``<stem>.ar-reference.output.txt``
+    for the AR comparison stream it diverges against.  Fully guarded."""
+
+    try:
+        stem = _receipt_stem(out_path)
+        arm = receipt.get("arm")
+        dsp = receipt.get("dspark")
+        if isinstance(dsp, dict):
+            primary, kind, div = dsp, "dspark", dsp.get("divergence")
+        else:
+            primary, kind, div = receipt, "ar", None
+        _emit_sidecar(
+            stem.with_name(stem.name + ".output.txt"),
+            arm=arm, kind=kind, stream=primary, divergence=div,
+        )
+        if isinstance(dsp, dict):
+            _emit_sidecar(
+                stem.with_name(stem.name + ".ar-reference.output.txt"),
+                arm=arm, kind="ar-reference", stream=receipt, divergence=div,
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: output sidecar step failed ({exc!r})", flush=True)
+
+
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
     if getattr(args, "decode_mode", "ar") == "dspark":
@@ -2734,6 +2892,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 json.dumps(ids).encode()
             ).hexdigest(),
             "first_token_ids": ids[:16],
+            # W106 output persistence: the FULL generated ids + decoded text (+
+            # head/tail) for the AR pass, so a rounding-class result is text-
+            # auditable, not just sha-comparable. Decoded with the loaded bench
+            # tokenizer; None if unavailable (guarded).
+            **_text_output_fields(_tok, ids),
             "overlap_telemetry": _overlap_telemetry(runtime)
             if runtime is not None
             else None,
@@ -2835,6 +2998,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     json.dumps(dsp_ids).encode()
                 ).hexdigest(),
             }
+            # W106 output persistence: the FULL DSpark stream (ids + decoded text)
+            # AND the AR comparison stream it is verified against, both under the
+            # dspark block so the divergence is text-auditable from the receipt.
+            receipt["dspark"].update(_text_output_fields(_tok, dsp_ids))
+            receipt["dspark"]["ar_reference"] = _text_output_fields(_tok, ids)
             if dsp.get("verify_stage_timing") is not None:
                 # W37 internal breakdown of the verify forward (attention +
                 # moe.routed_switch): the census that shows the routing phase.
@@ -2867,6 +3035,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     (i for i, (a, b) in enumerate(zip(dsp_ids, ids)) if a != b),
                     min(len(dsp_ids), len(ids)),
                 )
+                # W106: the decoded text ~200 chars either side of the divergence
+                # point, for BOTH streams, so the flip is readable in the receipt.
+                receipt["dspark"]["divergence_context"] = {
+                    "ar": _divergence_context(_tok, ids, first),
+                    "dspark": _divergence_context(_tok, dsp_ids, first),
+                }
                 ar_tok = ids[first] if first < len(ids) else None
                 dsp_tok = dsp_ids[first] if first < len(dsp_ids) else None
                 cap = dsp.get("divergence")
@@ -2903,6 +3077,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     )
             else:
                 receipt["dspark"]["divergence"] = None
+                receipt["dspark"]["divergence_context"] = None
         if getattr(args, "warm_repeat", False):
             receipt["warm"] = _warm_repeat_pass(
                 model=model, ops=ops, mem_probe=mem_probe,
@@ -3319,6 +3494,9 @@ def main(argv=None) -> int:
         receipts.append(receipt)
         with args.out.open("a") as fh:
             fh.write(json.dumps(receipt) + "\n")
+        # W106 output persistence: the FULL decoded output as a text sidecar beside
+        # the receipt (never overwriting an existing one), so David can audit it.
+        _write_output_sidecars(args.out, receipt)
         print(
             f"[ab]   decode_tok_s={receipt['decode_tok_s']} "
             f"{_memory_headline(receipt)} "
