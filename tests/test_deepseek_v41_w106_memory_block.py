@@ -213,3 +213,17 @@ def test_sampler_peak_rss_is_high_water_not_exit_value():
     assert sampler.peak_rss_bytes >= peak_at_alloc
     # and the peak genuinely captured the allocation (well above an empty baseline).
     assert sampler.peak_rss_bytes > 100 * 1024 * 1024
+
+
+def test_memory_block_process_peak_falls_back_when_sampler_peak_zero():
+    """W106 LOW: if a sampler ran but produced a 0 peak (never got a reading),
+    process_peak_rss_gb falls back to ru_maxrss (never a misleading 0.0); the
+    sampler's own key still reports 0.0."""
+    bench = _bench()
+    probe = bench._MLXMemProbe(_FakeMx(4 * 1024 * 1024))
+    sampler = probe.new_sampler(interval_s=1.0)
+    # do NOT start it -> peak_rss_bytes stays 0 (simulates "sampler ran, no reading")
+    block = probe.memory_block(sampler)
+    assert block["sampler_peak_rss_gb"] == 0.0            # the sampler's own value
+    assert block["process_peak_rss_gb"] == block["ru_maxrss_gb"]  # fallback
+    assert block["process_peak_rss_gb"] > 0.0
