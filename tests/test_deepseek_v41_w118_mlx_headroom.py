@@ -58,14 +58,21 @@ def _fake_plan(
 
 
 class _FakeMX:
-    """Captures the single value handed to ``set_memory_limit`` -- no Metal touched."""
+    """Captures the values handed to ``set_memory_limit`` and ``set_wired_limit``
+    (W121: the DSV4.1 cap now wires the working set too) -- no Metal touched."""
 
     def __init__(self) -> None:
         self.value: int | None = None
+        self.wired: int | None = None
 
     def set_memory_limit(self, value: int) -> int:
         prev = self.value
         self.value = int(value)
+        return 0 if prev is None else prev
+
+    def set_wired_limit(self, value: int) -> int:
+        prev = self.wired
+        self.wired = int(value)
         return 0 if prev is None else prev
 
 
@@ -127,8 +134,19 @@ def test_default_headroom_zero_is_today() -> None:
     env: dict[str, str] = {}
     report = apply_mlx_memory_cap(plan, mx_module=fake, env=env)
 
-    assert report == {"applied": True, "limit": plan_limit}
+    # W121: the report now also carries the wired-limit outcome (the DSV4.1 cap
+    # wires the Metal working set to the SAME value it hands set_memory_limit, so
+    # its IOAccelerator pages land in wire_count instead of the swappable LRU).
+    assert report == {
+        "applied": True,
+        "limit": plan_limit,
+        "wired_limit_applied": True,
+        "wired_limit_bytes": plan_limit,
+        "wired_limit_api": "mx.set_wired_limit",
+        "previous_wired_limit_bytes": 0,
+    }
     assert fake.value == plan_limit
+    assert fake.wired == plan_limit  # wired == the allocation cap
     assert env["MTPLX_MEMORY_LIMIT_BYTES"] == str(plan_limit)
 
 
@@ -150,7 +168,16 @@ def test_headroom_raises_only_the_allocator_limit() -> None:
     report = apply_mlx_memory_cap(plan, mx_module=fake, env=env)
 
     assert fake.value == plan_limit + 8 * GIB
-    assert report == {"applied": True, "limit": plan_limit + 8 * GIB}
+    # W121: the wired limit tracks the SAME effective allocator limit (plan + headroom).
+    assert report == {
+        "applied": True,
+        "limit": plan_limit + 8 * GIB,
+        "wired_limit_applied": True,
+        "wired_limit_bytes": plan_limit + 8 * GIB,
+        "wired_limit_api": "mx.set_wired_limit",
+        "previous_wired_limit_bytes": 0,
+    }
+    assert fake.wired == plan_limit + 8 * GIB
     # The engine budget that bounds residency stays the PLAN value, not plan+headroom.
     assert env["MTPLX_MEMORY_LIMIT_BYTES"] == str(plan_limit)
 

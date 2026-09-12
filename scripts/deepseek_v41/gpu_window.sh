@@ -158,6 +158,7 @@ _require_int GPU_WINDOW_FOREIGN_WORKER_RSS_GB "${FOREIGN_WORKER_RSS_GB}" || exit
 VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
 PS_CMD="${GPU_WINDOW_PS_CMD:-/bin/ps}"                           # overridable for the foreign-worker scan unit test
                                                                 # (also used for the phase-4 step-tree RSS walk below)
+TOP_CMD="${GPU_WINDOW_TOP_CMD:-/usr/bin/top}"                    # overridable so the top cross-check is unit-testable
 
 # W106 hermetic test mode: GPU_WINDOW_TEST_MODE=1 skips phases 1-3 (the wired-knob
 # sysctl read, the launchctl inspect + bootout) and the resident-agent restore --
@@ -179,23 +180,64 @@ log() { printf '%s [gpu_window] %s\n' "$(ts)" "$*"; }
 err() { printf '%s [gpu_window] ERROR: %s\n' "$(ts)" "$*" >&2; }
 gib() { awk -v b="${1:-0}" 'BEGIN{printf "%.1f", b/1073741824}'; }
 
-# Total *used* physical memory in bytes = (wired down + anonymous + occupied-by-
-# compressor) pages * page size, parsed from vm_stat.  Anonymous (not active):
-# active includes file-backed page cache, which a 269 GiB mmap'd expert bank
-# fills within seconds and macOS reclaims on demand (false abort 2026-09-11).  This is the system-wide
-# pressure signal the phase-4 guard aborts on: a runaway allocation ANYWHERE on
-# the box (not only the step child) is what panicked the machine on 2026-09-10.
-# "occupied by compressor" is the physical compressed footprint (NOT "stored in
-# compressor", which is the larger pre-compression logical count).
+# Total *used* physical memory in bytes = what `top` reports as "PhysMem used":
+#
+#   used = (wired down + active + inactive + speculative + occupied-by-compressor) * page size
+#
+# W121 finding (live idle-box reconciliation, 2026-09-12): the old
+# `wired + Anonymous + compressor` formula UNDERCOUNTS the box by ~12-40 GiB and
+# missed the panic that forced the window-46 abort.  Two failure modes, both from
+# Metal/IOAccelerator (GPU) memory:
+#   1. "Anonymous pages" == vm_stat's internal_page_count, which EXCLUDES the
+#      anonymous device pages that sit in the active/inactive LRU (measured: 6.5
+#      vs 18.3 GiB now -> −12 GiB), so it is the wrong "anon" term.
+#   2. When a process does NOT wire its Metal working set (the DSV4.1 bench sets
+#      only mx.set_memory_limit, never mx.set_wired_limit -- see
+#      expert_runtime.apply_mlx_memory_cap), its IOAccelerator pages are NOT in
+#      wire_count; they land in active/inactive (and get compressed/swapped under
+#      pressure).  In window 46 top read 122 GB used while wired+anon+comp read
+#      78-82 GB -- a ~40 GB blind spot.  A wired holder (the resident Qwen server,
+#      which DOES set_wired_limit) shows its Metal in wire_count instead.
+# `active`+`inactive` cover BOTH cases (wired Metal is in wire_count; non-wired
+# Metal is in active/inactive), so this formula tracks `top` in either regime.
+# Verified: A = 101.71 GiB vs `top` 102.00 GiB (Δ −0.29 GiB, within 1 GB) on the
+# idle box (Qwen wired 82 GiB).  `top used-mem-gib --selftest top-cross-check`
+# asserts the agreement.  Excludes free/purgeable (reclaimable) exactly like top's
+# "unused".  "occupied by compressor" is the physical compressed footprint (NOT
+# "stored in compressor", the larger pre-compression logical count).
 used_mem_bytes() {
   "${VM_STAT_CMD}" 2>/dev/null | awk '
     /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
     /^Pages wired down/             { gsub(/\./, "", $NF); wired = $NF }
-    /^Anonymous pages/              { gsub(/\./, "", $NF); anon = $NF }
+    /^Pages active/                 { gsub(/\./, "", $NF); active = $NF }
+    /^Pages inactive/               { gsub(/\./, "", $NF); inactive = $NF }
+    /^Pages speculative/            { gsub(/\./, "", $NF); spec = $NF }
     /^Pages occupied by compressor/ { gsub(/\./, "", $NF); comp = $NF }
     END {
       if (ps == "") ps = 16384
-      printf "%.0f", (wired + anon + comp) * ps
+      printf "%.0f", (wired + active + inactive + spec + comp) * ps
+    }
+  '
+}
+
+# `top`'s own "PhysMem: <N>G used" figure in bytes, for the self-test cross-check.
+# Parses `top -l1 -n0`.  Overridable via GPU_WINDOW_TOP_CMD for the unit test.
+top_used_bytes() {
+  "${TOP_CMD}" -l 1 -n 0 2>/dev/null | awk '
+    /^PhysMem/ {
+      for (i = 1; i <= NF; i++) {
+        if ($(i + 1) ~ /^used/ || $(i + 1) == "used") {
+          v = $i
+          unit = v; sub(/[0-9.]+/, "", unit); sub(/[^0-9.].*/, "", v)
+          mult = 1
+          if (unit ~ /^K/) mult = 1024
+          else if (unit ~ /^M/) mult = 1024 * 1024
+          else if (unit ~ /^G/) mult = 1024 * 1024 * 1024
+          else if (unit ~ /^T/) mult = 1024 * 1024 * 1024 * 1024
+          printf "%.0f", v * mult
+          exit
+        }
+      }
     }
   '
 }
@@ -365,6 +407,21 @@ if [[ "${1:-}" == "--selftest" ]]; then
   case "${1:-}" in
     used-mem-bytes) used_mem_bytes; echo ;;
     used-mem-gib)   gib "$(used_mem_bytes)"; echo ;;
+    top-used-bytes) top_used_bytes; echo ;;
+    top-cross-check)
+      # W121: assert used_mem_bytes() agrees with what `top` reports as used,
+      # within 1 GiB.  Prints "ok <delta_gib>" or "MISMATCH <delta_gib>".
+      _um="$(used_mem_bytes)"; _tu="$(top_used_bytes)"
+      if [[ ! "${_um}" =~ ^[0-9]+$ || ! "${_tu}" =~ ^[0-9]+$ ]]; then
+        echo "MISMATCH unparsable used=${_um} top=${_tu}"
+      else
+        awk -v u="${_um}" -v t="${_tu}" 'BEGIN{
+          d = (u - t) / 1073741824
+          ad = (d < 0) ? -d : d
+          printf "%s %.2f\n", (ad < 1.0 ? "ok" : "MISMATCH"), d
+        }'
+      fi
+      ;;
     over-ceiling)
       _u="$(used_mem_bytes)"
       if [[ "${_u}" =~ ^[0-9]+$ ]] && (( _u > TOTAL_MEM_CEILING_BYTES )); then

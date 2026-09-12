@@ -1781,7 +1781,49 @@ def apply_mlx_memory_cap(
     if not callable(setter):
         raise ExpertStreamingConfigurationError("MLX memory limit API is unavailable")
     setter(limit)
-    return {"applied": True, "limit": limit}
+    # W121: WIRE the Metal working set to the same cap.  The served path
+    # (mtplx.server.openai._apply_metal_memory_caps) sets BOTH set_memory_limit
+    # AND set_wired_limit; this CLI/bench path historically set only the former,
+    # so its IOAccelerator (GPU) pages were NOT wired -- they sat in the
+    # active/inactive LRU and were compressed/swapped under pressure (window 46:
+    # top read 122 GB used while the box's wired counter stayed low, invisible to
+    # the old vm_stat guard; the box went over the 110 GB hard limit and the
+    # window was aborted).  Wiring the working set to the allocation cap keeps the
+    # Metal pages in wire_count -- bounded, visible to the corrected guard, and
+    # never paged.  Mirrors mtplx.glm52_q1t_over10 (set_memory_limit +
+    # set_wired_limit).  Best-effort + reported: an older MLX without the API, or
+    # a value the OS refuses, must not fail the run (the memory limit still
+    # applies), so the wired outcome is recorded rather than raised.
+    wired_report: dict[str, Any] = {}
+    wired_setter = getattr(mx, "set_wired_limit", None)
+    wired_api = "mx.set_wired_limit"
+    if not callable(wired_setter):
+        metal = getattr(mx, "metal", None)
+        wired_setter = getattr(metal, "set_wired_limit", None)
+        wired_api = "mx.metal.set_wired_limit"
+    if callable(wired_setter):
+        try:
+            previous = wired_setter(limit)
+            wired_report = {
+                "wired_limit_applied": True,
+                "wired_limit_bytes": limit,
+                "wired_limit_api": wired_api,
+                "previous_wired_limit_bytes": (
+                    int(previous) if previous is not None else None
+                ),
+            }
+        except Exception as exc:  # pragma: no cover - OS/driver refusal path
+            wired_report = {
+                "wired_limit_applied": False,
+                "wired_limit_bytes": limit,
+                "wired_limit_error": repr(exc),
+            }
+    else:
+        wired_report = {
+            "wired_limit_applied": False,
+            "wired_limit_reason": "set_wired_limit_unavailable",
+        }
+    return {"applied": True, "limit": limit, **wired_report}
 
 
 def mlx_memory_telemetry(mx_module: Any | None = None) -> dict[str, int | str]:

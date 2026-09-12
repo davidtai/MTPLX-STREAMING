@@ -38,18 +38,24 @@ FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n     %s\n' "$1" "$2"; }
 
-# --- a fake vm_stat: (wired + anonymous + occupied-compressor) = 50 GiB ---------
-# Deterministic and well under the 105 GiB ceiling, so the system-wide guard never
-# trips regardless of the box's real memory state while this test runs.
-#   wired 1500000 + anon 1500000 + comp 276800 = 3276800 pages * 16384 = 50 GiB
+# --- a fake vm_stat: (wired + active + inactive + speculative + compressor) = 50 GiB
+# Deterministic and well under the 102 GiB ceiling, so the system-wide guard never
+# trips regardless of the box's real memory state while this test runs.  W121: the
+# used-memory formula is (wired + active + inactive + speculative + occupied-by-
+# compressor) -- the top-equivalent figure that also captures non-wired Metal in
+# the active/inactive LRU (the old wired+anonymous+compressor missed it):
+#   wired 1500000 + active 1300000 + inactive 200000 + spec 0 + comp 276800
+#     = 3276800 pages * 16384 = 50 GiB
 FAKE_VMSTAT="${TMP}/vm_stat_50gib"
 cat > "${FAKE_VMSTAT}" <<'EOF'
 #!/bin/bash
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
-Anonymous pages:                            1500000.
+Pages active:                               1300000.
 Pages inactive:                              200000.
+Pages speculative:                                0.
+Anonymous pages:                             900000.
 Pages wired down:                           1500000.
 Pages occupied by compressor:                276800.
 V
