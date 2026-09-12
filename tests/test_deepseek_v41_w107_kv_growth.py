@@ -154,14 +154,31 @@ def test_kv_bytes_breakdown_scales_with_max_kv():
     assert big["window"] == small["window"], "window must not grow with max_kv"
     assert big["total"] == big["window"] + big["compress"] + big["index"] + big["latent"]
     assert C.kv_bytes_at_max_kv(cfg, 4096) == big["total"]
-    # dtype widths scale the per-lane bytes: all-fp32 (4) doubles the default bf16 (2)
-    # stores and leaves the already-fp32 latent frontier unchanged.
+    # window is bf16 (follows x) -> all-fp32 doubles it; latent is already fp32.
     f32 = C.kv_bytes_breakdown_at_max_kv(
         cfg, 4096, window_dtype_bytes=4, compress_dtype_bytes=4, index_dtype_bytes=4,
         latent_dtype_bytes=4)
     assert f32["window"] == 2 * big["window"]     # bf16 -> fp32
-    assert f32["compress"] == 2 * big["compress"]
     assert f32["latent"] == big["latent"]         # latent already fp32 by default
+
+
+def test_medium2_ratio_gt1_compress_index_are_fp32():
+    """Review MEDIUM-2: compress/index on ratio>1 source layers are fp32 (the
+    compressor pools in fp32), only ratio==1 follows x's bf16.  _Cfg has kv_source
+    [2, 5] with ratios {2: 2, 5: 1}."""
+    cfg = _Cfg()
+    max_kv = 4096
+    bd = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv)  # defaults: bf16=2, fp32=4
+    cc2 = C._bounded_comp_cap(max_kv, 2)              # layer 2 (ratio 2, fp32)
+    cc1 = C._bounded_comp_cap(max_kv, 1)              # layer 5 (ratio 1, bf16)
+    hd, ihd = cfg.head_dim, cfg.index_head_dim
+    exp_compress = cc2 * hd * 4 + cc1 * hd * 2       # fp32 + bf16
+    exp_index = cc2 * ihd * 4 + cc1 * ihd * 2
+    assert bd["compress"] == exp_compress, (bd["compress"], exp_compress)
+    assert bd["index"] == exp_index, (bd["index"], exp_index)
+    # overriding latent_dtype_bytes moves the ratio>1 stores (they share the fp32 width)
+    bd_bf16 = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv, latent_dtype_bytes=2)
+    assert bd_bf16["compress"] == cc2 * hd * 2 + cc1 * hd * 2
 
 
 # ---------------------------------------------------------------------------

@@ -473,10 +473,16 @@ def kv_bytes_breakdown_at_max_kv(
         context).  (A prefill chunk wider than ``phys_cap`` grows it transiently; the
         decode-steady size compacts back to this, so the steady bound is this value.)
       * **compress_kv** / **index_k** (``kv_source`` layers only): one row per
-        completed group, ``comp_cap = ceil(max_kv / ratio) + COMP_SLACK`` rows ::
+        completed group, ``comp_cap = ceil(max_kv / ratio) + COMP_SLACK`` rows.
+        **Per-layer dtype (review MEDIUM-2):** on ``ratio > 1`` source layers the
+        compressor pools in fp32 (``Compressor.pool`` casts to float32) and
+        RMSNorm / RoPE / the indexer preserve dtype, so these stores are **fp32** and
+        use ``latent_dtype_bytes``; only ``ratio == 1`` layers are a plain per-token
+        projection that follows ``x``'s dtype (bf16) and use ``compress_dtype_bytes``
+        / ``index_dtype_bytes`` ::
 
-            B * comp_cap * head_dim       * compress_dtype_bytes   (compress_kv)
-            B * comp_cap * index_head_dim * index_dtype_bytes      (index_k)
+            B * comp_cap * head_dim       * (latent_dtype_bytes if ratio>1 else compress_dtype_bytes)
+            B * comp_cap * index_head_dim * (latent_dtype_bytes if ratio>1 else index_dtype_bytes)
       * **latent** frontier (``kv_source`` + ``ratio > 1`` layers, the "main latent
         KV"): the two fp32 raw arrays (kv + gate score), ``latent_cap =
         max_kv + LATENT_SLACK`` rows ::
@@ -484,9 +490,9 @@ def kv_bytes_breakdown_at_max_kv(
             2 * B * latent_cap * head_dim * latent_dtype_bytes
 
     ``*_dtype_bytes`` default to the streaming runtime's dtypes (bf16 post-RoPE
-    stores, fp32 compressor frontier); pass the measured widths to match a specific
-    build.  ``COMP_SLACK`` / ``LATENT_SLACK`` are :data:`_BOUNDED_COMP_SLACK` /
-    :data:`_BOUNDED_LATENT_SLACK`.
+    stores that follow ``x``, fp32 compressor frontier + fp32 ratio>1 compress/index);
+    pass the measured widths to match a specific build.  ``COMP_SLACK`` /
+    ``LATENT_SLACK`` are :data:`_BOUNDED_COMP_SLACK` / :data:`_BOUNDED_LATENT_SLACK`.
     """
     max_kv = int(max_kv)
     B = int(batch)
@@ -512,10 +518,18 @@ def kv_bytes_breakdown_at_max_kv(
         if L in kv_sources:
             ratio = int(ratios[L])
             cc = _bounded_comp_cap(max_kv, ratio)
-            compress_bytes += B * cc * head_dim * int(compress_dtype_bytes)
-            index_bytes += B * cc * index_head_dim * int(index_dtype_bytes)
             if ratio > 1:
+                # W107 MEDIUM-2: ratio>1 source layers pool in fp32 (Compressor.pool
+                # casts to float32; rmsnorm/rope/indexer preserve dtype) -> fp32 stores.
+                c_bytes = int(latent_dtype_bytes)
+                i_bytes = int(latent_dtype_bytes)
                 latent_bytes += 2 * B * latent_cap * head_dim * int(latent_dtype_bytes)
+            else:
+                # ratio==1: plain per-token projection follows x's dtype (bf16).
+                c_bytes = int(compress_dtype_bytes)
+                i_bytes = int(index_dtype_bytes)
+            compress_bytes += B * cc * head_dim * c_bytes
+            index_bytes += B * cc * index_head_dim * i_bytes
     total = window_bytes + compress_bytes + index_bytes + latent_bytes
     return {
         "window": int(window_bytes),
