@@ -1,0 +1,7 @@
+# offline decode of receipt token_ids (W106 in-run decode wrote empty text)
+# stream: ar  n=257  eos_index=238
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, so a `summarize_generation_outputs` helper should slot in near the existing stats/diagnostics helpers and reuse the module's `dict[str, Any]` / `Sequence` typing conventions.
+
+- The module already imports `Sequence` from `collections.abc` and uses `dict[str, Any]` return types (e.g. `_generation_rate_fields`, `_mlx_memory_stats`), so the new helper can match existing style without new imports beyond `statistics` or manual percentile math.
+- `GenerationStats` and `GenerationOutput` are referenced but not defined in the excerpt, so the helper must defensively use `getattr` for optional fields like prefill/decode TPS and peak memory to satisfy the "ignore unavailable optional metrics" requirement.
+- The file is truncated mid-`_attach_runtime_diagnostics`, so the diff should append the helper after the last visible function and add a separate `tests/` file rather than modifying existing call sites.<｜end▁of▁sentence｜>- The module already imports `Sequence` from `collections.abc` and uses `

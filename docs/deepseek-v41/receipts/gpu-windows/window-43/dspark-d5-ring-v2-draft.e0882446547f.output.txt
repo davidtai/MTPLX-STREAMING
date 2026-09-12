@@ -1,0 +1,7 @@
+# arm: cell16k_ring_v2_draft
+# stream: dspark
+# token_ids_sha256: 7eb5bf42448a66d55b07d0c75cddebf45a10fac80446c2da9ced504fab9ebe53
+# decode_tok_s: 1.751189987895693
+# divergence: {"divergence_index": 159, "ar_token": 14, "dspark_token": 29, "ar_top2_margin": 0.0, "dspark_top2_margin": 0.25, "max_abs_logit_delta": 0.8203125, "tie_margin": 0.03, "class": "tie_flip", "capture_index": 159}
+
+<decode unavailable (no tokenizer / decode failed)>

@@ -1,0 +1,7 @@
+# offline decode of receipt token_ids (W106 in-run decode wrote empty text)
+# stream: ar  n=257  eos_index=None
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, so a `summarize_generation_outputs` helper should slot in near the existing stats/diagnostics helpers and reuse the module's `dict[str, Any]` / `Sequence` typing conventions.
+
+- The module already exposes `GenerationStats`-style dataclasses and `_generation_rate_fields`, so a summary helper should mirror that style (plain `dict[str, Any]`, `Sequence[GenerationOutput]`, no new dataclass) and compute p95 via `numpy.percentile` since `numpy` is already imported.
+- Optional metrics (prefill TPS, decode TPS, peak memory) are frequently absent or zero in this codebase — e.g. `_generation_rate_fields` guards against zero elapsed time — so the helper must skip `None`/non-positive values rather than emit `inf`/`nan`, and must return a stable schema for the empty case.
+- The module's env-gated tracing (`_DecodeTrace`, `_runtime_count`, `_attach_runtime_diagnostics`) shows the established pattern of keeping summaries JSON
