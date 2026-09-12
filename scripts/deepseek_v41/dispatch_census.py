@@ -17,6 +17,26 @@ exactly as the tape collapses (validated here on the Sinkhorn: 198 eager -> 80
 compiled).  The K3 worker's "~119 primitives per Sinkhorn call" is this same
 count of the ``_sinkhorn_ops`` graph.
 
+Caveat: a primitive count is a backend-independent LOWER BOUND on Metal
+dispatches, NOT the dispatch count itself.  The graph is the same on CPU and
+Metal, but the Metal backend can expand ONE primitive into several kernels (and
+never fewer), so the true GPU dispatch count is >= the number counted here:
+
+* ``Arange`` is a FILL kernel, not a view -- it writes a materialised buffer
+  (one dispatch), so counting it as free / zero-cost understates the token.
+* ``Concatenate`` costs one COPY kernel per input array (it materialises the
+  joined buffer), so an n-way concat is ~n dispatches, not one.
+* A large ``Reduce`` (sum/max/softmax denominator over a wide axis) runs as TWO
+  passes (partials then final) on Metal, so one reduction primitive is ~2
+  dispatches at width.
+* ``Slice`` / strided views are free in the graph but force a COPY downstream
+  the moment a non-view consumer (a matmul/kernel needing contiguous input)
+  reads them, so the copy shows up under the consumer, not the slice.
+
+So a stage's primitive count bounds its dispatch count from below; read the
+before/after DELTA (the point of this census) rather than the absolute as a GPU
+dispatch tally.
+
 Two censuses are produced:
 
 * **Full-model per-stage** -- a ``_CensusProbe`` is installed into the W37 stage

@@ -4,7 +4,8 @@ lever (docs/deepseek-v41/W97_ATTENTION_291MS.md).
 The grouped o-LoRA ``wo_a`` down-projection is applied as an einsum, so
 ``Attention._o_lora_dense_weight`` calls ``mx.dequantize(wo_a)`` to materialise the
 dense weight.  Off (default) that dequantize is re-issued **every layer every decode
-token**; on, it is computed once and cached (keyed on the packed-weight identity).
+token**; on, it is computed once and cached (keyed on the ``(weight, scales, biases)``
+packed-array identities).
 
 This proves:
   1. byte-identity -- 64 decode steps through the production ``Attention._attend``
@@ -12,8 +13,10 @@ This proves:
      under the K22 attention compile tape;
   2. the cut -- with the lever OFF ``mx.dequantize`` is invoked once per decode step
      (per layer), with it ON exactly once for the whole run;
-  3. the cache keys on the packed-weight identity -- re-quantising ``wo_a`` (a new
-     weight array) rebuilds the cached dense weight.
+  3. the cache keys on the ``(weight, scales, biases)`` identities -- re-quantising
+     ``wo_a`` (a new weight array) rebuilds the cached dense weight, AND swapping
+     the scales or biases alone (same weight buffer) rebuilds it too, since the
+     dequant output depends on all three.
 
 Tiny dims, CPU-pinned (worker-tests-must-pin-mlx-cpu.md), well under the memory
 guard; no artifact, no GPU.
@@ -251,4 +254,62 @@ def test_wo_a_cache_is_f32_and_removes_per_token_astype(monkeypatch):
     assert off_count > on_count, (
         f"cache OFF must carry the per-token weight-leg AsType(s) the fix removes: "
         f"off={off_count} on={on_count}"
+    )
+
+
+def test_wo_a_cache_rebuilds_on_scales_or_biases_swap(monkeypatch):
+    """W97 (review item 8): the cache keys on ``(weight, scales, biases)``, not the
+    weight alone.  The dequant output is a function of all three, so a reload that
+    swaps the scales (rescale) or the biases (re-zero-point) while REUSING the packed
+    weight buffer must rebuild the cache -- a weight-only key would return the stale
+    dense array.  Proven by swapping each of scales / biases in isolation."""
+    args = _tiny_args()
+    attn = _build_quantized_layer()
+    monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+    monkeypatch.setenv(dsv41._ATTN_WO_A_CACHE_ENV, "1")
+
+    gs, bits = attn.wo_a.group_size, attn.wo_a.bits
+    mode = getattr(attn.wo_a, "mode", "affine")
+    weight0 = attn.wo_a.weight
+    scales0 = attn.wo_a.scales
+    biases0 = attn.wo_a.biases
+    assert biases0 is not None, "affine q8 fixture must carry biases for the bias swap"
+
+    w1 = attn._o_lora_dense_weight()
+    assert attn._o_lora_dense_weight() is w1, "same identities -> cached object reused"
+
+    # A different quantisation of a same-shaped dense gives fresh scales/biases whose
+    # VALUES differ, so a rebuilt weight is observably different, not just a new object.
+    mx.random.seed(4242)
+    dense_x = mx.random.normal(
+        (attn.n_groups * args.o_lora_rank,
+         attn.n_heads * args.head_dim // attn.n_groups)
+    ) * 0.09
+    _packed_x, scales_x, biases_x = mx.quantize(dense_x, group_size=gs, bits=bits)
+    mx.eval(scales_x, biases_x)
+    assert scales_x is not scales0 and biases_x is not biases0
+
+    # (A) Swap ONLY the scales; weight + biases identities unchanged.
+    attn.wo_a.scales = scales_x
+    assert attn.wo_a.weight is weight0 and attn.wo_a.biases is biases0
+    w_scales = attn._o_lora_dense_weight()
+    assert w_scales is not w1, "scales swap (same weight) must rebuild the cache"
+    expected_scales = mx.dequantize(
+        weight0, scales_x, biases0, group_size=gs, bits=bits, mode=mode
+    ).reshape(attn.n_groups, args.o_lora_rank, -1)
+    assert bool(mx.all(w_scales == expected_scales).item()), (
+        "rebuilt weight must reflect the new scales, not the stale dense array"
+    )
+
+    # (B) Restore scales, swap ONLY the biases; weight + scales identities unchanged.
+    attn.wo_a.scales = scales0
+    attn.wo_a.biases = biases_x
+    assert attn.wo_a.weight is weight0 and attn.wo_a.scales is scales0
+    w_bias = attn._o_lora_dense_weight()
+    assert w_bias is not w_scales, "biases swap (same weight) must rebuild the cache"
+    expected_bias = mx.dequantize(
+        weight0, scales0, biases_x, group_size=gs, bits=bits, mode=mode
+    ).reshape(attn.n_groups, args.o_lora_rank, -1)
+    assert bool(mx.all(w_bias == expected_bias).item()), (
+        "rebuilt weight must reflect the new biases, not the stale dense array"
     )

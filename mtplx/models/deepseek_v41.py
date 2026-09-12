@@ -1536,7 +1536,9 @@ class Attention(nn.Module):
 
         W97: under ``MTPLX_DSV41_ATTN_WO_A_CACHE`` the dequantized array is computed
         once, promoted to f32 and reused across decode tokens, keyed on the
-        packed-weight identity so a re-quantize / reload rebuilds it.  BYTE-IDENTICAL
+        ``(weight, scales, biases)`` packed-array identities so a re-quantize /
+        reload that swaps ANY of the three rebuilds it (the dequant output depends on
+        all three, not the weight alone).  BYTE-IDENTICAL
         to the per-token dequant: ``mx.dequantize`` returns bf16 (both q8 and the
         native codecs) and ``_o_lora_down`` / the K22 out tape promote it to f32 with
         ``.astype(mx.float32)``; the cache stores that exact f32 promotion (bf16->f32
@@ -1548,9 +1550,19 @@ class Attention(nn.Module):
             return wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)
         use_cache = _resolve_wo_a_cache()
         if use_cache:
+            # Key on all three packed arrays' identities, not the weight alone: the
+            # dequant output is a function of (weight, scales, biases), so a reload
+            # or re-quantize that swaps the scales or biases (keeping the weight
+            # buffer) must invalidate the cache.  ``biases`` is None for the native
+            # float codecs; ``None is None`` matches, so the check is codec-safe.
             cached = getattr(self, "_wo_a_dense_cache", None)
-            if cached is not None and cached[0] is wo.weight:
-                return cached[1]
+            if (
+                cached is not None
+                and cached[0] is wo.weight
+                and cached[1] is wo.scales
+                and cached[2] is wo.biases
+            ):
+                return cached[3]
         # Mode-aware: affine q8 carries biases; the native float codecs
         # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
         # the mode and a ``None`` bias directly.
@@ -1575,7 +1587,9 @@ class Attention(nn.Module):
             # Materialise once so later tokens reference the buffer, not a lazy
             # dequantize node that would recompute on every ``mx.eval``.
             mx.eval(w)
-            self._wo_a_dense_cache = (wo.weight, w)
+            # Store the (weight, scales, biases) identities the dequant read plus
+            # the f32 result, so the lookup above invalidates on any of the three.
+            self._wo_a_dense_cache = (wo.weight, wo.scales, wo.biases, w)
         return w
 
     def _o_lora_down(self, o):
