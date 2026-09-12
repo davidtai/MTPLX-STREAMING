@@ -298,8 +298,14 @@ layers (full/reindex) still carry the irreducible indexer `Sort`/`CumSum`/top-k.
 
 - Lever `MTPLX_DSV41_ATTN_CORE_COMPILE` (default OFF, rounding-class):
   `Attention._sparse_attend_selected` routes the fixed-shape core through the
-  geometry-keyed compiled tape at decode/small-M verify; above the small-M cap the
-  eager block runs (byte-for-byte control).
+  geometry-keyed compiled tape when `rows = b·s ≤ 8` (M=1 decode + the K+1 verify
+  batch — the count is `b·s`, so batched decode at `b>1` correctly falls to eager)
+  and not in a timed prefill session; above the cap the eager block runs. **Caveat
+  (item 4):** there is no untimed decode/verify-phase signal at this call site, so a
+  ≤8-row **untimed prefill** (a ≤8-token prompt, or a ≤8-row prefill tail chunk under
+  fine chunking) is also routed through the rounding-class tape — it is byte-for-byte
+  control only for prefill chunks larger than the cap. Keep prompts/prefill chunks
+  above the cap for byte-identical prefill, or accept prefill as rounding-class there.
 - Arms: `attn_core_compile` (isolation), `cell16k_ring_attn_core` (= cell16k_ring +
   core compile), `cell16k_ring_wo_a_core` (= cell16k_ring + `wo_a` cache + core
   compile — the full W97 attention-dispatch program). All three carry the core

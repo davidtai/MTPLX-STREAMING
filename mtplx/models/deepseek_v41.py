@@ -1203,9 +1203,19 @@ class Attention(nn.Module):
         # PV) at decode / small-M verify -- one geometry-keyed tape, the scattered
         # elementwise runs fused into ~3 Compiled nodes (~13 -> ~8 kernels).
         # ROUNDING-CLASS vs the eager block below (n=1 compile reassociates the fp32
-        # einsum/reductions), gated separately; the gather stayed OUTSIDE.  Above the
-        # small-M cap (prefill rows) the eager block runs, byte-for-byte control.
-        if _resolve_attn_core_compile() and q.shape[1] <= _ATTN_CORE_COMPILE_MAX_ROWS:
+        # einsum/reductions), gated separately; the gather stayed OUTSIDE.
+        # W97 (review item 4): gate on rows = b*s (NOT s alone -- batched decode at
+        # b>1 was admitting one tape per b), and force eager during a TIMED prefill
+        # session (``_stime.is_prefill()``) so the prefill stage census stays
+        # fine-grained (mirrors ``_attn_use_compile``).  The cap covers M=1 decode +
+        # the K+1 verify batch (b*s <= 8).  CAVEAT: there is no UNTIMED decode/verify-
+        # phase signal at this call site, so a <=8-row untimed prefill (a <=8-token
+        # prompt, or a <=8-row prefill tail chunk under fine chunking) still routes
+        # through this rounding-class tape -- keep prompts/prefill chunks > the cap
+        # for byte-identical prefill, or accept prefill as rounding-class there.
+        rows = b * s
+        if (_resolve_attn_core_compile() and rows <= _ATTN_CORE_COMPILE_MAX_ROWS
+                and not _stime.is_prefill()):
             _note_attn_core_call(True)
             with _stime.stage_attn("attn." + mode + ".score.core_compiled") as _st:
                 o = _attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, self.attn_sink)
@@ -1977,7 +1987,12 @@ _DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"
 
 #: Max query rows (``b*s``) the decode kernel serves: M=1 decode and the ``K+1``
 #: verify batch (8 covers MTP depth up to 7).  Above it the eager prefill score
-#: path runs (W58/W59's domain) -- the hook never diverts prefill.
+#: path runs (W58/W59's domain).  CAVEAT (review item 4): the cap is the ONLY
+#: guard -- there is no decode/verify-phase signal here, so a <=8-row prefill (a
+#: <=8-token prompt or a <=8-row prefill tail chunk) is also diverted to the
+#: kernel; it is rounding-class like decode, so this changes prefill numerics in
+#: that regime (the K29 kernel is SHELVED, so this is documentation, not a live
+#: path -- see the SHELVED verdict above).
 _DECODE_ATTN_KERNEL_MAX_ROWS = 8
 
 

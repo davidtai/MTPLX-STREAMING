@@ -196,3 +196,93 @@ def test_attn_core_compile_engagement_counts_compiled_vs_eager(monkeypatch):
     _decode_ids(model, ops, prompt_ids, steps)
     on = dsv41._attn_core_compile_calls()
     assert on["compiled"] > 0, f"lever ON but the compiled tape never engaged: {on}"
+
+
+def _tiny_swa_attn(seed: int = 0):
+    """A tiny swa_only ``Attention`` (bf16, no compressor) -- the simplest layer that
+    routes through ``_sparse_attend_selected`` (comp_idx None -> window-only KVg)."""
+    mx.random.seed(seed)
+    args = dsv41.ModelArgs(
+        num_hidden_layers=4, hidden_size=256, num_attention_heads=8, head_dim=64,
+        qk_rope_head_dim=16, q_lora_rank=128, o_lora_rank=64, o_groups=4,
+        sliding_window=16, index_n_heads=4, index_head_dim=32, index_topk=8,
+        compress_ratios=[0, 0, 0, 0], candidate_source_layer_id=-1,
+    )
+    attn = dsv41.Attention(args, 0)
+    attn.set_dtype(mx.bfloat16)
+    mx.eval(attn.parameters())
+    return attn, args
+
+
+def _run_selected_core(attn, b: int, s: int, pos0: int = 100):
+    """Drive ``_sparse_attend_selected`` at a controlled (b, s) with a window-only KVg
+    (compress_kv/comp_idx None), so the compile gate sees exactly rows = b*s."""
+    from mtplx.models.deepseek_v41_cache import SharedAttentionRuntime
+
+    H, hd = attn.n_heads, attn.head_dim
+    T = 16
+    mx.random.seed(1)
+    q = (mx.random.normal((b, s, H, hd)) * 0.05).astype(mx.bfloat16)
+    window_all = (mx.random.normal((b, T, hd)) * 0.05).astype(mx.bfloat16)
+    positions = mx.arange(pos0, pos0 + s)
+    o = attn._sparse_attend_selected(q, window_all, None, None, positions, 0,
+                                     shared=SharedAttentionRuntime())
+    mx.eval(o)
+    return o
+
+
+def test_core_compile_gate_uses_b_times_s(monkeypatch):
+    """W97 review item 4: the gate is rows = b*s, NOT s alone.  Batched decode (b>1,
+    s=1) and any b*s>cap fall to the eager core; only b*s<=cap builds the tape."""
+    monkeypatch.setenv(dsv41._ATTN_CORE_COMPILE_ENV, "1")
+    monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+    monkeypatch.setattr(dsv41._stime, "is_prefill", lambda: False)
+    attn, _args = _tiny_swa_attn()
+
+    # b=1, s=1 decode: rows=1 <= 8 -> tape built.
+    dsv41._ATTN_CORE_COMPILED.clear(); dsv41._reset_attn_core_compile_calls()
+    _run_selected_core(attn, b=1, s=1)
+    assert len(dsv41._ATTN_CORE_COMPILED) == 1
+    assert dsv41._attn_core_compile_calls() == {"compiled": 1, "eager": 0}
+
+    # b=16, s=1 batched decode: rows=16 > 8 -> NO tape.  s=1 alone would be admitted,
+    # so this proves the gate counts b*s (the pre-fix bug: one tape per b).
+    dsv41._ATTN_CORE_COMPILED.clear(); dsv41._reset_attn_core_compile_calls()
+    _run_selected_core(attn, b=16, s=1)
+    assert len(dsv41._ATTN_CORE_COMPILED) == 0, "b=16 decode built a core tape (gate ignored b*s)"
+    assert dsv41._attn_core_compile_calls() == {"compiled": 0, "eager": 1}
+
+    # b=2, s=8: rows=16 > 8 -> NO tape (s=8 alone would be admitted -> also b*s).
+    dsv41._ATTN_CORE_COMPILED.clear(); dsv41._reset_attn_core_compile_calls()
+    _run_selected_core(attn, b=2, s=8)
+    assert len(dsv41._ATTN_CORE_COMPILED) == 0
+
+    # b=1, s=8 verify batch: rows=8 <= 8 -> tape built.
+    dsv41._ATTN_CORE_COMPILED.clear(); dsv41._reset_attn_core_compile_calls()
+    _run_selected_core(attn, b=1, s=8)
+    assert len(dsv41._ATTN_CORE_COMPILED) == 1
+
+
+def test_core_compile_prefill_phase_guard(monkeypatch):
+    """W97 review item 4: a TIMED prefill session (``_stime.is_prefill()``) force-eagers
+    the core so the prefill stage census stays fine-grained.  There is no UNTIMED
+    decode/verify-phase signal at this call site, so a <=8-row untimed prefill still
+    builds a tape -- the documented residual, asserted here so the limitation is
+    explicit and tracked."""
+    monkeypatch.setenv(dsv41._ATTN_CORE_COMPILE_ENV, "1")
+    monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+    attn, _args = _tiny_swa_attn()
+
+    # T=4 prefill under a timed prefill session -> NO tape (phase guard fires).
+    monkeypatch.setattr(dsv41._stime, "is_prefill", lambda: True)
+    dsv41._ATTN_CORE_COMPILED.clear(); dsv41._reset_attn_core_compile_calls()
+    _run_selected_core(attn, b=1, s=4)
+    assert len(dsv41._ATTN_CORE_COMPILED) == 0, "timed prefill built a core tape (phase guard missing)"
+    assert dsv41._attn_core_compile_calls()["compiled"] == 0
+
+    # Untimed T=4 prefill: rows=4 <= 8 and no untimed phase signal -> tape built
+    # (the documented limitation; keep prefill chunks > the cap for byte-identity).
+    monkeypatch.setattr(dsv41._stime, "is_prefill", lambda: False)
+    dsv41._ATTN_CORE_COMPILED.clear(); dsv41._reset_attn_core_compile_calls()
+    _run_selected_core(attn, b=1, s=4)
+    assert len(dsv41._ATTN_CORE_COMPILED) == 1
