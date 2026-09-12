@@ -59,6 +59,13 @@ STANDARD_CELL16K_PROMPT_IDS = (
     "docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/"
     "prompt-ids-deepseek-v41.json"
 )
+# W113 LOW-a: the seed + expected PROMPT-ids sha the auto-default pins the standard
+# cell to (sha of json.dumps(ids) over the sweep/16384/20260829 entry) so a
+# swapped/edited file is refused rather than silently measured.
+STANDARD_CELL16K_PROMPT_SEED = 20260829
+STANDARD_CELL16K_PROMPT_SHA256 = (
+    "1a45b35bae742fae0e26d4f40ee0dc1093a2038e5b514460a4f02e9e56d74565"
+)
 
 # W106 item 3: derive the MLX plan limit from David's TOTAL box budget while
 # COMPENSATING for the non-Metal requirements (the box has a 110 GB hard ceiling
@@ -1626,8 +1633,11 @@ def _standard_cell16k_prompt_path() -> Path:
 
 
 def _cell16k_arm(name) -> bool:
-    """True for the standard-cell arms (names start ``cell16k_``)."""
-    return str(name).startswith("cell16k_")
+    """True for the standard-cell arms.  W113 LOW-c: the bare ``cell16k`` preset
+    (no trailing underscore) is a 16K-cell arm too, so match it as well as the
+    ``cell16k_*`` family."""
+    s = str(name)
+    return s == "cell16k" or s.startswith("cell16k_")
 
 
 _SPECIAL_IDS_CACHE: dict = {}
@@ -1828,6 +1838,42 @@ def _warn_if_first_token_eos(arm, lane, surf) -> None:
         )
 
 
+def _verify_standard_cell_prompt(path) -> None:
+    """W113 LOW-a: pin the auto-defaulted standard cell to its expected prompt sha.
+
+    Selects the ``(cell=sweep, target_tokens=16384, seed=STANDARD_CELL16K_PROMPT_
+    SEED)`` entry and refuses (``SystemExit``) if the sha of its prompt ids does
+    not match ``STANDARD_CELL16K_PROMPT_SHA256`` -- so a swapped/edited standard
+    file is caught before it is silently measured.  Only the auto-defaulted file is
+    pinned; an explicit --prompt-ids-file is the operator's own choice.
+    """
+    try:
+        data = json.loads(Path(path).read_text())
+        entry = next(
+            e
+            for e in (data.get("prompts") or [])
+            if str(e.get("cell")) == "sweep"
+            and int(e.get("target_tokens") or 0) == 16384
+            and e.get("seed") == STANDARD_CELL16K_PROMPT_SEED
+        )
+        ids = [int(t) for t in entry["token_ids"]]
+    except (StopIteration, KeyError, ValueError, TypeError,
+            json.JSONDecodeError, OSError) as exc:
+        raise SystemExit(
+            f"[ab] W113: cannot verify the standard cell file {path} "
+            f"(cell=sweep, target_tokens=16384, seed={STANDARD_CELL16K_PROMPT_SEED}"
+            f"): {exc!r}. Pass --prompt-ids-file explicitly or --allow-raw-prompt."
+        )
+    sha = hashlib.sha256(json.dumps(ids).encode("utf-8")).hexdigest()
+    if sha != STANDARD_CELL16K_PROMPT_SHA256:
+        raise SystemExit(
+            f"[ab] W113: the standard cell file {path} prompt-ids sha {sha} does "
+            f"NOT match the pinned {STANDARD_CELL16K_PROMPT_SHA256} -- the file was "
+            "edited/swapped. Pass --prompt-ids-file explicitly (if intended) or "
+            "--allow-raw-prompt."
+        )
+
+
 def _apply_cell_prompt_guard(args) -> None:
     """W113 cell-prompt guard for the REAL measurement path (see the block note).
 
@@ -1862,10 +1908,16 @@ def _apply_cell_prompt_guard(args) -> None:
         return
     std = _standard_cell16k_prompt_path()
     if ctx16k and std.exists():
+        # W113 LOW-a: pin the file to its expected prompt sha (refuse on mismatch),
+        # then stamp the seed so the receipt's prompt_seed is not left null.
+        _verify_standard_cell_prompt(std)
         args.prompt_ids_file = str(std)
+        if getattr(args, "prompt_seed", None) is None:
+            args.prompt_seed = STANDARD_CELL16K_PROMPT_SEED
         print(
             f"[ab] W113: defaulted --prompt-ids-file to the standard 16K cell {std} "
-            "(pass --prompt-seed 20260829; --allow-raw-prompt for the raw builder)",
+            f"(--prompt-seed {args.prompt_seed}, prompt-ids sha pinned; "
+            "--allow-raw-prompt for the raw builder)",
             flush=True,
         )
         return
@@ -3385,7 +3437,11 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             pass_start=t0,
             decode_start=_sc.get("decode_start"),
             pass_end=time.perf_counter(),
-            generated_tokens=len(toks),
+            # W113 LOW-b: DECODE-only token count (exclude the prefill/first token)
+            # so dspark decode_tok_s uses the SAME denominator as the AR lane
+            # (decode_steps_run), instead of steps+1.  Also correct under
+            # --stop-on-eos, where len(toks) is the truncated stream.
+            generated_tokens=max(0, len(toks) - 1),
         )
         peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
     finally:

@@ -52,10 +52,16 @@ exercises the raw builder with the fake tokenizer on purpose, and stamps
 1. **Auto-default** `--prompt-ids-file` to the standard cell file when
    `--context-tokens 16384` and that file exists (path resolved **repo-root
    relative**: `docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/prompt-ids-deepseek-v41.json`).
-   Launchers get the standard cell without passing the path.
+   Launchers get the standard cell without passing the path. The auto-default also
+   stamps `--prompt-seed 20260829` (so the receipt's `prompt_seed` is not left
+   null) and **pins the prompt-ids sha** to
+   `1a45b35bae742fae0e26d4f40ee0dc1093a2038e5b514460a4f02e9e56d74565`, refusing if
+   the file was edited/swapped.
 2. **Refuse** (raise `SystemExit` with a clear error naming the standard file) any
-   `cell16k_*` arm, or any `--context-tokens 16384` run, that has no
+   `cell16k`/`cell16k_*` arm, or any `--context-tokens 16384` run, that has no
    `--prompt-ids-file` (and no auto-default available, e.g. the file is missing).
+   (The bare `cell16k` preset — no trailing underscore — is treated as a 16K-cell
+   arm too.)
 3. `--allow-raw-prompt` is the loud diagnostics **escape hatch**: it skips both the
    refusal and the auto-default, runs the raw builder, and stamps
    `prompt_source="raw-builder"` with a warning.
@@ -90,6 +96,12 @@ AR top level **and** in the `dspark` block:
 
 This mirrors the `serve_bench_1k` W18 guard semantics (an EOS‑honouring server
 returns a blank answer when the first token is EOS).
+
+**DSpark decode rate denominator:** the DSpark headline `decode_tok_s` is computed
+over `len(toks) - 1` (decode-only, excluding the prefill/first token), matching the
+AR lane's `decode_steps_run`. Before W113 it divided by `steps + 1`, so the DSpark
+rate was on a different denominator than AR; it is also now correct under
+`--stop-on-eos` (where `toks` is the truncated stream).
 
 ## Flags
 

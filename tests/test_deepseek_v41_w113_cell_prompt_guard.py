@@ -145,11 +145,50 @@ def test_guard_defaults_prompt_ids_file_at_ctx16384(env_levers):
               ["--out", "/dev/null", "--context-tokens", "16384",
                "--arms", "control"])
     assert a.prompt_ids_file is None
+    assert a.prompt_seed is None
     env_levers._apply_cell_prompt_guard(a)
     assert a.prompt_ids_file is not None
     assert a.prompt_ids_file.endswith(_STANDARD_REL)
     assert Path(a.prompt_ids_file).exists()
     assert Path(a.prompt_ids_file) == env_levers._standard_cell16k_prompt_path()
+    # LOW-a: the auto-default also stamps the seed (receipt prompt_seed not null).
+    assert a.prompt_seed == env_levers.STANDARD_CELL16K_PROMPT_SEED == 20260829
+
+
+def test_guard_default_bare_cell16k_arm_is_matched(env_levers):
+    # LOW-c: the bare `cell16k` preset (no underscore) is a 16K-cell arm too.
+    assert env_levers._cell16k_arm("cell16k") is True
+    assert env_levers._cell16k_arm("cell16k_ring") is True
+    assert env_levers._cell16k_arm("control") is False
+    # a bare cell16k arm at ctx 1024 without a file must refuse (no auto-default
+    # at 1024, since the standard file is target 16384).
+    a = _args(env_levers,
+              ["--out", "/dev/null", "--context-tokens", "1024",
+               "--arms", "cell16k"])
+    with pytest.raises(SystemExit):
+        env_levers._apply_cell_prompt_guard(a)
+
+
+def test_guard_refuses_on_pinned_sha_mismatch(env_levers, tmp_path, monkeypatch):
+    # LOW-a: a swapped/edited standard file (wrong ids -> wrong sha) is refused by
+    # the auto-default's pin, not silently measured.
+    bad = tmp_path / "prompt-ids-deepseek-v41.json"
+    bad.write_text(json.dumps({
+        "schema": "mtplx-server-cell-prompt-ids-v1",
+        "prompts": [{"cell": "sweep", "target_tokens": 16384,
+                     "seed": 20260829, "token_ids": [0, 1, 2, 3]}],  # wrong ids
+    }))
+    monkeypatch.setattr(env_levers, "_standard_cell16k_prompt_path", lambda: bad)
+    a = _args(env_levers,
+              ["--out", "/dev/null", "--context-tokens", "16384", "--arms", "control"])
+    with pytest.raises(SystemExit) as exc:
+        env_levers._apply_cell_prompt_guard(a)
+    assert "does NOT match the pinned" in str(exc.value)
+
+
+def test_verify_standard_cell_prompt_passes_on_real_file(env_levers):
+    # the real standard file matches the pinned sha (no raise).
+    env_levers._verify_standard_cell_prompt(env_levers._standard_cell16k_prompt_path())
 
 
 def test_guard_explicit_file_wins(env_levers):
@@ -266,11 +305,17 @@ def test_chat_templated_none_without_assistant_special(env_levers):
 
 def test_chat_templated_on_real_standard_cell_prompt(env_levers):
     # The real standard cell (prompt[1]) is chat-templated with a generation prompt.
+    # LOW-d: skip when the model tokenizer files are absent (no special ids to
+    # detect the <｜Assistant｜> marker against).
     std = env_levers._standard_cell16k_prompt_path()
+    if not std.exists():
+        pytest.skip("standard cell ids file not present")
+    special = env_levers._special_token_ids(env_levers.DEFAULT_MODEL)
+    if "assistant" not in special:
+        pytest.skip("model tokenizer files absent -- no special ids to detect")
     data = json.loads(std.read_text())
     entry = next(e for e in data["prompts"]
                  if e.get("cell") == "sweep" and e.get("target_tokens") == 16384)
-    special = env_levers._special_token_ids(env_levers.DEFAULT_MODEL)
     assert env_levers._prompt_chat_templated(entry["token_ids"], special) is True
 
 
