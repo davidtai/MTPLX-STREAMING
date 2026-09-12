@@ -137,40 +137,59 @@ def _make_metal_writer():
     return _w
 
 
+def _data_ptr(a) -> Optional[int]:
+    """The buffer-protocol data pointer of an mx.array, or None if unavailable
+    (bf16 has no numpy dtype; Metal may refuse a zero-copy view)."""
+    if a is None:
+        return None
+    try:
+        import numpy as _np
+        return int(_np.array(a, copy=False).__array_interface__["data"][0])
+    except Exception:
+        return None
+
+
 def _time_primitive(name: str, writer: Callable, N: int, D: int, dtype,
                     reps: int, hold_view: bool) -> dict:
-    """Time a single row append into a preallocated [1, N, D] buffer at row N-1.
+    """Append a single row into a preallocated [1, N, D] buffer at row N-1, in the
+    cache's REBIND pattern (``buf = writer(buf, ...)`` -- the previous descriptor is
+    dropped, so ``buf`` is uniquely referenced at the write and MLX donates).  Track the
+    buffer data-pointer FLIPS across appends: 0 flips == donates (pointer-stable), reps
+    flips == copies.  ``hold_view`` keeps a live ``buf[:, :row, :]`` view of the CURRENT
+    buffer alive at each write (the cache's read alias), which raises the refcount and
+    defeats donation -- so we measure both the primitive AND the alias hazard.
 
-    ``hold_view`` keeps a live ``buf[:, :N-1, :]`` slice alive across the write (the
-    cache's read alias) to test whether it defeats donation."""
+    (Round-4 fix: round 3's ``out = w(buf); buf = out`` kept the PREVIOUS result alive,
+    so every input had refcount 2 and slice_update wrongly read as COPY -- the bug the
+    re-review found.  The real cache pattern rebinds with no lingering alias.)"""
     B = 1
     row = N - 1
     buf = mx.zeros((B, N, D), dtype=dtype)
-    mx.eval(buf)
     new = mx.ones((B, 1, D), dtype=dtype)
-    mx.eval(new)
-    # warmup (compile / first dispatch)
+    mx.eval(buf, new)
     try:
-        _b = writer(buf, new, row)
-        mx.eval(_b)
-        buf = _b
+        buf = writer(buf, new, row)  # warmup (compile / first dispatch), rebind
+        mx.eval(buf)
     except Exception as exc:  # unsupported primitive on this build/device
         return {"primitive": name, "N": N, "supported": False, "error": repr(exc)[:200]}
 
     _reset_peak()
     base_active = _active()
-    held = buf[:, :row, :] if hold_view else None
-    if held is not None:
-        mx.eval(held)
+    p0 = _data_ptr(buf)
+    ptr_flips = 0
     t0 = time.perf_counter()
     for _ in range(reps):
-        out = writer(buf, new, row)
-        mx.eval(out)
-        buf = out
+        held = buf[:, :row, :] if hold_view else None   # view of the CURRENT buffer
+        if held is not None:
+            mx.eval(held)
+        buf = writer(buf, new, row)                      # REBIND (no lingering `out`)
+        mx.eval(buf)
+        p1 = _data_ptr(buf)
+        if p0 is not None and p1 is not None and p1 != p0:
+            ptr_flips += 1
+        p0 = p1
+        held = None
     t1 = time.perf_counter()
-    # keep ``held`` referenced across the loop so the alias is live at each write
-    if held is not None:
-        _ = int(held.shape[1])
     ms = (t1 - t0) / reps * 1e3
     return {
         "primitive": name,
@@ -178,6 +197,8 @@ def _time_primitive(name: str, writer: Callable, N: int, D: int, dtype,
         "supported": True,
         "hold_view": hold_view,
         "ms_per_append": round(ms, 4),
+        "ptr_flips": ptr_flips,
+        "ptr_available": p0 is not None,
         "active_delta_bytes": _active() - base_active,
         "peak_delta_bytes": _peak() - base_active,
         "buffer_bytes": B * N * D * dtype.size,
@@ -245,46 +266,84 @@ def run(sizes, dim, dtype_name, reps, use_gpu) -> dict:
 
 
 def _verdict(rows) -> str:
-    """Per primitive/hold_view: does ms scale with N (copy) or stay flat (donate)?
-    A donating write's ms at the largest N is < ~2x its ms at the smallest N."""
+    """Per primitive/hold_view, classify DONATE vs COPY.  The PRIMARY signal is the
+    buffer data-pointer: 0 flips across the rebind appends == DONATE (pointer-stable),
+    flips-per-append == COPY.  ms-slope + peak_delta are corroborating (a copy is O(T)
+    in ms and allocates ~one buffer plane).  Pointer trumps ms because ms at the cell
+    is dominated by fence/dispatch latency, not the copy (window-42 finding)."""
     from collections import defaultdict
     series = defaultdict(list)
     for r in rows:
         if not r.get("supported"):
             continue
         key = (r["primitive"], r.get("hold_view", False))
-        series[key].append(
-            (r["N"], r["ms_per_append"], r["peak_delta_bytes"], r["buffer_bytes"]))
+        series[key].append(r)
     lines = []
-    for (prim, hv), pts in sorted(series.items()):
-        pts.sort()
-        n0, ms0, _, _ = pts[0]
-        n1, ms1, pk1, buf1 = pts[-1]
+    for (prim, hv), rs in sorted(series.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        rs.sort(key=lambda r: r["N"])
+        r0, r1 = rs[0], rs[-1]
+        ms0, ms1 = r0["ms_per_append"], r1["ms_per_append"]
         slope = ms1 / ms0 if ms0 > 0 else float("inf")
-        # DONATE == ms roughly flat across T AND the largest-N peak grew far less than
-        # one buffer plane (a copy allocates ~buffer_bytes; a donate reuses in place).
-        ms_flat = slope < 2.0
-        mem_flat = pk1 < 0.5 * buf1
-        verdict = "DONATE" if (ms_flat and mem_flat) else "COPY(O(T))"
+        pk1, buf1 = r1["peak_delta_bytes"], r1["buffer_bytes"]
+        # pointer flips at the largest N (reps writes)
+        flips = r1.get("ptr_flips")
+        ptr_ok = r1.get("ptr_available", False)
+        if ptr_ok:
+            verdict = "DONATE(ptr-stable)" if flips == 0 else f"COPY(ptr-flips={flips})"
+        else:  # pointer unavailable -> fall back to ms-slope + peak
+            verdict = ("DONATE?" if (slope < 2.0 and pk1 < 0.5 * buf1)
+                       else "COPY?(O(T))")
         lines.append(
-            f"  {prim:14s} hold_view={hv!s:5s}: ms {ms0:.4f}->{ms1:.4f} "
-            f"(x{slope:.1f} over N {n0}->{n1}), peak_delta@N{n1} {pk1} B "
-            f"(buffer {buf1} B) => {verdict}"
+            f"  {prim:14s} hold_view={hv!s:5s}: ptr_flips@N{r1['N']}="
+            f"{flips if ptr_ok else 'n/a'} ms {ms0:.4f}->{ms1:.4f} (x{slope:.1f}) "
+            f"peak_delta {pk1} B (buffer {buf1} B) => {verdict}"
         )
     return "\n".join(lines)
+
+
+def self_test() -> dict:
+    """CPU self-test: mx.slice_update is pointer-STABLE in the cache's rebind pattern
+    (donates) and FLIPS when a view of the buffer is held at the write.  Returns a dict
+    with both counts + a pass flag; raises AssertionError if the pointer is available
+    but donation does not hold (the probe would otherwise mis-measure)."""
+    mx.set_default_device(mx.cpu)
+    reb = _time_primitive("slice_update", _w_slice_update, 4096, 64, mx.float32,
+                          reps=16, hold_view=False)
+    held = _time_primitive("slice_update", _w_slice_update, 4096, 64, mx.float32,
+                           reps=16, hold_view=True)
+    out = {"rebind_ptr_flips": reb.get("ptr_flips"),
+           "held_view_ptr_flips": held.get("ptr_flips"),
+           "ptr_available": reb.get("ptr_available", False)}
+    if out["ptr_available"]:
+        assert out["rebind_ptr_flips"] == 0, (
+            f"slice_update did NOT donate in the rebind pattern "
+            f"({out['rebind_ptr_flips']} flips) -- probe would mis-measure")
+        assert out["held_view_ptr_flips"] > 0, (
+            "holding a view did not defeat donation -- probe cannot discriminate")
+        out["pass"] = True
+    else:
+        out["pass"] = None  # pointer unavailable -> self-test inconclusive (guarded)
+    return out
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--gpu", action="store_true",
                     help="run on Metal (default: CPU for validation)")
-    ap.add_argument("--sizes", default="16384,16896,17408",
-                    help="comma-separated preallocated seq lengths T")
+    ap.add_argument("--sizes", default="2048,8192,16384,17408",
+                    help="comma-separated preallocated seq lengths T (8x spread)")
     ap.add_argument("--dim", type=int, default=512, help="head_dim (512 window/latent, 128 index)")
     ap.add_argument("--dtype", default="fp32", choices=("fp32", "bf16", "fp16"))
     ap.add_argument("--reps", type=int, default=50)
+    ap.add_argument("--self-test", action="store_true",
+                    help="CPU: assert slice_update is pointer-stable in the rebind pattern")
     ap.add_argument("--json", default=None, help="write the full result table to this JSON path")
     args = ap.parse_args(argv)
+
+    if args.self_test:
+        st = self_test()
+        print(f"[probe] self-test: {st}")
+        return 0 if st.get("pass") is not False else 1
 
     sizes = [int(x) for x in args.sizes.split(",") if x.strip()]
     res = run(sizes, args.dim, args.dtype, args.reps, args.gpu)
@@ -296,9 +355,9 @@ def main(argv=None) -> int:
             print(f"  {r['primitive']:14s} N={r['N']}: UNSUPPORTED ({r.get('error')})")
             continue
         print(f"  {r['primitive']:14s} N={r['N']:6d} hv={str(r.get('hold_view')):5s} "
-              f"ms={r['ms_per_append']:.4f} active_d={r['active_delta_bytes']:>10d} "
-              f"peak_d={r['peak_delta_bytes']:>10d} buf={r['buffer_bytes']:>10d}")
-    print("[probe] verdict (DONATE = ms flat & memory flat across T; COPY = O(T)):")
+              f"ptr_flips={r.get('ptr_flips')!s:>4s} ms={r['ms_per_append']:.4f} "
+              f"peak_d={r['peak_delta_bytes']:>11d} buf={r['buffer_bytes']:>11d}")
+    print("[probe] verdict (DONATE = buffer pointer stable across appends; COPY = flips):")
     print(res["verdict"])
     if args.json:
         from pathlib import Path

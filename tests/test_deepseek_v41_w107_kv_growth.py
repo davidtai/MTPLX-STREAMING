@@ -1127,41 +1127,46 @@ def _rows_by(rows, prim, hold_view):
         key=lambda r: r["N"])
 
 
-def test_kv_donation_probe_discriminates_on_cpu():
+def test_kv_donation_probe_rebind_donates_on_cpu():
+    """Round-4 fixed probe: the buffer POINTER is the signal.  In the cache's rebind
+    pattern (no lingering alias) mx.slice_update DONATES (0 pointer flips) -- the
+    re-review's correction of round-3's false 'copy' verdict; holding a view at the
+    write flips the pointer every append (copy)."""
     probe = _load_probe_module()
     res = probe.run(sizes=[2048, 8192], dim=64, dtype_name="fp32", reps=6, use_gpu=False)
     rows = res["rows"]
     prims = {r["primitive"] for r in rows}
     assert {"concat", "slice_update", "setitem", "put_along_axis"} <= prims
 
-    # The MEMORY delta is the deterministic donation signal (ms is CPU-jittery): an
-    # in-place __setitem__ into a UNIQUELY-referenced buffer allocates ~nothing (peak
-    # delta well under one buffer plane), while slice_update allocates a fresh output
-    # plane (>= half a buffer) -- i.e. slice_update does NOT donate, even on CPU (which
-    # is exactly why the GPU cache_append ms/tok did not move under the lever).
     su = _rows_by(rows, "slice_update", False)[-1]
+    if not su.get("ptr_available"):
+        pytest.skip("MLX build does not expose the buffer-protocol data pointer")
+    # slice_update donates in the rebind pattern: pointer stable, ~no allocation
+    assert su["ptr_flips"] == 0, "slice_update did not donate in the rebind pattern"
+    assert su["peak_delta_bytes"] < 0.5 * su["buffer_bytes"]
+    # __setitem__ is identical (also donates) -- so the round-3 switch bought nothing
     si = _rows_by(rows, "setitem", False)[-1]
-    assert si["peak_delta_bytes"] < 0.5 * si["buffer_bytes"], "setitem should write in place"
-    assert su["peak_delta_bytes"] >= 0.5 * su["buffer_bytes"], "slice_update copies a plane"
-
-    # holding a live view() alias defeats the in-place setitem donation (copies) --
-    # the cache's read-time alias is load-bearing, not just the primitive choice.
-    si_hv = _rows_by(rows, "setitem", True)[-1]
-    assert si_hv["peak_delta_bytes"] >= 0.5 * si_hv["buffer_bytes"]
-
-    # the verdict string classifies each series
-    assert "DONATE" in res["verdict"] and "COPY(O(T))" in res["verdict"]
+    assert si["ptr_flips"] == 0
+    # holding a live view at the write defeats donation (copies) for BOTH primitives
+    assert _rows_by(rows, "slice_update", True)[-1]["ptr_flips"] > 0
+    assert _rows_by(rows, "setitem", True)[-1]["ptr_flips"] > 0
+    assert "DONATE(ptr-stable)" in res["verdict"] and "COPY(ptr-flips" in res["verdict"]
 
 
-def test_kv_donation_probe_verdict_shape():
+def test_kv_donation_probe_self_test_and_shape():
     probe = _load_probe_module()
+    st = probe.self_test()
+    if st.get("ptr_available"):
+        assert st["pass"] is True
+        assert st["rebind_ptr_flips"] == 0 and st["held_view_ptr_flips"] > 0
     res = probe.run(sizes=[256, 512], dim=32, dtype_name="fp32", reps=4, use_gpu=False)
-    # every supported row carries the timing + memory fields the receipt/doc quote
     for r in res["rows"]:
         if not r.get("supported"):
             continue
-        for k in ("ms_per_append", "active_delta_bytes", "peak_delta_bytes", "buffer_bytes"):
+        for k in ("ms_per_append", "peak_delta_bytes", "buffer_bytes"):
             assert k in r
+        if r["primitive"] != "concat":               # concat is the baseline (no rebind)
+            assert "ptr_flips" in r
 
 
 # ---------------------------------------------------------------------------
