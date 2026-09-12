@@ -31,6 +31,7 @@ this loader with NO ``runtime.py`` edit, exactly like the hy3 lane.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ from ..resident_loader import (
     ResidentModel,
     _dtype_name,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # Top-level config model_type for the merged (text + vision) checkpoint; the
 # text sub-config is "deepseek_v41_text".  Every serve-path dispatch gate reads
@@ -280,6 +283,28 @@ def engram_bank_path_for(root: Path | str) -> Path | None:
     return engram if engram.is_dir() else None
 
 
+#: Cap on the GLOBAL prefetch-ring size (2*k double-buffer); k <= 16.
+_GATE_PREFETCH_RING_CAP = 32
+
+
+def resolve_gate_prefetch_ring_slots(current: int = 0) -> int:
+    """The GLOBAL gate-oracle ring size when ``MTPLX_DSV41_GATE_PREFETCH`` is armed.
+
+    The env is AUTHORITATIVE: returns ``max(current, min(32, 2*k))`` so a profile-
+    or caller-seeded ``prefetch_slots`` (including the ab bench / served profile's
+    explicit ``0``) can never disable an armed ring -- otherwise the lever measures
+    control-vs-control (review CRITICAL). ``k`` is the predict width; the ring is
+    ``2*k`` to double-buffer one layer ahead (W93_GATE_PREFETCH.md §4). Returns
+    ``current`` unchanged when the flag is off (shipped profile byte-identical)."""
+
+    from .deepseek_v41 import _resolve_gate_prefetch_k
+
+    k = _resolve_gate_prefetch_k()
+    if k <= 0:
+        return int(current or 0)
+    return max(int(current or 0), min(_GATE_PREFETCH_RING_CAP, 2 * k))
+
+
 def build_streaming_config(
     spec: ExpertStreamingModelSpec,
     *,
@@ -298,20 +323,15 @@ def build_streaming_config(
     """
 
     # W93: size the GLOBAL gate-oracle prefetch ring from MTPLX_DSV41_GATE_PREFETCH.
-    # The ring is SHARED across layers (docs/deepseek-v41/W93_GATE_PREFETCH.md §4):
-    # one layer is prefetched a step ahead at a time, so 2*k slots double-buffer
-    # (layer L's committed hits keep resolving while L+1's fill). The whole ring is
-    # 2*k * expert_record ~= 0.36 GiB at k=10 -- a small fixed reserve, NOT
-    # k * n_layers carved from the persistent LRU. Opt-in only: with the flag off
-    # prefetch_slots stays 0 and the shipped profile is byte-identical. An explicit
-    # caller override always wins. Requires the layer cache scope + component-banks
-    # layout the mxfp4 profile already uses; __post_init__ rejects otherwise.
-    if "prefetch_slots" not in overrides:
-        from .deepseek_v41 import _resolve_gate_prefetch_k
-
-        gate_prefetch_k = _resolve_gate_prefetch_k()
-        if gate_prefetch_k > 0:
-            overrides["prefetch_slots"] = min(32, 2 * gate_prefetch_k)
+    # The env is AUTHORITATIVE (max(existing, 2*k), review CRITICAL): the ab bench
+    # and the served profile BOTH seed an explicit ``prefetch_slots`` (0 for the
+    # shipped profile), so a plain ``if not in overrides`` guard would leave the
+    # ring off and the lever would measure control-vs-control. ``resolve_...`` takes
+    # max(seeded, 2*k), so a seeded 0 cannot disable an armed ring; with the flag
+    # off it returns the caller's value unchanged (shipped profile byte-identical).
+    resolved_ring = resolve_gate_prefetch_ring_slots(overrides.get("prefetch_slots", 0))
+    if resolved_ring:
+        overrides["prefetch_slots"] = resolved_ring
 
     return ExpertStreamingConfig(
         model_key=spec.key,
@@ -365,6 +385,17 @@ def open_deepseek_v41_runtime(
             runtime_reserve_bytes=runtime_reserve_bytes,
             expert_cache_limit_bytes=expert_cache_limit_bytes,
             **config_overrides,
+        )
+    # W93: log the resolved gate-oracle ring size at open so it is visible in the
+    # serve/bench log whether the lever actually armed (review CRITICAL).
+    if getattr(config, "prefetch_slots", 0) > 0:
+        _ring = int(config.prefetch_slots)
+        _LOGGER.info(
+            "gate-prefetch ring armed: %d shared slots (predict width k=%d, "
+            "~%.2f GiB)",
+            _ring,
+            _ring // 2,
+            _ring * spec.expert_record_bytes / (1024 ** 3),
         )
     buffer_allocator = _component_bank_allocator_for(
         config, spec, artifact_root, resolved_manifest, loaded_manifest

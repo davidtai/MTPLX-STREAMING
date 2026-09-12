@@ -1212,22 +1212,54 @@ def _resolved_plan(runtime, args) -> dict | None:
     if plan is None:
         return None
     spec = getattr(runtime, "spec", None)
+    config = getattr(runtime, "config", None)
     record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
     transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
     persistent_slots = int(getattr(plan, "persistent_slots", 0) or 0)
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
+    prefetch_slots = int(getattr(config, "prefetch_slots", 0) or 0)
+    slots_per_layer = int(getattr(plan, "slots_per_layer", 0) or 0)
+    # W93 (review CRITICAL): the gate-oracle lever must have ACTUALLY armed the
+    # GLOBAL ring on this cell -- otherwise the A/B is control-vs-control. Fail
+    # loudly rather than silently benchmarking an unarmed ring.
+    gate_env = os.environ.get(GATE_PREFETCH_ENV)
+    gate_armed = bool(gate_env) and gate_env not in ("0", "")
+    if gate_armed and prefetch_slots <= 0:
+        raise AssertionError(
+            f"{GATE_PREFETCH_ENV}={gate_env!r} is armed but the runtime built NO "
+            "prefetch ring (prefetch_slots=0). The gate-oracle lever would measure "
+            "control-vs-control -- check build_streaming_config / the served "
+            "profile arm the env-authoritative ring."
+        )
+    # W93 (review MEDIUM-d): the 0.36 GiB ring comes out of the PERSISTENT budget,
+    # not free reserve. Show slots_per_layer WITHOUT vs WITH the ring so the LRU
+    # effect (kept the same only via floor-division slack) is auditable per run.
+    slots_per_layer_no_ring = slots_per_layer
+    if prefetch_slots > 0 and config is not None and spec is not None:
+        try:
+            import dataclasses
+
+            no_ring = dataclasses.replace(config, prefetch_slots=0)
+            slots_per_layer_no_ring = int(
+                getattr(no_ring.memory_plan(spec), "slots_per_layer", slots_per_layer)
+            )
+        except Exception:
+            slots_per_layer_no_ring = slots_per_layer
     return {
         "transient_slots": transient_slots,
         "persistent_slots": persistent_slots,
+        # review MEDIUM-d: LRU depth WITH the ring vs the hypothetical no-ring plan.
+        "slots_per_layer": slots_per_layer,
+        "slots_per_layer_no_ring": slots_per_layer_no_ring,
         "expert_record_bytes": record_bytes,
         "transient_bytes_per_layer": transient_slots * record_bytes,
         "transient_bytes_total": transient_slots * record_bytes * routed_layers,
-        "split_route_release": getattr(
-            getattr(runtime, "config", None), "split_route_release", None
-        ),
-        "prefetch_slots": getattr(
-            getattr(runtime, "config", None), "prefetch_slots", None
-        ),
+        "split_route_release": getattr(config, "split_route_release", None),
+        # GLOBAL ring: prefetch_slots = 2*k records TOTAL (shared); k = predict width.
+        "prefetch_slots": prefetch_slots,
+        "gate_prefetch_armed": gate_armed,
+        "gate_prefetch_k": (prefetch_slots // 2) if gate_armed else 0,
+        "gate_prefetch_ring_bytes": prefetch_slots * record_bytes,
         "source": (
             "explicit" if getattr(args, "transient_slots", None) is not None
             else f"profile:{getattr(args, 'expert_profile', 'none')}"
