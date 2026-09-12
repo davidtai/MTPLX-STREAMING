@@ -910,7 +910,7 @@ class Attention(nn.Module):
         return (idx - drop_offset).astype(mx.int32), valid
 
     def _sparse_attend_selected(self, q, window_all, compress_kv, comp_idx,
-                                positions, drop_offset=0):
+                                positions, drop_offset=0, shared=None):
         """K30 (W59) selected-key gather attention -- the faithful,
         non-transliterated form of :meth:`_sparse_attend`, for prefill (rows > 1),
         decode (rows == 1) and the ``K+1`` verify batch alike.
@@ -950,8 +950,13 @@ class Attention(nn.Module):
             win_valid = mx.broadcast_to(win_valid[None], (b, s, win_valid.shape[-1]))
             kvg_win = _gather_rows(window_all, win_idx, win_valid)   # [b,s,W,hd]
             if compress_kv is not None and comp_idx is not None:
-                comp_valid = comp_idx >= 0
-                kvg_cmp = _gather_rows(compress_kv, comp_idx, comp_valid)  # [b,s,Ck,hd]
+                # W90: gather the selected compressed KV once per (compress_kv,
+                # selected_idx) source and share it, so a Reuse/Reindex layer
+                # references the BOUNDED [b,s,k,hd] operand rather than the O(T)
+                # compress_kv store (the W90 in-situ mechanism).  Byte-identical --
+                # same rows in the same order as a per-layer gather.
+                kvg_cmp, comp_valid = _selected_compress_gather(
+                    compress_kv, comp_idx, shared)              # [b,s,Ck,hd]
                 KVg = mx.concatenate([kvg_win, kvg_cmp], axis=2)
                 valid = mx.concatenate([win_valid, comp_valid], axis=2)
             else:
@@ -1227,7 +1232,8 @@ class Attention(nn.Module):
         with _stime.stage_prefill("attn." + mode + ".score") as _st:
             if use_selected:
                 o = self._sparse_attend_selected(
-                    q, window_all, sel_compress_kv, sel_comp_idx, positions, win_drop
+                    q, window_all, sel_compress_kv, sel_comp_idx, positions, win_drop,
+                    shared=shared,
                 )
             else:
                 o = self._sparse_attend(q, KV, attend)
@@ -1499,6 +1505,40 @@ def _resolve_select_fence(raw=None) -> bool:
     return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
 
 
+#: W90: shape-stable selected-key gather.  The W90 CPU reproduction pinned the
+#: in-situ decode-attention overhead (in-model reuse 6.96 ms/layer vs the isolated
+#: 2.0 ms/layer flat, ~5 ms/layer) as the per-layer decode gather REFERENCING O(T)
+#: source buffers: every Reuse / Reindex / Full layer's ``_sparse_attend_selected``
+#: gathers ``index_topk`` rows out of the SHARED ``compress_kv`` store ``[b, n_comp,
+#: hd]`` (n_comp ~ T/2) -- only a bounded slice is read, but the tiny B=1 dispatch
+#: pays a Metal residency/encode cost that scales with the referenced source size
+#: (the W78/W80 "resident churn"), invisible on the CPU (host wall + per-fn time are
+#: FLAT in T -- W90 E6/E5) and NOT reproduced by unreferenced ballast (window 31).
+#: All ~34 non-swa layers of a group reuse the SAME (compress_kv, selected_idx)
+#: pair, so the K30 gather is recomputed ~34x/token against the O(T) store.  This
+#: lever gathers the selected compressed KV ONCE per (compress_kv, selected_idx)
+#: source and shares the BOUNDED ``[b, s, k, hd]`` result down the stack, so only
+#: the first layer of a group references the O(T) store and every reuse references
+#: the bounded operand -- cutting the compressed-lane O(T) references from ~34 to
+#: ~3/token.  BYTE-IDENTICAL: the shared gather is the same rows in the same order
+#: as the per-layer gather (a pure caching of an already-deterministic result); the
+#: only difference on any host is which layer issues the physical gather.  The W80
+#: window ring bounds the OTHER O(T) reference (the per-layer window store), so
+#: ``cell16k_ring`` + this lever bounds both lanes.  Read at use, never frozen at
+#: import ([[env-flags-read-at-use-not-import]]).
+_ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"
+
+
+def _resolve_attn_shape_stable(raw=None) -> bool:
+    """Whether ``MTPLX_DSV41_ATTN_SHAPE_STABLE`` shares the selected-compressed-KV
+    gather across a group's layers so a Reuse/Reindex layer references the bounded
+    ``[b,s,k,hd]`` gathered operand instead of the O(T) ``compress_kv`` store
+    (default OFF).  Byte-identical.  Read at call time (serving stamps the key after
+    import)."""
+    val = os.environ.get(_ATTN_SHAPE_STABLE_ENV) if raw is None else raw
+    return (val or "").strip().lower() not in ("", "0", "false", "no", "off", "auto")
+
+
 def _mask_to_topk_idx(mask: mx.array, k: int) -> mx.array:
     """Convert a boolean top-k row mask ``[b, s, n]`` (exactly ``min(k, reachable)``
     True per row) into ``[b, s, k]`` int32 indices of the True positions in
@@ -1540,6 +1580,36 @@ def _gather_rows(source: mx.array, idx: mx.array, valid: mx.array) -> mx.array:
     flat = (idx_c + offs).reshape(-1)
     g = mx.take(source.reshape(b * n, d), flat, axis=0)   # [b*s*k, d]
     return g.reshape(b, s, k, d)
+
+
+def _selected_compress_gather(compress_kv: mx.array, comp_idx: mx.array, shared):
+    """W90: gather the ``index_topk`` selected rows out of ``compress_kv`` into a
+    bounded ``[b, s, k, hd]`` operand plus its ``[b, s, k]`` valid mask, sharing the
+    result across every layer of a group that reuses the SAME (``compress_kv``,
+    ``comp_idx``) source under ``MTPLX_DSV41_ATTN_SHAPE_STABLE``.
+
+    Returns ``(kvg_cmp, comp_valid)``, byte-for-byte identical to the per-layer
+    ``_gather_rows(compress_kv, comp_idx, comp_idx >= 0)``.  W90 mechanism: the
+    per-layer decode gather references the O(T) ``compress_kv`` store (``n_comp ~
+    T/2``) once per Reuse/Reindex/Full layer (~34/token), and on Metal each tiny B=1
+    dispatch pays a residency/encode cost scaling with that referenced source size.
+    Caching the gather on the per-forward ``shared`` runtime (keyed by the identity
+    of the two source arrays, both held so an id can't be recycled) means only the
+    FIRST layer of a group references the O(T) store; the rest reference the bounded
+    gathered operand.  ``shared`` is fresh per forward (``new_shared_runtime``), so
+    the cache never leaks across tokens; a second source (a new ``kv_source`` /
+    ``index_source``) publishes new arrays whose identity misses the cache and
+    recomputes.  With the lever off (or no ``shared``) this is the plain per-layer
+    gather -- unchanged shipped behaviour."""
+    comp_valid = comp_idx >= 0
+    if shared is None or not _resolve_attn_shape_stable():
+        return _gather_rows(compress_kv, comp_idx, comp_valid), comp_valid
+    cache = getattr(shared, "_sel_cmp_kvg", None)
+    if cache is not None and cache[0] is compress_kv and cache[1] is comp_idx:
+        return cache[2], cache[3]
+    kvg = _gather_rows(compress_kv, comp_idx, comp_valid)
+    shared._sel_cmp_kvg = (compress_kv, comp_idx, kvg, comp_valid)
+    return kvg, comp_valid
 
 
 #: W58 / K28: fuse the prefill mask + per-head value-0 sink + f32 softmax over the

@@ -213,6 +213,22 @@ WINDOW_RING_MAX_VERIFY_ENV = "MTPLX_DSV41_WINDOW_RING_MAX_VERIFY"  # widest veri
 WINDOW_RING_SLACK_ENV = "MTPLX_DSV41_WINDOW_RING_SLACK"            # safety margin
 WINDOW_RING_HEADROOM_ENV = "MTPLX_DSV41_WINDOW_RING_HEADROOM"      # appends per compaction
 WINDOW_RING_MAXKV_ENV = "MTPLX_DSV41_WINDOW_RING_MAXKV"            # compress/index prealloc
+ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K35: shared selected-
+# compress gather.  W90 pinned the in-situ decode-attention overhead (in-model reuse
+# 6.96 ms/layer vs the isolated 2.0 ms/layer flat, ~5 ms/layer) as the per-layer
+# decode gather REFERENCING O(T) source buffers: every Reuse/Reindex/Full layer of a
+# group gathers index_topk rows out of the SHARED compress_kv store [b, n_comp, hd]
+# (n_comp ~ T/2), and on Metal each tiny B=1 dispatch pays a residency/encode cost
+# scaling with the referenced source size -- the W78/W80 "resident churn", invisible
+# on the CPU (host wall + per-fn time FLAT in T, W90 E5/E6) and NOT reproduced by
+# unreferenced ballast (window 31).  The W80 ring bounds the OTHER O(T) reference
+# (the per-layer window store); this bounds the compressed lane the ring can't touch
+# (the indexer needs compress_kv in full).  It gathers the selected compressed KV
+# ONCE per (compress_kv, selected_idx) source and shares the bounded [b,s,k,hd]
+# result, so only the first layer of a group references the O(T) store (~34 -> ~3
+# O(T) compress references/token).  BYTE-IDENTICAL (same rows, same order; a pure
+# caching of the already-deterministic K30 gather) -- the byte-identity summary must
+# show it clean.  A DECODE-shape lever; composes with the ring (cell16k_ring_stable).
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -260,6 +276,7 @@ ALL_LEVER_ENVS = (
     WINDOW_RING_SLACK_ENV,
     WINDOW_RING_HEADROOM_ENV,
     WINDOW_RING_MAXKV_ENV,
+    ATTN_SHAPE_STABLE_ENV,
 )
 
 
@@ -275,6 +292,7 @@ def _preset(
     kv_chunk_grow=None, select_fence=None,
     window_ring=None, window_ring_max_verify=None, window_ring_slack=None,
     window_ring_headroom=None, window_ring_maxkv=None,
+    attn_shape_stable=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
@@ -327,6 +345,7 @@ def _preset(
         WINDOW_RING_SLACK_ENV: window_ring_slack,
         WINDOW_RING_HEADROOM_ENV: window_ring_headroom,
         WINDOW_RING_MAXKV_ENV: window_ring_maxkv,
+        ATTN_SHAPE_STABLE_ENV: attn_shape_stable,
     }
 
 
@@ -595,6 +614,35 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         pin_working_set="all", device_route="1", device_route_pinned="1",
+    ),
+    # W90 / K35: the shared selected-compress gather in ISOLATION, with selected keys
+    # on so the K30 gather path (the one this lever shares) is the one measured.  Every
+    # Reuse/Reindex/Full layer of a group reads the SAME (compress_kv, selected_idx)
+    # source; the shipped path re-gathers index_topk rows out of the O(T) compress_kv
+    # store per layer (~34 O(T) compress references/token at 16K), while this gathers
+    # once per source and shares the bounded [b,s,k,hd] operand (~3 references/token).
+    # W90 pinned that O(T) SOURCE reference as the in-situ decode-attention overhead
+    # (in-model reuse 6.96 vs isolated 2.0 ms/layer): host-side FLAT in T on the CPU
+    # (W90 E5/E6), so the cost is the Metal per-B=1-dispatch residency/encode over the
+    # referenced source (the W80 "resident churn" the ring left in the compress lane).
+    # BYTE-IDENTICAL to selected-keys control (a pure caching of the deterministic K30
+    # gather -- same rows, same order); the byte-identity summary must show it clean.
+    "attn_shape_stable": _preset(selected_keys="1", attn_shape_stable="1"),
+    # W90 / K35: cell16k_ring + the shared selected-compress gather -- bounds BOTH O(T)
+    # source references the W90 mechanism identified.  The ring bounds the per-layer
+    # window store (~0.7 GB -> ~5.5 MB, recovered only ~12 ms/tok because it leaves the
+    # compress/index lane full); this arm additionally shares the compressed-lane gather
+    # so the ~34 non-swa layers stop referencing the O(T) compress_kv store, targeting
+    # the residual the ring could not.  Exact key set of cell16k_ring plus
+    # attn_shape_stable="1".  BYTE-IDENTICAL to cell16k_ring (both run selected keys;
+    # the shared gather adds no new lossiness), so the byte-identity summary must show
+    # it matching cell16k_ring's class (lossy vs control ONLY through head=bf16 + the
+    # dense/lean prefill reassoc, cf. cell16k).
+    "cell16k_ring_stable": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        attn_shape_stable="1",
     ),
 }
 
