@@ -39,6 +39,7 @@ pytest.importorskip("mlx.core")
 mx.set_default_device(mx.cpu)
 
 import mtplx.models.expert_mlx as expert_mlx  # noqa: E402
+import mtplx.models.deepseek_v41 as dv  # noqa: E402
 from mtplx.expert_manifest import load_expert_manifest  # noqa: E402
 from mtplx.expert_runtime import (  # noqa: E402
     ExpertStreamingConfig,
@@ -166,10 +167,17 @@ def test_gather_byte_identical_with_prediction_stashed(tmp_path, rows) -> None:
         _route_once(rt2, spec2, experts)
         x2, idx2 = _inputs(rows, spec2.top_k, spec2.hidden_size, experts)
         sw = _switch(rt2, spec2)
-        sw._mtplx_gate_prefetch_pending = (
-            _layer(spec2),
-            mx.array([[4, 5]], dtype=mx.int32),
+        # LOW-3: stash on the plain `_GatePrefetchLink` holder (the production
+        # shape), never a raw tuple on the switch nn.Module.
+        sw._mtplx_gate_prefetch_pending = dv._GatePrefetchLink(
+            _layer(spec2), pending_ids=mx.array([[4, 5]], dtype=mx.int32)
         )
+        # LOW-3: a plain-object stash must not register in the switch module dict
+        # (a raw `(int, mx.array)` tuple WOULD: mlx 0.32.2 `Module.__setattr__`
+        # takes the tuple into `self[key]`, so `"..._pending" in sw` would be True
+        # and the id array a registered child until the `= None` clear pops it).
+        assert "_mtplx_gate_prefetch_pending" not in sw, "stash polluted switch dict"
+
         out_on = sw(x2, idx2)
         _REAL_EVAL(out_on)
         rt2.flush_deferred_slot_releases(evaluate=True)
@@ -258,7 +266,9 @@ def test_prediction_adds_no_host_sync(tmp_path) -> None:
         without = _count_main_thread_evals(rt, spec, x, idx, pending=None)
         with_pred = _count_main_thread_evals(
             rt, spec, x, idx,
-            pending=(_layer(spec), mx.array([[4, 5]], dtype=mx.int32)),
+            pending=dv._GatePrefetchLink(
+                _layer(spec), pending_ids=mx.array([[4, 5]], dtype=mx.int32)
+            ),
         )
         # The fenced all-hit path's own generation-thread eval count (indices
         # barrier + wave fence) is the baseline; the claim (item 2) is that the

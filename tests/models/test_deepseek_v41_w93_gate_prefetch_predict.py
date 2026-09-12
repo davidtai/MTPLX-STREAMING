@@ -200,7 +200,7 @@ def test_stashed_prediction_matches_gate_oracle(monkeypatch) -> None:
         # independent recompute of W89's b' predictor: layer L's OWN gate applied
         # to mean-over-hc of the residual entering L-1.
         next_gate = model.model.layers[target].mlp.gate
-        collapsed = mx.mean(captured[src].astype(mx.float32), axis=2)
+        collapsed = mx.mean(captured[src].astype(mx.float32), axis=2).astype(mx.bfloat16).astype(mx.float32)
         expected = gate_predict_topk(next_gate, collapsed, k)
         mx.eval(predicted, expected)
         assert set(predicted.reshape(-1).tolist()) == set(
@@ -231,7 +231,7 @@ def test_predictor_uses_next_gate_not_own(monkeypatch) -> None:
 
     src = 4
     _target, predicted = model.model.layers[src].mlp.switch_mlp._mtplx_gate_prefetch_pending
-    collapsed = mx.mean(captured[src].astype(mx.float32), axis=2)
+    collapsed = mx.mean(captured[src].astype(mx.float32), axis=2).astype(mx.bfloat16).astype(mx.float32)
     with_next = gate_predict_topk(model.model.layers[src + 1].mlp.gate, collapsed, KPRED)
     with_own = gate_predict_topk(model.model.layers[src].mlp.gate, collapsed, KPRED)
     mx.eval(predicted, with_next, with_own)
