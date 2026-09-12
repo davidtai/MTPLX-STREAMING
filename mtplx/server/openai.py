@@ -3221,6 +3221,17 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # W93: gate-oracle one-layer-ahead expert prefetch (width k + target floor).
     "MTPLX_DSV41_GATE_PREFETCH",
     "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER",
+    # W107: bounded/preallocated KV growth levers (ab_decode_env_levers added these
+    # to ALL_LEVER_ENVS at the W107 merge).  The w107/kv-growth-bounded follow-up
+    # fix also adds these two keys here; when that branch is re-merged, resolve the
+    # add/add on this hunk by keeping a single copy of each.
+    "MTPLX_DSV41_KV_BOUNDED",
+    "MTPLX_DSV41_KV_BOUNDED_MAXKV",
+    # W95 / W104: the served path must also stamp the runner + draft-head-bf16
+    # levers in its log snapshot (drift guard: superset of ALL_LEVER_ENVS).
+    # Appended at the end.
+    "MTPLX_DSV41_RUNNER",
+    "MTPLX_DSV41_DRAFT_HEAD_BF16",
 )
 
 
