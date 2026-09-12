@@ -944,6 +944,26 @@ def _decode_cycles(
 # ---------------------------------------------------------------------------
 # public: model-level loop (unit-test surface)
 # ---------------------------------------------------------------------------
+def _fire_prefill_callback(
+    prefill_callback: Optional[Callable[[dict], None]],
+    prompt_ids: Sequence[int],
+    prompt_eval_time_s: float,
+) -> None:
+    """Invoke a prefill callback with the standard
+    ``{"prompt_tokens", "prompt_eval_time_s"}`` payload right after the prompt
+    prefill.  Shared by the self-contained :func:`dspark_generate` and the served
+    :func:`generate_dspark` so both lanes fire it identically.  Telemetry must
+    never crash decode, so any callback error is swallowed."""
+    if prefill_callback is None:
+        return
+    try:
+        prefill_callback(
+            {"prompt_tokens": len(prompt_ids), "prompt_eval_time_s": prompt_eval_time_s}
+        )
+    except Exception:  # pragma: no cover - defensive; telemetry must not crash decode
+        pass
+
+
 def dspark_generate(
     model,
     prompt_ids: Sequence[int],
@@ -958,6 +978,7 @@ def dspark_generate(
     stats: Optional[DSparkDecodeStats] = None,
     forward: Optional[Callable[[mx.array, Any], tuple]] = None,
     token_callback: Optional[Callable[[List[int]], None]] = None,
+    prefill_callback: Optional[Callable[[dict], None]] = None,
     abort_check: Optional[Callable[[], bool]] = None,
     divergence_capture: Optional["DivergenceCapture"] = None,
 ) -> List[int]:
@@ -969,7 +990,15 @@ def dspark_generate(
 
     The model must carry a DSpark head (``model.mtp`` built via the ``mtp=True``
     load path) and an all-trimmable V4.1 cache.
+
+    ``prefill_callback`` (optional) fires exactly once right after the prompt
+    prefill, before the decode cycles, with ``{"prompt_tokens",
+    "prompt_eval_time_s"}`` -- the same payload the served :func:`generate_dspark`
+    lane emits, so the ab harness's prefill->decode boundary snapshot works on
+    either lane.
     """
+    import time
+
     if getattr(model, "mtp", None) is None:
         raise RuntimeError("dspark_generate requires a model with a DSpark MTP head")
     if max_tokens <= 0:
@@ -985,8 +1014,12 @@ def dspark_generate(
     mtp_caches = model.make_mtp_cache()
 
     prompt_arr = mx.array([[int(t) for t in prompt_ids]])
+    _prefill_started = time.perf_counter()
     logits, main_hidden = fwd(prompt_arr, cache)
     mx.eval(logits, main_hidden)
+    _fire_prefill_callback(
+        prefill_callback, prompt_ids, time.perf_counter() - _prefill_started
+    )
     # seed the DSpark windows with the whole prompt's main hiddens (ring keeps
     # the last window_size), exactly as the reference forward_spec start_pos==0.
     model.mtp.seed_main(main_hidden, mtp_caches)
@@ -1101,11 +1134,7 @@ def generate_dspark(
     )
     mx.eval(logits, main_hidden)
     prompt_eval_time = time.perf_counter() - prefill_started
-    if prefill_callback is not None:
-        try:
-            prefill_callback({"prompt_tokens": len(prompt_ids), "prompt_eval_time_s": prompt_eval_time})
-        except Exception:
-            pass
+    _fire_prefill_callback(prefill_callback, prompt_ids, prompt_eval_time)
     model.mtp.seed_main(main_hidden, mtp_caches)
 
     def _fwd(ids: mx.array, c) -> tuple:
