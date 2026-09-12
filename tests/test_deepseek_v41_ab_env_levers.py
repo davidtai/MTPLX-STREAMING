@@ -904,9 +904,13 @@ def test_warm_and_stage_timing_pass_helpers_exist(env_levers):
     import inspect
 
     warm = inspect.signature(env_levers._warm_repeat_pass)
-    assert set(warm.parameters) == {
+    assert {
         "model", "ops", "mem_probe", "prompt_ids", "steps", "cold_ids"
-    }
+    } <= set(warm.parameters)
+    # W113 MEDIUM-2: optional served-parity early-stop params, defaulting off so the
+    # shipped call sites are unaffected.
+    assert warm.parameters["stop_on_eos"].default is False
+    assert warm.parameters["eos_id"].default is None
     st = inspect.signature(env_levers._stage_timing_pass)
     # W90 added optional keyword-only telemetry params (cooldown_s / util_sampler,
     # both defaulting to a no-op so the shipped call sites are unaffected).
