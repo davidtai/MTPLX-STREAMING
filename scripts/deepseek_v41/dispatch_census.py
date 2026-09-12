@@ -1021,6 +1021,146 @@ def _attn_core_main(args):
     return receipt
 
 
+def _attn_proj_regions(seed=1):
+    """qkv-prep and out-prep non-view kernel counts (+ op dicts) on a tiny SIMPLE
+    (reuse) layer, eager vs the K22-compiled tape vs the W101 fused metal_kernels.
+    Primitive count is shape-independent, so these equal the artifact's per-layer
+    counts (real dims annotated in the doc)."""
+    import os
+    from mtplx.models.deepseek_v41 import (
+        _rmsnorm, _rope_last, _cos_sin, _lin_arrays, _attn_qkv_prep, _attn_out_prep,
+    )
+    os.environ["MTPLX_DSV41_ATTN_FUSED_PROJ"] = "0"
+    model, args = _build(seed=seed, engram=False)
+    attn = model.model.layers[6].attn         # ratio-1, non-source -> simple (reuse)
+    b, s, H, hd = 1, 1, attn.n_heads, attn.head_dim
+    x = 0.1 * mx.random.normal((1, 1, attn.dim))
+    qcos, qsin = _cos_sin(attn.inv_freq, mx.array([5]))
+    o = 0.1 * mx.random.normal((b, s, H, hd))
+    mx.eval(x, qcos, qsin, o)
+
+    def K(*outs):
+        n, ops = count_prims(*outs)
+        return _kern(ops), dict(ops)
+
+    # --- qkv-prep ---
+    qr = _rmsnorm(attn.wq_a(x), attn.q_norm_weight, attn.eps)
+    q = _rope_last(attn.wq_b(qr).reshape(b, s, H, hd), qcos, qsin)
+    kv = _rope_last(_rmsnorm(attn.wkv(x), attn.kv_norm_weight, attn.eps), qcos, qsin)
+    qkv_e = K(q, qr, kv)
+    with _attn_flag(True, 8):
+        qc = _attn_qkv_prep(attn)(
+            x, qcos, qsin, attn.q_norm_weight, attn.kv_norm_weight,
+            *_lin_arrays(attn.wq_a), *_lin_arrays(attn.wq_b), *_lin_arrays(attn.wkv))
+        qkv_k = K(*qc)
+    qkv_f = K(*attn._qkv_prep_fused(x, qcos, qsin, b, s, H, hd))
+
+    # --- out-prep ---
+    oo = _rope_last(o, qcos, qsin, inverse=True).reshape(b, s, attn.n_groups, -1)
+    out_e = K(attn.wo_b(attn._o_lora_down(oo).reshape(b, s, -1)))
+    with _attn_flag(True, 8):
+        out_k = K(_attn_out_prep(attn)(
+            o, qcos, qsin, attn._o_lora_dense_weight(), *_lin_arrays(attn.wo_b)))
+    out_f = K(attn._out_prep_fused(o, qcos, qsin, b, s))
+    return {
+        "qkv_prep": {"eager": qkv_e, "k22_compiled": qkv_k, "fused": qkv_f},
+        "out_prep": {"eager": out_e, "k22_compiled": out_k, "fused": out_f},
+    }
+
+
+def _attn_proj_whole_layer(seed=1):
+    """Whole decode-layer non-view kernels per (mode), eager vs the K22-compiled
+    tape, at ONE decode token (per-call = _kern / calls-per-token).  The fused
+    whole-layer is ASSEMBLED (K22 - K22 regions + fused regions); the fused path is
+    GPU-only so it cannot be evaluated in this CPU census -- the region counts are
+    measured, the assembly is arithmetic (graph-primitive lower bound)."""
+    import os
+    os.environ["MTPLX_DSV41_SELECTED_KEYS"] = "1"
+
+    def run(flag, wo_a=False, lean=False, core=False):
+        os.environ["MTPLX_DSV41_ATTN_WO_A_CACHE"] = "1" if wo_a else "0"
+        os.environ["MTPLX_DSV41_ATTN_LEAN_CASTS"] = "1" if lean else "0"
+        os.environ["MTPLX_DSV41_ATTN_CORE_COMPILE"] = "1" if core else "0"
+        m, a = _build(seed=seed)
+        with _attn_flag(flag, 8):
+            ids = mx.array(np.random.RandomState(0).randint(0, a.vocab_size, size=(1, 12)))
+            cache = m.make_cache()
+            mx.eval(m(ids, cache=cache, prefill_chunk=0))
+            with _census_session() as probe:
+                with _stime.frame():
+                    lg = m(mx.array([[3]]), cache=cache)
+                    mx.eval(mx.argmax(lg[:, -1, :], axis=-1))
+            snap = probe.snapshot()
+        out = {}
+        for name, st in snap["stages"].items():
+            if name.startswith("attn.") and "." not in name[5:]:
+                c = max(st["count_per_token"], 1)
+                out[name] = _kern(st["op_types"]) / c
+        return out
+
+    return {"eager": run(False), "k22": run(True)}
+
+
+def _attn_proj_main(args):
+    """W101 fused projection-chain dispatch census: the qkv-prep / out-prep GLUE
+    (rmsnorm + interleaved-RoPE + head/group layout between the kept quantized
+    matmuls and the o-LoRA matmul) collapsed to fused metal_kernels."""
+    regions = _attn_proj_regions(seed=args.seed)
+    whole = _attn_proj_whole_layer(seed=args.seed)
+    # core reference (from _attn_core_main geometry): eager / compile / K29
+    core = {"eager": 13, "compile": 8, "k29": 1}
+
+    print("=" * 82)
+    print("W101 fused PROJECTION-CHAIN dispatch census (tiny real-structure; counts")
+    print("are shape-independent -> equal the artifact's).  Non-view graph primitives")
+    print("= a LOWER BOUND on Metal dispatches (Concatenate/Slice/reduction copies).")
+    print("=" * 82)
+    for region in ("qkv_prep", "out_prep"):
+        r = regions[region]
+        print(f"\n-- {region} --")
+        for cfg in ("eager", "k22_compiled", "fused"):
+            k, ops = r[cfg]
+            print(f"  {cfg:14s}: {k:3d} non-view kernels  {ops}")
+        print(f"  fused vs K22-compiled: -{r['k22_compiled'][0] - r['fused'][0]} "
+              f"kernels (vs eager: -{r['eager'][0] - r['fused'][0]})")
+
+    print("\n-- attention core (from --attn-core; separate lever, W101 is independent) --")
+    print(f"  eager {core['eager']} / mx.compile {core['compile']} / K29 fused {core['k29']} "
+          "dispatch.  Window-40 in-model: core ~= 0 ms (do not rely on K29 for the win).")
+
+    qkv_f = regions["qkv_prep"]["fused"][0]
+    out_f = regions["out_prep"]["fused"][0]
+    qkv_k = regions["qkv_prep"]["k22_compiled"][0]
+    out_k = regions["out_prep"]["k22_compiled"][0]
+    print("\n-- whole decode layer (per-call non-view kernels, 1 token) --")
+    print(f"  {'mode':10s} {'eager':>7} {'K22':>7} {'K22+fused':>10} {'+K29 core':>10}")
+    receipt = {"census": "attn_proj", "mlx_version": mx.__version__,
+               "regions": {k: {c: {"kernels": v[c][0], "ops": v[c][1]} for c in v}
+                           for k, v in regions.items()},
+               "core_ref": core, "whole_layer": {}}
+    for mode in sorted(whole["k22"]):
+        e = whole["eager"].get(mode, 0.0)
+        k = whole["k22"][mode]
+        # fused-proj replaces the K22 qkv/out tapes with the fused kernels (core
+        # unchanged); +K29 additionally collapses the core (~13 -> 1).
+        fused = k - qkv_k - out_k + qkv_f + out_f
+        fused_k29 = fused - core["eager"] + core["k29"]
+        m = mode.split(".")[1]
+        print(f"  {m:10s} {e:7.0f} {k:7.0f} {fused:10.0f} {fused_k29:10.0f}")
+        receipt["whole_layer"][m] = {"eager": e, "k22": k,
+                                     "k22_fused": fused, "k22_fused_k29": fused_k29}
+    print("\nverdict: fused-proj collapses the SIMPLE-layer projection chains from "
+          f"{qkv_k + out_k} (K22) to {qkv_f + out_f} dispatches (qkv 3 qmm + 3 fused; "
+          "out 2 matmul + 1 fused).  The whole-layer <=25 target needs the core (K29) "
+          "AND the out-of-scope structural ops (gather/window-idx/cos-sin/cache-append) "
+          "collapsed too; fused-proj's scope is the projection chains.")
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1046,6 +1186,11 @@ def main():
                          "(QK+mask+sink softmax+PV) primitive count eager vs the "
                          "fixed-shape mx.compile tape (MTPLX_DSV41_ATTN_CORE_COMPILE), "
                          "at the real decode geometry, + the K29 fused-kernel reference")
+    ap.add_argument("--attn-proj", action="store_true", dest="attn_proj",
+                    help="census the W101 fused PROJECTION-CHAIN kernels: qkv-prep / "
+                         "out-prep non-view kernel counts eager vs the K22-compiled "
+                         "tape vs the fused metal_kernels (MTPLX_DSV41_ATTN_FUSED_PROJ), "
+                         "+ the whole decode-layer before/after")
     args = ap.parse_args()
 
     if args.draft:
@@ -1056,6 +1201,8 @@ def main():
         return _small_main(args)
     if args.attn_core:
         return _attn_core_main(args)
+    if args.attn_proj:
+        return _attn_proj_main(args)
 
     # before = all off (eager); k22 = attention-tape compile only; after = K22 +
     # K24 window-mask memo (the full W45 attention-compile mode).

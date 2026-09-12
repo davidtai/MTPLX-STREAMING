@@ -1426,7 +1426,13 @@ class Attention(nn.Module):
         # eager (``_attn_use_compile`` is False under ``is_prefill``) so this
         # bracket fences the real projection chain, not a tape.
         with _stime.stage_prefill("attn." + mode + ".qkv_proj") as _st:
-            if _attn_use_compile(b * s):
+            if _fused_proj_use(b * s):
+                # W101/K36: keep the wq_a/wq_b/wkv quantized matmuls (MLX's tuned
+                # kernels), fuse the rmsnorm + interleaved-RoPE + head layout GLUE
+                # into 3 metal_kernels (one dispatch each).  GPU-only small-M;
+                # ROUNDING-CLASS vs the eager chain below.
+                q, qr, kv_new = self._qkv_prep_fused(x, qcos, qsin, b, s, H, hd)
+            elif _attn_use_compile(b * s):
                 q, qr, kv_new = _attn_qkv_prep(self)(
                     x, qcos, qsin, self.q_norm_weight, self.kv_norm_weight,
                     *_lin_arrays(self.wq_a), *_lin_arrays(self.wq_b), *_lin_arrays(self.wkv),
@@ -1514,7 +1520,13 @@ class Attention(nn.Module):
             # W50: the output-projection tail is bracketed separately (attn_breakdown)
             # so the score sub-stages sum to the SDPA proper, not SDPA + projection.
             with _stime.stage_attn("attn." + mode + ".score.out_proj") as _sp:
-                if _attn_use_compile(b * s):
+                if _fused_proj_use(b * s):
+                    # W101/K36: fuse the query-RoPE removal + group layout into one
+                    # metal_kernel; keep the grouped o-LoRA as one mx.einsum (BF16
+                    # wo_a operand, fp32 accumulate -- reference einsum) and wo_b as
+                    # the quantized matmul.  GPU-only small-M; ROUNDING-CLASS.
+                    out = self._out_prep_fused(o, qcos, qsin, b, s)
+                elif _attn_use_compile(b * s):
                     out = _attn_out_prep(self)(
                         o, qcos, qsin, self._o_lora_dense_weight(), *_lin_arrays(self.wo_b)
                     )
@@ -1598,6 +1610,81 @@ class Attention(nn.Module):
         own heads (reference model.py L785-787).  Dequantized when q8-resident."""
         w = self._o_lora_dense_weight()
         return mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w.astype(mx.float32))
+
+    # --- W101 / K36: fused decode/verify projection-chain path -----------------
+    def _qkv_prep_fused(self, x, qcos, qsin, b, s, H, hd):
+        """W101 fused qkv-prep (GPU, small-M): the three ``mx.quantized_matmul``
+        projections are kept (MLX's tuned kernels) and each glue region is ONE
+        fused ``metal_kernel`` -- post-``wq_a`` q-latent RMSNorm, the post-``wq_b``
+        q split+RoPE+head layout, and the post-``wkv`` KV RMSNorm+k_pe RoPE FUSED.
+        Returns ``(q, qr, kv_new)`` exactly like the eager body / K22 tape (``qr``
+        is threaded out for the indexer).  ROUNDING-CLASS vs eager."""
+        from mtplx.models import deepseek_v41_fused_proj_kernels as _fp
+        qr = _fp.rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
+        q = _fp.rope_heads(self.wq_b(qr).reshape(b, s, H, hd), qcos, qsin)
+        kv_new = _fp.rmsnorm_rope(self.wkv(x), self.kv_norm_weight, self.eps, qcos, qsin)
+        _fp.note_qkv(b * s)
+        return q, qr, kv_new
+
+    def _out_prep_fused(self, o, qcos, qsin, b, s):
+        """W101 fused out-prep (GPU, small-M).  The query-RoPE removal + group layout
+        is ONE fused ``metal_kernel``.  The grouped o-LoRA down-projection is a
+        BATCHED ``mx.matmul`` (one tuned dispatch) over a weight cached in the
+        [g, in_per_group, o_lora_rank] layout the matmul wants -- NOT ``mx.einsum``.
+
+        Why not einsum: window 40's in-model attribution priced ``out_proj`` at
+        ~4.9 ms/layer, ~25x its 67 MB bf16 read (~0.2 ms) -- the culprit is that
+        ``mx.einsum("bsgd,grd->bsgr", o, w)`` re-lays-out (Transpose) the
+        [8, 1024, 4096] = 33.55M-param wo_a operand EVERY token (3 Transpose nodes in
+        the einsum graph; ~67 MB copy/layer/token).  Pre-transposing wo_a ONCE to
+        [g, in, r] and running ``matmul(o[g,rows,in], wT[g,in,r])`` reads the weight
+        directly (only the tiny ``o`` is transposed) -- bit-identical to the bf16
+        einsum, ROUNDING-CLASS vs the port's f32 einsum.  ``wo_b`` stays the
+        quantized matmul (docs/deepseek-v41/W101_ATTN_FUSED_PROJ.md)."""
+        from mtplx.models import deepseek_v41_fused_proj_kernels as _fp
+        wT = self._o_lora_fused_weight()                         # [g, in_per_group, r]
+        o = _fp.rope_heads(o, qcos, qsin, inverse=True, out_dtype=wT.dtype)
+        g = self.n_groups
+        o = o.reshape(b * s, g, -1).swapaxes(0, 1)               # [g, rows, in_per_group]
+        o = mx.matmul(o, wT)                                     # [g, rows, r], fp32 accum
+        o = o.swapaxes(0, 1).reshape(b, s, -1)                   # [b, s, g*r]
+        out = self.wo_b(o)
+        _fp.note_out()
+        return out
+
+    def _o_lora_fused_weight(self):
+        """The grouped ``wo_a`` weight for the W101 fused out-prep matmul, in the
+        TRANSPOSED ``[g, in_per_group, o_lora_rank]`` layout the batched matmul reads
+        directly (so no per-token Transpose of the 33.55M-param weight), at the
+        REFERENCE bf16 dtype (model.py L784-787): dequantized to bf16 when
+        q8/native-resident (the artifact's scales are bf16, so ``mx.dequantize``
+        returns bf16 for the native codecs; q8 is cast down), else the raw dense
+        weight (tiny-config).
+
+        The ``[g, r, in] -> [g, in, r]`` transpose + dequant is done ONCE, cached per
+        layer keyed on the packed-weight identity (a re-quantize / reload rebuilds
+        it) and materialised via ``mx.eval`` so later tokens reference the buffer.
+        DISTINCT from :meth:`_o_lora_dense_weight` (the eager/K22 f32 path, owned by
+        the W97 wo_a cache): the fused path never calls that, so only this bf16 copy
+        (67 MB/layer, ~2.7 GB over 40 layers -- HALF the f32 cache) is resident under
+        the fused arm.  Reading bf16 + fp32-accumulating is ROUNDING-CLASS vs the
+        port's f32 einsum and bit-identical to the reference bf16 einsum."""
+        wo = self.wo_a
+        cached = getattr(self, "_wo_a_bf16T_cache", None)
+        key = wo.weight
+        if cached is not None and cached[0] is key:
+            return cached[1]
+        if not isinstance(wo, nn.QuantizedLinear):
+            w = wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)   # [g, r, in]
+        else:
+            w = mx.dequantize(
+                wo.weight, wo.scales, wo.biases,
+                group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
+            ).astype(mx.bfloat16).reshape(self.n_groups, self.o_lora_rank, -1)
+        wT = mx.contiguous(mx.swapaxes(w, 1, 2))                 # [g, in_per_group, r]
+        mx.eval(wT)
+        self._wo_a_bf16T_cache = (key, wT)
+        return wT
 
 
 # ---------------------------------------------------------------------------
@@ -2260,6 +2347,69 @@ def _resolve_attn_lean_casts(raw=None) -> bool:
         f"{_ATTN_LEAN_CASTS_ENV}={val!r} is not a boolean "
         "(1/true/on/yes or empty/0/off for the per-token casts)"
     )
+
+
+# --- W101 / K36: fused decode/verify attention PROJECTION-CHAIN kernels ---------
+#: The W99 §8.5 verdict: after the wo_a cache (per-token dequant removed), lean
+#: casts (redundant casts deduped) and K29 (the SDPA core -> 1 dispatch), a decode
+#: attention layer's remaining ~55-67 kernels are dominated by the qkv/out
+#: PROJECTION CHAINS -- the rmsnorm + interleaved-RoPE + head/group layout GLUE
+#: between the (already single-dispatch) mx.quantized_matmul projections and the
+#: grouped o-LoRA einsum.  W101 fuses each glue region into ONE mx.fast.metal_kernel
+#: (mtplx/models/deepseek_v41_fused_proj_kernels.py): post-wq_a rmsnorm; post-wq_b
+#: q split+RoPE+head layout; post-wkv KV rmsnorm+k_pe RoPE FUSED; and the out-prep
+#: query-RoPE removal + group layout.  The quantized matmuls stay MLX's tuned
+#: kernels (one dispatch each) and the grouped o-LoRA stays ONE mx.einsum Matmul,
+#: fed the BF16 wo_a operand + fp32 internal accumulation (reference bf16 einsum,
+#: model.py L784-787: half the per-token wo_a read, no f32 materialisation).
+#:
+#: ROUNDING-CLASS, not byte-identical (the fused rmsnorm reassociates the fp32
+#: sum-of-squares; the KV kernel keeps the normed latent in fp32 through the RoPE
+#: where the eager path rounds it to bf16 first; the o-LoRA einsum rounds wo_a to
+#: bf16) -- gated separately from the exact levers, GPU-only, small-M (b*s <= 8:
+#: AR decode + DSpark depth-5 verify).  Independent of K29 (which collapses the
+#: SEPARATE core): fused-proj composes with the eager / core-compile / K29 core
+#: alike, and with the wo_a cache + lean casts.  On CPU / when off / above the
+#: small-M cap the eager (or K22-tape) chain runs -- the fallback.  Read at use,
+#: never frozen at import ([[env-flags-read-at-use-not-import]]).  Default OFF (the
+#: win is a GPU-window measurement; the fused path caches a bf16 wo_a copy resident
+#: per layer, ~67 MB x 40 = 2.7 GB -- opt-in under the box budget).
+_ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
+
+
+def _resolve_attn_fused_proj(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_FUSED_PROJ`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_FUSED_PROJ_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_FUSED_PROJ_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager projection chains)"
+    )
+
+
+def _fused_proj_use(rows: int) -> bool:
+    """Whether the W101 fused projection kernels should run on THIS call: the flag
+    is armed, a Metal GPU is the default device, AND the query is small-M (decode /
+    verify, ``rows = b*s <= _DECODE_ATTN_KERNEL_MAX_ROWS``).  A CPU-pinned worker
+    test (or a no-Metal host) returns ``False`` so the eager path runs and no Metal
+    is dispatched -- the GPU route is proven by the engagement counter in the
+    tests.  Mirrors :func:`_decode_attn_kernel_use`'s gate so the two levers arm on
+    the same regime."""
+    if not _resolve_attn_fused_proj():
+        return False
+    try:
+        if not mx.metal.is_available() or mx.default_device() != mx.gpu:
+            return False
+    except Exception:
+        return False
+    return int(rows) <= _DECODE_ATTN_KERNEL_MAX_ROWS
 
 
 def _attn_core_impl(q, KVg, valid, sink, scale):

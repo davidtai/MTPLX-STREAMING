@@ -349,6 +349,14 @@ ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
 # default.  Composes with the wo_a cache as the byte-identical cell16k_ring_lean stack.
 ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
 
+# W101 / K36: fused decode/verify attention PROJECTION-CHAIN kernels -- the qkv/out
+# rmsnorm + interleaved-RoPE + head/group layout GLUE between the (kept) quantized
+# matmuls and the (kept) grouped o-LoRA einsum, each fused into ONE metal_kernel.
+# ROUNDING-CLASS (fused rmsnorm reassociates the fp32 sum; the o-LoRA einsum reads
+# bf16 wo_a), GPU-only, small-M.  Independent of K29 (the SEPARATE core); composes
+# with the wo_a cache + lean casts (docs/deepseek-v41/W101_ATTN_FUSED_PROJ.md).
+ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
+
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
 # prior arm in the same process left set -- the arms are independent. The eight
@@ -414,6 +422,8 @@ ALL_LEVER_ENVS = (
     ATTN_CORE_COMPILE_ENV,
     # W99 (appended):
     ATTN_LEAN_CASTS_ENV,
+    # W101 (appended):
+    ATTN_FUSED_PROJ_ENV,
 )
 
 
@@ -439,7 +449,7 @@ def _preset(
     runner=None,
     kv_bounded=None, kv_bounded_maxkv=None,
     wo_a_cache=None, attn_core_compile=None,
-    attn_lean_casts=None,
+    attn_lean_casts=None, attn_fused_proj=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -504,6 +514,7 @@ def _preset(
         WO_A_CACHE_ENV: wo_a_cache,
         ATTN_CORE_COMPILE_ENV: attn_core_compile,
         ATTN_LEAN_CASTS_ENV: attn_lean_casts,
+        ATTN_FUSED_PROJ_ENV: attn_fused_proj,
     }
 
 
@@ -922,6 +933,28 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
+    ),
+    # W101: fuse the qkv/out projection-chain GLUE in ISOLATION (selected_keys on so
+    # the fused out-prep's o-derope + bf16 o-LoRA einsum is the path; core runs
+    # eager -- fused-proj is INDEPENDENT of K29).  ROUNDING-CLASS (fused rmsnorm
+    # reassociates the fp32 sum; the o-LoRA einsum reads bf16 wo_a) -- the byte-
+    # identity summary flags it; the A/B vs attn_lean_casts / selected_keys isolates
+    # the projection-chain dispatch collapse.  GPU-only, small-M (b*s <= 8).
+    "attn_fused_proj": _preset(selected_keys="1", attn_fused_proj="1"),
+    # W101: cell16k_ring + the wo_a cache + lean casts + K29 (core -> 1 dispatch) +
+    # fused proj -- the FULL attention dispatch stack (qkv/out glue fused, core K29,
+    # per-token dequant + redundant casts gone).  ROUNDING-CLASS via K29 + fused
+    # proj (flagged in the byte-identity summary; token-id sha differs on a greedy
+    # tie flip -- [[dsv41-inexact-ok-if-tie-flips]]).  The lowest-dispatch attention
+    # arm; the direct A/B vs cell16k_ring_lean_k29 isolates the projection-chain
+    # fusion on top of the already-collapsed core.  Note the fused path holds a bf16
+    # wo_a copy resident per layer (~2.7 GB) -- watch peak memory at the 16K cell.
+    "cell16k_ring_fused": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
+        attn_fused_proj="1",
     ),
     # W92 (switch dispatch census): the minimal AR-decode host-sync-reduction arm in
     # ISOLATION -- the K23 variant-B fast-path (defer + async submit) plus verify
@@ -3102,6 +3135,14 @@ def _run_arm(args, arm, bench, mx) -> dict:
         _k29.reset_engagement()
     except Exception:  # pragma: no cover - defensive
         _k29 = None
+    # W101/K36 engagement: zero the fused projection-chain counters after model load
+    # so the receipt reports THIS arm's real fused-kernel dispatches (per phase) vs
+    # armed-but-eager fallbacks.
+    try:
+        from mtplx.models import deepseek_v41_fused_proj_kernels as _fp
+        _fp.reset_engagement()
+    except Exception:  # pragma: no cover - defensive
+        _fp = None
     # W73/K32 chunk-grow engagement: zero the cache telemetry after model load so
     # the receipt reports THIS arm's layer-backing choice + append counts.  enabled
     # == 0 means the flag did not reach cache construction (env timing / wrong
@@ -3230,6 +3271,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # measured delta cannot be credited to it -- proves the tape engaged.
             "attn_core_compile_engagement": (
                 _dsv41._attn_core_compile_calls() if _dsv41 is not None else None
+            ),
+            # W101/K36 fused projection-chain engagement (qkv_calls/out_calls/rows/
+            # fallbacks over the whole arm); qkv_calls 0 on a fused arm means the
+            # fused kernels never ran (all eager) rather than ran-and-was-slow.
+            "fused_proj_engagement": (
+                _fp.engagement() if _fp is not None else None
             ),
             # W81: the ACTUAL slot plan this arm ran (transient/persistent slot
             # counts + bytes + source), so an A/B is attributable to a capacity and
