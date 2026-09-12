@@ -135,6 +135,17 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
         if isinstance(cs, dict):
             out["cold_start"] = {str(k): v for k, v in cs.items()}
 
+        # W95f: pass through the gate-oracle prefetch + v2 runner receipt blocks so
+        # the served daemon's stream-counter path logs the SSD-hiding counters
+        # (prefetch hit/wasted, demand vs speculative bytes, budget_skips, margin,
+        # ring size, per-decode-token normalisations). Absent before -- this
+        # snapshot filtered the cache to _EXPERT_CACHE_KEYS -- and present now only
+        # when the ring / v2 runner is armed (the snapshot carries the block).
+        for _block_key in ("gate_prefetch", "runner"):
+            block = snap.get(_block_key)
+            if isinstance(block, dict):
+                out[_block_key] = block
+
     # 2. Engram row cache (per-layer NGramRowCache stats, summed).
     engram = _engram_row_cache_totals(rt)
     if engram is not None:

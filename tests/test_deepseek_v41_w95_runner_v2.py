@@ -564,3 +564,69 @@ def test_v2_byte_budget_recovers_after_latch(tmp_path):
         assert issued > 0, "budget stayed latched after a decode-token boundary"
     finally:
         rt.close()
+
+
+def test_v2_receipt_blocks_reach_harness_and_daemon(tmp_path):
+    """W95f (review HIGH-3): the runner + gate_prefetch receipt blocks reach BOTH
+    the harness receipt (ab_decode_env_levers._runner_receipt_blocks) and the served
+    daemon's stream-counter path (serve_stream_counters.snapshot_stream_counters),
+    carrying budget_skips, the committed+awaited denominator, and per-decode-token
+    normalisations.  At HEAD they lived only in resource_telemetry_snapshot, whose
+    callers were the other bench scripts + tests -- ab_decode_env_levers and the
+    daemon never logged them."""
+    import importlib.util
+    from types import SimpleNamespace
+    from mtplx.serve_stream_counters import snapshot_stream_counters
+
+    rt, spec = _open_runtime(
+        tmp_path / "v2", runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        sw = _switch(rt, spec)
+        for i in range(3):  # a few misses so counters + decode_steps are non-trivial
+            x, idx = _inputs(1, spec.top_k, spec.hidden_size, [8 + i, 9 + i], step=i)
+            _REAL_EVAL(sw(x, idx))
+            rt.flush_deferred_slot_releases(evaluate=True)
+
+        # (a) the served daemon's stream-counter path surfaces both blocks.
+        ssc = snapshot_stream_counters(rt)
+        assert "runner" in ssc and "gate_prefetch" in ssc
+        assert "budget_skips" in ssc["runner"]
+
+        # (b) the runner block carries the review's additions: the committed+awaited
+        #     denominator, a derived hit rate, and per-decode-token normalisations.
+        runner = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        for key in (
+            "budget_skips", "prefetch_committed", "prefetch_awaited_inflight",
+            "prefetch_hit_rate", "decode_steps", "expert_misses_per_token",
+            "speculative_bytes_per_token", "demand_bytes_per_token",
+        ):
+            assert key in runner, f"runner block missing {key}"
+        assert runner["decode_steps"] >= 1
+        assert 0.0 <= runner["prefetch_hit_rate"] <= 1.0  # committed+awaited denom
+
+        # (c) the harness embeds both onto a fake run's receipt.
+        _path = (
+            Path(__file__).resolve().parents[1]
+            / "scripts" / "deepseek_v41" / "ab_decode_env_levers.py"
+        )
+        _spec = importlib.util.spec_from_file_location("dsv41_ab_w95f", _path)
+        ab = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(ab)
+        blocks = ab._runner_receipt_blocks(SimpleNamespace(_mtplx_expert_runtime=rt))
+        assert "runner" in blocks and "gate_prefetch" in blocks
+        assert "budget_skips" in blocks["runner"]
+    finally:
+        rt.close()
+
+    # (d) OFF: neither block leaks into snapshot() or the stream-counter path
+    #     (the shipped snapshot stays byte-unchanged).
+    rt_off, _ = _open_runtime(tmp_path / "off", runner_v2=False, prefetch=0)
+    try:
+        snap_off = rt_off.snapshot()
+        assert "runner" not in snap_off and "gate_prefetch" not in snap_off
+        ssc_off = snapshot_stream_counters(rt_off)
+        assert "runner" not in ssc_off and "gate_prefetch" not in ssc_off
+    finally:
+        rt_off.close()

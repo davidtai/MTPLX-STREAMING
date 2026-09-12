@@ -1431,6 +1431,30 @@ def _stream_counters_snapshot(model):
         return None
 
 
+def _runner_receipt_blocks(model) -> dict:
+    """W95f (review HIGH-3): lift the runtime's ``runner`` (v2) and ``gate_prefetch``
+    receipt blocks onto every A/B receipt (AR and DSpark), so the SSD-hiding counters
+    the paired window reads -- prefetch hit/wasted, demand vs speculative bytes,
+    budget_skips, margin, ring size, per-decode-token normalisations -- travel with
+    the cell receipt.  They lived only in resource_telemetry_snapshot, whose callers
+    were the other benchmark scripts + tests, NOT this harness.  Best-effort: a stub
+    runtime or the flags-off shipped path just omits the blocks (empty dict)."""
+    try:
+        rt = getattr(model, "_mtplx_expert_runtime", None)
+        if rt is None:
+            return {}
+        es = getattr(rt, "expert_streaming", None) or rt
+        snap = getattr(es, "resource_telemetry_snapshot", None)
+        if not callable(snap):
+            return {}
+        full = snap()
+        if not isinstance(full, dict):
+            return {}
+        return {key: full[key] for key in ("runner", "gate_prefetch") if key in full}
+    except Exception:
+        return {}
+
+
 def _cold_reset_expert_streaming(model) -> bool:
     """W87 HIGH-3: cold-reset the expert-streaming residency + counters between the
     AR reference pass and the DSpark pass of a --decode-mode dspark cell, so the
@@ -1663,6 +1687,8 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         "extra_forward_steps": int(extra_forward_steps),
         "stream_after_prefill": _sc_after_prefill,
         "stream_end": _sc_end,
+        # W95f: the v2 runner + gate_prefetch receipt blocks (present only when armed).
+        **_runner_receipt_blocks(model),
         "cooldown": cooldown_block,
         "utilization": (
             util_sampler.summarize() if util_sampler is not None else None
@@ -1879,6 +1905,8 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         "stats": stats.to_dict(),
         "stream_after_prefill": _sc.get("after_prefill"),
         "stream_end": _sc.get("end"),
+        # W95f: the v2 runner + gate_prefetch receipt blocks (present only when armed).
+        **_runner_receipt_blocks(model),
     }
     if report is not None:
         out["verify_stage_timing"] = report

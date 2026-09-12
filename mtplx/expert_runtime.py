@@ -4659,6 +4659,17 @@ class ExpertStreamingRuntime:
         }
         if self._pipeline_ledger is not None:
             snapshot["expert_pipeline"] = self._pipeline_ledger.snapshot()
+        # W95f (review HIGH-3): carry the gate-oracle prefetch + v2 runner receipt
+        # blocks on THIS snapshot too (not only resource_telemetry_snapshot), so the
+        # served daemon's stream-counter path (expert_streaming_snapshot -> snapshot
+        # -> serve_stream_counters.snapshot_stream_counters) logs the SSD-hiding
+        # counters. Guarded, so the shipped/off snapshot is byte-unchanged.
+        if self.config.prefetch_slots > 0:
+            snapshot["gate_prefetch"] = self._gate_prefetch_snapshot(
+                cache, cache_by_layer
+            )
+        if os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
+            snapshot["runner"] = self._runner_snapshot(cache, cold_start)
         self._raise_if_unhealthy()
         return snapshot
 
@@ -4712,47 +4723,87 @@ class ExpertStreamingRuntime:
         # W95: the v2 runner receipt block -- ONE rolled-up view of the composed
         # SSD-hiding runner (single pool + prefetch ring + overlap_miss_reads).
         # Only when MTPLX_DSV41_RUNNER=v2 is armed, so the shipped snapshot is
-        # byte-unchanged off. Values are cumulative; the receipt divides by decode
-        # tokens for the per-token window targets (misses/token & bytes/token DOWN,
-        # prefetch hit UP vs the paired cell16k_ring reference).
+        # byte-unchanged off.
         if os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
-            _k_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH")
-            _m_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_MARGIN")
-            snapshot["runner"] = {
-                "mode": "v2",
-                "single_pool": bool(getattr(self, "_single_slot_pool", False)),
-                "overlap_miss_reads": bool(
-                    getattr(self.config, "overlap_miss_reads", False)
-                ),
-                # the retuned prefetch knobs (W95): AR predict width, confidence
-                # margin, global ring size, and the demand-priority byte budget.
-                "prefetch_k": int(_k_env) if (_k_env or "").lstrip("-").isdigit() else 6,
-                "prefetch_margin": float(_m_env) if _m_env else -0.05,
-                "ring_slots": int(getattr(self.config, "prefetch_slots", 0)),
-                "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
-                "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),
-                # SSD read (window target: misses/token & bytes/token DOWN, prefetch
-                # hit UP; demand vs speculative split shows the drive contention).
-                "expert_misses": int(cache.get("expert_misses", 0)),
-                "bytes_read": int(cache.get("bytes_read", 0)),
-                "hit_rate": float(cache.get("hit_rate", 0.0)),
-                "demand_bytes_read": int(getattr(self, "demand_bytes_read", 0)),
-                "speculative_bytes_read": int(
-                    getattr(self, "speculative_bytes_read", 0)
-                ),
-                "prefetch_issued": int(cache.get("prefetch_issued", 0)),
-                "prefetch_hit_on_true_route": int(
-                    cache.get("prefetch_hit_on_true_route", 0)
-                ),
-                "prefetch_wasted": int(cache.get("prefetch_wasted", 0)),
-                "prefetch_bytes": int(cache.get("prefetch_bytes", 0)),
-                "pool_promotions": int(cache.get("promotions", 0)),
-                "pool_loads": int(cache.get("pool_loads", 0)),
-                # Not timed on this path; the receipt derives SSD ms/token from
-                # expert_misses x record_bytes / realized BW.
-                "ssd_wait_ms_per_token": None,
-            }
+            snapshot["runner"] = self._runner_snapshot(cache, cold_start)
         return snapshot
+
+    def _runner_snapshot(
+        self, cache: dict[str, Any], cold_start: dict[str, Any]
+    ) -> dict[str, Any]:
+        """W95 v2 runner receipt block, built from the already-collected cache
+        counters + W87 cold-start telemetry. Emitted by BOTH ``snapshot`` (the
+        served daemon's stream-counter path) and ``resource_telemetry_snapshot``
+        (the bench sampler), so the paired window reads the SAME SSD-hiding counters
+        whether it scrapes the daemon or the harness receipt.
+
+        W95f (review HIGH-3): carries the ``committed+awaited`` denominator so a
+        prefetch HIT RATE can be derived, and PER-DECODE-TOKEN normalisations
+        (misses/token, speculative-bytes/token) rather than only cumulative-since-
+        open -- the window targets are per token."""
+
+        _k_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH")
+        _m_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_MARGIN")
+        # committed+awaited denominator: a settled ring read is counted in
+        # prefetch_committed XOR prefetch_awaited_inflight (the demand-await publish
+        # path), so their sum is the settled+published total and a prefetch hit rate
+        # (hit_on_true_route / this) is <= 1.0.
+        _committed = int(cache.get("prefetch_committed", 0))
+        _awaited = int(cache.get("prefetch_awaited_inflight", 0))
+        _committed_settled = _committed + _awaited
+        _hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        # per-decode-token normalisations. ``decode_steps`` is the W87 decode-step
+        # index (one full routed-layer sweep == one token under --decode-mode ar).
+        _steps = int(cold_start.get("decode_steps_observed", 0))
+        _misses = int(cache.get("expert_misses", 0))
+        _bytes_read = int(cache.get("bytes_read", 0))
+        _demand = int(getattr(self, "demand_bytes_read", 0))
+        _spec = int(getattr(self, "speculative_bytes_read", 0))
+
+        def _per_tok(value: int) -> float | None:
+            return (value / _steps) if _steps else None
+
+        return {
+            "mode": "v2",
+            "single_pool": bool(getattr(self, "_single_slot_pool", False)),
+            "overlap_miss_reads": bool(
+                getattr(self.config, "overlap_miss_reads", False)
+            ),
+            # the retuned prefetch knobs (W95): AR predict width, confidence
+            # margin, global ring size, and the demand-priority byte budget.
+            "prefetch_k": int(_k_env) if (_k_env or "").lstrip("-").isdigit() else 6,
+            "prefetch_margin": float(_m_env) if _m_env else -0.05,
+            "ring_slots": int(getattr(self.config, "prefetch_slots", 0)),
+            "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+            "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),
+            # SSD read (demand vs speculative split shows the drive contention).
+            "expert_misses": _misses,
+            "bytes_read": _bytes_read,
+            "hit_rate": float(cache.get("hit_rate", 0.0)),
+            "demand_bytes_read": _demand,
+            "speculative_bytes_read": _spec,
+            "prefetch_issued": int(cache.get("prefetch_issued", 0)),
+            "prefetch_hit_on_true_route": _hit,
+            "prefetch_wasted": int(cache.get("prefetch_wasted", 0)),
+            "prefetch_bytes": int(cache.get("prefetch_bytes", 0)),
+            "pool_promotions": int(cache.get("promotions", 0)),
+            "pool_loads": int(cache.get("pool_loads", 0)),
+            # committed+awaited denominator + the derived prefetch hit rate.
+            "prefetch_committed": _committed_settled,
+            "prefetch_awaited_inflight": _awaited,
+            "prefetch_hit_rate": (
+                _hit / _committed_settled if _committed_settled else 0.0
+            ),
+            # per-decode-token normalisations (the window targets are per token).
+            "decode_steps": _steps,
+            "expert_misses_per_token": _per_tok(_misses),
+            "bytes_read_per_token": _per_tok(_bytes_read),
+            "demand_bytes_per_token": _per_tok(_demand),
+            "speculative_bytes_per_token": _per_tok(_spec),
+            # Not timed on this path; the receipt derives SSD ms/token from
+            # expert_misses x record_bytes / realized BW.
+            "ssd_wait_ms_per_token": None,
+        }
 
     def _gate_prefetch_snapshot(
         self, cache: dict[str, Any], cache_by_layer: dict[str, Any]
