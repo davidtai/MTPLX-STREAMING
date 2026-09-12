@@ -4742,8 +4742,26 @@ class ExpertStreamingRuntime:
         (misses/token, speculative-bytes/token) rather than only cumulative-since-
         open -- the window targets are per token."""
 
-        _k_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH")
-        _m_env = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_MARGIN")
+        # W95f (review MEDIUM): report the RESOLVED prefetch width / margin -- the
+        # values the run actually uses -- not the raw env. Re-parsing the env here
+        # (``int(env)`` / ``float(env)``) raised ValueError on a malformed
+        # MTPLX_DSV41_GATE_PREFETCH_MARGIN (e.g. "abc") and lost the whole receipt,
+        # even though the run proceeded because ``_resolve_gate_prefetch_margin``
+        # swallows the bad value. The resolvers also apply the v2 default + explicit-
+        # override precedence, so the receipt matches the routed behaviour. Lazy
+        # import keeps this low-level module free of the deepseek_v41 import cycle
+        # (see the single_slot_pool note in ``open``); a resolver failure falls back
+        # to the v2 defaults rather than dropping the receipt.
+        try:
+            from mtplx.models.deepseek_v41 import (
+                _resolve_gate_prefetch_k,
+                _resolve_gate_prefetch_margin,
+            )
+
+            _k_resolved = int(_resolve_gate_prefetch_k())
+            _margin_resolved = float(_resolve_gate_prefetch_margin())
+        except Exception:
+            _k_resolved, _margin_resolved = 6, -0.05
         # committed+awaited denominator: a settled ring read is counted in
         # prefetch_committed XOR prefetch_awaited_inflight (the demand-await publish
         # path), so their sum is the settled+published total and a prefetch hit rate
@@ -4771,8 +4789,8 @@ class ExpertStreamingRuntime:
             ),
             # the retuned prefetch knobs (W95): AR predict width, confidence
             # margin, global ring size, and the demand-priority byte budget.
-            "prefetch_k": int(_k_env) if (_k_env or "").lstrip("-").isdigit() else 6,
-            "prefetch_margin": float(_m_env) if _m_env else -0.05,
+            "prefetch_k": _k_resolved,
+            "prefetch_margin": _margin_resolved,
             "ring_slots": int(getattr(self.config, "prefetch_slots", 0)),
             "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
             "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),

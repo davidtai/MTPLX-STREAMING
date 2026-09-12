@@ -662,3 +662,26 @@ def test_v2_receipt_blocks_reach_harness_and_daemon(tmp_path):
         assert "runner" not in ssc_off and "gate_prefetch" not in ssc_off
     finally:
         rt_off.close()
+
+
+def test_v2_receipt_survives_malformed_margin(monkeypatch, tmp_path):
+    """W95f (review MEDIUM): a malformed MTPLX_DSV41_GATE_PREFETCH_MARGIN must not
+    make the snapshot raise and lose the whole receipt.  The run itself proceeds
+    (_resolve_gate_prefetch_margin swallows the bad value), so re-parsing float(env)
+    in the receipt was the only failure point.  The runner block now reports the
+    RESOLVED k / margin (what the run uses), not the raw env, on BOTH the bench
+    sampler and the daemon-path snapshot()."""
+    monkeypatch.setenv("MTPLX_DSV41_GATE_PREFETCH_MARGIN", "abc")
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, expert_count=16, top_k=2,
+        resident_slots=2, transient=8, prefetch=6,
+    )
+    try:
+        snap = rt.resource_telemetry_snapshot(mx_module=mx)  # must NOT raise
+        runner = snap["runner"]
+        assert runner["prefetch_margin"] == _RUNNER_V2_GATE_PREFETCH_MARGIN  # -0.05
+        assert runner["prefetch_k"] == _RUNNER_V2_GATE_PREFETCH_K            # 6
+        # the served daemon's stream-counter source must survive it too.
+        assert rt.snapshot()["runner"]["prefetch_margin"] == _RUNNER_V2_GATE_PREFETCH_MARGIN
+    finally:
+        rt.close()
