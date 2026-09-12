@@ -72,17 +72,17 @@ def test_speculative_io_fraction_validation() -> None:
             )
 
 
-def test_memory_plan_carries_prefetch_slots_per_layer() -> None:
+def test_memory_plan_carries_global_prefetch_ring() -> None:
+    # W93: the prefetch ring is GLOBAL (shared across layers), so the plan
+    # reserves ``prefetch_ring_slots`` records TOTAL, not per-layer.
     spec = get_model_spec("hy3-expert-q2")
     config = ExpertStreamingConfig(**_config_kwargs(prefetch_slots=8))
     plan = config.memory_plan(spec)
-    assert plan.prefetch_slots_per_layer == 8
-    assert plan.prefetch_bytes == (
-        spec.routed_layer_count * 8 * spec.expert_record_bytes
-    )
+    assert plan.prefetch_ring_slots == 8
+    assert plan.prefetch_bytes == 8 * spec.expert_record_bytes
 
     baseline = ExpertStreamingConfig(**_config_kwargs()).memory_plan(spec)
-    assert baseline.prefetch_slots_per_layer == 0
+    assert baseline.prefetch_ring_slots == 0
     assert baseline.prefetch_bytes == 0
 
 

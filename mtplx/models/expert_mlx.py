@@ -254,6 +254,9 @@ _MIXED_TRANSIENT_LABEL = re.compile(
 _LAYER_PREFETCH_LABEL = re.compile(
     rf"layer-({_SLOT_INDEX_PATTERN})-prefetch-({_SLOT_INDEX_PATTERN})"
 )
+# W93: the prefetch ring is now a single SHARED tier across all layers (like the
+# global transient pool), so its slots carry a layer-less label.
+_GLOBAL_PREFETCH_LABEL = re.compile(rf"global-prefetch-({_SLOT_INDEX_PATTERN})")
 
 
 @contextmanager
@@ -434,7 +437,7 @@ def make_mlx_slot_buffer_allocator(
         elif label.startswith("layer-") and "-prefetch-" in label:
             layer = int(parts[1])
             slot = int(parts[-1])
-            count = plan.prefetch_slots_per_layer
+            count = plan.prefetch_ring_slots
             if layer not in spec.routed_layer_indices:
                 raise ValueError(f"prefetch slot layer {layer} is not routed")
         elif label.startswith("global-persistent-"):
@@ -443,6 +446,10 @@ def make_mlx_slot_buffer_allocator(
         elif label.startswith("global-transient-"):
             slot = int(parts[-1])
             count = plan.transient_slots
+        elif label.startswith("global-prefetch-"):
+            # W93: shared prefetch ring (one tier across all layers).
+            slot = int(parts[-1])
+            count = plan.prefetch_ring_slots
         else:
             raise ValueError(f"unknown expert slot label {label!r}")
         if count <= 0:
@@ -1454,7 +1461,7 @@ def make_mlx_component_bank_allocator(
             record = record_by_layer[discriminator]
             label = f"layer-{discriminator}-persistent-bank"
         elif kind == "prefetch":
-            capacity = plan.prefetch_slots_per_layer
+            capacity = plan.prefetch_ring_slots
             record = record_by_layer[discriminator]
             label = f"layer-{discriminator}-prefetch-bank"
         elif kind == "mixed-transient":
@@ -1467,6 +1474,11 @@ def make_mlx_component_bank_allocator(
             capacity = plan.persistent_slots
             record = record_by_layer[exemplar_layer]
             label = "global-persistent-bank"
+        elif kind == "global-prefetch":
+            # W93: one shared prefetch-ring bank across all layers (uniform record).
+            capacity = plan.prefetch_ring_slots
+            record = record_by_layer[exemplar_layer]
+            label = "global-prefetch-bank"
         else:
             capacity = plan.transient_slots
             record = record_by_layer[exemplar_layer]
@@ -1482,6 +1494,7 @@ def make_mlx_component_bank_allocator(
         layer_persistent = _LAYER_PERSISTENT_LABEL.fullmatch(label)
         global_persistent = _GLOBAL_PERSISTENT_LABEL.fullmatch(label)
         global_transient = _GLOBAL_TRANSIENT_LABEL.fullmatch(label)
+        global_prefetch = _GLOBAL_PREFETCH_LABEL.fullmatch(label)
         mixed_transient = _MIXED_TRANSIENT_LABEL.fullmatch(label)
         layer_prefetch = _LAYER_PREFETCH_LABEL.fullmatch(label)
         if mixed_transient is not None:
@@ -1501,7 +1514,7 @@ def make_mlx_component_bank_allocator(
             slot_index = int(layer_prefetch.group(2))
             if layer not in spec.routed_layer_indices:
                 raise ValueError(f"prefetch slot layer {layer} is not routed")
-            if not 0 <= slot_index < plan.prefetch_slots_per_layer:
+            if not 0 <= slot_index < plan.prefetch_ring_slots:
                 raise ValueError("prefetch slot is outside planned capacity")
             bank = bank_for("prefetch", layer)
         elif layer_persistent is not None:
@@ -1535,6 +1548,18 @@ def make_mlx_component_bank_allocator(
                 raise ValueError("transient slot is outside planned capacity")
             bank = bank_for("transient", -1)
         elif label.startswith("global-transient-"):
+            raise ValueError(f"unknown expert slot label {label!r}")
+        elif global_prefetch is not None:
+            # W93: shared prefetch ring (one bank across all layers).
+            if plan.cache_scope != "layer":
+                raise ValueError(
+                    "prefetch slot label conflicts with global cache scope"
+                )
+            slot_index = int(global_prefetch.group(1))
+            if not 0 <= slot_index < plan.prefetch_ring_slots:
+                raise ValueError("prefetch slot is outside planned capacity")
+            bank = bank_for("global-prefetch", -1)
+        elif label.startswith("global-prefetch-"):
             raise ValueError(f"unknown expert slot label {label!r}")
         else:
             raise ValueError(f"unknown expert slot label {label!r}")
@@ -2490,6 +2515,15 @@ class HotExpertSwitchGLU(nn.Module):
             )
         tokens = x.reshape(-1, hidden_size)
         top_k = int(indices.shape[-1])
+        # W93 gate-oracle prefetch: read-and-clear any prediction the DecoderLayer
+        # stashed (the NEXT layer's top-k ids, computed from THIS layer's input
+        # residual before attention). Consumed exactly once here regardless of the
+        # route path taken below: the fenced path rides it on its indices barrier
+        # and issues the reads; the barrier-free device-route path drops it (there
+        # is no host sync to piggyback -- W93_GATE_PREFETCH.md §3).
+        _gate_prefetch_pending = getattr(self, "_mtplx_gate_prefetch_pending", None)
+        if _gate_prefetch_pending is not None:
+            self._mtplx_gate_prefetch_pending = None
         # DSV4.1 switch fast-path (W42, KERNEL_LEDGER K23; env
         # ``MTPLX_DSV41_SWITCH_FASTPATH``, default off).  W37 measured the
         # streamed switch at ~2.5 ms/layer with warm-repeat decode == cold decode
@@ -2610,7 +2644,13 @@ class HotExpertSwitchGLU(nn.Module):
                 _hoisted_shared = shared_work()
                 _async_eval(_hoisted_shared)
         with _route_probe.bracket("hot.eval_indices"):
-            mx.eval(indices)
+            # W93: the next layer's predicted ids ride THIS one host sync (they are
+            # independent of ``indices``, so both materialize in one device->host
+            # round-trip -- no second barrier). Exactly one mx.eval either way.
+            if _gate_prefetch_pending is not None:
+                mx.eval(indices, _gate_prefetch_pending[1])
+            else:
+                mx.eval(indices)
         # This eval materialized every earlier layer's wave output, so any
         # deferred pin releases are now covered without their own fence.
         flush_deferred = getattr(self.runtime, "flush_deferred_slot_releases", None)
@@ -2618,6 +2658,11 @@ class HotExpertSwitchGLU(nn.Module):
             flush_deferred()
         with _route_probe.bracket("hot.route_host"):
             expert_ids = tuple(int(value) for value in indices.reshape(-1).tolist())
+        # W93: issue the gate-oracle prefetch for the NEXT layer now that its ids
+        # are on the host (already materialized above -- no extra sync). Pure cache
+        # warming: a mispredict only wastes a read (W93_GATE_PREFETCH.md §2/§5).
+        if _gate_prefetch_pending is not None:
+            _issue_gate_prefetch(self.runtime, _gate_prefetch_pending)
         # Batch size is not a generation phase. A batched decode has shape
         # ``[B, 1, H]`` and must still train/use the persistent decode hot set;
         # only the sequence length distinguishes prefill from decode here.
@@ -3648,6 +3693,25 @@ def run_switch_with_shared_overlap(
     return switch_mlp(x, indices), shared_work()
 
 
+def _issue_gate_prefetch(runtime: Any, pending: tuple) -> None:
+    """Hand a stashed W93 gate-oracle prediction to the speculative ring.
+
+    ``pending`` is ``(next_layer, predicted_ids_array)``; the array was already
+    materialized on the switch's indices barrier, so ``.tolist()`` here is a host
+    read with no new sync. Best-effort: a runtime without the ring (or a
+    prediction the ring drops as resident/inflight) costs only the prediction."""
+
+    next_layer, predicted = pending
+    prefetch = getattr(runtime, "prefetch_experts", None)
+    if prefetch is None:
+        return
+    ids = [int(value) for value in predicted.reshape(-1).tolist()]
+    note = getattr(runtime, "note_gate_prefetch_predicted", None)
+    if callable(note):
+        note(next_layer, len(set(ids)))
+    prefetch(next_layer, ids)
+
+
 def bind_streamed_switches(model: Any, runtime: ExpertStreamingRuntime) -> int:
     layers = getattr(getattr(model, "model", None), "layers", None)
     if layers is None:
@@ -3724,4 +3788,11 @@ def bind_streamed_switches(model: Any, runtime: ExpertStreamingRuntime) -> int:
                 layer_index,
             )
         bound += 1
+    # W93: wire each routed layer's MoE to the next layer's gate for one-ahead
+    # gate-oracle prefetch. DSV4.1-only + self-guarding (non-DSV4.1 trunks carry
+    # no `mlp.gate` with a `score_func`, so nothing is installed for them), and
+    # inert until MTPLX_DSV41_GATE_PREFETCH arms the ring.
+    from .deepseek_v41 import install_gate_prefetch_links
+
+    install_gate_prefetch_links(model, runtime)
     return bound

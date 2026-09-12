@@ -72,6 +72,11 @@ class RoutePlan:
     loads: tuple[SlotLoad, ...]
     evictions: tuple[SlotEviction, ...]
     generations: tuple[int | None, ...] = ()
+    # W93: the subset of ``hits`` that resolved from the speculative prefetch
+    # ring (a gate-oracle prediction that paid off), so the counters can price
+    # ``hit_on_true_route`` distinctly from the persistent-tier hits it is folded
+    # into. Empty on every non-ring path (byte-identical to the pre-W93 plan).
+    prefetch_hits: tuple[int, ...] = ()
 
 
 class RoutePolicyTxn:
@@ -128,6 +133,17 @@ class CacheCounters:
     bytes_read: int = 0
     prefetch_issued: int = 0
     prefetch_committed: int = 0
+    # W93 gate-oracle prefetch telemetry. ``predicted`` (ids handed to the ring),
+    # ``hit_on_true_route`` (commits a true route consumed as a hit), ``wasted``
+    # (commits evicted round-robin without ever being hit), ``awaited_inflight``
+    # (true-route experts awaited in flight instead of re-read) and ``bytes``
+    # (issued * record) are incremented by the runtime; ``hit_on_true_route`` also
+    # accrues through :meth:`observe` from ``RoutePlan.prefetch_hits``.
+    prefetch_predicted: int = 0
+    prefetch_hit_on_true_route: int = 0
+    prefetch_wasted: int = 0
+    prefetch_awaited_inflight: int = 0
+    prefetch_bytes: int = 0
 
     def observe(self, plan: RoutePlan, *, expert_record_bytes: int) -> None:
         expert_record_bytes = _integer(
@@ -146,6 +162,8 @@ class CacheCounters:
         self.transient_loads += sum(not load.persistent for load in plan.loads)
         self.evictions += len(plan.evictions)
         self.bytes_read += len(plan.loads) * expert_record_bytes
+        # W93: a prefetch-ring commit consumed by this true route (unique experts).
+        self.prefetch_hit_on_true_route += len(plan.prefetch_hits)
 
     @property
     def hit_rate(self) -> float:
@@ -167,6 +185,11 @@ class CacheCounters:
             "bytes_read": self.bytes_read,
             "prefetch_issued": self.prefetch_issued,
             "prefetch_committed": self.prefetch_committed,
+            "prefetch_predicted": self.prefetch_predicted,
+            "prefetch_hit_on_true_route": self.prefetch_hit_on_true_route,
+            "prefetch_wasted": self.prefetch_wasted,
+            "prefetch_awaited_inflight": self.prefetch_awaited_inflight,
+            "prefetch_bytes": self.prefetch_bytes,
         }
 
 
@@ -183,6 +206,199 @@ class _GlobalDirectoryEntry:
     generation: int
     state: str
     lru_rank: int
+
+
+class GlobalPrefetchRing:
+    """One speculative lookahead ring SHARED across all routed layers (W93).
+
+    In decode the layers run sequentially and each layer is prefetched exactly
+    one step ahead, so a ring of ``ring_size`` slots (sized 2*k for a width-k
+    predictor -- layer L's committed hits keep resolving while layer L+1's
+    fill) bounds the resident ring to ``ring_size`` records TOTAL, a small fixed
+    reserve like the transient pool, rather than ``ring_size * n_layers`` carved
+    out of the persistent LRU (docs/deepseek-v41/W93_GATE_PREFETCH.md §4).
+
+    Entries are keyed by ``(layer, expert)``; the physical slot handed to the
+    pool is ``base + ring_index`` where ``base = persistent_slots +
+    transient_slots`` (uniform across layers, so a ring slot resolves to the
+    shared ``ExpertSlotPool._prefetch[ring_index]`` regardless of layer). The
+    round-robin replacement, inflight-safety, ticketing and reeviction embargo
+    are the per-layer ring's, generalised: the embargo is measured in each
+    layer's OWN decode epoch (advanced by :meth:`note_decode` from the bank's
+    ``plan``), so a shared ring reproduces the per-layer churn guard exactly.
+
+    Every call is made under the caller's per-layer transaction lock (the
+    runtime serialises a layer's prefetch planning and route resolution), so the
+    ring holds no lock of its own. A ``ticket`` binds a completion to one exact
+    assignment and, like the per-layer ring, SURVIVES :meth:`reset` so a
+    callback straddling a reset can never collide with a fresh assignment.
+    """
+
+    reeviction_window = 2
+
+    def __init__(self, *, ring_size: int, base: int, expert_count: int) -> None:
+        self.ring_size = _integer("ring_size", ring_size, minimum=0)
+        self.base = _integer("base", base, minimum=0)
+        self.expert_count = _integer("expert_count", expert_count, minimum=1)
+        self._slot_to_key: list[tuple[int, int] | None] = [None] * self.ring_size
+        self._key_to_slot: dict[tuple[int, int], int] = {}
+        self._inflight: dict[tuple[int, int], tuple[int, int]] = {}
+        self._cursor = 0
+        self._ticket = 0
+        self._evicted: dict[tuple[int, int], int] = {}
+        self._used: set[tuple[int, int]] = set()
+        self._wasted = 0
+        self._epoch_by_layer: dict[int, int] = {}
+
+    def _key(self, layer: int, expert: int) -> tuple[int, int]:
+        expert = _integer("expert id", expert, minimum=0)
+        if expert >= self.expert_count:
+            raise ValueError(f"expert id {expert} is outside [0, {self.expert_count})")
+        return (int(layer), expert)
+
+    def note_decode(self, layer: int) -> None:
+        """Advance ``layer``'s decode epoch (drives that layer's reeviction
+        embargo). The owning bank calls this once per DECODE ``plan``."""
+
+        layer = int(layer)
+        self._epoch_by_layer[layer] = self._epoch_by_layer.get(layer, 0) + 1
+
+    def plan_prefetch(
+        self, layer: int, expert_ids: Iterable[int], *, resident: Iterable[int] = ()
+    ) -> tuple[SlotLoad, ...]:
+        """Assign ring slots for ``layer``'s predicted experts; return the loads.
+
+        Skips experts already resident (persistent) for this layer, already
+        committed or inflight in the ring, or under the reeviction embargo.
+        Ring replacement is round-robin over the WHOLE ring (across layers); an
+        inflight slot is never recycled (two fills on one buffer would race). A
+        committed victim recycled without ever being consumed by a true route is
+        priced as a wasted read."""
+
+        if not self.ring_size:
+            return ()
+        layer = int(layer)
+        resident_set = {int(e) for e in resident}
+        epoch = self._epoch_by_layer.get(layer, 0)
+        loads: list[SlotLoad] = []
+        for expert in dict.fromkeys(int(e) for e in expert_ids):
+            key = self._key(layer, expert)
+            if (
+                expert in resident_set
+                or key in self._key_to_slot
+                or key in self._inflight
+            ):
+                continue
+            evicted_epoch = self._evicted.get(key)
+            if evicted_epoch is not None:
+                if epoch - evicted_epoch < self.reeviction_window:
+                    continue
+                del self._evicted[key]
+            ring_index: int | None = None
+            for _probe in range(self.ring_size):
+                candidate = self._cursor % self.ring_size
+                self._cursor += 1
+                tenant = self._slot_to_key[candidate]
+                if tenant is not None and tenant in self._inflight:
+                    continue
+                ring_index = candidate
+                break
+            if ring_index is None:
+                continue
+            victim = self._slot_to_key[ring_index]
+            if victim is not None:
+                was_committed = self._key_to_slot.pop(victim, None) is not None
+                if was_committed and victim not in self._used:
+                    self._wasted += 1
+                self._used.discard(victim)
+                # embargo the victim in ITS layer's epoch scale.
+                self._evicted[victim] = self._epoch_by_layer.get(victim[0], 0)
+            self._slot_to_key[ring_index] = key
+            ticket = self._ticket
+            self._ticket += 1
+            self._inflight[key] = (self.base + ring_index, ticket)
+            loads.append(
+                SlotLoad(expert=expert, slot=self.base + ring_index, persistent=False)
+            )
+        return tuple(loads)
+
+    def prefetch_ticket(self, layer: int, expert: int) -> int | None:
+        entry = self._inflight.get(self._key(layer, expert))
+        return None if entry is None else entry[1]
+
+    def commit_prefetch(
+        self, layer: int, expert: int, *, ticket: int | None = None
+    ) -> bool:
+        key = self._key(layer, expert)
+        entry = self._inflight.get(key)
+        if entry is None:
+            return False
+        slot, assignment_ticket = entry
+        if ticket is not None and ticket != assignment_ticket:
+            return False
+        del self._inflight[key]
+        if self._slot_to_key[slot - self.base] != key:
+            return False
+        self._key_to_slot[key] = slot
+        return True
+
+    def invalidate_prefetch(
+        self, layer: int, expert: int, *, ticket: int | None = None
+    ) -> int | None:
+        key = self._key(layer, expert)
+        if ticket is not None:
+            entry = self._inflight.get(key)
+            if entry is None or entry[1] != ticket:
+                return None
+            del self._inflight[key]
+            slot = entry[0]
+            if self._slot_to_key[slot - self.base] == key:
+                self._slot_to_key[slot - self.base] = None
+            self._used.discard(key)
+            return slot
+        slot = self._key_to_slot.pop(key, None)
+        if slot is None:
+            entry = self._inflight.pop(key, None)
+            slot = None if entry is None else entry[0]
+        if slot is not None:
+            if self._slot_to_key[slot - self.base] == key:
+                self._slot_to_key[slot - self.base] = None
+        self._used.discard(key)
+        return slot
+
+    def published(self, layer: int, expert_ids: Iterable[int]) -> dict[int, int]:
+        """{expert: ring slot} for this layer's committed (hit-eligible) entries."""
+
+        layer = int(layer)
+        return {
+            int(expert): self._key_to_slot[(layer, int(expert))]
+            for expert in expert_ids
+            if (layer, int(expert)) in self._key_to_slot
+        }
+
+    def mark_used(self, layer: int, experts: Iterable[int]) -> None:
+        """Record that a true route consumed these committed ring entries, so a
+        later round-robin eviction of them is not miscounted as wasted."""
+
+        layer = int(layer)
+        for expert in experts:
+            self._used.add((layer, int(expert)))
+
+    def consume_wasted(self) -> int:
+        count = self._wasted
+        self._wasted = 0
+        return count
+
+    def reset(self) -> None:
+        self._slot_to_key = [None] * self.ring_size
+        self._key_to_slot.clear()
+        self._inflight.clear()
+        self._cursor = 0
+        self._evicted.clear()
+        self._used.clear()
+        self._wasted = 0
+        self._epoch_by_layer.clear()
+        # ``_ticket`` is deliberately NOT reset (see class docstring).
 
 
 class LayerExpertSlotBank:
@@ -212,6 +428,8 @@ class LayerExpertSlotBank:
         frequency_decay: float = 0.995,
         cache_policy: str = "frequency",
         prefetch_slots: int = 0,
+        layer_id: int = 0,
+        prefetch_ring: "GlobalPrefetchRing | None" = None,
     ) -> None:
         expert_count = _integer("expert_count", expert_count, minimum=1)
         persistent_slots = _integer("persistent_slots", persistent_slots, minimum=0)
@@ -247,23 +465,25 @@ class LayerExpertSlotBank:
         self._history = [_ExpertHistory() for _ in range(expert_count)]
         self._prefill_seed_candidates: set[int] = set()
         self._persistent_capacity = self.persistent_slots
-        # Speculative lookahead ring: bypasses frequency admission, never
-        # evicts an earned persistent resident, round-robin replacement.
-        # Inflight entries carry a monotonically increasing assignment
-        # ticket: an expert can be assigned, recycled, and re-assigned
-        # while its first load's completion callback is still queued, and
-        # that stale callback must not publish (or invalidate) the newer
-        # assignment. The ticket survives reset() so callbacks straddling
-        # a reset can never collide with fresh assignments either.
-        self._prefetch_slot_to_expert: list[int | None] = [None] * prefetch_slots
-        self._prefetch_expert_to_slot: dict[int, int] = {}
-        self._prefetch_inflight: dict[int, tuple[int, int]] = {}
-        self._prefetch_cursor = 0
-        self._prefetch_ticket = 0
-        # Ring-evicted experts under re-prediction embargo: expert ->
-        # decode epoch at eviction. Rapid ring turnover otherwise
-        # re-reads the same hot experts token after token.
-        self._prefetch_evicted: dict[int, int] = {}
+        # W93: the speculative lookahead ring is now a SHARED GlobalPrefetchRing
+        # (keyed by (layer, expert)), so its resident cost is one small fixed
+        # reserve across all layers rather than a per-layer ring times the layer
+        # count. The runtime passes ONE ring to every bank; a bank constructed
+        # standalone with prefetch_slots>0 (unit tests) owns a single-ring of that
+        # width, behaving exactly like the old per-layer ring. The ring is inert
+        # (None) when prefetch is disabled -- every path below is then byte-
+        # identical to the pre-ring code.
+        self._layer_id = int(layer_id)
+        if prefetch_slots > 0:
+            self._prefetch_ring = prefetch_ring or GlobalPrefetchRing(
+                ring_size=prefetch_slots,
+                base=self.persistent_slots + self.transient_slots,
+                expert_count=self.expert_count,
+            )
+            self._owns_prefetch_ring = prefetch_ring is None
+        else:
+            self._prefetch_ring = None
+            self._owns_prefetch_ring = False
         # W64 (R3-pin): a post-prefill PINNED WORKING SET. Experts in
         # ``_pinned`` are never chosen as a *decode-admission* eviction victim
         # (``_victim_slot`` with ``respect_pins``), so a pinned expert's
@@ -295,11 +515,16 @@ class LayerExpertSlotBank:
         slot mid-write. Pure peek — no history, epoch, or slot mutation.
         """
 
+        expert_ids = tuple(expert_ids)
+        ring_published: dict[int, int] = (
+            self._prefetch_ring.published(self._layer_id, expert_ids)
+            if self._prefetch_ring is not None
+            else {}
+        )
         return frozenset(
             expert
             for expert in expert_ids
-            if expert in self._expert_to_slot
-            or expert in self._prefetch_expert_to_slot
+            if expert in self._expert_to_slot or expert in ring_published
         )
 
     @property
@@ -362,98 +587,36 @@ class LayerExpertSlotBank:
         self._expert_to_slot.clear()
         self._history = [_ExpertHistory() for _ in range(self.expert_count)]
         self._prefill_seed_candidates.clear()
-        self._prefetch_slot_to_expert = [None] * self.prefetch_slots
-        self._prefetch_expert_to_slot.clear()
-        self._prefetch_inflight.clear()
-        self._prefetch_cursor = 0
-        self._prefetch_evicted.clear()
+        # A SHARED ring is reset once by the runtime (not per bank, or the first
+        # bank's reset would wipe the others' entries); a bank-owned ring resets
+        # here.
+        if self._owns_prefetch_ring and self._prefetch_ring is not None:
+            self._prefetch_ring.reset()
         self._pinned.clear()
         self._prefill_route_freq.clear()
 
     def plan_prefetch(self, expert_ids: Iterable[int]) -> tuple[SlotLoad, ...]:
-        """Assign ring slots for predicted experts and return their loads.
+        """Assign shared-ring slots for this layer's predicted experts.
 
-        Assignment reserves the slot but does NOT publish it as a hit —
-        plan() only resolves ring entries the caller has committed via
-        ``commit_prefetch`` after the load completed, so a route can never
-        consume a slot mid-write. Experts already resident, published, or
-        inflight are skipped. Ring replacement is round-robin over the
-        ring only — an earned persistent resident is never evicted by
-        speculation.
+        Delegates to the shared :class:`GlobalPrefetchRing` keyed by this bank's
+        layer; skips experts already resident for this layer (its persistent
+        tier), committed, inflight, or under the reeviction embargo. Ring
+        replacement is round-robin over the WHOLE (cross-layer) ring but never
+        recycles an inflight slot, and never touches this bank's persistent
+        tier. Empty when prefetch is disabled."""
 
-        A slot whose tenant is still INFLIGHT is never recycled: its load
-        may be queued, running, or completed-but-uncommitted, and handing
-        the slot to a second load would race two claims on one physical
-        buffer (the later fill can be published under the earlier fill's
-        bytes). Committed tenants are always safe to replace — commit runs
-        strictly after the fill settles. When every slot is inflight the
-        prediction is dropped; speculation is best-effort.
-        """
-
-        if not self.prefetch_slots:
+        if self._prefetch_ring is None:
             return ()
-        experts = tuple(
-            _integer("expert id", expert, minimum=0) for expert in expert_ids
+        return self._prefetch_ring.plan_prefetch(
+            self._layer_id, expert_ids, resident=self._expert_to_slot.keys()
         )
-        for expert in experts:
-            if expert >= self.expert_count:
-                raise ValueError(
-                    f"expert id {expert} is outside [0, {self.expert_count})"
-                )
-        base = self.persistent_slots + self.transient_slots
-        loads: list[SlotLoad] = []
-        for expert in dict.fromkeys(experts):
-            if (
-                expert in self._expert_to_slot
-                or expert in self._prefetch_expert_to_slot
-                or expert in self._prefetch_inflight
-            ):
-                continue
-            evicted_epoch = self._prefetch_evicted.get(expert)
-            if evicted_epoch is not None:
-                if (
-                    self._decode_epoch - evicted_epoch
-                    < self.prefetch_reeviction_window
-                ):
-                    # Just evicted from the ring: re-reading it now is the
-                    # turnover churn this embargo exists to stop.
-                    continue
-                del self._prefetch_evicted[expert]
-            ring_index: int | None = None
-            for _probe in range(self.prefetch_slots):
-                candidate = self._prefetch_cursor % self.prefetch_slots
-                self._prefetch_cursor += 1
-                tenant = self._prefetch_slot_to_expert[candidate]
-                if tenant is not None and tenant in self._prefetch_inflight:
-                    continue
-                ring_index = candidate
-                break
-            if ring_index is None:
-                continue
-            victim = self._prefetch_slot_to_expert[ring_index]
-            if victim is not None:
-                self._prefetch_expert_to_slot.pop(victim, None)
-                self._prefetch_evicted[victim] = self._decode_epoch
-            self._prefetch_slot_to_expert[ring_index] = expert
-            ticket = self._prefetch_ticket
-            self._prefetch_ticket += 1
-            self._prefetch_inflight[expert] = (base + ring_index, ticket)
-            loads.append(
-                SlotLoad(expert=expert, slot=base + ring_index, persistent=False)
-            )
-        return tuple(loads)
 
     def prefetch_ticket(self, expert_id: int) -> int | None:
-        """Return the inflight assignment ticket for an expert, if any.
+        """The inflight assignment ticket for ``(this layer, expert)``, if any."""
 
-        The caller records it at plan time (under its route lock) and hands
-        it back to ``commit_prefetch``/``invalidate_prefetch`` so a delayed
-        completion can only act on the exact assignment its load belongs to.
-        """
-
-        expert = _integer("expert id", expert_id, minimum=0)
-        entry = self._prefetch_inflight.get(expert)
-        return None if entry is None else entry[1]
+        if self._prefetch_ring is None:
+            return None
+        return self._prefetch_ring.prefetch_ticket(self._layer_id, expert_id)
 
     def commit_prefetch(
         self,
@@ -461,34 +624,13 @@ class LayerExpertSlotBank:
         *,
         ticket: int | None = None,
     ) -> bool:
-        """Publish a completed ring load as hit-eligible.
+        """Publish a completed shared-ring load for this layer as hit-eligible."""
 
-        Returns False when the assignment was recycled by a later
-        plan_prefetch before the load completed (the slot is no longer
-        this expert's; its bytes must not be published). ``ticket`` binds
-        the commit to one specific assignment: a stale callback whose
-        assignment was recycled while the SAME expert was re-assigned to
-        another ring slot must neither publish that newer (possibly
-        unfilled) slot nor consume its inflight entry. ``ticket=None``
-        commits whatever assignment is inflight and is only safe for
-        callers that never overlap loads of one expert.
-        """
-
-        expert = _integer("expert id", expert_id, minimum=0)
-        entry = self._prefetch_inflight.get(expert)
-        if entry is None:
+        if self._prefetch_ring is None:
             return False
-        slot, assignment_ticket = entry
-        if ticket is not None and ticket != assignment_ticket:
-            # Stale completion for a recycled assignment; the live entry
-            # belongs to a newer load and must stay untouched.
-            return False
-        del self._prefetch_inflight[expert]
-        base = self.persistent_slots + self.transient_slots
-        if self._prefetch_slot_to_expert[slot - base] != expert:
-            return False
-        self._prefetch_expert_to_slot[expert] = slot
-        return True
+        return self._prefetch_ring.commit_prefetch(
+            self._layer_id, expert_id, ticket=ticket
+        )
 
     def invalidate_prefetch(
         self,
@@ -496,34 +638,55 @@ class LayerExpertSlotBank:
         *,
         ticket: int | None = None,
     ) -> int | None:
-        """Forget a failed or stale ring assignment and return its slot.
+        """Forget a failed or stale shared-ring assignment for this layer."""
 
-        A ticketed invalidation only retires the exact inflight assignment
-        that failed; if that assignment was already recycled (and the
-        expert possibly re-assigned or even published by a newer load),
-        nothing is touched. ``ticket=None`` keeps the administrative
-        behavior: drop whatever published or inflight state the expert has.
-        """
+        if self._prefetch_ring is None:
+            return None
+        return self._prefetch_ring.invalidate_prefetch(
+            self._layer_id, expert_id, ticket=ticket
+        )
 
-        expert = _integer("expert id", expert_id, minimum=0)
-        base = self.persistent_slots + self.transient_slots
-        if ticket is not None:
-            entry = self._prefetch_inflight.get(expert)
-            if entry is None or entry[1] != ticket:
-                return None
-            del self._prefetch_inflight[expert]
-            slot = entry[0]
-            if self._prefetch_slot_to_expert[slot - base] == expert:
-                self._prefetch_slot_to_expert[slot - base] = None
-            return slot
-        slot = self._prefetch_expert_to_slot.pop(expert, None)
-        if slot is None:
-            entry = self._prefetch_inflight.pop(expert, None)
-            slot = None if entry is None else entry[0]
-        if slot is not None:
-            if self._prefetch_slot_to_expert[slot - base] == expert:
-                self._prefetch_slot_to_expert[slot - base] = None
-        return slot
+    def consume_prefetch_wasted(self) -> int:
+        """Return and zero the shared ring's wasted-read count.
+
+        A wasted read is a committed ring entry recycled round-robin without
+        ever being consumed by a true route (a mispredicted one-layer-ahead
+        prediction). The count is ring-global (across layers); the runtime
+        drains it after each ``plan_prefetch`` under the layer lock. Failed
+        reads and reset are excluded -- only settled, never-hit commits count."""
+
+        if self._prefetch_ring is None:
+            return 0
+        return self._prefetch_ring.consume_wasted()
+
+    @property
+    def _prefetch_expert_to_slot(self) -> dict[int, int]:
+        """This layer's committed ring entries as ``{expert: slot}`` -- a read-only
+        per-layer projection of the shared ring (keyed globally by (layer,
+        expert)), matching the pre-W93 per-layer dict for introspection/tests."""
+
+        if self._prefetch_ring is None:
+            return {}
+        layer = self._layer_id
+        return {
+            expert: slot
+            for (ring_layer, expert), slot in self._prefetch_ring._key_to_slot.items()
+            if ring_layer == layer
+        }
+
+    @property
+    def _prefetch_inflight(self) -> dict[int, tuple[int, int]]:
+        """This layer's inflight ring assignments as ``{expert: (slot, ticket)}``
+        -- the read-only per-layer projection of the shared ring."""
+
+        if self._prefetch_ring is None:
+            return {}
+        layer = self._layer_id
+        return {
+            expert: entry
+            for (ring_layer, expert), entry in self._prefetch_ring._inflight.items()
+            if ring_layer == layer
+        }
 
     def prepare_prefill_seed(self, expert_ids: Iterable[int]) -> tuple[int, ...]:
         """Choose prompt-frequent experts for empty slots without eviction."""
@@ -741,15 +904,27 @@ class LayerExpertSlotBank:
             self._decode_epoch += 1
             for expert in experts:
                 self._touch_decode(expert)
+            # W93: advance this layer's epoch in the shared ring so its reeviction
+            # embargo tracks the layer's own decode cadence.
+            if self._prefetch_ring is not None:
+                self._prefetch_ring.note_decode(self._layer_id)
 
         hit_set = {
             expert for expert in unique_experts if expert in self._expert_to_slot
         }
-        prefetch_hits = {
-            expert
-            for expert in unique_experts
-            if expert not in hit_set and expert in self._prefetch_expert_to_slot
-        }
+        # W93: committed shared-ring entries for THIS layer that the true route
+        # needs resolve as hits reading the ring slot in place (no re-read, no
+        # copy). The ring is keyed by (layer, expert), so this bank sees only its
+        # own layer's commits.
+        ring_published: dict[int, int] = (
+            self._prefetch_ring.published(
+                self._layer_id,
+                [expert for expert in unique_experts if expert not in hit_set],
+            )
+            if self._prefetch_ring is not None
+            else {}
+        )
+        prefetch_hits = set(ring_published)
         miss_order = [
             expert
             for expert in unique_experts
@@ -759,7 +934,11 @@ class LayerExpertSlotBank:
             expert: self._expert_to_slot[expert] for expert in hit_set
         }
         for expert in prefetch_hits:
-            resolved[expert] = self._prefetch_expert_to_slot[expert]
+            resolved[expert] = ring_published[expert]
+        # Mark these ring commits consumed, so a later round-robin eviction is not
+        # miscounted as wasted.
+        if prefetch_hits and self._prefetch_ring is not None:
+            self._prefetch_ring.mark_used(self._layer_id, prefetch_hits)
         hit_set |= prefetch_hits
         loads: list[SlotLoad] = []
         evictions: list[SlotEviction] = []
@@ -821,6 +1000,7 @@ class LayerExpertSlotBank:
             misses=tuple(miss_order),
             loads=tuple(loads),
             evictions=tuple(evictions),
+            prefetch_hits=tuple(prefetch_hits),
         )
 
     def plan_transaction(

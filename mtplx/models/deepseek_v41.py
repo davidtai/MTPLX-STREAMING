@@ -80,7 +80,7 @@ from mtplx.models.deepseek_v41_cache import (
     _grow,
     make_cache as _make_cache,
 )
-from mtplx.models.deepseek_v41_moe import MoE
+from mtplx.models.deepseek_v41_moe import MoE, gate_predict_topk
 from mtplx.models import deepseek_v41_stage_timing as _stime
 
 # Opt-in per-stage attribution (MTPLX_ROUTE_STAGE_PROBE=1). When disabled the only
@@ -2056,6 +2056,102 @@ def _hc_use_compile(x: mx.array) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# W93 gate-oracle one-layer-ahead expert prefetch (docs/deepseek-v41/W93_GATE_PREFETCH.md)
+# ---------------------------------------------------------------------------
+#: Prefetch width k (10/12); 0 / unset disables. During layer L-1's decode
+#: forward, layer L's OWN router is applied to the residual entering L-1 (W89's
+#: `b'` predictor, missRed@10 0.736) and its top-k experts are speculatively read
+#: for layer L. Read at use (env-flags-read-at-use-not-import), like the other
+#: DSV4.1 decode levers.
+_GATE_PREFETCH_ENV = "MTPLX_DSV41_GATE_PREFETCH"
+#: Skip prefetching target layers below this index (W89: the first ~4 layers turn
+#: over fastest and are the oracle floor, missRed<0.5). Default 4.
+_GATE_PREFETCH_MIN_LAYER_ENV = "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER"
+_GATE_PREFETCH_MIN_LAYER_DEFAULT = 4
+
+
+def _resolve_gate_prefetch_k(raw=None) -> int:
+    """Prefetch width ``k`` (0 = off). A non-positive or unparsable value is off."""
+    if raw is None:
+        raw = os.environ.get(_GATE_PREFETCH_ENV)
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _resolve_gate_prefetch_min_layer(raw=None) -> int:
+    if raw is None:
+        raw = os.environ.get(_GATE_PREFETCH_MIN_LAYER_ENV)
+    if not raw:
+        return _GATE_PREFETCH_MIN_LAYER_DEFAULT
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return _GATE_PREFETCH_MIN_LAYER_DEFAULT
+
+
+class _GatePrefetchLink:
+    """Plain (non-Module) holder for the NEXT routed layer's gate, so binding it
+    on a :class:`MoE` does not re-register the sibling gate's parameters under a
+    second path in the module tree (``nn.Module.__setattr__`` registers
+    array/dict/list/tuple/Module values as children; a plain ``__slots__`` object
+    rides outside the tree -- mirrors ``lookahead_prefetch.LookaheadRouters``)."""
+
+    __slots__ = ("next_layer", "next_gate")
+
+    def __init__(self, next_layer: int, next_gate) -> None:
+        self.next_layer = int(next_layer)
+        self.next_gate = next_gate
+
+
+def install_gate_prefetch_links(model, runtime) -> int:
+    """Wire each routed layer's MoE to the NEXT eligible routed layer's gate, so
+    ``DecoderLayer.__call__`` can predict that next layer's route a layer ahead.
+
+    Idempotent and DSV4.1-specific: a layer is linked only when its target
+    ``L = prev+1`` is a routed streamed layer with a DSV4.1 :class:`~mtplx.models.
+    deepseek_v41_moe.Gate`, ``L >= MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER`` (W89's
+    early floor) and ``L`` is not the last routed layer (skipped per the brief).
+    Non-DSV4.1 models (hy3/glm share ``bind_streamed_switches``) carry no such
+    gate and are left untouched. Returns the number of links installed. Safe to
+    call with the flag off -- the links are inert until the flag arms the ring;
+    the eligibility bakes the layer skip in so the hot path never re-checks it."""
+
+    layers = getattr(getattr(model, "model", None), "layers", None)
+    if layers is None:
+        layers = getattr(model, "layers", None)
+    if layers is None:
+        return 0
+    routed = tuple(getattr(runtime.spec, "routed_layer_indices", ()))
+    if len(routed) < 2:
+        return 0
+    last_routed = routed[-1]
+    min_layer = _resolve_gate_prefetch_min_layer()
+    installed = 0
+    for prev, nxt in zip(routed[:-1], routed[1:]):
+        # one layer ahead only: prev's residual predicts the immediately
+        # following routed layer.
+        if nxt != prev + 1:
+            continue
+        if nxt < min_layer or nxt == last_routed:
+            continue
+        prev_mlp = getattr(layers[prev], "mlp", None)
+        nxt_mlp = getattr(layers[nxt], "mlp", None)
+        if prev_mlp is None or nxt_mlp is None:
+            continue
+        next_gate = getattr(nxt_mlp, "gate", None)
+        # DSV4.1 gate only (the port's `_gate_prefix` scoring); other trunks skip.
+        if next_gate is None or not hasattr(next_gate, "score_func"):
+            continue
+        prev_mlp._mtplx_gate_prefetch_next = _GatePrefetchLink(nxt, next_gate)
+        installed += 1
+    return installed
+
+
+# ---------------------------------------------------------------------------
 # Decoder block (Hyper-Connections around attention + MoE)
 # ---------------------------------------------------------------------------
 class DecoderLayer(nn.Module):
@@ -2187,7 +2283,47 @@ class DecoderLayer(nn.Module):
             _st.add(out)
         return out
 
+    def _maybe_stash_gate_prefetch(self, h) -> None:
+        """W93: predict the NEXT routed layer's top-k route from ``h`` -- the
+        residual ENTERING this layer, BEFORE this layer's attention (W89's
+        `layer_in_{L-1}`) -- and stash the ids on this layer's streamed switch.
+        The switch evaluates them on its own ``mx.eval(indices)`` routing barrier
+        (no new host sync, W93_GATE_PREFETCH.md §3) and issues the speculative
+        reads for layer L. Inert unless the flag is armed, this is single-token AR
+        decode, and the bound switch has a runtime with a prefetch ring. Reads
+        only ``h`` and the (frozen) next gate weights, so it can never perturb
+        this layer's output (proven byte-identical on/off)."""
+        link = getattr(self.mlp, "_mtplx_gate_prefetch_next", None)
+        if link is None:
+            return
+        # single-token AR decode only: h is [B, T, hc_mult, dim]; T == 1.
+        if h.ndim != 4 or int(h.shape[1]) != 1:
+            return
+        switch = getattr(self.mlp, "switch_mlp", None)
+        runtime = getattr(switch, "runtime", None)
+        if runtime is None:
+            return
+        config = getattr(runtime, "config", None)
+        if config is None or getattr(config, "prefetch_slots", 0) <= 0:
+            return
+        k = _resolve_gate_prefetch_k()
+        if k <= 0:
+            return
+        # EXACTLY the collector's ``layer_in`` (scripts/deepseek_v41/collect_route
+        # _traces.py:175): mean over the hc copies with the f32 upcast BEFORE the
+        # mean, so the predicted route matches the W89 gate-oracle that measured
+        # missRed@10 0.736 on this tensor. (Casting after the mean would differ at
+        # the bf16 ULP on the real bf16 residual.)
+        collapsed = mx.mean(h.astype(mx.float32), axis=2)
+        predicted = gate_predict_topk(link.next_gate, collapsed, k)
+        # Stash for the switch's barrier to materialize + issue. NOT an ancestor
+        # of this layer's output, so it rides the switch's existing indices eval.
+        switch._mtplx_gate_prefetch_pending = (link.next_layer, predicted)
+
     def __call__(self, h, pre_mix, positions, layer_cache, shared):
+        # W93 gate-oracle prefetch: predict the next layer's route from the
+        # pre-attention residual, before attention consumes it. No-op unless armed.
+        self._maybe_stash_gate_prefetch(h)
         moe_input, carry, ffn_pre = self.attn_and_moe_input(
             h, pre_mix, positions, layer_cache, shared
         )

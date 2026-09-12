@@ -234,6 +234,8 @@ ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K35: shared sel
 # ~45% GPU-busy (gpu_usage_ratio), freq swinging 580-1381 MHz: the GPU DVFS-downclocks
 # in the gaps between B=1 bursts.  The decisive per-mode control is swa_only; see
 # docs/deepseek-v41/W90_ATTN_IN_SITU.md and the --utilization telemetry.
+GATE_PREFETCH_ENV = "MTPLX_DSV41_GATE_PREFETCH"  # W93: gate-oracle one-ahead prefetch width k
+GATE_PREFETCH_MIN_LAYER_ENV = "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER"  # W93: skip targets below this
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -282,6 +284,8 @@ ALL_LEVER_ENVS = (
     WINDOW_RING_HEADROOM_ENV,
     WINDOW_RING_MAXKV_ENV,
     ATTN_SHAPE_STABLE_ENV,
+    GATE_PREFETCH_ENV,
+    GATE_PREFETCH_MIN_LAYER_ENV,
 )
 
 
@@ -299,6 +303,8 @@ def _preset(
     window_ring_headroom=None, window_ring_maxkv=None,
     attn_shape_stable=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
+    gate_prefetch=None,
+    gate_prefetch_min_layer=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -351,6 +357,8 @@ def _preset(
         WINDOW_RING_HEADROOM_ENV: window_ring_headroom,
         WINDOW_RING_MAXKV_ENV: window_ring_maxkv,
         ATTN_SHAPE_STABLE_ENV: attn_shape_stable,
+        GATE_PREFETCH_ENV: gate_prefetch,
+        GATE_PREFETCH_MIN_LAYER_ENV: gate_prefetch_min_layer,
     }
 
 
@@ -646,6 +654,29 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
+    ),
+    # W93: the gate-oracle one-layer-ahead prefetch in ISOLATION at k=10 (W89's
+    # b' predictor clears the 0.70 overlap threshold at width 10, missRed@10
+    # 0.736). During layer L-1's decode the residual entering L-1 is scored by
+    # layer L's own router and L's predicted top-10 experts stream from SSD into a
+    # bounded ring, so L's true-route misses are pre-warmed. BYTE-IDENTICAL to
+    # control: the MoE still gathers on the TRUE route (the prediction only warms
+    # the cache; a mispredict wastes a read), and the prediction rides L-1's
+    # existing indices barrier (no new host sync). The gate_prefetch receipt block
+    # reads the hit rate. Sizes the ring (prefetch_slots=10) via the loader flag.
+    "gate_prefetch": _preset(gate_prefetch="10"),
+    # W93: cell16k_ring + the gate-oracle prefetch at k=10 -- the standard 16K cell
+    # (ring + measured decode/prefill stack) with one-layer-ahead expert prefetch
+    # stacked on. The direct A/B against cell16k_ring that isolates how much of the
+    # ~19% AR I/O the one-ahead prefetch hides. Byte-identical to cell16k_ring
+    # (same lossy class -- head=bf16 + dense/lean prefill reassoc; the prefetch
+    # adds NO new lossiness), so the byte-identity summary must show it matching
+    # cell16k_ring's class.
+    "cell16k_ring_prefetch": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        gate_prefetch="10",
     ),
 }
 

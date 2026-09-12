@@ -3212,6 +3212,9 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_WINDOW_RING_HEADROOM",
     "MTPLX_DSV41_WINDOW_RING_MAXKV",
     "MTPLX_DSV41_ATTN_SHAPE_STABLE",
+    # W93: gate-oracle one-layer-ahead expert prefetch (width k + target floor).
+    "MTPLX_DSV41_GATE_PREFETCH",
+    "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER",
 )
 
 

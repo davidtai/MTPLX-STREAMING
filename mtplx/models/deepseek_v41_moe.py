@@ -117,6 +117,41 @@ def _gate_prefix(gate):
     return _compiled(key, lambda: (lambda x, weight, bias: _gate_prefix_impl(x, weight, bias, temp, sf)))
 
 
+def gate_predict_topk(gate: "Gate", x: mx.array, k: int) -> mx.array:
+    """W93 gate-oracle prefetch prediction: the SET of the top-``k`` expert ids
+    layer L's router assigns to input ``x``, using the port's EXACT routing
+    transform.
+
+    This is the shipped :meth:`Gate.__call__` scoring (model.py L810-822 via
+    :func:`_gate_prefix_impl`: score GEMM / gate_temp, ``sqrtsoftplus``, +
+    ``e_score_correction_bias``) truncated to the top ``k`` of ``(scores +
+    bias)``.  ``k`` is the prefetch width (10/12), WIDER than the gate's shipped
+    top-6; prefetch needs the SET, not ``torch.topk``'s descending order or the
+    routing weights, so the ``argsort`` and weight gather that :meth:`Gate.
+    __call__` performs (L823-824) are deliberately dropped.  A pure read of ``x``
+    and the (frozen) gate weights: it has no side effect and is never an ancestor
+    of the layer's own output, so evaluating it can only warm the expert cache,
+    never change a logit (W93_GATE_PREFETCH.md §2).
+
+    Returns ``[n, k]`` int32.  Eager on purpose (no ``mx.compile`` dispatch): at
+    decode row counts the compiled prefix is byte-identical to this eager body
+    (K22), and the prediction's exactness never matters -- only which reads it
+    issues.
+    """
+    xf = x.reshape(-1, gate.dim)
+    _scores, biased = _gate_prefix_impl(
+        xf,
+        gate.weight,
+        gate.e_score_correction_bias,
+        float(gate.gate_temp),
+        str(gate.score_func),
+    )
+    width = int(biased.shape[-1])
+    k = max(1, min(int(k), width))
+    part = mx.argpartition(-biased, kth=k - 1, axis=-1)[..., :k]
+    return part.astype(mx.int32)
+
+
 def _moe_combine_impl(routed, weights, shared):
     """The MoE combine: weighted routed sum (f32 accumulator) + shared add.
     Byte-identical to the eager ``(routed*weights).sum(-2) + shared``."""
