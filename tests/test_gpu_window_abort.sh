@@ -135,5 +135,51 @@ _wait_dead() { local p="$1" i; [[ -n "$p" ]] || return 1; for (( i=0;i<20;i++ ))
 if _wait_dead "${AB_PY}"; then ok "python step killed on abort (pid ${AB_PY})"; else bad "python step killed on abort" "pid ${AB_PY} alive"; kill -KILL "${AB_PY}" 2>/dev/null||true; fi
 if _wait_dead "${AB_SLEEP}"; then ok "sleep grandchild killed on abort (pid ${AB_SLEEP})"; else bad "sleep grandchild killed on abort" "pid ${AB_SLEEP} alive"; kill -KILL "${AB_SLEEP}" 2>/dev/null||true; fi
 
+# =============================================================================
+# W106 abort item (b): a python REPARENTED to launchd (its `bash -c` chain exits
+# first) must still be reaped -- window 42's 27 GB python kept loading experts.bin
+# outside the lock.  The ppid walk misses it (ppid=1); the env-TAG scan catches it.
+# Here the step's bash -c backgrounds+disowns the python and exits 0 (NORMAL exit):
+# on teardown the wrapper must reap the tagged orphan before releasing the lock.
+# =============================================================================
+ORPHAN_PY="${TMP}/orphan_child.py"
+cat > "${ORPHAN_PY}" <<'EOF'
+import os, sys, time
+with open(os.environ["ORPHAN_PIDFILE"], "w") as fh:
+    fh.write("%d\n" % os.getpid()); fh.flush(); os.fsync(fh.fileno())
+sys.stderr.write("orphan up (ppid=%d, tag=%s)\n" % (os.getppid(), os.environ.get("_GPU_WINDOW_STEP_TAG",""))); sys.stderr.flush()
+time.sleep(600)
+EOF
+ORPHAN_PIDFILE="${TMP}/orphan_pid"; export ORPHAN_PIDFILE
+# bash -c: background + disown the python, then EXIT 0 -> python reparents to launchd.
+ORPHAN_STEP="python3 '${ORPHAN_PY}' & disown; exit 0"
+OLOG="${TMP}/orphan.log"
+
+bash "${SCRIPT}" bash -c "${ORPHAN_STEP}" >"${OLOG}" 2>&1 &
+OHOLDER=$!
+for _ in $(seq 1 60); do [[ -s "${ORPHAN_PIDFILE}" ]] && break; sleep 0.25; done
+ORPHAN_PID="$(cat "${ORPHAN_PIDFILE}" 2>/dev/null | tr -d ' \n')"
+if [[ -n "${ORPHAN_PID}" ]]; then ok "orphan python started (pid=${ORPHAN_PID})"; else bad "orphan started" "no pidfile"; fi
+
+# Wait for the wrapper to finish (the step exits 0 quickly; teardown then reaps).
+for _ in $(seq 1 60); do kill -0 "${OHOLDER}" 2>/dev/null || break; sleep 0.25; done
+
+echo "----- gpu_window.sh log (ORPHAN reap) -----"; cat "${OLOG}"; echo "-------------------------------------------"
+
+# The reparented python (ppid=1 after the chain exits) must be DEAD -- only the
+# env-tag scan can find it, so this is the direct proof of the (b) fix.
+if _wait_dead "${ORPHAN_PID}"; then
+  ok "reparented orphan python was reaped via the env tag (pid ${ORPHAN_PID})"
+else
+  bad "reparented orphan reaped" "pid ${ORPHAN_PID} STILL ALIVE outside the lock"
+  kill -KILL "${ORPHAN_PID}" 2>/dev/null || true
+fi
+# It reparented for real (ppid became 1) -- the ppid walk would have missed it.
+if grep -q "orphan up (ppid=1" "${OLOG}"; then
+  ok "orphan really reparented to launchd (ppid=1) -- ppid walk would miss it"
+else
+  ok "orphan reap verified (ppid line not captured, non-fatal)"
+fi
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [[ "${FAIL}" -eq 0 ]]

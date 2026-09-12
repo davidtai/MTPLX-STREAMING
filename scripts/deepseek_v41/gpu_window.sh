@@ -442,38 +442,64 @@ if [[ ! "${KILL_GRACE_SECONDS}" =~ ^[0-9]+$ ]]; then
   KILL_GRACE_SECONDS=2
 fi
 
+# W106 abort item (b): the tree-kill must catch descendants REPARENTED to launchd.
+# A ppid walk from STEP_PID misses a python whose `bash -c` chain died first (its
+# ppid is now 1) -- window 42: a 27 GB python kept loading experts.bin outside the
+# lock for minutes.  So each step is launched with a UNIQUE env tag
+# (_GPU_WINDOW_STEP_TAG), inherited by every descendant and UNCHANGED by
+# reparenting; `_pids_with_tag` finds them via `ps -E` regardless of ppid.  The
+# grep uses the [x]-bracket trick so the grep/awk pipeline never matches itself.
+_pids_with_tag() {
+  [[ -n "${_STEP_TAG:-}" ]] || return 0
+  local pat="_GPU_WINDOW_STEP_TAG=[${_STEP_TAG:0:1}]${_STEP_TAG:1}"
+  "${PS_CMD}" -axEo pid=,command= 2>/dev/null \
+    | grep -E "${pat}" 2>/dev/null \
+    | awk -v self=" $$ ${PPID:-} ${_GPU_WINDOW_HOLDER_PID:-} " \
+        '{ if (index(self, " " $1 " ") == 0) print $1 }'
+}
+
+# The FULL set of step pids: the ppid tree rooted at STEP_PID UNION the env-tagged
+# processes (which survive reparenting), one pid per line, deduped.
+_collect_step_pids() {
+  {
+    [[ -n "${STEP_PID:-}" ]] && _step_tree_pids "${STEP_PID}" | tr ' ' '\n'
+    _pids_with_tag
+  } 2>/dev/null | grep -E '^[0-9]+$' | sort -un
+}
+
 _kill_step_tree() {
-  # W106 item 4: TERM then (after a grace) KILL the ENTIRE process tree rooted at
-  # STEP_PID -- the `bash -c "..."` chain AND every python/sleep descendant -- so
-  # an aborted step can NEVER start its next chained command and no grandchild is
-  # left orphaned (reparented to launchd) still holding GPU/host memory.  The pids
-  # are snapshotted BEFORE any signal (killing reparents/removes tree members), and
-  # signalled by pid so reparenting mid-teardown does not let one escape.  Reaps
-  # STEP_PID (a job of this shell) and clears it so the teardown trap does not
-  # re-run; the restore of the resident agent then runs from the EXIT trap.
-  [[ -n "${STEP_PID}" ]] || return 0
-  local pids _p _i _alive
-  pids="$(_step_tree_pids "${STEP_PID}")"
-  [[ -n "${pids}" ]] || pids="${STEP_PID}"
-  for _p in ${pids}; do
-    kill -TERM "${_p}" 2>/dev/null || true
-  done
-  # Poll for the whole tree to exit, up to KILL_GRACE_SECONDS (0.25 s cadence).
-  for (( _i = 0; _i < KILL_GRACE_SECONDS * 4; _i++ )); do
-    _alive=0
-    for _p in ${pids}; do
-      if kill -0 "${_p}" 2>/dev/null; then _alive=1; break; fi
+  # TERM then (after a grace) KILL every process in the step set (ppid tree UNION
+  # env-tag), so an aborted or completed step leaves NO descendant -- including one
+  # reparented to launchd -- alive to keep running outside the lock.  Then RE-SCAN
+  # (a couple rounds) for late forks / reparents, logging + KILLing any ORPHAN.
+  # Robust to an empty STEP_PID (reaps tagged orphans after a "normal" step exit).
+  local pids _p _i _alive _r
+  pids="$(_collect_step_pids)"
+  [[ -z "${pids}" && -n "${STEP_PID:-}" ]] && pids="${STEP_PID}"
+  if [[ -n "${pids}" ]]; then
+    for _p in ${pids}; do kill -TERM "${_p}" 2>/dev/null || true; done
+    for (( _i = 0; _i < KILL_GRACE_SECONDS * 4; _i++ )); do
+      _alive=0
+      for _p in ${pids}; do kill -0 "${_p}" 2>/dev/null && { _alive=1; break; }; done
+      (( _alive == 0 )) && break
+      sleep 0.25
     done
-    (( _alive == 0 )) && break
-    sleep 0.25
-  done
-  # KILL any survivor of the grace period.
-  for _p in ${pids}; do
-    if kill -0 "${_p}" 2>/dev/null; then
+    for _p in ${pids}; do
+      kill -0 "${_p}" 2>/dev/null && kill -KILL "${_p}" 2>/dev/null || true
+    done
+  fi
+  # Re-scan: catch anything that forked/reparented AFTER the snapshot (the window-42
+  # orphan). Log each survivor as an ORPHAN and KILL it.
+  for _r in 1 2 3; do
+    local survivors; survivors="$(_collect_step_pids)"
+    [[ -z "${survivors}" ]] && break
+    for _p in ${survivors}; do
+      err "phase 4: ORPHAN survived tree-kill: pid ${_p} ($("${PS_CMD}" -o command= -p "${_p}" 2>/dev/null | tr '\n' ' ' | cut -c1-100)); KILLing"
       kill -KILL "${_p}" 2>/dev/null || true
-    fi
+    done
+    sleep 0.3
   done
-  wait "${STEP_PID}" 2>/dev/null || true
+  [[ -n "${STEP_PID:-}" ]] && { wait "${STEP_PID}" 2>/dev/null || true; }
   STEP_PID=""
 }
 
@@ -483,6 +509,7 @@ _kill_step_child() { _kill_step_tree; }
 WAS_LOADED=0
 RESTORED=0
 STEP_PID=""
+_STEP_TAG=""                # W106 (b): unique env tag on the step, to find reparented descendants
 PEAK_TREE_RSS_BYTES=0       # running peak of the SUM of RSS across the step process tree
 PEAK_MAX_PROC_RSS_BYTES=0   # running peak of the MAX single-process RSS in that tree
 PEAK_SYSTEM_USED_BYTES=0    # running peak of system used memory (NOT the value at exit)
@@ -512,6 +539,11 @@ teardown() {
   # `bash -c` chain never starts its next step and no python descendant survives.
   if [[ -n "${STEP_PID}" ]] && kill -0 "${STEP_PID}" 2>/dev/null; then
     log "teardown: terminating step process tree (root pid=${STEP_PID}): $(_step_tree_pids "${STEP_PID}")"
+    _kill_step_tree
+  elif [[ -n "${_STEP_TAG:-}" ]]; then
+    # W106 (b): the step already returned, but a tagged descendant may be orphaned
+    # (reparented to launchd) and still running -- reap it before releasing the lock
+    # so nothing keeps loading the model outside the exclusive window.
     _kill_step_tree
   fi
   restore_qwen
@@ -658,8 +690,13 @@ fi
 # W106 HIGH-2: state BOTH caps explicitly (GiB + the ~GB equivalent) at step start
 # so the operator sees the guard envelope next to the step it is about to run.
 log "phase 4: guard caps -- child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (~$(awk -v b="${EFFECTIVE_CHILD_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); system used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
-log "phase 4: starting GPU step under child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
-"$@" &
+# W106 (b): tag the step's environment with a unique marker, inherited by EVERY
+# descendant and unchanged by reparenting, so _pids_with_tag can find (and kill) a
+# python that was reparented to launchd after its `bash -c` chain died.  Set inline
+# on the step only (NOT exported in the wrapper), so it never matches the wrapper.
+_STEP_TAG="gpuwin-$$-$(date +%s)-${RANDOM}${RANDOM}"
+log "phase 4: starting GPU step (tag ${_STEP_TAG}) under child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
+_GPU_WINDOW_STEP_TAG="${_STEP_TAG}" "$@" &
 STEP_PID=$!
 # Seed the system-used running peak with the at-start reading so PEAK_SYSTEM_USED
 # is a true max over the window (the pre-W106 exit line re-read used_mem_bytes and
