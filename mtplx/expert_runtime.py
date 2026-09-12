@@ -4788,16 +4788,25 @@ class ExpertStreamingRuntime:
         # import keeps this low-level module free of the deepseek_v41 import cycle
         # (see the single_slot_pool note in ``open``); a resolver failure falls back
         # to the v2 defaults rather than dropping the receipt.
+        # W95g (review LOW-1): also resolve the DSpark verify-phase prefetch gate so
+        # the receipt stamps whether the verify speculates and its row bound -- a
+        # self-describing receipt (the verify shares the AR width/margin and the
+        # speculative-byte throttle, stamped in ``verify_prefetch`` below).
         try:
             from mtplx.models.deepseek_v41 import (
                 _resolve_gate_prefetch_k,
                 _resolve_gate_prefetch_margin,
+                _runner_v2_enabled,
+                _RUNNER_V2_VERIFY_MAX_ROWS,
             )
 
             _k_resolved = int(_resolve_gate_prefetch_k())
             _margin_resolved = float(_resolve_gate_prefetch_margin())
+            _v2_on = bool(_runner_v2_enabled())
+            _verify_max_rows = int(_RUNNER_V2_VERIFY_MAX_ROWS)
         except Exception:
             _k_resolved, _margin_resolved = 6, -0.05
+            _v2_on, _verify_max_rows = True, 8
         # committed+awaited denominator: a settled ring read is counted in
         # prefetch_committed XOR prefetch_awaited_inflight (the demand-await publish
         # path), so their sum is the settled+published total and a prefetch hit rate
@@ -4845,6 +4854,29 @@ class ExpertStreamingRuntime:
             ),
             "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),
             "prefetch_calls": int(getattr(self, "_prefetch_calls", 0)),
+            # W95g (review LOW-1): the DSpark verify-phase prefetch gate, stamped so
+            # the receipt self-describes what the verify did. The verify predicts the
+            # per-row UNION of gate_L one layer ahead ONLY under v2, on a
+            # <= ``max_rows`` batch in the DECODE routing phase; it reuses the AR
+            # predict width (``k`` == prefetch_k) + confidence ``margin`` (==
+            # prefetch_margin) and shares the same speculative-byte throttle
+            # (``byte_budget`` / ``byte_floor_records`` == the runner-level keys
+            # above, by construction). ``enabled`` = the gate will speculate on a
+            # verify (v2 armed, width > 0, ring present).
+            "verify_prefetch": {
+                "enabled": bool(
+                    _v2_on
+                    and _k_resolved > 0
+                    and int(getattr(self.config, "prefetch_slots", 0)) > 0
+                ),
+                "max_rows": _verify_max_rows,
+                "k": _k_resolved,
+                "margin": _margin_resolved,
+                "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+                "byte_floor_records": int(
+                    getattr(self, "_prefetch_byte_floor_records", 0)
+                ),
+            },
             # SSD read (demand vs speculative split shows the drive contention).
             "expert_misses": _misses,
             "bytes_read": _bytes_read,

@@ -946,3 +946,63 @@ def test_v2_receipt_has_first_hit_stamps(tmp_path):
         assert "first_hit_rate" in ssc["gate_prefetch"]
     finally:
         rt.close()
+
+
+# ---------------------------------------------------------------------------
+# F. review LOW-1: verify-phase prefetch gate stamp (self-describing receipt)
+# ---------------------------------------------------------------------------
+def test_v2_receipt_stamps_verify_prefetch_gate(tmp_path):
+    """Review LOW-1: the runner receipt carries a ``verify_prefetch`` sub-block --
+    the DSpark verify-phase prefetch gate enabled/disabled, its row bound, and its
+    width / margin / speculative-byte-budget values -- so a receipt self-describes
+    what the verify speculated.  It reuses the AR width/margin and shares the AR
+    speculative-byte throttle, so those mirror the runner-level keys."""
+    from mtplx.serve_stream_counters import snapshot_stream_counters
+    from mtplx.models.deepseek_v41 import _RUNNER_V2_VERIFY_MAX_ROWS
+
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, resident_slots=2, transient=8, prefetch=6
+    )
+    try:
+        block = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        assert "verify_prefetch" in block, "runner block missing verify_prefetch"
+        vp = block["verify_prefetch"]
+        for key in (
+            "enabled", "max_rows", "k", "margin", "byte_budget",
+            "byte_floor_records",
+        ):
+            assert key in vp, f"verify_prefetch missing {key}"
+        # v2 armed + width>0 + ring present => the verify gate speculates.
+        assert vp["enabled"] is True
+        assert vp["max_rows"] == _RUNNER_V2_VERIFY_MAX_ROWS
+        # the verify reuses the AR width / margin and shares the byte throttle.
+        assert vp["k"] == block["prefetch_k"]
+        assert vp["margin"] == block["prefetch_margin"]
+        assert vp["byte_budget"] == block["byte_budget"]
+        assert vp["byte_floor_records"] == block["byte_floor_records"]
+
+        # the served daemon's stream-counter path carries it too.
+        ssc = snapshot_stream_counters(rt)
+        assert "verify_prefetch" in ssc["runner"]
+        assert ssc["runner"]["verify_prefetch"]["enabled"] is True
+    finally:
+        rt.close()
+
+
+def test_v2_verify_prefetch_disabled_when_width_zero(tmp_path):
+    """``verify_prefetch.enabled`` reflects the resolved gate: an explicit
+    ``MTPLX_DSV41_GATE_PREFETCH=0`` under v2 resolves width 0, so the verify gate
+    cannot speculate and the stamp reports disabled -- the receipt still describes
+    the (off) gate rather than omitting it."""
+    rt, spec = _open_runtime(
+        tmp_path, runner_v2=True, resident_slots=2, transient=8, prefetch=6
+    )
+    try:
+        os.environ["MTPLX_DSV41_GATE_PREFETCH"] = "0"   # explicit width 0 wins
+        block = rt.resource_telemetry_snapshot(mx_module=mx)["runner"]
+        vp = block["verify_prefetch"]
+        assert vp["k"] == 0
+        assert vp["enabled"] is False
+    finally:
+        os.environ.pop("MTPLX_DSV41_GATE_PREFETCH", None)
+        rt.close()

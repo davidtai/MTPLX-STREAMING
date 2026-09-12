@@ -583,6 +583,24 @@ record is re-counted.
 The `gate_prefetch` block reports `first_consumption_hits` / `first_hit_rate` per
 layer as well, and its `census` line prints `first_hit=<n> (rate <r>)`.
 
+#### 6.5.2 Definitions — verify-phase prefetch gate stamp (W95g, review LOW-1)
+
+The runner block carries a **`verify_prefetch`** sub-block so a receipt self-describes
+the DSpark verify-phase prefetch gate (the verify predicts the per-row UNION of the
+next layer's gate one layer ahead, `_maybe_stash_gate_prefetch`), defined once:
+
+- **`verify_prefetch.enabled`** — the gate will speculate on a verify: `v2` armed AND
+  predict width > 0 AND a ring is configured (`prefetch_slots > 0`).
+- **`verify_prefetch.max_rows`** — `_RUNNER_V2_VERIFY_MAX_ROWS`; the verify predicts
+  only on a DECODE-phase batch of at most this many rows (never a prefill of any T).
+- **`verify_prefetch.k`** / **`verify_prefetch.margin`** — the per-row predict width
+  and confidence-gate margin; equal to the AR `prefetch_k` / `prefetch_margin` by
+  construction (the verify reuses the resolved AR values).
+- **`verify_prefetch.byte_budget`** / **`verify_prefetch.byte_floor_records`** — the
+  verify shares the one speculative-byte throttle with the AR path, so these mirror
+  the runner-level `byte_budget` / `byte_floor_records`; stamped here so the verify
+  gate is fully described in one place.
+
 ### 6.6 Integration/sequencing note (must resolve before coding)
 
 The four W93 lanes (A/B/C/D) are committed on `a5e162ee5` — a **rewrite** of
@@ -667,3 +685,8 @@ compulsory bytes are the floor (§7).
   hits / prefetch_issued`, on both the runner and `gate_prefetch` receipt blocks (and
   per-layer). The existing `prefetch_hit_rate` / `prefetch_hit_on_true_route` keys are
   kept unchanged for continuity. Definitions in §6.5.1.
+- **LOW-1 (receipt not self-describing).** The runner receipt now stamps a
+  `verify_prefetch` sub-block — the verify-phase prefetch gate enabled/disabled, its
+  row bound, and its width/margin/byte-budget values — alongside the existing runner
+  counters, so a receipt fully describes what the verify speculated. Definitions in
+  §6.5.2.
