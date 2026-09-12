@@ -59,6 +59,13 @@ STANDARD_CELL16K_PROMPT_IDS = (
     "docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/"
     "prompt-ids-deepseek-v41.json"
 )
+# W113 LOW-a: the seed + expected PROMPT-ids sha the auto-default pins the standard
+# cell to (sha of json.dumps(ids) over the sweep/16384/20260829 entry) so a
+# swapped/edited file is refused rather than silently measured.
+STANDARD_CELL16K_PROMPT_SEED = 20260829
+STANDARD_CELL16K_PROMPT_SHA256 = (
+    "1a45b35bae742fae0e26d4f40ee0dc1093a2038e5b514460a4f02e9e56d74565"
+)
 
 # W106 item 3: derive the MLX plan limit from David's TOTAL box budget while
 # COMPENSATING for the non-Metal requirements (the box has a 110 GB hard ceiling
@@ -1720,8 +1727,11 @@ def _standard_cell16k_prompt_path() -> Path:
 
 
 def _cell16k_arm(name) -> bool:
-    """True for the standard-cell arms (names start ``cell16k_``)."""
-    return str(name).startswith("cell16k_")
+    """True for the standard-cell arms.  W113 LOW-c: the bare ``cell16k`` preset
+    (no trailing underscore) is a 16K-cell arm too, so match it as well as the
+    ``cell16k_*`` family."""
+    s = str(name)
+    return s == "cell16k" or s.startswith("cell16k_")
 
 
 _SPECIAL_IDS_CACHE: dict = {}
@@ -1789,6 +1799,21 @@ def _resolve_eos_id(args):
     return int(eid) if eid is not None else None
 
 
+def _require_eos_id_for_stop(stop_on_eos, eos_id) -> None:
+    """W113 MEDIUM-3: refuse ``--stop-on-eos`` when no EOS id could be resolved.
+
+    Without this the flag silently no-ops (nothing stops the decode) while the
+    receipt still stamps ``stop_on_eos: true`` -- a served-parity run that did not
+    behave like the served path.  Raised in ``_run_arm`` before the model load.
+    """
+    if stop_on_eos and eos_id is None:
+        raise SystemExit(
+            "[ab] --stop-on-eos needs an EOS id but none could be resolved from "
+            "the tokenizer files (tokenizer_config.json + tokenizer.json) under "
+            "--model; pass --eos-id <id> (DeepSeek-V4.1 EOS is id 1)."
+        )
+
+
 def _prompt_chat_templated(prompt_ids, special):
     """Best-effort: is ``prompt_ids`` chat-templated WITH a generation prompt?
 
@@ -1847,39 +1872,49 @@ def _prompt_provenance(args, prompt_ids, prompt_meta) -> dict:
     }
 
 
-def _eos_surfacing(generated_ids, eos_id, *, n=None) -> dict:
+def _eos_surfacing(generated_ids, eos_id) -> dict:
     """EOS surfacing over a generated id stream (W113).
 
     ``first_token_eos`` -- the FIRST generated token is EOS (a served path would
     then return an EMPTY answer).  ``eos_index`` -- the first position of the EOS
     id in the stream, or ``None``.  ``tokens_before_eos`` -- ``eos_index`` if
-    present, else the whole stream length.  ``answer_valid`` -- ``True`` when EOS
-    never appears OR appears past the halfway point (``eos_index > 0.5 * N``): the
-    model produced a substantial answer before stopping.  ``N`` is the number of
-    generated tokens recorded in the stream (defaults to ``len(generated_ids)``;
-    for the AR pass that is ``decode_tokens + 1`` -- the prefill argmax token plus
-    the decode loop).  All fields are ``None`` when ``eos_id`` is unknown.
+    present, else the whole stream length.  ``answer_valid`` -- ``not
+    first_token_eos``: the answer is non-empty iff the first token is not EOS.
+    This is CAP-INDEPENDENT -- it does not change whether --stop-on-eos truncated
+    the stream or the full fixed-step decode ran -- unlike the withdrawn
+    ``eos_index > 0.5*N`` rule, which flipped a correct SHORT answer (e.g. a valid
+    60-token answer) to invalid once --stop-on-eos shrank N.  ``answer_truncated``
+    -- ``eos_index is None``: the decode hit the token cap without the model
+    emitting EOS (the answer may be cut off).  ``post_eos_tokens_timed`` -- when
+    EOS is present, the number of FORCED post-EOS tokens that were still timed
+    (``n_generated - eos_index - 1``; the wasted filler a served path would never
+    produce -- 256 on the windows 39-42 raw prompt, whose EOS was at index 0);
+    ``0`` when EOS is absent.  All fields are ``None`` when ``eos_id`` is unknown.
     """
     ids = [int(t) for t in (generated_ids or [])]
     total = len(ids)
-    n_eff = int(n) if n is not None else total
     if eos_id is None:
         return {
             "first_token_eos": None,
             "eos_index": None,
             "tokens_before_eos": None,
             "answer_valid": None,
+            "answer_truncated": None,
+            "post_eos_tokens_timed": None,
             "eos_id": None,
             "n_generated": total,
         }
     eos_id = int(eos_id)
     eos_index = next((i for i, t in enumerate(ids) if t == eos_id), None)
+    first_token_eos = bool(ids and ids[0] == eos_id)
     return {
-        "first_token_eos": bool(ids and ids[0] == eos_id),
+        "first_token_eos": first_token_eos,
         "eos_index": eos_index,
         "tokens_before_eos": int(eos_index if eos_index is not None else total),
-        "answer_valid": bool(
-            eos_index is None or (n_eff > 0 and eos_index > 0.5 * n_eff)
+        "answer_valid": not first_token_eos,
+        "answer_truncated": eos_index is None,
+        "post_eos_tokens_timed": (
+            (total - eos_index - 1) if eos_index is not None else 0
         ),
         "eos_id": eos_id,
         "n_generated": total,
@@ -1894,6 +1929,42 @@ def _warn_if_first_token_eos(arm, lane, surf) -> None:
             "would be EMPTY on a served path " + "!" * 8
             + f" (arm {arm!r}, {lane})",
             flush=True,
+        )
+
+
+def _verify_standard_cell_prompt(path) -> None:
+    """W113 LOW-a: pin the auto-defaulted standard cell to its expected prompt sha.
+
+    Selects the ``(cell=sweep, target_tokens=16384, seed=STANDARD_CELL16K_PROMPT_
+    SEED)`` entry and refuses (``SystemExit``) if the sha of its prompt ids does
+    not match ``STANDARD_CELL16K_PROMPT_SHA256`` -- so a swapped/edited standard
+    file is caught before it is silently measured.  Only the auto-defaulted file is
+    pinned; an explicit --prompt-ids-file is the operator's own choice.
+    """
+    try:
+        data = json.loads(Path(path).read_text())
+        entry = next(
+            e
+            for e in (data.get("prompts") or [])
+            if str(e.get("cell")) == "sweep"
+            and int(e.get("target_tokens") or 0) == 16384
+            and e.get("seed") == STANDARD_CELL16K_PROMPT_SEED
+        )
+        ids = [int(t) for t in entry["token_ids"]]
+    except (StopIteration, KeyError, ValueError, TypeError,
+            json.JSONDecodeError, OSError) as exc:
+        raise SystemExit(
+            f"[ab] W113: cannot verify the standard cell file {path} "
+            f"(cell=sweep, target_tokens=16384, seed={STANDARD_CELL16K_PROMPT_SEED}"
+            f"): {exc!r}. Pass --prompt-ids-file explicitly or --allow-raw-prompt."
+        )
+    sha = hashlib.sha256(json.dumps(ids).encode("utf-8")).hexdigest()
+    if sha != STANDARD_CELL16K_PROMPT_SHA256:
+        raise SystemExit(
+            f"[ab] W113: the standard cell file {path} prompt-ids sha {sha} does "
+            f"NOT match the pinned {STANDARD_CELL16K_PROMPT_SHA256} -- the file was "
+            "edited/swapped. Pass --prompt-ids-file explicitly (if intended) or "
+            "--allow-raw-prompt."
         )
 
 
@@ -1931,10 +2002,16 @@ def _apply_cell_prompt_guard(args) -> None:
         return
     std = _standard_cell16k_prompt_path()
     if ctx16k and std.exists():
+        # W113 LOW-a: pin the file to its expected prompt sha (refuse on mismatch),
+        # then stamp the seed so the receipt's prompt_seed is not left null.
+        _verify_standard_cell_prompt(std)
         args.prompt_ids_file = str(std)
+        if getattr(args, "prompt_seed", None) is None:
+            args.prompt_seed = STANDARD_CELL16K_PROMPT_SEED
         print(
             f"[ab] W113: defaulted --prompt-ids-file to the standard 16K cell {std} "
-            "(pass --prompt-seed 20260829; --allow-raw-prompt for the raw builder)",
+            f"(--prompt-seed {args.prompt_seed}, prompt-ids sha pinned; "
+            "--allow-raw-prompt for the raw builder)",
             flush=True,
         )
         return
@@ -3506,7 +3583,11 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             pass_start=t0,
             decode_start=_sc.get("decode_start"),
             pass_end=time.perf_counter(),
-            generated_tokens=len(toks),
+            # W113 LOW-b: DECODE-only token count (exclude the prefill/first token)
+            # so dspark decode_tok_s uses the SAME denominator as the AR lane
+            # (decode_steps_run), instead of steps+1.  Also correct under
+            # --stop-on-eos, where len(toks) is the truncated stream.
+            generated_tokens=max(0, len(toks) - 1),
         )
         peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
     finally:
@@ -4000,6 +4081,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
     # receipt fields and the optional --stop-on-eos served-parity early stop.
     eos_id = _resolve_eos_id(args)
     stop_on_eos = bool(getattr(args, "stop_on_eos", False))
+    # W113 MEDIUM-3: --stop-on-eos with no resolvable EOS id must refuse (not
+    # silently no-op while stamping stop_on_eos:true).  Before the model load.
+    _require_eos_id_for_stop(stop_on_eos, eos_id)
     resident = _load_model(args, bench, mx)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime", None)
@@ -4376,7 +4460,15 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 model=model, ops=ops, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
                 cold_ids=ids,
+                # W113 MEDIUM-2: stop the warm pass at the same point as the cold
+                # pass so denominators match and token_ids_match holds.
+                stop_on_eos=stop_on_eos, eos_id=eos_id,
             )
+        # W113 MEDIUM-2: the --stage-timing and --syncs passes below deliberately
+        # IGNORE --stop-on-eos -- they run the full requested step count for a
+        # fenced per-stage / host-sync census whose absolute tok/s is discarded
+        # (not a headline rate), so an early stop would only shrink the census
+        # sample.  Only the headline AR/DSpark and warm passes honour --stop-on-eos.
         if getattr(args, "stage_timing", False):
             steps = (
                 int(args.stage_timing_steps)
@@ -4544,7 +4636,8 @@ def _tokenizer(args, bench):
     return load_tokenizer(Path(args.model))
 
 
-def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> dict:
+def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids,
+                      stop_on_eos=False, eos_id=None) -> dict:
     """Second prefill+decode of the SAME prompt in the same process.
 
     A fresh ``model.make_cache()`` resets the KV window and hands a fresh engram
@@ -4552,12 +4645,21 @@ def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> 
     the cold pass, so this pass bounds the no-miss decode ceiling.  Greedy decode
     is deterministic, so the warm token ids must match the cold pass -- recorded
     (``token_ids_match`` + both sha256), never asserted, so a mismatch is reported
-    instead of crashing the arm."""
+    instead of crashing the arm.
+
+    W113 MEDIUM-2: ``stop_on_eos`` / ``eos_id`` are threaded through so the warm
+    pass stops at the SAME point as the (also stopped) cold pass -- otherwise the
+    warm pass runs the full ``steps`` while the cold pass stopped early, mixing
+    denominators (warm_decode_tok_s over ``steps`` vs the cold rate over the tokens
+    it generated) and breaking ``token_ids_match``.  ``warm_decode_tok_s`` is over
+    the tokens ACTUALLY generated (``decode_steps_run``)."""
     run = _generate(
         model=model, ops=ops, mem_probe=mem_probe,
         prompt_ids=prompt_ids, steps=steps,
+        stop_on_eos=stop_on_eos, eos_id=eos_id,
     )
     warm_ids = run["generated"]
+    warm_generated = int(run.get("decode_steps_run", steps))
     cold = [int(t) for t in cold_ids]
     warm_sha = hashlib.sha256(json.dumps(warm_ids).encode()).hexdigest()
     cold_sha = hashlib.sha256(json.dumps(cold).encode()).hexdigest()
@@ -4567,8 +4669,10 @@ def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> 
         if run["ttft_s"] > 0
         else None,
         "warm_decode_wall_s": run["decode_wall_s"],
-        "warm_decode_tok_s": (steps / run["decode_wall_s"])
-        if run["decode_wall_s"] > 0
+        # W113: over the tokens actually generated (== steps unless --stop-on-eos).
+        "warm_decode_tokens_generated": warm_generated,
+        "warm_decode_tok_s": (warm_generated / run["decode_wall_s"])
+        if (run["decode_wall_s"] > 0 and warm_generated > 0)
         else None,
         "warm_peak_gb": run["peak_gb"],
         "warm_token_ids_sha256": warm_sha,

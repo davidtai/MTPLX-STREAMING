@@ -52,10 +52,16 @@ exercises the raw builder with the fake tokenizer on purpose, and stamps
 1. **Auto-default** `--prompt-ids-file` to the standard cell file when
    `--context-tokens 16384` and that file exists (path resolved **repo-root
    relative**: `docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/prompt-ids-deepseek-v41.json`).
-   Launchers get the standard cell without passing the path.
+   Launchers get the standard cell without passing the path. The auto-default also
+   stamps `--prompt-seed 20260829` (so the receipt's `prompt_seed` is not left
+   null) and **pins the prompt-ids sha** to
+   `1a45b35bae742fae0e26d4f40ee0dc1093a2038e5b514460a4f02e9e56d74565`, refusing if
+   the file was edited/swapped.
 2. **Refuse** (raise `SystemExit` with a clear error naming the standard file) any
-   `cell16k_*` arm, or any `--context-tokens 16384` run, that has no
+   `cell16k`/`cell16k_*` arm, or any `--context-tokens 16384` run, that has no
    `--prompt-ids-file` (and no auto-default available, e.g. the file is missing).
+   (The bare `cell16k` preset — no trailing underscore — is treated as a 16K-cell
+   arm too.)
 3. `--allow-raw-prompt` is the loud diagnostics **escape hatch**: it skips both the
    refusal and the auto-default, runs the raw builder, and stamps
    `prompt_source="raw-builder"` with a warning.
@@ -75,14 +81,27 @@ AR top level **and** in the `dspark` block:
   `[ab] !!! WARNING: first generated token is EOS -- answer would be EMPTY on a served path !!!`
 - `eos_index` — first position of the EOS id in the stream, or `null`.
 - `tokens_before_eos` — `eos_index`, or the whole stream length if EOS is absent.
-- `answer_valid` — `true` when EOS never appears **or** appears past the halfway
-  point (`eos_index > 0.5 * N`); the model produced a substantial answer before
-  stopping. **N** = the number of generated tokens recorded in the stream
-  (AR: `decode_tokens + 1` — the prefill argmax token plus the decode loop).
+- `answer_valid` — `not first_token_eos`: the answer is non-empty iff the first
+  token is not EOS. **Cap-independent** — it does not change whether `--stop-on-eos`
+  truncated the stream or the full fixed-step decode ran. (The earlier
+  `eos_index > 0.5·N` rule was withdrawn: it flipped a correct short answer to
+  invalid once `--stop-on-eos` shrank N.)
+- `answer_truncated` — `eos_index is null`: the decode hit the token cap without
+  the model emitting EOS (the answer may be cut off).
+- `post_eos_tokens_timed` — when EOS is present, the number of forced post-EOS
+  tokens that were still timed (`n_generated - eos_index - 1`; the wasted filler a
+  served path never produces — **256** on the windows 39–42 raw prompt, whose EOS
+  was at index 0); `0` when EOS is absent.
 - `eos_id`, `n_generated` — for auditability.
 
 This mirrors the `serve_bench_1k` W18 guard semantics (an EOS‑honouring server
 returns a blank answer when the first token is EOS).
+
+**DSpark decode rate denominator:** the DSpark headline `decode_tok_s` is computed
+over `len(toks) - 1` (decode-only, excluding the prefill/first token), matching the
+AR lane's `decode_steps_run`. Before W113 it divided by `steps + 1`, so the DSpark
+rate was on a different denominator than AR; it is also now correct under
+`--stop-on-eos` (where `toks` is the truncated stream).
 
 ## Flags
 
@@ -96,6 +115,18 @@ The EOS id is resolved from the tokenizer files (`tokenizer_config.json` +
 `tokenizer.json`'s `added_tokens`) — **no model load** — so it works even on the
 `--prompt-ids-file` path that skips the tokenizer. For this model, EOS = id 1,
 `<｜Assistant｜>` = 128804.
+
+`--stop-on-eos` with an **unresolvable** EOS id (empty/missing tokenizer files and
+no `--eos-id`) is refused in `_run_arm`
+(`SystemExit("--stop-on-eos needs an EOS id … pass --eos-id")`) rather than
+silently no-op'ing while stamping `stop_on_eos: true`.
+
+**Which passes honour `--stop-on-eos`:** the headline AR and DSpark passes and the
+`--warm-repeat` pass (its denominator is the tokens actually generated, and it
+stops at the same point as the cold pass so `token_ids_match` holds). The
+`--stage-timing` and `--syncs` passes deliberately **ignore** it — they run the
+full requested step count for a fenced per-stage / host-sync census whose absolute
+tok/s is discarded, so an early stop would only shrink the census sample.
 
 ## The exact window launcher line for the cell
 
