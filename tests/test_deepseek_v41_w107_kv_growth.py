@@ -561,3 +561,88 @@ def test_bounded_maxkv_falls_back_to_window_ring_maxkv(monkeypatch):
     assert C._kv_bounded_maxkv() == 96
     monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "77")   # explicit wins
     assert C._kv_bounded_maxkv() == 77
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH-1: DSpark trim/rollback must NOT reallocate the preallocated
+# compress/index lanes (length-only truncate, stable backing).
+# ---------------------------------------------------------------------------
+def _drive_verify_cycle(lc, cfg, k_plus_1):
+    """One DSpark-style verify block: append K+1 rows through window + compressor +
+    compress/index, advance."""
+    lc.append_window(_row(k_plus_1, cfg.head_dim))
+    p = lc.comp_state.push(_row(k_plus_1, cfg.head_dim), _row(k_plus_1, cfg.head_dim))
+    if p.shape[1] > 0:
+        lc.append_compress(_row(p.shape[1], cfg.head_dim))
+        lc.append_index_k(_row(p.shape[1], cfg.index_head_dim))
+    lc.advance(k_plus_1)
+
+
+def test_dspark_trim_no_realloc_compress_index(monkeypatch):
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=512)
+    C.reset_kv_bounded_stats()
+    lc = C.LayerAttentionCache(window_size=cfg.window_size, compress_ratio=2,
+                               is_kv_source=True)
+    # prefill 40 rows (fills the buffers once)
+    lc.append_window(_row(40, cfg.head_dim))
+    lc.comp_state.push(_row(40, cfg.head_dim), _row(40, cfg.head_dim))
+    lc.append_compress(_row(20, cfg.head_dim))
+    lc.append_index_k(_row(20, cfg.index_head_dim))
+    lc.advance(40)
+
+    s0 = C.kv_bounded_stats()
+    realloc_c0, realloc_i0 = s0["kv_realloc_compress"], s0["kv_realloc_index"]
+    alloc0 = s0["alloc_bytes"]
+    # backing capacity (shape) is the stable-buffer proxy: mx.slice_update returns a
+    # new mx.array WRAPPER each in-place write (functional API) even when it donates
+    # the same memory, so id() is not stable; a fresh mx.zeros (a realloc) would
+    # change the shape and bump kv_realloc_* / alloc_bytes -- those are the invariants.
+    shape_c0 = tuple(lc._compress_kv.raw_backing().shape)
+    shape_i0 = tuple(lc._index_k.raw_backing().shape)
+
+    # 8 rejected DSpark cycles: append K+1=4, then trim 2 (reject 2 of the block)
+    for _ in range(8):
+        _drive_verify_cycle(lc, cfg, k_plus_1=4)
+        lc.trim(2)
+
+    s1 = C.kv_bounded_stats()
+    assert s1["kv_realloc_compress"] == realloc_c0, (
+        f"compress reallocated over verify cycles "
+        f"({realloc_c0} -> {s1['kv_realloc_compress']})")
+    assert s1["kv_realloc_index"] == realloc_i0, (
+        f"index reallocated over verify cycles "
+        f"({realloc_i0} -> {s1['kv_realloc_index']})")
+    # the backing capacity is unchanged (length-only truncate, not a fresh set())
+    assert tuple(lc._compress_kv.raw_backing().shape) == shape_c0
+    assert tuple(lc._index_k.raw_backing().shape) == shape_i0
+    # alloc_bytes did not grow with the cycles (no fresh mx.zeros per reject)
+    assert s1["alloc_bytes"] == alloc0, (
+        f"alloc_bytes grew over verify cycles ({alloc0} -> {s1['alloc_bytes']})")
+
+
+def test_rollback_no_realloc_compress_index(monkeypatch):
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=512)
+    C.reset_kv_bounded_stats()
+    lc = C.LayerAttentionCache(window_size=cfg.window_size, compress_ratio=2,
+                               is_kv_source=True)
+    lc.append_window(_row(40, cfg.head_dim))
+    lc.comp_state.push(_row(40, cfg.head_dim), _row(40, cfg.head_dim))
+    lc.append_compress(_row(20, cfg.head_dim))
+    lc.append_index_k(_row(20, cfg.index_head_dim))
+    lc.advance(40)
+
+    realloc_c0 = C.kv_bounded_stats()["kv_realloc_compress"]
+    shape_c0 = tuple(lc._compress_kv.raw_backing().shape)
+
+    for _ in range(8):
+        m = lc.mark()
+        _drive_verify_cycle(lc, cfg, k_plus_1=4)
+        lc.rollback(m)
+
+    s1 = C.kv_bounded_stats()
+    assert s1["kv_realloc_compress"] == realloc_c0
+    assert tuple(lc._compress_kv.raw_backing().shape) == shape_c0
+    # rollback restored the exact pre-cycle group count
+    assert int(lc.compress_kv.shape[1]) == 20

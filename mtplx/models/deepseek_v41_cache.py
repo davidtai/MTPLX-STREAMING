@@ -1198,6 +1198,21 @@ class LayerAttentionCache:
             return lane
         return value
 
+    @staticmethod
+    def _lane_truncate(lane, n):
+        """Drop a compress/index lane back to ``n`` rows for trim/rollback.
+
+        W107 (review HIGH-1): a :class:`_GrowBuffer` lane truncates LENGTH-ONLY
+        (:meth:`_GrowBuffer.truncate_to`), keeping its preallocated buffer -- so a
+        rejected DSpark verify cycle does NOT reallocate the "preallocated" lane
+        (the old ``= _truncate(...)`` routed through the property setter ->
+        ``_GrowBuffer.set`` == fresh ``mx.zeros`` + full prefix copy every cycle).
+        A plain array lane still uses :func:`_truncate`."""
+        if isinstance(lane, _GrowBuffer):
+            lane.truncate_to(n)
+            return lane
+        return _truncate(lane, n)
+
     @property
     def window(self) -> Optional[mx.array]:
         return self._lane_get(self._window)
@@ -1340,8 +1355,9 @@ class LayerAttentionCache:
             self.window = _truncate(self.window, new_len)
         if self.is_kv_source and self.compress_ratio >= 1:
             groups = new_len // self.compress_ratio
-            self.compress_kv = _truncate(self.compress_kv, groups)
-            self.index_k = _truncate(self.index_k, groups)
+            # W107 (HIGH-1): length-only truncate for _GrowBuffer lanes (no realloc).
+            self._compress_kv = self._lane_truncate(self._compress_kv, groups)
+            self._index_k = self._lane_truncate(self._index_k, groups)
             if self.comp_state is not None:
                 self.comp_state.trim(n)
         if self.engram_state is not None:
@@ -1374,8 +1390,9 @@ class LayerAttentionCache:
             self._window.truncate_to_length(int(offset))
         else:
             self.window = _truncate(self.window, nw)
-        self.compress_kv = _truncate(self.compress_kv, nc)
-        self.index_k = _truncate(self.index_k, ni)
+        # W107 (HIGH-1): length-only truncate for _GrowBuffer lanes (no realloc).
+        self._compress_kv = self._lane_truncate(self._compress_kv, nc)
+        self._index_k = self._lane_truncate(self._index_k, ni)
         if self.comp_state is not None and comp_mark is not None:
             self.comp_state.rollback(comp_mark)
         self.offset = int(offset)
