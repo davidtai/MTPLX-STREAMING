@@ -294,3 +294,78 @@ index-source layers (full/reindex) still carry the irreducible indexer `Sort`/
   (2 matmuls survive, elementwise fuses); compile-cache bounded over 64 steps (no
   per-token retrace); greedy-argmax identical + labelled logit max\|Δ\| over 64
   decode steps on a tiny full model (rounding-class band).
+
+## 8. W99 — the casts and concats: trace, classify, lean (byte-identical)
+
+The §7 census shows the decode attention layer issues 15 (simple) / 25 (full) `AsType`
+kernels and 6 / 10 `Concatenate` kernels. W99 traced each on the T=1 decode path (tiny
+real-structure model, real dims, `WINDOW_RING` = the served backing) and classified them:
+(a) redundant, (b) load-bearing reference f32, (c) load-bearing kernel/index dtype.
+
+### 8.1 `AsType` (f32 casts) — trace + classification
+
+| source (helper) | count/layer | dtype | class | reason |
+|---|---:|---|---|---|
+| `_rmsnorm` (q-norm, kv-norm; ×2 calls) | ~4 | bf16→f32→bf16 | **(b)** | reference `RMSNorm` normalises in f32 (model.py L288-293); folds into the K22 qkv `Compiled` node |
+| `_apply_interleaved_rope` store (q, kv, o; ×3) | ~3 | f32→bf16 | **(b)** | reference `apply_rotary_emb` rotates in f32, stores at model dtype (L232-244); folds into the tapes |
+| `_cos_sin` `positions.astype(f32)` | 1 | int→f32 | **(b)** | angle math is f32 (positions differ per token — not hoistable) |
+| core `q.astype(f32)` | 1 | bf16→f32 | **(b)** | reference sparse-attn scores in f32 |
+| core `KVg.astype(f32)` (QK **and** PV) | 2 | bf16→f32 | **(a)** | **same array cast twice — compute once** |
+| core `attn_sink.astype(f32)` | 1 | f32→f32 reshape | **(a)** | per-layer constant re-cast every token — **cache per layer** |
+| `_o_lora_down` `o`/`w`.astype(f32) | ~2 | →f32 | **(b)** | the port's o-LoRA einsum is f32 (folds into the K22 out tape) |
+| `_window_selected_idx` `.astype(int32)` | 1 | →int32 | **(c)** | `mx.take` requires int index |
+| (also, not a graph primitive) `_cos_sin` `mx.array(np.asarray(inv_freq))` | — | numpy→device | **(a)** | per-token host→device **upload** of a per-layer constant — **lift once, cache** |
+
+### 8.2 `Concatenate` — trace + classification
+
+All 6 (simple) come from **RoPE**, ×3 calls (q, kv_new, o), 2 each: `_apply_interleaved_rope`'s
+`mx.stack([r0,r1])` (the complex-pair interleave) and `_rope_last`'s `concatenate([head, roped])`
+(re-joining the non-rope head to the rotated tail). Full adds 2 (`_sparse_attend_selected`'s
+window+compressed KVg/valid concat) + the indexer lanes. **All class (b)/structural**: the
+interleave is the rope layout; the head-rejoin is byte-identically removable only by roping the
+full head with an identity-padded (cos=1,sin=0) table, which costs 8× the rope elementwise and
+2 padding-concats to build — a net loss. The window+compressed concat is 1 op vs 2 einsums or 2
+slice-writes if split — also a loss.
+
+### 8.3 What W99 removes (byte-identical, `MTPLX_DSV41_ATTN_LEAN_CASTS`, default OFF)
+
+The three class-(a) items: the eager core's **double `KVg` f32 cast → one**, the **per-layer f32
+sink cached**, and the **per-token `inv_freq` numpy→device relift → lifted once and cached**.
+BYTE-IDENTICAL by construction (no fp math reordered) — tested bit-for-bit over 64 decode steps,
+eager AND compiled, and composing with the wo_a cache.
+
+### 8.4 Measured before/after (real dims, one decode `_attend`, K22 tapes on, WINDOW_RING)
+
+| mode | config | graph prims | non-view kernels | AsType | Concat |
+|---|---|---:|---:|---:|---:|
+| swa_only/reuse | K22 (baseline) | 162 | 69 | 15 | 6 |
+| swa_only/reuse | K22 + lean (byte-identical) | 160 | 67 | 13 | 6 |
+| swa_only/reuse | K22 + lean + core-compile (rounding-class) | 151 | 63 | 14 | 6 |
+| full | K22 (baseline) | 283 | 122 | 25 | 10 |
+| full | K22 + lean | 282 | 121 | 24 | 10 |
+
+### 8.5 Verdict — the targets are NOT reachable by cast/concat lean
+
+The ≤40 (byte-identical) and ≤25 (with K29) **per-layer** targets are **not achievable** by
+leaning casts/concats. The trace shows the honest reason: **~13 of the 15 casts are class-(b)
+reference f32** (rmsnorm, softmax, cos/sin, RoPE store, o-LoRA) and the **6 concats are
+structural RoPE** — none reducible byte-identically. Byte-identical lean removes only the 2
+class-(a) casts (KVg dedupe) + the per-token inv_freq upload (a host-encode, not a graph
+primitive), taking a simple layer 69 → 67 kernels. K29 collapses the ~13-kernel core to 1 (69 →
+~57), still short of 25. **The whole-layer count is dominated by the qkv/out projection chains
+(matmuls + f32 rmsnorm + RoPE interleave/rejoin) that none of these levers touch.** Reaching
+≤25/layer would require FUSED custom Metal kernels for qkv-prep (proj+rmsnorm+rope) and out-prep
+(rope+grouped-einsum+wo_b) — a single dispatch each — i.e. the K29 approach applied to the
+projection chains, a separate kernel-authoring program (not byte-identical, GPU-only). Recommend
+that as the next step; the exact-numerics ceiling here is ~55–67 kernels/layer.
+
+### 8.6 Arms + tests
+
+- Lever `MTPLX_DSV41_ATTN_LEAN_CASTS` (default OFF, **byte-identical**).
+- Arms: `attn_lean_casts` (isolation), `cell16k_ring_lean` (= cell16k_ring + wo_a cache +
+  lean casts — the byte-identical W97/W99 stack), `cell16k_ring_lean_k29` (+ K29, rounding-class),
+  and `cell16k_ring_wo_a_k29` (= cell16k_ring + wo_a cache + K29, the 1-dispatch core arm).
+- Tests: `tests/test_deepseek_v41_lean_casts_w99.py` — bit-for-bit identical logits + greedy ids
+  over 64 decode steps (eager + compiled); composes byte-identically with the wo_a cache; the
+  eager core issues fewer `AsType`; inv_freq/sink cached once. Arm assertions in
+  `tests/test_deepseek_v41_ab_env_levers.py`.

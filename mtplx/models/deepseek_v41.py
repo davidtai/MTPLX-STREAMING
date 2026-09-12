@@ -610,9 +610,12 @@ def _compress_inv_freq(args: ModelArgs) -> mx.array:
 def _cos_sin(inv_freq, positions: mx.array):
     """``cos``/``sin`` tables ``[len(positions), rope_head_dim//2]`` in fp32.
 
-    ``inv_freq`` is a numpy constant (kept off the parameter tree); it is lifted
-    to MLX here."""
-    freq = mx.array(np.asarray(inv_freq, dtype=np.float32))
+    ``inv_freq`` is a numpy constant (kept off the parameter tree), lifted to MLX
+    here -- or, under W99 lean casts, an already-lifted ``mx.array`` passed straight
+    through (the caller cached it once per layer, so the per-token numpy->device
+    upload is skipped; the values are identical, so cos/sin are byte-identical)."""
+    freq = inv_freq if isinstance(inv_freq, mx.array) \
+        else mx.array(np.asarray(inv_freq, dtype=np.float32))
     ang = positions.astype(mx.float32)[:, None] * freq[None, :]
     return mx.cos(ang), mx.sin(ang)
 
@@ -857,6 +860,28 @@ class Attention(nn.Module):
             self.inv_freq = np.asarray(_compress_inv_freq(args), dtype=np.float32)
         else:
             self.inv_freq = np.asarray(_swa_inv_freq(args), dtype=np.float32)
+        # W99 lean-casts: lazily-cached device lifts of the per-layer RoPE inv_freq
+        # and the f32 attention sink, so the hot path skips the per-token numpy->device
+        # relift / sink cast (byte-identical; see MTPLX_DSV41_ATTN_LEAN_CASTS).
+        self._inv_freq_mx_cache = None
+        self._attn_sink_f32_cache = None
+
+    def _lean_inv_freq(self):
+        """The layer's RoPE ``inv_freq`` lifted to a device ``mx.array`` ONCE and
+        cached (W99).  Same values as the per-token ``mx.array(np.asarray(...))`` in
+        :func:`_cos_sin`, so cos/sin are byte-identical."""
+        if self._inv_freq_mx_cache is None:
+            self._inv_freq_mx_cache = mx.array(np.asarray(self.inv_freq, dtype=np.float32))
+        return self._inv_freq_mx_cache
+
+    def _lean_sink_f32(self):
+        """The per-head value-0 attention sink cast to f32 ONCE and cached (W99) --
+        the same array ``self.attn_sink.astype(mx.float32)`` produces each token."""
+        sink = self._attn_sink_f32_cache
+        if sink is None or sink[0] is not self.attn_sink:
+            sink = (self.attn_sink, self.attn_sink.astype(mx.float32))
+            self._attn_sink_f32_cache = sink
+        return sink[1]
 
     def _sparse_attend(self, q, KV, attend):
         """One softmax over the concatenated KV with a per-head sink (value 0),
@@ -1185,15 +1210,22 @@ class Attention(nn.Module):
                 o = _attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, self.attn_sink)
                 _st.add(o)
             return o
+        # W99 lean casts (byte-identical): cast KVg to f32 ONCE (reused by QK^T and
+        # PV, which otherwise re-cast the same array) and use the per-layer cached f32
+        # sink instead of re-casting attn_sink every token.
+        lean = _resolve_attn_lean_casts()
+        KVg_f32 = KVg.astype(mx.float32) if lean else None
         with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
             scores = mx.einsum(
-                "bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)
+                "bshd,bskd->bshk", q.astype(mx.float32),
+                KVg_f32 if lean else KVg.astype(mx.float32),
             ) * scale                                       # [b,s,H,k]
             _st.add(scores)
         with _stime.stage_attn("attn." + mode + ".score.scale_mask_sink") as _st:
             scores = mx.where(valid[:, :, None, :], scores, float("-inf"))
             _st.add(scores)
-        sink = self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1)
+        sink = (self._lean_sink_f32() if lean
+                else self.attn_sink.astype(mx.float32)).reshape(1, 1, H, 1)
         with _stime.stage_attn("attn." + mode + ".score.softmax") as _st:
             # reference _k_sparse_attn L149-153: value-0 sink in the denominator,
             # a finite max floor so an all-invalid row yields all-zero (not NaN).
@@ -1202,7 +1234,9 @@ class Attention(nn.Module):
             denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
             _st.add(ex, denom)
         with _stime.stage_attn("attn." + mode + ".score.pv_matmul") as _st:
-            o = mx.einsum("bshk,bskd->bshd", ex, KVg.astype(mx.float32)) / denom
+            o = mx.einsum(
+                "bshk,bskd->bshd", ex, KVg_f32 if lean else KVg.astype(mx.float32)
+            ) / denom
             _st.add(o)
         return o
 
@@ -1352,7 +1386,10 @@ class Attention(nn.Module):
         b, s, _ = x.shape
         H, hd, rd = self.n_heads, self.head_dim, self.rope_head_dim
         mode = self.mode
-        qcos, qsin = _cos_sin(self.inv_freq, positions)
+        # W99 lean casts: pass the once-lifted device inv_freq (byte-identical cos/sin,
+        # skips the per-token numpy->device relift in _cos_sin).
+        _inv_freq = self._lean_inv_freq() if _resolve_attn_lean_casts() else self.inv_freq
+        qcos, qsin = _cos_sin(_inv_freq, positions)
 
         # K22 attention-chain compile: the pure projection/norm/rope prep that
         # produces (q, qr, kv_new) is one compiled tape at decode/verify row
@@ -2054,6 +2091,46 @@ def _resolve_attn_core_compile(raw=None) -> bool:
     raise ValueError(
         f"{_ATTN_CORE_COMPILE_ENV}={val!r} is not a boolean "
         "(1/true/on/yes or empty/0/off for the eager core)"
+    )
+
+
+# --- W99: lean the decode-attention casts (byte-identical redundant-cast removal) --
+#: The W97 dispatch census (docs/deepseek-v41/W97_ATTENTION_291MS.md §7) shows the
+#: decode attention layer issues 15-25 ``AsType`` (f32 cast) kernels; W99 traced each:
+#: almost all are LOAD-BEARING reference f32 (rmsnorm normalises in f32, the softmax
+#: core runs in f32, cos/sin are f32, the interleaved RoPE rotates in f32 then stores
+#: at the model dtype, the o-LoRA einsum is f32) -- removing those would change the
+#: numerics, so they stay.  Two are genuinely REDUNDANT and removed here, byte-
+#: identically:
+#:   * the eager selected-key core casts ``KVg`` to f32 TWICE (once for QK^T, once for
+#:     PV) -- compute it ONCE and reuse (same values -> same bytes); and the per-head
+#:     value-0 ``sink`` is re-cast to f32 every token -- cache the f32 vector per layer;
+#:   * ``_cos_sin`` re-lifts the layer's numpy ``inv_freq`` to a fresh device array
+#:     every token (a host->device upload on the hot path) -- lift it ONCE and cache
+#:     the ``mx.array`` per layer (same constant -> same cos/sin bytes).
+#: BYTE-IDENTICAL by construction (no fp math reordered): tested bit-for-bit over 64
+#: decode steps, eager AND compiled.  Composes with the wo_a cache (also byte-
+#: identical) as the byte-identical ``cell16k_ring_lean`` stack.  The bulk of the
+#: casts (reference f32) and the structural RoPE concatenates are NOT reducible byte-
+#: identically; the ~13-kernel core (its casts included) collapses to ONE dispatch
+#: only via the K29 fused kernel (rounding-class).  Read at use; default OFF.
+_ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
+
+
+def _resolve_attn_lean_casts(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_LEAN_CASTS`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_LEAN_CASTS_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_LEAN_CASTS_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the per-token casts)"
     )
 
 

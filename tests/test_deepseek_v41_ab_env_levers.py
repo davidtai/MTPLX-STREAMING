@@ -79,6 +79,7 @@ _DRP = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 / K24 revived: pinned device rou
 _SSP = "MTPLX_DSV41_SINGLE_SLOT_POOL"     # W87: merged scan-resistant slot pool
 _WOAC = "MTPLX_DSV41_ATTN_WO_A_CACHE"     # W97: cached dequantized o-LoRA wo_a
 _ACC = "MTPLX_DSV41_ATTN_CORE_COMPILE"    # W97: fixed-shape core compile (rounding-class)
+_ALC = "MTPLX_DSV41_ATTN_LEAN_CASTS"      # W99: byte-identical cast lean
 _KCG = "MTPLX_DSV41_KV_CHUNK_GROW"       # W73 / K32: chunk-grown KV append backing
 _SS = "MTPLX_DSV41_SMALL_STAGES_FUSED"   # W91 / K35: fused per-layer small stages
 _HPK = "MTPLX_DSV41_HC_PREMIX_KERNEL"    # W91 / K35: GPU-only fused HC-premix kernel
@@ -1117,3 +1118,26 @@ def test_cell16k_ring_composite_arms(env_levers):
     assert {
         k: v for k, v in presets["cell16k_ring_wo_a_core"].items() if v != ring.get(k)
     } == {_WOAC: "1", _ACC: "1"}, "cell16k_ring_wo_a_core must touch only the two W97 keys"
+
+    # W97 follow-on: cell16k_ring_wo_a_k29 = cell16k_ring + wo_a cache + K29 fused core.
+    assert {
+        k: v for k, v in presets["cell16k_ring_wo_a_k29"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _DAK: "1"}, "cell16k_ring_wo_a_k29 must touch only wo_a + K29 keys"
+
+    # W99 lean-casts arms (attn_lean_casts is BYTE-IDENTICAL; _ALC in the master list).
+    assert _ALC in env_levers.ALL_LEVER_ENVS
+    alc = presets["attn_lean_casts"]
+    assert alc[_SEL] == "1" and alc[_ALC] == "1", "attn_lean_casts missing its keys"
+    assert all(v is None for k, v in alc.items() if k not in (_SEL, _ALC)), (
+        "attn_lean_casts must set ONLY selected_keys + attn_lean_casts (hermetic)"
+    )
+    # cell16k_ring_lean = cell16k_ring + wo_a cache + lean casts (byte-identical stack).
+    assert {
+        k: v for k, v in presets["cell16k_ring_lean"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _ALC: "1"}, "cell16k_ring_lean must touch only wo_a + lean-casts keys"
+    # cell16k_ring_lean_k29 = the above + K29 (rounding-class via K29).
+    assert {
+        k: v for k, v in presets["cell16k_ring_lean_k29"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _ALC: "1", _DAK: "1"}, (
+        "cell16k_ring_lean_k29 must touch only wo_a + lean-casts + K29 keys"
+    )

@@ -284,6 +284,15 @@ WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
 # the portable (CPU+GPU) fallback / A-B.  Read at use (never import-frozen).
 ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
 
+# W99: lean the decode-attention casts -- BYTE-IDENTICAL removal of the two genuinely
+# redundant f32 casts (the eager core casts KVg to f32 twice -> once; the per-head
+# sink is re-cast per token -> cached) plus the per-token numpy->device relift of the
+# layer's RoPE inv_freq (cached).  The bulk of the casts are reference f32 numerics
+# and the concatenates are structural RoPE (interleave + head-rejoin) -- NOT reducible
+# byte-identically (docs/deepseek-v41/W97_ATTENTION_291MS.md §8).  Read at use; OFF by
+# default.  Composes with the wo_a cache as the byte-identical cell16k_ring_lean stack.
+ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
+
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
 # prior arm in the same process left set -- the arms are independent. The eight
@@ -338,6 +347,8 @@ ALL_LEVER_ENVS = (
     # W97 (appended; coordinate with any concurrent list extension):
     WO_A_CACHE_ENV,
     ATTN_CORE_COMPILE_ENV,
+    # W99 (appended):
+    ATTN_LEAN_CASTS_ENV,
 )
 
 
@@ -357,6 +368,7 @@ def _preset(
     attn_shape_stable=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
     single_slot_pool=None, wo_a_cache=None, attn_core_compile=None,
+    attn_lean_casts=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -414,6 +426,7 @@ def _preset(
         SINGLE_SLOT_POOL_ENV: single_slot_pool,
         WO_A_CACHE_ENV: wo_a_cache,
         ATTN_CORE_COMPILE_ENV: attn_core_compile,
+        ATTN_LEAN_CASTS_ENV: attn_lean_casts,
     }
 
 
@@ -788,6 +801,43 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_core_compile="1",
+    ),
+    # W97 follow-on: cell16k_ring + the wo_a-dequant cache (exact) + the K29 FUSED
+    # decode-attention kernel (decode_attn_kernel="1"): the SINGLE-DISPATCH core
+    # (score+mask+sink softmax+PV in one metal_kernel) instead of the mx.compile core.
+    # K29 is ROUNDING-CLASS (its tile reduction reassociates the fp32 softmax), so the
+    # byte-identity summary flags it (token-id sha differs on a greedy tie flip); this
+    # arm lets window 40/41 measure the 1-dispatch core against the ~8-kernel compile
+    # core (cell16k_ring_wo_a_core) and the eager baseline (cell16k_ring_wo_a_cache).
+    "cell16k_ring_wo_a_k29": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", decode_attn_kernel="1",
+    ),
+    # W99: lean the decode-attention casts in ISOLATION (selected_keys on so the eager
+    # core -- where the redundant KVg double-cast lives -- is the path).  BYTE-IDENTICAL
+    # to selected_keys control (dedupes the KVg f32 cast, caches the f32 sink + the
+    # device inv_freq); the byte-identity summary must show it clean.
+    "attn_lean_casts": _preset(selected_keys="1", attn_lean_casts="1"),
+    # W99: cell16k_ring + the wo_a cache + lean casts -- the BYTE-IDENTICAL W97/W99
+    # attention stack (both levers are exact; the only loss vs control is
+    # cell16k_ring's own head=bf16).  A/B vs cell16k_ring isolates the exact-lever
+    # dispatch savings (wo_a per-token dequant removed + KVg/sink/inv_freq casts leaned).
+    "cell16k_ring_lean": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1",
+    ),
+    # W99: cell16k_ring_lean + the K29 fused decode core (1-dispatch score+softmax+PV).
+    # ROUNDING-CLASS via K29 (flagged in the byte-identity summary); the lowest-dispatch
+    # attention arm (exact wo_a cache + lean casts + the fused core).
+    "cell16k_ring_lean_k29": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
     ),
     # W92 (switch dispatch census): the minimal AR-decode host-sync-reduction arm in
     # ISOLATION -- the K23 variant-B fast-path (defer + async submit) plus verify
