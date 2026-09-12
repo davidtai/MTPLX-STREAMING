@@ -133,3 +133,77 @@ def test_sampler_thread_is_daemon_and_stops_cleanly():
     assert sampler._thread.is_alive()
     sampler.stop()
     assert sampler._thread is None
+
+
+# --------------------------------------------------------------------------
+# David's directive: the printed headline + the top-level receipt must carry the
+# whole-PROCESS number (incl. non-Metal), not only the MLX allocator peak.  These
+# cover the new keys/helpers in ab_decode_env_levers.py (loaded by file path).
+# --------------------------------------------------------------------------
+
+
+def _ab():
+    return _load("ab_decode_env_levers")
+
+
+def test_peak_process_gb_reads_process_peak_rss_from_run():
+    ab = _ab()
+    run = {"memory": {"mlx_peak_gb": 40.0, "process_peak_rss_gb": 52.5,
+                      "system_used_peak_gb": 90.0, "system_used_at_start_gb": 20.0}}
+    # peak_process_gb is the whole-process RSS peak, NOT the MLX allocator peak.
+    assert ab._peak_process_gb(run) == 52.5
+
+
+def test_peak_process_gb_none_when_no_memory_block():
+    ab = _ab()
+    assert ab._peak_process_gb({}) is None
+    assert ab._peak_process_gb({"memory": {}}) is None
+
+
+def test_memory_headline_prints_non_metal_keys():
+    ab = _ab()
+    receipt = {
+        "peak_gb": 40.0,
+        "memory": {
+            "mlx_peak_gb": 40.0,
+            "process_peak_rss_gb": 52.5,
+            "system_used_peak_gb": 90.0,
+            "system_used_at_start_gb": 20.0,
+        },
+    }
+    line = ab._memory_headline(receipt)
+    # legacy MLX-only figure stays; the non-Metal figures are named explicitly.
+    assert "peak_gb=40.00" in line
+    assert "mlx_peak_gb=40.00" in line
+    assert "process_peak_rss_gb=52.50" in line
+    assert "system_used_peak_gb=90.00" in line
+    assert "sys start 20.00" in line
+
+
+def test_memory_headline_handles_missing_memory_block():
+    ab = _ab()
+    # No memory block (e.g. a defensive None): the headline still renders.
+    line = ab._memory_headline({"peak_gb": 12.0})
+    assert "peak_gb=12.00" in line
+    assert "process_peak_rss_gb=0.00" in line
+
+
+def test_sampler_peak_rss_is_high_water_not_exit_value():
+    """The sampler must report the PEAK over its window, not the value at stop:
+    allocate, let the sampler catch it, drop the reference, and the recorded peak
+    must still reflect the allocation (proves peak-over-prefill+decode semantics)."""
+    bench = _bench()
+    probe = bench._MLXMemProbe(_FakeMx(1))
+    sampler = probe.new_sampler(interval_s=0.02)
+    sampler.start()
+    blob = bytearray(220 * 1024 * 1024)
+    for i in range(0, len(blob), 4096):
+        blob[i] = 1
+    time.sleep(0.15)
+    peak_at_alloc = sampler.peak_rss_bytes
+    del blob  # drop the allocation; the recorded peak must NOT fall back
+    time.sleep(0.15)
+    sampler.stop()
+    assert sampler.peak_rss_bytes >= peak_at_alloc
+    # and the peak genuinely captured the allocation (well above an empty baseline).
+    assert sampler.peak_rss_bytes > 100 * 1024 * 1024

@@ -2568,6 +2568,36 @@ def _device_route_pinned_telemetry(runtime) -> dict | None:
     return tel
 
 
+def _peak_process_gb(run) -> float | None:
+    """The whole-PROCESS peak RSS (incl. the non-Metal Python heap + expert-reader
+    buffers) from the in-process 1 Hz sampler, for the top-level receipt key
+    ``peak_process_gb``.  David's "peak memory must include non-Metal parts" fix:
+    the legacy ``peak_gb`` is the MLX allocator peak only.  ``None`` when a pass
+    produced no memory block."""
+
+    mem = (run or {}).get("memory") or {}
+    val = mem.get("process_peak_rss_gb")
+    return None if val is None else float(val)
+
+
+def _memory_headline(receipt) -> str:
+    """The ``[ab]`` console peak-memory fragment.  Prints the legacy MLX peak AND
+    the whole-process RSS peak + box used-memory peak (David's non-Metal fix), so
+    the operator sees the real footprint, not just the MLX allocator figure.
+    ``peak_gb`` stays MLX-only for old-receipt comparability; the process/system
+    figures come from the in-process sampler over prefill+decode (peak, not exit)."""
+
+    mem = receipt.get("memory") or {}
+    peak_gb = receipt.get("peak_gb", 0.0) or 0.0
+    return (
+        f"peak_gb={peak_gb:.2f}"
+        f" mlx_peak_gb={mem.get('mlx_peak_gb', peak_gb):.2f}"
+        f" process_peak_rss_gb={mem.get('process_peak_rss_gb', 0.0):.2f}"
+        f" system_used_peak_gb={mem.get('system_used_peak_gb', 0.0):.2f}"
+        f" (sys start {mem.get('system_used_at_start_gb', 0.0):.2f})"
+    )
+
+
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
     if getattr(args, "decode_mode", "ar") == "dspark":
@@ -2685,7 +2715,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "decode_tok_s": (args.decode_tokens / run["decode_wall_s"])
             if run["decode_wall_s"] > 0
             else None,
+            # peak_gb is the MLX allocator peak ONLY (kept as-is for old receipts'
+            # comparability); peak_process_gb is the whole-PROCESS peak RSS incl.
+            # the non-Metal footprint (David's fix). Both come off run["memory"].
             "peak_gb": run["peak_gb"],
+            "peak_process_gb": _peak_process_gb(run),
             # W106: the memory envelope (mlx_peak_gb == the peak_gb above, plus the
             # process RSS peak and the whole-box used-memory peak/at-start the
             # gpu_window.sh guard measures). peak_gb alone is the MLX allocator peak
@@ -2778,7 +2812,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "decode_wall_s": dsp["decode_wall_s"],
                 "pass_wall_s": dsp.get("pass_wall_s"),
                 "decode_tok_s": dsp.get("decode_tok_s"),
-                "peak_gb": dsp["peak_gb"],
+                "peak_gb": dsp["peak_gb"],  # MLX allocator peak only (legacy)
+                "peak_process_gb": _peak_process_gb(dsp),  # whole-process RSS peak
                 # W106: memory envelope for the dspark headline pass (see AR above).
                 "memory": dsp.get("memory"),
                 "tokens_per_cycle": st["tokens_per_cycle"],
@@ -3284,22 +3319,10 @@ def main(argv=None) -> int:
         receipts.append(receipt)
         with args.out.open("a") as fh:
             fh.write(json.dumps(receipt) + "\n")
-        _mem = receipt.get("memory") or {}
-        _mem_summary = ""
-        if _mem:
-            # W106: peak_gb is the MLX allocator peak only; print the process RSS
-            # peak and the whole-box used-memory peak so the operator sees the real
-            # footprint on the console, not just the MLX figure.
-            _mem_summary = (
-                f" process_rss_gb={_mem.get('process_peak_rss_gb', 0.0):.2f}"
-                f" sys_used_gb={_mem.get('system_used_peak_gb', 0.0):.2f}"
-                f" (start {_mem.get('system_used_at_start_gb', 0.0):.2f})"
-            )
         print(
             f"[ab]   decode_tok_s={receipt['decode_tok_s']} "
-            f"peak_gb={receipt['peak_gb']:.2f}"
-            f" mlx_peak_gb={_mem.get('mlx_peak_gb', receipt['peak_gb']):.2f}"
-            f"{_mem_summary} sha={receipt['token_ids_sha256'][:12]}"
+            f"{_memory_headline(receipt)} "
+            f"sha={receipt['token_ids_sha256'][:12]}"
         )
 
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.
