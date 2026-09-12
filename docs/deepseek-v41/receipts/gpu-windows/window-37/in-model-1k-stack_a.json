@@ -1,0 +1,876 @@
+{
+  "worker": "W78",
+  "script": "scripts/deepseek_v41/metal_decode_attn_bisect.py",
+  "mode": "in_model",
+  "device": "gpu",
+  "tiny": false,
+  "arm": "stack_a",
+  "steps": 30,
+  "dims": {
+    "hidden": 1024,
+    "context_tokens": 1024,
+    "max_kv": 4096,
+    "memory_limit_gib": 60.0
+  },
+  "prompt": {
+    "prompt_policy": "coding_agent_tail_v2",
+    "prompt_style": "coding-agent",
+    "prompt_format": "raw",
+    "prompt_enable_thinking": false,
+    "prompt_release_valid": true,
+    "prompt_tail_sha256": "887573dd262ed624eccb39f8b833f5711dd36889d2ea16e68837e2985a1f71b1",
+    "prompt_tail_tokens": 282,
+    "prompt_tail_preserved": true,
+    "prompt_tail_truncated": false,
+    "prompt_filler_tokens": 742,
+    "prompt_head_trimmed_tokens": 0,
+    "prompt_context_tokens": 1024,
+    "prompt_actual_tokens": 1024,
+    "prompt_filler_sha256": "69b2be3dbd45365504b6dd0f0caff283b04905e96e0b905fa670260e359f8dcc",
+    "prompt_source": "prefill_bench",
+    "bos_prepended": true,
+    "bos_id": 0,
+    "input_tokens": 1025,
+    "tokenizer": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
+  },
+  "ballast_gib": 0.0,
+  "memory": {
+    "active_end_gib": 52.92903004959226,
+    "peak_gib": 54.265722915530205
+  },
+  "utilization": {
+    "samples": 8,
+    "gpu_freq_mhz": {
+      "min": 472.0,
+      "mean": 626.125,
+      "max": 769.0
+    },
+    "gpu_power_w": {
+      "min": 1.46701979637146,
+      "mean": 1.9788943827152252,
+      "max": 2.5406649112701416
+    },
+    "gpu_usage_ratio": {
+      "min": 0.26593244075775146,
+      "mean": 0.3768908455967903,
+      "max": 0.4675242304801941
+    },
+    "gpu_active_ratio": {
+      "min": 0.9121617674827576,
+      "mean": 0.9720805510878563,
+      "max": 0.9899775981903076
+    },
+    "cpu_usage_ratio": {
+      "min": 0.09612201154232025,
+      "mean": 0.10436994675546885,
+      "max": 0.12377973645925522
+    },
+    "gpu_temp_c": {
+      "min": 62.66741180419922,
+      "mean": 64.13225507736206,
+      "max": 66.43712615966797
+    },
+    "cpu_temp_c": {
+      "min": 64.14926147460938,
+      "mean": 65.69788360595703,
+      "max": 68.2713851928711
+    },
+    "series": [
+      {
+        "gpu_freq_mhz": 472.0,
+        "gpu_power_w": 1.46701979637146,
+        "gpu_usage_ratio": 0.26593244075775146,
+        "gpu_active_ratio": 0.9121617674827576,
+        "cpu_usage_ratio": 0.12377973645925522,
+        "gpu_temp_c": 66.43712615966797,
+        "cpu_temp_c": 68.2713851928711,
+        "t": 2.5593023330002325
+      },
+      {
+        "gpu_freq_mhz": 593.0,
+        "gpu_power_w": 1.8666911125183105,
+        "gpu_usage_ratio": 0.3531152307987213,
+        "gpu_active_ratio": 0.9637779593467712,
+        "cpu_usage_ratio": 0.11544167995452881,
+        "gpu_temp_c": 65.23419189453125,
+        "cpu_temp_c": 66.84457397460938,
+        "t": 4.569510375004029
+      },
+      {
+        "gpu_freq_mhz": 617.0,
+        "gpu_power_w": 1.9588078260421753,
+        "gpu_usage_ratio": 0.37333914637565613,
+        "gpu_active_ratio": 0.9796901941299438,
+        "cpu_usage_ratio": 0.09988100826740265,
+        "gpu_temp_c": 64.63746643066406,
+        "cpu_temp_c": 66.15789794921875,
+        "t": 6.584265333003714
+      },
+      {
+        "gpu_freq_mhz": 646.0,
+        "gpu_power_w": 2.019977331161499,
+        "gpu_usage_ratio": 0.3908075988292694,
+        "gpu_active_ratio": 0.9788311719894409,
+        "cpu_usage_ratio": 0.09815386682748795,
+        "gpu_temp_c": 64.15438842773438,
+        "cpu_temp_c": 65.53289794921875,
+        "t": 8.5954436250031
+      },
+      {
+        "gpu_freq_mhz": 599.0,
+        "gpu_power_w": 1.9249190092086792,
+        "gpu_usage_ratio": 0.3643592596054077,
+        "gpu_active_ratio": 0.9850690960884094,
+        "cpu_usage_ratio": 0.10513844341039658,
+        "gpu_temp_c": 63.66145706176758,
+        "cpu_temp_c": 65.3384017944336,
+        "t": 10.6103574160079
+      },
+      {
+        "gpu_freq_mhz": 626.0,
+        "gpu_power_w": 1.9671401977539062,
+        "gpu_usage_ratio": 0.38307344913482666,
+        "gpu_active_ratio": 0.9899775981903076,
+        "cpu_usage_ratio": 0.09826558083295822,
+        "gpu_temp_c": 63.2844123840332,
+        "cpu_temp_c": 64.80139923095703,
+        "t": 12.624662750007701
+      },
+      {
+        "gpu_freq_mhz": 687.0,
+        "gpu_power_w": 2.08593487739563,
+        "gpu_usage_ratio": 0.4169754087924957,
+        "gpu_active_ratio": 0.9832336902618408,
+        "cpu_usage_ratio": 0.09612201154232025,
+        "gpu_temp_c": 62.98158645629883,
+        "cpu_temp_c": 64.48725128173828,
+        "t": 14.639523333011311
+      },
+      {
+        "gpu_freq_mhz": 769.0,
+        "gpu_power_w": 2.5406649112701416,
+        "gpu_usage_ratio": 0.4675242304801941,
+        "gpu_active_ratio": 0.9839029312133789,
+        "cpu_usage_ratio": 0.09817724674940109,
+        "gpu_temp_c": 62.66741180419922,
+        "cpu_temp_c": 64.14926147460938,
+        "t": 16.65396504099772
+      }
+    ]
+  },
+  "cooldown": null,
+  "passes": {
+    "full": {
+      "label": "full_model",
+      "report": {
+        "enabled": true,
+        "kind": "decode",
+        "tokens": 30,
+        "stage_sum_ms": 17805.251376,
+        "stage_sum_ms_per_token": 593.5083792,
+        "frame_wall_ms": 17866.166124,
+        "frame_wall_ms_per_token": 595.5388707999999,
+        "stages": {
+          "attn.full": {
+            "total_ms": 1135.702953,
+            "count": 120,
+            "mean_ms": 9.464191275000001,
+            "mean_ms_per_token": 37.8567651
+          },
+          "attn.reindex": {
+            "total_ms": 1023.548787,
+            "count": 120,
+            "mean_ms": 8.529573225,
+            "mean_ms_per_token": 34.1182929
+          },
+          "attn.reuse": {
+            "total_ms": 7130.874039,
+            "count": 900,
+            "mean_ms": 7.923193376666667,
+            "mean_ms_per_token": 237.6958013
+          },
+          "attn.swa_only": {
+            "total_ms": 486.486506,
+            "count": 60,
+            "mean_ms": 8.108108433333333,
+            "mean_ms_per_token": 16.216216866666667
+          },
+          "embed": {
+            "total_ms": 11.96121,
+            "count": 30,
+            "mean_ms": 0.398707,
+            "mean_ms_per_token": 0.398707
+          },
+          "engram.advance": {
+            "total_ms": 3.609125,
+            "count": 30,
+            "mean_ms": 0.12030416666666667,
+            "mean_ms_per_token": 0.12030416666666667
+          },
+          "engram.apply": {
+            "total_ms": 59.240876,
+            "count": 60,
+            "mean_ms": 0.9873479333333334,
+            "mean_ms_per_token": 1.9746958666666667
+          },
+          "engram.hash": {
+            "total_ms": 0.222084,
+            "count": 60,
+            "mean_ms": 0.0037014,
+            "mean_ms_per_token": 0.0074028
+          },
+          "engram.row_fetch": {
+            "total_ms": 37.245373,
+            "count": 60,
+            "mean_ms": 0.6207562166666667,
+            "mean_ms_per_token": 1.2415124333333334
+          },
+          "final_norm": {
+            "total_ms": 7.818709,
+            "count": 30,
+            "mean_ms": 0.2606236333333333,
+            "mean_ms_per_token": 0.2606236333333333
+          },
+          "hc.combine": {
+            "total_ms": 825.175482,
+            "count": 2400,
+            "mean_ms": 0.3438231175,
+            "mean_ms_per_token": 27.5058494
+          },
+          "hc.premix_sinkhorn": {
+            "total_ms": 1098.838781,
+            "count": 2400,
+            "mean_ms": 0.4578494920833333,
+            "mean_ms_per_token": 36.627959366666666
+          },
+          "head": {
+            "total_ms": 83.070124,
+            "count": 30,
+            "mean_ms": 2.7690041333333335,
+            "mean_ms_per_token": 2.7690041333333335
+          },
+          "moe.combine": {
+            "total_ms": 270.307047,
+            "count": 1200,
+            "mean_ms": 0.2252558725,
+            "mean_ms_per_token": 9.0102349
+          },
+          "moe.gate_topk": {
+            "total_ms": 648.948365,
+            "count": 1200,
+            "mean_ms": 0.5407903041666667,
+            "mean_ms_per_token": 21.631612166666667
+          },
+          "moe.routed_switch": {
+            "total_ms": 4561.325822,
+            "count": 1200,
+            "mean_ms": 3.8011048516666666,
+            "mean_ms_per_token": 152.04419406666665
+          },
+          "moe.shared_expert": {
+            "total_ms": 414.282092,
+            "count": 1200,
+            "mean_ms": 0.34523507666666664,
+            "mean_ms_per_token": 13.809403066666667
+          },
+          "sample": {
+            "total_ms": 6.594001,
+            "count": 30,
+            "mean_ms": 0.21980003333333334,
+            "mean_ms_per_token": 0.2198000333333333
+          }
+        },
+        "decode_breakdown": {
+          "attn.full.cache_append": {
+            "total_ms": 45.523,
+            "count": 120,
+            "mean_ms": 0.3793583333333333,
+            "mean_ms_per_token": 1.5174333333333334
+          },
+          "attn.full.compress_append": {
+            "total_ms": 131.675008,
+            "count": 120,
+            "mean_ms": 1.0972917333333334,
+            "mean_ms_per_token": 4.389166933333333
+          },
+          "attn.full.select": {
+            "total_ms": 73.067669,
+            "count": 120,
+            "mean_ms": 0.6088972416666667,
+            "mean_ms_per_token": 2.4355889666666664
+          },
+          "attn.reindex.cache_append": {
+            "total_ms": 46.599998,
+            "count": 120,
+            "mean_ms": 0.38833331666666665,
+            "mean_ms_per_token": 1.5533332666666666
+          },
+          "attn.reindex.select": {
+            "total_ms": 80.936331,
+            "count": 120,
+            "mean_ms": 0.6744694250000001,
+            "mean_ms_per_token": 2.6978777
+          },
+          "attn.reuse.cache_append": {
+            "total_ms": 344.552738,
+            "count": 900,
+            "mean_ms": 0.38283637555555555,
+            "mean_ms_per_token": 11.485091266666666
+          },
+          "attn.reuse.select": {
+            "total_ms": 1.862831,
+            "count": 900,
+            "mean_ms": 0.0020698122222222223,
+            "mean_ms_per_token": 0.062094366666666664
+          },
+          "attn.swa_only.cache_append": {
+            "total_ms": 22.573209,
+            "count": 60,
+            "mean_ms": 0.37622015000000003,
+            "mean_ms_per_token": 0.7524403
+          }
+        }
+      },
+      "summary": {
+        "enabled": true,
+        "frame_wall_ms_per_token": 595.5388707999999,
+        "stage_sum_ms_per_token": 593.5083792,
+        "tokens": 30,
+        "attn_ms_per_layer": {
+          "swa_only": 8.108108433333333,
+          "full": 9.464191275000001,
+          "reindex": 8.529573225,
+          "reuse": 7.923193376666667
+        },
+        "decode_breakdown_ms_per_layer": {
+          "swa_only": {
+            "cache_append": 0.37622015000000003,
+            "compress_append": null,
+            "select": null
+          },
+          "full": {
+            "cache_append": 0.3793583333333333,
+            "compress_append": 1.0972917333333334,
+            "select": 0.6088972416666667
+          },
+          "reindex": {
+            "cache_append": 0.38833331666666665,
+            "compress_append": null,
+            "select": 0.6744694250000001
+          },
+          "reuse": {
+            "cache_append": 0.38283637555555555,
+            "compress_append": null,
+            "select": 0.0020698122222222223
+          }
+        },
+        "non_attn_ms_per_layer": {
+          "moe.gate_topk": 0.5407903041666667,
+          "moe.routed_switch": 3.8011048516666666,
+          "moe.shared_expert": 0.34523507666666664,
+          "moe.combine": 0.2252558725,
+          "hc.premix_sinkhorn": 0.4578494920833333,
+          "hc.combine": 0.3438231175
+        },
+        "per_token": {
+          "embed": 0.398707,
+          "final_norm": 0.2606236333333333,
+          "head": 2.7690041333333335,
+          "sample": 0.21980003333333334
+        }
+      },
+      "utilization": {
+        "samples": 8,
+        "gpu_freq_mhz": {
+          "min": 472.0,
+          "mean": 626.125,
+          "max": 769.0
+        },
+        "gpu_power_w": {
+          "min": 1.46701979637146,
+          "mean": 1.9788943827152252,
+          "max": 2.5406649112701416
+        },
+        "gpu_usage_ratio": {
+          "min": 0.26593244075775146,
+          "mean": 0.3768908455967903,
+          "max": 0.4675242304801941
+        },
+        "gpu_active_ratio": {
+          "min": 0.9121617674827576,
+          "mean": 0.9720805510878563,
+          "max": 0.9899775981903076
+        },
+        "cpu_usage_ratio": {
+          "min": 0.09612201154232025,
+          "mean": 0.10436994675546885,
+          "max": 0.12377973645925522
+        },
+        "gpu_temp_c": {
+          "min": 62.66741180419922,
+          "mean": 64.13225507736206,
+          "max": 66.43712615966797
+        },
+        "cpu_temp_c": {
+          "min": 64.14926147460938,
+          "mean": 65.69788360595703,
+          "max": 68.2713851928711
+        },
+        "series": [
+          {
+            "gpu_freq_mhz": 472.0,
+            "gpu_power_w": 1.46701979637146,
+            "gpu_usage_ratio": 0.26593244075775146,
+            "gpu_active_ratio": 0.9121617674827576,
+            "cpu_usage_ratio": 0.12377973645925522,
+            "gpu_temp_c": 66.43712615966797,
+            "cpu_temp_c": 68.2713851928711,
+            "t": 2.5593023330002325
+          },
+          {
+            "gpu_freq_mhz": 593.0,
+            "gpu_power_w": 1.8666911125183105,
+            "gpu_usage_ratio": 0.3531152307987213,
+            "gpu_active_ratio": 0.9637779593467712,
+            "cpu_usage_ratio": 0.11544167995452881,
+            "gpu_temp_c": 65.23419189453125,
+            "cpu_temp_c": 66.84457397460938,
+            "t": 4.569510375004029
+          },
+          {
+            "gpu_freq_mhz": 617.0,
+            "gpu_power_w": 1.9588078260421753,
+            "gpu_usage_ratio": 0.37333914637565613,
+            "gpu_active_ratio": 0.9796901941299438,
+            "cpu_usage_ratio": 0.09988100826740265,
+            "gpu_temp_c": 64.63746643066406,
+            "cpu_temp_c": 66.15789794921875,
+            "t": 6.584265333003714
+          },
+          {
+            "gpu_freq_mhz": 646.0,
+            "gpu_power_w": 2.019977331161499,
+            "gpu_usage_ratio": 0.3908075988292694,
+            "gpu_active_ratio": 0.9788311719894409,
+            "cpu_usage_ratio": 0.09815386682748795,
+            "gpu_temp_c": 64.15438842773438,
+            "cpu_temp_c": 65.53289794921875,
+            "t": 8.5954436250031
+          },
+          {
+            "gpu_freq_mhz": 599.0,
+            "gpu_power_w": 1.9249190092086792,
+            "gpu_usage_ratio": 0.3643592596054077,
+            "gpu_active_ratio": 0.9850690960884094,
+            "cpu_usage_ratio": 0.10513844341039658,
+            "gpu_temp_c": 63.66145706176758,
+            "cpu_temp_c": 65.3384017944336,
+            "t": 10.6103574160079
+          },
+          {
+            "gpu_freq_mhz": 626.0,
+            "gpu_power_w": 1.9671401977539062,
+            "gpu_usage_ratio": 0.38307344913482666,
+            "gpu_active_ratio": 0.9899775981903076,
+            "cpu_usage_ratio": 0.09826558083295822,
+            "gpu_temp_c": 63.2844123840332,
+            "cpu_temp_c": 64.80139923095703,
+            "t": 12.624662750007701
+          },
+          {
+            "gpu_freq_mhz": 687.0,
+            "gpu_power_w": 2.08593487739563,
+            "gpu_usage_ratio": 0.4169754087924957,
+            "gpu_active_ratio": 0.9832336902618408,
+            "cpu_usage_ratio": 0.09612201154232025,
+            "gpu_temp_c": 62.98158645629883,
+            "cpu_temp_c": 64.48725128173828,
+            "t": 14.639523333011311
+          },
+          {
+            "gpu_freq_mhz": 769.0,
+            "gpu_power_w": 2.5406649112701416,
+            "gpu_usage_ratio": 0.4675242304801941,
+            "gpu_active_ratio": 0.9839029312133789,
+            "cpu_usage_ratio": 0.09817724674940109,
+            "gpu_temp_c": 62.66741180419922,
+            "cpu_temp_c": 64.14926147460938,
+            "t": 16.65396504099772
+          }
+        ]
+      },
+      "cooldown": null
+    },
+    "expert_stub": {
+      "label": "expert_switch_stubbed",
+      "report": {
+        "enabled": true,
+        "kind": "decode",
+        "tokens": 30,
+        "stage_sum_ms": 11839.828837,
+        "stage_sum_ms_per_token": 394.6609612333333,
+        "frame_wall_ms": 11884.334127,
+        "frame_wall_ms_per_token": 396.1444709,
+        "stages": {
+          "attn.full": {
+            "total_ms": 1005.096956,
+            "count": 120,
+            "mean_ms": 8.375807966666667,
+            "mean_ms_per_token": 33.50323186666667
+          },
+          "attn.reindex": {
+            "total_ms": 901.023248,
+            "count": 120,
+            "mean_ms": 7.508527066666667,
+            "mean_ms_per_token": 30.034108266666667
+          },
+          "attn.reuse": {
+            "total_ms": 6307.239545,
+            "count": 900,
+            "mean_ms": 7.008043938888889,
+            "mean_ms_per_token": 210.24131816666667
+          },
+          "attn.swa_only": {
+            "total_ms": 422.203912,
+            "count": 60,
+            "mean_ms": 7.036731866666666,
+            "mean_ms_per_token": 14.073463733333334
+          },
+          "embed": {
+            "total_ms": 10.391209,
+            "count": 30,
+            "mean_ms": 0.3463736333333334,
+            "mean_ms_per_token": 0.3463736333333333
+          },
+          "engram.advance": {
+            "total_ms": 3.456337,
+            "count": 30,
+            "mean_ms": 0.11521123333333334,
+            "mean_ms_per_token": 0.11521123333333333
+          },
+          "engram.apply": {
+            "total_ms": 43.845992,
+            "count": 60,
+            "mean_ms": 0.7307665333333333,
+            "mean_ms_per_token": 1.4615330666666668
+          },
+          "engram.hash": {
+            "total_ms": 0.209834,
+            "count": 60,
+            "mean_ms": 0.003497233333333333,
+            "mean_ms_per_token": 0.006994466666666667
+          },
+          "engram.row_fetch": {
+            "total_ms": 50.844124,
+            "count": 60,
+            "mean_ms": 0.8474020666666666,
+            "mean_ms_per_token": 1.6948041333333335
+          },
+          "final_norm": {
+            "total_ms": 6.530958,
+            "count": 30,
+            "mean_ms": 0.2176986,
+            "mean_ms_per_token": 0.2176986
+          },
+          "hc.combine": {
+            "total_ms": 765.256922,
+            "count": 2400,
+            "mean_ms": 0.3188570508333333,
+            "mean_ms_per_token": 25.50856406666667
+          },
+          "hc.premix_sinkhorn": {
+            "total_ms": 882.372494,
+            "count": 2400,
+            "mean_ms": 0.36765520583333333,
+            "mean_ms_per_token": 29.412416466666667
+          },
+          "head": {
+            "total_ms": 80.369166,
+            "count": 30,
+            "mean_ms": 2.6789722,
+            "mean_ms_per_token": 2.6789722
+          },
+          "moe.combine": {
+            "total_ms": 226.884174,
+            "count": 1200,
+            "mean_ms": 0.189070145,
+            "mean_ms_per_token": 7.5628058000000005
+          },
+          "moe.gate_topk": {
+            "total_ms": 547.903025,
+            "count": 1200,
+            "mean_ms": 0.4565858541666667,
+            "mean_ms_per_token": 18.263434166666666
+          },
+          "moe.routed_switch": {
+            "total_ms": 240.702344,
+            "count": 1200,
+            "mean_ms": 0.20058528666666664,
+            "mean_ms_per_token": 8.023411466666667
+          },
+          "moe.shared_expert": {
+            "total_ms": 340.279471,
+            "count": 1200,
+            "mean_ms": 0.28356622583333335,
+            "mean_ms_per_token": 11.342649033333334
+          },
+          "sample": {
+            "total_ms": 5.219126,
+            "count": 30,
+            "mean_ms": 0.17397086666666667,
+            "mean_ms_per_token": 0.17397086666666667
+          }
+        },
+        "decode_breakdown": {
+          "attn.full.cache_append": {
+            "total_ms": 38.316032,
+            "count": 120,
+            "mean_ms": 0.31930026666666667,
+            "mean_ms_per_token": 1.2772010666666667
+          },
+          "attn.full.compress_append": {
+            "total_ms": 102.934498,
+            "count": 120,
+            "mean_ms": 0.8577874833333333,
+            "mean_ms_per_token": 3.4311499333333333
+          },
+          "attn.full.select": {
+            "total_ms": 59.641301,
+            "count": 120,
+            "mean_ms": 0.49701084166666665,
+            "mean_ms_per_token": 1.9880433666666666
+          },
+          "attn.reindex.cache_append": {
+            "total_ms": 38.001298,
+            "count": 120,
+            "mean_ms": 0.31667748333333334,
+            "mean_ms_per_token": 1.2667099333333334
+          },
+          "attn.reindex.select": {
+            "total_ms": 65.295625,
+            "count": 120,
+            "mean_ms": 0.5441302083333334,
+            "mean_ms_per_token": 2.1765208333333335
+          },
+          "attn.reuse.cache_append": {
+            "total_ms": 286.859249,
+            "count": 900,
+            "mean_ms": 0.3187324988888889,
+            "mean_ms_per_token": 9.561974966666666
+          },
+          "attn.reuse.select": {
+            "total_ms": 1.700629,
+            "count": 900,
+            "mean_ms": 0.0018895877777777778,
+            "mean_ms_per_token": 0.056687633333333334
+          },
+          "attn.swa_only.cache_append": {
+            "total_ms": 19.011129,
+            "count": 60,
+            "mean_ms": 0.31685215,
+            "mean_ms_per_token": 0.6337043
+          }
+        }
+      },
+      "summary": {
+        "enabled": true,
+        "frame_wall_ms_per_token": 396.1444709,
+        "stage_sum_ms_per_token": 394.6609612333333,
+        "tokens": 30,
+        "attn_ms_per_layer": {
+          "swa_only": 7.036731866666666,
+          "full": 8.375807966666667,
+          "reindex": 7.508527066666667,
+          "reuse": 7.008043938888889
+        },
+        "decode_breakdown_ms_per_layer": {
+          "swa_only": {
+            "cache_append": 0.31685215,
+            "compress_append": null,
+            "select": null
+          },
+          "full": {
+            "cache_append": 0.31930026666666667,
+            "compress_append": 0.8577874833333333,
+            "select": 0.49701084166666665
+          },
+          "reindex": {
+            "cache_append": 0.31667748333333334,
+            "compress_append": null,
+            "select": 0.5441302083333334
+          },
+          "reuse": {
+            "cache_append": 0.3187324988888889,
+            "compress_append": null,
+            "select": 0.0018895877777777778
+          }
+        },
+        "non_attn_ms_per_layer": {
+          "moe.gate_topk": 0.4565858541666667,
+          "moe.routed_switch": 0.20058528666666664,
+          "moe.shared_expert": 0.28356622583333335,
+          "moe.combine": 0.189070145,
+          "hc.premix_sinkhorn": 0.36765520583333333,
+          "hc.combine": 0.3188570508333333
+        },
+        "per_token": {
+          "embed": 0.3463736333333334,
+          "final_norm": 0.2176986,
+          "head": 2.6789722,
+          "sample": 0.17397086666666667
+        }
+      },
+      "utilization": null,
+      "cooldown": null
+    },
+    "attn_stub": {
+      "label": "attention_stubbed",
+      "report": {
+        "enabled": true,
+        "kind": "decode",
+        "tokens": 30,
+        "stage_sum_ms": 8424.387294,
+        "stage_sum_ms_per_token": 280.8129098,
+        "frame_wall_ms": 8462.374207,
+        "frame_wall_ms_per_token": 282.07914023333336,
+        "stages": {
+          "embed": {
+            "total_ms": 7.438957,
+            "count": 30,
+            "mean_ms": 0.24796523333333334,
+            "mean_ms_per_token": 0.24796523333333334
+          },
+          "engram.advance": {
+            "total_ms": 3.322376,
+            "count": 30,
+            "mean_ms": 0.11074586666666666,
+            "mean_ms_per_token": 0.11074586666666668
+          },
+          "engram.apply": {
+            "total_ms": 52.773959,
+            "count": 60,
+            "mean_ms": 0.8795659833333332,
+            "mean_ms_per_token": 1.7591319666666665
+          },
+          "engram.hash": {
+            "total_ms": 0.194748,
+            "count": 60,
+            "mean_ms": 0.0032458,
+            "mean_ms_per_token": 0.0064916
+          },
+          "engram.row_fetch": {
+            "total_ms": 157.677792,
+            "count": 60,
+            "mean_ms": 2.6279632000000004,
+            "mean_ms_per_token": 5.255926400000001
+          },
+          "final_norm": {
+            "total_ms": 6.412626,
+            "count": 30,
+            "mean_ms": 0.2137542,
+            "mean_ms_per_token": 0.2137542
+          },
+          "hc.combine": {
+            "total_ms": 472.099529,
+            "count": 2400,
+            "mean_ms": 0.19670813708333335,
+            "mean_ms_per_token": 15.736650966666668
+          },
+          "hc.premix_sinkhorn": {
+            "total_ms": 740.095082,
+            "count": 2400,
+            "mean_ms": 0.3083729508333333,
+            "mean_ms_per_token": 24.66983606666667
+          },
+          "head": {
+            "total_ms": 74.825207,
+            "count": 30,
+            "mean_ms": 2.494173566666667,
+            "mean_ms_per_token": 2.494173566666667
+          },
+          "moe.combine": {
+            "total_ms": 212.232706,
+            "count": 1200,
+            "mean_ms": 0.17686058833333335,
+            "mean_ms_per_token": 7.074423533333333
+          },
+          "moe.gate_topk": {
+            "total_ms": 331.288189,
+            "count": 1200,
+            "mean_ms": 0.2760734908333333,
+            "mean_ms_per_token": 11.042939633333333
+          },
+          "moe.routed_switch": {
+            "total_ms": 6017.01528,
+            "count": 1200,
+            "mean_ms": 5.014179400000001,
+            "mean_ms_per_token": 200.567176
+          },
+          "moe.shared_expert": {
+            "total_ms": 342.969391,
+            "count": 1200,
+            "mean_ms": 0.2858078258333333,
+            "mean_ms_per_token": 11.432313033333333
+          },
+          "sample": {
+            "total_ms": 6.041452,
+            "count": 30,
+            "mean_ms": 0.20138173333333334,
+            "mean_ms_per_token": 0.2013817333333333
+          }
+        },
+        "decode_breakdown": {}
+      },
+      "summary": {
+        "enabled": true,
+        "frame_wall_ms_per_token": 282.07914023333336,
+        "stage_sum_ms_per_token": 280.8129098,
+        "tokens": 30,
+        "attn_ms_per_layer": {
+          "swa_only": null,
+          "full": null,
+          "reindex": null,
+          "reuse": null
+        },
+        "decode_breakdown_ms_per_layer": {
+          "swa_only": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          },
+          "full": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          },
+          "reindex": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          },
+          "reuse": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          }
+        },
+        "non_attn_ms_per_layer": {
+          "moe.gate_topk": 0.2760734908333333,
+          "moe.routed_switch": 5.014179400000001,
+          "moe.shared_expert": 0.2858078258333333,
+          "moe.combine": 0.17686058833333335,
+          "hc.premix_sinkhorn": 0.3083729508333333,
+          "hc.combine": 0.19670813708333335
+        },
+        "per_token": {
+          "embed": 0.24796523333333334,
+          "final_norm": 0.2137542,
+          "head": 2.494173566666667,
+          "sample": 0.20138173333333334
+        }
+      },
+      "utilization": null,
+      "cooldown": null
+    }
+  }
+}
