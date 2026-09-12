@@ -48,6 +48,8 @@ _EXPECTED_MEMORY_KEYS = {
     "budget_non_metal_overhead_measured_gb",
     "budget_kv_growth_to_max_kv_gb",
     "budget_safety_gb",
+    "budget_plan_overshoot_gib",
+    "budget_forecast_system_peak_gb",
     "budget_floor_gib",
     "rss_semantics",
 }
@@ -79,10 +81,14 @@ def test_derivation_math_with_injected_measurements():
         non_metal_overhead_gb=10.0,
         kv_growth_to_max_kv_gb=2.0,
         safety_gb=3.0,
+        plan_overshoot_gib=6.0,
         floor_gib=20.0,
     )
-    # 100 - 20 - 10 - 2 - 3 = 65
-    assert d.plan_limit_gib == pytest.approx(65.0)
+    # 100 - 20 - 10 - 2 - 3 - 6 = 59
+    assert d.plan_limit_gib == pytest.approx(59.0)
+    # forecast box peak = baseline + plan + overshoot + overhead = 20+59+6+10 = 95 <= 100
+    assert d.forecast_system_peak_gib() == pytest.approx(95.0)
+    assert d.forecast_system_peak_gib() <= 100.0
     assert d.source == "budget"
     assert d.non_metal_overhead_measured_gb is None  # not measured yet (pre-load)
     # the formula string names every term
@@ -121,13 +127,14 @@ def test_negative_term_rejected():
 
 def test_exactly_at_floor_is_allowed():
     mod = _mod()
-    # 55 - 20 - 10 - 2 - 3 = 20 == floor -> allowed (not below).
+    # 55 - 20 - 10 - 2 - 3 - 0 = 20 == floor -> allowed (not below).
     d = mod.derive_budget_total_plan(
         budget_total_gb=55.0,
         system_used_at_start_gb=20.0,
         non_metal_overhead_gb=10.0,
         kv_growth_to_max_kv_gb=2.0,
         safety_gb=3.0,
+        plan_overshoot_gib=0.0,
         floor_gib=20.0,
     )
     assert d.plan_limit_gib == pytest.approx(20.0)
@@ -146,13 +153,16 @@ def test_memory_keys_budget_path_has_all_terms():
         non_metal_overhead_gb=10.0,
         kv_growth_to_max_kv_gb=2.0,
         safety_gb=3.0,
+        plan_overshoot_gib=6.0,
         floor_gib=20.0,
     )
     keys = d.memory_keys()
     assert set(keys) == _EXPECTED_MEMORY_KEYS
     assert keys["memory_plan_source"] == "budget"
     assert keys["budget_total_gb"] == 100.0
-    assert keys["plan_limit_gib_derived"] == 65.0
+    assert keys["plan_limit_gib_derived"] == 59.0
+    assert keys["budget_plan_overshoot_gib"] == 6.0
+    assert keys["budget_forecast_system_peak_gb"] == 95.0
     assert keys["budget_system_used_at_start_gb"] == 20.0
     assert keys["budget_non_metal_overhead_gb"] == 10.0
     assert keys["budget_non_metal_overhead_measured_gb"] is None
@@ -362,7 +372,7 @@ def test_resolve_derivation_budget_path(tmp_path):
     # kv growth for a single window-only layer at max_kv 1000: 1000*512*2 bytes.
     kv_gb = (1000 * 512 * 2) / GIB
     # non_metal_overhead default = 10, safety default = 3.
-    expected = 100.0 - 20.0 - 10.0 - kv_gb - 3.0
+    expected = 100.0 - 20.0 - 10.0 - kv_gb - 3.0 - 6.0  # incl. default overshoot 6
     assert bt.plan_limit_gib == pytest.approx(expected)
     # the W62 derivation the loader consumes uses the derived limit as its plan.
     assert derivation.plan_gib == pytest.approx(expected)
@@ -813,3 +823,46 @@ def test_floor_refusal_exception_is_tagged_budget_derivation():
         # and that stage flows into the ledger row
         row = mod._abort_receipt_row("control", exc, None)
         assert row["stage"] == "budget_derivation"
+
+
+# --------------------------------------------------------------------------
+# HIGH-1: explicit plan_overshoot term; forecast box peak <= budget; clamp overhead
+# --------------------------------------------------------------------------
+
+
+def test_high1_forecast_system_peak_within_budget():
+    mod = _mod()
+    # reviewer's numbers: total 93, baseline 10.2, overhead 2, kv 0.36, safety 3,
+    # overshoot 6 -> forecast = baseline + plan + overshoot + overhead <= 93.
+    d = mod.derive_budget_total_plan(
+        budget_total_gb=93.0,
+        system_used_at_start_gb=10.2,
+        non_metal_overhead_gb=2.0,
+        kv_growth_to_max_kv_gb=0.36,
+        safety_gb=3.0,
+        plan_overshoot_gib=6.0,
+        floor_gib=20.0,
+    )
+    assert d.plan_limit_gib == pytest.approx(93 - 10.2 - 2 - 0.36 - 3 - 6)
+    fc = d.forecast_system_peak_gib()
+    assert fc == pytest.approx(10.2 + d.plan_limit_gib + 6 + 2)
+    assert fc <= 93.0  # the HIGH-1 invariant
+
+
+def test_high1_overhead_clamped_to_min_2(tmp_path):
+    mod = _mod()
+    # --non-metal-overhead-gib 1 is below the 2 GiB floor -> clamped to 2.
+    args = _budget_args(mod, tmp_path, non_metal_overhead_gib=1.0)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    assert args._dsv41_budget_total.non_metal_overhead_gb == pytest.approx(2.0)
+
+
+def test_high1_plan_overshoot_flag_threads(tmp_path):
+    mod = _mod()
+    args = _budget_args(mod, tmp_path, plan_overshoot_gib=9.0)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    bt = args._dsv41_budget_total
+    assert bt.plan_overshoot_gib == pytest.approx(9.0)
+    assert "plan_overshoot(9)" in bt.formula()

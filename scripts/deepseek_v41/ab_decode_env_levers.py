@@ -74,6 +74,16 @@ DEFAULT_BOS_ID = 0
 DEFAULT_NON_METAL_OVERHEAD_GIB = 10.0
 # Safety headroom subtracted from the budget (flag --memory-safety-gb).
 DEFAULT_MEMORY_SAFETY_GIB = 3.0
+# W106 HIGH-1 (budget re-review): the MLX allocator PEAK overshoots the plan's
+# expert-cache ceiling by the KV + prefill transients that live OUTSIDE the plan
+# body (window 43: 60 GiB plan -> 65.1-65.5 GiB mlx_peak, ~5.5 GiB over).  Price
+# this explicitly so it is not silently absorbed by an inflated non_metal_overhead
+# (which would invite lowering the overhead into the window-41c pressure regime).
+DEFAULT_PLAN_OVERSHOOT_GIB = 6.0
+# HIGH-1: the real non-Metal overhead is ~1-2 GiB (system_used_peak - mlx_peak -
+# baseline); clamp the estimate to at least this so it never goes to zero once the
+# overshoot is a separate term.
+_MIN_NON_METAL_OVERHEAD_GIB = 2.0
 # Floor below which a derived plan limit is refused (flag --memory-budget-floor-gib).
 DEFAULT_MEMORY_BUDGET_FLOOR_GIB = 20.0
 # If the post-load re-measured overhead exceeds the pre-load estimate by more than
@@ -1186,6 +1196,23 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="GB",
         help="DEPRECATED alias of --non-metal-overhead-gib (decimal GB -> GiB).",
     )
+    p.add_argument(
+        "--plan-overshoot-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=f"GiB the MLX allocator PEAK overshoots the plan's expert-cache ceiling "
+        f"(KV + prefill transients that live outside the plan body); subtracted in "
+        f"the budget derivation so the forecast box peak stays under budget (default "
+        f"{DEFAULT_PLAN_OVERSHOOT_GIB:g}).",
+    )
+    p.add_argument(
+        "--plan-overshoot-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --plan-overshoot-gib (decimal GB -> GiB).",
+    )
     # W106 LOW-4: pre-flight the budget derivation from a dry snapshot (no model
     # load, no MLX) so the floor refusal happens BEFORE the guarded GPU window opens
     # (a raise inside _load_model happens after Qwen is already unloaded).
@@ -1359,8 +1386,9 @@ class BudgetTotalDerivation:
     __slots__ = (
         "source", "budget_total_gb", "system_used_at_start_gb",
         "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
-        "floor_gib", "plan_limit_gib", "non_metal_overhead_measured_gb",
-        "plan_limit_gib_effective", "rss_semantics",
+        "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
+        "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
+        "rss_semantics",
     )
 
     def __init__(
@@ -1374,6 +1402,7 @@ class BudgetTotalDerivation:
         safety_gb,
         floor_gib,
         plan_limit_gib,
+        plan_overshoot_gib=DEFAULT_PLAN_OVERSHOOT_GIB,
         non_metal_overhead_measured_gb=None,
         plan_limit_gib_effective=None,
         rss_semantics="unmeasured",
@@ -1384,6 +1413,7 @@ class BudgetTotalDerivation:
         self.non_metal_overhead_gb = non_metal_overhead_gb
         self.kv_growth_to_max_kv_gb = kv_growth_to_max_kv_gb
         self.safety_gb = safety_gb
+        self.plan_overshoot_gib = plan_overshoot_gib
         self.floor_gib = floor_gib
         self.plan_limit_gib = plan_limit_gib
         self.non_metal_overhead_measured_gb = non_metal_overhead_measured_gb
@@ -1399,14 +1429,28 @@ class BudgetTotalDerivation:
         current.update(changes)
         return BudgetTotalDerivation(**current)
 
+    def forecast_system_peak_gib(self):
+        """HIGH-1: the forecast whole-box peak = baseline + plan + plan_overshoot +
+        non_metal_overhead.  With the plan derived by subtracting overshoot/kv/safety
+        too, this stays <= budget_total (the invariant the derivation guarantees)."""
+        if self.budget_total_gb is None:
+            return None
+        return (
+            self.system_used_at_start_gb + self.plan_limit_gib
+            + self.plan_overshoot_gib + self.non_metal_overhead_gb
+        )
+
     def formula(self) -> str:
+        fc = self.forecast_system_peak_gib()
         return (
             f"plan_limit = budget_total({self.budget_total_gb:.4g}) "
             f"- system_used_at_start({self.system_used_at_start_gb:.4g}) "
             f"- non_metal_overhead({self.non_metal_overhead_gb:.4g}) "
             f"- kv_growth_to_max_kv({self.kv_growth_to_max_kv_gb:.4g}) "
             f"- safety({self.safety_gb:.4g}) "
-            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g})"
+            f"- plan_overshoot({self.plan_overshoot_gib:.4g}) "
+            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g}; "
+            f"forecast_system_peak {fc:.4g} <= budget)"
         )
 
     def memory_keys(self) -> dict:
@@ -1414,6 +1458,7 @@ class BudgetTotalDerivation:
         SAME key set (nulls where a term does not apply) so receipts are
         self-describing regardless of which plan source ran."""
 
+        fc = self.forecast_system_peak_gib()
         return {
             "memory_plan_source": self.source,
             "budget_total_gb": (
@@ -1433,6 +1478,8 @@ class BudgetTotalDerivation:
             ),
             "budget_kv_growth_to_max_kv_gb": round(self.kv_growth_to_max_kv_gb, 4),
             "budget_safety_gb": round(self.safety_gb, 4),
+            "budget_plan_overshoot_gib": round(self.plan_overshoot_gib, 4),
+            "budget_forecast_system_peak_gb": (None if fc is None else round(fc, 4)),
             "budget_floor_gib": round(self.floor_gib, 4),
             "rss_semantics": self.rss_semantics,
         }
@@ -1445,17 +1492,19 @@ def derive_budget_total_plan(
     non_metal_overhead_gb: float,
     kv_growth_to_max_kv_gb: float,
     safety_gb: float = DEFAULT_MEMORY_SAFETY_GIB,
+    plan_overshoot_gib: float = DEFAULT_PLAN_OVERSHOOT_GIB,
     floor_gib: float = DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
 ) -> BudgetTotalDerivation:
     """Derive the MLX plan limit from David's TOTAL box budget, compensating for
     the non-Metal requirements.  All measurements are injected (pure math):
 
         plan_limit = total - system_used_at_start - non_metal_overhead
-                           - kv_growth_to_max_kv - safety
+                           - kv_growth_to_max_kv - safety - plan_overshoot
 
-    Raises ``ValueError`` (a clear, actionable message) when the derived plan
-    limit is below ``floor_gib`` -- refusing to start rather than opening a GPU
-    window on a plan too small to hold the model.
+    ``plan_overshoot`` (HIGH-1) prices the MLX allocator peak that lands OVER the
+    plan's expert-cache ceiling (KV + prefill transients), so the forecast box peak
+    = baseline + plan + overshoot + overhead stays <= budget.  Raises ``ValueError``
+    (actionable) when the derived plan limit is below ``floor_gib``.
     """
 
     for name, value in (
@@ -1464,6 +1513,7 @@ def derive_budget_total_plan(
         ("non_metal_overhead_gb", non_metal_overhead_gb),
         ("kv_growth_to_max_kv_gb", kv_growth_to_max_kv_gb),
         ("safety_gb", safety_gb),
+        ("plan_overshoot_gib", plan_overshoot_gib),
         ("floor_gib", floor_gib),
     ):
         if value < 0:
@@ -1475,6 +1525,7 @@ def derive_budget_total_plan(
         - float(non_metal_overhead_gb)
         - float(kv_growth_to_max_kv_gb)
         - float(safety_gb)
+        - float(plan_overshoot_gib)
     )
     if plan_limit < float(floor_gib):
         exc = ValueError(
@@ -1484,8 +1535,9 @@ def derive_budget_total_plan(
             f"- system_used_at_start {system_used_at_start_gb:.4g} "
             f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
             f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
-            f"- safety {safety_gb:.4g}. Raise --memory-budget-total-gib, lower "
-            f"--memory-safety-gib / --non-metal-overhead-gib, reduce --max-kv, or "
+            f"- safety {safety_gb:.4g} - plan_overshoot {plan_overshoot_gib:.4g}. "
+            f"Raise --memory-budget-total-gib, lower --memory-safety-gib / "
+            f"--non-metal-overhead-gib / --plan-overshoot-gib, reduce --max-kv, or "
             f"lower --memory-budget-floor-gib (default "
             f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
         )
@@ -1498,6 +1550,7 @@ def derive_budget_total_plan(
         non_metal_overhead_gb=float(non_metal_overhead_gb),
         kv_growth_to_max_kv_gb=float(kv_growth_to_max_kv_gb),
         safety_gb=float(safety_gb),
+        plan_overshoot_gib=float(plan_overshoot_gib),
         floor_gib=float(floor_gib),
         plan_limit_gib=plan_limit,
     )
@@ -1741,9 +1794,24 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
         args, "non_metal_overhead_gib", "non_metal_overhead_gb",
         DEFAULT_NON_METAL_OVERHEAD_GIB, "--non-metal-overhead",
     )
+    # HIGH-1: clamp the non-Metal overhead to >= 2 GiB -- the real value is ~1-2 GiB
+    # once the plan overshoot is a separate term, and a 0 estimate would under-budget.
+    if non_metal_gb < _MIN_NON_METAL_OVERHEAD_GIB:
+        print(
+            f"[ab] NOTE: --non-metal-overhead {non_metal_gb:.4g} GiB is below the "
+            f"{_MIN_NON_METAL_OVERHEAD_GIB:.4g} GiB floor; clamping up "
+            "(the real non-Metal overhead is ~1-2 GiB and the plan overshoot is a "
+            "separate --plan-overshoot-gib term).",
+            flush=True,
+        )
+        non_metal_gb = _MIN_NON_METAL_OVERHEAD_GIB
     safety_gb = _resolve_gib_flag(
         args, "memory_safety_gib", "memory_safety_gb",
         DEFAULT_MEMORY_SAFETY_GIB, "--memory-safety",
+    )
+    plan_overshoot_gib = _resolve_gib_flag(
+        args, "plan_overshoot_gib", "plan_overshoot_gb",
+        DEFAULT_PLAN_OVERSHOOT_GIB, "--plan-overshoot",
     )
     floor_gib = float(
         getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
@@ -1756,6 +1824,7 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
         non_metal_overhead_gb=non_metal_gb,
         kv_growth_to_max_kv_gb=kv_growth_gb,
         safety_gb=safety_gb,
+        plan_overshoot_gib=plan_overshoot_gib,
         floor_gib=floor_gib,
     )
 
