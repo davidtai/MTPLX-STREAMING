@@ -72,6 +72,10 @@ class RoutePlan:
     loads: tuple[SlotLoad, ...]
     evictions: tuple[SlotEviction, ...]
     generations: tuple[int | None, ...] = ()
+    # W87 single-pool admission telemetry (0 on the two-tier path).
+    pool_loads: int = 0
+    scan_inserts: int = 0
+    promotions: int = 0
 
 
 class RoutePolicyTxn:
@@ -128,6 +132,12 @@ class CacheCounters:
     bytes_read: int = 0
     prefetch_issued: int = 0
     prefetch_committed: int = 0
+    # W87 single-pool (0 on the two-tier path): pool_loads = misses admitted into
+    # the merged resident pool; scan_inserts = of those, the prefill/scan-resistant
+    # inserts; promotions = probationary->protected transitions on a later hit.
+    pool_loads: int = 0
+    scan_inserts: int = 0
+    promotions: int = 0
 
     def observe(self, plan: RoutePlan, *, expert_record_bytes: int) -> None:
         expert_record_bytes = _integer(
@@ -146,6 +156,9 @@ class CacheCounters:
         self.transient_loads += sum(not load.persistent for load in plan.loads)
         self.evictions += len(plan.evictions)
         self.bytes_read += len(plan.loads) * expert_record_bytes
+        self.pool_loads += plan.pool_loads
+        self.scan_inserts += plan.scan_inserts
+        self.promotions += plan.promotions
 
     @property
     def hit_rate(self) -> float:
@@ -167,6 +180,9 @@ class CacheCounters:
             "bytes_read": self.bytes_read,
             "prefetch_issued": self.prefetch_issued,
             "prefetch_committed": self.prefetch_committed,
+            "pool_loads": self.pool_loads,
+            "scan_inserts": self.scan_inserts,
+            "promotions": self.promotions,
         }
 
 
@@ -196,6 +212,15 @@ class LayerExpertSlotBank:
     This class plans I/O but never performs it.  The future native layer owns
     fixed Metal buffers and applies the returned ``SlotLoad`` operations using
     aligned ``pread``.
+
+    W87: with ``single_pool=True`` (env ``MTPLX_DSV41_SINGLE_SLOT_POOL``) the two
+    tiers collapse into ONE resident pool.  Every miss -- prefill or decode -- is
+    admitted into the pool with 2Q/segmented-LRU scan-resistant insertion (new
+    entries probationary, promoted to protected on a later hit, victims taken from
+    the probationary segment first, pins never victims), so a long prefill scan
+    flows through without evicting the earned set and the prompt's tail is left
+    resident for decode.  A slot bank is a pure cache, so this changes only which
+    loads happen, never a route's computed output.
     """
 
     # Decode epochs a ring-evicted expert stays unpredictable. Ring
@@ -212,6 +237,7 @@ class LayerExpertSlotBank:
         frequency_decay: float = 0.995,
         cache_policy: str = "frequency",
         prefetch_slots: int = 0,
+        single_pool: bool = False,
     ) -> None:
         expert_count = _integer("expert_count", expert_count, minimum=1)
         persistent_slots = _integer("persistent_slots", persistent_slots, minimum=0)
@@ -282,6 +308,26 @@ class LayerExpertSlotBank:
         # ``pin_working_set`` can rank the resident set by prompt-frequent
         # experts with no caller-supplied count. Decode ``_score`` breaks ties.
         self._prefill_route_freq: Counter[int] = Counter()
+        # W87 single-pool (env MTPLX_DSV41_SINGLE_SLOT_POOL): merge the persistent
+        # + transient tiers into ONE per-layer resident pool with 2Q/segmented-LRU
+        # scan-resistant admission.  All state below is inert (never read) when
+        # ``single_pool`` is False, so the two-tier path stays byte-identical.
+        self.single_pool = bool(single_pool)
+        # Experts promoted out of probation by a later hit (protected segment).
+        self._protected: set[int] = set()
+        # Resident-expert recency stamp on a pool-local monotonic clock that
+        # PREFILL advances too (unlike ``_decode_epoch``, which prefill must not
+        # touch): this is what leaves the prompt's tail resident for decode.
+        self._pool_recency: dict[int, int] = {}
+        self._pool_clock = 0
+        # Segmented-LRU protected-segment cap (~80%), leaving a probation landing
+        # zone so a scan cannot starve; promotion past the cap demotes the coldest
+        # protected expert back to probation.
+        self._protected_cap = max(1, int(self.persistent_slots * 0.8))
+        # W87 HIGH-2 (per-request warming): True once a DECODE route is planned;
+        # the next PREFILL (a new request) demotes the prior request's protected
+        # set so this prompt can re-warm.  Reset by that demote and by reset().
+        self._saw_decode_since_prefill = False
 
     @property
     def resident_experts(self) -> tuple[int, ...]:
@@ -350,8 +396,12 @@ class LayerExpertSlotBank:
         slot = self._expert_to_slot.pop(expert, None)
         if slot is not None:
             self._slot_to_expert[slot] = None
-        # A forgotten mapping is no longer resident, so it cannot stay pinned.
+        # A forgotten mapping is no longer resident, so it cannot stay pinned,
+        # protected, or carry a stale pool-recency stamp (W87: a capacity/health
+        # eviction goes through here, so the pool bookkeeping must follow).
         self._pinned.discard(expert)
+        self._protected.discard(expert)
+        self._pool_recency.pop(expert, None)
         return slot
 
     def reset(self) -> None:
@@ -369,6 +419,10 @@ class LayerExpertSlotBank:
         self._prefetch_evicted.clear()
         self._pinned.clear()
         self._prefill_route_freq.clear()
+        self._protected.clear()
+        self._pool_recency.clear()
+        self._pool_clock = 0
+        self._saw_decode_since_prefill = False
 
     def plan_prefetch(self, expert_ids: Iterable[int]) -> tuple[SlotLoad, ...]:
         """Assign ring slots for predicted experts and return their loads.
@@ -534,15 +588,41 @@ class LayerExpertSlotBank:
         # full (the return value/seed selection below is otherwise unchanged).
         experts = self._validate_experts_for_seed(expert_ids)
         self._prefill_route_freq.update(experts)
-        empty = self._persistent_capacity - self.occupancy
+        # W87 HIGH-2: a new request demotes the prior protected set here, so the
+        # seed budget below is the whole (now-unprotected) pool rather than the
+        # zero empty slots a full pool would report.
+        self._reopen_pool_for_new_request()
+        if self.single_pool:
+            # Budget = capacity - protected: demoted residents are probationary and
+            # the seed evicts them, so the seed can span the whole pool per request.
+            empty = self._persistent_capacity - len(self._protected)
+        else:
+            empty = self._persistent_capacity - self.occupancy
         if empty <= 0:
             self._prefill_seed_candidates.clear()
             return ()
         counts = Counter(experts)
         ranked = sorted(counts, key=lambda expert: (-counts[expert], expert))
-        chosen = tuple(
-            expert for expert in ranked if expert not in self._expert_to_slot
-        )[:empty]
+        if self.single_pool:
+            # W87 IMPORTANT: rank the top-``empty`` by frequency REGARDLESS of
+            # residency.  A same-hot-set request 2 returns experts still resident
+            # (demoted to probation by the reopen); RE-PROTECT those in place so the
+            # seed of the low-frequency remainder cannot evict them, and seed only
+            # the NON-resident chosen for admission.  Without this the demote + seed
+            # evicts the returning hot set (only ~12/49 survive; first-64 0.355).
+            # Recency is refreshed by ASCENDING frequency (least-frequent lowest),
+            # matching the seed-first admission order.
+            chosen_all = ranked[:empty]
+            resident_chosen = [e for e in chosen_all if e in self._expert_to_slot]
+            for expert in sorted(resident_chosen, key=lambda e: counts[e]):
+                self._protected.add(expert)
+                self._pool_clock += 1
+                self._pool_recency[expert] = self._pool_clock
+            chosen = tuple(e for e in chosen_all if e not in self._expert_to_slot)
+        else:
+            chosen = tuple(
+                expert for expert in ranked if expert not in self._expert_to_slot
+            )[:empty]
         self._prefill_seed_candidates = set(chosen)
         return chosen
 
@@ -653,6 +733,11 @@ class LayerExpertSlotBank:
                     f"expert id {expert} is outside [0, {self.expert_count})"
                 )
         unique_count = len(dict.fromkeys(experts))
+        # W87 (review HIGH-1): the single-pool wave width is transient_slots (the
+        # merged-capacity widening was retired -- protected/pinned slots make a
+        # wider prefill wave unserviceable), so the route bound is transient_slots
+        # on BOTH paths, exactly as before.  route_waves keeps every wave within
+        # it; the plan() overflow guard below is the final tripwire.
         if unique_count > self.transient_slots:
             raise ValueError(
                 "transient_slots must cover the maximum unique experts in one route"
@@ -725,6 +810,108 @@ class LayerExpertSlotBank:
         self._slot_to_expert[slot] = expert
         self._expert_to_slot[expert] = slot
 
+    # ------------------------------------------------------------------
+    # W87 single-pool (env MTPLX_DSV41_SINGLE_SLOT_POOL) 2Q admission.
+    # ------------------------------------------------------------------
+    def _pool_victim_slot(
+        self, *, pinned: set[int], allow_protected: bool
+    ) -> int | None:
+        """Coldest PROBATIONARY resident; only if ``allow_protected`` (decode) and
+        probation is empty, the coldest PROTECTED resident; never a route hit
+        (``pinned``) nor a W64 pin (``_pinned``).  Segmented-LRU: a scan-landing
+        (probationary) expert is evicted before any promoted one.  During PREFILL
+        the caller passes ``allow_protected=False`` (HIGH-3), so a wide prefill
+        wave can NEVER evict the earned/seeded set -- it overflows to transient
+        instead (bounded by :meth:`pool_admission_capacity`)."""
+
+        blocked = pinned | self._pinned if self._pinned else pinned
+        probation: list[tuple[int, int]] = []
+        protected: list[tuple[int, int]] = []
+        for slot, expert in enumerate(self._slot_to_expert):
+            if expert is None or expert in blocked:
+                continue
+            recency = self._pool_recency.get(expert, 0)
+            if expert in self._protected:
+                protected.append((recency, slot))
+            else:
+                probation.append((recency, slot))
+        if probation:
+            return min(probation)[1]
+        if allow_protected and protected:
+            return min(protected)[1]
+        return None
+
+    def _pool_admit(
+        self,
+        *,
+        expert: int,
+        evictions: list[SlotEviction],
+        pinned: set[int],
+        protect: bool,
+        allow_protected: bool,
+    ) -> int | None:
+        """Admit a miss into the merged resident pool.  ``protect`` marks it
+        PROTECTED on entry (a frequency-seed expert -- HIGH-2); otherwise it lands
+        PROBATIONARY.  ``allow_protected`` lets the victim search fall back to the
+        protected segment (decode) or not (prefill -- HIGH-3).  Returns the slot,
+        or None when no admissible slot exists (the miss overflows to transient)."""
+
+        slot = self._empty_persistent_slot()
+        if slot is None:
+            slot = self._pool_victim_slot(
+                pinned=pinned, allow_protected=allow_protected
+            )
+        if slot is None:
+            return None
+        victim = self._slot_to_expert[slot]
+        if victim is not None:
+            self._protected.discard(victim)
+            self._pool_recency.pop(victim, None)
+        self._assign_persistent(slot=slot, expert=expert, evictions=evictions)
+        self._pool_clock += 1
+        self._pool_recency[expert] = self._pool_clock
+        if protect:
+            self._protected.add(expert)
+        else:
+            self._protected.discard(expert)
+        return slot
+
+    def _pool_touch(self, expert: int) -> int:
+        """Refresh a resident expert's pool recency and promote it out of
+        probation on this (re-)reference.  Returns 1 iff it was promoted now."""
+
+        self._pool_clock += 1
+        self._pool_recency[expert] = self._pool_clock
+        if expert in self._protected:
+            return 0
+        self._protected.add(expert)
+        if len(self._protected) > self._protected_cap:
+            # Demote the coldest OTHER protected expert back to probation (still
+            # resident) so the probation landing zone never starves under a
+            # promote-heavy workload.
+            coldest = min(
+                (e for e in self._protected if e != expert),
+                key=lambda e: self._pool_recency.get(e, 0),
+                default=None,
+            )
+            if coldest is not None:
+                self._protected.discard(coldest)
+        return 1
+
+    def _reopen_pool_for_new_request(self) -> None:
+        """W87 HIGH-2: on the first PREFILL after a DECODE (a new request), demote
+        this layer's protected hot set -- clear ``_protected`` but KEEP
+        ``_pool_recency`` (LRU order) -- so the new prompt's frequency seed can
+        re-warm the pool and its prefill scan can evict the prior request's set.
+        Without this, a served daemon warms only the FIRST request: the seed budget
+        would be zero (pool full) and the stale protected set would never demote, so
+        request 2 (a different hot set) starts colder than the two-tier LRU.  No-op
+        unless a decode route was seen since the last reopen (and off the flag)."""
+
+        if self.single_pool and self._saw_decode_since_prefill:
+            self._protected.clear()
+            self._saw_decode_since_prefill = False
+
     def plan(
         self,
         expert_ids: Iterable[int],
@@ -739,6 +926,8 @@ class LayerExpertSlotBank:
 
         if phase is RoutingPhase.DECODE:
             self._decode_epoch += 1
+            if self.single_pool:
+                self._saw_decode_since_prefill = True
             for expert in experts:
                 self._touch_decode(expert)
 
@@ -765,9 +954,83 @@ class LayerExpertSlotBank:
         evictions: list[SlotEviction] = []
         pinned = set(hit_set)
         transient_experts: list[int] = []
+        pool_loads = 0
+        scan_inserts = 0
+        promotions = 0
+        if self.single_pool:
+            # Decode hits promote (2Q); PREFILL hits only refresh recency --
+            # prefill promotion is FREQUENCY-driven via the seed (HIGH-2), not
+            # "hit in a later wave" (which never fires on the real layer-major
+            # single sorted route).  Prefetch-ring hits live outside the pool.
+            promote_hits = phase is RoutingPhase.DECODE
+            for expert in hit_set:
+                if expert in self._expert_to_slot:
+                    if promote_hits:
+                        promotions += self._pool_touch(expert)
+                    else:
+                        self._pool_clock += 1
+                        self._pool_recency[expert] = self._pool_clock
+
+        if self.single_pool and phase is RoutingPhase.PREFILL:
+            # HIGH-2 fallback: a prefill route that skipped prepare_prefill_seed
+            # still reopens the pool for the new request here (idempotent).
+            self._reopen_pool_for_new_request()
+            if self._prefill_seed_candidates:
+                # HIGH-2: admit the frequency-seed experts FIRST within the wave so
+                # they claim (protected) slots before the low-frequency scan fills
+                # it -- a seed appearing late in an id-sorted wave would otherwise
+                # find the pool full and overflow to transient (lost, since
+                # sorted-unique waves never revisit it).  LOW: order the seed by
+                # ASCENDING frequency so the least-frequent seed gets the lowest
+                # recency and is the first protected expert a later decode eviction
+                # drops (not merely the lowest id).  Reordering ADMISSION never
+                # changes the route output: ``resolved`` maps each expert to its
+                # slot by identity and the gather is recombined by original position.
+                _seed_first = sorted(
+                    (e for e in miss_order if e in self._prefill_seed_candidates),
+                    key=lambda e: self._prefill_route_freq.get(e, 0),
+                )
+                if _seed_first:
+                    _rest = [
+                        e
+                        for e in miss_order
+                        if e not in self._prefill_seed_candidates
+                    ]
+                    miss_order = _seed_first + _rest
 
         for expert in miss_order:
             persistent_slot: int | None = None
+            if self.single_pool:
+                is_prefill = phase is RoutingPhase.PREFILL
+                # HIGH-2: a prompt-frequency seed expert enters PROTECTED so a
+                # later prefill wave (or a re-prefill) cannot scan it out; every
+                # other prefill miss lands probationary.  HIGH-3: prefill never
+                # evicts a protected/seeded expert (allow_protected=False) -- it
+                # overflows to transient instead.
+                is_seed = is_prefill and expert in self._prefill_seed_candidates
+                persistent_slot = self._pool_admit(
+                    expert=expert,
+                    evictions=evictions,
+                    pinned=pinned,
+                    protect=is_seed,
+                    allow_protected=not is_prefill,
+                )
+                if is_seed:
+                    self._prefill_seed_candidates.discard(expert)
+                if persistent_slot is None:
+                    transient_experts.append(expert)
+                    continue
+                pool_loads += 1
+                if is_seed:
+                    promotions += 1
+                elif is_prefill:
+                    scan_inserts += 1
+                pinned.add(expert)
+                resolved[expert] = persistent_slot
+                loads.append(
+                    SlotLoad(expert=expert, slot=persistent_slot, persistent=True)
+                )
+                continue
             if (
                 phase is RoutingPhase.PREFILL
                 and expert in self._prefill_seed_candidates
@@ -803,6 +1066,19 @@ class LayerExpertSlotBank:
             resolved[expert] = persistent_slot
             loads.append(SlotLoad(expert=expert, slot=persistent_slot, persistent=True))
 
+        if self.single_pool and len(transient_experts) > self.transient_slots:
+            # HIGH-1 tripwire: a correctly bounded wave (route_waves ->
+            # pool_admission_capacity) can never overflow the transient scratch.
+            # Raise BEFORE emitting an out-of-plan slot index (which would fault
+            # deep in ExpertSlotPool._physical) so a bounding bug is loud here.
+            raise ValueError(
+                "single-pool route overflowed the transient scratch: "
+                f"{len(transient_experts)} experts spilled but only "
+                f"{self.transient_slots} transient slots exist "
+                f"(persistent_capacity={self._persistent_capacity}, "
+                f"pinned={len(self._pinned)}); the route was not bounded by "
+                "pool_admission_capacity()."
+            )
         transient_base = self.persistent_slots
         for offset, expert in enumerate(transient_experts):
             slot = transient_base + offset
@@ -821,6 +1097,9 @@ class LayerExpertSlotBank:
             misses=tuple(miss_order),
             loads=tuple(loads),
             evictions=tuple(evictions),
+            pool_loads=pool_loads,
+            scan_inserts=scan_inserts,
+            promotions=promotions,
         )
 
     def plan_transaction(
@@ -841,6 +1120,10 @@ class LayerExpertSlotBank:
             for expert in unique_experts
         }
         seed_candidates = set(self._prefill_seed_candidates)
+        pool_protected = set(self._protected)
+        pool_recency = dict(self._pool_recency)
+        pool_clock = self._pool_clock
+        saw_decode = self._saw_decode_since_prefill
         plan = self.plan(experts, phase=phase)
 
         def rollback() -> None:
@@ -861,6 +1144,10 @@ class LayerExpertSlotBank:
                 history = self._history[expert]
                 history.score, history.score_epoch, history.last_used = values
             self._prefill_seed_candidates = set(seed_candidates)
+            self._protected = pool_protected
+            self._pool_recency = pool_recency
+            self._pool_clock = pool_clock
+            self._saw_decode_since_prefill = saw_decode
 
         return plan, RoutePolicyTxn(rollback=rollback)
 
@@ -888,10 +1175,26 @@ class LayerExpertSlotBank:
 
         if phase is RoutingPhase.DECODE:
             self._decode_epoch += 1
+            if self.single_pool:
+                self._saw_decode_since_prefill = True
             for expert in experts:
                 self._touch_decode(expert)
             for expert in unique_experts:
                 self._history[expert].last_used = self._decode_epoch
+
+        promotions = 0
+        if self.single_pool:
+            # Phase-guard: a DECODE all-hit route promotes (2Q); a PREFILL all-hit
+            # only refreshes recency -- prefill promotion is frequency-seed-driven,
+            # not hit-driven (matches the plan() hit handling).
+            promote = phase is RoutingPhase.DECODE
+            for expert in unique_experts:
+                if expert in self._expert_to_slot:
+                    if promote:
+                        promotions += self._pool_touch(expert)
+                    else:
+                        self._pool_clock += 1
+                        self._pool_recency[expert] = self._pool_clock
 
         return RoutePlan(
             phase=phase,
@@ -901,6 +1204,7 @@ class LayerExpertSlotBank:
             misses=(),
             loads=(),
             evictions=(),
+            promotions=promotions,
         )
 
     def try_plan_all_hits_transaction(
@@ -920,6 +1224,10 @@ class LayerExpertSlotBank:
             )
             for expert in unique_experts
         }
+        pool_protected = set(self._protected)
+        pool_recency = dict(self._pool_recency)
+        pool_clock = self._pool_clock
+        saw_decode = self._saw_decode_since_prefill
         plan = self.try_plan_all_hits(experts, phase=phase)
         if plan is None:
             return None
@@ -929,6 +1237,10 @@ class LayerExpertSlotBank:
             for expert, values in histories.items():
                 history = self._history[expert]
                 history.score, history.score_epoch, history.last_used = values
+            self._protected = pool_protected
+            self._pool_recency = pool_recency
+            self._pool_clock = pool_clock
+            self._saw_decode_since_prefill = saw_decode
 
         return plan, RoutePolicyTxn(rollback=rollback)
 

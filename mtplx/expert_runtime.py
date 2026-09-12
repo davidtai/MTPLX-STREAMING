@@ -1795,6 +1795,11 @@ def parse_pin_refresh_tokens(value: str | None) -> int:
     return n if n >= 1 else 0
 
 
+# W87: first N DECODE tokens counted as "cold start" for the first-N-token vs
+# steady-state decode hit-rate receipt fields (both slot-pool paths populate them).
+_COLD_START_DECODE_TOKENS = 64
+
+
 class ExpertStreamingRuntime:
     """Connect cache policy, checked I/O, fixed slots, and KV admission."""
 
@@ -1811,6 +1816,7 @@ class ExpertStreamingRuntime:
         memory_cap_report: dict[str, Any] | None = None,
         integrity_report: dict[str, Any] | None = None,
         pipeline_ledger: ExpertPipelineLedger | None = None,
+        single_slot_pool: bool = False,
     ) -> None:
         self.root = root
         self.spec = spec
@@ -1860,6 +1866,25 @@ class ExpertStreamingRuntime:
         self.island_layer_set = frozenset(config.island_layers) | frozenset(
             config.mmap_island_layers
         )
+        # W87 single-slot pool (env MTPLX_DSV41_SINGLE_SLOT_POOL): merge each
+        # layer's persistent + transient tiers into ONE scan-resistant resident
+        # pool (only layer cache scope; the two-tier path is byte-identical off).
+        self._single_slot_pool = bool(single_slot_pool)
+        # W87 cold-start decode telemetry: first-N-token vs steady-state decode
+        # hit rate, ALWAYS ON so both paths report the same receipt fields.
+        self._streamed_layer_set = (
+            frozenset(spec.routed_layer_indices) - self.island_layer_set
+        )
+        self._cold_start_decode_tokens = _COLD_START_DECODE_TOKENS
+        self._decode_token_index = 0
+        self._decode_layers_seen: set[int] = set()
+        self._cold_decode_hits = 0
+        self._cold_decode_requests = 0
+        self._steady_decode_hits = 0
+        self._steady_decode_requests = 0
+        # MED-4: re-open the cold window on the first PREFILL route after decode
+        # (a new request), so each request's first decode steps are measured fresh.
+        self._saw_decode_since_prefill = False
         self._banks = (
             {}
             if self._global_bank is not None
@@ -1871,6 +1896,7 @@ class ExpertStreamingRuntime:
                     frequency_decay=config.frequency_decay,
                     cache_policy=config.cache_policy,
                     prefetch_slots=plan.prefetch_slots_per_layer,
+                    single_pool=self._single_slot_pool,
                 )
                 for layer in spec.routed_layer_indices
                 if layer not in self.island_layer_set
@@ -2185,6 +2211,17 @@ class ExpertStreamingRuntime:
                 artifact_root,
                 verify_sidecar_hash=config.verify_sidecar_hash_at_open,
             )
+        _ssp_env = os.environ.get("MTPLX_DSV41_SINGLE_SLOT_POOL") == "1"
+        # MED-6: the single slot pool is implemented only for per-layer banks
+        # (GlobalExpertSlotBank has no pool policy and would fault every prefill
+        # wave). Gate it on layer scope and warn rather than crash a served config.
+        single_slot_pool = _ssp_env and config.cache_scope == "layer"
+        if _ssp_env and config.cache_scope != "layer":
+            _LOGGER.warning(
+                "MTPLX_DSV41_SINGLE_SLOT_POOL ignored: it requires cache_scope "
+                "'layer' (got %r); running the two-tier path.",
+                config.cache_scope,
+            )
         plan = config.memory_plan(
             model_spec,
             additional_resident_bytes=additional_resident_bytes,
@@ -2322,6 +2359,7 @@ class ExpertStreamingRuntime:
             slots,
             memory_cap_report=cap_report,
             integrity_report=integrity_report,
+            single_slot_pool=single_slot_pool,
             **pipeline_kwargs,
         )
         if config.miss_shadow is not None:
@@ -2785,6 +2823,65 @@ class ExpertStreamingRuntime:
         self._phase_counters[plan.phase].observe(
             plan, expert_record_bytes=record_bytes
         )
+        self._observe_cold_start_unlocked(layer, plan)
+
+    def _observe_cold_start_unlocked(self, layer: int, plan: RoutePlan) -> None:
+        """W87: attribute each DECODE layer-route's assignment hits to the
+        first-N-step (cold-start) or steady-state bucket, advancing the decode-step
+        index at the token boundary (all streamed layers seen, or a layer repeats).
+        Assignment-grained to match ``CacheCounters.hit_rate``.  Always on; both
+        slot-pool paths populate the same fields.  A decode STEP == one full layer
+        sweep == one token in --decode-mode ar (the mode the window A/B runs in);
+        MED-4 re-opens the cold window on the first PREFILL route after decode so
+        each request is measured fresh."""
+
+        if plan.phase is not RoutingPhase.DECODE:
+            if plan.phase is RoutingPhase.PREFILL and self._saw_decode_since_prefill:
+                self._decode_token_index = 0
+                self._decode_layers_seen = set()
+                self._saw_decode_since_prefill = False
+            return
+        self._saw_decode_since_prefill = True
+        hit_experts = set(plan.hits)
+        assignment_hits = sum(expert in hit_experts for expert in plan.experts)
+        requests = len(plan.experts)
+        if self._decode_token_index < self._cold_start_decode_tokens:
+            self._cold_decode_hits += assignment_hits
+            self._cold_decode_requests += requests
+        else:
+            self._steady_decode_hits += assignment_hits
+            self._steady_decode_requests += requests
+        seen = self._decode_layers_seen
+        if layer in seen:
+            self._decode_token_index += 1
+            self._decode_layers_seen = {layer}
+        else:
+            seen.add(layer)
+            if self._streamed_layer_set and seen >= self._streamed_layer_set:
+                self._decode_token_index += 1
+                self._decode_layers_seen = set()
+
+    def _cold_start_telemetry_locked(self) -> dict[str, Any]:
+        """W87 cold-start decode telemetry (caller holds the counter lock)."""
+
+        cold_h, cold_r = self._cold_decode_hits, self._cold_decode_requests
+        warm_h, warm_r = self._steady_decode_hits, self._steady_decode_requests
+        return {
+            "cold_start_decode_steps": self._cold_start_decode_tokens,
+            "decode_steps_observed": self._decode_token_index,
+            "measurement_basis": (
+                "first-64 DECODE STEPS, single-request (verify calls under DSpark, "
+                "one token per step under --decode-mode ar; the cold window "
+                "re-opens per request). Run the window A/B in --decode-mode ar."
+            ),
+            "single_slot_pool": self._single_slot_pool,
+            "first_64_steps_hits": cold_h,
+            "first_64_steps_requests": cold_r,
+            "first_64_steps_hit_rate": (cold_h / cold_r) if cold_r else None,
+            "steady_hits": warm_h,
+            "steady_requests": warm_r,
+            "steady_hit_rate": (warm_h / warm_r) if warm_r else None,
+        }
 
     def _observe_incremental_unlocked(self, *, routes: int, parts: int) -> None:
         self._incremental_miss_routes += routes
@@ -3245,9 +3342,21 @@ class ExpertStreamingRuntime:
     ) -> tuple[RouteWave, ...]:
         return partition_route_waves(
             expert_ids,
-            max_unique_experts=self.plan.transient_slots,
+            max_unique_experts=self._batch_admission_slots(),
             sort_unique=sort_unique,
         )
+
+    def _batch_admission_slots(self) -> int:
+        """W87: max unique experts admitted in ONE transaction (one fence) =
+        ``plan.batch_admission_slots`` (== transient_slots on both paths; the merged-
+        capacity widening was retired, review HIGH-1).  Consumed by ``route_waves``
+        and the expert_mlx verify single-fence gate."""
+
+        # W87: the single-fence wave width is plan.batch_admission_slots
+        # (== transient_slots; the merged-capacity widening was retired, review
+        # HIGH-1) -- transient_slots on both paths (byte-identical).  The single-pool
+        # win is the admission policy (prefill warms the pool, decode 2Q), not width.
+        return int(self.plan.batch_admission_slots or self.plan.transient_slots)
 
     def observe_route(
         self,
@@ -4034,6 +4143,13 @@ class ExpertStreamingRuntime:
                 }
                 self._incremental_miss_routes = 0
                 self._incremental_miss_parts = 0
+                self._decode_token_index = 0
+                self._decode_layers_seen = set()
+                self._cold_decode_hits = 0
+                self._cold_decode_requests = 0
+                self._steady_decode_hits = 0
+                self._steady_decode_requests = 0
+                self._saw_decode_since_prefill = False
             if self.config.trace_routes:
                 with self._route_trace_lock:
                     previous_epoch = self._route_trace_epoch
@@ -4074,6 +4190,7 @@ class ExpertStreamingRuntime:
                 "routes": self._incremental_miss_routes,
                 "parts": self._incremental_miss_parts,
             }
+            cold_start = self._cold_start_telemetry_locked()
         # Never hold the counter lock across slot health/fence inspection.
         slots = self.slots.snapshot()
         snapshot = {
@@ -4092,6 +4209,8 @@ class ExpertStreamingRuntime:
                     else None
                 ),
                 "transient_slots": self.plan.transient_slots,
+                "batch_admission_slots": self._batch_admission_slots(),
+                "single_slot_pool": self._single_slot_pool,
                 "allocated_bytes": self.plan.allocated_bytes,
                 "unallocated_bytes": self.plan.unallocated_bytes,
                 "miss_shadow": self.plan.miss_shadow,
@@ -4117,6 +4236,7 @@ class ExpertStreamingRuntime:
             "cache_by_layer": cache_by_layer,
             "cache_by_phase": cache_by_phase,
             "incremental_misses": incremental_misses,
+            "cold_start": cold_start,
             "slots": slots,
             "pin_working_set": self.pinned_working_set_telemetry(),
             "device_route_pinned": self.device_route_pinned_telemetry(),
@@ -4188,6 +4308,7 @@ class ExpertStreamingRuntime:
                 "routes": self._incremental_miss_routes,
                 "parts": self._incremental_miss_parts,
             }
+            cold_start = self._cold_start_telemetry_locked()
         # Pool occupancy has independent locks; do not hold the counter lock
         # across that snapshot.
         slots = self.slots.resource_telemetry_snapshot()
@@ -4200,6 +4321,7 @@ class ExpertStreamingRuntime:
             "cache_by_layer": cache_by_layer,
             "cache_by_phase": cache_by_phase,
             "incremental_misses": incremental_misses,
+            "cold_start": cold_start,
             "pin_working_set": self.pinned_working_set_telemetry(),
             "device_route_pinned": self.device_route_pinned_telemetry(),
             **slots,

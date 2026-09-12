@@ -234,6 +234,14 @@ ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K35: shared sel
 # ~45% GPU-busy (gpu_usage_ratio), freq swinging 580-1381 MHz: the GPU DVFS-downclocks
 # in the gaps between B=1 bursts.  The decisive per-mode control is swa_only; see
 # docs/deepseek-v41/W90_ATTN_IN_SITU.md and the --utilization telemetry.
+# W87: merge each layer's persistent + transient slot tiers into ONE scan-resistant
+# resident pool (prefill AND decode misses admitted, probationary at the eviction
+# end, promoted on a later hit).  Memory is UNCHANGED (allocation identical); it
+# warms the pool during the 16K prefill so decode starts on the prompt tail instead
+# of cold, and widens the verify single-fence capacity to persistent+transient.
+# A pure cache change -> BYTE-IDENTICAL tokens/logits to cell16k_ring; the byte-
+# identity summary must show it clean.  Composes with the window ring (independent).
+SINGLE_SLOT_POOL_ENV = "MTPLX_DSV41_SINGLE_SLOT_POOL"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -282,6 +290,7 @@ ALL_LEVER_ENVS = (
     WINDOW_RING_HEADROOM_ENV,
     WINDOW_RING_MAXKV_ENV,
     ATTN_SHAPE_STABLE_ENV,
+    SINGLE_SLOT_POOL_ENV,
 )
 
 
@@ -299,6 +308,7 @@ def _preset(
     window_ring_headroom=None, window_ring_maxkv=None,
     attn_shape_stable=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
+    single_slot_pool=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -351,6 +361,7 @@ def _preset(
         WINDOW_RING_HEADROOM_ENV: window_ring_headroom,
         WINDOW_RING_MAXKV_ENV: window_ring_maxkv,
         ATTN_SHAPE_STABLE_ENV: attn_shape_stable,
+        SINGLE_SLOT_POOL_ENV: single_slot_pool,
     }
 
 
@@ -646,6 +657,22 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
+    ),
+    # W87 (window 35): cell16k_ring + the single-slot pool (MTPLX_DSV41_SINGLE_SLOT_
+    # POOL).  EXACT key set of cell16k_ring plus single_slot_pool="1".  Merges each
+    # layer's persistent + transient tiers into ONE scan-resistant resident pool so
+    # the 16K prefill leaves the prompt tail resident and decode starts warm instead
+    # of re-streaming its own working set (measured two-tier: persistent learns
+    # nothing from prefill; decode hit rate 0.741 at 49 slots/layer).  Allocation is
+    # UNCHANGED (bytes identical to cell16k_ring), so this is a pure residency change
+    # -> BYTE-IDENTICAL tokens/logits; the direct A/B vs cell16k_ring isolates the
+    # cold-start recovery, which reads from the receipt's cold_start block
+    # (decode_hit_rate_first_64_steps vs steady_state, populated by BOTH arms).
+    "cell16k_ring_pool": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        single_slot_pool="1",
     ),
 }
 
@@ -1240,6 +1267,28 @@ def _stream_counters_snapshot(model):
         return None
 
 
+def _cold_reset_expert_streaming(model) -> bool:
+    """W87 HIGH-3: cold-reset the expert-streaming residency + counters between the
+    AR reference pass and the DSpark pass of a --decode-mode dspark cell, so the
+    DSpark prefill measures a COLD bank (the AR pass otherwise leaves it warm, which
+    confounds the single-slot-pool warming A/B).  Best-effort; append-only."""
+    try:
+        rt = getattr(model, "_mtplx_expert_runtime", None)
+        if rt is None:
+            return False
+        # W87 HIGH-1: the loader attaches the BARE ExpertStreamingRuntime (which HAS
+        # reset()), not an MTPLXRuntime (whose .expert_streaming has it); resolve
+        # either shape, else the DSpark cold reset was a silent no-op.
+        es = getattr(rt, "expert_streaming", None) or rt
+        reset = getattr(es, "reset", None)
+        if callable(reset):
+            reset()
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def _stream_counters_block(run, decode_tokens, resolved_plan):
     """DECODE-scoped serve_stream_counters delta for the receipt (or None).
 
@@ -1807,6 +1856,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR
             # ids byte-for-byte (verify is authoritative); assert it in the
             # receipt and record tokens/cycle + accept-by-depth.
+            # W87 HIGH-3: cold-reset residency so the DSpark prefill is not warmed
+            # by the AR reference pass (which would confound the pool A/B).
+            _dspark_cold_reset = _cold_reset_expert_streaming(model)
             dsp = _generate_dspark(
                 model=model, mx=mx, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
@@ -1819,6 +1871,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             st = dsp["stats"]
             receipt["dspark"] = {
                 "depth": int(args.dspark_depth),
+                "cold_reset_before_pass": _dspark_cold_reset,
                 "byte_identical_vs_ar": byte_identical,
                 "decode_wall_s": dsp["decode_wall_s"],
                 "decode_tok_s": (
