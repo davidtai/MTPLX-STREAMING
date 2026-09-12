@@ -152,15 +152,18 @@ else
   bad "used the temp lock path" "lock line did not reference ${LOCK}"
 fi
 
-# 7b. W106 HIGH-2: the step-start log states BOTH guard caps explicitly, with the
-#     new defaults (child-tree 93 GiB ~= 100 GB, system ceiling 102 GiB < 110 GB).
-#     (This scenario runs with the DEFAULT caps -- no cap env overrides.)
-if grep -q "phase 4: guard caps -- child-tree RSS cap 93.0 GiB" "${LOG}" \
+# 7b. W106 HIGH-2 + MEDIUM-B: the step-start log states BOTH guard caps, and since
+#     this scenario's baseline is 50 GiB used with the DEFAULT 93 GiB child cap and
+#     102 GiB ceiling (50 + 93 > 102), MEDIUM-B LOWERS the effective child cap to
+#     ceiling - used_start = 52 GiB. Assert the lowering line (naming the original
+#     93 GiB default) + the guard-caps line showing the 52 GiB effective cap.
+if grep -q "phase 4: effective child-tree cap 52.0 GiB (lowered from 93.0 GiB" "${LOG}" \
+   && grep -q "phase 4: guard caps -- child-tree RSS cap 52.0 GiB" "${LOG}" \
    && grep -q "system used ceiling 102 GiB" "${LOG}"; then
-  ok "step-start states both guard caps at the W106 defaults (93 GiB / 102 GiB)"
+  ok "MEDIUM-B: effective child cap lowered to ceiling-used_start (52 GiB); ceiling 102 GiB (HIGH-2)"
 else
-  bad "step-start states both guard caps (93 GiB child, 102 GiB ceiling)" \
-      "$(grep 'guard caps' "${LOG}" || echo 'no guard-caps line')"
+  bad "MEDIUM-B effective child cap 52 GiB + 102 GiB ceiling" \
+      "$(grep -E 'effective child-tree cap|guard caps' "${LOG}" || echo 'no cap lines')"
 fi
 
 # =============================================================================
@@ -270,6 +273,40 @@ if grep -q "GPU_WINDOW_KILL_GRACE_SECONDS='abc' is not a non-negative integer; u
   ok "non-integer kill-grace is validated and falls back to 2 (LOW-2)"
 else
   bad "non-integer kill-grace validation" "warning line not found"
+fi
+
+# =============================================================================
+# W106 MEDIUM-A: a FRACTIONAL guard-cap env (e.g. 93.13, a GiB/GB confusion) must
+# be validated to an integer BEFORE phase 0 (warn + fall back to the default), not
+# left unset to break `$(( GB * 1024^3 ))` and, under set -u, kill the window after
+# Qwen is booted out.  Run a trivial fast step; assert the warning + a clean exit.
+# =============================================================================
+MA_LOG="${TMP}/mediuma.log"
+GPU_WINDOW_TEST_MODE=1 \
+MTPLX_GPU_LOCK="${TMP}/mediuma.lock" \
+GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
+GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
+GPU_WINDOW_RSS_POLL_SECONDS=1 \
+GPU_WINDOW_TOTAL_MEM_CEILING_GB=93.13 \
+  bash "${SCRIPT}" bash -c "true" >"${MA_LOG}" 2>&1
+MA_RC=$?
+
+echo "----- gpu_window.sh log (MEDIUM-A fractional ceiling) -----"
+cat "${MA_LOG}"
+echo "-----------------------------------------------------------"
+
+# 14. the fractional ceiling was validated + fell back to 102 (no crash)
+if grep -q "GPU_WINDOW_TOTAL_MEM_CEILING_GB=93.13 is not a non-negative integer (GiB); using 102" "${MA_LOG}"; then
+  ok "MEDIUM-A: fractional system ceiling validated, fell back to 102"
+else
+  bad "MEDIUM-A fractional ceiling validation" "warning line not found"
+fi
+
+# 15. the window ran to a clean exit (the arithmetic did not break under set -u)
+if [[ "${MA_RC}" -eq 0 ]]; then
+  ok "MEDIUM-A: window completed cleanly with the fallback ceiling (no set -u crash)"
+else
+  bad "MEDIUM-A window clean exit" "exit code was ${MA_RC}"
 fi
 
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"

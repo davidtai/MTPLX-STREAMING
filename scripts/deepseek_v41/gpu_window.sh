@@ -50,6 +50,23 @@
 set -uo pipefail  # intentionally NOT -e: exit codes are managed explicitly so
                   # the teardown trap always runs and restores the resident agent.
 
+# W106 MEDIUM-A: several GiB caps feed bash arithmetic (`GB * 1024^3`, `X * 4`) that
+# a fractional/non-integer value would break -- and with `set -u` an unset derived
+# var would kill the window at the first poll AFTER Qwen is already booted out.
+# Validate them to a non-negative INTEGER BEFORE phase 0 (warn + fall back to the
+# default, like KILL_GRACE).  Defined before the config block so it can guard it.
+# NOTE: the env var names carry GiB despite the historical `_GB` suffix (see the
+# W106 doc "Units" section); the value is GiB (1 GiB = 1024^3 bytes).
+_int_or_default() {  # $1=value $2=default $3=env-name -> a valid non-negative int
+  if [[ "$1" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$1"
+  else
+    printf '%s [gpu_window] WARN: %s=%s is not a non-negative integer (GiB); using %s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$3" "$1" "$2" >&2
+    printf '%s' "$2"
+  fi
+}
+
 # ------------------------------- configuration -------------------------------
 LOCK_PATH="${MTPLX_GPU_LOCK:-/tmp/mtplx-gpu-exclusive.lock}"
 LOCK_TIMEOUT="${GPU_WINDOW_LOCK_TIMEOUT:-0}"          # seconds; 0 = block forever
@@ -57,7 +74,7 @@ QWEN_LABEL="${GPU_WINDOW_QWEN_LABEL:-com.tea.qwen}"
 WIRED_CAP_MB="${GPU_WINDOW_WIRED_CAP_MB:-102400}"     # 100 GiB, never exceeded/raised
 STOP_TIMEOUT="${GPU_WINDOW_STOP_TIMEOUT:-180}"        # seconds to confirm the stop
 RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm restore
-MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"        # the step needs this much available after the stop
+MIN_AVAIL_GB="$(_int_or_default "${GPU_WINDOW_MIN_AVAIL_GB:-100}" 100 GPU_WINDOW_MIN_AVAIL_GB)"  # GiB the step needs available after the stop
 # W106 HIGH-2: all guard caps are GiB (bytes = N * 1024^3), stated explicitly.
 # Default child-tree RSS cap = 93 GiB ~= 100 GB (David's "100 GB total for
 # everything").  This cap is LIVE for the first time (pre-W106 the poll read the
@@ -73,9 +90,9 @@ RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
 # cap are resident (their footprint co-resides with the step's).
 # W106 HIGH-2: GiB. Default system ceiling = 102 GiB ~= 109.5 GB, just under the
 # 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
-TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}"   # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
+TOTAL_MEM_CEILING_GB="$(_int_or_default "${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}" 102 GPU_WINDOW_TOTAL_MEM_CEILING_GB)"  # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
 TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
-FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # refuse to start if another mtplx/python worker exceeds this RSS
+FOREIGN_WORKER_RSS_GB="$(_int_or_default "${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}" 2 GPU_WINDOW_FOREIGN_WORKER_RSS_GB)"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
 VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
 PS_CMD="${GPU_WINDOW_PS_CMD:-/bin/ps}"                           # overridable for the foreign-worker scan unit test
                                                                 # (also used for the phase-4 step-tree RSS walk below)
@@ -498,10 +515,24 @@ fi
 USED_START="$(used_mem_bytes)"
 log "phase 4: system used memory at start: $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB)"
 
+# W106 MEDIUM-B: relate the child-tree cap to the measured baseline.  If the step
+# grew to the full CHILD_RSS_CAP on top of what is ALREADY used, the box would
+# cross the system ceiling before the per-child cap ever fired.  So the EFFECTIVE
+# child-tree cap is min(CHILD_RSS_CAP, ceiling - used_start): the most the step can
+# add without crossing the ceiling.  We LOWER (never raise) it, and never refuse.
+EFFECTIVE_CHILD_CAP_BYTES="${CHILD_RSS_CAP_BYTES}"
+if [[ "${USED_START:-}" =~ ^[0-9]+$ ]] && \
+   (( USED_START + CHILD_RSS_CAP_BYTES > TOTAL_MEM_CEILING_BYTES )); then
+  _headroom=$(( TOTAL_MEM_CEILING_BYTES - USED_START ))
+  (( _headroom < 0 )) && _headroom=0
+  EFFECTIVE_CHILD_CAP_BYTES="${_headroom}"
+  log "phase 4: effective child-tree cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (lowered from $(gib "${CHILD_RSS_CAP_BYTES}") GiB: used_start $(gib "${USED_START}") + cap would cross the ${TOTAL_MEM_CEILING_GB} GiB ceiling)"
+fi
+
 # W106 HIGH-2: state BOTH caps explicitly (GiB + the ~GB equivalent) at step start
 # so the operator sees the guard envelope next to the step it is about to run.
-log "phase 4: guard caps -- child-tree RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB (~$(awk -v b="${CHILD_RSS_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); system used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
-log "phase 4: starting GPU step under child-tree RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
+log "phase 4: guard caps -- child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (~$(awk -v b="${EFFECTIVE_CHILD_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); system used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
+log "phase 4: starting GPU step under child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
 "$@" &
 STEP_PID=$!
 # Seed the system-used running peak with the at-start reading so PEAK_SYSTEM_USED
@@ -529,8 +560,8 @@ while :; do
   if (( max_bytes > PEAK_MAX_PROC_RSS_BYTES )); then
     PEAK_MAX_PROC_RSS_BYTES=${max_bytes}
   fi
-  if (( tree_bytes > CHILD_RSS_CAP_BYTES )); then
-    err "phase 4: step tree RSS $(gib "${tree_bytes}") GiB (max single process $(gib "${max_bytes}") GiB) exceeded cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB; killing child and restoring"
+  if (( tree_bytes > EFFECTIVE_CHILD_CAP_BYTES )); then
+    err "phase 4: step tree RSS $(gib "${tree_bytes}") GiB (max single process $(gib "${max_bytes}") GiB) exceeded cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB; killing child and restoring"
     _kill_step_child
     exit 6
   fi
