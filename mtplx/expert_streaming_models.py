@@ -351,7 +351,7 @@ class ExpertMemoryPlan:
     island_bytes: int = 0
     mmap_island_layer_count: int = 0
     mmap_island_bytes: int = 0
-    prefetch_slots_per_layer: int = 0
+    prefetch_ring_slots: int = 0
     prefetch_bytes: int = 0
     mmap_islands_wired: bool = True
     miss_shadow: str | None = None
@@ -858,7 +858,7 @@ def plan_expert_memory(
     island_layer_count: int = 0,
     mmap_island_layer_count: int = 0,
     mmap_islands_wired: bool = True,
-    prefetch_slots_per_layer: int = 0,
+    prefetch_ring_slots: int = 0,
     miss_shadow: str | None = None,
     miss_shadow_layers: int | None = None,
     layer_record_bytes: Mapping[int, int] | None = None,
@@ -931,8 +931,8 @@ def plan_expert_memory(
     mmap_island_layer_count = _integer(
         "mmap_island_layer_count", mmap_island_layer_count, minimum=0
     )
-    prefetch_slots_per_layer = _integer(
-        "prefetch_slots_per_layer", prefetch_slots_per_layer, minimum=0
+    prefetch_ring_slots = _integer(
+        "prefetch_ring_slots", prefetch_ring_slots, minimum=0
     )
     if island_layer_count + mmap_island_layer_count > spec.routed_layer_count:
         raise ValueError(
@@ -971,7 +971,7 @@ def plan_expert_memory(
             raise ValueError(
                 "mixed-official MVP forbids dense/mmap islands and miss-shadow"
             )
-        if prefetch_slots_per_layer:
+        if prefetch_ring_slots:
             raise ValueError(
                 "mixed-official MVP forbids the prefetch ring (perf lane)"
             )
@@ -1039,7 +1039,13 @@ def plan_expert_memory(
     # ``streamed_bytes_sum`` is the byte cost of one persistent slot PER streamed
     # layer summed across all streamed layers (D2): the replacement for the old
     # uniform ``streamed_layer_count * expert_record_bytes``.
-    prefetch_bytes = prefetch_slots_per_layer * streamed_bytes_sum
+    # W93: the prefetch ring is now GLOBAL (one ring SHARED across all layers,
+    # docs/deepseek-v41/W93_GATE_PREFETCH.md §4), so it reserves ``ring_slots``
+    # records TOTAL -- a small fixed pool like the transient scratch -- not
+    # ``ring_slots * n_streamed_layers`` carved from the persistent LRU budget.
+    # Records are uniform here (the ring is forbidden for mixed-official banks
+    # above), so one ``expert_record_bytes`` is the exact per-slot size.
+    prefetch_bytes = prefetch_ring_slots * spec.expert_record_bytes
     if miss_shadow is not None and miss_shadow not in SHADOW_CODECS:
         choices = ", ".join(repr(codec) for codec in SHADOW_CODECS)
         raise ValueError(f"miss_shadow must be None, {choices}")
@@ -1130,7 +1136,7 @@ def plan_expert_memory(
         mmap_island_layer_count=mmap_island_layer_count,
         mmap_island_bytes=mmap_island_bytes,
         mmap_islands_wired=bool(mmap_islands_wired),
-        prefetch_slots_per_layer=prefetch_slots_per_layer,
+        prefetch_ring_slots=prefetch_ring_slots,
         prefetch_bytes=prefetch_bytes,
         miss_shadow=miss_shadow,
         shadow_bytes=shadow_bytes,

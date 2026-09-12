@@ -3218,6 +3218,9 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # W87 (appended): single-slot pool lever (MTPLX_DSV41_SINGLE_SLOT_POOL) -- keep
     # the served-log snapshot a superset of ab_decode_env_levers.ALL_LEVER_ENVS.
     "MTPLX_DSV41_SINGLE_SLOT_POOL",
+    # W93: gate-oracle one-layer-ahead expert prefetch (width k + target floor).
+    "MTPLX_DSV41_GATE_PREFETCH",
+    "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER",
 )
 
 

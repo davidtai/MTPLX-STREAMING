@@ -32,6 +32,7 @@ from .expert_slots import (
 from .expert_streaming import (
     CacheCounters,
     GlobalExpertSlotBank,
+    GlobalPrefetchRing,
     LayerExpertSlotBank,
     RoutePlan,
     RoutePolicyTxn,
@@ -609,7 +610,7 @@ class ExpertStreamingConfig:
             island_layer_count=len(self.island_layers),
             mmap_island_layer_count=len(self.mmap_island_layers),
             mmap_islands_wired=self.mmap_island_wired,
-            prefetch_slots_per_layer=self.prefetch_slots,
+            prefetch_ring_slots=self.prefetch_slots,
             miss_shadow=self.miss_shadow,
             miss_shadow_layers=self.miss_shadow_layers,
             layer_record_bytes=layer_record_bytes,
@@ -1885,6 +1886,18 @@ class ExpertStreamingRuntime:
         # MED-4: re-open the cold window on the first PREFILL route after decode
         # (a new request), so each request's first decode steps are measured fresh.
         self._saw_decode_since_prefill = False
+        # W93: ONE shared prefetch ring across all routed layers (the memory bound
+        # -- ``prefetch_ring_slots`` records TOTAL, not per-layer). Every bank
+        # delegates its ring bookkeeping to this instance, keyed by its layer.
+        self._prefetch_ring = (
+            GlobalPrefetchRing(
+                ring_size=plan.prefetch_ring_slots,
+                base=plan.slots_per_layer + plan.transient_slots,
+                expert_count=spec.expert_count,
+            )
+            if plan.prefetch_ring_slots > 0 and self._global_bank is None
+            else None
+        )
         self._banks = (
             {}
             if self._global_bank is not None
@@ -1895,8 +1908,10 @@ class ExpertStreamingRuntime:
                     transient_slots=plan.transient_slots,
                     frequency_decay=config.frequency_decay,
                     cache_policy=config.cache_policy,
-                    prefetch_slots=plan.prefetch_slots_per_layer,
+                    prefetch_slots=plan.prefetch_ring_slots,
                     single_pool=self._single_slot_pool,
+                    layer_id=layer,
+                    prefetch_ring=self._prefetch_ring,
                 )
                 for layer in spec.routed_layer_indices
                 if layer not in self.island_layer_set
@@ -2039,6 +2054,12 @@ class ExpertStreamingRuntime:
         self._prefetch_completions: dict[
             int, list[tuple[int, int | None, bool]]
         ] = {}
+        # W93: (layer, expert) -> the inflight speculative read's future, so the
+        # DEMAND route can await a needed expert's in-flight prefetch instead of
+        # issuing a duplicate read (``_reconcile_prefetch_for_route``). Registered
+        # under ``_prefetch_lock`` alongside ``_prefetch_futures``; dropped when the
+        # read settles (``_finish_prefetch_load``).
+        self._prefetch_inflight_futures: dict[tuple[int, int], Future] = {}
         # Each layer's most recent route-plan misses (updated under the
         # layer lock): their bytes are streaming in on the demand path or
         # freshly transient-resident, so predicting them again would only
@@ -2051,7 +2072,7 @@ class ExpertStreamingRuntime:
         # whole backlog. Beyond this ceiling prefetch_experts plans
         # nothing — speculation is best-effort.
         self._prefetch_backlog_limit = 4 * max(
-            1, plan.prefetch_slots_per_layer
+            1, plan.prefetch_ring_slots
         )
         # Speculative I/O admission: speculation may occupy at most a
         # configured fraction of the inflight read budget, so a demand
@@ -2069,7 +2090,7 @@ class ExpertStreamingRuntime:
             ) // max(1, spec.expert_record_bytes)
             self._prefetch_max_reads = max(
                 1,
-                min(budget_reads, max(1, plan.prefetch_slots_per_layer)),
+                min(budget_reads, max(1, plan.prefetch_ring_slots)),
             )
         else:
             self._prefetch_max_reads = 0
@@ -3190,6 +3211,9 @@ class ExpertStreamingRuntime:
                 f"layer {layer} is not routed for {self.spec.key}"
             ) from exc
         lock.acquire()
+        # W93: materialize once so the reconcile scan below and the planner see the
+        # same ids (expert_ids may be a one-shot iterable).
+        expert_ids = tuple(expert_ids)
         plan: RoutePlan | None = None
         policy_txn: RoutePolicyTxn | None = None
         hit_ready: ReadyRoute | None = None
@@ -3200,6 +3224,11 @@ class ExpertStreamingRuntime:
         combined_cancel = _RouteCancel(cancel_event, miss_cancel_event)
         try:
             self._raise_if_unhealthy()
+            # W93 gate-oracle prefetch reconcile (inert unless the ring is armed):
+            # publish settled ring reads and await a needed in-flight one before
+            # planning, so a gate-predicted expert resolves as a hit rather than a
+            # duplicate demand read. Under the layer lock already held here.
+            self._reconcile_prefetch_for_route(layer, expert_ids)
             plan, policy_txn = self._plan_route_transaction(
                 layer,
                 expert_ids,
@@ -3940,6 +3969,73 @@ class ExpertStreamingRuntime:
         with self._prefetch_lock:
             return len(self._prefetch_futures) >= self._prefetch_backlog_limit
 
+    def note_gate_prefetch_predicted(self, layer: int, count: int) -> None:
+        """W93: record the id volume a gate-oracle prediction handed to the ring
+        for ``layer`` (before the ring dedups it against residency/inflight/
+        recent-miss). No-op when the ring is off or the layer is not routed."""
+
+        if self.config.prefetch_slots <= 0 or count <= 0:
+            return
+        layer_counter = self._layer_counters.get(layer)
+        with self._counter_lock:
+            self.counters.prefetch_predicted += int(count)
+            if layer_counter is not None:
+                layer_counter.prefetch_predicted += int(count)
+
+    def _reconcile_prefetch_for_route(
+        self, layer: int, expert_ids: tuple[int, ...]
+    ) -> None:
+        """W93 (item 3): before a DEMAND route plans ``layer``, promote settled
+        ring reads to committed hits and AWAIT any needed expert whose ring read
+        is still in flight -- so the true route reads the already-issued bytes
+        rather than issuing a duplicate demand read.
+
+        Runs under the layer lock the caller (``begin_split_route``) already
+        holds. Deadlock-free: the awaited read runs on a prefetch worker whose
+        ``_run_speculative_load`` takes the layer lock only advisorily
+        (``blocking=False``) and reads through the slot state machine's own locks,
+        never this layer lock. Inert unless the ring is armed, so the shipped
+        demand path is byte-identical with the flag off."""
+
+        if self.config.prefetch_slots <= 0:
+            return
+        bank = self._banks.get(layer)
+        if bank is None:
+            return
+        # The common case: the read finished during the one-layer overlap window
+        # and only needs publishing (cheap, non-blocking) -> it becomes a hit.
+        self._apply_prefetch_completions(layer, bank)
+        awaited = 0
+        for expert in dict.fromkeys(int(value) for value in expert_ids):
+            # A committed expert already hit-resolves; only a still-INFLIGHT ring
+            # read has a live ticket here.
+            ticket = bank.prefetch_ticket(expert)
+            if ticket is None:
+                continue
+            with self._prefetch_lock:
+                future = self._prefetch_inflight_futures.get((layer, expert))
+            if future is None:
+                continue
+            try:
+                future.result()
+                ok = True
+            except BaseException:
+                ok = False
+            if ok and bank.prefetch_ticket(expert) == ticket:
+                # Publish the settled read directly (do not race the done
+                # callback's completion record): the true route then hit-resolves
+                # this ring slot instead of issuing a second read.
+                if bank.commit_prefetch(expert, ticket=ticket):
+                    awaited += 1
+            elif not ok:
+                bank.invalidate_prefetch(expert, ticket=ticket)
+        # Catch any reads that settled while we awaited above.
+        self._apply_prefetch_completions(layer, bank)
+        if awaited:
+            with self._counter_lock:
+                self.counters.prefetch_awaited_inflight += awaited
+                self._layer_counters[layer].prefetch_awaited_inflight += awaited
+
     def prefetch_experts(self, layer: int, expert_ids: Iterable[int]) -> int:
         """Speculatively load predicted experts into the layer's ring tier.
 
@@ -3987,6 +4083,9 @@ class ExpertStreamingRuntime:
                     if expert not in recent_misses
                 ]
             loads = bank.plan_prefetch(expert_ids)
+            # W93: drain the wasted-read count the plan_prefetch eviction accrued
+            # while we still hold the layer lock (the bank counter is layer-local).
+            wasted = bank.consume_prefetch_wasted()
             # Assignment tickets bind each load's completion to the exact
             # assignment it filled: the same expert can be recycled and
             # re-assigned while a callback is still queued, and that stale
@@ -4017,16 +4116,24 @@ class ExpertStreamingRuntime:
                 continue
             with self._prefetch_lock:
                 self._prefetch_futures.add(future)
+                # W93: index the future by (layer, expert) so a demand route can
+                # await this exact read (see _reconcile_prefetch_for_route).
+                self._prefetch_inflight_futures[(layer, load.expert)] = future
             future.add_done_callback(
                 lambda completed, layer=layer, expert=load.expert, ticket=(
                     tickets[load.expert]
                 ): self._finish_prefetch_load(layer, expert, ticket, completed)
             )
             issued += 1
-        if issued:
+        record_bytes = self._record_bytes_for_layer(layer)
+        if issued or wasted:
             with self._counter_lock:
                 self.counters.prefetch_issued += issued
                 self._layer_counters[layer].prefetch_issued += issued
+                self.counters.prefetch_bytes += issued * record_bytes
+                self._layer_counters[layer].prefetch_bytes += issued * record_bytes
+                self.counters.prefetch_wasted += wasted
+                self._layer_counters[layer].prefetch_wasted += wasted
         return issued
 
     def _run_speculative_load(
@@ -4079,6 +4186,10 @@ class ExpertStreamingRuntime:
 
         with self._prefetch_lock:
             self._prefetch_futures.discard(future)
+            # W93: drop the (layer, expert) index only if it still points at THIS
+            # future -- a newer prefetch of the same expert may have replaced it.
+            if self._prefetch_inflight_futures.get((layer, expert)) is future:
+                del self._prefetch_inflight_futures[(layer, expert)]
         try:
             future.result()
         except BaseException:
@@ -4133,6 +4244,9 @@ class ExpertStreamingRuntime:
                 pass
         with self._prefetch_lock:
             self._prefetch_completions.clear()
+            # W93: the futures have all settled; their (layer, expert) index dies
+            # with the bank state along with the completions.
+            self._prefetch_inflight_futures.clear()
 
     def reset(self) -> None:
         # Deferred pin releases must flush (with a covering fence) before the
@@ -4164,6 +4278,10 @@ class ExpertStreamingRuntime:
             else:
                 for bank in self._banks.values():
                     bank.reset()
+            # W93: the shared ring is reset once here (the banks delegate to it and
+            # do not reset a shared ring themselves).
+            if self._prefetch_ring is not None:
+                self._prefetch_ring.reset()
             self._recent_route_misses.clear()
             with self._counter_lock:
                 self.counters = CacheCounters()
@@ -4360,7 +4478,71 @@ class ExpertStreamingRuntime:
         }
         if self._pipeline_ledger is not None:
             snapshot["expert_pipeline"] = self._pipeline_ledger.snapshot()
+        # W93: the gate-oracle prefetch receipt block (only when the ring is armed,
+        # so the shipped snapshot is unchanged with the flag off).
+        if self.config.prefetch_slots > 0:
+            snapshot["gate_prefetch"] = self._gate_prefetch_snapshot(
+                cache, cache_by_layer
+            )
         return snapshot
+
+    def _gate_prefetch_snapshot(
+        self, cache: dict[str, Any], cache_by_layer: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Assemble the W93 ``gate_prefetch`` receipt block from the already
+        collected cache counters: totals, per-layer hit rate, and a one-line
+        census. ``min_layer`` reads the DSV4.1 lever env (gate-prefetch is a
+        DSV4.1 feature); a bad value falls back to the shipped default 4."""
+
+        try:
+            min_layer = max(
+                0, int(os.environ.get("MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER") or 4)
+            )
+        except (TypeError, ValueError):
+            min_layer = 4
+        committed = int(cache.get("prefetch_committed", 0))
+        hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        bytes_prefetched = int(cache.get("prefetch_bytes", 0))
+        block: dict[str, Any] = {
+            "k": int(self.config.prefetch_slots),
+            "min_layer": min_layer,
+            "predicted": int(cache.get("prefetch_predicted", 0)),
+            "issued": int(cache.get("prefetch_issued", 0)),
+            "committed": committed,
+            "hit_on_true_route": hit,
+            "wasted": int(cache.get("prefetch_wasted", 0)),
+            "awaited_inflight": int(cache.get("prefetch_awaited_inflight", 0)),
+            "bytes_prefetched": bytes_prefetched,
+            "hit_rate": (hit / committed) if committed else 0.0,
+        }
+        per_layer: dict[str, Any] = {}
+        for layer, lc in cache_by_layer.items():
+            lcommitted = int(lc.get("prefetch_committed", 0))
+            lhit = int(lc.get("prefetch_hit_on_true_route", 0))
+            if not (
+                lc.get("prefetch_predicted")
+                or lc.get("prefetch_issued")
+                or lhit
+            ):
+                continue
+            per_layer[str(layer)] = {
+                "predicted": int(lc.get("prefetch_predicted", 0)),
+                "issued": int(lc.get("prefetch_issued", 0)),
+                "committed": lcommitted,
+                "hit_on_true_route": lhit,
+                "wasted": int(lc.get("prefetch_wasted", 0)),
+                "awaited_inflight": int(lc.get("prefetch_awaited_inflight", 0)),
+                "hit_rate": (lhit / lcommitted) if lcommitted else 0.0,
+            }
+        block["per_layer"] = per_layer
+        block["census"] = (
+            f"gate_prefetch k={block['k']} min_layer={min_layer}: "
+            f"predicted={block['predicted']} issued={block['issued']} "
+            f"committed={committed} hit={hit} (rate {block['hit_rate']:.3f}) "
+            f"wasted={block['wasted']} awaited={block['awaited_inflight']} "
+            f"bytes={bytes_prefetched / (1024 * 1024):.1f}MiB"
+        )
+        return block
 
     def _flush_route_census(self) -> None:
         """Merge session decode counts to disk and re-derive the placement.

@@ -297,6 +297,22 @@ def build_streaming_config(
     :class:`ExpertStreamingConfig` for callers that need to tune it.
     """
 
+    # W93: size the GLOBAL gate-oracle prefetch ring from MTPLX_DSV41_GATE_PREFETCH.
+    # The ring is SHARED across layers (docs/deepseek-v41/W93_GATE_PREFETCH.md §4):
+    # one layer is prefetched a step ahead at a time, so 2*k slots double-buffer
+    # (layer L's committed hits keep resolving while L+1's fill). The whole ring is
+    # 2*k * expert_record ~= 0.36 GiB at k=10 -- a small fixed reserve, NOT
+    # k * n_layers carved from the persistent LRU. Opt-in only: with the flag off
+    # prefetch_slots stays 0 and the shipped profile is byte-identical. An explicit
+    # caller override always wins. Requires the layer cache scope + component-banks
+    # layout the mxfp4 profile already uses; __post_init__ rejects otherwise.
+    if "prefetch_slots" not in overrides:
+        from .deepseek_v41 import _resolve_gate_prefetch_k
+
+        gate_prefetch_k = _resolve_gate_prefetch_k()
+        if gate_prefetch_k > 0:
+            overrides["prefetch_slots"] = min(32, 2 * gate_prefetch_k)
+
     return ExpertStreamingConfig(
         model_key=spec.key,
         memory_limit_bytes=memory_limit_bytes,
