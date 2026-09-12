@@ -1165,80 +1165,114 @@ def test_kv_donation_probe_verdict_shape():
 
 
 # ---------------------------------------------------------------------------
-# Review round-2 finding 1 (fix): the lanes' write primitive is the donating
-# in-place __setitem__ (default), byte-identical to slice_update, toggleable.
+# Review round-4: round-3's in-place __setitem__ was REVERTED.  The re-review proved
+# at the mlx-fork source that mx.slice_update donates in the cache's rebind pattern
+# (self._buf = write(self._buf) drops the old descriptor -> is_donatable), so it is
+# pointer-stable and identical to __setitem__; and in-place is UNSAFE because view()
+# can return the buffer IDENTITY (_len == cap), so a held lc.window would be mutated
+# by the next append.  These tests lock in the safe reverted primitive.
 # ---------------------------------------------------------------------------
-def test_inplace_row_write_byte_identical_to_slice_update():
-    rng = np.random.default_rng(5)
-    for ndim_extra in (1,):  # 3D lanes: [B, T, D]
-        buf = mx.array(rng.standard_normal((1, 16, 4)).astype(np.float32))
-        new = mx.array(rng.standard_normal((1, 3, 4)).astype(np.float32))
-        row = 7
-        su = mx.slice_update(buf, new, mx.array([0, row, 0], dtype=mx.int32), axes=(0, 1, 2))
-        got = C._inplace_row_write(mx.array(buf), new, row)
-        assert bool(mx.all(su == got).item())
-    # a live view of the buffer is NOT corrupted by the in-place write (copy-on-write)
-    buf = mx.array(rng.standard_normal((1, 16, 4)).astype(np.float32)); mx.eval(buf)
-    view = buf[:, :5, :]; snap = mx.array(view); mx.eval(view, snap)
-    C._inplace_row_write(buf, mx.ones((1, 1, 4)), 2)   # writes into the view's span
-    mx.eval(buf, view)
-    assert bool(mx.all(view == snap).item()), "held view corrupted by in-place write"
-    assert bool(mx.all(buf[:, 2, :] == 1.0).item())
+def test_inplace_write_machinery_removed():
+    """The in-place write lever/helpers are gone; lanes carry no _inplace flag."""
+    assert not hasattr(C, "_kv_inplace_write_enabled")
+    assert not hasattr(C, "_inplace_row_write")
+    assert not hasattr(C, "_KV_INPLACE_WRITE_ENV")
+    gb = C._GrowBuffer(bounded_cap=8, counter_lane="compress")
+    assert not hasattr(gb, "_inplace")
+    ring = C._WindowRing(8, 2, 1, 2, counter_lane="window")
+    assert not hasattr(ring, "_inplace")
 
 
-def test_write_primitive_rides_bounded_lanes(monkeypatch):
-    _clear_kv_envs(monkeypatch)
-    # unset env: the construction default decides (bounded lanes True, others False)
-    assert C._kv_inplace_write_enabled(True) is True
-    assert C._kv_inplace_write_enabled(False) is False
-    # a standalone chunk-grow/window_ring lane defaults to slice_update (frozen)
-    assert C._GrowBuffer(bounded_cap=8, counter_lane="compress")._inplace is False
-    assert C._GrowBuffer(bounded_cap=8, counter_lane="compress", inplace=True)._inplace is True
+def test_slice_update_append_does_not_mutate_returned_view():
+    """The hazard round-3's in-place write would have caused: view() returns the buffer
+    IDENTITY when _len == cap, so a held view must NOT change when the next append
+    writes.  mx.slice_update (functional; copies when the old buffer is still referenced
+    by the view) keeps the held view intact -- the safety the revert restores."""
+    gb = C._GrowBuffer(bounded_cap=4, counter_lane="compress")
+    gb.append(_row(4, 8))                     # _len == cap 4 -> view() is buffer IDENTITY
+    v = gb.view()
+    assert v is gb.raw_backing(), "precondition: view() returns the buffer identity here"
+    snap = mx.array(v); mx.eval(v, snap)
+    gb.truncate_to(3)
+    gb.append(_row(1, 8))                     # next append while v still references _buf
+    mx.eval(v, gb.view())
+    assert bool(mx.all(v == snap).item()), "a previously-returned view was mutated by append"
 
-    # the BOUNDED cache's lanes all use the donating in-place write
+
+def test_bounded_lane_backing_pointer_stable_rebind(monkeypatch):
+    """mx.slice_update donates in the rebind pattern: raw_backing()'s data pointer is
+    stable across steady in-cap decode appends (0 flips), matching the source-level
+    finding.  Guarded: skipped if MLX refuses the buffer-protocol pointer."""
     _bounded_env(monkeypatch, maxkv=256)
-    cache = _make_cache(_Cfg())
-    assert cache.layers[0]._window._inplace is True
-    assert cache.layers[2]._compress_kv._inplace is True
-    assert cache.layers[2]._index_k._inplace is True
-    assert cache.layers[2].comp_state._kv_buf._inplace is True
-
-    # env override forces either way (isolates the write primitive within a bounded arm)
-    monkeypatch.setenv("MTPLX_DSV41_KV_INPLACE_WRITE", "0")
-    cache_su = _make_cache(_Cfg())
-    assert cache_su.layers[0]._window._inplace is False       # forced slice_update
-    assert cache_su.layers[2].comp_state._kv_buf._inplace is False
-    assert C._kv_inplace_write_enabled(True) is False         # env beats the default
-
-
-def test_frozen_control_ring_uses_slice_update(monkeypatch):
-    """The FROZEN window_ring control (not bounded) keeps slice_update, so its timing
-    basis is unchanged (review round-2 finding 2): the donating write rides bounded."""
-    _clear_kv_envs(monkeypatch)
-    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING", "1")        # control has the ring...
-    cache = _make_cache(_Cfg())
-    assert cache.layers[0]._window_ring is True and cache.layers[0]._kv_bounded is False
-    assert cache.layers[0]._window._inplace is False          # ...but slice_update (frozen)
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=1, is_kv_source=True)
+    lc.append_compress(_row(4, 16)); lc.advance(4)   # allocate the compress buffer
+    p0 = C._array_data_ptr(lc._compress_kv.raw_backing())
+    if p0 is None:
+        pytest.skip("MLX build does not expose the buffer-protocol data pointer")
+    flips = 0
+    for _ in range(30):                       # steady in-cap appends (no realloc)
+        lc.append_compress(_row(1, 16)); lc.advance(1)
+        p1 = C._array_data_ptr(lc._compress_kv.raw_backing())
+        if p1 != p0:
+            flips += 1
+            p0 = p1
+    assert flips == 0, f"slice_update did not donate in the rebind pattern ({flips} flips)"
 
 
-def test_model_bit_identical_inplace_vs_slice_update(monkeypatch):
-    """The whole tiny-model prefill+decode is BIT-identical whether the lanes write
-    with in-place __setitem__ (default) or mx.slice_update -- so the donating switch
-    changes no bytes, only where the copy happens."""
-    model = _tiny_model()
-    prompt = list(range(20)); steps = 60
+def test_donation_gate_slice_update_donates_on_cpu(monkeypatch):
+    """The round-4 donation gate: driving a bounded cache through decode with
+    mx.slice_update, the compress/index/latent buffer pointers NEVER flip (every append
+    donates via the rebind pattern) and the window pointer flips exactly once per
+    ping-pong compaction (== window_ring.drops).  This is the real-path proof the
+    reviewer specified; guarded if the pointer is unavailable."""
+    cfg = _Cfg()
+    _bounded_env(monkeypatch, maxkv=4096)
+    C.reset_kv_bounded_stats()
+    C.reset_window_ring_stats()
+    cache = _make_cache(cfg)
+    if C._array_data_ptr(mx.zeros((1, 2, 2))) is None:
+        pytest.skip("MLX build does not expose the buffer-protocol data pointer")
+    _prefill_all_lanes(cache, cfg, n=20)               # single append/lane -> 0 window drops
+    mx.eval([a for lc in cache.layers for a in lc.eval_backing()])
+    cache.sample_ptr_flips()                            # init prev pointers (no flip counted)
+    for _ in range(150):                               # enough to force window compactions
+        for L, lc in enumerate(cache.layers):
+            lc.append_window(_row(1, cfg.head_dim))
+            if L in set(cfg.kv_source_layer_ids):
+                ratio = cfg.compress_ratios[L]
+                if ratio > 1:
+                    p = lc.comp_state.push(_row(1, cfg.head_dim), _row(1, cfg.head_dim))
+                    if p.shape[1] > 0:
+                        lc.append_compress(_row(p.shape[1], cfg.head_dim))
+                        lc.append_index_k(_row(p.shape[1], cfg.index_head_dim))
+                else:
+                    lc.append_compress(_row(1, cfg.head_dim))
+                    lc.append_index_k(_row(1, cfg.index_head_dim))
+            lc.advance(1)
+        mx.eval([a for lc in cache.layers for a in lc.eval_backing()])
+        cache.sample_ptr_flips()
 
-    _clear_kv_envs(monkeypatch)
-    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
-    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
-    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "512")
-    monkeypatch.setenv("MTPLX_DSV41_KV_INPLACE_WRITE", "0")     # slice_update
-    su, su_toks, _ = _prefill_decode(model, prompt, steps)
+    s = C.kv_bounded_stats()
+    rs = C.window_ring_stats()
+    assert s["ptr_samples"] > 0
+    # compress/index/latent donate every append -> pointer never moves
+    assert s["ptr_flips_compress"] == 0
+    assert s["ptr_flips_index"] == 0
+    assert s["ptr_flips_latent"] == 0
+    # the window flips exactly once per compaction
+    assert rs["drops"] > 0, "need window compactions to exercise the ptr flip"
+    assert s["ptr_flips_window"] == rs["drops"], (s["ptr_flips_window"], rs["drops"])
+    # one prealloc per lane per layer (no per-token realloc)
+    gate = C.kv_donation_gate(s, rs, expected_reallocs=C.expected_bounded_reallocs(cfg))
+    assert gate["ok"] is True, gate["reasons"]
 
-    monkeypatch.setenv("MTPLX_DSV41_KV_INPLACE_WRITE", "1")     # in-place __setitem__
-    ip, ip_toks, ipc = _prefill_decode(model, prompt, steps)
-    assert ipc.layers[0]._window._inplace is True
 
-    assert su_toks == ip_toks
-    for i, (a, b) in enumerate(zip(su, ip)):
-        assert bool(mx.all(a == b).item()), f"in-place vs slice_update differ at step {i}"
+def test_donation_gate_unavailable_without_samples():
+    z = {"ptr_samples": 0}
+    g = C.kv_donation_gate(z, {"drops": 0})
+    assert g["ok"] is None and "unavailable" in g["reasons"][0]
+
+
+def test_expected_bounded_reallocs():
+    exp = C.expected_bounded_reallocs(_Cfg())   # kv_source [2,5] ratios {2:2, 5:1}
+    assert exp == {"window": 8, "compress": 2, "index": 2, "latent": 2}

@@ -167,46 +167,23 @@ def _rows_copied_total() -> int:
 
 
 # ---------------------------------------------------------------------------
-# W107 (review round-3): the append write PRIMITIVE.
+# W107 (review round-4): the append write primitive is ``mx.slice_update``.
 # ---------------------------------------------------------------------------
-#: The GPU census (window 42) + the CPU donation probe
-#: (scripts/deepseek_v41/kv_donation_probe.py) showed ``mx.slice_update`` is an
-#: **O(T) COPY even on CPU** -- it is a functional op that allocates a fresh output
-#: plane every append -- which is why the bounded lever left ``cache_append`` ms/token
-#: unchanged.  In-place slice assignment (``buf[:, r:r+n] = new``) DONATES (writes in
-#: place, no allocation) when ``buf`` is uniquely referenced, and copy-on-writes
-#: SAFELY (byte-identical, held views untouched -- verified on MLX 0.32.2) when a
-#: ``view()`` alias is live.  So this is byte-identical to ``slice_update`` in every
-#: case and strictly cheaper when the buffer is unique.
-#:
-#: It rides the BOUNDED lanes (the bounded lever's lanes construct with
-#: ``inplace=True``); the shipped window_ring / chunk-grow lanes keep ``slice_update``
-#: so the FROZEN control's timing basis is unchanged (review round-2 finding 2 --
-#: don't silently shift the control).  ``MTPLX_DSV41_KV_INPLACE_WRITE`` overrides
-#: either way (the A/B lever that isolates the write primitive within a bounded arm:
-#: set it to 0 to force slice_update, 1 to force in-place).  Read at construction.
-_KV_INPLACE_WRITE_ENV = "MTPLX_DSV41_KV_INPLACE_WRITE"
-
-
-def _kv_inplace_write_enabled(default: bool) -> bool:
-    """Whether a lane uses the donating in-place ``__setitem__`` write vs the
-    functional ``mx.slice_update`` (never donates -- W107 round-3 probe).  Unset env
-    -> the construction ``default`` (True for bounded lanes, False for the frozen
-    window_ring / chunk-grow lanes); an explicit env forces it either way."""
-    raw = (os.environ.get(_KV_INPLACE_WRITE_ENV) or "").strip().lower()
-    if raw == "":
-        return bool(default)
-    return raw not in ("0", "false", "no", "off")
-
-
-def _inplace_row_write(buf: mx.array, new: mx.array, row: int) -> mx.array:
-    """Write ``new`` ([B, n, *tail]) into ``buf`` rows ``[row, row+n)`` via in-place
-    slice assignment and return ``buf``.  Donates when ``buf`` is uniquely referenced;
-    MLX copy-on-writes (byte-identically, without corrupting a live view) otherwise."""
-    n = int(new.shape[1])
-    idx = (slice(None), slice(row, row + n)) + (slice(None),) * (buf.ndim - 2)
-    buf[idx] = new
-    return buf
+# Round 3 switched the bounded lanes to in-place ``__setitem__`` on a CPU probe that
+# claimed slice_update "copies".  The re-review DISPROVED that at the source: both the
+# static ``SliceUpdate`` (``__setitem__``) and dynamic ``mx.slice_update`` go through
+# ``copy_{cpu,gpu}`` -> ``set_copy_output_data`` -> ``out.copy_shared_buffer(in)`` when
+# ``is_donatable(in)`` (mlx-fork common/copy.h), so in the cache's REBIND pattern
+# (``self._buf = write(self._buf)`` -- the previous descriptor is dropped) slice_update
+# is pointer-stable (donates) and IDENTICAL to __setitem__ (0 pointer flips on every
+# lane in the real AR + K+1-verify + rollback trace).  The probe's "COPY" verdict was
+# an artifact of its own ``out = w(buf); eval; buf = out`` alias keeping the old
+# descriptor alive.  In-place __setitem__ is also HAZARDOUS here: :meth:`_GrowBuffer.view`
+# / :meth:`_WindowRing.view` return the buffer IDENTITY when ``_len == cap``, so a held
+# ``lc.window`` / ``lc.state[0]`` would be mutated by the next in-place append.  So W107
+# keeps ``mx.slice_update`` (functional, donates in the rebind pattern) -- the reverted,
+# safe primitive.  W107 is a MEMORY-PLAN lever (bounded, priced, receipt-gated), not a
+# speed lever; window-42's flat ``cache_append`` is fence latency, not copies.
 
 
 class _GrowBuffer:
@@ -226,16 +203,12 @@ class _GrowBuffer:
     the plain path) but the same bytes.
     """
 
-    __slots__ = ("_buf", "_len", "_init_cap", "_bounded_cap", "_lane", "_inplace")
+    __slots__ = ("_buf", "_len", "_init_cap", "_bounded_cap", "_lane")
 
     def __init__(self, init_cap: int = 256, *, bounded_cap: Optional[int] = None,
-                 counter_lane: Optional[str] = None, inplace: bool = False):
+                 counter_lane: Optional[str] = None):
         self._buf: Optional[mx.array] = None
         self._len: int = 0
-        #: W107 round-3: donating in-place ``__setitem__`` write vs functional
-        #: ``mx.slice_update`` (never donates).  ``inplace`` default False (frozen
-        #: window_ring / chunk-grow); bounded lanes pass True; env overrides.
-        self._inplace = _kv_inplace_write_enabled(inplace)
         #: W107: when ``bounded_cap`` is set the buffer is preallocated to it on the
         #: first append and the logical length may never exceed it -- an append that
         #: would overflow RAISES (no geometric resize), so the lane is hard-bounded
@@ -252,10 +225,10 @@ class _GrowBuffer:
         return mx.array([0, int(row)] + [0] * (ndim - 2), dtype=mx.int32)
 
     def _write(self, buf: mx.array, new: mx.array, row: int) -> mx.array:
-        # W107 round-3: in-place __setitem__ DONATES (slice_update never does); both
-        # write the same bytes, so this is byte-identical (probe + tests).
-        if self._inplace:
-            return _inplace_row_write(buf, new, row)
+        # W107 round-4: mx.slice_update donates in the cache's rebind pattern
+        # (``self._buf = _write(self._buf, ...)`` drops the old descriptor), so the
+        # write is pointer-stable; kept over in-place __setitem__ (which is unsafe --
+        # view() can return the buffer identity -- and no faster).
         axes = tuple(range(new.ndim))
         return mx.slice_update(buf, new, self._starts(new.ndim, row), axes=axes)
 
@@ -661,11 +634,19 @@ def window_ring_stats() -> dict:
 #: + cumulative (like the Sinkhorn / chunk-grow / ring counters); the ab harness
 #: resets after model load and snapshots after the run.
 _BOUNDED_LANES = ("window", "compress", "index", "latent")
-_BOUNDED_STATS = {"layers_bounded": 0, "maxkv": 0, "alloc_bytes": 0}
+_BOUNDED_STATS = {"layers_bounded": 0, "maxkv": 0, "alloc_bytes": 0,
+                  "ptr_samples": 0}
 for _ln in _BOUNDED_LANES:
     _BOUNDED_STATS[f"kv_inplace_writes_{_ln}"] = 0
     _BOUNDED_STATS[f"kv_realloc_{_ln}"] = 0
     _BOUNDED_STATS[f"rows_{_ln}"] = 0
+    #: W107 round-4 DONATION GATE: buffer data-pointer FLIPS per lane across decode
+    #: tokens (:meth:`DeepseekV41Cache.sample_ptr_flips`).  A donating append (the
+    #: rebind-pattern slice_update) keeps the pointer stable -> 0 flips on
+    #: compress/index/latent; the window lane flips once per ping-pong compaction, so
+    #: ``ptr_flips_window == window_ring.drops``.  A non-donating (copy) append flips
+    #: every token.  See :func:`kv_donation_gate`.
+    _BOUNDED_STATS[f"ptr_flips_{_ln}"] = 0
 del _ln
 
 
@@ -700,6 +681,70 @@ def _note_bounded(lane: Optional[str], *, inplace: bool = False,
         _BOUNDED_STATS["alloc_bytes"] += int(alloc_bytes)
 
 
+def _array_data_ptr(a) -> Optional[int]:
+    """The buffer-protocol data pointer of an mx.array (for the W107 round-4 donation
+    gate), or ``None`` if the build/dtype refuses a zero-copy numpy view (guarded --
+    the reviewer's "if Metal refuses" case; e.g. bf16 has no numpy dtype).  The array
+    must already be evaluated for the pointer to be meaningful."""
+    if a is None:
+        return None
+    try:
+        import numpy as _np
+        return int(_np.array(a, copy=False).__array_interface__["data"][0])
+    except Exception:
+        return None
+
+
+def expected_bounded_reallocs(config) -> dict:
+    """The one-prealloc-per-lane-per-layer realloc counts a fully-donating bounded run
+    should show (for :func:`kv_donation_gate`): ``window`` on every layer, ``compress``
+    / ``index`` on each kv-source layer, ``latent`` on each ratio>1 kv-source layer
+    times two (kv + gate-score buffers)."""
+    n_layers = int(config.num_hidden_layers)
+    ratios = list(getattr(config, "compress_ratios", None) or [0] * n_layers)
+    if len(ratios) < n_layers:
+        ratios = ratios + [0] * (n_layers - len(ratios))
+    kv_src = set(int(i) for i in getattr(config, "kv_source_layer_ids", ()) or ())
+    n_comp = len(kv_src)
+    n_lat = sum(1 for L in kv_src if int(ratios[L]) > 1)
+    return {"window": n_layers, "compress": n_comp, "index": n_comp, "latent": 2 * n_lat}
+
+
+def kv_donation_gate(bounded_stats: dict, ring_stats: dict,
+                     expected_reallocs: Optional[dict] = None) -> dict:
+    """W107 round-4 donation gate (the reviewer's spec): the bounded lanes DONATE on
+    the real path iff, across the sampled decode tokens,
+    ``ptr_flips_window == window_ring.drops`` (the window pointer flips only on a
+    ping-pong compaction) and ``ptr_flips_{compress,index,latent} == 0`` (every append
+    reuses the buffer -- pointer-stable), with each ``kv_realloc_<lane>`` == its
+    one-prealloc-per-layer count (:func:`expected_bounded_reallocs`, i.e. no per-token
+    realloc).  Returns ``{ok, reasons, checks}``; ``ok`` is None when no pointer was
+    sampled (Metal refused the buffer-protocol pointer -> gate unavailable, not
+    failed)."""
+    checks = {}
+    reasons = []
+    if int(bounded_stats.get("ptr_samples", 0) or 0) == 0:
+        return {"ok": None, "reasons": ["no pointer samples (gate unavailable)"],
+                "checks": {}}
+    drops = int(ring_stats.get("drops", 0) or 0)
+    fw = int(bounded_stats.get("ptr_flips_window", 0) or 0)
+    checks["ptr_flips_window==drops"] = (fw == drops)
+    if fw != drops:
+        reasons.append(f"ptr_flips_window {fw} != window_ring.drops {drops}")
+    for lane in ("compress", "index", "latent"):
+        f = int(bounded_stats.get(f"ptr_flips_{lane}", 0) or 0)
+        checks[f"ptr_flips_{lane}==0"] = (f == 0)
+        if f != 0:
+            reasons.append(f"ptr_flips_{lane} {f} != 0 (append did not donate)")
+    if expected_reallocs:
+        for lane, want in expected_reallocs.items():
+            r = int(bounded_stats.get(f"kv_realloc_{lane}", 0) or 0)
+            checks[f"kv_realloc_{lane}=={want}"] = (r == want)
+            if r != want:
+                reasons.append(f"kv_realloc_{lane} {r} != {want} (not one prealloc/layer)")
+    return {"ok": all(checks.values()), "reasons": reasons, "checks": checks}
+
+
 class _WindowRing:
     """Bounded sliding-window store for one layer (W80 / K34).
 
@@ -729,11 +774,11 @@ class _WindowRing:
 
     __slots__ = (
         "window_size", "cap_keep", "phys_cap", "_base_phys_cap",
-        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail", "_lane", "_inplace",
+        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail", "_lane",
     )
 
     def __init__(self, window_size: int, max_verify: int, slack: int, headroom: int,
-                 *, counter_lane: Optional[str] = None, inplace: bool = False):
+                 *, counter_lane: Optional[str] = None):
         self.window_size = int(window_size)
         self.cap_keep = int(window_size) + int(max_verify) + int(slack)
         self.phys_cap = self.cap_keep + int(headroom)
@@ -753,10 +798,6 @@ class _WindowRing:
         #: W107: lane name for the per-lane bounded engagement counters (``"window"``
         #: under KV_BOUNDED), or ``None`` for the plain W80 window_ring arm.
         self._lane = counter_lane
-        #: W107 round-3: donating in-place ``__setitem__`` write vs ``mx.slice_update``
-        #: (never donates).  ``inplace`` default False (frozen window_ring arm); the
-        #: bounded window lane passes True; env overrides.
-        self._inplace = _kv_inplace_write_enabled(inplace)
 
     # -- absolute-position accessors ---------------------------------------
     @property
@@ -771,12 +812,9 @@ class _WindowRing:
         return self._len
 
     # -- internals ---------------------------------------------------------
-    def _write(self, buf: mx.array, new: mx.array, row: int) -> mx.array:
-        # W107 round-3: in-place __setitem__ DONATES (slice_update never does);
-        # byte-identical, and copy-on-write keeps the OTHER ping-pong buffer / any
-        # live view safe.
-        if self._inplace:
-            return _inplace_row_write(buf, new, row)
+    @staticmethod
+    def _write(buf: mx.array, new: mx.array, row: int) -> mx.array:
+        # W107 round-4: mx.slice_update (donates in the rebind pattern; see _GrowBuffer).
         n = new.ndim
         starts = mx.array([0, int(row)] + [0] * (n - 2), dtype=mx.int32)
         return mx.slice_update(buf, new, starts, axes=tuple(range(n)))
@@ -1021,11 +1059,9 @@ class CompressorState:
         if self._bounded:
             cap = _bounded_latent_cap(maxkv)
             self._kv_buf: Optional[_GrowBuffer] = _GrowBuffer(
-                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent",
-                inplace=True)  # W107 round-3: donating in-place write for the frontier
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
             self._sc_buf: Optional[_GrowBuffer] = _GrowBuffer(
-                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent",
-                inplace=True)
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
             self._raw_kv: Optional[mx.array] = None
             self._raw_score: Optional[mx.array] = None
         else:
@@ -1254,17 +1290,15 @@ class LayerAttentionCache:
             #: not shrunk); the compressor frontier (main latent KV) is preallocated
             #: below.  ``max_kv`` unset -> geometric fallback (still in place, but the
             #: ``kv_realloc_*`` counters flag it as not preallocated-bounded).
-            #: W107 round-3: bounded lanes use the DONATING in-place write (the frozen
-            #: window_ring / chunk-grow lanes keep slice_update); env can override.
             self._window = _WindowRing(self.window_size, _mv, _slk, _hr,
-                                       counter_lane="window", inplace=True)
+                                       counter_lane="window")
             _comp_cap = _bounded_comp_cap(_maxkv, self.compress_ratio)
             self._compress_kv = _GrowBuffer(
                 init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
-                counter_lane="compress", inplace=True)
+                counter_lane="compress")
             self._index_k = _GrowBuffer(
                 init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
-                counter_lane="index", inplace=True)
+                counter_lane="index")
             #: compressor frontier: preallocated to max_kv (W107 fixes the last O(T)
             #: concatenate lane) for ratio>1 kv-source layers, else None.
             self.comp_state: Optional[CompressorState] = (
@@ -1768,6 +1802,45 @@ class DeepseekV41Cache:
         #: property setter keeps that entry's reference in sync, so re-pointing
         #: ``cache.engram_state`` re-owns the history on the entry that trims it.
         self.engram_state = engram_state
+        #: W107 round-4 donation gate: per-(layer, lane) last-sampled buffer pointer,
+        #: for :meth:`sample_ptr_flips`.  ``None`` until the first sample.
+        self._prev_ptrs = None
+
+    # -- W107 round-4 donation gate ---------------------------------------
+    def sample_ptr_flips(self) -> None:
+        """Sample each bounded lane's raw-backing DATA POINTER and count flips since
+        the previous sample.  Call once per decode token AFTER the forward's eval
+        fence (only in the fenced stage-timing pass -- reading a pointer forces an
+        eval, so never in the timed headline loop).  A donating append (rebind-pattern
+        slice_update) keeps the pointer stable, so compress/index/latent never flip and
+        the window flips only on a ping-pong compaction; :func:`kv_donation_gate` reads
+        the counts.  No-op unless bounded / the pointer is available (guarded)."""
+        if not self.layers or not getattr(self.layers[0], "_kv_bounded", False):
+            return
+        first = self._prev_ptrs is None
+        if first:
+            self._prev_ptrs = {}
+        _BOUNDED_STATS["ptr_samples"] += 1
+        for li, lc in enumerate(self.layers):
+            win = lc._window if isinstance(lc._window, _WindowRing) else None
+            comp = lc._compress_kv if isinstance(lc._compress_kv, _GrowBuffer) else None
+            idx = lc._index_k if isinstance(lc._index_k, _GrowBuffer) else None
+            lat = lc.comp_state._kv_buf if (lc.comp_state is not None and
+                                            getattr(lc.comp_state, "_bounded", False)) else None
+            for lane, backing in (("window", win), ("compress", comp),
+                                  ("index", idx), ("latent", lat)):
+                if backing is None:
+                    continue
+                arr = backing.raw_backing()
+                if arr is None:
+                    continue
+                ptr = _array_data_ptr(arr)
+                if ptr is None:
+                    continue
+                key = (li, lane)
+                if (not first) and key in self._prev_ptrs and self._prev_ptrs[key] != ptr:
+                    _BOUNDED_STATS[f"ptr_flips_{lane}"] += 1
+                self._prev_ptrs[key] = ptr
 
     # -- mlx_lm sequence protocol (a list of per-layer caches) -------------
     def __iter__(self):
