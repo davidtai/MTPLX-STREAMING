@@ -9,8 +9,12 @@ Covers ``scripts/deepseek_v41/ab_decode_env_levers.py``:
     floor refusal;
   * ``BudgetTotalDerivation.memory_keys`` -- the exact receipt ``memory``-block
     keys (budget + explicit paths);
-  * ``_kv_bytes_at_max_kv`` -- the LOCAL KV growth estimator (TODO: swap for the
-    W107 helper) against small fake configs;
+  * ``_kv_bytes_at_max_kv`` -- the LOCAL KV growth estimator (now the FALLBACK)
+    against small fake configs;
+  * ``_kv_growth_estimate`` -- prefers the exact W107 helper
+    (``mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv``), falls back to the
+    local estimator when that import is unavailable, and reports which ran
+    (``budget_kv_estimator``);
   * ``_read_kv_config_dims`` -- flat and ``text_config``-nested ``config.json``;
   * ``_resolve_derivation`` -- the budget path end-to-end with an injected
     system-used baseline and a temp ``config.json`` (still no MLX/model).
@@ -47,6 +51,7 @@ _EXPECTED_MEMORY_KEYS = {
     "budget_non_metal_overhead_gb",
     "budget_non_metal_overhead_measured_gb",
     "budget_kv_growth_to_max_kv_gb",
+    "budget_kv_estimator",
     "budget_safety_gb",
     "budget_floor_gib",
 }
@@ -146,6 +151,7 @@ def test_memory_keys_budget_path_has_all_terms():
         kv_growth_to_max_kv_gb=2.0,
         safety_gb=3.0,
         floor_gib=20.0,
+        kv_estimator="w107",
     )
     keys = d.memory_keys()
     assert set(keys) == _EXPECTED_MEMORY_KEYS
@@ -156,6 +162,7 @@ def test_memory_keys_budget_path_has_all_terms():
     assert keys["budget_non_metal_overhead_gb"] == 10.0
     assert keys["budget_non_metal_overhead_measured_gb"] is None
     assert keys["budget_kv_growth_to_max_kv_gb"] == 2.0
+    assert keys["budget_kv_estimator"] == "w107"
     assert keys["budget_safety_gb"] == 3.0
     assert keys["budget_floor_gib"] == 20.0
 
@@ -170,6 +177,7 @@ def test_memory_keys_explicit_path_nulls_the_budget_terms():
     assert keys["plan_limit_gib_derived"] == 70.0
     assert keys["plan_limit_gib_effective"] == 70.0
     assert keys["budget_non_metal_overhead_measured_gb"] is None
+    assert keys["budget_kv_estimator"] is None  # no KV growth priced on this path
 
 
 # --------------------------------------------------------------------------
@@ -247,6 +255,40 @@ def test_kv_estimator_unknown_ratio_defaults_to_no_pooling():
     rope = 1000 * 64 * 2
     index = 1000 * 128 * 2
     assert got == window + latent + rope + index
+
+
+# --------------------------------------------------------------------------
+# _kv_growth_estimate: prefer the exact W107 helper, fall back to local
+# --------------------------------------------------------------------------
+
+
+def test_kv_growth_estimate_prefers_w107():
+    mod = _mod()
+    dims = dict(mod._KV_CONFIG_DEFAULTS)
+    kv_bytes, estimator = mod._kv_growth_estimate(dims, 1000)
+    assert estimator == "w107"
+    # delegates EXACTLY to mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv,
+    # reading the flat dims dict via a SimpleNamespace.
+    from types import SimpleNamespace
+
+    from mtplx.models.deepseek_v41_cache import kv_bytes_at_max_kv
+
+    assert kv_bytes == kv_bytes_at_max_kv(SimpleNamespace(**dims), 1000)
+
+
+def test_kv_growth_estimate_falls_back_to_local_when_import_fails(monkeypatch):
+    mod = _mod()
+    import sys
+    import types as _types
+
+    # A stand-in cache module WITHOUT kv_bytes_at_max_kv: the ``from ... import``
+    # inside _kv_growth_estimate raises ImportError -> the local estimator runs.
+    fake = _types.ModuleType("mtplx.models.deepseek_v41_cache")
+    monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_cache", fake)
+    dims = dict(mod._KV_CONFIG_DEFAULTS)
+    kv_bytes, estimator = mod._kv_growth_estimate(dims, 1000)
+    assert estimator == "local"
+    assert kv_bytes == mod._kv_bytes_at_max_kv(dims, 1000)
 
 
 def test_read_config_dims_flat(tmp_path):
@@ -330,8 +372,15 @@ def test_resolve_derivation_budget_path(tmp_path):
 
     bt = args._dsv41_budget_total
     assert bt is not None and bt.source == "budget"
-    # kv growth for a single window-only layer at max_kv 1000: 1000*512*2 bytes.
-    kv_gb = (1000 * 512 * 2) / GIB
+    # W107 merge: the plan prices KV growth with the exact per-lane helper
+    # (mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv), recorded as
+    # budget_kv_estimator == "w107".  The config has no kv_source_layer_ids, so the
+    # only lane priced is the bounded window ring (independent of max_kv).
+    dims = mod._read_kv_config_dims(tmp_path)
+    kv_bytes, estimator = mod._kv_growth_estimate(dims, 1000)
+    assert estimator == "w107"
+    kv_gb = kv_bytes / GIB
+    assert bt.kv_estimator == "w107"
     # non_metal_overhead default = 10, safety default = 3.
     expected = 100.0 - 20.0 - 10.0 - kv_gb - 3.0
     assert bt.plan_limit_gib == pytest.approx(expected)
@@ -341,6 +390,7 @@ def test_resolve_derivation_budget_path(tmp_path):
     assert keys["memory_plan_source"] == "budget"
     assert keys["budget_total_gb"] == 100.0
     assert keys["budget_kv_growth_to_max_kv_gb"] == pytest.approx(round(kv_gb, 4))
+    assert keys["budget_kv_estimator"] == "w107"
 
 
 def test_resolve_derivation_budget_overrides_memory_limit(tmp_path):

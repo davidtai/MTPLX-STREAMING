@@ -122,23 +122,28 @@ loads (the loader takes `memory_limit_bytes`). So:
    the TOTAL still fits the budget, and record the lowered limit
    (`plan_limit_gib_effective`). Best-effort + guarded — it never crashes the run.
 
-**KV growth estimator.** `_kv_bytes_at_max_kv(config, max_kv)` is a LOCAL,
-deliberately conservative estimate: per layer it prices the sliding-window ring at
-the full `max_kv` (the bounded ring is opt-in), and on kv-source layers the
+**KV growth estimator.** `_kv_growth_estimate(dims, max_kv)` prices the
+KV-growth-to-`max_kv` term. As of the **W107 merge** it prefers the exact per-lane
+helper `mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv` (W107), which prices
+the bounded lanes exactly as the cache preallocates them — the window ring bounded
+and *independent* of `max_kv`, and compress/index/latent only on the `kv_source`
+layers — so the derived plan matches what the bounded arm actually allocates. The
+receipt records which ran as **`budget_kv_estimator`** (`"w107"` | `"local"`). The
+LOCAL `_kv_bytes_at_max_kv(config, max_kv)` is now the **fallback**, used only when
+that import is unavailable (a config-only, MLX-less environment): a deliberately
+conservative estimate that per layer prices the sliding-window ring at the full
+`max_kv` (the bounded ring is opt-in), and on kv-source layers the
 latent/compressed KV `[max_kv/ratio, head_dim]`, the decoupled rope key
 `[max_kv/ratio, qk_rope_head_dim]`, and the index key `[max_kv/ratio,
 index_head_dim]`, all bf16. Config dims are read from the artifact `config.json`
 (flat or `text_config`-nested) without importing MLX or loading weights.
-**TODO(W107):** replace with
-`mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv` — a sibling worker is adding
-the exact per-lane helper on another branch; do not depend on it, just swap this
-call site when it lands.
 
 **Receipt keys** (in the `memory` block, alongside the item-2 envelope keys):
 `memory_plan_source`, `budget_total_gb`, `plan_limit_gib_derived`,
 `plan_limit_gib_effective`, `budget_system_used_at_start_gb`,
 `budget_non_metal_overhead_gb`, `budget_non_metal_overhead_measured_gb`,
-`budget_kv_growth_to_max_kv_gb`, `budget_safety_gb`, `budget_floor_gib`.
+`budget_kv_growth_to_max_kv_gb`, `budget_kv_estimator`, `budget_safety_gb`,
+`budget_floor_gib`.
 
 **Bench command line — item 3 on the 16K cell** (do not run here; a GPU window is
 held by another worktree):

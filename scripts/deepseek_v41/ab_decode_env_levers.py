@@ -39,6 +39,7 @@ import importlib.util
 import json
 import os
 import time
+import types
 from pathlib import Path
 
 import numpy as np  # CPU-only (no mlx); safe for the --dry-run path
@@ -1320,7 +1321,7 @@ class BudgetTotalDerivation:
         "source", "budget_total_gb", "system_used_at_start_gb",
         "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
         "floor_gib", "plan_limit_gib", "non_metal_overhead_measured_gb",
-        "plan_limit_gib_effective",
+        "plan_limit_gib_effective", "kv_estimator",
     )
 
     def __init__(
@@ -1336,6 +1337,7 @@ class BudgetTotalDerivation:
         plan_limit_gib,
         non_metal_overhead_measured_gb=None,
         plan_limit_gib_effective=None,
+        kv_estimator=None,
     ):
         self.source = source
         self.budget_total_gb = budget_total_gb
@@ -1347,6 +1349,11 @@ class BudgetTotalDerivation:
         self.plan_limit_gib = plan_limit_gib
         self.non_metal_overhead_measured_gb = non_metal_overhead_measured_gb
         self.plan_limit_gib_effective = plan_limit_gib_effective
+        # W107 follow-up: which KV-growth estimator priced budget_kv_growth_to_max_kv_gb
+        # -- "w107" (mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv, the exact
+        # per-lane helper) or "local" (the conservative fallback in this module).
+        # None on the explicit path (no KV growth term is priced).
+        self.kv_estimator = kv_estimator
 
     def replace(self, **changes) -> "BudgetTotalDerivation":
         """A copy with the named fields overridden (dataclasses.replace-style)."""
@@ -1387,6 +1394,7 @@ class BudgetTotalDerivation:
                 else round(self.non_metal_overhead_measured_gb, 4)
             ),
             "budget_kv_growth_to_max_kv_gb": round(self.kv_growth_to_max_kv_gb, 4),
+            "budget_kv_estimator": self.kv_estimator,
             "budget_safety_gb": round(self.safety_gb, 4),
             "budget_floor_gib": round(self.floor_gib, 4),
         }
@@ -1400,6 +1408,7 @@ def derive_budget_total_plan(
     kv_growth_to_max_kv_gb: float,
     safety_gb: float = DEFAULT_MEMORY_SAFETY_GIB,
     floor_gib: float = DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
+    kv_estimator: str | None = None,
 ) -> BudgetTotalDerivation:
     """Derive the MLX plan limit from David's TOTAL box budget, compensating for
     the non-Metal requirements.  All measurements are injected (pure math):
@@ -1452,6 +1461,7 @@ def derive_budget_total_plan(
         safety_gb=float(safety_gb),
         floor_gib=float(floor_gib),
         plan_limit_gib=plan_limit,
+        kv_estimator=kv_estimator,
     )
 
 
@@ -1517,9 +1527,11 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
     bounded ring is opt-in, and treats an unknown compress_ratio as 1 = no
     pooling), so the plan errs on the safe side of the 100 GB budget.
 
-    TODO(W107): replace with mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv --
-    a sibling worker (W107) is adding the exact per-lane helper on another branch.
-    Do NOT import it here; swap this call site when it lands on this branch.
+    FALLBACK only.  As of the W107 merge the budget derivation prefers the exact
+    per-lane helper ``mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv`` (see
+    ``_kv_growth_estimate``); this local estimate runs only when that import is
+    unavailable (a config-only, MLX-less environment).  The receipt records which
+    ran as ``budget_kv_estimator`` ("w107" | "local").
 
     Per the cache module (mtplx/models/deepseek_v41_cache.py docstring + ModelArgs)
     each layer holds, at bf16 (2 bytes/element), batch 1:
@@ -1572,6 +1584,31 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
     return int(total)
 
 
+def _kv_growth_estimate(dims: dict, max_kv: int) -> tuple[int, str]:
+    """The KV-growth-to-``max_kv`` budget term (bytes) and the estimator that
+    produced it (``"w107"`` | ``"local"``), for the receipt ``budget_kv_estimator``.
+
+    Prefer the EXACT per-lane helper
+    ``mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv`` (W107): it prices the
+    bounded lanes exactly as the cache preallocates them -- the window ring bounded
+    and INDEPENDENT of ``max_kv``, and compress / index / latent only on the
+    ``kv_source`` layers -- so the derived plan matches what the bounded arm
+    actually allocates.  Fall back to the LOCAL conservative estimate
+    (:func:`_kv_bytes_at_max_kv`) only if that import is unavailable (a config-only,
+    MLX-less environment).  ``dims`` is the flat config dict from
+    :func:`_read_kv_config_dims`; the W107 helper reads it as attributes, so it is
+    wrapped in a ``SimpleNamespace``."""
+
+    try:
+        from mtplx.models.deepseek_v41_cache import (
+            kv_bytes_at_max_kv as _w107_kv_bytes_at_max_kv,
+        )
+    except Exception:
+        return int(_kv_bytes_at_max_kv(dims, int(max_kv))), "local"
+    cfg = types.SimpleNamespace(**dims)
+    return int(_w107_kv_bytes_at_max_kv(cfg, int(max_kv))), "w107"
+
+
 def _measure_system_used_at_start_bytes(args, bench) -> int:
     """The system-wide used-memory baseline (vm_stat, the SAME formula the
     gpu_window.sh guard uses -- factored in bench._system_used_bytes).  Measured
@@ -1620,7 +1657,8 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
             else DEFAULT_NON_METAL_OVERHEAD_GIB
         )
         dims = _read_kv_config_dims(getattr(args, "model", None))
-        kv_growth_gb = _kv_bytes_at_max_kv(dims, int(max_kv)) / GIB
+        kv_growth_bytes, kv_estimator = _kv_growth_estimate(dims, int(max_kv))
+        kv_growth_gb = kv_growth_bytes / GIB
         bt = derive_budget_total_plan(
             budget_total_gb=float(budget_total),
             system_used_at_start_gb=system_used_gb,
@@ -1630,6 +1668,7 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
             floor_gib=float(
                 getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
             ),
+            kv_estimator=kv_estimator,
         )
         args._dsv41_budget_total = bt
         override = bt.plan_limit_gib
