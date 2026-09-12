@@ -1928,6 +1928,11 @@ def _gather_component_bank(
         selected = values_x.reshape((n, 1, 1, width))
         if codec == "mxfp4":
             def qmm(values: mx.array, projection: str) -> mx.array:
+                # W92 dispatch census: one grouped gather_qmm per component over
+                # ALL routed slots (never per-expert). Probe-gated (zero cost when
+                # MTPLX_ROUTE_STAGE_PROBE is off); the receipt divides this by
+                # hot.all_hit to prove the all-hit switch is 3 dispatches/call.
+                _route_probe.count("hot.switch_gather_qmm")
                 return mx.gather_qmm(
                     values,
                     bank.arrays[f"{projection}.weight"],
@@ -1941,6 +1946,8 @@ def _gather_component_bank(
                 )
         else:
             def qmm(values: mx.array, projection: str) -> mx.array:
+                # W92 dispatch census: see the mxfp4 branch above.
+                _route_probe.count("hot.switch_gather_qmm")
                 return mx.gather_qmm(
                     values,
                     bank.arrays[f"{projection}.weight"],
@@ -2406,6 +2413,11 @@ class HotExpertSwitchGLU(nn.Module):
         else:
             lut = self.runtime.device_route_lut(self.layer_index)
             snapshot = self.runtime.device_route_snapshot(self.layer_index)
+        if lut is None:
+            # W92: the LUT builder could not take this layer's lock (a pending
+            # deferred route holds it) -- use the fenced path this token, which
+            # runs the covering flush that releases the deferral.
+            return None
         # Device-side expert -> slot: no host round-trip on ``indices``.
         slot = mx.take(lut, indices.reshape(-1))
         safe = mx.maximum(slot, 0).reshape((-1, 1))
@@ -2947,10 +2959,19 @@ class HotExpertSwitchGLU(nn.Module):
                         _pipeline_work_call(
                             pipeline_ledger, hit_pipeline_work, "claim", phase=phase
                         )
+                    # W92 dispatch census: the W61 (multi-row verify) all-hit gather
+                    # is attributed to hot.allhit_gather_qmm too (a delta on the
+                    # shared counter), so gather_qmm_per_all_hit_call stays 3 across
+                    # BOTH the AR M=1 general-loop and the M=2..8 verify all-hit.
+                    _qmm_before = _route_probe.peek("hot.switch_gather_qmm")
                     with _route_probe.bracket("hot.allhit_dispatch_build"):
                         wave_output = self._dispatch_component_bank(
                             assignment_inputs, ready.bindings
                         )
+                    _route_probe.count(
+                        "hot.allhit_gather_qmm",
+                        _route_probe.peek("hot.switch_gather_qmm") - _qmm_before,
+                    )
                     # Variant-B release: submit the one gather (non-blocking) so the
                     # GPU is fed, and DEFER the slot release to the next layer's
                     # routing barrier (its covering eval materializes this gather
@@ -3317,11 +3338,23 @@ class HotExpertSwitchGLU(nn.Module):
                                     "claim",
                                     phase=phase,
                                 )
+                            # W92 dispatch census: attribute ONLY this all-hit
+                            # call's gather_qmm dispatches to hot.allhit_gather_qmm
+                            # (a delta on the shared counter), so the receipt's
+                            # per-all-hit-call ratio is exactly 3 (gate/up/down) and
+                            # is not inflated by split parts / prefill waves that
+                            # also flow through _gather_component_bank.
+                            _qmm_before = _route_probe.peek("hot.switch_gather_qmm")
                             with _route_probe.bracket("hot.allhit_dispatch_build"):
                                 wave_output = self._dispatch_component_bank(
                                     assignment_inputs,
                                     ready.bindings,
                                 )
+                            _route_probe.count(
+                                "hot.allhit_gather_qmm",
+                                _route_probe.peek("hot.switch_gather_qmm")
+                                - _qmm_before,
+                            )
                             # Slot pins may be released only after the lazy graph
                             # has consumed the currently bound bank generations.
                             # Deferred mode: the next generation-thread eval is
@@ -3334,7 +3367,16 @@ class HotExpertSwitchGLU(nn.Module):
                             # is armed on a runtime that can defer -- removing this
                             # per-all-hit-layer blocking ``mx.eval`` is the whole
                             # point of the fast-path.
-                            if wave_index == final_wave and _deferred_pin_active:
+                            # DECODE-only (self-guarding, not just the enclosing
+                            # branch): a multi-group layer-major PREFILL has no
+                            # covering eval between groups, so a deferred gather
+                            # could read a slot the next group reloaded before its
+                            # release -- always fence in prefill (W92 review).
+                            if (
+                                wave_index == final_wave
+                                and _deferred_pin_active
+                                and phase is RoutingPhase.DECODE
+                            ):
                                 # Variant B: submit the gather now (non-blocking)
                                 # so the GPU is fed during the host graph-build of
                                 # the next layers, instead of idling until the

@@ -647,6 +647,41 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
     ),
+    # W92 (switch dispatch census): the minimal AR-decode host-sync-reduction arm in
+    # ISOLATION -- the K23 variant-B fast-path (defer + async submit) plus verify
+    # single-barrier (default ON, pinned explicit).  Window 33 (arm cell16k_ring)
+    # ran the AR all-hit switch through the shipped SYNCHRONOUS wave fence
+    # (hot.allhit_fence_eval == hot.all_hit): a SECOND blocking mx.eval(wave_output)
+    # per all-hit layer on top of the one mx.eval(indices) routing barrier, plus a
+    # blocking fence per split-route wave part on miss layers.  This arm defers that
+    # release to the next layer's routing barrier (the covering eval) and async-
+    # submits the gather so the GPU is fed WITHOUT the blocking round-trip (variant B;
+    # pure defer without submit lost -13% at 1K -- W42 window-14 -- because the lazy
+    # graph then accrued and the device idled until the next barrier drained it).
+    # Net: exactly ONE small eval (indices only) per streamed layer.  Byte-identical
+    # to control (pure fence/release-timing reorder; the gather math is unchanged);
+    # pin-safe (try_all_hit_route pins the whole route and defer_slot_release holds
+    # those pins until the covering flush, so no admission can recycle a slot whose
+    # gather is still pending -- the W44 slot-recycle hazard cannot arise).
+    "switch_lean": _preset(fastpath="1", submit="1", verify_single="1"),
+    # W92: cell16k_ring + the switch-lean keys (K23 variant B + verify single-barrier).
+    # The direct A/B against cell16k_ring that isolates the AR-decode host-sync cut at
+    # 16K: same prefill + decode stack, only the per-all-hit-layer wave fence and the
+    # per-split-wave miss fences are deferred to the next routing barrier (async-
+    # submitted meanwhile).  Byte-identical to cell16k_ring (cell16k_ring is itself
+    # lossy vs control only through head=bf16 + the dense/lean prefill reassoc; the
+    # switch keys add NO new lossiness -- they are a fence/release-timing reorder).
+    # EXPECTATION: small.  At 16K only ~30% of layer-calls are all-hit (window 33:
+    # 3,054/10,240); the other ~70% are split layers that block on SSD regardless of
+    # fences, so the removable exposed cost is <= ~2.5% (<= ~11 ms/token), inside
+    # single-prompt seed noise.  The +2.86% variant-B figure is the 1K regime (window
+    # 16, ab-1024-fastpath-b.json), not 16K.  Primarily a host-sync-hygiene lever.
+    "cell16k_ring_switch": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        fastpath="1", submit="1", verify_single="1",
+    ),
 }
 
 
@@ -1288,7 +1323,7 @@ def _macmon():
 
 def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
               mem_profile_every=64, device_sample=False, cooldown_s=0.0,
-              util_sampler=None):
+              util_sampler=None, stage_timing=False):
     """Greedy prefill + ``steps`` decode; captures the decoded token ids.
 
     W90: ``cooldown_s`` idles AFTER prefill and BEFORE the timed decode (TTFT, from
@@ -1327,38 +1362,121 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     _sc_after_prefill = _stream_counters_snapshot(model)
     extra_forward_steps = 0
 
+    # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
+    # loop (prefill excluded) so the receipt reports per-layer host syncs
+    # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
+    # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
+    # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
+    # module even if the launch env did not; counters cleared to scope to decode.
+    _route_probe = None
+    _route_prev_enabled = None
+    if stage_timing:
+        try:
+            from mtplx import expert_route_probe as _route_probe
+
+            _route_prev_enabled = _route_probe.ENABLED
+            _route_probe.ENABLED = True
+            _route_probe._SUMS.clear()
+            _route_probe._COUNTS.clear()
+        except Exception:
+            _route_probe = None
+
     _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
     # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
     # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
     with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
         decode_start = time.perf_counter()
-        if device_sample:
-            from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+        try:  # W92: restore the probe ENABLED flag even if the decode loop raises
+            if device_sample:
+                from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
 
-            def _forward_row(ids):
-                # ids is a device-side [1, 1] token-id array; the model's embedding
-                # lookup consumes it directly (mx.take) -- no host round trip.
-                return model(ids, cache=cache)[0, -1]
+                def _forward_row(ids):
+                    # ids is a device-side [1, 1] token-id array; the model's embedding
+                    # lookup consumes it directly (mx.take) -- no host round trip.
+                    return model(ids, cache=cache)[0, -1]
 
-            more, _finish, extra_forward_steps = run_device_sample_decode(
-                forward_row=_forward_row,
-                first_token=int(token),
-                n_more=int(steps),
-                sampler=None,  # greedy (byte-identical to the classic argmax loop)
-                stop_ids=set(),
-            )
-            generated.extend(int(t) for t in more)
-        else:
-            every = max(1, int(mem_profile_every))
-            for step in range(int(steps)):
-                logits = model(ops.input([[token]]), cache=cache)
-                ops.sync(logits)
-                token = ops.argmax_last(logits)
-                generated.append(token)
-                if mem_profile is not None and (step + 1) % every == 0:
-                    mem_profile("decode", token=step + 1)
+                more, _finish, extra_forward_steps = run_device_sample_decode(
+                    forward_row=_forward_row,
+                    first_token=int(token),
+                    n_more=int(steps),
+                    sampler=None,  # greedy (byte-identical to the classic argmax loop)
+                    stop_ids=set(),
+                )
+                generated.extend(int(t) for t in more)
+            else:
+                every = max(1, int(mem_profile_every))
+                for step in range(int(steps)):
+                    logits = model(ops.input([[token]]), cache=cache)
+                    ops.sync(logits)
+                    token = ops.argmax_last(logits)
+                    generated.append(token)
+                    if mem_profile is not None and (step + 1) % every == 0:
+                        mem_profile("decode", token=step + 1)
+        finally:
+            # W92: restore the probe ENABLED flag even if the decode loop raised, so
+            # a failed arm never leaves the module armed for the rest of the process
+            # (the snapshot below reads _COUNTS regardless of ENABLED).
+            if _route_probe is not None and _route_prev_enabled is not None:
+                _route_probe.ENABLED = bool(_route_prev_enabled)
         decode_wall_s = time.perf_counter() - decode_start
     _sc_end = _stream_counters_snapshot(model)
+    switch_dispatch = None
+    if _route_probe is not None:
+        _snap = _route_probe.snapshot()
+        _stg = _snap.get("stages", {}) if isinstance(_snap, dict) else {}
+
+        def _c(name):
+            return int(_stg.get(name, {}).get("count", 0))
+
+        _all_hit = _c("hot.all_hit")
+        _synced = _c("hot.allhit_fence_eval")
+        _deferred = _c("hot.allhit_defer")
+        _gather_qmm_total = _c("hot.switch_gather_qmm")   # all paths
+        _allhit_gather_qmm = _c("hot.allhit_gather_qmm")  # all-hit branch only
+        _decode_steps = max(1, int(steps))
+        switch_dispatch = {
+            # per-layer host round-trips over this DECODE pass (cumulative).
+            "eval_indices": _c("hot.eval_indices"),      # the one routing barrier/layer
+            "route_host_tolist": _c("hot.route_host"),   # .tolist()+int() host read/layer
+            # all-hit switch: fences DEFERRED (to the next routing barrier) vs SYNCED
+            # (the shipped blocking mx.eval(wave_output)). The whole win is the ratio.
+            "all_hit": _all_hit,
+            "allhit_fence_synced": _synced,
+            "allhit_fence_deferred": _deferred,
+            "allhit_defer_submit": _c("hot.allhit_defer_submit"),
+            "allhit_deferred_pct": (
+                round(100.0 * _deferred / _all_hit, 2) if _all_hit else None
+            ),
+            # miss/split switch: begin_split_route admissions + split-route layer-calls.
+            "split_route": _c("hot.split_route"),
+            "begin_split_route": _c("hot.begin_split_route"),
+            # dispatch census. switch_gather_qmm_total counts EVERY gather_qmm on
+            # the pass (all-hit + split parts + prefill waves); allhit_gather_qmm is
+            # the all-hit branch only, so gather_qmm_per_all_hit_call is exactly 3
+            # (gate/up/down grouped over the routed slots -- never per-expert).
+            "switch_gather_qmm_total": _gather_qmm_total,
+            "allhit_gather_qmm": _allhit_gather_qmm,
+            "gather_qmm_per_all_hit_call": (
+                round(_allhit_gather_qmm / _all_hit, 3) if _all_hit else None
+            ),
+            "note": "cumulative over this AR DECODE pass. Per layer the host round-trip "
+                    "is one mx.eval(indices) barrier; allhit_fence_synced counts the "
+                    "SECOND blocking eval the shipped path pays per all-hit layer "
+                    "(switch_lean defers it -> allhit_fence_deferred). "
+                    "allhit_gather_qmm/all_hit is 3 (gate/up/down); "
+                    "switch_gather_qmm_total also includes split parts + prefill waves.",
+        }
+        print(
+            "[ab] switch dispatch: "
+            f"all_hit={_all_hit} fence_synced={_synced} fence_deferred={_deferred} "
+            f"({switch_dispatch['allhit_deferred_pct']}% deferred) "
+            f"allhit_gather_qmm={_allhit_gather_qmm} "
+            f"(~{switch_dispatch['gather_qmm_per_all_hit_call']}/all-hit call) "
+            f"gather_qmm_total={_gather_qmm_total} "
+            f"split_route={switch_dispatch['split_route']} "
+            f"eval_indices={switch_dispatch['eval_indices']}",
+            flush=True,
+        )
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
@@ -1371,6 +1489,7 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         "utilization": (
             util_sampler.summarize() if util_sampler is not None else None
         ),
+        "switch_dispatch": switch_dispatch,
     }
 
 
@@ -1722,6 +1841,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             device_sample=device_sample,
             cooldown_s=float(getattr(args, "cooldown_s", 0.0) or 0.0),
             util_sampler=util_sampler,
+            stage_timing=bool(getattr(args, "stage_timing", False)),
         )
         if util_sampler is not None:
             print(f"[ab] {arm}: {util_sampler.census()}", flush=True)
@@ -1787,6 +1907,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "serve_stream_counters": _stream_counters_block(
                 run, args.decode_tokens, _resolved_plan(runtime, args)
             ),
+            # W92 switch-dispatch census (present only with --stage-timing): per-layer
+            # host syncs + all-hit fences deferred vs synced + gather_qmm/switch-call.
+            "switch_dispatch": run.get("switch_dispatch"),
         }
         if mem_profile_snaps is not None:
             from mtplx.deepseek_v41_memory_profile import (
