@@ -27,3 +27,5 @@ Score scale (mean over layers/decode rows): s1=19.1057, s6=17.6337, gap(s1-s6)=1
 | 12 | +0.30 | 10.14 | 4.57 | 5.57 | 0.486 | 0.761 | 0.835 |
 
 **Pick (max objective, precision >= 0.5): k=6, margin=-0.05 (= -0.03 x the s1-s6 gap) -> precision 0.780, recall 0.535, issued 4.13/layer, objective 2.588.**
+
+**W95f (review LOW) — the per-row set is effectively `<=5`, not 6.** At margin=-0.05 the trim threshold is the 6th-highest score + 0.05, which sits strictly *above* the 6th score, so the 6th-ranked candidate is always dropped to the `-1` sentinel — every row keeps at most its top 5. This is why the `k=6`, `k=8` and `k=12` rows are byte-for-byte identical at margin `-0.05` (all `issued 4.13 / hits 3.21`): ranks `6..k` are trimmed by construction. Read "k=6" here as "top-6 argpartition candidates, `<=5` surviving the confidence gate per row". Because of this the verify's dedicated per-row width `_RUNNER_V2_VERIFY_K_PER_ROW = 8` was dead (identical surviving set to 6) and has been removed; the verify uses the resolved AR `k`.

@@ -2527,15 +2527,18 @@ _GATE_PREFETCH_MARGIN_ENV = "MTPLX_DSV41_GATE_PREFETCH_MARGIN"
 _RUNNER_V2_GATE_PREFETCH_MARGIN = -0.05
 #: v2 DSpark-verify prefetch (W95). At layer L-1 of a T=(K+1)-row verify the residual
 #: entering L-1 is available for ALL rows, so predict gate_L per row and prefetch the
-#: UNION of the per-row top-``_RUNNER_V2_VERIFY_K_PER_ROW`` for layer L (W89 one-ahead,
-#: applied to the verify's ~20-expert/layer union; window 31: ~8 misses/layer-verify).
+#: UNION of the per-row top-``k`` (the resolved gate-prefetch width, 6 by default) for
+#: layer L (W89 one-ahead, applied to the verify's ~20-expert/layer union; window 31:
+#: ~8 misses/layer-verify).  W95f (review LOW): the old dedicated per-row width
+#: ``_RUNNER_V2_VERIFY_K_PER_ROW = 8`` was DEAD under the v2 default confidence margin
+#: (-0.05): the 6th-ranked candidate is always trimmed (the threshold sits strictly
+#: above the 6th score), so a per-row width of 6 and 8 leave the IDENTICAL <=5
+#: surviving set. It has been removed -- the verify uses the resolved AR ``k``.
 #: Gated on RUNNER=v2, so an AR-only MTPLX_DSV41_GATE_PREFETCH stays inert on T>1
 #: (the lane-D multi-row contract). ``_RUNNER_V2_VERIFY_MAX_ROWS`` bounds it to the
 #: verify shape (never a prefill). The union rides the verify's existing per-layer
 #: routing eval and dedups at the issue site; the global ring is sized to
-#: ``_RUNNER_V2_RING_SLOTS`` (2 x ~24) to double-buffer the union one layer ahead
-#: (also amply covers the AR k=12).
-_RUNNER_V2_VERIFY_K_PER_ROW = 8
+#: ``_RUNNER_V2_RING_SLOTS`` (2 x ~24) to double-buffer the union one layer ahead.
 _RUNNER_V2_VERIFY_MAX_ROWS = 8
 _RUNNER_V2_RING_SLOTS = 48
 
@@ -2907,11 +2910,13 @@ class DecoderLayer(nn.Module):
 
         if current_expert_routing_phase(token_count=_T) is not RoutingPhase.DECODE:
             return  # PREFILL (any T) never predicts
-        if _T == 1:
-            _verify = False
-        elif _runner_v2_enabled() and 2 <= _T <= _RUNNER_V2_VERIFY_MAX_ROWS:
-            _verify = True
-        else:
+        # AR decode (T==1) predicts the single row's route; a DSpark verify row
+        # batch (2..MAX rows) predicts the per-row UNION, but ONLY under the v2
+        # runner -- an AR-only MTPLX_DSV41_GATE_PREFETCH stays inert on T>1 (the
+        # lane-D multi-row contract); a verify wider than MAX never predicts.
+        if _T != 1 and not (
+            _runner_v2_enabled() and _T <= _RUNNER_V2_VERIFY_MAX_ROWS
+        ):
             return
         switch = getattr(self.mlp, "switch_mlp", None)
         runtime = getattr(switch, "runtime", None)
@@ -2923,10 +2928,14 @@ class DecoderLayer(nn.Module):
         k = _resolve_gate_prefetch_k()
         if k <= 0:
             return
-        # AR predicts ``k`` for the single row; the verify predicts a per-row width
-        # and UNIONs across the K+1 rows (the union dedups + is confidence-gated at
-        # the issue site). Both are confidence-margin trimmed (W95 retune).
-        k_eff = _RUNNER_V2_VERIFY_K_PER_ROW if _verify else k
+        # AR predicts ``k`` for the single row; the verify predicts the same ``k``
+        # per row and UNIONs across the K+1 rows (the union dedups + is confidence-
+        # gated at the issue site). Both are confidence-margin trimmed (W95 retune).
+        # W95f (review LOW): the verify used a dedicated per-row width of 8, but
+        # under the v2 default margin (-0.05) the 6th-ranked candidate is ALWAYS
+        # trimmed (the threshold sits strictly above the 6th score), so a per-row
+        # width of 6 and 8 leave the IDENTICAL <=5 surviving set -- the 8 was dead,
+        # so both AR and verify now use the resolved ``k`` (default 6).
         # EXACTLY the collector's ``layer_in`` (scripts/deepseek_v41/collect_route
         # _traces.py:175): mean over the hc copies with the f32 upcast BEFORE the
         # mean.  (Collapsing in bf16 first would differ at the bf16 ULP on the real
@@ -2941,7 +2950,7 @@ class DecoderLayer(nn.Module):
         # the gate oracle was measured on (``bf16_bits`` -> ``bf16_to_f32`` == this).
         collapsed = collapsed.astype(mx.bfloat16).astype(mx.float32)
         predicted = gate_predict_topk(
-            link.next_gate, collapsed, k_eff, margin=_resolve_gate_prefetch_margin()
+            link.next_gate, collapsed, k, margin=_resolve_gate_prefetch_margin()
         )
         # LOW-3 (W93 review): stash on the plain `_GatePrefetchLink` (which exposes
         # the (next_layer, pending_ids) sequence interface) rather than setting a

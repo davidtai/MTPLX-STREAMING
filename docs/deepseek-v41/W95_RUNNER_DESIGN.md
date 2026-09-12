@@ -267,7 +267,7 @@ structure:
 
 - **One covering barrier per verify** (not per layer): the verify's logits eval carries all
   40 routes of the `M`-row batch to the planner.
-- **The route is the union of the M rows' top-6** (up to `U(K+1)` distinct experts/layer —
+- **The route is the union of the M rows' top-6** (per row `<=5` survive the `-0.05` confidence gate — the 6th-ranked candidate is always trimmed, so "top-6" is the argpartition width, not the issued count; see W95_PREFETCH_PRECISION.md) (up to `U(K+1)` distinct experts/layer —
   independence estimate U(4)=23.6 at depth 3, U(6)=34.9 at depth 5; the served plan's 48
   transient slots hold the union). The device LUT + epoch cover it exactly as for M=1; a
   covered layer is barrier-free, an uncovered-miss layer is inline-fenced.
