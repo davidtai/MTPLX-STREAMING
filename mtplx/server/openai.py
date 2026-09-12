@@ -3231,6 +3231,15 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # Appended at the end.
     "MTPLX_DSV41_RUNNER",
     "MTPLX_DSV41_DRAFT_HEAD_BF16",
+    # W97 / W99 / W101 (appended -- coordinate with any concurrent list extension):
+    # the decode-attention levers ab_decode_env_levers added to ALL_LEVER_ENVS at the
+    # w97/w101 merges (wo_a f32 cache + fixed-shape core compile + leaned casts + the
+    # K36 fused projection-chain kernels).  Kept here so the served-log snapshot stays
+    # a superset of ALL_LEVER_ENVS (the W46/W90 drift guard).
+    "MTPLX_DSV41_ATTN_WO_A_CACHE",
+    "MTPLX_DSV41_ATTN_CORE_COMPILE",
+    "MTPLX_DSV41_ATTN_LEAN_CASTS",
+    "MTPLX_DSV41_ATTN_FUSED_PROJ",
 )
 
 
