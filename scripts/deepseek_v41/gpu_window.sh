@@ -258,15 +258,19 @@ _step_tree_rss() {
 _step_tree_pids() {
   local root="${1:-}"
   [[ -n "${root}" ]] || return 0
+  # MEDIUM-1: emit only pids PRESENT in the ps snapshot.  The old walk seeded the
+  # root unconditionally, so `--selftest tree-pids 999999` (or an already-dead
+  # STEP_PID) printed a bogus pid -> the abort rescan logged false "ORPHAN survived"
+  # ERRORs and KILLed a dead pid.
   "${PS_CMD}" -axo pid=,ppid= 2>/dev/null | awk -v root="${root}" '
-    { pid = $1 + 0; ppid = $2 + 0; kids[ppid] = kids[ppid] " " pid }
+    { pid = $1 + 0; ppid = $2 + 0; present[pid] = 1; kids[ppid] = kids[ppid] " " pid }
     END {
       head = 1; tail = 0; wl[++tail] = root + 0; out = "";
       while (head <= tail) {
         p = wl[head]; head++;
         if (p in seen) continue;
         seen[p] = 1;
-        out = out " " p;
+        if (p in present) out = out " " p;   # only live pids
         if (p in kids) {
           n = split(kids[p], cc, " ");
           for (i = 1; i <= n; i++) if (cc[i] != "") wl[++tail] = cc[i] + 0;
@@ -537,14 +541,20 @@ _kill_step_tree() {
     done
   fi
   # Re-scan: catch anything that forked/reparented AFTER the snapshot (the window-42
-  # orphan). Log each survivor as an ORPHAN and KILL it.
+  # orphan). Log each survivor as an ORPHAN and KILL it.  MEDIUM-1: re-confirm each
+  # pid is ALIVE (kill -0) before logging/KILLing, so a dead pid never produces a
+  # false "ORPHAN survived" line.
   for _r in 1 2 3; do
     local survivors; survivors="$(_collect_step_pids)"
     [[ -z "${survivors}" ]] && break
+    local _any=0
     for _p in ${survivors}; do
+      kill -0 "${_p}" 2>/dev/null || continue
+      _any=1
       err "phase 4: ORPHAN survived tree-kill: pid ${_p} ($("${PS_CMD}" -o command= -p "${_p}" 2>/dev/null | tr '\n' ' ' | cut -c1-100)); KILLing"
       kill -KILL "${_p}" 2>/dev/null || true
     done
+    (( _any == 0 )) && break
     sleep 0.3
   done
   [[ -n "${STEP_PID:-}" ]] && { wait "${STEP_PID}" 2>/dev/null || true; }
