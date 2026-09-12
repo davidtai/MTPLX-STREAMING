@@ -380,15 +380,14 @@ ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
 # with the wo_a cache + lean casts (docs/deepseek-v41/W101_ATTN_FUSED_PROJ.md).
 ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
 
-# W115: verify-attention fast path -- auto-arm the fused decode SDPA core (K29 kernel
-# on GPU, W97 core-compile tape on CPU/GPU) + the W101 fused projections for the K+1
-# DSpark verify batch (1 < rows <= VERIFY_ATTN_MAX_ROWS, default 8), independent of
-# the M=1 decode-core levers, so the batched verify stops running the eager per-row
-# core at ~M x the M=1 cost.  ROUNDING-CLASS (the fused/compiled core reassociates the
-# fp32 softmax vs eager -- greedy-identical), phase-scoped to the decode_verify forward
-# (docs/deepseek-v41/W115_VERIFY_ATTN_FASTPATH.md).
-VERIFY_ATTN_FASTPATH_ENV = "MTPLX_DSV41_VERIFY_ATTN_FASTPATH"
-VERIFY_ATTN_MAX_ROWS_ENV = "MTPLX_DSV41_VERIFY_ATTN_MAX_ROWS"
+# W115: the DSpark lane's per-verify K29 knob.  ``_run_arm`` (and the served
+# ``arm_dspark_decode_kernels``) ``os.environ.setdefault`` K29 (DECODE_ATTN_KERNEL) +
+# K30 (SELECTED_KEYS) to "1" for EVERY ``--decode-mode dspark`` arm, so the K+1 verify
+# runs the fused decode-attention CORE by default; ``MTPLX_DSV41_DSPARK_VERIFY_K29=0``
+# drops K29 from that setdefault (K30 stays), leaving the eager per-row gathered core.
+# This is the honest A/B knob (W60: K29 is itself -38% vs eager at M=1) -- pin it "0"
+# AND DECODE_ATTN_KERNEL="0" on an eager arm so the setdefault cannot re-arm it.
+DSPARK_VERIFY_K29_ENV = "MTPLX_DSV41_DSPARK_VERIFY_K29"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -457,10 +456,9 @@ ALL_LEVER_ENVS = (
     ATTN_LEAN_CASTS_ENV,
     # W101 (appended):
     ATTN_FUSED_PROJ_ENV,
-    # W115 (appended; coordinate with any concurrent list extension): verify-attention
-    # fast path lever + row cap.
-    VERIFY_ATTN_FASTPATH_ENV,
-    VERIFY_ATTN_MAX_ROWS_ENV,
+    # W115 (appended; coordinate with any concurrent list extension): the DSpark
+    # per-verify K29 knob (governs the setdefault that arms the verify decode core).
+    DSPARK_VERIFY_K29_ENV,
     # NOTE: VERIFY_RECORD_HASHES_ENV is DELIBERATELY NOT in this list. It is a
     # BENCH-ONLY diagnostic env (honoured on the loader/bench builder, NOT on the
     # served profile builder) -- keeping it out of ALL_LEVER_ENVS also keeps it out
@@ -492,7 +490,7 @@ def _preset(
     kv_bounded=None, kv_bounded_maxkv=None,
     wo_a_cache=None, attn_core_compile=None,
     attn_lean_casts=None, attn_fused_proj=None,
-    verify_attn_fastpath=None, verify_attn_max_rows=None,
+    dspark_verify_k29=None,
     verify_record_hashes=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
@@ -559,8 +557,7 @@ def _preset(
         ATTN_CORE_COMPILE_ENV: attn_core_compile,
         ATTN_LEAN_CASTS_ENV: attn_lean_casts,
         ATTN_FUSED_PROJ_ENV: attn_fused_proj,
-        VERIFY_ATTN_FASTPATH_ENV: verify_attn_fastpath,
-        VERIFY_ATTN_MAX_ROWS_ENV: verify_attn_max_rows,
+        DSPARK_VERIFY_K29_ENV: dspark_verify_k29,
         VERIFY_RECORD_HASHES_ENV: verify_record_hashes,
     }
 
@@ -1135,23 +1132,26 @@ ARM_PRESETS = {
         runner="v2", draft="1", draft_head_bf16="1",
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
-    # W115: cell16k_ring_v2_draft_attn + the verify-attention fast path lever. EXACT
-    # KEY SET = cell16k_ring_v2_draft_attn's fifteen keys PLUS verify_attn_fastpath="1".
-    # The base arm deliberately keeps the eager SDPA CORE (K29 + core-compile OFF), so
-    # its K+1 verify pays ~M x the M=1 core cost; this arm auto-arms the fused decode
-    # core + fused projections for the verify rows (1 < rows <= 8) ONLY, phase-scoped
-    # to decode_verify.  The direct A/B vs cell16k_ring_v2_draft_attn isolates the
-    # batched-verify core: eval_indices sums down, verify_ms down, and fused_proj_
-    # engagement (dspark block) counts the verify rows.  ROUNDING-CLASS (fused/compiled
-    # core reassociates the fp32 softmax vs eager -- greedy verify stays authoritative,
-    # so byte-identical-to-AR is NOT the bar; the dspark divergence classifier gates it).
-    "cell16k_ring_v2_draft_attn_vfast": _preset(
+    # W115: the HONEST verify-core A/B.  cell16k_ring_v2_draft_attn runs the K+1 verify
+    # through the K29 fused decode-attention CORE -- NOT because the preset arms it (it
+    # does not) but because _run_arm setdefaults DECODE_ATTN_KERNEL="1" for every
+    # --decode-mode dspark arm (dspark_decode_kernel_env_defaults).  This arm pins that
+    # core OFF for the verify: decode_attn_kernel="0" is the RUNTIME knob (an explicit
+    # "0" beats the setdefault, which only fills unset keys) and dspark_verify_k29="0"
+    # drops K29 from the setdefault entirely -- BOTH, so nothing can re-arm it.  Every
+    # other key is identical to cell16k_ring_v2_draft_attn (SELECTED_KEYS + fused proj +
+    # lean casts + wo_a cache all still on), so the direct A/B isolates the verify SDPA
+    # CORE: K29 (draft_attn) vs the eager per-row gathered core (this arm).  Proof:
+    # dspark.decode_attn_kernel_engagement.calls == 0 here (>0 on draft_attn) and the
+    # dspark per_cycle verify_ms delta.  Both arms are greedy-identical to their own AR
+    # reference (the verify is authoritative); this arm's core is byte-identical eager.
+    "cell16k_ring_v2_draft_attn_eager": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
-        verify_attn_fastpath="1",
+        decode_attn_kernel="0", dspark_verify_k29="0",
     ),
     # W110 (BENCH-ONLY DIAGNOSTIC): cell16k_ring_v2 + decode-path per-record sha256
     # turned ON (MTPLX_DSV41_VERIFY_RECORD_HASHES=1, env-authoritative over the ab
@@ -1197,10 +1197,6 @@ ARM_PRESETS = {
 #   MTPLX_DSV41_DRAFT_HEAD_BF16: a bf16 DSpark draft head would round the draft logits;
 #       no current preset arms it (no such constant yet), listed by name so a future
 #       arm classifies without a code change.
-#   VERIFY_ATTN_FASTPATH (W115): auto-arms the fused/compiled decode SDPA core for the
-#       K+1 verify batch, which reassociates the fp32 softmax vs the eager per-row core
-#       (rounding-class 1e-6, greedy-identical) -- so the verify tokens can differ from
-#       control by rounding, exactly like DECODE_ATTN_KERNEL / ATTN_CORE_COMPILE.
 # DELIBERATELY EXCLUDED (kept FAIL so a genuine exact-lever regression is caught):
 #   HC_COMPILE (K4) and SINKHORN_METAL (K3) are classed byte-identical execution
 #       reorders on this CPU A/B path (K4 is a byte-identical HC-premix compile; K3
@@ -1217,17 +1213,29 @@ ROUNDING_CLASS_ENVS = (
     HC_PREMIX_KERNEL_ENV,
     "MTPLX_DSV41_DRAFT_HEAD_BF16",
     ATTN_FUSED_PROJ_ENV,  # W101: metal_kernel glue + cached pre-transposed wo_a (GPU numerics: rounding-class, 0 greedy flips / 65)
-    VERIFY_ATTN_FASTPATH_ENV,  # W115: fused/compiled decode SDPA core for the K+1 verify batch (rounding-class softmax reassoc, greedy-identical)
 )
+
+
+#: Preset values that mean a lever is UNSET / turned OFF (never a rounding-class
+#: reason).  W115: an arm may pin a rounding-class key to an explicit "0" to defeat a
+#: setdefault (cell16k_ring_v2_draft_attn_eager pins DECODE_ATTN_KERNEL="0"); an OFF
+#: lever must not be listed as a reason its tokens round.
+_LEVER_OFF_VALUES = frozenset({None, "", "0", "false", "off", "no", "none"})
 
 
 def _rounding_class_keys(arm: str) -> list:
     """The rounding-class env keys (see ``ROUNDING_CLASS_ENVS``) an arm's preset
     actually arms -- the reason its tokens are EXPECTED to differ from control by
     rounding.  Empty list for an exact arm.  Derived from ``ARM_PRESETS``, never
-    hand-listed, so a new rounding-class arm is classified automatically."""
+    hand-listed, so a new rounding-class arm is classified automatically.  A key pinned
+    to an explicit OFF value ("0"/None/...) is NOT a reason (W115: an eager arm pins the
+    verify core off with DECODE_ATTN_KERNEL="0")."""
     preset = ARM_PRESETS.get(arm, {})
-    return [k for k in ROUNDING_CLASS_ENVS if preset.get(k) not in (None, "")]
+    return [
+        k for k in ROUNDING_CLASS_ENVS
+        if str(preset.get(k) if preset.get(k) is not None else "").strip().lower()
+        not in _LEVER_OFF_VALUES
+    ]
 
 
 def _is_rounding_class(arm: str) -> bool:
@@ -3083,16 +3091,17 @@ def _dspark_decode_wall_accounting(
 
 
 def _reset_dspark_engagement_counters() -> dict:
-    """W115: zero the decode-attention-core, fused-projection and verify-fast-path
-    engagement counters before a dspark headline pass so the census is scoped to that
-    pass (the top-level ``*_engagement`` blocks are AR-scoped).  Best-effort: a module
-    that is absent on an older build is skipped, and the returned dict records which
-    modules were reset so :func:`_capture_dspark_engagement` only reports those."""
+    """W115: zero the decode-attention-core and fused-projection engagement counters
+    before a dspark headline pass so the census is SCOPED to that pass.  The top-level
+    ``*_engagement`` receipt blocks are AR-scoped (read after ``_generate``); without a
+    dspark-scoped re-read the K+1 VERIFY rows are never counted (the window-43 receipt's
+    ``fused_proj_engagement.rows = 10240`` was the AR pass only).  Best-effort: a module
+    absent on an older build is skipped; the returned dict says which were reset so
+    :func:`_capture_dspark_engagement` reports only those."""
     ok: dict = {}
     try:
         from mtplx.models import deepseek_v41 as _dsv41
         _dsv41._reset_attn_core_compile_calls()
-        _dsv41._reset_verify_attn_fastpath_calls()
         ok["dsv41"] = True
     except Exception:  # pragma: no cover - defensive
         pass
@@ -3114,15 +3123,14 @@ def _reset_dspark_engagement_counters() -> dict:
 def _capture_dspark_engagement(reset_ok: dict) -> dict:
     """W115: read the verify-scoped engagement counters after a dspark headline pass.
 
-    ``verify_attn_fastpath_engagement`` (calls/rows/fallbacks the W115 lever governed),
-    ``attn_core_compile_engagement`` (compiled vs eager cores -- the verify uses the
-    compiled core on CPU / when K29 declines), ``decode_attn_kernel_engagement`` (K29
-    dispatches -- the GPU verify core), and ``fused_proj_engagement`` (W101 qkv/out
-    calls + rows -- now INCLUDING the verify rows, the window-43 gap)."""
+    ``decode_attn_kernel_engagement`` (K29 dispatches -- the GPU verify core, ON by
+    default via the _run_arm setdefault, so ``calls == 0`` proves an eager arm turned it
+    off), ``attn_core_compile_engagement`` (the compiled selected-key core), and
+    ``fused_proj_engagement`` (W101 qkv/out calls + rows -- now INCLUDING the verify
+    rows, the window-43 gap)."""
     out: dict = {}
     if reset_ok.get("dsv41"):
         from mtplx.models import deepseek_v41 as _dsv41
-        out["verify_attn_fastpath_engagement"] = _dsv41._verify_attn_fastpath_engagement()
         out["attn_core_compile_engagement"] = _dsv41._attn_core_compile_calls()
     if reset_ok.get("k29"):
         from mtplx.models import deepseek_v41_attn_kernels as _k29
@@ -3179,21 +3187,18 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             # re-prefill (this callback fires after prefill, before the decode cycles).
             _sc["decode_start"] = time.perf_counter()
 
-        # W115: zero the attention-core / projection / verify-fast-path engagement
-        # counters right before the UNTIMED headline pass so the dspark receipt block
-        # reports THIS pass's real verify engagement (the fused decode core + W101
-        # projections the verify rows drove) rather than the AR pass's -- the receipt's
-        # top-level fused_proj_engagement is AR-scoped, so without this the verify rows
-        # would never be counted (the window-43 "rows = AR only" gap).  Captured right
-        # after the headline pass, before the timed stage-timing pass (which forces the
-        # cores eager, adding eager fallbacks that would pollute the census).
-        _eng_reset = _reset_dspark_engagement_counters()
         # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
         # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
         # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
         # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
         # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
         # per-stage attribution is a SECOND, timed pass below.
+        # W115: zero the decode-core / fused-proj engagement counters right before the
+        # UNTIMED headline pass so the dspark receipt block reports THIS pass's verify
+        # engagement (the K29 core the verify rows drove + the W101 projections),
+        # captured after the pass and before the timed stage-timing pass (which forces
+        # the cores eager).  Closes the window-43 "fused_proj = AR only" gap.
+        _eng_reset = _reset_dspark_engagement_counters()
         t0 = time.perf_counter()
         toks = dspark_generate(
             model,
@@ -3207,8 +3212,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             prefill_callback=_stream_prefill_cb,
         )
         _sc["end"] = _stream_counters_snapshot(model)
-        # W115: capture the verify-scoped engagement (fused decode core + W101
-        # projections + verify-fast-path) from the headline pass, before the timed pass.
+        # W115: capture the verify-scoped engagement from the headline pass.
         _dspark_engagement = _capture_dspark_engagement(_eng_reset)
         # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
         # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
@@ -3717,9 +3721,6 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # W97 (review item 3): zero the decode-attention-core compile engagement so
         # the receipt reports THIS arm's compiled-tape calls vs eager fallbacks.
         _dsv41._reset_attn_core_compile_calls()
-        # W115: zero the verify-fast-path engagement so the AR-pass receipt reports 0
-        # (M=1 AR has no verify batch); the dspark block re-zeros + reports the verify.
-        _dsv41._reset_verify_attn_fastpath_calls()
     except Exception:  # pragma: no cover - defensive
         _dsv41 = None
     # W60/K29 engagement: zero the fused-decode-attention counters after model load
@@ -3873,12 +3874,6 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "fused_proj_engagement": (
                 _fp.engagement() if _fp is not None else None
             ),
-            # W115: verify-attention fast-path engagement over the AR pass (calls 0 --
-            # AR is M=1, no verify batch; the DSpark verify count is in the dspark
-            # block).  Present at the top level so the receipt schema always carries it.
-            "verify_attn_fastpath_engagement": (
-                _dsv41._verify_attn_fastpath_engagement() if _dsv41 is not None else None
-            ),
             # W81: the ACTUAL slot plan this arm ran (transient/persistent slot
             # counts + bytes + source), so an A/B is attributable to a capacity and
             # the in-process bench is comparable to the served profile plan.
@@ -3974,10 +3969,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 # W61 single-barrier fast-path engagement (+ eval_indices barrier
                 # count) from the route-stage probe.
                 receipt["dspark"]["w61_engagement"] = dsp["w61_engagement"]
-            # W115: verify-SCOPED engagement (from the headline pass) so this arm's
-            # verify rows are counted -- verify_attn_fastpath_engagement (the lever's
-            # calls/rows/fallbacks), and the decode-core / fused-proj engagement now
-            # reflecting the verify rows (NOT the AR pass at the receipt top level).
+            # W115: verify-SCOPED engagement (headline pass) so THIS arm's K+1 verify
+            # rows are counted -- decode_attn_kernel_engagement.calls == 0 proves an
+            # eager arm turned the verify core off (draft_attn: > 0), and fused_proj_
+            # engagement.rows now reflects the verify rows (NOT the AR pass at the
+            # receipt top level -- the window-43 gap).
             if dsp.get("engagement"):
                 receipt["dspark"].update(dsp["engagement"])
             # W81: DECODE-scoped expert-streaming counters for the DSpark decode
