@@ -876,7 +876,7 @@ ARM_PRESETS = {
     # amount and re-open the overshoot.
     "cell16k_ring_wo_a_cache": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1",
     ),
@@ -895,7 +895,7 @@ ARM_PRESETS = {
     # if also armed, wins the early return before this path.
     "cell16k_ring_attn_core": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_core_compile="1",
     ),
@@ -905,7 +905,7 @@ ARM_PRESETS = {
     # memory (the wo_a cache holds a dense wo_a copy resident per layer, ~5.4/2.7 GB).
     "cell16k_ring_wo_a_core": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_core_compile="1",
     ),
@@ -918,7 +918,7 @@ ARM_PRESETS = {
     # core (cell16k_ring_wo_a_core) and the eager baseline (cell16k_ring_wo_a_cache).
     "cell16k_ring_wo_a_k29": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", decode_attn_kernel="1",
     ),
@@ -933,7 +933,7 @@ ARM_PRESETS = {
     # dispatch savings (wo_a per-token dequant removed + KVg/sink/inv_freq casts leaned).
     "cell16k_ring_lean": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_lean_casts="1",
     ),
@@ -942,7 +942,7 @@ ARM_PRESETS = {
     # attention arm (exact wo_a cache + lean casts + the fused core).
     "cell16k_ring_lean_k29": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
     ),
@@ -963,7 +963,7 @@ ARM_PRESETS = {
     # wo_a copy resident per layer (~2.7 GB) -- watch peak memory at the 16K cell.
     "cell16k_ring_fused": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
         attn_fused_proj="1",
@@ -1060,6 +1060,45 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
+    ),
+    # W97F composite: cell16k_ring_v2 + the byte-identical W97/W99 lean attention
+    # stack (wo_a f32 cache + leaned casts) + the W101/K36 fused projection-chain glue.
+    # EXACT KEY SET (13 keys) = cell16k_ring_v2's twelve keys
+    #   layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+    #   window_ring="1", layout_fix="1", kv_bounded="1", head="bf16", sinkhorn="1",
+    #   attn="1", win_memo="1", runner="v2"
+    # PLUS the three W97/W99/W101 attention keys
+    #   wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1".
+    # wo_a_cache + attn_lean_casts are the BYTE-IDENTICAL (exact) W97/W99 lean stack
+    # (cell16k_ring_lean); attn_fused_proj is the W101/K36 GPU-only small-M (b*s<=8)
+    # projection glue.  The K29 fused decode core (decode_attn_kernel) is DELIBERATELY
+    # NOT armed -- the eager core stays -- so the direct A/B vs cell16k_ring_v2 isolates
+    # the v2 SSD-hiding runner combined with the attention-dispatch reductions (lean
+    # stack + fused proj) without the fused core.  Watch peak memory (wo_a cache + the
+    # fused path each hold a per-layer wo_a copy resident at the 16K cell).
+    "cell16k_ring_v2_attn": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W97F composite (DSpark): cell16k_ring_v2_draft + the SAME three attention keys as
+    # cell16k_ring_v2_attn.  EXACT KEY SET (15 keys) = cell16k_ring_v2_draft's twelve
+    #   layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+    #   window_ring="1", layout_fix="1", kv_bounded="1", head="bf16", sinkhorn="1",
+    #   attn="1", win_memo="1", runner="v2", draft="1", draft_head_bf16="1"
+    # PLUS wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1".
+    # The draft + draft_head_bf16 keys drive the DSpark draft head (--decode-mode
+    # dspark); the three attention keys apply to the shared trunk attention exactly as
+    # in cell16k_ring_v2_attn.  The direct A/B vs cell16k_ring_v2_draft isolates the
+    # W97/W99/W101 attention stack under the DSpark decode lane.
+    "cell16k_ring_v2_draft_attn": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
 }
 
