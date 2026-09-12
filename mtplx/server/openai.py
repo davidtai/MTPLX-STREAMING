@@ -3240,6 +3240,12 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_ATTN_CORE_COMPILE",
     "MTPLX_DSV41_ATTN_LEAN_CASTS",
     "MTPLX_DSV41_ATTN_FUSED_PROJ",
+    # W118 (appended -- coordinate with any concurrent list extension): the MLX
+    # allocator-limit headroom lever.  It is read on the served path too
+    # (expert_runtime.apply_mlx_memory_cap, called from ExpertStreamingRuntime.open),
+    # so it is a LIVE served lever -- kept here so the served-log snapshot stays a
+    # superset of ALL_LEVER_ENVS (the W46/W90 drift guard).
+    "MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB",
     # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
     # in-place write was reverted to slice_update + a donation gate), so it is gone from
     # ALL_LEVER_ENVS and therefore removed here too -- the superset invariant holds.

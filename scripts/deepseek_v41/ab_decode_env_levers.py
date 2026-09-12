@@ -410,6 +410,16 @@ ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
 # with the wo_a cache + lean casts (docs/deepseek-v41/W101_ATTN_FUSED_PROJ.md).
 ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
 
+# W118 / H7: raise ONLY the MLX allocator soft limit (mx.set_memory_limit) by N GiB
+# ABOVE the residency plan, WITHOUT changing what is resident or the expert-cache slot
+# plan -- so bytes/routing/outputs are byte-identical.  Read at use by
+# expert_runtime.apply_mlx_memory_cap (the served ExpertStreamingRuntime.open path);
+# the value is a GiB count ("8"), not a boolean.  Every real window runs the model OVER
+# its own MLX limit (plan 69.2 -> mlx_peak 74.3), and MLX 0.32.2 treats set_memory_limit
+# as soft: over-limit allocations take the cache-release / scheduler-wait path (the
+# allocator-pressure regime).  docs/deepseek-v41/W118_MLX_LIMIT_HEADROOM.md.
+MLX_LIMIT_HEADROOM_ENV = "MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB"
+
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
 # prior arm in the same process left set -- the arms are independent. The eight
@@ -477,6 +487,9 @@ ALL_LEVER_ENVS = (
     ATTN_LEAN_CASTS_ENV,
     # W101 (appended):
     ATTN_FUSED_PROJ_ENV,
+    # W118 (appended; coordinate with any concurrent list extension): the MLX
+    # allocator-limit headroom lever (GiB above the plan; residency-only, byte-identical).
+    MLX_LIMIT_HEADROOM_ENV,
     # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
     # in-place write was reverted to slice_update + a donation gate), so it is no longer
     # in this list -- the served-log snapshot dropped it too (superset invariant holds).
@@ -512,6 +525,7 @@ def _preset(
     wo_a_cache=None, attn_core_compile=None,
     attn_lean_casts=None, attn_fused_proj=None,
     verify_record_hashes=None,
+    mlx_limit_headroom=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -578,6 +592,7 @@ def _preset(
         ATTN_LEAN_CASTS_ENV: attn_lean_casts,
         ATTN_FUSED_PROJ_ENV: attn_fused_proj,
         VERIFY_RECORD_HASHES_ENV: verify_record_hashes,
+        MLX_LIMIT_HEADROOM_ENV: mlx_limit_headroom,
     }
 
 
@@ -1165,6 +1180,36 @@ ARM_PRESETS = {
         runner="v2", draft="1", draft_head_bf16="1",
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
+    # W118 pair for window 46: cell16k_ring_v2_attn + the MLX allocator-limit headroom
+    # lever at 8 GiB (H7).  EXACT KEY SET = cell16k_ring_v2_attn's keys PLUS
+    # mlx_limit_headroom="8" (MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB).  The headroom raises
+    # ONLY the mx.set_memory_limit soft cap above the residency plan -- residents,
+    # expert-cache slots and the prefetch ring are UNCHANGED, so the direct A/B vs
+    # cell16k_ring_v2_attn is BYTE-IDENTICAL (same plan_limit_gib_effective) and
+    # isolates whether lifting the allocator over-limit path (plan 69.2 < mlx_peak 74.3)
+    # frees the in-model attention/verify from the allocator-pressure regime.  Pin the
+    # plan with --memory-plan-from so both arms run the SAME plan_limit.
+    "cell16k_ring_v2_attn_hr8": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        mlx_limit_headroom="8",
+    ),
+    # W118 pair for window 46 (DSpark): cell16k_ring_v2_draft_attn + headroom 8.  EXACT
+    # KEY SET = cell16k_ring_v2_draft_attn's keys PLUS mlx_limit_headroom="8".  The
+    # headroom is a whole-process allocator cap (not a decode lever), so it composes
+    # with the DSpark draft/verify path exactly as on the AR arm; the direct A/B vs
+    # cell16k_ring_v2_draft_attn isolates the headroom under the DSpark decode lane.
+    "cell16k_ring_v2_draft_attn_hr8": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        mlx_limit_headroom="8",
+    ),
     # W107F pair for window 44: cell16k_ring_v2_attn + kv_bounded="1" (the
     # dedicated bounded variant, per the W107 round-3 policy that composites do
     # NOT carry kv_bounded -- it lives only in *_bounded arms).  EXACT KEY SET =
@@ -1596,6 +1641,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="GB",
         help="DEPRECATED alias of --plan-overshoot-gib (decimal GB -> GiB).",
+    )
+    p.add_argument(
+        "--mlx-limit-headroom-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="W118 (H7): raise ONLY the MLX allocator soft limit (mx.set_memory_limit) "
+        "by this many GiB ABOVE the residency plan, WITHOUT changing what is resident "
+        "or the expert-cache slot plan -- so bytes/routing/outputs are byte-identical. "
+        "Maps to MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB (read at use by "
+        "apply_mlx_memory_cap) and is priced into the budget forecast box peak (the "
+        "arm presets *_hr8 set 8). Default: the env / preset value, else 0 (today).",
     )
     # W106 LOW-4: pre-flight the budget derivation from a dry snapshot (no model
     # load, no MLX) so the floor refusal happens BEFORE the guarded GPU window opens
@@ -2151,6 +2208,10 @@ class BudgetTotalDerivation:
         "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
         "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
         "kv_estimator", "rss_semantics", "system_used_live_gb",
+        # W118 (H7): GiB the MLX allocator soft limit is raised ABOVE the plan
+        # (mx.set_memory_limit = plan + headroom).  It does NOT change plan_limit_gib
+        # (residents/slots unchanged) but DOES count toward the forecast box peak.
+        "mlx_limit_headroom_gib",
     )
 
     def __init__(
@@ -2170,6 +2231,7 @@ class BudgetTotalDerivation:
         kv_estimator=None,
         rss_semantics="unmeasured",
         system_used_live_gb=None,
+        mlx_limit_headroom_gib=0.0,
     ):
         self.source = source
         self.budget_total_gb = budget_total_gb
@@ -2194,6 +2256,10 @@ class BudgetTotalDerivation:
         # HIGH (round 4): the LIVE system-used baseline measured when a pinned plan
         # is validated (None unless this run pinned a sidecar).
         self.system_used_live_gb = system_used_live_gb
+        # W118 (H7): GiB added to mx.set_memory_limit ABOVE the plan.  Priced into the
+        # forecast box peak (forecast += headroom) so the budget guard stays honest;
+        # NEVER subtracted from plan_limit_gib on the pinned path (residents unchanged).
+        self.mlx_limit_headroom_gib = float(mlx_limit_headroom_gib or 0.0)
 
     def replace(self, **changes) -> "BudgetTotalDerivation":
         """A copy with the named fields overridden (dataclasses.replace-style)."""
@@ -2214,23 +2280,27 @@ class BudgetTotalDerivation:
             "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
             "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
             "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
-            "rss_semantics", "system_used_live_gb",
+            "rss_semantics", "system_used_live_gb", "mlx_limit_headroom_gib",
         }
         return BudgetTotalDerivation(**{k: v for k, v in d.items() if k in fields})
 
     def forecast_system_peak_gib(self):
         """HIGH-1: the forecast whole-box peak = baseline + plan + plan_overshoot +
-        non_metal_overhead.  With the plan derived by subtracting overshoot/kv/safety
-        too, this stays <= budget_total (the invariant the derivation guarantees)."""
+        non_metal_overhead + mlx_limit_headroom (W118).  With the plan derived by
+        subtracting overshoot/kv/safety/headroom too, this stays <= budget_total (the
+        invariant the derivation guarantees).  The headroom term prices the extra bytes
+        the raised mx.set_memory_limit lets the allocator retain ABOVE the plan."""
         if self.budget_total_gb is None:
             return None
         return (
             self.system_used_at_start_gb + self.plan_limit_gib
             + self.plan_overshoot_gib + self.non_metal_overhead_gb
+            + self.mlx_limit_headroom_gib
         )
 
     def formula(self) -> str:
         fc = self.forecast_system_peak_gib()
+        hr = self.mlx_limit_headroom_gib
         return (
             f"plan_limit = budget_total({self.budget_total_gb:.4g}) "
             f"- system_used_at_start({self.system_used_at_start_gb:.4g}) "
@@ -2238,7 +2308,9 @@ class BudgetTotalDerivation:
             f"- kv_growth_to_max_kv({self.kv_growth_to_max_kv_gb:.4g}) "
             f"- safety({self.safety_gb:.4g}) "
             f"- plan_overshoot({self.plan_overshoot_gib:.4g}) "
-            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g}; "
+            + (f"- mlx_limit_headroom({hr:.4g}) " if hr else "")
+            + f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g}; "
+            f"mlx_set_limit {self.plan_limit_gib + hr:.4g}; "
             f"forecast_system_peak {fc:.4g} <= budget)"
         )
 
@@ -2248,6 +2320,15 @@ class BudgetTotalDerivation:
         self-describing regardless of which plan source ran."""
 
         fc = self.forecast_system_peak_gib()
+        # W118 (H7): the value actually handed to mx.set_memory_limit -- the plan limit
+        # (residents/slots UNCHANGED) PLUS the allocator headroom.  plan_limit_gib*
+        # never move with the headroom, so a control-vs-hrN A/B keeps an equal
+        # plan_limit_gib_effective (the byte-identity plan-equality guard); only
+        # mlx_limit_gib_effective differs by the headroom.
+        _plan_eff = (
+            self.plan_limit_gib if self.plan_limit_gib_effective is None
+            else self.plan_limit_gib_effective
+        )
         return {
             "memory_plan_source": self.source,
             "budget_total_gb": (
@@ -2258,6 +2339,10 @@ class BudgetTotalDerivation:
             "plan_limit_gib_effective": (
                 None if self.plan_limit_gib_effective is None
                 else round(self.plan_limit_gib_effective, 4)
+            ),
+            "mlx_limit_headroom_gib": round(self.mlx_limit_headroom_gib, 4),
+            "mlx_limit_gib_effective": round(
+                _plan_eff + self.mlx_limit_headroom_gib, 4
             ),
             "budget_system_used_at_start_gb": round(self.system_used_at_start_gb, 4),
             "budget_non_metal_overhead_gb": round(self.non_metal_overhead_gb, 4),
@@ -2289,17 +2374,25 @@ def derive_budget_total_plan(
     plan_overshoot_gib: float = DEFAULT_PLAN_OVERSHOOT_GIB,
     floor_gib: float = DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
     kv_estimator: str | None = None,
+    mlx_limit_headroom_gib: float = 0.0,
 ) -> BudgetTotalDerivation:
     """Derive the MLX plan limit from David's TOTAL box budget, compensating for
     the non-Metal requirements.  All measurements are injected (pure math):
 
         plan_limit = total - system_used_at_start - non_metal_overhead
                            - kv_growth_to_max_kv - safety - plan_overshoot
+                           - mlx_limit_headroom
 
     ``plan_overshoot`` (HIGH-1) prices the MLX allocator peak that lands OVER the
     plan's expert-cache ceiling (KV + prefill transients), so the forecast box peak
-    = baseline + plan + overshoot + overhead stays <= budget.  Raises ``ValueError``
-    (actionable) when the derived plan limit is below ``floor_gib``.
+    = baseline + plan + overshoot + overhead + headroom stays <= budget.
+    ``mlx_limit_headroom`` (W118 / H7) reserves the extra GiB the raised
+    mx.set_memory_limit lets the allocator retain above the plan: on THIS
+    derive-from-budget path it comes off the plan (fewer residents under a fixed
+    budget) so the forecast still fits; on the PINNED-plan A/B path the plan is fixed
+    and the headroom is added at set_memory_limit time (see forecast_system_peak_gib).
+    Raises ``ValueError`` (actionable) when the derived plan limit is below
+    ``floor_gib``.
     """
 
     for name, value in (
@@ -2310,6 +2403,7 @@ def derive_budget_total_plan(
         ("safety_gb", safety_gb),
         ("plan_overshoot_gib", plan_overshoot_gib),
         ("floor_gib", floor_gib),
+        ("mlx_limit_headroom_gib", mlx_limit_headroom_gib),
     ):
         if value < 0:
             raise ValueError(f"{name} must be non-negative, got {value!r}")
@@ -2321,6 +2415,7 @@ def derive_budget_total_plan(
         - float(kv_growth_to_max_kv_gb)
         - float(safety_gb)
         - float(plan_overshoot_gib)
+        - float(mlx_limit_headroom_gib)
     )
     if plan_limit < float(floor_gib):
         exc = ValueError(
@@ -2330,9 +2425,11 @@ def derive_budget_total_plan(
             f"- system_used_at_start {system_used_at_start_gb:.4g} "
             f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
             f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
-            f"- safety {safety_gb:.4g} - plan_overshoot {plan_overshoot_gib:.4g}. "
+            f"- safety {safety_gb:.4g} - plan_overshoot {plan_overshoot_gib:.4g} "
+            f"- mlx_limit_headroom {mlx_limit_headroom_gib:.4g}. "
             f"Raise --memory-budget-total-gib, lower --memory-safety-gib / "
-            f"--non-metal-overhead-gib / --plan-overshoot-gib, reduce --max-kv, or "
+            f"--non-metal-overhead-gib / --plan-overshoot-gib / "
+            f"--mlx-limit-headroom-gib, reduce --max-kv, or "
             f"lower --memory-budget-floor-gib (default "
             f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
         )
@@ -2349,6 +2446,7 @@ def derive_budget_total_plan(
         floor_gib=float(floor_gib),
         plan_limit_gib=plan_limit,
         kv_estimator=kv_estimator,
+        mlx_limit_headroom_gib=float(mlx_limit_headroom_gib),
     )
 
 
@@ -2565,6 +2663,28 @@ def _budget_total_gib(args):
     )
 
 
+def _resolve_mlx_limit_headroom_gib(args) -> float:
+    """W118 (H7): the MLX allocator-limit headroom in GiB for THIS arm.
+
+    Precedence: the explicit ``--mlx-limit-headroom-gib`` flag, else the env the arm
+    preset stamps (``MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB``, read at use -- the runtime
+    reads the SAME env in apply_mlx_memory_cap), else 0 (today).  Refuses a negative
+    value.  Read at use so it reflects the arm whose env is currently applied."""
+
+    flag = getattr(args, "mlx_limit_headroom_gib", None)
+    if flag is not None:
+        value = float(flag)
+    else:
+        raw = os.environ.get(MLX_LIMIT_HEADROOM_ENV)
+        value = float(raw) if raw not in (None, "") else 0.0
+    if value < 0:
+        raise ValueError(
+            f"--mlx-limit-headroom-gib / {MLX_LIMIT_HEADROOM_ENV} must be "
+            f"non-negative, got {value}"
+        )
+    return value
+
+
 def _detect_qwen_rss_bytes(label="com.tea.qwen"):
     """Best-effort, READ-ONLY estimate of the resident agent's RSS in bytes via
     ``launchctl print`` (pid) + ``ps -o rss=`` -- neither mutates anything.  Used
@@ -2656,6 +2776,10 @@ def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
         plan_overshoot_gib=plan_overshoot_gib,
         floor_gib=floor_gib,
         kv_estimator=kv_estimator,
+        # W118 (H7): reserve the allocator headroom off the plan on the derive-from-
+        # budget path so the forecast box peak still fits (the pinned A/B path keeps
+        # the plan and adds the headroom at set_memory_limit time instead).
+        mlx_limit_headroom_gib=_resolve_mlx_limit_headroom_gib(args),
     )
 
 
@@ -2753,17 +2877,24 @@ def _validate_pinned_plan(args, bench, max_kv, bt, stamp):
     live_gb = _measure_system_used_at_start_bytes(args, bench) / GIB if bench else 0.0
     budget = stamp.get("budget_total_gb") or bt.budget_total_gb
     if budget is not None:
+        # W118 (H7): the raised mx.set_memory_limit lets the allocator retain
+        # bt.mlx_limit_headroom_gib ABOVE the pinned plan, so it counts toward the
+        # forecast box peak the pin must fit under.
+        headroom = bt.mlx_limit_headroom_gib
         forecast = (
             live_gb + bt.plan_limit_gib + bt.plan_overshoot_gib
-            + bt.non_metal_overhead_gb
+            + bt.non_metal_overhead_gb + headroom
         )
         if forecast > float(budget):
             exc = ValueError(
                 f"--memory-plan-from would exceed the budget under the CURRENT live "
                 f"baseline: forecast {forecast:.4g} = live {live_gb:.4g} + plan "
                 f"{bt.plan_limit_gib:.4g} + overshoot {bt.plan_overshoot_gib:.4g} + "
-                f"overhead {bt.non_metal_overhead_gb:.4g} > budget {float(budget):.4g}. "
-                "The box is more loaded than when the plan was derived; free memory "
+                f"overhead {bt.non_metal_overhead_gb:.4g}"
+                + (f" + mlx_limit_headroom {headroom:.4g}" if headroom else "")
+                + f" > budget {float(budget):.4g}. "
+                "The box is more loaded than when the plan was derived (or the "
+                "headroom does not fit); free memory, lower --mlx-limit-headroom-gib, "
                 "or re-derive."
             )
             exc.dsv41_stage = "pin_validation"
@@ -2795,6 +2926,11 @@ def _preflight_memory_plan(args, bench) -> int:
     if pin_path:
         try:
             bt, stamp = _load_pinned_plan(pin_path)
+            # W118 (H7): price THIS run's headroom flag against the pin's budget (the
+            # preset env is not applied on the pre-flight path, so only the flag).
+            bt = bt.replace(
+                mlx_limit_headroom_gib=_resolve_mlx_limit_headroom_gib(args)
+            )
             live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(f"[ab] memory-plan preflight: PIN REFUSED -- {exc}", flush=True)
@@ -2886,6 +3022,12 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
         # every A/B arm uses the SAME plan_limit -- but RE-VALIDATE it (stamp match +
         # live over-budget) and refuse (exit 3, before load) a stale/over-budget pin.
         bt, stamp = _load_pinned_plan(pin_path)
+        # W118 (H7): the headroom is a per-ARM lever, not a pinned plan property -- the
+        # sidecar pins the shared plan_limit (residents), each arm applies its own
+        # headroom on top.  Override the sidecar's value with THIS arm's before the
+        # forecast/over-budget check prices it, keeping plan_limit (and thus residency
+        # / byte-identity) untouched.
+        bt = bt.replace(mlx_limit_headroom_gib=_resolve_mlx_limit_headroom_gib(args))
         live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
         bt = bt.replace(system_used_live_gb=live_gb)
         print(
@@ -2913,7 +3055,12 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
     if args._dsv41_budget_total is None:
         # Non-budget path: record the actually-used plan limit as "explicit" so the
         # receipt memory block carries the full budget key set (nulls elsewhere).
-        args._dsv41_budget_total = _explicit_plan_derivation(derivation.plan_gib)
+        # W118 (H7): still surface the arm's allocator headroom so the receipt's
+        # mlx_limit_gib_effective matches the value the runtime hands set_memory_limit
+        # (the forecast term stays null -- no budget to check on the explicit path).
+        args._dsv41_budget_total = _explicit_plan_derivation(
+            derivation.plan_gib
+        ).replace(mlx_limit_headroom_gib=_resolve_mlx_limit_headroom_gib(args))
     return derivation
 
 
@@ -4326,6 +4473,13 @@ def _write_output_sidecars(out_path, receipt) -> None:
 
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
+    # W118 (H7): map an explicit --mlx-limit-headroom-gib to the env AFTER the arm
+    # preset is applied (a non-hr arm's preset POPs the key), so the flag overrides the
+    # preset and the runtime (apply_mlx_memory_cap, read at use) sees the same value the
+    # harness prices into the forecast.  Unset flag -> the preset/env value stands.
+    _hr_flag = getattr(args, "mlx_limit_headroom_gib", None)
+    if _hr_flag is not None:
+        os.environ[MLX_LIMIT_HEADROOM_ENV] = f"{float(_hr_flag):g}"
     # W107: a bounded arm that did not pin an explicit MTPLX_DSV41_KV_BOUNDED_MAXKV
     # (the presets do not know the CLI --max-kv) preallocates every KV lane to the
     # resolved cell max_kv.  Stamp it here, after the arm env is applied and BEFORE

@@ -1678,17 +1678,67 @@ def reconcile_mlx_memory_cap(
     return mlx_limit
 
 
+# W118 (H7): the MLX allocator-limit headroom lever.  Read at USE (never frozen at
+# import), matching every other DSV4.1 lever ([[env-flags-read-at-use-not-import]]).
+# Default 0 == today.  It adds N GiB to the value passed to ``set_memory_limit`` ABOVE
+# the residency plan WITHOUT changing the plan (residents, expert-cache slots, prefetch
+# ring) or the ``MTPLX_MEMORY_LIMIT_BYTES`` engine budget -- so bytes/routing/outputs
+# stay byte-identical.  The finding (W112 receipt window-44b): every real window runs
+# the model OVER its own MLX limit (plan 69.2 -> mlx_peak 74.3), and MLX 0.32.2 treats
+# set_memory_limit as a SOFT limit -- allocations beyond it take the over-limit path
+# (cache release / scheduler wait), the (f) allocator-pressure regime (5.2x in-model
+# attention).  Raising ONLY the limit above the steady-state peak leaves that regime
+# without touching what is resident.
+MLX_LIMIT_HEADROOM_ENV = "MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB"
+_MLX_LIMIT_HEADROOM_GIB = 1024**3
+
+
+def resolve_mlx_limit_headroom_bytes(env: Mapping[str, str] | None = None) -> int:
+    """Extra bytes added to the value passed to ``mx.set_memory_limit`` ABOVE the
+    residency plan (W118 / H7).  Reads ``MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB`` at USE;
+    default 0 (unset / empty == today).  Does NOT change the plan or
+    ``MTPLX_MEMORY_LIMIT_BYTES``.  Rejects a non-numeric or negative value."""
+
+    source = os.environ if env is None else env
+    raw = source.get(MLX_LIMIT_HEADROOM_ENV)
+    if raw is None or str(raw).strip() == "":
+        return 0
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be a number of GiB, got {raw!r}"
+        ) from exc
+    if value < 0:
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be non-negative, got {value}"
+        )
+    return int(round(value * _MLX_LIMIT_HEADROOM_GIB))
+
+
 def apply_mlx_memory_cap(
     plan: ExpertMemoryPlan,
     *,
     mx_module: Any | None = None,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Apply the reconciled cap before resident or expert-slot allocation."""
+    """Apply the reconciled cap before resident or expert-slot allocation.
+
+    ``MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB`` (default 0, read at use) adds N GiB to the
+    value handed to ``set_memory_limit`` ABOVE the residency plan.  The plan-derived
+    engine budget (``MTPLX_MEMORY_LIMIT_BYTES``, which bounds residents / KV / expert
+    slots) is stamped UNCHANGED, so the headroom raises only the soft allocator limit;
+    residency, routing and outputs are byte-identical.  ``limit`` in the report is the
+    effective value passed to the allocator (plan + headroom)."""
 
     target_env = os.environ if env is None else env
-    limit = reconcile_mlx_memory_cap(plan, env=target_env)
-    target_env["MTPLX_MEMORY_LIMIT_BYTES"] = str(limit)
+    plan_limit = reconcile_mlx_memory_cap(plan, env=target_env)
+    # The engine budget stays the PLAN value: it bounds what is resident (weights /
+    # KV / expert-cache slots) and must not move with the allocator headroom, or the
+    # plan (and thus bytes/routing) would change.
+    target_env["MTPLX_MEMORY_LIMIT_BYTES"] = str(plan_limit)
+    headroom = resolve_mlx_limit_headroom_bytes(target_env)
+    limit = plan_limit + headroom
     if mx_module is None:
         try:
             import mlx.core as mx

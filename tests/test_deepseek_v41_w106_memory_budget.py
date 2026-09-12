@@ -47,6 +47,9 @@ _EXPECTED_MEMORY_KEYS = {
     "budget_total_gb",
     "plan_limit_gib_derived",
     "plan_limit_gib_effective",
+    # W118 (H7): the MLX allocator-limit headroom + the effective set_memory_limit value.
+    "mlx_limit_headroom_gib",
+    "mlx_limit_gib_effective",
     "budget_system_used_at_start_gb",
     "budget_non_metal_overhead_gb",
     "budget_non_metal_overhead_measured_gb",
