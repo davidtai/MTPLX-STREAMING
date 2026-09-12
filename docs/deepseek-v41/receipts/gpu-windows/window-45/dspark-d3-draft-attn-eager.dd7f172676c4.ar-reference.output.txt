@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_draft_attn_eager
+# stream: ar-reference
+# token_ids_sha256: dd7f172676c4d30453203fd1348be76a3bc5e87875250b315803e1f2dff578f3
+# decode_tok_s: 2.8970485394975545
+# divergence: {"divergence_index": 111, "ar_token": 8049, "dspark_token": 1975, "ar_top2_margin": 0.125, "dspark_top2_margin": 0.0, "max_abs_logit_delta": 1.125, "tie_margin": 0.03, "class": "divergent", "capture_index": 111}
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, but it currently lacks any aggregate summary helper over `GenerationOutput` sequences.
+
+- The module already has strong per-request telemetry (`GenerationStats`, `_DecodeTrace`, `_runtime_counter_delta`) but no cross-request aggregation layer, so a `summarize_generation_outputs` helper would slot in naturally alongside `_generation_rate_fields` and reuse the existing `tok_s`/`decode_tok_s`/`end_to_end_tok_s` conventions.
+- Optional metrics like prefill TPS, decode TPS, and peak memory are already conditionally populated (e.g., `paged_kv_capacity_tokens`, `mlx_memory` stats), so the helper should treat missing/zero fields as "unavailable" rather than coercing them to zero, matching the module's existing tolerant-delta style in `_DecodeTrace._delta`.
+- The module's type style favors `Literal` aliases, `@dataclass` outputs, and `dict[str, Any]` returns with explicit `float`/`int` casts
