@@ -38,6 +38,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -1197,6 +1198,16 @@ def build_parser() -> argparse.ArgumentParser:
         "the budget can be checked BEFORE the guarded GPU window opens.",
     )
     p.add_argument(
+        "--preflight-freed-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="GiB the guarded window will FREE by booting out the resident agent "
+        "(com.tea.qwen); subtracted from the pre-flight 'now' baseline so it derives "
+        "from the expected in-window baseline. Default: best-effort read-only "
+        "auto-detect of the agent RSS, else 0 with a caveat. Pre-flight only.",
+    )
+    p.add_argument(
         "--memory-profile",
         action="store_true",
         default=False,
@@ -1349,7 +1360,7 @@ class BudgetTotalDerivation:
         "source", "budget_total_gb", "system_used_at_start_gb",
         "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
         "floor_gib", "plan_limit_gib", "non_metal_overhead_measured_gb",
-        "plan_limit_gib_effective",
+        "plan_limit_gib_effective", "rss_semantics",
     )
 
     def __init__(
@@ -1365,6 +1376,7 @@ class BudgetTotalDerivation:
         plan_limit_gib,
         non_metal_overhead_measured_gb=None,
         plan_limit_gib_effective=None,
+        rss_semantics="unmeasured",
     ):
         self.source = source
         self.budget_total_gb = budget_total_gb
@@ -1376,6 +1388,10 @@ class BudgetTotalDerivation:
         self.plan_limit_gib = plan_limit_gib
         self.non_metal_overhead_measured_gb = non_metal_overhead_measured_gb
         self.plan_limit_gib_effective = plan_limit_gib_effective
+        # HIGH-A: "ok" (footprint>=active, measured valid), "inverted" (footprint <
+        # mx active -> Metal not in phys_footprint, overhead unmeasurable), or
+        # "unmeasured" (pre-load / footprint unavailable).
+        self.rss_semantics = rss_semantics
 
     def replace(self, **changes) -> "BudgetTotalDerivation":
         """A copy with the named fields overridden (dataclasses.replace-style)."""
@@ -1418,6 +1434,7 @@ class BudgetTotalDerivation:
             "budget_kv_growth_to_max_kv_gb": round(self.kv_growth_to_max_kv_gb, 4),
             "budget_safety_gb": round(self.safety_gb, 4),
             "budget_floor_gib": round(self.floor_gib, 4),
+            "rss_semantics": self.rss_semantics,
         }
 
 
@@ -1670,10 +1687,43 @@ def _budget_total_gib(args):
     )
 
 
-def _derive_budget_total(args, bench, max_kv):
+def _detect_qwen_rss_bytes(label="com.tea.qwen"):
+    """Best-effort, READ-ONLY estimate of the resident agent's RSS in bytes via
+    ``launchctl print`` (pid) + ``ps -o rss=`` -- neither mutates anything.  Used
+    ONLY by the pre-flight (below) to estimate what the guarded window will free by
+    booting the agent out; the in-window run measures the real post-bootout baseline
+    itself.  Returns None on any failure.  (Not invoked by the tests, which pass
+    --preflight-freed-gib explicitly.)"""
+
+    try:
+        uid = os.getuid()
+        out = subprocess.run(
+            ["/bin/launchctl", "print", f"gui/{uid}/{label}"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        pid = None
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith("pid = "):
+                pid = s.split("=", 1)[1].strip()
+                break
+        if not pid or not pid.isdigit():
+            return None
+        rss = subprocess.run(
+            ["/bin/ps", "-o", "rss=", "-p", pid],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return int(rss) * 1024 if rss.isdigit() else None
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
     """Compute the item-3 ``BudgetTotalDerivation`` from the resolved flags + the
     measured system-used baseline + the KV estimate, or return None when no budget
-    flag was given.  Shared by ``_resolve_derivation`` and the pre-flight."""
+    flag was given.  Shared by ``_resolve_derivation`` and the pre-flight.
+    ``system_used_gb`` overrides the measured baseline (the pre-flight passes a
+    freed-adjusted value)."""
 
     budget_total = _budget_total_gib(args)
     if budget_total is None:
@@ -1683,7 +1733,8 @@ def _derive_budget_total(args, bench, max_kv):
             "--memory-budget-total-gib needs the bench module and resolved max_kv "
             "to price the KV growth"
         )
-    system_used_gb = _measure_system_used_at_start_bytes(args, bench) / GIB
+    if system_used_gb is None:
+        system_used_gb = _measure_system_used_at_start_bytes(args, bench) / GIB
     non_metal_gb = _resolve_gib_flag(
         args, "non_metal_overhead_gib", "non_metal_overhead_gb",
         DEFAULT_NON_METAL_OVERHEAD_GIB, "--non-metal-overhead",
@@ -1708,32 +1759,73 @@ def _derive_budget_total(args, bench, max_kv):
 
 
 def _preflight_memory_plan(args, bench) -> int:
-    """W106 LOW-4 pre-flight: derive the budget plan from a DRY snapshot (measure
-    system-used now, estimate the overhead, price the KV growth from config.json --
-    no model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor).  Run this
-    BEFORE the guarded GPU window opens so a floor refusal never fires after Qwen is
-    already unloaded.  With no --memory-budget-total-* it reports the explicit plan
-    and exits 0."""
+    """W106 LOW-4 / HIGH-B pre-flight: derive the budget plan from a DRY snapshot (no
+    model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor), BEFORE the
+    guarded GPU window opens so a floor refusal never fires after Qwen is already
+    unloaded.
 
-    if _budget_total_gib(args) is None:
+    HIGH-B: the "now" baseline still has the resident agent (com.tea.qwen, ~45 GiB)
+    and any bench worker resident, but the guarded window BOOTS THAT OUT before the
+    step runs.  ``--preflight-freed-gib N`` (default: best-effort read-only
+    auto-detect of the agent RSS, else 0 with a caveat) is subtracted so the
+    pre-flight derives from the EXPECTED IN-WINDOW baseline, not the crowded "now"
+    baseline.  Both baselines are printed; the real in-window derivation (measured
+    after bootout) is authoritative."""
+
+    # LOW: a both-set flag error must exit 3, not traceback.
+    try:
+        budget = _budget_total_gib(args)
+    except ValueError as exc:
+        print(f"[ab] memory-plan preflight: REFUSED -- {exc}", flush=True)
+        return 3
+    if budget is None:
         print(
             "[ab] memory-plan preflight: no --memory-budget-total-gib/-gb given; "
             "plan source is explicit (--memory-limit-gib / legacy box-budget). OK.",
             flush=True,
         )
         return 0
+
     max_kv = bench.resolve_max_kv(
         [args.context_tokens], args.decode_tokens, args.max_kv
     )
+    used_now_gb = int(bench._system_used_bytes()) / GIB
+
+    # Resolve how much the window will free by booting out the resident agent.
+    freed = getattr(args, "preflight_freed_gib", None)
+    if freed is not None:
+        freed_gb = float(freed)
+        freed_src = "explicit --preflight-freed-gib"
+    else:
+        det = _detect_qwen_rss_bytes()
+        if det is not None:
+            freed_gb = det / GIB
+            freed_src = "auto-detected com.tea.qwen RSS (launchctl+ps, read-only)"
+        else:
+            freed_gb = 0.0
+            freed_src = ("0 -- could NOT detect the resident agent; pass "
+                         "--preflight-freed-gib to model the bootout")
+    baseline_in_window = max(0.0, used_now_gb - freed_gb)
+    print(
+        f"[ab] memory-plan preflight: system used now {used_now_gb:.2f} GiB; "
+        f"expected in-window {baseline_in_window:.2f} GiB "
+        f"(freed {freed_gb:.2f} GiB via {freed_src})",
+        flush=True,
+    )
+
     try:
-        bt = _derive_budget_total(args, bench, max_kv)
+        bt = _derive_budget_total(
+            args, bench, max_kv, system_used_gb=baseline_in_window
+        )
     except ValueError as exc:
         print(f"[ab] memory-plan preflight: REFUSED -- {exc}", flush=True)
         return 3
     print(
         "[ab] memory-plan preflight: OK (plan >= floor)\n"
         f"[ab]   max_kv={max_kv}\n"
-        f"[ab]   {bt.formula()}",
+        f"[ab]   {bt.formula()}\n"
+        "[ab]   NB: the in-window derivation (measured after the agent is booted "
+        "out) is authoritative; this is a pre-check.",
         flush=True,
     )
     return 0
@@ -1996,41 +2088,40 @@ def _load_model(args, bench, mx):
 
 def _remeasure_non_metal_overhead(args, mx) -> None:
     """Phase 2 of the item-3 budget derivation.  Measure the real non-Metal process
-    overhead as ``current process footprint (phys_footprint, mach task_info) - mx
-    active memory`` (NOT ru_maxrss, which is a lifetime high-water incl. load
-    transients and earlier arms), record estimate-vs-measured on the derivation,
-    and:
-      * NEVER call ``mx.set_memory_limit`` (residents are allocated; it cannot
-        shrink, and a limit below active memory routes every later allocation onto
-        the over-limit path -- silent perturbation of the measured decode), and
-      * ABORT (raise, before the decode starts) when the measured overhead exceeds
-        the pre-load estimate by more than the tolerance, because the real total
-        footprint would then exceed the budget.
-    Measurement itself is guarded (a mach/read failure records None, no abort)."""
+    overhead as ``current phys_footprint (mach task_info) - mx active - mx cache``
+    (NOT ru_maxrss, a lifetime high-water) and record estimate-vs-measured, and:
+      * subtract the MLX freed-buffer CACHE (``get_cache_memory``) as well as active
+        -- the cache is load-transient Metal memory the allocator will reuse, NOT
+        non-Metal overhead; counting it caused false aborts (HIGH-A).  We do NOT
+        call ``mx.clear_cache()`` (it would perturb the first decode token's
+        allocations); subtracting the cache is the non-perturbing equivalent.
+      * NEVER call ``mx.set_memory_limit`` post-load (HIGH-1).
+      * if ``footprint < active`` (Metal not in phys_footprint on this platform) the
+        overhead is UNMEASURABLE: record ``None`` + ``rss_semantics="inverted"`` +
+        a WARN, and do NOT abort (never a bogus 0.0 that hides the inversion).
+      * otherwise ABORT (raise, before decode) when the measured overhead exceeds
+        the estimate by more than the tolerance (the real footprint would then
+        exceed the budget).
+    Measurement itself is guarded (a read failure records None, no abort)."""
 
     bt = getattr(args, "_dsv41_budget_total", None)
     if bt is None or bt.source != "budget" or mx is None:
         return
     try:
-        from mtplx.deepseek_v41_memory_profile import process_rss_snapshot
+        from mtplx.deepseek_v41_memory_profile import (
+            mlx_memory_snapshot,
+            process_rss_snapshot,
+        )
 
         snap = process_rss_snapshot()
         footprint = snap.get("phys_footprint_bytes") or snap.get("resident_bytes")
-        active = 0
-        for owner in (mx, getattr(mx, "metal", None)):
-            getter = getattr(owner, "get_active_memory", None)
-            if callable(getter):
-                try:
-                    active = int(getter())
-                    break
-                except Exception:
-                    active = 0
+        mlx = mlx_memory_snapshot(mx_module=mx)
+        active = int(mlx.get("active_bytes", 0) or 0)
+        cache = int(mlx.get("cache_bytes", 0) or 0)
     except Exception:  # pragma: no cover - defensive
         return
 
     if footprint is None:
-        # No current-footprint figure (non-darwin / mach unavailable): keep the
-        # estimate, record None, do NOT abort.
         print(
             "[ab] budget-total re-measure: process footprint unavailable "
             "(non-darwin / mach); keeping the pre-load estimate, MLX limit unchanged",
@@ -2039,21 +2130,43 @@ def _remeasure_non_metal_overhead(args, mx) -> None:
         args._dsv41_budget_total = bt.replace(
             non_metal_overhead_measured_gb=None,
             plan_limit_gib_effective=bt.plan_limit_gib,
+            rss_semantics="unmeasured",
         )
         return
 
-    measured_gb = max(0.0, (int(footprint) - int(active)) / GIB)
+    footprint = int(footprint)
+    if footprint < active:
+        # Metal is not counted in phys_footprint on this platform -> the non-Metal
+        # overhead cannot be derived by subtraction. Record it as inverted (never a
+        # misleading 0.0) and do not abort.
+        print(
+            f"[ab] budget-total re-measure: WARN phys_footprint "
+            f"{footprint / GIB:.2f} GiB < mx active {active / GIB:.2f} GiB "
+            "(Metal not in footprint); non_metal_overhead UNMEASURABLE, recorded "
+            "None (rss_semantics=inverted); MLX limit unchanged, no abort",
+            flush=True,
+        )
+        args._dsv41_budget_total = bt.replace(
+            non_metal_overhead_measured_gb=None,
+            plan_limit_gib_effective=bt.plan_limit_gib,
+            rss_semantics="inverted",
+        )
+        return
+
+    measured_gb = max(0.0, (footprint - active - cache) / GIB)
     overage_gb = measured_gb - bt.non_metal_overhead_gb
     # plan_limit is NEVER lowered post-load (HIGH-1).
     args._dsv41_budget_total = bt.replace(
         non_metal_overhead_measured_gb=measured_gb,
         plan_limit_gib_effective=bt.plan_limit_gib,
+        rss_semantics="ok",
     )
     print(
         f"[ab] budget-total re-measure: non_metal_overhead measured "
-        f"{measured_gb:.2f} GiB (phys_footprint {int(footprint) / GIB:.2f} - mx "
-        f"active {int(active) / GIB:.2f}); estimate {bt.non_metal_overhead_gb:.2f} "
-        f"GiB; MLX limit unchanged (set_memory_limit is NOT called post-load)",
+        f"{measured_gb:.2f} GiB (phys_footprint {footprint / GIB:.2f} - mx active "
+        f"{active / GIB:.2f} - mx cache {cache / GIB:.2f}); estimate "
+        f"{bt.non_metal_overhead_gb:.2f} GiB; MLX limit unchanged "
+        "(set_memory_limit is NOT called post-load)",
         flush=True,
     )
     if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:

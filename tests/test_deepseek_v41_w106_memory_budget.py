@@ -49,6 +49,7 @@ _EXPECTED_MEMORY_KEYS = {
     "budget_kv_growth_to_max_kv_gb",
     "budget_safety_gb",
     "budget_floor_gib",
+    "rss_semantics",
 }
 
 
@@ -413,13 +414,24 @@ def test_resolve_derivation_floor_refusal_propagates(tmp_path):
 
 
 class _FakeMx:
-    def __init__(self, active_bytes):
+    def __init__(self, active_bytes, cache_bytes=0):
         self._active = int(active_bytes)
+        self._cache = int(cache_bytes)
         self.set_memory_limit_calls = []
+        self.clear_cache_calls = 0
         self.metal = None
 
     def get_active_memory(self):
         return self._active
+
+    def get_cache_memory(self):
+        return self._cache
+
+    def get_peak_memory(self):
+        return self._active
+
+    def clear_cache(self):  # must NEVER be called post-load (would perturb decode)
+        self.clear_cache_calls += 1
 
     def set_memory_limit(self, n):  # must NEVER be called post-load
         self.set_memory_limit_calls.append(int(n))
@@ -514,6 +526,52 @@ def test_remeasure_noop_for_explicit_plan():
     args = _A()
     args._dsv41_budget_total = mod._explicit_plan_derivation(50.0)
     mod._remeasure_non_metal_overhead(args, mx)  # explicit -> noop
+    assert mx.set_memory_limit_calls == []
+
+
+# --------------------------------------------------------------------------
+# HIGH-A: subtract the MLX freed-buffer CACHE (not just active), and handle the
+# footprint < active "inverted" case as unmeasurable (None), never a bogus 0.0.
+# --------------------------------------------------------------------------
+
+
+def test_remeasure_subtracts_cache_no_false_abort(monkeypatch):
+    mod = _mod()
+    # active 60, cache 4, footprint 74 -> measured = 74-60-4 = 10 == estimate 10 ->
+    # NO abort (pre-HIGH-A this counted the 4 GiB cache and would abort).
+    _patch_footprint(mod, monkeypatch, 74.0)
+    mx = _FakeMx(active_bytes=int(60 * GIB), cache_bytes=int(4 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # no raise
+    bt = args._dsv41_budget_total
+    assert bt.non_metal_overhead_measured_gb == pytest.approx(10.0, abs=0.01)
+    assert bt.rss_semantics == "ok"
+    assert mx.set_memory_limit_calls == []
+    assert mx.clear_cache_calls == 0  # never perturb the decode
+
+
+def test_remeasure_inverted_records_none_not_zero(monkeypatch):
+    mod = _mod()
+    # footprint 12 < active 60 -> Metal not in footprint -> UNMEASURABLE: None +
+    # rss_semantics="inverted", never a bogus 0.0, and never aborts.
+    _patch_footprint(mod, monkeypatch, 12.0)
+    mx = _FakeMx(active_bytes=int(60 * GIB), cache_bytes=int(4 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # no raise
+    bt = args._dsv41_budget_total
+    assert bt.non_metal_overhead_measured_gb is None       # NOT 0.0
+    assert bt.rss_semantics == "inverted"
+    assert bt.plan_limit_gib_effective == pytest.approx(50.0)
     assert mx.set_memory_limit_calls == []
 
 
@@ -658,3 +716,40 @@ def test_preflight_no_budget_flag_returns_0(tmp_path):
     args = _pf_args(mod, tmp_path)  # no --memory-budget-total-*
     rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
     assert rc == 0
+
+
+# --------------------------------------------------------------------------
+# HIGH-B: the pre-flight subtracts --preflight-freed-gib (what the window frees by
+# booting out the resident agent) from the "now" baseline, so it does not refuse a
+# plan the window would allow.
+# --------------------------------------------------------------------------
+
+
+def test_preflight_freed_gib_makes_crowded_baseline_pass(tmp_path):
+    mod = _mod()
+    # 87.6 GiB used NOW (Qwen ~45 + workers); with --preflight-freed-gib 45 the
+    # in-window baseline is 42.6 -> plan = 93 - 42.6 - 10 - kv - 3 >= 20 -> rc 0.
+    args = _pf_args(mod, tmp_path,
+                    argv_extra=["--memory-budget-total-gib", "93",
+                                "--preflight-freed-gib", "45"])
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(87.6 * GIB)))
+    assert rc == 0
+
+
+def test_preflight_without_freed_refuses_crowded_baseline(tmp_path):
+    mod = _mod()
+    # Same 87.6 GiB used but NO freed model -> auto-detect returns None here (no
+    # launchctl agent), so freed=0 -> 93 - 87.6 - ... < floor -> rc 3.
+    args = _pf_args(mod, tmp_path,
+                    argv_extra=["--memory-budget-total-gib", "93"])
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(87.6 * GIB)))
+    assert rc == 3
+
+
+def test_preflight_both_flag_forms_exit_3_not_traceback(tmp_path):
+    mod = _mod()
+    args = _pf_args(mod, tmp_path,
+                    argv_extra=["--memory-budget-total-gib", "93",
+                                "--memory-budget-total-gb", "100"])
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
+    assert rc == 3  # both-set -> clean exit 3, no traceback
