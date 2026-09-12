@@ -858,9 +858,21 @@ def _apply_stub(model, which: str, *, keep_routing_barrier: bool = False):
     return saved
 
 
+#: Restore sentinel: the attribute was NOT an instance override before the stub (a
+#: class method), so restore = delete the instance shadow the stub set, revealing the
+#: class method again (W97 attn sub-op stubs; see :func:`_apply_attn_subop_stub`).
+_RESTORE_DELETE = object()
+
+
 def _restore_stub(saved):
     for obj, name, orig in saved:
-        setattr(obj, name, orig)
+        if orig is _RESTORE_DELETE:
+            try:
+                delattr(obj, name)
+            except AttributeError:
+                pass
+        else:
+            setattr(obj, name, orig)
 
 
 def _summarize_report(report: dict) -> dict:
@@ -1534,6 +1546,203 @@ def print_in_model_unfenced(receipt: dict) -> None:
     print(f"  unattributed residual (1 - sum)  = {_f(a['unattributed_residual_ms_per_token'], '{:.3f}')}")
 
 
+# ===========================================================================
+# --in-model --unfenced --attn-subops: WITHIN-attention sub-op attribution (W97)
+# ===========================================================================
+# The 5-pass mode above attributes the whole 291 ms/token attention as (1)-(3).
+# W97 (docs/deepseek-v41/W97_ATTENTION_291MS.md) found the attention MATH is tiny
+# (337 MFLOP/layer, ~0.03 ms/layer of compute; the port is MLA-absorbed like the
+# reference -- one shared 512-latent scored against all 64 heads, no per-head K/V
+# up-projection) while the per-token TRAFFIC is dominated by the grouped o-LoRA
+# ``wo_a`` weight: the port re-issues ``mx.dequantize(wo_a)`` every layer every
+# token (304 MB f32 q8 / 420 MB mxfp4 per layer/token), which the isolated bf16
+# bench (dense ``wo_a``, no dequant) never sees.  The remaining gap is the
+# host-encode of attention's ~100 small dispatches, EXPOSED because the per-layer
+# routing barrier drains the pipeline every layer (W96) so nothing hides them --
+# the bench's tight loop pipelines them.
+#
+# This sub-mode locates the 291 ms WITHIN attention: it stubs ONE attention sub-op
+# at a time (shape-preserving pass) on the real model and measures the unfenced
+# whole-token frame wall, so full - <subop> is that sub-op's true in-situ cost
+# (its own kernels PLUS the host-encode of its dispatches, which is the signal).
+#
+# Sub-ops (this port is ABSORBED, so the reference's "K/V up-projection per head"
+# does not exist -- documented N/A; the shared-latent gather is inside attn_core):
+#   qkv_proj      -- q down/up (wq_a,wq_b) + kv (wkv) projections zeroed.
+#   attn_core     -- the selected-key gather + QK^T + sink softmax + PV (the whole
+#                    _sparse_attend[_selected]) -> zeros.
+#   wo_a_dequant  -- _o_lora_dense_weight precomputed once and returned (the exact
+#                    MTPLX_DSV41_ATTN_WO_A_CACHE fix): full - this = the per-token
+#                    mx.dequantize(wo_a) cost.
+#   out_proj      -- the whole output projection (grouped wo_a einsum + wo_b) zeroed
+#                    (includes the dequant); full - out_proj minus full - wo_a_dequant
+#                    isolates the einsum+wo_b from the dequant.
+#   rope          -- _rope_last (q rope + inverse output rope) -> identity.
+#
+# Run with the attention compile tapes forced OFF: the compiled qkv/out tapes
+# evaluate their weight-array inputs (``_lin_arrays``/``_o_lora_dense_weight``) at
+# the _attend call site BEFORE the tape runs, so a builder stub could not skip that
+# work -- the eager path is the faithful, patchable microscope, and its higher
+# dispatch count is exactly what surfaces each sub-op's exposed host-encode.  The
+# 5-pass compiled arm still owns the absolute 291 ms; this locates where it sits.
+_ATTN_SUBOPS = ["qkv_proj", "attn_core", "wo_a_dequant", "out_proj", "rope"]
+
+
+def _apply_attn_subop_stub(model, which: str):
+    """Monkeypatch ONE attention sub-op to a shape-preserving pass on every backbone
+    layer; returns a ``(obj, attr, orig)`` restore list (``_restore_stub`` restores
+    it).  Caller must have forced ``dsv41._ATTN_COMPILE = False`` first (see above)."""
+    # Class methods (not instance overrides) are restored by DELETING the instance
+    # shadow the stub sets (revealing the class method again); submodules (wq_*, wo_b)
+    # and the module-level _rope_last are restored to their original object.
+    saved = []
+    if which == "rope":
+        saved.append((dsv41, "_rope_last", dsv41._rope_last))
+        dsv41._rope_last = lambda x, cos, sin, inverse=False: x
+        return saved
+    for layer in model.layers:
+        attn = layer.attn
+        H, hd, g, olr, dim = (attn.n_heads, attn.head_dim, attn.n_groups,
+                              attn.o_lora_rank, attn.dim)
+        if which == "qkv_proj":
+            qlr = int(attn.q_norm_weight.shape[0])
+            for name, out in (("wq_a", qlr), ("wq_b", H * hd), ("wkv", hd)):
+                saved.append((attn, name, getattr(attn, name)))  # submodule -> setattr
+                setattr(attn, name, lambda x, out=out: mx.zeros(
+                    (x.shape[0], x.shape[1], out), dtype=x.dtype))
+        elif which == "attn_core":
+            for name in ("_sparse_attend", "_sparse_attend_selected"):
+                saved.append((attn, name, _RESTORE_DELETE))  # class method
+            attn._sparse_attend = lambda q, KV, attend, H=H, hd=hd: mx.zeros(
+                (q.shape[0], q.shape[1], H, hd), dtype=mx.float32)
+            attn._sparse_attend_selected = lambda q, *a, H=H, hd=hd, **k: mx.zeros(
+                (q.shape[0], q.shape[1], H, hd), dtype=mx.float32)
+        elif which == "wo_a_dequant":
+            w = attn._o_lora_dense_weight()   # dequantize ONCE (the fix's ceiling)
+            mx.eval(w)
+            saved.append((attn, "_o_lora_dense_weight", _RESTORE_DELETE))  # class method
+            attn._o_lora_dense_weight = lambda w=w: w
+        elif which == "out_proj":
+            saved.append((attn, "_o_lora_down", _RESTORE_DELETE))  # class method
+            attn._o_lora_down = lambda o, g=g, olr=olr: mx.zeros(
+                (o.shape[0], o.shape[1], g, olr), dtype=mx.float32)
+            saved.append((attn, "wo_b", attn.wo_b))  # submodule -> setattr
+            attn.wo_b = lambda o, dim=dim: mx.zeros(
+                (o.shape[0], o.shape[1], dim), dtype=o.dtype)
+        else:
+            raise ValueError(which)
+    return saved
+
+
+def run_in_model_attn_subops(cfg: dict) -> dict:
+    """Within-attention sub-op attribution: a full (eager-attention) baseline plus
+    one pass per :data:`_ATTN_SUBOPS`, each with that sub-op stubbed.  Unfenced
+    whole-token frame wall; ``full - <subop>`` is the sub-op's in-situ cost."""
+    tiny = cfg.get("tiny", False)
+    steps = int(cfg.get("steps", 8 if tiny else 64))
+    warmup_steps = int(cfg.get("warmup_steps", 2 if tiny else 8))
+    ssd_bw = float(cfg.get("ssd_bandwidth_gibs", 4.4) or 4.4)
+    setup = _in_model_setup(cfg, steps)
+    ab = setup["ab"]
+    model, ops = setup["model"], setup["ops"]
+    prompt_ids, prompt_meta = setup["prompt_ids"], setup["prompt_meta"]
+    dims, device, arm = setup["dims"], setup["device"], setup["arm"]
+
+    util_on = bool(cfg.get("utilization", False))
+    util_interval_ms = int(cfg.get("util_interval_ms", 2000))
+
+    def _run_pass(label):
+        sampler = (ab._macmon().UtilizationSampler(interval_ms=util_interval_ms)
+                   if util_on else None)
+        data = _unfenced_decode_pass(
+            ab=ab, model=model, ops=ops, prompt_ids=prompt_ids, steps=steps,
+            warmup_steps=warmup_steps, cooldown_s=0.0, util_sampler=sampler,
+        )
+        util_summary = sampler.summarize() if sampler is not None else None
+        if sampler is not None:
+            print(f"[w97-subops] {label}: {sampler.census()}", flush=True)
+        return {
+            "label": label,
+            "summary": _unfenced_pass_summary(data, util_summary, ssd_bandwidth_gibs=ssd_bw),
+            "utilization": util_summary,
+            "token_ids_sha256": hashlib.sha256(
+                json.dumps(data["generated"]).encode()).hexdigest(),
+            "n_token_ids": len(data["generated"]),
+        }
+
+    # Force the attention compile tapes OFF for the whole sub-op microscope so every
+    # sub-op is a reachable eager patch; restore the caller's setting afterwards.
+    saved_compile = dsv41._ATTN_COMPILE
+    dsv41._ATTN_COMPILE = False
+    passes: Dict[str, dict] = {}
+    try:
+        passes["full"] = _run_pass("full_eager_attention")
+        for sub in _ATTN_SUBOPS:
+            st = _apply_attn_subop_stub(model, sub)
+            try:
+                passes[sub] = _run_pass(sub + "_stubbed")
+            finally:
+                _restore_stub(st)
+    finally:
+        dsv41._ATTN_COMPILE = saved_compile
+
+    def _ms(key):
+        return (passes.get(key, {}).get("summary") or {}).get("mean_ms_per_token")
+
+    full = _ms("full")
+    attribution = {"full_eager_ms_per_token": full, "subops": {}}
+    for sub in _ATTN_SUBOPS:
+        v = _ms(sub)
+        attribution["subops"][sub] = {
+            "stubbed_ms_per_token": v,
+            "cost_ms_per_token": (full - v) if isinstance(full, (int, float))
+            and isinstance(v, (int, float)) else None,
+        }
+
+    return {
+        "worker": "W97",
+        "script": "scripts/deepseek_v41/metal_decode_attn_bisect.py",
+        "mode": "in_model_unfenced_attn_subops",
+        "device": device, "tiny": tiny, "arm": arm, "steps": steps,
+        "warmup_steps": warmup_steps, "ssd_bandwidth_gibs": ssd_bw,
+        "dims": dims, "prompt": prompt_meta,
+        "note": "attention compile tapes forced OFF for the sub-op microscope; "
+                "the 5-pass compiled arm owns the absolute attention (1)-(3).",
+        "memory": {"active_end_gib": _mem_gib("get_active_memory"),
+                   "peak_gib": _mem_gib("get_peak_memory")},
+        "utilization": passes["full"].get("utilization"),
+        "passes": passes,
+        "attribution": attribution,
+    }
+
+
+def print_in_model_attn_subops(receipt: dict) -> None:
+    print(f"\n=== W97 --in-model --unfenced --attn-subops [{receipt['device']}, "
+          f"arm={receipt['arm']}, steps={receipt['steps']}] ===")
+    print(f"dims: {receipt['dims']}   {receipt['note']}")
+
+    def _f(v, fmt):
+        return fmt.format(v) if isinstance(v, (int, float)) else "-"
+
+    hdr = "pass".ljust(24) + f"{'ms/tok(mean)':>13}{'busy%':>8}{'MHz':>8}"
+    print("\n-- unfenced whole-token frame wall, attention eager --")
+    print(hdr)
+    print("-" * len(hdr))
+    for key in ["full"] + _ATTN_SUBOPS:
+        s = receipt["passes"][key]["summary"]
+        print(("full" if key == "full" else key + "-stub").ljust(24)
+              + f"{_f(s.get('mean_ms_per_token'), '{:.3f}'):>13}"
+              + f"{_f(s.get('gpu_busy_pct'), '{:.0f}'):>8}"
+              + f"{_f(s.get('gpu_freq_mhz'), '{:.0f}'):>8}")
+    a = receipt["attribution"]
+    print("\n-- within-attention sub-op cost (full - <subop stubbed>, ms/token) --")
+    print(f"  full (eager attention)   = {_f(a['full_eager_ms_per_token'], '{:.3f}')}")
+    for sub in _ATTN_SUBOPS:
+        print(f"  {sub:16s} cost = {_f(a['subops'][sub]['cost_ms_per_token'], '{:.3f}')}")
+    print("  (out_proj cost - wo_a_dequant cost = the grouped wo_a einsum + wo_b; "
+          "K/V up-projection N/A -- this port is MLA-absorbed)")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1573,6 +1782,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "passes -- no stage recorder, no per-stage fences (only the "
                         "production per-token sampler eval); delta full-stubbed is the "
                         "component's true in-situ cost. GPU-window mode; --tiny validates.")
+    p.add_argument("--attn-subops", action="store_true",
+                   help="--in-model --unfenced: WITHIN-attention sub-op attribution "
+                        "(W97) instead of the 5 component passes -- a full (eager-"
+                        "attention) baseline plus one unfenced pass per attention "
+                        "sub-op stubbed (qkv_proj / attn_core / wo_a_dequant / "
+                        "out_proj / rope); full-<subop> is that sub-op's in-situ cost. "
+                        "Attention compile tapes forced OFF. GPU-window; --tiny validates.")
     p.add_argument("--warmup-steps", type=int, default=None,
                    help="--in-model --unfenced: decode steps excluded as warmup from "
                         "the mean/median ms/token (default 8 gpu / 2 tiny)")
@@ -1628,6 +1844,7 @@ def _in_model_cfg(a) -> dict:
         "utilization": a.utilization,
         "util_interval_ms": a.util_interval_ms,
         "unfenced": getattr(a, "unfenced", False),
+        "attn_subops": getattr(a, "attn_subops", False),
         "ssd_bandwidth_gibs": getattr(a, "ssd_bandwidth_gibs", 4.4),
     }
     if a.in_model_steps is not None:
@@ -1643,6 +1860,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if getattr(a, "unfenced", False) and not a.in_model:
         p.error("--unfenced is an --in-model mode; pass --in-model --unfenced")
+    if getattr(a, "attn_subops", False) and not (a.in_model and getattr(a, "unfenced", False)):
+        p.error("--attn-subops is an --in-model --unfenced mode; pass all three")
 
     if a.in_model:
         if not (a.gpu or a.tiny):
@@ -1650,7 +1869,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.gpu and a.tiny:
             p.error("--in-model: choose --gpu OR --tiny, not both")
         cfg = _in_model_cfg(a)
-        if getattr(a, "unfenced", False):
+        if getattr(a, "attn_subops", False):
+            receipt = run_in_model_attn_subops(cfg)
+            print_in_model_attn_subops(receipt)
+        elif getattr(a, "unfenced", False):
             receipt = run_in_model_unfenced(cfg)
             print_in_model_unfenced(receipt)
         else:

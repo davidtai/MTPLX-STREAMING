@@ -77,6 +77,7 @@ _MLXBUF = "MLX_MAX_MB_PER_BUFFER"        # K14 / W63: MLX command-buffer MB cap 
 _PWS = "MTPLX_DSV41_PIN_WORKING_SET"     # W64 / R3-pin: post-prefill pinned working set
 _DRP = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 / K24 revived: pinned device route
 _SSP = "MTPLX_DSV41_SINGLE_SLOT_POOL"     # W87: merged scan-resistant slot pool
+_WOAC = "MTPLX_DSV41_ATTN_WO_A_CACHE"     # W97: cached dequantized o-LoRA wo_a
 _KCG = "MTPLX_DSV41_KV_CHUNK_GROW"       # W73 / K32: chunk-grown KV append backing
 _SS = "MTPLX_DSV41_SMALL_STAGES_FUSED"   # W91 / K35: fused per-layer small stages
 _HPK = "MTPLX_DSV41_HC_PREMIX_KERNEL"    # W91 / K35: GPU-only fused HC-premix kernel
@@ -1066,3 +1067,23 @@ def test_cell16k_ring_composite_arms(env_levers):
     assert {
         k: v for k, v in presets["cell16k_ring_pool"].items() if v != ring.get(k)
     } == {_SSP: "1"}, "cell16k_ring_pool must touch only the single-slot-pool key"
+
+    # W97: cell16k_ring_wo_a_cache = cell16k_ring + the wo_a-dequant cache ONLY.
+    assert "cell16k_ring_wo_a_cache" in presets, "cell16k_ring_wo_a_cache arm missing"
+    expected_woac = dict(ring)
+    expected_woac[_WOAC] = "1"
+    assert presets["cell16k_ring_wo_a_cache"] == expected_woac, (
+        "cell16k_ring_wo_a_cache must equal cell16k_ring + MTPLX_DSV41_ATTN_WO_A_CACHE=1"
+    )
+    assert {
+        k: v for k, v in presets["cell16k_ring_wo_a_cache"].items() if v != ring.get(k)
+    } == {_WOAC: "1"}, "cell16k_ring_wo_a_cache must touch only the wo_a-cache key"
+    # The standalone isolation arm sets ONLY selected_keys + wo_a_cache (hermetic).
+    assert "wo_a_cache" in presets, "wo_a_cache isolation arm missing"
+    woac = presets["wo_a_cache"]
+    assert woac[_SEL] == "1" and woac[_WOAC] == "1", "wo_a_cache missing its keys"
+    assert all(v is None for k, v in woac.items() if k not in (_SEL, _WOAC)), (
+        "wo_a_cache must set ONLY selected_keys + wo_a_cache (hermetic)"
+    )
+    # W97 lever is in the master list (receipt arm_env + hermetic clear).
+    assert _WOAC in env_levers.ALL_LEVER_ENVS

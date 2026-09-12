@@ -261,6 +261,17 @@ ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K36: shared sel
 # identity summary must show it clean.  Composes with the window ring (independent).
 SINGLE_SLOT_POOL_ENV = "MTPLX_DSV41_SINGLE_SLOT_POOL"
 
+# W97: cache the dequantized grouped o-LoRA (wo_a) weight per layer instead of
+# re-issuing mx.dequantize(wo_a) every decode token (the released wo_a is 8x1024x4096
+# = 33.55M params -> a fresh 134 MB f32 / 67 MB bf16 array per token per backbone
+# layer; the reference dequantizes it ONCE at convert; docs/deepseek-v41/
+# W97_ATTENTION_291MS.md).  BYTE-IDENTICAL (the cached array is exactly the dequantize
+# output; the einsum's .astype(f32) is unchanged) -> the byte-identity summary must
+# show it clean.  Read at use (never import-frozen), so it works regardless of the
+# lazy dsv41 import.  Holds a dense wo_a copy resident per layer (q8: ~5.4 GB / native
+# mxfp4: ~2.7 GB across 40 layers), so it is opt-in under the box memory budget.
+WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
+
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
 # prior arm in the same process left set -- the arms are independent. The eight
@@ -312,6 +323,8 @@ ALL_LEVER_ENVS = (
     SMALL_STAGES_FUSED_ENV,
     HC_PREMIX_KERNEL_ENV,
     SINGLE_SLOT_POOL_ENV,
+    # W97 (appended; coordinate with any concurrent list extension):
+    WO_A_CACHE_ENV,
 )
 
 
@@ -330,7 +343,7 @@ def _preset(
     window_ring_headroom=None, window_ring_maxkv=None,
     attn_shape_stable=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
-    single_slot_pool=None,
+    single_slot_pool=None, wo_a_cache=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -386,6 +399,7 @@ def _preset(
         WINDOW_RING_MAXKV_ENV: window_ring_maxkv,
         ATTN_SHAPE_STABLE_ENV: attn_shape_stable,
         SINGLE_SLOT_POOL_ENV: single_slot_pool,
+        WO_A_CACHE_ENV: wo_a_cache,
     }
 
 
@@ -710,6 +724,27 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         single_slot_pool="1",
+    ),
+    # W97: cache the dequantized grouped o-LoRA wo_a per layer instead of re-issuing
+    # mx.dequantize(wo_a) every decode token (the largest per-token attention traffic
+    # item: 304 MB/layer q8 / 420 MB mxfp4; the reference dequantizes it once at
+    # convert).  ISOLATION arm (selected_keys on so the decode attention path is the
+    # shipped one).  BYTE-IDENTICAL to selected-keys control (the cached array is
+    # exactly the dequantize output; the einsum's .astype(f32) is unchanged) -- the
+    # byte-identity summary must show it clean.  Holds a dense wo_a copy resident per
+    # layer (q8 ~5.4 GB / native ~2.7 GB across 40), so mind the memory limit.
+    "wo_a_cache": _preset(selected_keys="1", wo_a_cache="1"),
+    # W97: cell16k_ring + the wo_a-dequant cache ONLY.  Exact key set of cell16k_ring
+    # plus wo_a_cache="1"; the direct A/B vs cell16k_ring isolates the per-token
+    # mx.dequantize(wo_a) cost (40 dequant dispatches + ~5.4/2.7 GB dequant writes per
+    # token).  BYTE-IDENTICAL to cell16k_ring -- the byte-identity summary must show it
+    # clean.  Watch peak memory: cell16k_ring already peaks ~65 GB at the 16K cell, so
+    # run this arm at a higher --memory-limit-gib or a smaller cell.
+    "cell16k_ring_wo_a_cache": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1",
     ),
     # W92 (switch dispatch census): the minimal AR-decode host-sync-reduction arm in
     # ISOLATION -- the K23 variant-B fast-path (defer + async submit) plus verify

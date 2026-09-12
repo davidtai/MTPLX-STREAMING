@@ -1457,19 +1457,36 @@ class Attention(nn.Module):
         f32-castable array -- dequantized when q8/native-resident, else the raw
         ``nn.Linear`` weight.  Extracted so :meth:`_o_lora_down` (eager) and the K22
         compiled output tape derive the einsum weight through the *identical* path
-        (bit-exact either way): the dequant is weight-only, no dependence on ``o``."""
+        (bit-exact either way): the dequant is weight-only, no dependence on ``o``.
+
+        W97: under ``MTPLX_DSV41_ATTN_WO_A_CACHE`` the dequantized array is computed
+        once (materialised via ``mx.eval``) and reused across decode tokens, keyed
+        on the packed-weight identity so a re-quantize / reload rebuilds it -- byte-
+        identical to the per-token dequant (the cached array is exactly what
+        ``mx.dequantize`` returned; the reshape and the later ``_o_lora_down``
+        ``.astype(f32)`` are unchanged).  Off (default) the dequant is re-issued
+        every layer every token (docs/deepseek-v41/W97_ATTENTION_291MS.md)."""
         wo = self.wo_a
-        if isinstance(wo, nn.QuantizedLinear):
-            # Mode-aware: affine q8 carries biases; the native float codecs
-            # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
-            # the mode and a ``None`` bias directly.
-            w = mx.dequantize(
-                wo.weight, wo.scales, wo.biases,
-                group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
-            )
-        else:
-            w = wo.weight
-        return w.reshape(self.n_groups, self.o_lora_rank, -1)
+        if not isinstance(wo, nn.QuantizedLinear):
+            return wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)
+        use_cache = _resolve_wo_a_cache()
+        if use_cache:
+            cached = getattr(self, "_wo_a_dense_cache", None)
+            if cached is not None and cached[0] is wo.weight:
+                return cached[1]
+        # Mode-aware: affine q8 carries biases; the native float codecs
+        # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
+        # the mode and a ``None`` bias directly.
+        w = mx.dequantize(
+            wo.weight, wo.scales, wo.biases,
+            group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
+        ).reshape(self.n_groups, self.o_lora_rank, -1)
+        if use_cache:
+            # Materialise once so later tokens reference the buffer, not a lazy
+            # dequantize node that would recompute on every ``mx.eval``.
+            mx.eval(w)
+            self._wo_a_dense_cache = (wo.weight, w)
+        return w
 
     def _o_lora_down(self, o):
         """Grouped ``wo_a`` down-projection: reshape the [out=n_groups*o_lora_rank,
@@ -1935,6 +1952,52 @@ def _decode_attn_kernel_use(q) -> bool:
     except Exception:
         return False
     return rows <= _DECODE_ATTN_KERNEL_MAX_ROWS
+
+
+# --- W97: cache the dequantized grouped o-LoRA (``wo_a``) weight per layer ----
+#: The grouped ``wo_a`` down-projection is applied as an einsum, not a
+#: ``quantized_matmul``, so :meth:`Attention._o_lora_dense_weight` calls
+#: ``mx.dequantize(wo_a)`` to materialise the dense ``[g, o_lora_rank,
+#: in_per_group]`` weight.  With the flag OFF (default) that dequantize is
+#: re-issued as a graph node **every layer every decode token** (W96 as-is audit
+#: finding L9): at the released dims (``wo_a`` = 8x1024x4096 = 33.55M params) it
+#: writes a fresh 134 MB f32 (q8 gs64) / 67 MB bf16 (native mxfp4/mxfp8) array per
+#: token per backbone layer -- ~= 5.4 / 2.7 GB of dequant writes per token across
+#: the 40 layers, plus 40 extra dispatches the isolated bench (dense bf16 ``wo_a``,
+#: no dequant) never issues (docs/deepseek-v41/W97_ATTENTION_291MS.md).  The
+#: reference (model.py L784-787) dequantizes ``wo_a`` ONCE at convert time to bf16;
+#: the weight is a per-forward constant with no dependence on the activation, so
+#: caching the dequantized array is a pure host-dispatch + write-traffic cut.
+#:
+#: With the flag ON the dequantized array is computed once and reused (keyed on the
+#: packed-weight array identity, so a re-quantize / reload rebuilds it).  It is
+#: BYTE-IDENTICAL to control: the cached array is exactly what ``mx.dequantize``
+#: returned, and ``_o_lora_down`` still casts it to f32 (a no-op for the q8-f32
+#: dequant, the same bf16->f32 promotion for native codecs) before the einsum --
+#: no fp math is reordered.  Read at use, never frozen at import
+#: ([[env-flags-read-at-use-not-import]]).  Default OFF: the win is a GPU-window
+#: measurement AND the cache holds a dense copy of every layer's ``wo_a`` resident
+#: (q8: 40 x 134 MB ~= 5.4 GB; native: 40 x 67 MB ~= 2.7 GB), so it is opt-in under
+#: the box memory budget ([[never-exceed-the-memory-knob]]).
+_ATTN_WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
+
+
+def _resolve_wo_a_cache(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_WO_A_CACHE`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other DSV4.1
+    levers."""
+    val = os.environ.get(_ATTN_WO_A_CACHE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_WO_A_CACHE_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the per-token dequantize)"
+    )
 
 
 def _lin_desc(linear):
