@@ -83,6 +83,7 @@ MTPLX_GPU_LOCK="${LOCK}" \
 GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
 GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
 GPU_WINDOW_RSS_POLL_SECONDS=1 \
+GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB=0 \
   bash "${SCRIPT}" bash -c "${STEP_CHAIN}" >"${LOG}" 2>&1
 RC=$?
 
@@ -168,11 +169,11 @@ fi
 
 # =============================================================================
 # W106 item 4: TREE-KILL on abort.  A fake step is a `bash -c` chain that launches
-# a python child which spawns a long-lived `sleep` GRANDCHILD, then allocates
-# enough to trip a (low) child-tree RSS cap so the wrapper aborts.  After the
-# abort NO descendant may survive: pre-W106 the abort killed only STEP_PID (the
-# `bash -c` chain), orphaning the python + sleep (reparented to launchd) and
-# letting a chained next step still run.  The tree-kill must reap the whole tree.
+# a python child which spawns a long-lived `sleep` GRANDCHILD.  The wrapper aborts
+# on the SYSTEM CEILING (fake vm_stat 50 GiB > a 40 GiB ceiling -- exit 8; the
+# child-tree RSS cap now requires >= 1 GiB per HIGH-3 so it is not used to trip
+# here).  After the abort NO descendant may survive: pre-W106 the abort killed only
+# STEP_PID (the `bash -c` chain), orphaning the python + sleep.
 # =============================================================================
 TK_PIDFILE="${TMP}/treekill_pids"
 TK_CHILD_PY="${TMP}/treekill_child.py"
@@ -207,7 +208,7 @@ MTPLX_GPU_LOCK="${TMP}/treekill.lock" \
 GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
 GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
 GPU_WINDOW_RSS_POLL_SECONDS=1 \
-GPU_WINDOW_CHILD_RSS_CAP_BYTES=$(( 200 * 1024 * 1024 )) \
+GPU_WINDOW_TOTAL_MEM_CEILING_GB=40 \
 GPU_WINDOW_KILL_GRACE_SECONDS=abc \
 TK_PIDFILE="${TK_PIDFILE}" \
   bash "${SCRIPT}" bash -c "${TK_STEP}" >"${TK_LOG}" 2>&1
@@ -217,11 +218,11 @@ echo "----- gpu_window.sh log (TREE-KILL) -----"
 cat "${TK_LOG}"
 echo "-----------------------------------------"
 
-# 8. the RSS-cap abort fired (exit 6) and killed the child
-if [[ "${TK_RC}" -eq 6 ]]; then
-  ok "tree-kill scenario aborted on the child-tree RSS cap (exit 6)"
+# 8. the system-ceiling abort fired (exit 8) and killed the child
+if [[ "${TK_RC}" -eq 8 ]]; then
+  ok "tree-kill scenario aborted on the system ceiling (exit 8)"
 else
-  bad "tree-kill scenario aborted on the RSS cap (exit 6)" "exit code was ${TK_RC}"
+  bad "tree-kill scenario aborted on the system ceiling (exit 8)" "exit code was ${TK_RC}"
 fi
 
 # 9. the fake step recorded its descendant pids
@@ -260,11 +261,11 @@ else
   kill -KILL "${TK_SLEEP}" 2>/dev/null || true
 fi
 
-# 12. the log shows the tree-RSS-cap abort path (not a single-pid poll)
-if grep -q "step tree RSS.*exceeded cap" "${TK_LOG}"; then
-  ok "abort log names the step-TREE RSS cap breach"
+# 12. the log shows the system-ceiling abort path
+if grep -q "SYSTEM used memory .* exceeded ceiling" "${TK_LOG}"; then
+  ok "abort log names the system-ceiling breach"
 else
-  bad "abort log names the step-TREE RSS cap breach" "cap line not found"
+  bad "abort log names the system-ceiling breach" "ceiling line not found"
 fi
 
 # 13. W106 LOW-2: the non-integer GPU_WINDOW_KILL_GRACE_SECONDS was validated
@@ -276,37 +277,57 @@ else
 fi
 
 # =============================================================================
-# W106 MEDIUM-A: a FRACTIONAL guard-cap env (e.g. 93.13, a GiB/GB confusion) must
-# be validated to an integer BEFORE phase 0 (warn + fall back to the default), not
-# left unset to break `$(( GB * 1024^3 ))` and, under set -u, kill the window after
-# Qwen is booted out.  Run a trivial fast step; assert the warning + a clean exit.
+# W106 HIGH-3: a FRACTIONAL safety cap (e.g. GPU_WINDOW_TOTAL_MEM_CEILING_GB=95.5, a
+# GiB/GB confusion) must REFUSE (exit 2 BEFORE phase 0), not silently fall back to
+# the 102 default and RAISE the ceiling over the operator's intent.
 # =============================================================================
 MA_LOG="${TMP}/mediuma.log"
 GPU_WINDOW_TEST_MODE=1 \
 MTPLX_GPU_LOCK="${TMP}/mediuma.lock" \
 GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
-GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
-GPU_WINDOW_RSS_POLL_SECONDS=1 \
-GPU_WINDOW_TOTAL_MEM_CEILING_GB=93.13 \
+GPU_WINDOW_TOTAL_MEM_CEILING_GB=95.5 \
   bash "${SCRIPT}" bash -c "true" >"${MA_LOG}" 2>&1
 MA_RC=$?
 
-echo "----- gpu_window.sh log (MEDIUM-A fractional ceiling) -----"
+echo "----- gpu_window.sh log (HIGH-3 fractional ceiling refusal) -----"
 cat "${MA_LOG}"
-echo "-----------------------------------------------------------"
+echo "-----------------------------------------------------------------"
 
-# 14. the fractional ceiling was validated + fell back to 102 (no crash)
-if grep -q "GPU_WINDOW_TOTAL_MEM_CEILING_GB=93.13 is not a non-negative integer (GiB); using 102" "${MA_LOG}"; then
-  ok "MEDIUM-A: fractional system ceiling validated, fell back to 102"
+# 14. the fractional ceiling is REFUSED with exit 2 (before phase 0)
+if [[ "${MA_RC}" -eq 2 ]] && grep -q "GPU_WINDOW_TOTAL_MEM_CEILING_GB=95.5 is invalid" "${MA_LOG}"; then
+  ok "HIGH-3: fractional system ceiling REFUSED (exit 2), not silently raised"
 else
-  bad "MEDIUM-A fractional ceiling validation" "warning line not found"
+  bad "HIGH-3 fractional ceiling refusal (exit 2)" "rc=${MA_RC}; log: $(cat "${MA_LOG}")"
 fi
 
-# 15. the window ran to a clean exit (the arithmetic did not break under set -u)
-if [[ "${MA_RC}" -eq 0 ]]; then
-  ok "MEDIUM-A: window completed cleanly with the fallback ceiling (no set -u crash)"
+# 15. HIGH-3: CHILD_RSS_CAP_BYTES "93" (93 BYTES, < 1 GiB) is REFUSED, not treated
+#     as 93 GiB nor left to kill the step after bootout.
+CAP_LOG="${TMP}/cap.log"
+GPU_WINDOW_TEST_MODE=1 \
+MTPLX_GPU_LOCK="${TMP}/cap.lock" \
+GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
+GPU_WINDOW_CHILD_RSS_CAP_BYTES=93 \
+  bash "${SCRIPT}" bash -c "true" >"${CAP_LOG}" 2>&1
+CAP_RC=$?
+if [[ "${CAP_RC}" -eq 2 ]] && grep -q "GPU_WINDOW_CHILD_RSS_CAP_BYTES=93 is invalid" "${CAP_LOG}"; then
+  ok "HIGH-3: CHILD_RSS_CAP_BYTES=93 (bytes, < 1 GiB) REFUSED (exit 2)"
 else
-  bad "MEDIUM-A window clean exit" "exit code was ${MA_RC}"
+  bad "HIGH-3 child-cap bytes refusal" "rc=${CAP_RC}; log: $(cat "${CAP_LOG}")"
+fi
+
+# 16. W106 MEDIUM-1: the child cap is lowered by the ps-vs-Metal RSS undercount.
+UC_LOG="${TMP}/undercount.log"
+GPU_WINDOW_TEST_MODE=1 \
+MTPLX_GPU_LOCK="${TMP}/uc.lock" \
+GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
+GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
+GPU_WINDOW_RSS_POLL_SECONDS=1 \
+GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB=18 \
+  bash "${SCRIPT}" bash -c "true" >"${UC_LOG}" 2>&1
+if grep -q "by the 18 GiB ps-vs-Metal RSS undercount" "${UC_LOG}"; then
+  ok "MEDIUM-1: effective child cap lowered by the 18 GiB Metal RSS undercount"
+else
+  bad "MEDIUM-1 undercount adjustment" "$(grep -E 'effective child-tree cap' "${UC_LOG}" || echo 'no line')"
 fi
 
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"

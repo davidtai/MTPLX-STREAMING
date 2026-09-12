@@ -50,13 +50,15 @@
 set -uo pipefail  # intentionally NOT -e: exit codes are managed explicitly so
                   # the teardown trap always runs and restores the resident agent.
 
-# W106 MEDIUM-A: several GiB caps feed bash arithmetic (`GB * 1024^3`, `X * 4`) that
-# a fractional/non-integer value would break -- and with `set -u` an unset derived
-# var would kill the window at the first poll AFTER Qwen is already booted out.
-# Validate them to a non-negative INTEGER BEFORE phase 0 (warn + fall back to the
-# default, like KILL_GRACE).  Defined before the config block so it can guard it.
-# NOTE: the env var names carry GiB despite the historical `_GB` suffix (see the
-# W106 doc "Units" section); the value is GiB (1 GiB = 1024^3 bytes).
+# W106 MEDIUM-A/HIGH-3: several GiB caps feed bash arithmetic (`GB * 1024^3`,
+# `X * 4`) that a fractional/non-integer value would break -- and with `set -u` an
+# unset derived var would kill the window at the first poll AFTER Qwen is already
+# booted out.  Validate them to a non-negative INTEGER BEFORE phase 0.  Defined
+# before the config block so they can guard it.  NOTE: the env var names carry GiB
+# despite the historical `_GB` suffix (see the W106 doc "Units" section); the value
+# is GiB (1 GiB = 1024^3 bytes).
+#
+# _int_or_default warns + falls back (used for non-safety knobs like KILL_GRACE).
 _int_or_default() {  # $1=value $2=default $3=env-name -> a valid non-negative int
   if [[ "$1" =~ ^[0-9]+$ ]]; then
     printf '%s' "$1"
@@ -65,6 +67,27 @@ _int_or_default() {  # $1=value $2=default $3=env-name -> a valid non-negative i
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$3" "$1" "$2" >&2
     printf '%s' "$2"
   fi
+}
+
+# HIGH-3: the SAFETY caps (system ceiling, min-avail, foreign cap, child-tree cap)
+# must REFUSE on an invalid value, not fall back to a default -- a fractional
+# GPU_WINDOW_TOTAL_MEM_CEILING_GB=95.5 falling back to 102 would silently RAISE the
+# ceiling (over the operator's intent).  _require_int VALIDATES (prints an ERROR to
+# stderr and returns non-zero on a bad value) but does NOT exit -- the CALLER does
+# `|| exit 2` in the MAIN shell, because an `exit` inside `$(...)` would only leave
+# a subshell and the invalid value would slip through.  Refuses BEFORE phase 0.
+_require_int() {  # $1=env-name $2=value [min] -> return 0 valid, else err + return 1
+  local name="$1" val="$2" min="${3:-0}" reason=""
+  if [[ ! "${val}" =~ ^[0-9]+$ ]]; then
+    reason="must be a non-negative integer"
+  elif (( val < min )); then
+    reason="must be >= ${min}"
+  else
+    return 0
+  fi
+  printf '%s [gpu_window] ERROR: %s=%s is invalid (%s); refusing to open a GPU window\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${name}" "${val}" "${reason}" >&2
+  return 1
 }
 
 # ------------------------------- configuration -------------------------------
@@ -85,13 +108,26 @@ RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm resto
 CANONICAL_PLIST="${GPU_WINDOW_QWEN_PLIST:-${HOME}/Library/LaunchAgents/${QWEN_LABEL}.plist}"
 RESTORE_QWEN_ALWAYS="${GPU_WINDOW_RESTORE_QWEN_ALWAYS:-1}"   # default ON on this box
 LAUNCHCTL_CMD="${GPU_WINDOW_LAUNCHCTL_CMD:-/bin/launchctl}"  # overridable for tests
-MIN_AVAIL_GB="$(_int_or_default "${GPU_WINDOW_MIN_AVAIL_GB:-100}" 100 GPU_WINDOW_MIN_AVAIL_GB)"  # GiB the step needs available after the stop
+# HIGH-3: safety caps REFUSE (exit 2) on an invalid value (never silently fall back).
+MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"  # GiB the step needs available after the stop
+_require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
 # W106 HIGH-2: all guard caps are GiB (bytes = N * 1024^3), stated explicitly.
 # Default child-tree RSS cap = 93 GiB ~= 100 GB (David's "100 GB total for
 # everything").  This cap is LIVE for the first time (pre-W106 the poll read the
 # few-MB `bash -c` shell RSS ~= 0); at 93 GiB it sits just under the 100 GB budget.
-CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"  # 93 GiB ~= 100 GB (David's total budget)
-RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
+# HIGH-3: CHILD_RSS_CAP_BYTES is BYTES (not GiB) and must be >= 1 GiB -- "93" would
+# be 93 BYTES (killing the step right after bootout), and a fractional value would
+# break the arithmetic; refuse either.
+CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"
+_require_int GPU_WINDOW_CHILD_RSS_CAP_BYTES "${CHILD_RSS_CAP_BYTES}" $(( 1024 * 1024 * 1024 )) || exit 2
+RSS_POLL_SECONDS="$(_int_or_default "${GPU_WINDOW_RSS_POLL_SECONDS:-1}" 1 GPU_WINDOW_RSS_POLL_SECONDS)"  # MEDIUM-1: default 1s (streaming grows fast)
+# W106 MEDIUM-1: the child-tree cap compares `ps` RSS, which UNDERCOUNTS unified
+# Metal memory by ~18 GiB (window 43: tree RSS 51.2 vs system-baseline 69.5), so it
+# could never fire before the (accurate, vm_stat-based) system ceiling. Lower the
+# effective child cap by this documented undercount so it fires at the real
+# footprint; set 0 to disable the correction.  The SYSTEM ceiling remains the
+# authoritative guard (vm_stat counts wired + compressed Metal).
+RSS_METAL_UNDERCOUNT_GIB="$(_int_or_default "${GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB:-18}" 18 GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB)"
 
 # System-wide phase-4 guard (2026-09-10 panic hardening): the box kernel-panicked
 # and rebooted when TOTAL used memory crossed the box limit, even though no single
@@ -101,9 +137,13 @@ RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
 # cap are resident (their footprint co-resides with the step's).
 # W106 HIGH-2: GiB. Default system ceiling = 102 GiB ~= 109.5 GB, just under the
 # 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
-TOTAL_MEM_CEILING_GB="$(_int_or_default "${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}" 102 GPU_WINDOW_TOTAL_MEM_CEILING_GB)"  # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
+# HIGH-3: REFUSE on an invalid ceiling (a fractional 95.5 must NOT silently become
+# the 102 default and raise the ceiling over the operator's intent).
+TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}"  # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
+_require_int GPU_WINDOW_TOTAL_MEM_CEILING_GB "${TOTAL_MEM_CEILING_GB}" 1 || exit 2
 TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
-FOREIGN_WORKER_RSS_GB="$(_int_or_default "${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}" 2 GPU_WINDOW_FOREIGN_WORKER_RSS_GB)"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
+FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
+_require_int GPU_WINDOW_FOREIGN_WORKER_RSS_GB "${FOREIGN_WORKER_RSS_GB}" || exit 2
 VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
 PS_CMD="${GPU_WINDOW_PS_CMD:-/bin/ps}"                           # overridable for the foreign-worker scan unit test
                                                                 # (also used for the phase-4 step-tree RSS walk below)
@@ -685,6 +725,17 @@ if [[ "${USED_START:-}" =~ ^[0-9]+$ ]] && \
   (( _headroom < 0 )) && _headroom=0
   EFFECTIVE_CHILD_CAP_BYTES="${_headroom}"
   log "phase 4: effective child-tree cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (lowered from $(gib "${CHILD_RSS_CAP_BYTES}") GiB: used_start $(gib "${USED_START}") + cap would cross the ${TOTAL_MEM_CEILING_GB} GiB ceiling)"
+fi
+# W106 MEDIUM-1: `ps` RSS undercounts unified Metal by ~RSS_METAL_UNDERCOUNT_GIB, so
+# lower the cap it is compared against by that amount (the real footprint is ~this
+# much higher than the polled tree RSS).  Clamp at >= 1 GiB so a large undercount
+# cannot zero the cap and abort instantly.
+_UNDERCOUNT_BYTES=$(( RSS_METAL_UNDERCOUNT_GIB * 1024 * 1024 * 1024 ))
+if (( _UNDERCOUNT_BYTES > 0 )); then
+  _capped=$(( EFFECTIVE_CHILD_CAP_BYTES - _UNDERCOUNT_BYTES ))
+  (( _capped < 1024 * 1024 * 1024 )) && _capped=$(( 1024 * 1024 * 1024 ))
+  log "phase 4: effective child-tree cap $(gib "${_capped}") GiB (lowered from $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB by the ${RSS_METAL_UNDERCOUNT_GIB} GiB ps-vs-Metal RSS undercount; the vm_stat system ceiling ${TOTAL_MEM_CEILING_GB} GiB is the authoritative guard)"
+  EFFECTIVE_CHILD_CAP_BYTES="${_capped}"
 fi
 
 # W106 HIGH-2: state BOTH caps explicitly (GiB + the ~GB equivalent) at step start
