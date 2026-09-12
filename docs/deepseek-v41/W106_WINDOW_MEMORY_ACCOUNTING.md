@@ -46,10 +46,11 @@ Files:
 - **`ru_maxrss_gb`** — the process LIFETIME peak RSS (`ru_maxrss`), which also
   spans model load and earlier arms. (MEDIUM-2.)
 - **`process_peak_rss_gb`** (top-level alias **`peak_process_gb`**) — the process
-  peak over the RUN: the **sampler peak when a sampler ran, else `ru_maxrss`**. A
-  single, decomposable meaning (no `max()` blob). This is David's "peak memory must
-  include the non-Metal parts" figure, and it is a PEAK over the window, never the
-  value at exit.
+  peak over the RUN: the **sampler peak when it is non-zero, else `ru_maxrss`**
+  (LOW: a sampler that ran but got no reading yields 0, which falls back to
+  `ru_maxrss` rather than a misleading 0.0). A single, decomposable meaning (no
+  `max()` blob). David's "peak memory must include the non-Metal parts" figure; a
+  PEAK over the window, never the value at exit.
 - **`system_used_peak_gb`** — the whole-**box** used-memory peak over the run:
   `(wired down + anonymous + occupied-by-compressor) pages × page size` from
   `vm_stat` — the SAME formula the `gpu_window.sh` phase-4 guard aborts on
@@ -78,8 +79,15 @@ process-tree RSS (in the `gpu_window.sh` log).
   `--non-metal-overhead-gib`) because the plan must be fixed before the model
   loads; see the two-phase note.
 - **`budget_non_metal_overhead_measured_gb`** — the same overhead **re-measured
-  after load** as `current phys_footprint (mach task_info) − mx active memory`
-  (NOT `ru_maxrss`); `null` until measured / when unmeasurable.
+  after load** as `current phys_footprint (mach task_info) − mx active − mx CACHE`
+  (HIGH-A: the MLX freed-buffer cache is load-transient Metal memory, not non-Metal
+  overhead; NOT `ru_maxrss`); `null` until measured / when unmeasurable.
+- **`rss_semantics`** — the state of that re-measurement (HIGH-A): `"ok"`
+  (footprint ≥ active, measured valid), `"inverted"` (footprint < mx active, so
+  Metal is not in `phys_footprint` on this platform and the overhead is
+  unmeasurable — recorded `null`, never a bogus 0.0, and never aborts), or
+  `"unmeasured"` (pre-load / footprint unavailable). Distinct from the fixed
+  `rss_semantics_note`.
 - **`budget_kv_growth_to_max_kv_gb`** — the bytes the KV lanes grow to at
   `--max-kv`, from config dims × max_kv × bf16 (see the KV estimator note).
 - **`budget_safety_gb`** — `--memory-safety-gib` headroom (default 3 GiB).
@@ -126,37 +134,58 @@ the model loads. So:
    (default 10 GiB) and fix the plan.
 2. **Load** the model.
 3. **Re-measure** the real overhead as `current phys_footprint (mach task_info) −
-   mx active memory` and record it (`budget_non_metal_overhead_measured_gb`). The
-   MLX active limit is **never** lowered post-load (residents are already
-   allocated, so it cannot shrink, and a limit below active memory would route
-   later allocations onto the over-limit path and perturb the decode). Instead, if
-   the measured overhead exceeds the estimate by more than 0.5 GiB — so the real
-   footprint would blow the budget — the run **ABORTS with a clear error before
-   the decode starts**.
+   mx active − mx CACHE` and record it (`budget_non_metal_overhead_measured_gb` +
+   `rss_semantics`). Subtracting the MLX freed-buffer **cache** (HIGH-A) is
+   essential: it is load-transient Metal memory the allocator reuses, and counting
+   it caused false aborts inside an open window. `mx.clear_cache()` is deliberately
+   NOT called (it would perturb the first decode token); subtracting the cache is
+   the non-perturbing equivalent. If `phys_footprint < mx active` the overhead is
+   unmeasurable on this platform → `rss_semantics="inverted"`, measured `null`
+   (never a bogus 0.0), no abort. The MLX active limit is **never** lowered
+   post-load (residents are already allocated; a limit below active memory would
+   route later allocations onto the over-limit path and perturb the decode).
+   Otherwise, if the measured overhead exceeds the estimate by more than 0.5 GiB —
+   the real footprint would blow the budget — the run **ABORTS with a clear error
+   before the decode starts** (recorded via MEDIUM-C).
 
-**KV growth estimator (LOW-1).** `_kv_bytes_at_max_kv(config, max_kv)` is a LOCAL,
-conservative estimate: every layer's sliding-window ring is priced at the full
-`max_kv` (the bounded ring is opt-in), and only the **kv-source layers**
-(`kv_source_layer_ids`, released `[2,8,14,20]`; else layers with a non-zero
-`compress_ratios`) add the latent `[max_kv/ratio, head_dim]`, rope
-`[max_kv/ratio, qk_rope_head_dim]`, and index `[max_kv/ratio, index_head_dim]`
-lanes, all bf16. Config dims are read from `config.json` (flat or
-`text_config`-nested) without importing MLX. **TODO(W107):** replace with
-`mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv` when it lands.
+**KV growth estimator (LOW-1).** `_kv_bytes_at_max_kv(config, max_kv)` is a LOCAL
+estimate: every layer's sliding-window ring is priced at the full `max_kv`, and
+only the **kv-source layers** (`kv_source_layer_ids`, released `[2,8,14,20]`; else
+layers with a non-zero `compress_ratios`) add the latent `[max_kv/ratio, head_dim]`,
+rope `[max_kv/ratio, qk_rope_head_dim]`, and index `[max_kv/ratio, index_head_dim]`
+lanes, all bf16. It is "conservative" ONLY while the sliding-window ring is off (it
+prices the window lane at the full `max_kv`); it models **no fp32 latent frontier**
+and so is NOT conservative in general — e.g. it estimated ~774 MB (61 MB non-window)
+where W107's exact helper reports ~320 MB for the same cell. Config dims are read
+from `config.json` (flat or `text_config`-nested) without importing MLX.
+**TODO(W107):** the int-branch already swaps this for
+`mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv` when it lands — this local
+estimate is a placeholder, not the authority.
 
 **Receipt keys** (in the `memory` block, alongside the peak/envelope keys):
 `memory_plan_source`, `budget_total_gb`, `plan_limit_gib_derived`,
 `plan_limit_gib_effective`, `budget_system_used_at_start_gb`,
 `budget_non_metal_overhead_gb`, `budget_non_metal_overhead_measured_gb`,
 `budget_kv_growth_to_max_kv_gb`, `budget_safety_gb`, `budget_floor_gib`,
-`rss_semantics_note`.
+`rss_semantics`, `rss_semantics_note`.
 
-**Pre-flight (LOW-4).** `--memory-plan-preflight` derives the plan from a dry
-snapshot (measure system-used now, estimate overhead, price KV from `config.json`
-— no model load, no MLX) and exits 0 (plan ≥ floor) or 3 (below floor), so the
-budget is checked before the guarded window opens. NB: a `bash -c "a; b; c"` step
-chain continues to `b` after `a` fails, so the pre-flight (a separate step that
-exits nonzero) is the reliable gate, not an in-chain failure.
+**Abort ledger (MEDIUM-C).** If an arm raises (a budget re-measure abort or a floor
+refusal), `main()` appends an abort row `{"arm", "aborted": true, "reason",
+"stage", "exception"}` (stage: `budget_remeasure` / `budget_derivation` /
+`run_arm`; plus the budget snapshot) to `--out` and exits with code **4**, so the
+ledger records the failure rather than leaving a silent gap.
+
+**Pre-flight (LOW-4 / HIGH-B).** `--memory-plan-preflight` derives the plan from a
+dry snapshot (no model load, no MLX) and exits 0 (plan ≥ floor) or 3 (below floor),
+so the budget is checked before the guarded window opens. The "now" baseline still
+has the resident agent (~45 GiB) + workers resident, but the window boots the agent
+out first, so `--preflight-freed-gib N` (default: best-effort READ-ONLY auto-detect
+of the com.tea.qwen RSS via `launchctl print` + `ps`, else 0 with a caveat) is
+subtracted; both the "now" and "expected in-window" baselines are printed, and the
+in-window derivation (measured after bootout) is authoritative. A both-flag-forms
+error exits 3 (not a traceback). NB: a `bash -c "a; b; c"` step chain continues to
+`b` after `a` fails, so the pre-flight (a separate step that exits nonzero) is the
+reliable gate, not an in-chain failure.
 
 **Bench command line — item 3 on the 16K cell** (do not run here; a GPU window is
 held by another worktree). Canonical GiB form (~100 GB budget):
@@ -191,13 +220,23 @@ next command never starts after the abort.
 Qwen is still restored and the lock released from the EXIT trap (restore before
 release).
 
-## Guard caps (HIGH-2) — under David's limits
+## Guard caps (HIGH-2, MEDIUM-A, MEDIUM-B) — under David's limits
 
 - System used-memory **ceiling = 102 GiB** (~109.5 GB, under the 110 GB hard
   line). Default was 105 GiB ≈ 112.7 GB, which was OVER the hard line.
 - Child-tree **RSS cap = 93 GiB** (~100 GB = David's "100 GB total"). This cap is
   LIVE for the first time under W106 (pre-W106 the poll read the ~0 `bash -c`
   shell RSS). Both caps are printed explicitly (GiB + ~GB) at step start.
+- **MEDIUM-A:** `GPU_WINDOW_TOTAL_MEM_CEILING_GB`, `GPU_WINDOW_MIN_AVAIL_GB` and
+  `GPU_WINDOW_FOREIGN_WORKER_RSS_GB` are integer-validated **before phase 0** (a
+  fractional value would leave the `$(( GB × 1024³ ))` byte var unset and, under
+  `set -u`, kill the window after Qwen is booted out) — a non-integer warns and
+  falls back to the default, like `GPU_WINDOW_KILL_GRACE_SECONDS`. (These
+  historical `*_GB` env names carry **GiB**; see the Units section.)
+- **MEDIUM-B:** the effective child-tree cap is related to the measured baseline:
+  when `used_start + child_cap > ceiling`, it is lowered (never raised, never
+  refused) to `ceiling − used_start` and logged as "effective child-tree cap X
+  GiB"; the phase-4 poll aborts on that effective cap.
 
 ## Peak-memory directive — report the whole-process peak, not only MLX
 
@@ -230,21 +269,24 @@ failure records `null` / `"<decode unavailable>"` and never kills the run).
 
 - `tests/test_deepseek_v41_w106_memory_budget.py` — derivation math (injected
   measurements), floor refusal, the exact receipt key set, the KV estimator
-  (kv_source_layer_ids), the config reader, `_resolve_derivation`, the HIGH-1
-  re-measure (never calls `set_memory_limit`; aborts over budget), the MEDIUM-1
-  `-gib`/`-gb` resolution, the HIGH-2 `rss_semantics_note`, and the LOW-4
-  pre-flight exit codes.
+  (kv_source_layer_ids), the config reader, `_resolve_derivation`; the HIGH-1/HIGH-A
+  re-measure (never `set_memory_limit`/`clear_cache`; subtracts the mx cache so no
+  false abort; `inverted` → `None`, never 0.0); the HIGH-B pre-flight freed baseline
+  (rc 0 with `--preflight-freed-gib`, rc 3 without, rc 3 on both-flag-forms); the
+  MEDIUM-1 `-gib`/`-gb` resolution; the HIGH-2 `rss_semantics_note`; and the
+  MEDIUM-C abort ledger row (stage + reason + append).
 - `tests/test_deepseek_v41_w106_memory_block.py` — the item-2 sampler + the
   MEDIUM-2 decomposed keys (`sampler_peak_rss_gb` / `ru_maxrss_gb` /
-  `process_peak_rss_gb`), `_peak_process_gb` / `_memory_headline`, and a
-  high-water (peak-not-exit) test.
+  `process_peak_rss_gb`), the LOW 0-sampler-peak fallback to `ru_maxrss`,
+  `_peak_process_gb` / `_memory_headline`, and a high-water (peak-not-exit) test.
 - `tests/test_deepseek_v41_w106_receipt_output.py` — decode guards, token_ids /
   head / tail, divergence-context spans, and the MEDIUM-3 paired sha-named
   sidecars.
 - `tests/test_gpu_window_memory_accounting.sh` — item-1 tree-RSS accounting, the
-  item-4 tree-kill (a `sleep` grandchild does not survive the abort), the HIGH-2
-  step-start caps line (93/102 GiB), and the LOW-2 non-integer-grace fallback — in
-  `GPU_WINDOW_TEST_MODE=1` with a hermetic temp lock (no sysctl, no launchctl, no
-  real GPU lock, no Metal).
+  item-4 tree-kill (a `sleep` grandchild does not survive the abort), the MEDIUM-B
+  effective-cap lowering (52 GiB) + 102 GiB ceiling, the LOW-2 non-integer-grace
+  fallback, and the MEDIUM-A fractional-ceiling validation (warn + fall back to 102,
+  clean exit) — in `GPU_WINDOW_TEST_MODE=1` with a hermetic temp lock (no sysctl,
+  no launchctl, no real GPU lock, no Metal).
 - `scripts/deepseek_v41/test_gpu_window_guard.sh` — the phase-4 guard math + the
   HIGH-2 102 GiB default ceiling.
