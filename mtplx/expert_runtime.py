@@ -4696,6 +4696,14 @@ class ExpertStreamingRuntime:
             "pin_working_set": self.pinned_working_set_telemetry(),
             "device_route_pinned": self.device_route_pinned_telemetry(),
         }
+        # W110: the io-thread reader metrics (per-record sha256 engagement +
+        # bytes/reads) so the MTPLX_DSV41_VERIFY_RECORD_HASHES lever's counters
+        # (records_hashed / records_unhashed / hash_thread_ns_total) travel on the receipt.
+        # Guarded: a stub reader without metrics just omits the block.
+        try:
+            snapshot["io"] = self.reader.metrics.as_dict()
+        except Exception:
+            pass
         if self._belady_oracle is not None:
             # The clairvoyant fetch floor over the full decode window, at the
             # actual per-layer slot budget — the runtime analog of the offline
@@ -4792,6 +4800,13 @@ class ExpertStreamingRuntime:
             "device_route_pinned": self.device_route_pinned_telemetry(),
             **slots,
         }
+        # W110: io-thread reader metrics (per-record sha256 engagement) for the
+        # bench sampler's receipt too (records_hashed / records_unhashed /
+        # hash_thread_ns_total). Guarded; a stub reader just omits it.
+        try:
+            snapshot["io"] = self.reader.metrics.as_dict()
+        except Exception:
+            pass
         if self._pipeline_ledger is not None:
             snapshot["expert_pipeline"] = self._pipeline_ledger.snapshot()
         # W93: the gate-oracle prefetch receipt block (only when the ring is armed,

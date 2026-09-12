@@ -146,6 +146,14 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
             if isinstance(block, dict):
                 out[_block_key] = block
 
+        # W110: pass through the io-thread reader metrics (per-record sha256
+        # engagement) so the decode-scoped delta can report records_hashed /
+        # records_unhashed / hash_thread_ns_total per verify/decode window -- the
+        # MTPLX_DSV41_VERIFY_RECORD_HASHES lever's engagement counters.
+        io_metrics = snap.get("io")
+        if isinstance(io_metrics, dict):
+            out["io"] = {str(k): io_metrics[k] for k in io_metrics}
+
     # 2. Engram row cache (per-layer NGramRowCache stats, summed).
     engram = _engram_row_cache_totals(rt)
     if engram is not None:
@@ -211,6 +219,42 @@ def stream_counters_delta(
         d["routes_per_token"] = round(d.get("routes", 0) / tok, 4)
         d["parts_per_token"] = round(d.get("parts", 0) / tok, 4)
         out["incremental_misses"] = d
+
+    # W110: per-record sha256 engagement over THIS decode window (the bench-only
+    # MTPLX_DSV41_VERIFY_RECORD_HASHES diagnostic's counters). ``records_hashed`` +
+    # ``records_unhashed`` = records streamed off SSD during decode; with hashing ON
+    # unhashed is 0 and ``hash_thread_ms`` is the SUMMED io-thread hashing time (across
+    # all io-pool threads, NOT wall -- divide by the io-pool width for an upper bound
+    # on exposed wall); with hashing OFF hashed is 0 and no re-check ran (bytes are
+    # byte-identical either way).
+    b_io, a_io = before.get("io"), after.get("io")
+    if isinstance(b_io, dict) and isinstance(a_io, dict):
+        # _delta_map differences EVERY key, but ``read_mib_per_second`` is a
+        # cumulative-since-open FLOAT RATE (from ExpertIOMetrics.as_dict), so
+        # differencing it yields a garbage "delta". Drop the non-counter (derived
+        # float) keys before the delta and derive the decode-WINDOW read rate from the
+        # ``read_bytes`` / ``read_ns`` counter deltas instead.
+        _NON_COUNTER_IO = ("read_mib_per_second",)
+        b_c = {k: v for k, v in b_io.items() if k not in _NON_COUNTER_IO}
+        a_c = {k: v for k, v in a_io.items() if k not in _NON_COUNTER_IO}
+        d = _delta_map(b_c, a_c)
+        hashed = d.get("records_hashed", 0)
+        unhashed = d.get("records_unhashed", 0)
+        total = hashed + unhashed
+        d["records_hashed_per_token"] = round(hashed / tok, 4)
+        d["records_unhashed_per_token"] = round(unhashed / tok, 4)
+        d["hash_fraction"] = round(hashed / total, 6) if total else None
+        d["hash_thread_ms"] = round(d.get("hash_thread_ns_total", 0) / 1e6, 3)
+        d["hash_thread_ms_per_token"] = round(d.get("hash_thread_ns_total", 0) / 1e6 / tok, 4)
+        # Decode-window realized read rate from the counter deltas: bytes / ns == GB/s
+        # (1e9 bytes / 1e9 ns). ``read_ns`` is SUMMED io-thread read time, so this is
+        # the aggregate io-thread read throughput WHILE reading (not wall) -- the
+        # per-window SSD read rate W109 wanted in the receipt. None when no reads.
+        _read_ns = d.get("read_ns", 0)
+        d["read_gb_per_s_window"] = (
+            round(d.get("read_bytes", 0) / _read_ns, 4) if _read_ns else None
+        )
+        out["io"] = d
 
     b_er, a_er = before.get("engram_row_cache"), after.get("engram_row_cache")
     if isinstance(b_er, dict) and isinstance(a_er, dict):

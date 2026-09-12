@@ -3240,6 +3240,11 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_ATTN_CORE_COMPILE",
     "MTPLX_DSV41_ATTN_LEAN_CASTS",
     "MTPLX_DSV41_ATTN_FUSED_PROJ",
+    # NOTE (W110): MTPLX_DSV41_VERIFY_RECORD_HASHES is intentionally NOT here. The
+    # served profile builder (expert_profiles.build_expert_streaming_config) does not
+    # read it, so it would be a DEAD served lever; it is a bench-only diagnostic env
+    # (see scripts/deepseek_v41/ab_decode_env_levers.py) and is likewise absent from
+    # ALL_LEVER_ENVS, so the W90 superset drift guard still holds.
 )
 
 

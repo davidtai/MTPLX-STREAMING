@@ -327,6 +327,16 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+# W110 (BENCH-ONLY DIAGNOSTIC -- not a perf lever): gate the per-record sha256
+# re-check on the DECODE/verify streaming path. Decode-path hashing has been OFF on
+# every ab/bench path (arg default False) and OFF in the served profile
+# (deepseek-v41-mxfp4-75: verify_record_hashes=false), so there is nothing to REMOVE.
+# The salvaged value runs the OTHER direction: "1" turns hashing ON to MEASURE its
+# io-thread cost (arm cell16k_ring_v2_hash), with the records_hashed / hash_thread_ns
+# counters. Honoured only by the loader/bench builder (build_streaming_config); the
+# served profile builder (expert_profiles.build_expert_streaming_config) deliberately
+# does NOT read it, so this env is NOT registered as a served lever. See W110 doc.
+VERIFY_RECORD_HASHES_ENV = "MTPLX_DSV41_VERIFY_RECORD_HASHES"
 
 # W97: cache the dequantized grouped o-LoRA (wo_a) weight per layer instead of
 # re-issuing mx.dequantize(wo_a) every decode token (the released wo_a is 8x1024x4096
@@ -437,6 +447,11 @@ ALL_LEVER_ENVS = (
     ATTN_LEAN_CASTS_ENV,
     # W101 (appended):
     ATTN_FUSED_PROJ_ENV,
+    # NOTE: VERIFY_RECORD_HASHES_ENV is DELIBERATELY NOT in this list. It is a
+    # BENCH-ONLY diagnostic env (honoured on the loader/bench builder, NOT on the
+    # served profile builder) -- keeping it out of ALL_LEVER_ENVS also keeps it out
+    # of the served-log lever snapshot (openai._DSV41_LEVER_ENV_KEYS, which must be a
+    # superset), where it would be a DEAD served lever. See W110 doc + _preset.
 )
 
 
@@ -463,6 +478,7 @@ def _preset(
     kv_bounded=None, kv_bounded_maxkv=None,
     wo_a_cache=None, attn_core_compile=None,
     attn_lean_casts=None, attn_fused_proj=None,
+    verify_record_hashes=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -528,6 +544,7 @@ def _preset(
         ATTN_CORE_COMPILE_ENV: attn_core_compile,
         ATTN_LEAN_CASTS_ENV: attn_lean_casts,
         ATTN_FUSED_PROJ_ENV: attn_fused_proj,
+        VERIFY_RECORD_HASHES_ENV: verify_record_hashes,
     }
 
 
@@ -1100,6 +1117,22 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W110 (BENCH-ONLY DIAGNOSTIC): cell16k_ring_v2 + decode-path per-record sha256
+    # turned ON (MTPLX_DSV41_VERIFY_RECORD_HASHES=1, env-authoritative over the ab
+    # harness's --verify-record-hashes default False).  This is NOT a perf lever:
+    # decode hashing is already OFF on every ab/bench path and OFF in the served
+    # profile, so there was nothing to remove.  The A/B cell16k_ring_v2_hash vs
+    # cell16k_ring_v2 MEASURES the io-thread cost of hashing (records_hashed /
+    # hash_thread_ns) should a future policy ever require it -- the reverse of the
+    # withdrawn W109 §1.b "drop hashing" framing.  Byte-identical class either way
+    # (hashing never changes bytes, so token_ids_sha256 must match); the
+    # resolved_plan.verify_record_hashes stamp proves the two arms actually differ.
+    "cell16k_ring_v2_hash": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", verify_record_hashes="1",
     ),
 }
 
@@ -2261,6 +2294,33 @@ def _resolve_plan_overrides(args) -> dict:
     return overrides
 
 
+def _runtime_gate_prefetch_k(runtime) -> int | None:
+    """The gate-oracle predict width ``k`` the RUNTIME actually resolved, read from
+    the runtime's own runner receipt block (``resource_telemetry_snapshot()['runner']
+    ['prefetch_k']``, built by deepseek_v41._runner_snapshot).  Returns ``None`` when
+    the runtime cannot produce the block (e.g. an explicit GATE_PREFETCH-only arm with
+    no v2 runner), so the caller falls back to ``prefetch_slots//2``.
+
+    W110: this is the fix for the window-41 receipt bug -- reading the width from the
+    runtime, not from ``os.environ`` (which misses the v2 auto-arm), and not from
+    ``prefetch_slots//2`` (the v2 ring is sized to buffer the verify union, not 2*k).
+    """
+
+    try:
+        snap = runtime.resource_telemetry_snapshot()
+    except Exception:
+        return None
+    if not isinstance(snap, dict):
+        return None
+    runner = snap.get("runner")
+    if isinstance(runner, dict) and runner.get("prefetch_k") is not None:
+        try:
+            return int(runner["prefetch_k"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _resolved_plan(runtime, args) -> dict | None:
     """The runtime's ACTUAL slot plan, for the receipt/census header.
 
@@ -2279,18 +2339,35 @@ def _resolved_plan(runtime, args) -> dict | None:
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
     prefetch_slots = int(getattr(config, "prefetch_slots", 0) or 0)
     slots_per_layer = int(getattr(plan, "slots_per_layer", 0) or 0)
-    # W93 (review CRITICAL): the gate-oracle lever must have ACTUALLY armed the
-    # GLOBAL ring on this cell -- otherwise the A/B is control-vs-control. Fail
-    # loudly rather than silently benchmarking an unarmed ring.
+    # W93 (review CRITICAL): an EXPLICIT gate-oracle lever must have ACTUALLY armed
+    # the GLOBAL ring on this cell -- otherwise the A/B is control-vs-control. Fail
+    # loudly rather than silently benchmarking an unarmed ring. (Explicit-lever guard
+    # only; the v2 auto-arm is handled below.)
     gate_env = os.environ.get(GATE_PREFETCH_ENV)
-    gate_armed = bool(gate_env) and gate_env not in ("0", "")
-    if gate_armed and prefetch_slots <= 0:
+    gate_env_armed = bool(gate_env) and gate_env not in ("0", "")
+    if gate_env_armed and prefetch_slots <= 0:
         raise AssertionError(
             f"{GATE_PREFETCH_ENV}={gate_env!r} is armed but the runtime built NO "
             "prefetch ring (prefetch_slots=0). The gate-oracle lever would measure "
             "control-vs-control -- check build_streaming_config / the served "
             "profile arm the env-authoritative ring."
         )
+    # W110 (receipt fix): report the ACTUAL armed state, read from the runtime object
+    # the loader built -- NOT os.environ. The v2 runner AUTO-ARMS the gate-oracle ring
+    # (build_streaming_config sets prefetch_slots for MTPLX_DSV41_RUNNER=v2) with
+    # MTPLX_DSV41_GATE_PREFETCH UNSET, so the old env-only ``gate_armed`` reported
+    # armed=False / k=0 while the runner actually prefetched at k=6 (window 41:
+    # prefetch_committed=10513). A built ring (config.prefetch_slots>0) IS the armed
+    # signal; the predict WIDTH is the width the runtime resolved (its runner receipt
+    # block's ``prefetch_k``), NOT prefetch_slots//2 -- the v2 ring is sized 2*24=48
+    # to double-buffer the ~24-expert verify union one layer ahead, so //2 would
+    # misreport the width as 24 instead of 6.
+    gate_armed = prefetch_slots > 0
+    gate_k = _runtime_gate_prefetch_k(runtime) if gate_armed else 0
+    if gate_k is None:
+        # No runner block (e.g. an explicit GATE_PREFETCH-only arm, ring = 2*k):
+        # //2 recovers the explicit predict width.
+        gate_k = prefetch_slots // 2
     # W93 (review MEDIUM-d): the 0.36 GiB ring comes out of the PERSISTENT budget,
     # not free reserve. Show slots_per_layer WITHOUT vs WITH the ring so the LRU
     # effect (kept the same only via floor-division slack) is auditable per run.
@@ -2315,11 +2392,19 @@ def _resolved_plan(runtime, args) -> dict | None:
         "transient_bytes_per_layer": transient_slots * record_bytes,
         "transient_bytes_total": transient_slots * record_bytes * routed_layers,
         "split_route_release": getattr(config, "split_route_release", None),
-        # GLOBAL ring: prefetch_slots = 2*k records TOTAL (shared); k = predict width.
+        # GLOBAL ring: prefetch_slots records TOTAL (shared); k = predict width.
         "prefetch_slots": prefetch_slots,
+        # W110: the ACTUAL armed state / predict width the runtime ran (v2 auto-arm
+        # included), not the explicit env. ``gate_prefetch_env`` keeps the raw env
+        # for provenance (None on a v2-auto-armed run).
         "gate_prefetch_armed": gate_armed,
-        "gate_prefetch_k": (prefetch_slots // 2) if gate_armed else 0,
+        "gate_prefetch_k": gate_k,
+        "gate_prefetch_env": gate_env,
         "gate_prefetch_ring_bytes": prefetch_slots * record_bytes,
+        # W110 (guard/stamp): the ACTUAL decode-path per-record sha256 state the
+        # runtime ran, so a hash-vs-parent A/B can never be control-vs-control
+        # silently (parent stamps False, cell16k_ring_v2_hash stamps True).
+        "verify_record_hashes": bool(getattr(config, "verify_record_hashes", False)),
         "source": (
             "explicit" if getattr(args, "transient_slots", None) is not None
             else f"profile:{getattr(args, 'expert_profile', 'none')}"
