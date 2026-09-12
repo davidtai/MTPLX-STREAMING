@@ -117,6 +117,19 @@ class ExpertSlotMetrics:
     overlap_split_routes: int = 0
     overlap_gpu_dispatch_ns: int = 0
     overlap_exposed_wait_ns: int = 0
+    # W109 (DSpark verify SSD queue depth). Engagement counters for the
+    # MTPLX_DSV41_VERIFY_IO_FANOUT / _VERIFY_UNION_READ levers (issue I1 / T1):
+    # verify_io_reads_issued -- expert records scheduled on the DECODE miss path
+    # under the lever; verify_io_batches -- concurrent batched groups (futures)
+    # they were submitted as; verify_io_max_inflight -- peak concurrently
+    # in-flight miss reads observed (a real gauge, not len(parts)); and
+    # verify_io_wait_ns_total -- nanoseconds the generation thread was blocked
+    # inside iter_ready_misses awaiting those reads (surfaced as
+    # verify_io_wait_ms_total in the receipt). All zero unless a lever is armed.
+    verify_io_reads_issued: int = 0
+    verify_io_batches: int = 0
+    verify_io_max_inflight: int = 0
+    verify_io_wait_ns_total: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _route_claims: list[_RouteReleaseClaim] = field(default_factory=list, repr=False)
     _admission_test_hook: Callable[[str], None] | None = field(default=None, repr=False)
@@ -126,6 +139,30 @@ class ExpertSlotMetrics:
             for name, value in values.items():
                 setattr(self, name, int(getattr(self, name)) + int(value))
             self.active_routes_peak = max(self.active_routes_peak, self.active_routes)
+
+    def note_verify_io(
+        self,
+        *,
+        reads_issued: int = 0,
+        batches: int = 0,
+        wait_ns: int = 0,
+        inflight_peak: int | None = None,
+    ) -> None:
+        """Accumulate W109 verify-IO engagement counters.
+
+        ``reads_issued``/``batches``/``wait_ns`` are additive; ``inflight_peak``
+        raises the observed maximum (a max, not a sum). Cheap and only called
+        from the DECODE miss path when a verify-IO lever is armed.
+        """
+
+        with self._lock:
+            self.verify_io_reads_issued += int(reads_issued)
+            self.verify_io_batches += int(batches)
+            self.verify_io_wait_ns_total += int(wait_ns)
+            if inflight_peak is not None:
+                self.verify_io_max_inflight = max(
+                    self.verify_io_max_inflight, int(inflight_peak)
+                )
 
     def admit_route(self, claim: _RouteReleaseClaim) -> None:
         with self._lock:
@@ -232,6 +269,10 @@ class ExpertSlotMetrics:
                     "overlap_split_routes",
                     "overlap_gpu_dispatch_ns",
                     "overlap_exposed_wait_ns",
+                    "verify_io_reads_issued",
+                    "verify_io_batches",
+                    "verify_io_max_inflight",
+                    "verify_io_wait_ns_total",
                 )
             }
 

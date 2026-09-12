@@ -314,6 +314,13 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+# W109 (T1 / issue I1): DSpark verify SSD queue-depth levers. FANOUT=N issues a
+# verify layer's miss union as up to N concurrent batched-scatter preadv groups;
+# UNION_READ=1 forces the whole union into one batched submission even when the
+# overlap_miss_reads config knob is off. Both read AT USE, byte-identical (I/O
+# scheduling only; records land in the same slots). See W109_VERIFY_IO_FANOUT.md.
+VERIFY_IO_FANOUT_ENV = "MTPLX_DSV41_VERIFY_IO_FANOUT"
+VERIFY_UNION_READ_ENV = "MTPLX_DSV41_VERIFY_UNION_READ"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -375,6 +382,9 @@ ALL_LEVER_ENVS = (
     # W107 (appended; coordinate with any concurrent list extension):
     KV_BOUNDED_ENV,
     KV_BOUNDED_MAXKV_ENV,
+    # W109 (appended; coordinate with any concurrent list extension):
+    VERIFY_IO_FANOUT_ENV,
+    VERIFY_UNION_READ_ENV,
 )
 
 
@@ -399,6 +409,8 @@ def _preset(
     gate_prefetch_min_layer=None,
     runner=None,
     kv_bounded=None, kv_bounded_maxkv=None,
+    verify_io_fanout=None,
+    verify_union_read=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -460,6 +472,8 @@ def _preset(
         RUNNER_ENV: runner,
         KV_BOUNDED_ENV: kv_bounded,
         KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
+        VERIFY_IO_FANOUT_ENV: verify_io_fanout,
+        VERIFY_UNION_READ_ENV: verify_union_read,
     }
 
 
@@ -879,6 +893,21 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
+    ),
+    # W109 (T1 / issue I1): cell16k_ring_v2 + the DSpark verify SSD queue-depth
+    # levers -- fanout the verify miss union into 8 concurrent batched-scatter preadv
+    # groups (VERIFY_IO_FANOUT=8) with the whole union coalesced (VERIFY_UNION_READ=1).
+    # Exact key set of cell16k_ring_v2 plus those two I/O-scheduling keys; they touch
+    # only WHEN/HOW the verify's ~5.4 GB/token miss reads are issued, never the bytes
+    # or the gather that consumes them, so this is BYTE-IDENTICAL to cell16k_ring_v2's
+    # class (same head=bf16 + dense/lean prefill reassoc; the fanout adds no new
+    # lossiness). The direct A/B vs cell16k_ring_v2 isolates the SSD queue-depth win
+    # on the standard 16K cell with the v2 runner armed. See W109_VERIFY_IO_FANOUT.md.
+    "cell16k_ring_v2_verifyio": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", verify_io_fanout="8", verify_union_read="1",
     ),
 }
 
@@ -2587,6 +2616,35 @@ def _overlap_telemetry(runtime) -> dict | None:
     }
 
 
+def _verify_io_telemetry(runtime) -> dict | None:
+    """W109 (T1 / issue I1) DSpark verify SSD queue-depth engagement off the runtime
+    slot metrics. Returns the lever state + the four counters
+    (``verify_io_reads_issued`` / ``verify_io_batches`` / ``verify_io_max_inflight``
+    / ``verify_io_wait_ms_total``). None when nothing engaged (no lever armed), so an
+    off arm never fabricates a figure. ``wait_ms_total`` is the gen-thread wall spent
+    blocked inside ``iter_ready_misses`` awaiting the verify reads (per_cycle_ms
+    remains the authoritative headline)."""
+    metrics = getattr(getattr(runtime, "slots", None), "metrics", None)
+    snap = getattr(metrics, "as_dict", None)
+    data = snap() if callable(snap) else getattr(metrics, "__dict__", None)
+    if not isinstance(data, dict):
+        return None
+    reads = data.get("verify_io_reads_issued") or 0
+    batches = data.get("verify_io_batches") or 0
+    if not reads and not batches:
+        return None
+    return {
+        "fanout": os.environ.get(VERIFY_IO_FANOUT_ENV),
+        "union_read": os.environ.get(VERIFY_UNION_READ_ENV),
+        "verify_io_reads_issued": int(reads),
+        "verify_io_batches": int(batches),
+        "verify_io_max_inflight": int(data.get("verify_io_max_inflight") or 0),
+        "verify_io_wait_ms_total": (
+            int(data.get("verify_io_wait_ns_total") or 0) / 1e6
+        ),
+    }
+
+
 def _pin_telemetry(runtime) -> dict | None:
     """W64 pinned-working-set telemetry off the runtime (pinned count per layer +
     the all-pinned-hit rate per decode route). None when the runtime lacks the
@@ -2971,6 +3029,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # tokenizer; None if unavailable (guarded).
             **_text_output_fields(_tok, ids),
             "overlap_telemetry": _overlap_telemetry(runtime)
+            if runtime is not None
+            else None,
+            # W109 (T1 / issue I1): DSpark verify SSD queue-depth engagement
+            # (lever state + reads_issued/batches/max_inflight/wait_ms_total).
+            "verify_io": _verify_io_telemetry(runtime)
             if runtime is not None
             else None,
             # W64 R3-pin: pinned count per layer + all-pinned-hit rate per token
