@@ -883,6 +883,67 @@ ARM_PRESETS = {
     ),
 }
 
+# W97 (review item 7): the rounding-class env keys, documented in ONE place with the
+# reason.  An arm whose preset arms ANY of these keys has decoded tokens that are
+# EXPECTED to differ from control by rounding (the lever reassociates the fp32
+# attention core / softmax, so a greedy near-tie can flip -- [[dsv41-inexact-ok-if-
+# tie-flips]]).  A token-id sha mismatch on such an arm is "expected (rounding-class)",
+# NOT a broken exact lever, so the byte-identity summary must not FAIL it; every other
+# arm keeps the FAIL (an exact lever that changed the tokens is a bug).
+#
+# ROUNDING_CLASS_ARMS is DERIVED from ARM_PRESETS (not a hand list), so a new arm is
+# classified automatically the moment its preset names one of these keys.  Each key's
+# reason (why reassociation, not a bug):
+#   DECODE_ATTN_KERNEL (K29): the fused decode/verify MLA kernel's online-softmax tile
+#       reduction reorders the fp32 softmax -- greedy-identical <=1e-6, NOT byte-ident
+#       (W60; GPU-only, CPU falls back to the eager one-shot).
+#   ATTN_CORE_COMPILE (W97): the n=1 fixed-shape mx.compile of the decode-attention
+#       core reassociates the fp32 einsum/reductions (the K35 lesson; measured max|Δ|
+#       ~9e-10 on CPU) -- NOT byte-identical, on CPU AND GPU.
+#   SMALL_STAGES_FUSED (K35): the fused per-layer small-stage graphs reassociate the
+#       fp32 GEMM/reductions on Metal (window-37: token-id sha DIFFERS on GPU;
+#       byte-identical only within the CPU mx.compile bit-exact regime).
+#   HC_PREMIX_KERNEL (K35): the fused HC-premix Sinkhorn kernel (rounding-class 1e-6,
+#       argmax-exact); pinned force-unset by every preset today, listed so a future
+#       arm that turns it on is classified automatically.
+#   MTPLX_DSV41_DRAFT_HEAD_BF16: a bf16 DSpark draft head would round the draft logits;
+#       no current preset arms it (no such constant yet), listed by name so a future
+#       arm classifies without a code change.
+# DELIBERATELY EXCLUDED (kept FAIL so a genuine exact-lever regression is caught):
+#   HC_COMPILE (K4) and SINKHORN_METAL (K3) are classed byte-identical execution
+#       reorders on this CPU A/B path (K4 is a byte-identical HC-premix compile; K3
+#       falls back to eager on CPU), and MANY exact composite arms carry sinkhorn="1"
+#       (cell16k_ring_wo_a_cache, cell16k_ring_lean, stack_*) -- excusing them would
+#       mask a real exact-lever divergence.  HEAD_MODE=bf16/mxfp8/q8 is a LOSSY-by-
+#       design LOAD-TIME codec, a different class (flagged separately, W40_HEAD_LEVER),
+#       not a rounding reorder -- so head=bf16 on an otherwise-exact arm is NOT what
+#       makes it rounding-class.  ATTN_LEAN_CASTS (W99) is a byte-identical cast dedupe.
+ROUNDING_CLASS_ENVS = (
+    DECODE_ATTN_KERNEL_ENV,
+    ATTN_CORE_COMPILE_ENV,
+    SMALL_STAGES_FUSED_ENV,
+    HC_PREMIX_KERNEL_ENV,
+    "MTPLX_DSV41_DRAFT_HEAD_BF16",
+)
+
+
+def _rounding_class_keys(arm: str) -> list:
+    """The rounding-class env keys (see ``ROUNDING_CLASS_ENVS``) an arm's preset
+    actually arms -- the reason its tokens are EXPECTED to differ from control by
+    rounding.  Empty list for an exact arm.  Derived from ``ARM_PRESETS``, never
+    hand-listed, so a new rounding-class arm is classified automatically."""
+    preset = ARM_PRESETS.get(arm, {})
+    return [k for k in ROUNDING_CLASS_ENVS if preset.get(k) not in (None, "")]
+
+
+def _is_rounding_class(arm: str) -> bool:
+    """True when ``arm`` arms any rounding-class env key (see ``_rounding_class_keys``)."""
+    return bool(_rounding_class_keys(arm))
+
+
+# Derived, not hand-listed: every arm whose preset arms a rounding-class env key.
+ROUNDING_CLASS_ARMS = frozenset(a for a in ARM_PRESETS if _is_rounding_class(a))
+
 
 def _load_bench_module():
     """Import ``bench_standard_shape`` (a sibling script) for its cell harness.
@@ -1228,6 +1289,10 @@ def _dry_run_arm(args, arm, bench) -> dict:
     return {
         "arm": arm,
         "dry_run": True,
+        # W97 (review item 7): rounding-class flag + the reason keys the arm arms
+        # (see ROUNDING_CLASS_ENVS).  True => a token-id sha mismatch is EXPECTED.
+        "rounding_class": _is_rounding_class(arm),
+        "rounding_class_keys": _rounding_class_keys(arm),
         "overlap_env": os.environ.get(OVERLAP_ENV),
         "arm_env": _arm_env_snapshot(),
         # K14 (W63): the MLX command-buffer MB cap this arm pins (None = MLX
@@ -2125,6 +2190,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
         ids = run["generated"]
         receipt = {
             "arm": arm,
+            # W97 (review item 7): True when this arm's tokens are EXPECTED to differ
+            # from control by rounding (a rounding-class attention lever), so the
+            # byte-identity summary reads a sha mismatch as "expected", not FAIL.
+            # ``rounding_class_keys`` are the reason keys (see ROUNDING_CLASS_ENVS).
+            "rounding_class": _is_rounding_class(arm),
+            "rounding_class_keys": _rounding_class_keys(arm),
             "overlap_env": os.environ.get(OVERLAP_ENV),
             "arm_env": _arm_env_snapshot(),
             # K14 (W63): the MLX command-buffer MB cap in effect for this arm
@@ -2759,10 +2830,43 @@ def main(argv=None) -> int:
                 else f"[ab] {cand['arm']} vs {base['arm']}: byte_identical={identical}"
             )
             if not identical:
-                print(
-                    f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
-                    "(the lever must be a pure execution reorder)"
-                )
+                # W97 (review item 7): a rounding-class attention lever (the n=1 core
+                # compile / K29 tile reduction reassociates the fp32 softmax) can flip
+                # a greedy near-tie -- that is EXPECTED, not a broken exact lever, so
+                # it must not read as FAIL.  Every other arm keeps the FAIL.  Read the
+                # machine label off the receipt (fall back to deriving it, so an older
+                # receipt without the field still classifies).
+                cand_rc = cand.get("rounding_class")
+                if cand_rc is None:
+                    cand_rc = _is_rounding_class(cand["arm"])
+                if cand_rc:
+                    # Name the reason keys so the label is machine-checkable, not a
+                    # bare "expected".
+                    keys = cand.get("rounding_class_keys") or _rounding_class_keys(
+                        cand["arm"]
+                    )
+                    keys_str = ", ".join(keys) if keys else "?"
+                    # When the receipt already classified a divergence (the dspark
+                    # decode path records one), add the first divergence index and the
+                    # control top-2 logit margin there -- a tiny margin corroborates a
+                    # rounding tie ([[dsv41-inexact-ok-if-tie-flips]]).
+                    div = (cand.get("dspark") or {}).get("divergence")
+                    div_str = ""
+                    if isinstance(div, dict) and div.get("divergence_index") is not None:
+                        div_str = (
+                            f"; first divergence @ {div['divergence_index']}, "
+                            f"control top-2 logit margin {_fmt(div.get('ar_top2_margin'))} "
+                            f"(cand {_fmt(div.get('dspark_top2_margin'))})"
+                        )
+                    print(
+                        f"[ab] {cand['arm']}: token-id sha differs -- expected "
+                        f"(rounding-class: {keys_str}){div_str}"
+                    )
+                else:
+                    print(
+                        f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
+                        "(the lever must be a pure execution reorder)"
+                    )
     return 0
 
 
