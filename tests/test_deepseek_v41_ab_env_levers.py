@@ -59,6 +59,7 @@ _SB = "MTPLX_DSV41_SWITCH_SUBMIT"      # W42 / K23 var B: all-hit async submit
 _AC = "MTPLX_DSV41_ATTN_COMPILE"       # W41 / K22: attention-chain compile
 _WM = "MTPLX_DSV41_ATTN_WIN_MEMO"      # W45 / K24: sliding-window mask memo
 _DC = "MTPLX_DSV41_DRAFT_COMPILE"      # W65 / K33: DSpark draft-block tape collapse
+_DHB = "MTPLX_DSV41_DRAFT_HEAD_BF16"   # W103: DSpark draft-head fp32-cast fix (wired W104)
 _DR = "MTPLX_DSV41_DEVICE_ROUTE"       # W44 / K24: barrier-free all-hit device route
 _VSB = "MTPLX_DSV41_VERIFY_SINGLE_BARRIER"  # W61 / K31: small-M verify one barrier/layer (default ON)
 _PD = "MTPLX_DSV41_PREFILL_DENSE_EXPERTS"     # W51 / K26: prefill dense experts
@@ -93,7 +94,7 @@ _BOOL_AND_HEAD = _ALL_KEYS + (_DR, _PD, _PDMR, _PDB, _PDD, _HM)  # every pre-W50
 # + the three W50 score-path keys + the W59 K30 selected-key gather boolean + the
 # W58 K28 fused-softmax-kernel boolean + the K27 layout_fix boolean (the W58
 # prefill_best* full-stack arms set it) + the W60 K29 decode-attention-kernel boolean.
-_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF, _DC, _PWS, _DRP, _KCG, _SS, _HPK)
+_ALL_WATCHED = _BOOL_AND_HEAD + (_SD, _SC, _SP, _SEL, _SFK, _LFX, _DAK, _VSB, _MLXBUF, _DC, _DHB, _PWS, _DRP, _KCG, _SS, _HPK)
 
 ALL_ARMS = [
     "control",
@@ -238,6 +239,11 @@ EXPECTED_VERIFY = {arm: (arm == "verify_single_barrier") for arm in ALL_ARMS}
 # W65 K33: DSpark draft-block compile (separate boolean, not in _ALL_KEYS -- like
 # device_route / verify_single_barrier; only the standalone draft_compile arm sets it).
 EXPECTED_DRAFT = {arm: (arm == "draft_compile") for arm in ALL_ARMS}
+# W104: DSpark draft-head bf16 fix (separate boolean, not in _ALL_KEYS -- like _DC).
+# NO arm in ALL_ARMS sets it (the only arms that do are the ring composites
+# cell16k_ring_draft / cell16k_ring_v2_draft, checked in test_cell16k_ring_composite_arms),
+# so every ALL_ARMS arm must force-unset it (proves a parent-shell export can't survive).
+EXPECTED_DRAFT_HEAD_BF16 = {arm: False for arm in ALL_ARMS}
 # W91 K35: none of ALL_ARMS (up to cell16k) arms the fused-small-stages or the
 # HC-premix-kernel booleans -- K35 is rounding-class on GPU (window-37, null win),
 # so its ONLY arm is the isolation A/B small_stages_fused (verified in
@@ -541,6 +547,12 @@ def test_apply_arm_env_sets_and_clears(env_levers, arm):
         assert os.environ.get(_DC) == "1", f"{arm}: {_DC} should be '1'"
     else:
         assert _DC not in os.environ, f"{arm}: {_DC} should be force-unset"
+    # W104: the W103 draft-head-bf16 boolean is force-unset for every ALL_ARMS arm
+    # (only the ring composites arm it; tested in test_cell16k_ring_composite_arms).
+    if EXPECTED_DRAFT_HEAD_BF16[arm]:
+        assert os.environ.get(_DHB) == "1", f"{arm}: {_DHB} should be '1'"
+    else:
+        assert _DHB not in os.environ, f"{arm}: {_DHB} should be force-unset"
     # W91 K35: the fused-small-stages + HC-premix-kernel booleans are force-unset for
     # every ALL_ARMS arm (the K35 arms are in the ring family, tested separately) --
     # proves a parent-shell K35 export cannot survive an arm application.
@@ -720,6 +732,7 @@ def test_dry_run_main_records_env_per_arm(env_levers, tmp_path):
         assert r["arm_env"].get(_PWS) == EXPECTED_PIN_WS[r["arm"]], r["arm"]
         assert (r["arm_env"].get(_VSB) == "1") == EXPECTED_VERIFY[r["arm"]], r["arm"]
         assert (r["arm_env"].get(_DC) == "1") == EXPECTED_DRAFT[r["arm"]], r["arm"]
+        assert (r["arm_env"].get(_DHB) == "1") == EXPECTED_DRAFT_HEAD_BF16[r["arm"]], r["arm"]
         assert r["arm_env"].get(_HM) == EXPECTED_HEAD[r["arm"]], r["arm"]
         # the prefill-dense boolean + value knobs are recorded per arm.
         assert (r["arm_env"].get(_PD) == "1") == EXPECTED_DENSE[r["arm"]], r["arm"]
@@ -1008,15 +1021,33 @@ def test_prefill_stage_timing_pass_small_real_forward(env_levers, monkeypatch):
 # --------------------------------------------------------------------------
 def test_cell16k_ring_composite_arms(env_levers):
     presets = env_levers.ARM_PRESETS
-    for name in ("cell16k_ring_draft", "cell16k_ring_pinned", "cell16k_ring_pool"):
+    for name in ("cell16k_ring_draft", "cell16k_ring_v2_draft",
+                 "cell16k_ring_pinned", "cell16k_ring_pool"):
         assert name in presets, f"{name} arm missing from ARM_PRESETS"
     ring = presets["cell16k_ring"]
 
-    # cell16k_ring_draft = cell16k_ring + K33 DSpark draft-block compile only.
+    # W104: cell16k_ring_draft = cell16k_ring + BOTH DSpark draft-head levers
+    # (K33 draft-block compile + the W103 draft-head bf16 fix).  Before W104 this arm
+    # pinned MTPLX_DSV41_DRAFT_COMPILE only; DRAFT_COMPILE in isolation is still the
+    # standalone `draft_compile` arm.
     expected_draft = dict(ring)
     expected_draft[_DC] = "1"
+    expected_draft[_DHB] = "1"
     assert presets["cell16k_ring_draft"] == expected_draft, (
-        "cell16k_ring_draft must equal cell16k_ring + MTPLX_DSV41_DRAFT_COMPILE=1"
+        "cell16k_ring_draft must equal cell16k_ring + MTPLX_DSV41_DRAFT_COMPILE=1 + "
+        "MTPLX_DSV41_DRAFT_HEAD_BF16=1"
+    )
+
+    # W104: cell16k_ring_v2_draft = cell16k_ring_v2 + the two draft-head levers.  Built
+    # off cell16k_ring_v2 (which is cell16k_ring + the v2 runner) so a later edit to
+    # either propagates; no draft-MoE key exists (W104 traced the draft MoE to an
+    # already barrier-free resident gather_qmm -- see W104_DRAFT_RESIDENT_MOE.md).
+    expected_v2_draft = dict(presets["cell16k_ring_v2"])
+    expected_v2_draft[_DC] = "1"
+    expected_v2_draft[_DHB] = "1"
+    assert presets["cell16k_ring_v2_draft"] == expected_v2_draft, (
+        "cell16k_ring_v2_draft must equal cell16k_ring_v2 + MTPLX_DSV41_DRAFT_COMPILE=1 "
+        "+ MTPLX_DSV41_DRAFT_HEAD_BF16=1"
     )
 
     # cell16k_ring_pinned = cell16k_ring + W64 pin + W71 pinned device route only.

@@ -423,26 +423,29 @@ def _render_micro(micro):
 # (one cycle == one "token" here), and count primitives per stage before/after
 # MTPLX_DSV41_DRAFT_COMPILE -- the same _CensusProbe / count_prims machinery as the
 # full-model backbone census, so the reduction is a number.
-def _dspark_args():
+def _dspark_args(block_size=4):
     return ModelArgs(
         vocab_size=64, hidden_size=32, num_hidden_layers=5, num_attention_heads=4,
         head_dim=16, qk_rope_head_dim=8, q_lora_rank=16, o_lora_rank=8, o_groups=2,
         moe_intermediate_size=16, n_routed_experts=8, num_experts_per_tok=2,
         sliding_window=8, window_size=8, hc_mult=4, hc_sinkhorn_iters=2,
         scoring_func="sqrtsoftplus", routed_scaling_factor=1.5, swiglu_limit=0.0,
-        n_mtp_layers=3, dspark_block_size=4, dspark_noise_token_id=63,
+        n_mtp_layers=3, dspark_block_size=block_size, dspark_noise_token_id=63,
         dspark_target_layer_ids=[2, 3, 4], dspark_markov_rank=12,
         dspark_n_routed_experts=8, dspark_num_experts_per_tok=2,
     )
 
 
-def _build_dspark(seed=1):
-    """Tiny real-structure DSpark head (3 stages, block_size 4, resident 8-expert
-    top-2 MoE == the 128-expert top-3 structure at small scale).  Power-of-2
-    reductions (hidden 32, hc*dim 128, q_lora 16, head_dim 16) so every compiled
-    chain is bit-exact vs eager (the K22 tiny-config RMSNorm caveat)."""
+def _build_dspark(seed=1, block_size=4, head_bf16=False):
+    """Tiny real-structure DSpark head (3 stages, resident 8-expert top-2 MoE ==
+    the 128-expert top-3 structure at small scale).  Power-of-2 reductions
+    (hidden 32, hc*dim 128, q_lora 16, head_dim 16) so every compiled chain is
+    bit-exact vs eager (the K22 tiny-config RMSNorm caveat).  ``block_size`` sets
+    the draft depth (default 4, the existing K33 census; W103 uses 1 and 5);
+    ``head_bf16`` casts the shared trunk output head to bf16 so the census can
+    measure the fp32-cast trap (the native artifact keeps the real head bf16)."""
     mx.random.seed(seed)
-    args = _dspark_args()
+    args = _dspark_args(block_size=block_size)
     model = Model(args, quantize=False, mtp=True)
     filled = []
     for name, value in tree_flatten(model.parameters()):
@@ -454,6 +457,8 @@ def _build_dspark(seed=1):
             new = mx.random.normal(value.shape) * (value.shape[-1] ** -0.5)
         filled.append((name, new.astype(value.dtype)))
     model.update(tree_unflatten(filled))
+    if head_bf16:
+        model.head.weight = model.head.weight.astype(mx.bfloat16)
     mx.eval(model.parameters())
     return model, args
 
@@ -692,6 +697,245 @@ def _small_main(args):
     return receipt
 
 
+# ---------------------------------------------------------------------------
+# W103: DSpark DRAFT-STEP census -- per-step / per-phase dispatch + head bytes
+# ---------------------------------------------------------------------------
+# The DSpark decode lane brackets the whole draft cycle as ``dspark.draft`` and
+# tiles it with the head module's own stage brackets (forward_embed, attn.*, hc.*,
+# head, markov, confidence) plus the reused MoE's brackets (moe.*).  This census
+# runs ONE ``draft_block`` at decode geometry (one committed main token, windows
+# already seeded) at block_size 1 (ONE draft step -- the per-cycle FIXED cost) and
+# at block_size 5 (the production depth-5 phase), counts graph primitives /
+# non-view kernels / top ops per stage, and measures the bytes the shared trunk
+# output head materialises per cycle under the fp32-cast trap vs the W103 bf16 fix.
+# Eager (DRAFT_COMPILE OFF), matching GPU window 39's arm (DRAFT_COMPILE=None).
+
+#: MLX primitives that are pure views / metadata movement -- no heavy compute
+#: kernel; folded into the consuming kernel's strided access at eval -- separated
+#: so the census reports the "real" (non-view) dispatch count, the proxy for the
+#: ~100 us/kernel host-encode floor ([[b1-decode-dispatch-removal-hides]]).
+_VIEW_OPS = frozenset({
+    "Reshape", "Broadcast", "BroadcastAxes", "Transpose", "ExpandDims", "Squeeze",
+    "Slice", "Flatten", "Unflatten", "AsStrided", "StopGradient", "Split", "Depends",
+})
+
+#: Draft stage -> the group the task's split asks for (embed / attn / hc / moe /
+#: head / sample-and-commit glue).  ``moe.*`` are the reused MoE's own brackets;
+#: the resident switch gather is ``moe.routed_switch``.
+_DRAFT_STAGE_GROUP = {
+    "dspark.forward_embed": "embed",
+    "dspark.attn.main_kv": "attn",
+    "dspark.attn.qkv_prep": "attn",
+    "dspark.attn.sdpa": "attn",
+    "dspark.attn.out_prep": "attn",
+    "dspark.hc.attn_prep": "hc",
+    "dspark.hc.ffn_prep": "hc",
+    "dspark.hc.moe_combine": "hc",
+    "moe.gate_topk": "moe",
+    "moe.routed_switch": "moe",
+    "moe.shared_expert": "moe",
+    "moe.combine": "moe",
+    "dspark.head": "head",
+    "dspark.markov": "sample_commit_glue",
+    "dspark.confidence": "sample_commit_glue",
+    "sample": "sample_commit_glue",
+}
+_DRAFT_GROUP_ORDER = ("embed", "attn", "hc", "moe", "head", "sample_commit_glue")
+
+
+def _nonview(op_types: dict) -> int:
+    return int(sum(n for op, n in op_types.items() if op not in _VIEW_OPS))
+
+
+def _run_dspark_draft_census(block_size, seed=1, head_bf16=True):
+    """One ``draft_block`` at decode geometry under the census probe (DRAFT_COMPILE
+    forced OFF -- the eager dispatch structure GPU window 39 measured); returns the
+    per-stage snapshot for ``block_size`` draft rows.  ``head_bf16`` makes the
+    shared trunk head bf16 (the native artifact's real head), so the head stage's
+    op-types carry the production fp32-cast promotion."""
+    import mtplx.models.deepseek_v41_dspark as dsp
+    model, args = _build_dspark(seed=seed, block_size=block_size, head_bf16=head_bf16)
+    ids = mx.array(np.random.RandomState(0).randint(0, args.vocab_size, size=(1, 17)))
+    logits, main_hidden = model(ids, return_hidden=True)
+    mx.eval(logits, main_hidden)
+    caches = model.make_mtp_cache()
+    model.mtp.seed_main(main_hidden, caches)
+    primary = mx.array([int(mx.argmax(logits[0, -1]))])
+    main_h = main_hidden[:, -1:, :]
+    embed, head = model.model.embed_tokens, model.head
+    prev = dsp._DRAFT_COMPILE
+    dsp._DRAFT_COMPILE = False
+    try:
+        with _census_session() as probe:
+            probe._recording_now = True  # the draft block is a block-row chain
+            with _stime.frame():
+                out_ids, dlogits, conf = model.mtp.draft_block(
+                    main_h, primary, caches, embed, head
+                )
+                with probe._stage("sample") as _st:
+                    _st.add(out_ids, conf)
+                mx.eval(out_ids, dlogits, conf)
+    finally:
+        dsp._DRAFT_COMPILE = prev
+    return probe.snapshot()
+
+
+def _dspark_head_bytes(seed=1, block_size=5):
+    """Measure the bytes the SHARED trunk output head materialises per draft cycle
+    under the fp32-cast trap vs the W103 bf16 fix -- graph-verified on the tiny bf16
+    head, projected to the released head shape.
+
+    The draft head is ``head(rmsnorm(x).astype(mx.float32))``.  With a dense bf16
+    head MLX has no mixed-precision matmul, so ``f32 @ bf16.T`` promotes the whole
+    ``[vocab, hidden]`` weight to an f32 temporary before the GEMV.  Proof that the
+    f32 cast lands on the WEIGHT (not the tiny input): ``xf`` is a pre-eval'd f32
+    leaf and ``W`` a pre-eval'd bf16 leaf, so the only ``AsType`` in ``xf @ W.T`` is
+    the promotion of ``W``; with an f32 ``W`` leaf that ``AsType`` vanishes."""
+    model, args = _build_dspark(seed=seed, block_size=block_size, head_bf16=True)
+    W = model.head.weight
+    dim, vocab = int(args.hidden_size), int(args.vocab_size)
+    hidden = mx.random.normal((1, block_size, dim)) * 0.1
+    Wf32 = W.astype(mx.float32)
+    xf = hidden.astype(mx.float32)      # exactly what the trap feeds head()
+    xb = hidden.astype(W.dtype)         # what the fix feeds head()
+    mx.eval(W, Wf32, xf, xb)
+    trap = xf @ W.T                     # f32 @ bf16.T -> promotes W to f32
+    fix = (xb @ W.T).astype(mx.float32)  # bf16 GEMV, f32 logits after (W untouched)
+    ctrl = xf @ Wf32.T                  # control: W already f32 -> no promotion AsType
+    _, trap_ops = count_prims(trap)
+    _, fix_ops = count_prims(fix)
+    _, ctrl_ops = count_prims(ctrl)
+    mx.eval(trap, fix, ctrl)
+    weight_promo = trap_ops.get("AsType", 0) - ctrl_ops.get("AsType", 0)
+
+    def acct(v, d):
+        bf16 = v * d * 2
+        f32w = v * d * 4
+        logits_f32 = block_size * v * 4
+        return {
+            "weight_shape": [v, d],
+            "weight_bytes_bf16": bf16,
+            "trap_weight_promoted_bytes_f32": f32w,
+            "fix_logits_materialized_bytes_f32": logits_f32,
+            # per-cycle weight-related DRAM traffic (W40 model), block_size-independent
+            "trap_traffic_bytes_per_cycle": bf16 + f32w + f32w,  # read bf16 + write f32 + read f32
+            "fix_traffic_bytes_per_cycle": bf16 + logits_f32,    # read bf16 + write tiny f32 logits
+        }
+
+    PROD_VOCAB, PROD_DIM = 129280, 5120  # released head (W40, artifact safetensors header)
+    return {
+        "block_size": block_size,
+        "trap_out_dtype": str(trap.dtype),
+        "fix_out_dtype": str(fix.dtype),
+        "trap_weight_promotion_astype": int(weight_promo),   # == 1 (proves the promotion)
+        "fix_weight_promotion_astype": int(fix_ops.get("AsType", 0) - 1),  # 0: only logits cast
+        "tiny": acct(vocab, dim),
+        "production": acct(PROD_VOCAB, PROD_DIM),
+    }
+
+
+def _dspark_draft_main(args):
+    """W103 DSpark draft-step census: per-stage primitives / non-view kernels / top
+    ops for ONE draft step (block_size 1) and the full depth-5 draft phase
+    (block_size 5), plus the head-bytes finding (fp32-cast trap vs bf16 fix)."""
+    step = _run_dspark_draft_census(1, seed=args.seed)
+    phase = _run_dspark_draft_census(5, seed=args.seed)
+    head_bytes = _dspark_head_bytes(seed=args.seed, block_size=5)
+
+    def _stage_rows(snap):
+        rows = []
+        for name, st in snap["stages"].items():
+            ops = st["op_types"]
+            rows.append({
+                "stage": name,
+                "group": _DRAFT_STAGE_GROUP.get(name, "other"),
+                "calls": st["count_per_token"],
+                "primitives": st["primitives_per_token"],
+                "nonview": _nonview(ops),
+                "top_ops": Counter(ops).most_common(4),
+                "op_types": ops,
+            })
+        return rows
+
+    def _print_table(title, snap):
+        rows = _stage_rows(snap)
+        by_group = {}
+        for r in rows:
+            by_group.setdefault(r["group"], []).append(r)
+        print("=" * 92)
+        print(title)
+        print("=" * 92)
+        hdr = f"{'stage':<24}{'calls':>6}{'prim':>7}{'nonview':>9}   top ops (label:count)"
+        print(hdr)
+        print("-" * len(hdr))
+        gtot_p = gtot_nv = 0
+        for g in _DRAFT_GROUP_ORDER:
+            grp = by_group.get(g)
+            if not grp:
+                continue
+            gp = sum(r["primitives"] for r in grp)
+            gnv = sum(r["nonview"] for r in grp)
+            gtot_p += gp
+            gtot_nv += gnv
+            for r in grp:
+                tops = " ".join(f"{op}:{n}" for op, n in r["top_ops"])
+                print(f"{r['stage']:<24}{r['calls']:>6.0f}{r['primitives']:>7.0f}"
+                      f"{r['nonview']:>9.0f}   {tops}")
+            print(f"  {'-> group ' + g:<22}{'':>6}{gp:>7.0f}{gnv:>9.0f}")
+        print("-" * len(hdr))
+        print(f"{'TOTAL / draft cycle':<24}{'':>6}{gtot_p:>7.0f}{gtot_nv:>9.0f}")
+        return gtot_p, gtot_nv
+
+    p1, nv1 = _print_table(
+        "ONE DSpark draft step (block_size=1) -- primitives/non-view per stage, eager", step)
+    print()
+    p5, nv5 = _print_table(
+        "Full depth-5 DSpark draft phase (block_size=5) -- primitives/non-view per stage, eager",
+        phase)
+    print()
+    print(f"per-cycle FIXED vs per-step SCALING (block1 -> block5):")
+    print(f"  total primitives:  {p1:.0f} (step) -> {p5:.0f} (phase)   "
+          f"scaling {p5 - p1:.0f} over +4 draft rows ({(p5 - p1) / 4:.1f}/added row)")
+    print(f"  non-view kernels:  {nv1:.0f} (step) -> {nv5:.0f} (phase)   "
+          f"scaling {nv5 - nv1:.0f} over +4 rows")
+    print()
+    print("HEAD BYTES per draft cycle (shared trunk output head, W40 fp32-cast trap):")
+    hb = head_bytes
+    print(f"  trap weight-promotion AsType (proof, tiny): {hb['trap_weight_promotion_astype']} "
+          f"(control with f32 weight: {hb['fix_weight_promotion_astype']})")
+    print(f"  tiny head  {hb['tiny']['weight_shape']}: "
+          f"bf16 {hb['tiny']['weight_bytes_bf16']} B -> trap f32 temp "
+          f"{hb['tiny']['trap_weight_promoted_bytes_f32']} B; fix materializes only "
+          f"{hb['tiny']['fix_logits_materialized_bytes_f32']} B of f32 logits")
+    pr = hb["production"]
+    gib = 1024 ** 3
+    print(f"  PRODUCTION head {pr['weight_shape']} (bf16, released artifact):")
+    print(f"    trap: promotes bf16 {pr['weight_bytes_bf16'] / gib:.3f} GiB weight -> f32 "
+          f"{pr['trap_weight_promoted_bytes_f32'] / gib:.3f} GiB temp EVERY cycle")
+    print(f"    trap DRAM traffic/cycle {pr['trap_traffic_bytes_per_cycle'] / gib:.3f} GiB "
+          f"vs fix {pr['fix_traffic_bytes_per_cycle'] / gib:.3f} GiB "
+          f"({pr['trap_traffic_bytes_per_cycle'] / pr['fix_traffic_bytes_per_cycle']:.1f}x)")
+    print(f"    (block_size-independent: weight traffic dominates the {hb['block_size']} draft rows)")
+
+    receipt = {
+        "census": "dspark_draft_step",
+        "flag": {"W103": "MTPLX_DSV41_DRAFT_HEAD_BF16"},
+        "seed": args.seed,
+        "mlx_version": mx.__version__,
+        "draft_compile": "off",
+        "one_step_block1": step,
+        "full_phase_block5": phase,
+        "step_group_totals": {"primitives": p1, "nonview": nv1},
+        "phase_group_totals": {"primitives": p5, "nonview": nv5},
+        "head_bytes": head_bytes,
+    }
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -703,6 +947,11 @@ def main():
                     help="census the DSpark-DIRECT draft block (K33, W65) instead of "
                          "the backbone decode: primitives per draft cycle per stage, "
                          "before/after MTPLX_DSV41_DRAFT_COMPILE")
+    ap.add_argument("--dspark-draft", action="store_true", dest="dspark_draft",
+                    help="W103 DSpark draft-STEP census: per-stage primitives / "
+                         "non-view kernels / top ops for one draft step (block_size 1) "
+                         "and the full depth-5 phase (block_size 5), plus the head "
+                         "fp32-cast-trap byte accounting (MTPLX_DSV41_DRAFT_HEAD_BF16)")
     ap.add_argument("--small-stages", action="store_true", dest="small_stages",
                     help="census the K35/W91 small-stages fusion: per-layer AR-decode "
                          "dispatch count before/after MTPLX_DSV41_SMALL_STAGES_FUSED "
@@ -711,6 +960,8 @@ def main():
 
     if args.draft:
         return _draft_main(args)
+    if args.dspark_draft:
+        return _dspark_draft_main(args)
     if args.small_stages:
         return _small_main(args)
 
