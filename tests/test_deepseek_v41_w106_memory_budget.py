@@ -753,3 +753,63 @@ def test_preflight_both_flag_forms_exit_3_not_traceback(tmp_path):
                                 "--memory-budget-total-gb", "100"])
     rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
     assert rc == 3  # both-set -> clean exit 3, no traceback
+
+
+# --------------------------------------------------------------------------
+# MEDIUM-C: an aborted arm records a {arm, aborted, reason, stage} ledger row and
+# main() exits 4 (a distinct code), so a budget/re-measure abort is not a silent
+# gap in the receipts.
+# --------------------------------------------------------------------------
+
+
+def test_abort_receipt_row_carries_stage_and_reason():
+    mod = _mod()
+    exc = RuntimeError("boom")
+    exc.dsv41_stage = "budget_remeasure"
+    row = mod._abort_receipt_row("control", exc, None)
+    assert row["arm"] == "control"
+    assert row["aborted"] is True
+    assert row["reason"] == "boom"
+    assert row["stage"] == "budget_remeasure"
+    assert row["exception"] == "RuntimeError"
+
+
+def test_abort_receipt_row_default_stage_and_budget_snapshot():
+    mod = _mod()
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = mod._explicit_plan_derivation(50.0)
+    row = mod._abort_receipt_row("overlap", ValueError("nope"), args)
+    assert row["stage"] == "run_arm"  # untagged exception
+    assert row["exception"] == "ValueError"
+    assert row["memory"]["memory_plan_source"] == "explicit"  # snapshot attached
+
+
+def test_append_receipt_row_writes_jsonl(tmp_path):
+    mod = _mod()
+    out = tmp_path / "cell.jsonl"
+    mod._append_receipt_row(out, {"arm": "control", "aborted": True})
+    mod._append_receipt_row(out, {"arm": "overlap", "aborted": True})
+    lines = out.read_text().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["arm"] == "control"
+    assert json.loads(lines[1])["aborted"] is True
+
+
+def test_floor_refusal_exception_is_tagged_budget_derivation():
+    mod = _mod()
+    try:
+        mod.derive_budget_total_plan(
+            budget_total_gb=40.0, system_used_at_start_gb=20.0,
+            non_metal_overhead_gb=10.0, kv_growth_to_max_kv_gb=2.0,
+            safety_gb=3.0, floor_gib=20.0,
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert getattr(exc, "dsv41_stage", None) == "budget_derivation"
+        # and that stage flows into the ledger row
+        row = mod._abort_receipt_row("control", exc, None)
+        assert row["stage"] == "budget_derivation"

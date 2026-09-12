@@ -1477,7 +1477,7 @@ def derive_budget_total_plan(
         - float(safety_gb)
     )
     if plan_limit < float(floor_gib):
-        raise ValueError(
+        exc = ValueError(
             f"--memory-budget-total-gib {budget_total_gb:.4g} derives a plan limit "
             f"of {plan_limit:.4g} GiB, BELOW the floor of {floor_gib:.4g} GiB: "
             f"plan_limit = {budget_total_gb:.4g} "
@@ -1489,6 +1489,8 @@ def derive_budget_total_plan(
             f"lower --memory-budget-floor-gib (default "
             f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
         )
+        exc.dsv41_stage = "budget_derivation"  # W106 MEDIUM-C ledger stage
+        raise exc
     return BudgetTotalDerivation(
         source="budget",
         budget_total_gb=float(budget_total_gb),
@@ -2170,7 +2172,7 @@ def _remeasure_non_metal_overhead(args, mx) -> None:
         flush=True,
     )
     if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:
-        raise RuntimeError(
+        exc = RuntimeError(
             "budget-total re-measure ABORT (before decode): measured non-Metal "
             f"overhead {measured_gb:.2f} GiB exceeds the pre-load estimate "
             f"{bt.non_metal_overhead_gb:.2f} GiB by {overage_gb:.2f} GiB, so the real "
@@ -2179,6 +2181,8 @@ def _remeasure_non_metal_overhead(args, mx) -> None:
             f"--non-metal-overhead-gib >= {measured_gb:.2f}, a lower --max-kv, or a "
             "higher budget; refusing to run the decode over budget."
         )
+        exc.dsv41_stage = "budget_remeasure"  # W106 MEDIUM-C ledger stage
+        raise exc
 
 
 def _memory_profile_collector(args, mx, runtime, resident):
@@ -3030,6 +3034,40 @@ def _sidecar_text(*, arm, kind, stream, divergence) -> str:
     return header + body + "\n"
 
 
+def _abort_receipt_row(arm, exc, args=None) -> dict:
+    """W106 MEDIUM-C: the ledger row for an arm that aborted before producing a
+    receipt (a budget/re-measure abort or a floor refusal).  Carries the arm, the
+    failure reason + stage, and (best-effort) the budget derivation captured so far
+    so the ledger shows why."""
+
+    stage = getattr(exc, "dsv41_stage", "run_arm")
+    row = {
+        "arm": arm,
+        "aborted": True,
+        "reason": str(exc),
+        "stage": stage,
+        "exception": type(exc).__name__,
+    }
+    bt = getattr(args, "_dsv41_budget_total", None) if args is not None else None
+    if bt is not None:
+        try:
+            row["memory"] = bt.memory_keys()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return row
+
+
+def _append_receipt_row(out_path, row) -> None:
+    """Append one JSONL row to the append-only receipt (MEDIUM-C)."""
+
+    try:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        with Path(out_path).open("a") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except OSError as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: could not append abort row ({exc!r})", flush=True)
+
+
 def _write_output_sidecars(out_path, receipt) -> None:
     """Persist the FULL decoded output beside the receipt (MEDIUM-3):
     ``<stem>.<sha12>.output.txt`` for the measured stream and, for a DSpark run,
@@ -3815,7 +3853,20 @@ def main(argv=None) -> int:
     receipts = []
     for arm in args.arms:
         print(f"[ab] arm={arm} ctx={args.context_tokens} decode={args.decode_tokens}")
-        receipt = _run_arm(args, arm, bench, mx)
+        try:
+            receipt = _run_arm(args, arm, bench, mx)
+        except (RuntimeError, ValueError) as exc:
+            # W106 MEDIUM-C: record the failure in the ledger (an abort row on
+            # args.out) and exit with a distinct code (4), so a budget/re-measure
+            # abort or a floor refusal is not a silent gap in the receipts.
+            row = _abort_receipt_row(arm, exc, args)
+            _append_receipt_row(args.out, row)
+            print(
+                f"[ab]   ABORTED arm={arm} stage={row['stage']} "
+                f"reason={row['reason']}",
+                flush=True,
+            )
+            return 4
         receipts.append(receipt)
         with args.out.open("a") as fh:
             fh.write(json.dumps(receipt) + "\n")
