@@ -58,7 +58,11 @@ WIRED_CAP_MB="${GPU_WINDOW_WIRED_CAP_MB:-102400}"     # 100 GiB, never exceeded/
 STOP_TIMEOUT="${GPU_WINDOW_STOP_TIMEOUT:-180}"        # seconds to confirm the stop
 RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm restore
 MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"        # the step needs this much available after the stop
-CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 90 * 1024 * 1024 * 1024 ))}"  # 90 GiB (lowered from 100 after the 2026-09-10 over-110 panic)
+# W106 HIGH-2: all guard caps are GiB (bytes = N * 1024^3), stated explicitly.
+# Default child-tree RSS cap = 93 GiB ~= 100 GB (David's "100 GB total for
+# everything").  This cap is LIVE for the first time (pre-W106 the poll read the
+# few-MB `bash -c` shell RSS ~= 0); at 93 GiB it sits just under the 100 GB budget.
+CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"  # 93 GiB ~= 100 GB (David's total budget)
 RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
 
 # System-wide phase-4 guard (2026-09-10 panic hardening): the box kernel-panicked
@@ -67,7 +71,9 @@ RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-2}"
 # + active + compressed, from vm_stat) and aborts+restores over this ceiling, and
 # it REFUSES to open the window while other mtplx/python workers above the foreign
 # cap are resident (their footprint co-resides with the step's).
-TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-105}"   # abort the step over this system-wide used-memory ceiling
+# W106 HIGH-2: GiB. Default system ceiling = 102 GiB ~= 109.5 GB, just under the
+# 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
+TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}"   # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
 TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
 FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # refuse to start if another mtplx/python worker exceeds this RSS
 VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
@@ -486,6 +492,9 @@ fi
 USED_START="$(used_mem_bytes)"
 log "phase 4: system used memory at start: $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB)"
 
+# W106 HIGH-2: state BOTH caps explicitly (GiB + the ~GB equivalent) at step start
+# so the operator sees the guard envelope next to the step it is about to run.
+log "phase 4: guard caps -- child-tree RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB (~$(awk -v b="${CHILD_RSS_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); system used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
 log "phase 4: starting GPU step under child-tree RSS cap $(gib "${CHILD_RSS_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
 "$@" &
 STEP_PID=$!

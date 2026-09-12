@@ -487,3 +487,35 @@ def test_remeasure_noop_for_explicit_plan():
     args._dsv41_budget_total = mod._explicit_plan_derivation(50.0)
     mod._remeasure_non_metal_overhead(args, mx)  # explicit -> noop
     assert mx.set_memory_limit_calls == []
+
+
+# --------------------------------------------------------------------------
+# HIGH-2: the receipt memory block carries an rss_semantics_note stating that
+# RSS-vs-mlx_peak on Metal is unverified.
+# --------------------------------------------------------------------------
+
+
+def test_memory_block_extra_keys_carry_rss_semantics_note(tmp_path):
+    mod = _mod()
+    args = _budget_args(mod, tmp_path)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    extra = mod._memory_block_extra_keys(args)
+    assert "rss_semantics_note" in extra
+    assert "UNVERIFIED" in extra["rss_semantics_note"]
+    assert "mlx_peak_gb" in extra["rss_semantics_note"]
+    # the budget keys are still present alongside the note
+    assert extra["memory_plan_source"] == "budget"
+
+
+def test_memory_block_extra_keys_explicit_still_has_note():
+    mod = _mod()
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = mod._explicit_plan_derivation(50.0)
+    extra = mod._memory_block_extra_keys(args)
+    assert extra["memory_plan_source"] == "explicit"
+    assert "rss_semantics_note" in extra

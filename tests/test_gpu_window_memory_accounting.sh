@@ -142,6 +142,17 @@ else
   bad "used the temp lock path" "lock line did not reference ${LOCK}"
 fi
 
+# 7b. W106 HIGH-2: the step-start log states BOTH guard caps explicitly, with the
+#     new defaults (child-tree 93 GiB ~= 100 GB, system ceiling 102 GiB < 110 GB).
+#     (This scenario runs with the DEFAULT caps -- no cap env overrides.)
+if grep -q "phase 4: guard caps -- child-tree RSS cap 93.0 GiB" "${LOG}" \
+   && grep -q "system used ceiling 102 GiB" "${LOG}"; then
+  ok "step-start states both guard caps at the W106 defaults (93 GiB / 102 GiB)"
+else
+  bad "step-start states both guard caps (93 GiB child, 102 GiB ceiling)" \
+      "$(grep 'guard caps' "${LOG}" || echo 'no guard-caps line')"
+fi
+
 # =============================================================================
 # W106 item 4: TREE-KILL on abort.  A fake step is a `bash -c` chain that launches
 # a python child which spawns a long-lived `sleep` GRANDCHILD, then allocates

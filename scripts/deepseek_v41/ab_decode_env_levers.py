@@ -76,8 +76,20 @@ DEFAULT_MEMORY_SAFETY_GIB = 3.0
 # Floor below which a derived plan limit is refused (flag --memory-budget-floor-gib).
 DEFAULT_MEMORY_BUDGET_FLOOR_GIB = 20.0
 # If the post-load re-measured overhead exceeds the pre-load estimate by more than
-# this, the two-phase step lowers the MLX active-allocation limit by the overage.
+# this, the two-phase step ABORTS before decode (HIGH-1: the MLX limit is never
+# lowered post-load).
 _BUDGET_REMEASURE_TOLERANCE_GIB = 0.5
+
+# W106 HIGH-2: RSS-vs-mlx_peak semantics on Metal are UNVERIFIED until one real GPU
+# window produces a receipt whose gpu_window.sh tree RSS can be compared against
+# this process's mlx_peak. Recorded on every memory block so a reader does not
+# treat process_peak_rss_gb and mlx_peak_gb as interchangeable.
+_RSS_SEMANTICS_NOTE = (
+    "UNVERIFIED on Metal: process_peak_rss_gb (phys_footprint) vs mlx_peak_gb "
+    "(allocator peak) have not been cross-checked against a real gpu_window.sh "
+    "tree-RSS receipt; unified memory may double-count. Compare a real-window "
+    "receipt before treating either as the box figure."
+)
 # W77: AR top-1/top-2 logit gap (logit units) below which a greedy DSpark
 # divergence is classed a tie-break flip rather than a genuine divergence.
 # 3x the bf16-class per-logit floor (~1e-2, the W40/K21 HEAD_MODE=bf16 head-GEMV
@@ -1638,6 +1650,15 @@ def _budget_memory_keys(args) -> dict:
     if bt is None:
         return _explicit_plan_derivation(0.0).memory_keys()
     return bt.memory_keys()
+
+
+def _memory_block_extra_keys(args) -> dict:
+    """The W106 keys merged into every receipt ``memory`` block: the item-3 budget
+    derivation terms plus the HIGH-2 ``rss_semantics_note``."""
+
+    keys = _budget_memory_keys(args)
+    keys["rss_semantics_note"] = _RSS_SEMANTICS_NOTE
+    return keys
 
 
 # Plan fields the served profile sets that the loader would otherwise default
@@ -3206,12 +3227,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # W106 item 3: merge the budget-total derivation terms into every memory
         # block (memory_plan_source + the derived plan limit + each term), so the
         # receipt records how the plan compensated for the non-Metal requirements.
-        _budget_keys = _budget_memory_keys(args)
+        _extra_keys = _memory_block_extra_keys(args)
         if isinstance(receipt.get("memory"), dict):
-            receipt["memory"].update(_budget_keys)
+            receipt["memory"].update(_extra_keys)
         _dsp = receipt.get("dspark")
         if isinstance(_dsp, dict) and isinstance(_dsp.get("memory"), dict):
-            _dsp["memory"].update(_budget_keys)
+            _dsp["memory"].update(_extra_keys)
         return receipt
     finally:
         if runtime is not None:
