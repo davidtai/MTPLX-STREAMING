@@ -283,6 +283,13 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+# W107 round-3: the KV append WRITE PRIMITIVE.  The bounded lanes default to the
+# donating in-place __setitem__ (mx.slice_update is an O(T) COPY even on CPU -- the GPU
+# window-42 finding + kv_donation_probe.py).  This env OVERRIDES either way to isolate
+# the write primitive within a bounded arm: "0" forces slice_update (the copy), "1"
+# forces in-place.  Unset => construction default (bounded lanes in-place; the frozen
+# window_ring/chunk-grow lanes slice_update).  Logged in the receipt arm_env.
+KV_INPLACE_WRITE_ENV = "MTPLX_DSV41_KV_INPLACE_WRITE"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -344,6 +351,8 @@ ALL_LEVER_ENVS = (
     # W107 (appended; coordinate with any concurrent list extension):
     KV_BOUNDED_ENV,
     KV_BOUNDED_MAXKV_ENV,
+    # W107 round-3 (appended):
+    KV_INPLACE_WRITE_ENV,
 )
 
 
@@ -367,7 +376,7 @@ def _preset(
     gate_prefetch=None,
     gate_prefetch_min_layer=None,
     runner=None,
-    kv_bounded=None, kv_bounded_maxkv=None,
+    kv_bounded=None, kv_bounded_maxkv=None, kv_inplace_write=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -429,6 +438,7 @@ def _preset(
         RUNNER_ENV: runner,
         KV_BOUNDED_ENV: kv_bounded,
         KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
+        KV_INPLACE_WRITE_ENV: kv_inplace_write,
     }
 
 
@@ -685,6 +695,17 @@ ARM_PRESETS = {
     "cell16k_ring_bounded": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+    ),
+    # W107 round-3: the bounded lanes with the write primitive FORCED to slice_update
+    # (kv_inplace_write="0"), so the pair (cell16k_ring_bounded vs
+    # cell16k_ring_bounded_copy) ISOLATES the donating in-place __setitem__ from the
+    # functional slice_update copy.  Byte-identical output; the receipt line that
+    # proves the fix is cache_append ms/tok DOWN on cell16k_ring_bounded with
+    # kv_realloc_* flat (see W107_KV_GROWTH.md §6).
+    "cell16k_ring_bounded_copy": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1", kv_inplace_write="0",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
     # W104 (was W81): cell16k_ring + BOTH DSpark draft-head levers -- K33 draft-block
@@ -2520,6 +2541,10 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 bstats = bounded_stats_fn()
                 bstats["env"] = os.environ.get(KV_BOUNDED_ENV)
                 bstats["maxkv_env"] = os.environ.get(KV_BOUNDED_MAXKV_ENV)
+                # W107 round-3: which append write primitive the lanes used (in-place
+                # donating __setitem__ vs slice_update copy); unset => bounded default
+                # (in-place).  Pair cell16k_ring_bounded vs cell16k_ring_bounded_copy.
+                bstats["inplace_write_env"] = os.environ.get(KV_INPLACE_WRITE_ENV)
                 # W107 (review MEDIUM-A): receipt gate -- compare the memory-plan
                 # formula W106 will use against the bytes actually allocated, so a
                 # dtype-model drift is caught at runtime.  Exact when the window did
