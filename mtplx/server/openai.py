@@ -3243,6 +3243,12 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
     # in-place write was reverted to slice_update + a donation gate), so it is gone from
     # ALL_LEVER_ENVS and therefore removed here too -- the superset invariant holds.
+    # W115 (appended -- coordinate with any concurrent list extension): the DSpark
+    # per-verify K29 knob.  The served lane's arm_dspark_decode_kernels() reads it to
+    # decide whether to setdefault the fused decode core for the served verify, so it
+    # is a real served-relevant knob; kept here so the served-log snapshot stays a
+    # superset of ALL_LEVER_ENVS (the W46/W90 drift guard).
+    "MTPLX_DSV41_DSPARK_VERIFY_K29",
     # NOTE (W110): MTPLX_DSV41_VERIFY_RECORD_HASHES is intentionally NOT here. The
     # served profile builder (expert_profiles.build_expert_streaming_config) does not
     # read it, so it would be a DEAD served lever; it is a bench-only diagnostic env
