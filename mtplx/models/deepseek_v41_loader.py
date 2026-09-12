@@ -31,6 +31,7 @@ this loader with NO ``runtime.py`` edit, exactly like the hy3 lane.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -52,6 +53,8 @@ from ..resident_loader import (
     _dtype_name,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 # Top-level config model_type for the merged (text + vision) checkpoint; the
 # text sub-config is "deepseek_v41_text".  Every serve-path dispatch gate reads
 # the TOP-LEVEL model_type, so this is the string those gates register.
@@ -68,6 +71,39 @@ NUM_TEXT_LAYERS = 40
 SLIDING_WINDOW = 128
 KV_LATENT_DIM = 512
 SWA_WINDOW_BYTES = NUM_TEXT_LAYERS * SLIDING_WINDOW * (KV_LATENT_DIM * 2)
+
+# W97 wo_a f32 cache reserve (MTPLX_DSV41_ATTN_WO_A_CACHE). With the lever armed,
+# every backbone layer caches the dequantized o-LoRA ``wo_a`` weight materialised to
+# f32 -- released dims [o_groups*o_lora_rank, n_heads*head_dim//o_groups] =
+# [8192, 4096] -- so the per-token .astype(f32) becomes a no-op (see
+# Attention._o_lora_dense_weight). mx.dequantize returns bf16 for BOTH resident
+# codecs, so the cached f32 size is codec-independent: 40 * 8192 * 4096 * 4
+# ~= 5.4 GB. Priced as a FIXED resident reserve when armed (mirroring
+# SWA_WINDOW_BYTES) so the streamed expert-cache allowance shrinks by it -- the
+# cache is materialised lazily at the first decode token, AFTER the plan is fixed,
+# so an unpriced cache runs the process ~5.4 GB over plan.
+WO_A_DENSE_ROWS = 8192          # o_groups (8) * o_lora_rank (1024), released dims
+WO_A_DENSE_COLS = 4096          # n_heads (64) * head_dim (512) // o_groups (8)
+WO_A_DENSE_F32_BYTES = WO_A_DENSE_ROWS * WO_A_DENSE_COLS * 4   # 134.2 MB / layer
+WO_A_CACHE_RESIDENT_BYTES = NUM_TEXT_LAYERS * WO_A_DENSE_F32_BYTES  # ~5.4 GB
+
+
+def deepseek_v41_additional_resident_bytes() -> int:
+    """Fixed resident reserve priced into the memory plan: the SWA window plus, when
+    ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense cache
+    (``WO_A_CACHE_RESIDENT_BYTES``).
+
+    ``derived_expert_cache_allowance_bytes`` subtracts ``plan.fixed_bytes`` (which is
+    spec-derived from ``additional_resident_bytes``) to size the streamed expert
+    cache.  The wo_a cache is materialised lazily at the first decode token, after
+    ``build_streaming_config`` and the W62 budget derivation have fixed the plan, so
+    unless it is reserved here the expert cache keeps its full allowance and the
+    process runs ~5.4 GB over plan.  Read at use so the arm's env is honoured at
+    open() time (the ab bench arms the lever before load)."""
+    from .deepseek_v41 import _resolve_wo_a_cache
+
+    extra = WO_A_CACHE_RESIDENT_BYTES if _resolve_wo_a_cache() else 0
+    return SWA_WINDOW_BYTES + extra
 
 # Default runtime reserve: the promoted streaming profiles reserve exactly
 # 7 GiB (docs/advanced/ssd-streamed-moe.md); the ExpertStreamingConfig default
@@ -280,6 +316,37 @@ def engram_bank_path_for(root: Path | str) -> Path | None:
     return engram if engram.is_dir() else None
 
 
+#: Cap on the GLOBAL prefetch-ring size (2*k double-buffer); k <= 16.
+_GATE_PREFETCH_RING_CAP = 32
+
+
+def resolve_gate_prefetch_ring_slots(current: int = 0) -> int:
+    """The GLOBAL gate-oracle ring size when ``MTPLX_DSV41_GATE_PREFETCH`` is armed.
+
+    The env is AUTHORITATIVE: returns ``max(current, min(32, 2*k))`` so a profile-
+    or caller-seeded ``prefetch_slots`` (including the ab bench / served profile's
+    explicit ``0``) can never disable an armed ring -- otherwise the lever measures
+    control-vs-control (review CRITICAL). ``k`` is the predict width; the ring is
+    ``2*k`` to double-buffer one layer ahead (W93_GATE_PREFETCH.md §4). Returns
+    ``current`` unchanged when the flag is off (shipped profile byte-identical)."""
+
+    from .deepseek_v41 import (
+        _resolve_gate_prefetch_k,
+        _runner_v2_enabled,
+        _RUNNER_V2_RING_SLOTS,
+    )
+
+    k = _resolve_gate_prefetch_k()
+    if k <= 0:
+        return int(current or 0)
+    ring = min(_GATE_PREFETCH_RING_CAP, 2 * k)
+    # W95: v2 sizes the ring to double-buffer the DSpark verify's ~24-expert/layer
+    # union (2 x 24 = 48) one layer ahead; this also amply covers the AR k=6.
+    if _runner_v2_enabled():
+        ring = max(ring, _RUNNER_V2_RING_SLOTS)
+    return max(int(current or 0), ring)
+
+
 def build_streaming_config(
     spec: ExpertStreamingModelSpec,
     *,
@@ -296,6 +363,53 @@ def build_streaming_config(
     default direct-slot layout.  ``overrides`` pass through to
     :class:`ExpertStreamingConfig` for callers that need to tune it.
     """
+
+    # W93: size the GLOBAL gate-oracle prefetch ring from MTPLX_DSV41_GATE_PREFETCH.
+    # The env is AUTHORITATIVE (max(existing, 2*k), review CRITICAL): the ab bench
+    # and the served profile BOTH seed an explicit ``prefetch_slots`` (0 for the
+    # shipped profile), so a plain ``if not in overrides`` guard would leave the
+    # ring off and the lever would measure control-vs-control. ``resolve_...`` takes
+    # max(seeded, 2*k), so a seeded 0 cannot disable an armed ring; with the flag
+    # off it returns the caller's value unchanged (shipped profile byte-identical).
+    resolved_ring = resolve_gate_prefetch_ring_slots(overrides.get("prefetch_slots", 0))
+    if resolved_ring:
+        overrides["prefetch_slots"] = resolved_ring
+
+    # W95: the v2 runner (MTPLX_DSV41_RUNNER=v2) arms overlap_miss_reads -- a layer's
+    # decode misses go down as ONE batched part (single future, admission ahead of
+    # the wait) instead of one part per expert, raising the SSD queue depth above the
+    # ~2 the per-part default drives (W96 D2). Byte-identical (scheduling, not math;
+    # tests/test_expert_overlap_split.py); unset RUNNER -> unchanged. An explicit
+    # caller value always wins.
+    if (
+        os.environ.get("MTPLX_DSV41_RUNNER") == "v2"
+        and "overlap_miss_reads" not in overrides
+    ):
+        overrides["overlap_miss_reads"] = True
+
+    # W110 (BENCH-ONLY DIAGNOSTIC hook -- NOT a served lever): read
+    # MTPLX_DSV41_VERIFY_RECORD_HASHES here to gate the per-record sha256 re-check on
+    # the DECODE/verify streaming path. Read AT USE (env at config build, not import).
+    # AUTHORITATIVE when set (0/1): overrides an explicit caller value so the bench
+    # arm cell16k_ring_v2_hash can force hashing ON to MEASURE its io-thread cost
+    # (decode hashing is already OFF everywhere -- ab arg default False AND the served
+    # profile deepseek-v41-mxfp4-75 pins verify_record_hashes=false -- so there is
+    # nothing to remove; the diagnostic runs the ON direction). UNSET leaves current
+    # behaviour (caller value, else config default). This is the LOADER/BENCH builder
+    # only; the served profile builder (expert_profiles.build_expert_streaming_config)
+    # deliberately does NOT carry this hook, so the env cannot affect a served daemon.
+    # DECODE PATH ONLY: never touches verify_artifact_headers /
+    # verify_sidecar_hash_at_open (the admission/open integrity checks) -- separate
+    # config fields, so open-time verification stays on regardless
+    # (docs/deepseek-v41/W110_DECODE_RECORD_HASH.md).
+    _vrh_env = os.environ.get("MTPLX_DSV41_VERIFY_RECORD_HASHES")
+    if _vrh_env is not None and _vrh_env.strip() != "":
+        overrides["verify_record_hashes"] = _vrh_env.strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
 
     return ExpertStreamingConfig(
         model_key=spec.key,
@@ -324,7 +438,9 @@ def open_deepseek_v41_runtime(
 ) -> ExpertStreamingRuntime:
     """Construct the ExpertStreamingRuntime from ``expert-manifest.json``.
 
-    The SWA window is priced as a fixed ``additional_resident_bytes`` reserve.
+    The SWA window (and, when ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32
+    ``wo_a`` cache) is priced as a fixed ``additional_resident_bytes`` reserve
+    (:func:`deepseek_v41_additional_resident_bytes`).
     Bank I/O is lazy: opening the runtime reads the manifest JSON and (with the
     default header verification) size-checks ``experts.bin`` only -- it never
     reads or hashes the 169 GiB bank.  ``spec`` defaults to the pinned
@@ -350,6 +466,17 @@ def open_deepseek_v41_runtime(
             expert_cache_limit_bytes=expert_cache_limit_bytes,
             **config_overrides,
         )
+    # W93: log the resolved gate-oracle ring size at open so it is visible in the
+    # serve/bench log whether the lever actually armed (review CRITICAL).
+    if getattr(config, "prefetch_slots", 0) > 0:
+        _ring = int(config.prefetch_slots)
+        _LOGGER.info(
+            "gate-prefetch ring armed: %d shared slots (predict width k=%d, "
+            "~%.2f GiB)",
+            _ring,
+            _ring // 2,
+            _ring * spec.expert_record_bytes / (1024 ** 3),
+        )
     buffer_allocator = _component_bank_allocator_for(
         config, spec, artifact_root, resolved_manifest, loaded_manifest
     )
@@ -359,7 +486,7 @@ def open_deepseek_v41_runtime(
         config,
         spec=spec,
         buffer_allocator=buffer_allocator,
-        additional_resident_bytes=SWA_WINDOW_BYTES,
+        additional_resident_bytes=deepseek_v41_additional_resident_bytes(),
         apply_memory_cap=apply_memory_cap,
         mx_module=mx_module,
         expert_admission_receipt=admission_receipt,
@@ -396,7 +523,8 @@ def _component_bank_allocator_for(
 
     The plan handed to the allocator is built the same way
     ``ExpertStreamingRuntime.open`` builds its own (island placement resolved,
-    the SWA window priced as ``additional_resident_bytes``, the resident-quant
+    the SWA window + f32 wo_a cache priced as ``additional_resident_bytes`` via the
+    shared :func:`deepseek_v41_additional_resident_bytes`, the resident-quant
     discounts applied, mixed-official per-layer record sizes when applicable),
     so the allocator's per-bank capacities match the slot pool's plan exactly.
     """
@@ -417,7 +545,7 @@ def _component_bank_allocator_for(
     resolved_config = resolve_island_placement(config, artifact_root, spec=spec)
     plan = resolved_config.memory_plan(
         spec,
-        additional_resident_bytes=SWA_WINDOW_BYTES,
+        additional_resident_bytes=deepseek_v41_additional_resident_bytes(),
         # This allocator sizes the component-bank per-layer capacities; its
         # resident discount MUST equal the one ``ExpertStreamingRuntime.open``
         # applies to its own pool plan (proj_quant + proj_requant + the

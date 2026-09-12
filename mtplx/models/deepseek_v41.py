@@ -80,7 +80,7 @@ from mtplx.models.deepseek_v41_cache import (
     _grow,
     make_cache as _make_cache,
 )
-from mtplx.models.deepseek_v41_moe import MoE
+from mtplx.models.deepseek_v41_moe import MoE, gate_predict_topk
 from mtplx.models import deepseek_v41_stage_timing as _stime
 
 # Opt-in per-stage attribution (MTPLX_ROUTE_STAGE_PROBE=1). When disabled the only
@@ -610,9 +610,12 @@ def _compress_inv_freq(args: ModelArgs) -> mx.array:
 def _cos_sin(inv_freq, positions: mx.array):
     """``cos``/``sin`` tables ``[len(positions), rope_head_dim//2]`` in fp32.
 
-    ``inv_freq`` is a numpy constant (kept off the parameter tree); it is lifted
-    to MLX here."""
-    freq = mx.array(np.asarray(inv_freq, dtype=np.float32))
+    ``inv_freq`` is a numpy constant (kept off the parameter tree), lifted to MLX
+    here -- or, under W99 lean casts, an already-lifted ``mx.array`` passed straight
+    through (the caller cached it once per layer, so the per-token numpy->device
+    upload is skipped; the values are identical, so cos/sin are byte-identical)."""
+    freq = inv_freq if isinstance(inv_freq, mx.array) \
+        else mx.array(np.asarray(inv_freq, dtype=np.float32))
     ang = positions.astype(mx.float32)[:, None] * freq[None, :]
     return mx.cos(ang), mx.sin(ang)
 
@@ -857,6 +860,28 @@ class Attention(nn.Module):
             self.inv_freq = np.asarray(_compress_inv_freq(args), dtype=np.float32)
         else:
             self.inv_freq = np.asarray(_swa_inv_freq(args), dtype=np.float32)
+        # W99 lean-casts: lazily-cached device lifts of the per-layer RoPE inv_freq
+        # and the f32 attention sink, so the hot path skips the per-token numpy->device
+        # relift / sink cast (byte-identical; see MTPLX_DSV41_ATTN_LEAN_CASTS).
+        self._inv_freq_mx_cache = None
+        self._attn_sink_f32_cache = None
+
+    def _lean_inv_freq(self):
+        """The layer's RoPE ``inv_freq`` lifted to a device ``mx.array`` ONCE and
+        cached (W99).  Same values as the per-token ``mx.array(np.asarray(...))`` in
+        :func:`_cos_sin`, so cos/sin are byte-identical."""
+        if self._inv_freq_mx_cache is None:
+            self._inv_freq_mx_cache = mx.array(np.asarray(self.inv_freq, dtype=np.float32))
+        return self._inv_freq_mx_cache
+
+    def _lean_sink_f32(self):
+        """The per-head value-0 attention sink cast to f32 ONCE and cached (W99) --
+        the same array ``self.attn_sink.astype(mx.float32)`` produces each token."""
+        sink = self._attn_sink_f32_cache
+        if sink is None or sink[0] is not self.attn_sink:
+            sink = (self.attn_sink, self.attn_sink.astype(mx.float32))
+            self._attn_sink_f32_cache = sink
+        return sink[1]
 
     def _sparse_attend(self, q, KV, attend):
         """One softmax over the concatenated KV with a per-head sink (value 0),
@@ -1174,15 +1199,45 @@ class Attention(nn.Module):
             )
             return out.reshape(b, s, H, hd)
         scale = self.softmax_scale
+        # W97: fixed-shape mx.compile of the whole core (QK + mask + sink softmax +
+        # PV) at decode / small-M verify -- one geometry-keyed tape, the scattered
+        # elementwise runs fused into ~3 Compiled nodes (~13 -> ~8 kernels).
+        # ROUNDING-CLASS vs the eager block below (n=1 compile reassociates the fp32
+        # einsum/reductions), gated separately; the gather stayed OUTSIDE.
+        # W97 (review item 4): gate on rows = b*s (NOT s alone -- batched decode at
+        # b>1 was admitting one tape per b), and force eager during a TIMED prefill
+        # session (``_stime.is_prefill()``) so the prefill stage census stays
+        # fine-grained (mirrors ``_attn_use_compile``).  The cap covers M=1 decode +
+        # the K+1 verify batch (b*s <= 8).  CAVEAT: there is no UNTIMED decode/verify-
+        # phase signal at this call site, so a <=8-row untimed prefill (a <=8-token
+        # prompt, or a <=8-row prefill tail chunk under fine chunking) still routes
+        # through this rounding-class tape -- keep prompts/prefill chunks > the cap
+        # for byte-identical prefill, or accept prefill as rounding-class there.
+        rows = b * s
+        if (_resolve_attn_core_compile() and rows <= _ATTN_CORE_COMPILE_MAX_ROWS
+                and not _stime.is_prefill()):
+            _note_attn_core_call(True)
+            with _stime.stage_attn("attn." + mode + ".score.core_compiled") as _st:
+                o = _attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, self.attn_sink)
+                _st.add(o)
+            return o
+        _note_attn_core_call(False)
+        # W99 lean casts (byte-identical): cast KVg to f32 ONCE (reused by QK^T and
+        # PV, which otherwise re-cast the same array) and use the per-layer cached f32
+        # sink instead of re-casting attn_sink every token.
+        lean = _resolve_attn_lean_casts()
+        KVg_f32 = KVg.astype(mx.float32) if lean else None
         with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
             scores = mx.einsum(
-                "bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)
+                "bshd,bskd->bshk", q.astype(mx.float32),
+                KVg_f32 if lean else KVg.astype(mx.float32),
             ) * scale                                       # [b,s,H,k]
             _st.add(scores)
         with _stime.stage_attn("attn." + mode + ".score.scale_mask_sink") as _st:
             scores = mx.where(valid[:, :, None, :], scores, float("-inf"))
             _st.add(scores)
-        sink = self.attn_sink.astype(mx.float32).reshape(1, 1, H, 1)
+        sink = (self._lean_sink_f32() if lean
+                else self.attn_sink.astype(mx.float32)).reshape(1, 1, H, 1)
         with _stime.stage_attn("attn." + mode + ".score.softmax") as _st:
             # reference _k_sparse_attn L149-153: value-0 sink in the denominator,
             # a finite max floor so an all-invalid row yields all-zero (not NaN).
@@ -1191,7 +1246,9 @@ class Attention(nn.Module):
             denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
             _st.add(ex, denom)
         with _stime.stage_attn("attn." + mode + ".score.pv_matmul") as _st:
-            o = mx.einsum("bshk,bskd->bshd", ex, KVg.astype(mx.float32)) / denom
+            o = mx.einsum(
+                "bshk,bskd->bshd", ex, KVg_f32 if lean else KVg.astype(mx.float32)
+            ) / denom
             _st.add(o)
         return o
 
@@ -1303,9 +1360,24 @@ class Attention(nn.Module):
                 # K30 (W59): publish the selection as gather indices too, once per
                 # index source (the Reuse layers below reuse it, like topk_mask).
                 if _resolve_selected_keys():
-                    shared.selected_idx = _mask_to_topk_idx(
-                        mask, min(self.indexer.index_topk, n_comp)
+                    # W97 (review item 5): when a FIXED-SHAPE consumer is armed (the
+                    # core-compile tape or the K29 kernel), pad the selection to the
+                    # FULL index_topk so k = window + index_topk is context-independent.
+                    # Otherwise k = window + min(index_topk, n_comp) grows every token
+                    # until the indexer saturates (~index_topk tokens), so a prompt
+                    # shorter than that retraces the compile tape / re-specialises the
+                    # kernel for its whole warmup (~index_topk distinct k).  The
+                    # ``valid`` mask already drops the -1 pads; greedy-identical (the
+                    # extra masked rows contribute exp(-inf)=0), rounding-class vs the
+                    # unpadded selection (the softmax sum reassociates over the pads),
+                    # so it is gated to those already-rounding-class consumers and the
+                    # default selected-keys path stays byte-identical.
+                    topk = (
+                        self.indexer.index_topk
+                        if (_resolve_attn_core_compile() or _resolve_decode_attn_kernel())
+                        else min(self.indexer.index_topk, n_comp)
                     )
+                    shared.selected_idx = _mask_to_topk_idx(mask, topk)
             else:  # Reuse: read the source's selection
                 mask = shared.topk_mask
             # W76: fence ``mask`` always; additionally fence the K30
@@ -1341,7 +1413,10 @@ class Attention(nn.Module):
         b, s, _ = x.shape
         H, hd, rd = self.n_heads, self.head_dim, self.rope_head_dim
         mode = self.mode
-        qcos, qsin = _cos_sin(self.inv_freq, positions)
+        # W99 lean casts: pass the once-lifted device inv_freq (byte-identical cos/sin,
+        # skips the per-token numpy->device relift in _cos_sin).
+        _inv_freq = self._lean_inv_freq() if _resolve_attn_lean_casts() else self.inv_freq
+        qcos, qsin = _cos_sin(_inv_freq, positions)
 
         # K22 attention-chain compile: the pure projection/norm/rope prep that
         # produces (q, qr, kv_new) is one compiled tape at decode/verify row
@@ -1351,7 +1426,13 @@ class Attention(nn.Module):
         # eager (``_attn_use_compile`` is False under ``is_prefill``) so this
         # bracket fences the real projection chain, not a tape.
         with _stime.stage_prefill("attn." + mode + ".qkv_proj") as _st:
-            if _attn_use_compile(b * s):
+            if _fused_proj_use(b * s):
+                # W101/K36: keep the wq_a/wq_b/wkv quantized matmuls (MLX's tuned
+                # kernels), fuse the rmsnorm + interleaved-RoPE + head layout GLUE
+                # into 3 metal_kernels (one dispatch each).  GPU-only small-M;
+                # ROUNDING-CLASS vs the eager chain below.
+                q, qr, kv_new = self._qkv_prep_fused(x, qcos, qsin, b, s, H, hd)
+            elif _attn_use_compile(b * s):
                 q, qr, kv_new = _attn_qkv_prep(self)(
                     x, qcos, qsin, self.q_norm_weight, self.kv_norm_weight,
                     *_lin_arrays(self.wq_a), *_lin_arrays(self.wq_b), *_lin_arrays(self.wkv),
@@ -1439,7 +1520,13 @@ class Attention(nn.Module):
             # W50: the output-projection tail is bracketed separately (attn_breakdown)
             # so the score sub-stages sum to the SDPA proper, not SDPA + projection.
             with _stime.stage_attn("attn." + mode + ".score.out_proj") as _sp:
-                if _attn_use_compile(b * s):
+                if _fused_proj_use(b * s):
+                    # W101/K36: fuse the query-RoPE removal + group layout into one
+                    # metal_kernel; keep the grouped o-LoRA as one mx.einsum (BF16
+                    # wo_a operand, fp32 accumulate -- reference einsum) and wo_b as
+                    # the quantized matmul.  GPU-only small-M; ROUNDING-CLASS.
+                    out = self._out_prep_fused(o, qcos, qsin, b, s)
+                elif _attn_use_compile(b * s):
                     out = _attn_out_prep(self)(
                         o, qcos, qsin, self._o_lora_dense_weight(), *_lin_arrays(self.wo_b)
                     )
@@ -1457,19 +1544,65 @@ class Attention(nn.Module):
         f32-castable array -- dequantized when q8/native-resident, else the raw
         ``nn.Linear`` weight.  Extracted so :meth:`_o_lora_down` (eager) and the K22
         compiled output tape derive the einsum weight through the *identical* path
-        (bit-exact either way): the dequant is weight-only, no dependence on ``o``."""
+        (bit-exact either way): the dequant is weight-only, no dependence on ``o``.
+
+        W97: under ``MTPLX_DSV41_ATTN_WO_A_CACHE`` the dequantized array is computed
+        once, promoted to f32 and reused across decode tokens, keyed on the
+        ``(weight, scales, biases)`` packed-array identities so a re-quantize /
+        reload that swaps ANY of the three rebuilds it (the dequant output depends on
+        all three, not the weight alone).  BYTE-IDENTICAL
+        to the per-token dequant: ``mx.dequantize`` returns bf16 (both q8 and the
+        native codecs) and ``_o_lora_down`` / the K22 out tape promote it to f32 with
+        ``.astype(mx.float32)``; the cache stores that exact f32 promotion (bf16->f32
+        is lossless), so the per-token ``.astype(mx.float32)`` becomes a no-op and no
+        fp math is reordered.  Off (default) the dequant is re-issued every layer
+        every token (docs/deepseek-v41/W97_ATTENTION_291MS.md)."""
         wo = self.wo_a
-        if isinstance(wo, nn.QuantizedLinear):
-            # Mode-aware: affine q8 carries biases; the native float codecs
-            # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
-            # the mode and a ``None`` bias directly.
-            w = mx.dequantize(
-                wo.weight, wo.scales, wo.biases,
-                group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
-            )
-        else:
-            w = wo.weight
-        return w.reshape(self.n_groups, self.o_lora_rank, -1)
+        if not isinstance(wo, nn.QuantizedLinear):
+            return wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)
+        use_cache = _resolve_wo_a_cache()
+        if use_cache:
+            # Key on all three packed arrays' identities, not the weight alone: the
+            # dequant output is a function of (weight, scales, biases), so a reload
+            # or re-quantize that swaps the scales or biases (keeping the weight
+            # buffer) must invalidate the cache.  ``biases`` is None for the native
+            # float codecs; ``None is None`` matches, so the check is codec-safe.
+            cached = getattr(self, "_wo_a_dense_cache", None)
+            if (
+                cached is not None
+                and cached[0] is wo.weight
+                and cached[1] is wo.scales
+                and cached[2] is wo.biases
+            ):
+                return cached[3]
+        # Mode-aware: affine q8 carries biases; the native float codecs
+        # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
+        # the mode and a ``None`` bias directly.
+        w = mx.dequantize(
+            wo.weight, wo.scales, wo.biases,
+            group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
+        ).reshape(self.n_groups, self.o_lora_rank, -1)
+        if use_cache:
+            # W97 (adversarial-review fix): ``mx.dequantize`` returns the SCALE
+            # dtype -- bf16 for BOTH the affine-q8 (bf16 scales/biases) and the
+            # native mxfp4/mxfp8/nvfp4 codecs (probe: [8192,4096] q8 gs64 -> bf16,
+            # 67.1 MB).  Caching that bf16 array left the per-token consumers
+            # (``_o_lora_down`` below and the K22 out tape) still running
+            # ``w.astype(mx.float32)`` EVERY token -- re-materialising the 134 MB
+            # f32 array per layer (~10.7 GB/token of write+read over 40 layers).
+            # Cache the f32 array once (bf16->f32 is exact, so byte-identical) so
+            # that per-token ``.astype(mx.float32)`` is a graph no-op (verified: 0
+            # AsType on the weight leg).  f32 cache = n_layers * [8192,4096]*4
+            # ~= 5.4 GB for BOTH codecs; priced into the memory plan when armed
+            # (mtplx/models/deepseek_v41_loader.py).
+            w = w.astype(mx.float32)
+            # Materialise once so later tokens reference the buffer, not a lazy
+            # dequantize node that would recompute on every ``mx.eval``.
+            mx.eval(w)
+            # Store the (weight, scales, biases) identities the dequant read plus
+            # the f32 result, so the lookup above invalidates on any of the three.
+            self._wo_a_dense_cache = (wo.weight, wo.scales, wo.biases, w)
+        return w
 
     def _o_lora_down(self, o):
         """Grouped ``wo_a`` down-projection: reshape the [out=n_groups*o_lora_rank,
@@ -1477,6 +1610,81 @@ class Attention(nn.Module):
         own heads (reference model.py L785-787).  Dequantized when q8-resident."""
         w = self._o_lora_dense_weight()
         return mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w.astype(mx.float32))
+
+    # --- W101 / K36: fused decode/verify projection-chain path -----------------
+    def _qkv_prep_fused(self, x, qcos, qsin, b, s, H, hd):
+        """W101 fused qkv-prep (GPU, small-M): the three ``mx.quantized_matmul``
+        projections are kept (MLX's tuned kernels) and each glue region is ONE
+        fused ``metal_kernel`` -- post-``wq_a`` q-latent RMSNorm, the post-``wq_b``
+        q split+RoPE+head layout, and the post-``wkv`` KV RMSNorm+k_pe RoPE FUSED.
+        Returns ``(q, qr, kv_new)`` exactly like the eager body / K22 tape (``qr``
+        is threaded out for the indexer).  ROUNDING-CLASS vs eager."""
+        from mtplx.models import deepseek_v41_fused_proj_kernels as _fp
+        qr = _fp.rmsnorm(self.wq_a(x), self.q_norm_weight, self.eps)
+        q = _fp.rope_heads(self.wq_b(qr).reshape(b, s, H, hd), qcos, qsin)
+        kv_new = _fp.rmsnorm_rope(self.wkv(x), self.kv_norm_weight, self.eps, qcos, qsin)
+        _fp.note_qkv(b * s)
+        return q, qr, kv_new
+
+    def _out_prep_fused(self, o, qcos, qsin, b, s):
+        """W101 fused out-prep (GPU, small-M).  The query-RoPE removal + group layout
+        is ONE fused ``metal_kernel``.  The grouped o-LoRA down-projection is a
+        BATCHED ``mx.matmul`` (one tuned dispatch) over a weight cached in the
+        [g, in_per_group, o_lora_rank] layout the matmul wants -- NOT ``mx.einsum``.
+
+        Why not einsum: window 40's in-model attribution priced ``out_proj`` at
+        ~4.9 ms/layer, ~25x its 67 MB bf16 read (~0.2 ms) -- the culprit is that
+        ``mx.einsum("bsgd,grd->bsgr", o, w)`` re-lays-out (Transpose) the
+        [8, 1024, 4096] = 33.55M-param wo_a operand EVERY token (3 Transpose nodes in
+        the einsum graph; ~67 MB copy/layer/token).  Pre-transposing wo_a ONCE to
+        [g, in, r] and running ``matmul(o[g,rows,in], wT[g,in,r])`` reads the weight
+        directly (only the tiny ``o`` is transposed) -- bit-identical to the bf16
+        einsum, ROUNDING-CLASS vs the port's f32 einsum.  ``wo_b`` stays the
+        quantized matmul (docs/deepseek-v41/W101_ATTN_FUSED_PROJ.md)."""
+        from mtplx.models import deepseek_v41_fused_proj_kernels as _fp
+        wT = self._o_lora_fused_weight()                         # [g, in_per_group, r]
+        o = _fp.rope_heads(o, qcos, qsin, inverse=True, out_dtype=wT.dtype)
+        g = self.n_groups
+        o = o.reshape(b * s, g, -1).swapaxes(0, 1)               # [g, rows, in_per_group]
+        o = mx.matmul(o, wT)                                     # [g, rows, r], fp32 accum
+        o = o.swapaxes(0, 1).reshape(b, s, -1)                   # [b, s, g*r]
+        out = self.wo_b(o)
+        _fp.note_out()
+        return out
+
+    def _o_lora_fused_weight(self):
+        """The grouped ``wo_a`` weight for the W101 fused out-prep matmul, in the
+        TRANSPOSED ``[g, in_per_group, o_lora_rank]`` layout the batched matmul reads
+        directly (so no per-token Transpose of the 33.55M-param weight), at the
+        REFERENCE bf16 dtype (model.py L784-787): dequantized to bf16 when
+        q8/native-resident (the artifact's scales are bf16, so ``mx.dequantize``
+        returns bf16 for the native codecs; q8 is cast down), else the raw dense
+        weight (tiny-config).
+
+        The ``[g, r, in] -> [g, in, r]`` transpose + dequant is done ONCE, cached per
+        layer keyed on the packed-weight identity (a re-quantize / reload rebuilds
+        it) and materialised via ``mx.eval`` so later tokens reference the buffer.
+        DISTINCT from :meth:`_o_lora_dense_weight` (the eager/K22 f32 path, owned by
+        the W97 wo_a cache): the fused path never calls that, so only this bf16 copy
+        (67 MB/layer, ~2.7 GB over 40 layers -- HALF the f32 cache) is resident under
+        the fused arm.  Reading bf16 + fp32-accumulating is ROUNDING-CLASS vs the
+        port's f32 einsum and bit-identical to the reference bf16 einsum."""
+        wo = self.wo_a
+        cached = getattr(self, "_wo_a_bf16T_cache", None)
+        key = wo.weight
+        if cached is not None and cached[0] is key:
+            return cached[1]
+        if not isinstance(wo, nn.QuantizedLinear):
+            w = wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)   # [g, r, in]
+        else:
+            w = mx.dequantize(
+                wo.weight, wo.scales, wo.biases,
+                group_size=wo.group_size, bits=wo.bits, mode=getattr(wo, "mode", "affine"),
+            ).astype(mx.bfloat16).reshape(self.n_groups, self.o_lora_rank, -1)
+        wT = mx.contiguous(mx.swapaxes(w, 1, 2))                 # [g, in_per_group, r]
+        mx.eval(wT)
+        self._wo_a_bf16T_cache = (key, wT)
+        return wT
 
 
 # ---------------------------------------------------------------------------
@@ -1748,13 +1956,27 @@ def _mask_to_topk_idx(mask: mx.array, k: int) -> mx.array:
     Position order within the row is irrelevant to the softmax; ascending is chosen
     to match the reference.  One argsort over ``n`` per row -- run once per index
     source (published on ``shared.selected_idx``, reused down the stack), O(n) in
-    memory and ~n/(H*head_dim) cheaper than the score it replaces."""
+    memory and ~n/(H*head_dim) cheaper than the score it replaces.
+
+    ``k > n`` is supported (W97 item 5: pad the width to a FIXED ``index_topk`` even
+    before the compressed history has ``index_topk`` rows), producing ``[b, s, k]``
+    with ``-1`` in the surplus columns; the ``valid`` mask (``count`` True per row,
+    ``count <= n < k``) already drops them, so the gathered key set is unchanged."""
     b, s, n = mask.shape
     ar = mx.arange(n)
     # True positions sort by their own index (0..n-1); False positions by n+index,
     # so every True lands ahead of every False.  All keys distinct -> deterministic.
     keys = mx.where(mask, ar.reshape(1, 1, n), (n + ar).reshape(1, 1, n))
-    order = mx.argsort(keys, axis=-1)[..., :k].astype(mx.int32)   # [b, s, k]
+    order = mx.argsort(keys, axis=-1).astype(mx.int32)            # [b, s, n]
+    if k <= n:
+        order = order[..., :k]                                   # [b, s, k]
+    else:
+        # Pad the width to k > n with -1 (surplus columns); the valid mask below
+        # (count <= n < k) drops them, so this is byte-identical for the k <= n case
+        # and shape-stabilises the k > n case.
+        order = mx.concatenate(
+            [order, mx.full((b, s, k - n), -1, dtype=mx.int32)], axis=-1
+        )                                                        # [b, s, k]
     count = mx.sum(mask.astype(mx.int32), axis=-1, keepdims=True)  # [b, s, 1]
     valid = mx.arange(k).reshape(1, 1, k) < count
     return mx.where(valid, order, mx.array(-1, dtype=mx.int32))
@@ -1895,7 +2117,12 @@ _DECODE_ATTN_KERNEL_ENV = "MTPLX_DSV41_DECODE_ATTN_KERNEL"
 
 #: Max query rows (``b*s``) the decode kernel serves: M=1 decode and the ``K+1``
 #: verify batch (8 covers MTP depth up to 7).  Above it the eager prefill score
-#: path runs (W58/W59's domain) -- the hook never diverts prefill.
+#: path runs (W58/W59's domain).  CAVEAT (review item 4): the cap is the ONLY
+#: guard -- there is no decode/verify-phase signal here, so a <=8-row prefill (a
+#: <=8-token prompt or a <=8-row prefill tail chunk) is also diverted to the
+#: kernel; it is rounding-class like decode, so this changes prefill numerics in
+#: that regime (the K29 kernel is SHELVED, so this is documentation, not a live
+#: path -- see the SHELVED verdict above).
 _DECODE_ATTN_KERNEL_MAX_ROWS = 8
 
 
@@ -1935,6 +2162,289 @@ def _decode_attn_kernel_use(q) -> bool:
     except Exception:
         return False
     return rows <= _DECODE_ATTN_KERNEL_MAX_ROWS
+
+
+# --- W97: cache the dequantized grouped o-LoRA (``wo_a``) weight per layer ----
+#: The grouped ``wo_a`` down-projection is applied as an einsum, not a
+#: ``quantized_matmul``, so :meth:`Attention._o_lora_dense_weight` calls
+#: ``mx.dequantize(wo_a)`` to materialise the dense ``[g, o_lora_rank,
+#: in_per_group]`` weight.  With the flag OFF (default) that dequantize is
+#: re-issued as a graph node **every layer every decode token** (W96 as-is audit
+#: finding L9): at the released dims (``wo_a`` = 8x1024x4096 = 33.55M params) it
+#: writes a fresh 134 MB f32 (q8 gs64) / 67 MB bf16 (native mxfp4/mxfp8) array per
+#: token per backbone layer -- ~= 5.4 / 2.7 GB of dequant writes per token across
+#: the 40 layers, plus 40 extra dispatches the isolated bench (dense bf16 ``wo_a``,
+#: no dequant) never issues (docs/deepseek-v41/W97_ATTENTION_291MS.md).  The
+#: reference (model.py L784-787) dequantizes ``wo_a`` ONCE at convert time to bf16;
+#: the weight is a per-forward constant with no dependence on the activation, so
+#: caching the dequantized array is a pure host-dispatch + write-traffic cut.
+#:
+#: With the flag ON the dequantized array is computed once, promoted to f32 and
+#: reused (keyed on the packed-weight array identity, so a re-quantize / reload
+#: rebuilds it).  It is BYTE-IDENTICAL to control: ``mx.dequantize`` returns bf16
+#: for BOTH the affine-q8 (bf16 scales/biases) and the native mxfp4/mxfp8/nvfp4
+#: codecs, and both ``_o_lora_down`` and the K22 out tape then promote it to f32
+#: with ``.astype(mx.float32)``.  The cache stores that exact f32 promotion (bf16->
+#: f32 is lossless), so the per-token cast is a graph no-op and no fp math is
+#: reordered.  (The earlier lever cached the bf16 dequant and left the per-token
+#: f32 materialisation in place -- ~10.7 GB/token of write+read traffic; fixed
+#: here.)  Read at use, never frozen at import
+#: ([[env-flags-read-at-use-not-import]]).  Default OFF: the win is a GPU-window
+#: measurement AND the f32 cache holds a dense copy of every layer's ``wo_a``
+#: resident (40 x [8192,4096]*4 = 40 x 134 MB ~= 5.4 GB for BOTH codecs), so it is
+#: opt-in AND priced into the memory plan when armed
+#: (mtplx/models/deepseek_v41_loader.py) ([[never-exceed-the-memory-knob]]).
+_ATTN_WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
+
+
+def _resolve_wo_a_cache(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_WO_A_CACHE`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other DSV4.1
+    levers."""
+    val = os.environ.get(_ATTN_WO_A_CACHE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_WO_A_CACHE_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the per-token dequantize)"
+    )
+
+
+# --- W97: fixed-shape mx.compile of the decode attention CORE -----------------
+#: The selected-key attention core -- QK^T score, CSA/causal mask, per-head value-0
+#: sink, f32 softmax, PV -- over the gathered ``[b,s,k,hd]`` operand.  At decode
+#: (T==1) / small-M verify the shapes are FIXED (k = window + index_topk = 640,
+#: hd 512, H 64), so the whole eager chain (~13 tiny kernels: 2 matmuls + the
+#: scattered scale/where/max/exp/sum/exp/add/divide) is one geometry-keyed
+#: ``mx.compile`` tape whose elementwise runs fuse into ~3 ``Compiled`` nodes ->
+#: ~8 kernels (W97 census: core 13 -> 8; docs/deepseek-v41/W97_ATTENTION_291MS.md).
+#: The gather (data-dependent indices) stays OUTSIDE the tape.
+#:
+#: ROUNDING-CLASS, not byte-identical (like K35): the n=1 compile reassociates the
+#: fp32 einsum/reductions (measured max|Δ| ~9e-10 on CPU vs eager) -- greedy-argmax
+#: identical but the bytes differ, so it is gated SEPARATELY from the exact levers
+#: and its arms are flagged in the byte-identity summary.  The K29 fused decode
+#: kernel (MTPLX_DSV41_DECODE_ATTN_KERNEL) collapses the SAME core to ONE dispatch
+#: and, when armed on a GPU, wins the early return in ``_sparse_attend_selected``
+#: before this path (so the two never both apply).  K29 = 1 dispatch but was
+#: measured -38% at 1K (decode_attn_kernel 3.71 vs stack_a 6.01 tok/s, window-27,
+#: SHELVED -- docs/deepseek-v41/W60_FUSED_DECODE_ATTENTION.md) with a coarser
+#: Delta ~1e-3 (bf16/fast-transcendental class), NOT the 9.3e-10 f32-reassociation
+#: Delta of this compile core; so K29 is the lower-DISPATCH but not the faster
+#: option, and this compile core is the UNMEASURED candidate (fewer dispatches is
+#: not the win at M=1 -- the big-kernel chain dominates).  Its engagement is
+#: recorded in the ab receipt (``attn_core_compile_engagement``) so a window can
+#: prove the tape actually ran vs fell through to eager.
+#: Read at use, never frozen at import ([[env-flags-read-at-use-not-import]]).
+#: Default OFF (the win is a GPU-window measurement).
+_ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
+#: Max query rows (b*s) the core tape serves: M=1 decode + the K+1 verify batch,
+#: mirroring the K29 decode-kernel cap; above it the eager core runs (prefill).
+_ATTN_CORE_COMPILE_MAX_ROWS = 8
+#: One compiled core tape per (geometry, dtype, scale) signature.  Module global so
+#: tests can inspect its growth and clear it between configs.  W97 (review item 5):
+#: the tape count is bounded to ONE per distinct ``(b*s, CSA-mode k)`` -- NOT one per
+#: distinct ``k`` -- because arming the tape pads the selected keys to the full
+#: ``index_topk`` (see ``_compressed``), so ``k = window + index_topk`` is fixed
+#: instead of ``window + min(index_topk, n_comp)`` growing every token until the
+#: indexer saturates (~index_topk tokens).  Without the padding a prompt shorter than
+#: ratio*index_topk retraced the tape for its whole warmup (~index_topk tapes).
+_ATTN_CORE_COMPILED: dict = {}
+
+#: W97 (adversarial review, item 3) engagement counters for the decode-attention
+#: core: selected-key core calls that ran the fixed-shape ``mx.compile`` tape
+#: (``compiled``) vs calls that ran the eager core (``eager`` -- lever off, or above
+#: the small-M cap).  Recorded in the ab receipt as ``attn_core_compile_engagement``
+#: (mirroring K29's ``decode_attn_kernel_engagement``), so a GPU window can prove the
+#: tape actually ran (compiled > 0) rather than silently falling through to eager.
+_ATTN_CORE_COMPILE_CALLS = 0
+_ATTN_CORE_EAGER_CALLS = 0
+
+
+def _reset_attn_core_compile_calls() -> None:
+    """Zero the compiled/eager decode-attention-core counters (call before each A/B arm)."""
+    global _ATTN_CORE_COMPILE_CALLS, _ATTN_CORE_EAGER_CALLS
+    _ATTN_CORE_COMPILE_CALLS = 0
+    _ATTN_CORE_EAGER_CALLS = 0
+
+
+def _note_attn_core_call(compiled: bool) -> None:
+    """Record one selected-key attention-core call as compiled-tape or eager."""
+    global _ATTN_CORE_COMPILE_CALLS, _ATTN_CORE_EAGER_CALLS
+    if compiled:
+        _ATTN_CORE_COMPILE_CALLS += 1
+    else:
+        _ATTN_CORE_EAGER_CALLS += 1
+
+
+def _attn_core_compile_calls() -> dict:
+    """Counters since the last reset: ``compiled`` (selected-key core calls that ran
+    the fixed-shape mx.compile tape) and ``eager`` (calls that ran the eager core --
+    lever off, or above the small-M cap ``_ATTN_CORE_COMPILE_MAX_ROWS``)."""
+    return {
+        "compiled": int(_ATTN_CORE_COMPILE_CALLS),
+        "eager": int(_ATTN_CORE_EAGER_CALLS),
+    }
+
+
+def _resolve_attn_core_compile(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_CORE_COMPILE`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_CORE_COMPILE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_CORE_COMPILE_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager core)"
+    )
+
+
+# --- W99: lean the decode-attention casts (byte-identical redundant-cast removal) --
+#: The W97 dispatch census (docs/deepseek-v41/W97_ATTENTION_291MS.md §7) shows the
+#: decode attention layer issues 15-25 ``AsType`` (f32 cast) kernels; W99 traced each:
+#: almost all are LOAD-BEARING reference f32 (rmsnorm normalises in f32, the softmax
+#: core runs in f32, cos/sin are f32, the interleaved RoPE rotates in f32 then stores
+#: at the model dtype, the o-LoRA einsum is f32) -- removing those would change the
+#: numerics, so they stay.  Two are genuinely REDUNDANT and removed here, byte-
+#: identically:
+#:   * the eager selected-key core casts ``KVg`` to f32 TWICE (once for QK^T, once for
+#:     PV) -- compute it ONCE and reuse (same values -> same bytes); and the per-head
+#:     value-0 ``sink`` is re-cast to f32 every token -- cache the f32 vector per layer;
+#:   * ``_cos_sin`` re-lifts the layer's numpy ``inv_freq`` to a fresh device array
+#:     every token (a host->device upload on the hot path) -- lift it ONCE and cache
+#:     the ``mx.array`` per layer (same constant -> same cos/sin bytes).
+#: BYTE-IDENTICAL by construction (no fp math reordered): tested bit-for-bit over 64
+#: decode steps, eager AND compiled.  Composes with the wo_a cache (also byte-
+#: identical) as the byte-identical ``cell16k_ring_lean`` stack.  The bulk of the
+#: casts (reference f32) and the structural RoPE concatenates are NOT reducible byte-
+#: identically; the ~13-kernel core (its casts included) collapses to ONE dispatch
+#: only via the K29 fused kernel (rounding-class).  Read at use; default OFF.
+_ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
+
+
+def _resolve_attn_lean_casts(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_LEAN_CASTS`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_LEAN_CASTS_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_LEAN_CASTS_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the per-token casts)"
+    )
+
+
+# --- W101 / K36: fused decode/verify attention PROJECTION-CHAIN kernels ---------
+#: The W99 §8.5 verdict: after the wo_a cache (per-token dequant removed), lean
+#: casts (redundant casts deduped) and K29 (the SDPA core -> 1 dispatch), a decode
+#: attention layer's remaining ~55-67 kernels are dominated by the qkv/out
+#: PROJECTION CHAINS -- the rmsnorm + interleaved-RoPE + head/group layout GLUE
+#: between the (already single-dispatch) mx.quantized_matmul projections and the
+#: grouped o-LoRA einsum.  W101 fuses each glue region into ONE mx.fast.metal_kernel
+#: (mtplx/models/deepseek_v41_fused_proj_kernels.py): post-wq_a rmsnorm; post-wq_b
+#: q split+RoPE+head layout; post-wkv KV rmsnorm+k_pe RoPE FUSED; and the out-prep
+#: query-RoPE removal + group layout.  The quantized matmuls stay MLX's tuned
+#: kernels (one dispatch each) and the grouped o-LoRA stays ONE mx.einsum Matmul,
+#: fed the BF16 wo_a operand + fp32 internal accumulation (reference bf16 einsum,
+#: model.py L784-787: half the per-token wo_a read, no f32 materialisation).
+#:
+#: ROUNDING-CLASS, not byte-identical (the fused rmsnorm reassociates the fp32
+#: sum-of-squares; the KV kernel keeps the normed latent in fp32 through the RoPE
+#: where the eager path rounds it to bf16 first; the o-LoRA einsum rounds wo_a to
+#: bf16) -- gated separately from the exact levers, GPU-only, small-M (b*s <= 8:
+#: AR decode + DSpark depth-5 verify).  Independent of K29 (which collapses the
+#: SEPARATE core): fused-proj composes with the eager / core-compile / K29 core
+#: alike, and with the wo_a cache + lean casts.  On CPU / when off / above the
+#: small-M cap the eager (or K22-tape) chain runs -- the fallback.  Read at use,
+#: never frozen at import ([[env-flags-read-at-use-not-import]]).  Default OFF (the
+#: win is a GPU-window measurement; the fused path caches a bf16 wo_a copy resident
+#: per layer, ~67 MB x 40 = 2.7 GB -- opt-in under the box budget).
+_ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
+
+
+def _resolve_attn_fused_proj(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_FUSED_PROJ`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_FUSED_PROJ_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_FUSED_PROJ_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager projection chains)"
+    )
+
+
+def _fused_proj_use(rows: int) -> bool:
+    """Whether the W101 fused projection kernels should run on THIS call: the flag
+    is armed, a Metal GPU is the default device, AND the query is small-M (decode /
+    verify, ``rows = b*s <= _DECODE_ATTN_KERNEL_MAX_ROWS``).  A CPU-pinned worker
+    test (or a no-Metal host) returns ``False`` so the eager path runs and no Metal
+    is dispatched -- the GPU route is proven by the engagement counter in the
+    tests.  Mirrors :func:`_decode_attn_kernel_use`'s gate so the two levers arm on
+    the same regime."""
+    if not _resolve_attn_fused_proj():
+        return False
+    try:
+        if not mx.metal.is_available() or mx.default_device() != mx.gpu:
+            return False
+    except Exception:
+        return False
+    return int(rows) <= _DECODE_ATTN_KERNEL_MAX_ROWS
+
+
+def _attn_core_impl(q, KVg, valid, sink, scale):
+    """The selected-key attention core (gathered operand -> [b,s,H,hd] output):
+    QK^T, mask, per-head value-0 sink, f32 softmax, PV -- the reference
+    ``_k_sparse_attn`` value-0 sink form (max includes the sink, normalize after
+    PV), all f32.  BYTE-for-byte the eager block in :meth:`Attention._sparse_attend_selected`
+    when run eagerly; under ``mx.compile`` the fp32 einsum/reductions reassociate
+    (rounding-class).  Pure (no ``self``, no env, no stage brackets) so
+    ``mx.compile`` traces one fixed-shape tape."""
+    H = q.shape[2]
+    scores = mx.einsum("bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)) * scale
+    scores = mx.where(valid[:, :, None, :], scores, float("-inf"))
+    sink = sink.astype(mx.float32).reshape(1, 1, H, 1)
+    m = mx.maximum(mx.max(scores, axis=-1, keepdims=True), sink)
+    ex = mx.exp(scores - m)
+    denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
+    return mx.einsum("bshk,bskd->bshd", ex, KVg.astype(mx.float32)) / denom
+
+
+def _attn_core_compiled(q, KVg, valid, scale):
+    """The geometry-keyed compiled core tape for these operand shapes/dtypes and
+    ``scale``.  Cached in :data:`_ATTN_CORE_COMPILED` so 64 decode steps at one
+    geometry build ONE tape (no per-token retrace); ``scale`` is baked into the
+    traced closure and is part of the key."""
+    sig = (
+        tuple(int(d) for d in q.shape), tuple(int(d) for d in KVg.shape),
+        tuple(int(d) for d in valid.shape),
+        str(q.dtype), str(KVg.dtype), str(valid.dtype), float(scale),
+    )
+    fn = _ATTN_CORE_COMPILED.get(sig)
+    if fn is None:
+        fn = mx.compile(lambda q, KVg, valid, sink: _attn_core_impl(q, KVg, valid, sink, scale))
+        _ATTN_CORE_COMPILED[sig] = fn
+    return fn
 
 
 def _lin_desc(linear):
@@ -2485,6 +2995,234 @@ def _small_compiled(kind: str, layer: "DecoderLayer"):
 
 
 # ---------------------------------------------------------------------------
+# W93 gate-oracle one-layer-ahead expert prefetch (docs/deepseek-v41/W93_GATE_PREFETCH.md)
+# ---------------------------------------------------------------------------
+#: Prefetch width k (10/12); 0 / unset disables. During layer L-1's decode
+#: forward, layer L's OWN router is applied to the residual entering L-1 (W89's
+#: `b'` predictor, missRed@10 0.736) and its top-k experts are speculatively read
+#: for layer L. Read at use (env-flags-read-at-use-not-import), like the other
+#: DSV4.1 decode levers.
+_GATE_PREFETCH_ENV = "MTPLX_DSV41_GATE_PREFETCH"
+#: Skip prefetching target layers below this index (W89: the first ~4 layers turn
+#: over fastest and are the oracle floor, missRed<0.5). Default 4.
+_GATE_PREFETCH_MIN_LAYER_ENV = "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER"
+_GATE_PREFETCH_MIN_LAYER_DEFAULT = 4
+
+#: W95 v2 runner switch (docs/deepseek-v41/W95_RUNNER_DESIGN.md).  ``MTPLX_DSV41_RUNNER=v2``
+#: is the SINGLE user switch for the rebuilt streaming decode path: it composes the W93
+#: gate-oracle one-layer-ahead prefetch and the W87 single scan-resistant slot pool (admit
+#: every miss) WITHOUT the user stacking their individual env keys.  Default (unset) is the
+#: current path, byte-for-byte.  Window 38 withdrew the host-sync-drain premise, so v2's
+#: FIRST job is hiding the SSD miss waits (prefetch + admit-every-miss); the device-LUT /
+#: eviction-epoch / planner-thread sync removal is parked as phase 2 (it only pays once the
+#: GPU is otherwise busy).  An explicit sub-key (``MTPLX_DSV41_GATE_PREFETCH`` /
+#: ``MTPLX_DSV41_SINGLE_SLOT_POOL``) still works and always wins over the v2 default.
+_RUNNER_ENV = "MTPLX_DSV41_RUNNER"
+#: v2's default gate-oracle prefetch width when the user set no explicit
+#: ``MTPLX_DSV41_GATE_PREFETCH`` (W89: one-layer-ahead missRed@12 0.766; ring 2*k=24 <= 32).
+#: v2 AR prefetch width. Window-39 RETUNE: k=12 over-issued (164 speculative
+#: reads/token -> SSD 20%->70% busy, speculative contending with demand -> net -6%).
+#: The offline precision table (scripts/deepseek_v41/w95_prefetch_precision.py, W89
+#: one-ahead gate oracle) maximises (hits - 0.67*wasted) at k=6 + a small trim
+#: margin: k=6 halves the candidate width and the margin trims to the confident
+#: subset (precision 0.65 -> 0.78, issued ~4/layer).
+_RUNNER_V2_GATE_PREFETCH_K = 6
+#: v2 confidence-gate margin (W95 retune): issue a predicted expert iff its gate
+#: score >= (6th-highest score) - margin.  NEGATIVE trims to the confident subset
+#: (threshold ABOVE the 6th).  Offline max-objective pick on the W89 trace:
+#: -0.05 (score units; = -0.03 x the s1-s6 gap) -> precision 0.78, issued ~4/layer,
+#: objective 2.588.  Env MTPLX_DSV41_GATE_PREFETCH_MARGIN overrides; 0.0 = no gate
+#: (the top-k as-is, the lane-D / GATE_PREFETCH-only behaviour).
+_GATE_PREFETCH_MARGIN_ENV = "MTPLX_DSV41_GATE_PREFETCH_MARGIN"
+_RUNNER_V2_GATE_PREFETCH_MARGIN = -0.05
+#: v2 DSpark-verify prefetch (W95). At layer L-1 of a T=(K+1)-row verify the residual
+#: entering L-1 is available for ALL rows, so predict gate_L per row and prefetch the
+#: UNION of the per-row top-``k`` (the resolved gate-prefetch width, 6 by default) for
+#: layer L (W89 one-ahead, applied to the verify's ~20-expert/layer union; window 31:
+#: ~8 misses/layer-verify).  W95f (review LOW): the old dedicated per-row width
+#: ``_RUNNER_V2_VERIFY_K_PER_ROW = 8`` was DEAD under the v2 default confidence margin
+#: (-0.05): the 6th-ranked candidate is always trimmed (the threshold sits strictly
+#: above the 6th score), so a per-row width of 6 and 8 leave the IDENTICAL <=5
+#: surviving set. It has been removed -- the verify uses the resolved AR ``k``.
+#: Gated on RUNNER=v2, so an AR-only MTPLX_DSV41_GATE_PREFETCH stays inert on T>1
+#: (the lane-D multi-row contract). ``_RUNNER_V2_VERIFY_MAX_ROWS`` bounds it to the
+#: verify shape (never a prefill). The union rides the verify's existing per-layer
+#: routing eval and dedups at the issue site; the global ring is sized to
+#: ``_RUNNER_V2_RING_SLOTS`` (2 x ~24) to double-buffer the union one layer ahead.
+_RUNNER_V2_VERIFY_MAX_ROWS = 8
+_RUNNER_V2_RING_SLOTS = 48
+
+
+def _runner_v2_enabled() -> bool:
+    """True when the single v2 runner switch (``MTPLX_DSV41_RUNNER=v2``) is armed."""
+    return os.environ.get(_RUNNER_ENV) == "v2"
+
+
+def _resolve_gate_prefetch_k(raw=None) -> int:
+    """Prefetch width ``k`` (0 = off). A non-positive or unparsable value is off.
+
+    When the width comes from the environment (``raw is None``) and no explicit
+    ``MTPLX_DSV41_GATE_PREFETCH`` is set, ``MTPLX_DSV41_RUNNER=v2`` arms it at
+    ``_RUNNER_V2_GATE_PREFETCH_K``.  An explicit env value (or an explicit ``raw``
+    argument) always wins; with neither armed this returns 0 -- byte-identical off."""
+    from_env = raw is None
+    if from_env:
+        raw = os.environ.get(_GATE_PREFETCH_ENV)
+    if not raw:
+        if from_env and _runner_v2_enabled():
+            return _RUNNER_V2_GATE_PREFETCH_K
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _resolve_gate_prefetch_min_layer(raw=None) -> int:
+    if raw is None:
+        raw = os.environ.get(_GATE_PREFETCH_MIN_LAYER_ENV)
+    if not raw:
+        return _GATE_PREFETCH_MIN_LAYER_DEFAULT
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return _GATE_PREFETCH_MIN_LAYER_DEFAULT
+
+
+def _resolve_gate_prefetch_margin() -> float:
+    """The W95 confidence-gate margin for the prefetch prediction (score units).
+    ``MTPLX_DSV41_GATE_PREFETCH_MARGIN`` overrides; else the v2 default when the
+    runner is armed, else 0.0 (no gate -- the lane-D / GATE_PREFETCH-only path)."""
+    raw = os.environ.get(_GATE_PREFETCH_MARGIN_ENV)
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    return _RUNNER_V2_GATE_PREFETCH_MARGIN if _runner_v2_enabled() else 0.0
+
+
+class _GatePrefetchLink:
+    """Plain (non-Module) holder for the NEXT routed layer's gate AND the pending
+    one-layer-ahead prediction, so binding it on a :class:`MoE` / the streamed
+    switch does not re-register anything under the module tree.
+
+    ``nn.Module.__setattr__`` registers ``array``/``dict``/``list``/``tuple``/
+    ``Module`` values as children; a plain ``__slots__`` object rides outside the
+    tree (mirrors ``lookahead_prefetch.LookaheadRouters``).
+
+    LOW-3 (W93 review): the stash used to be a raw ``(int, mx.array)`` tuple set
+    as an nn.Module attribute on the switch.  Under mlx 0.32.2
+    ``Module.__setattr__`` a ``tuple`` goes into the *if* branch and is registered
+    as a module child (``self[key] = val``), so between stash and consume the
+    predicted-id array lived inside ``switch.parameters()`` -- a latent corruption
+    of the param tree (any ``tree_flatten`` / ``mx.eval(module)`` / save in that
+    window would have seen a bogus ``(int, array)`` child); the ``= None`` clear
+    only ``pop``ed it back out.  Carrying the stash on THIS plain object keeps the
+    array out of every module's parameter tree entirely: the switch stores a plain
+    ``_GatePrefetchLink`` reference (``__setattr__`` *else* branch), never an array
+    or tuple.
+
+    The 2-element ``(next_layer, pending_ids)`` sequence interface
+    (``__getitem__`` / ``__iter__`` / ``__len__``) is the stash's public shape, so
+    the streamed switch's consume site reads it exactly as it read the old tuple
+    (``pending[1]`` for the ids, ``next_layer, ids = pending`` to unpack) with no
+    change required there -- while attribute access (``.pending_ids`` /
+    ``.next_layer``) is available for a cleaner consumer."""
+
+    __slots__ = ("next_layer", "next_gate", "pending_ids")
+
+    def __init__(self, next_layer: int, next_gate=None, pending_ids=None) -> None:
+        self.next_layer = int(next_layer)
+        self.next_gate = next_gate
+        self.pending_ids = pending_ids
+
+    # -- stash sequence interface: (next_layer, pending_ids) --------------------
+    def __getitem__(self, i):
+        return (self.next_layer, self.pending_ids)[i]
+
+    def __iter__(self):
+        yield self.next_layer
+        yield self.pending_ids
+
+    def __len__(self) -> int:
+        return 2
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid only
+        return (
+            f"_GatePrefetchLink(next_layer={self.next_layer}, "
+            f"pending_ids={'set' if self.pending_ids is not None else None})"
+        )
+
+
+def install_gate_prefetch_links(model, runtime) -> int:
+    """Wire each routed layer's MoE to the NEXT eligible routed layer's gate, so
+    ``DecoderLayer.__call__`` can predict that next layer's route a layer ahead.
+
+    Idempotent and DSV4.1-specific: a layer is linked only when its target
+    ``L = prev+1`` is a routed streamed layer with a DSV4.1 :class:`~mtplx.models.
+    deepseek_v41_moe.Gate`, ``L >= MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER`` (W89's
+    early floor), ``L`` is not the last routed layer (skipped per the brief), AND
+    the SOURCE layer ``prev`` is a *streamed* switch that takes the ``mx.eval(
+    indices)`` routing barrier the prediction rides (W93_GATE_PREFETCH.md §3).
+    Non-DSV4.1 models (hy3/glm share ``bind_streamed_switches``) carry no such
+    gate and are left untouched. Returns the number of links installed. Safe to
+    call with the flag off -- the links are inert until the flag arms the ring;
+    the eligibility bakes the layer skip in so the hot path never re-checks it.
+
+    LOW-3 (W93 review): a ``DenseIslandSwitchGLU`` source is skipped.  A dense
+    island layer holds its experts resident and issues its wave with *zero host
+    asks* -- it never runs the ``mx.eval(indices)`` barrier the one-ahead
+    prediction is designed to piggyback (§3) and its ``_run`` is not the streamed
+    consume site that reads the stash, so a link on such a source would compute a
+    prediction every decode token that nothing ever evaluates or issues.  Linking
+    only streamed sources keeps the predictor off the resident-island path
+    entirely.  ``install`` runs after ``bind_streamed_switches`` has replaced each
+    routed layer's ``switch_mlp`` with its concrete type, so the source type is
+    final here."""
+
+    layers = getattr(getattr(model, "model", None), "layers", None)
+    if layers is None:
+        layers = getattr(model, "layers", None)
+    if layers is None:
+        return 0
+    routed = tuple(getattr(runtime.spec, "routed_layer_indices", ()))
+    if len(routed) < 2:
+        return 0
+    # Lazy import (no module-load cycle): install is called from within
+    # expert_mlx.bind_streamed_switches, so expert_mlx is fully imported here.
+    try:
+        from .expert_mlx import DenseIslandSwitchGLU as _DenseIslandSwitchGLU
+    except Exception:  # pragma: no cover - expert_mlx always importable in practice
+        _DenseIslandSwitchGLU = ()
+    last_routed = routed[-1]
+    min_layer = _resolve_gate_prefetch_min_layer()
+    installed = 0
+    for prev, nxt in zip(routed[:-1], routed[1:]):
+        # one layer ahead only: prev's residual predicts the immediately
+        # following routed layer.
+        if nxt != prev + 1:
+            continue
+        if nxt < min_layer or nxt == last_routed:
+            continue
+        prev_mlp = getattr(layers[prev], "mlp", None)
+        nxt_mlp = getattr(layers[nxt], "mlp", None)
+        if prev_mlp is None or nxt_mlp is None:
+            continue
+        # Streamed SOURCE only: a dense-island source has no `mx.eval(indices)`
+        # barrier to ride and never consumes the stash, so linking it is dead work.
+        if isinstance(getattr(prev_mlp, "switch_mlp", None), _DenseIslandSwitchGLU):
+            continue
+        next_gate = getattr(nxt_mlp, "gate", None)
+        # DSV4.1 gate only (the port's `_gate_prefix` scoring); other trunks skip.
+        if next_gate is None or not hasattr(next_gate, "score_func"):
+            continue
+        prev_mlp._mtplx_gate_prefetch_next = _GatePrefetchLink(nxt, next_gate)
+        installed += 1
+    return installed
+
+
+# ---------------------------------------------------------------------------
 # Decoder block (Hyper-Connections around attention + MoE)
 # ---------------------------------------------------------------------------
 class DecoderLayer(nn.Module):
@@ -2649,12 +3387,101 @@ class DecoderLayer(nn.Module):
         )
         return h, ffn_pre
 
+    def _maybe_stash_gate_prefetch(self, h) -> None:
+        """W93: predict the NEXT routed layer's top-k route from ``h`` -- the
+        residual ENTERING this layer, BEFORE this layer's attention (W89's
+        `layer_in_{L-1}`) -- and stash the ids on this layer's streamed switch.
+        The switch evaluates them on its own ``mx.eval(indices)`` routing barrier
+        (no new host sync, W93_GATE_PREFETCH.md §3) and issues the speculative
+        reads for layer L. Inert unless the flag is armed, this is single-token AR
+        decode, and the bound switch has a runtime with a prefetch ring. Reads
+        only ``h`` and the (frozen) next gate weights, so it can never perturb
+        this layer's output (proven byte-identical on/off)."""
+        link = getattr(self.mlp, "_mtplx_gate_prefetch_next", None)
+        if link is None:
+            return
+        # h is [B, T, hc_mult, dim]. AR decode (T==1); the DSpark verify row batch
+        # (T = K+1, 2..MAX) only under the v2 runner -- an AR-only
+        # MTPLX_DSV41_GATE_PREFETCH stays inert on T>1 (the lane-D multi-row
+        # contract).
+        if h.ndim != 4:
+            return
+        _T = int(h.shape[1])
+        # W95f (review MEDIUM): gate on the ROUTING PHASE, not the row count alone.
+        # A 2..8-token PREFILL (a short prompt, or a short appended turn on a cached
+        # prefix) has the SAME T as a DSpark verify row batch, but must NOT
+        # speculate -- prefill would burn ring slots + drive time and inflate
+        # prefetch_predicted/issued.  The DSpark verify runs under
+        # ``expert_routing_phase(DECODE)`` (deepseek_v41_dspark_decode.py) and AR
+        # decode is T==1/DECODE, so the phase -- not the shape -- separates a verify
+        # from a prefill.  Local import keeps the module import graph acyclic.
+        from mtplx.expert_streaming import RoutingPhase
+        from mtplx.models.expert_mlx import current_expert_routing_phase
+
+        if current_expert_routing_phase(token_count=_T) is not RoutingPhase.DECODE:
+            return  # PREFILL (any T) never predicts
+        # AR decode (T==1) predicts the single row's route; a DSpark verify row
+        # batch (2..MAX rows) predicts the per-row UNION, but ONLY under the v2
+        # runner -- an AR-only MTPLX_DSV41_GATE_PREFETCH stays inert on T>1 (the
+        # lane-D multi-row contract); a verify wider than MAX never predicts.
+        if _T != 1 and not (
+            _runner_v2_enabled() and _T <= _RUNNER_V2_VERIFY_MAX_ROWS
+        ):
+            return
+        switch = getattr(self.mlp, "switch_mlp", None)
+        runtime = getattr(switch, "runtime", None)
+        if runtime is None:
+            return
+        config = getattr(runtime, "config", None)
+        if config is None or getattr(config, "prefetch_slots", 0) <= 0:
+            return
+        k = _resolve_gate_prefetch_k()
+        if k <= 0:
+            return
+        # AR predicts ``k`` for the single row; the verify predicts the same ``k``
+        # per row and UNIONs across the K+1 rows (the union dedups + is confidence-
+        # gated at the issue site). Both are confidence-margin trimmed (W95 retune).
+        # W95f (review LOW): the verify used a dedicated per-row width of 8, but
+        # under the v2 default margin (-0.05) the 6th-ranked candidate is ALWAYS
+        # trimmed (the threshold sits strictly above the 6th score), so a per-row
+        # width of 6 and 8 leave the IDENTICAL <=5 surviving set -- the 8 was dead,
+        # so both AR and verify now use the resolved ``k`` (default 6).
+        # EXACTLY the collector's ``layer_in`` (scripts/deepseek_v41/collect_route
+        # _traces.py:175): mean over the hc copies with the f32 upcast BEFORE the
+        # mean.  (Collapsing in bf16 first would differ at the bf16 ULP on the real
+        # bf16 residual.)
+        collapsed = mx.mean(h.astype(mx.float32), axis=2)
+        # LOW-2 (W93 review): W89's evaluator scored the STORED trace tensor, which
+        # the collector wrote through ``bf16_bits`` (`li_u = bf16_bits(li)`,
+        # collect_route_traces.py:180) -- i.e. the f32 mean ROUNDED to bf16 and
+        # upcast back to f32.  Scoring the un-rounded f32 mean is a different tensor
+        # at the bf16 ULP, so the measured missRed@10 0.736 would not apply exactly.
+        # Round-trip through bf16 so the predictor scores the bit-identical tensor
+        # the gate oracle was measured on (``bf16_bits`` -> ``bf16_to_f32`` == this).
+        collapsed = collapsed.astype(mx.bfloat16).astype(mx.float32)
+        predicted = gate_predict_topk(
+            link.next_gate, collapsed, k, margin=_resolve_gate_prefetch_margin()
+        )
+        # LOW-3 (W93 review): stash on the plain `_GatePrefetchLink` (which exposes
+        # the (next_layer, pending_ids) sequence interface) rather than setting a
+        # raw `(int, mx.array)` tuple on the switch nn.Module -- a tuple would be
+        # registered into `switch.parameters()` by mlx 0.32.2 `Module.__setattr__`.
+        # The switch holds only a plain-object reference (`__setattr__` else
+        # branch), so the predicted-id array never enters any module's param tree.
+        # NOT an ancestor of this layer's output, so it rides the switch's existing
+        # indices eval.
+        link.pending_ids = predicted
+        switch._mtplx_gate_prefetch_pending = link
+
     def __call__(self, h, pre_mix, positions, layer_cache, shared):
         global _SMALL_STAGES_FUSED_CALLS, _SMALL_STAGES_EAGER_CALLS
         if _small_stages_use(h):
             _SMALL_STAGES_FUSED_CALLS += 1
             return self._fused_small_decode(h, pre_mix, positions, layer_cache, shared)
         _SMALL_STAGES_EAGER_CALLS += 1
+        # W93 gate-oracle prefetch: predict the next layer's route from the
+        # pre-attention residual, before attention consumes it. No-op unless armed.
+        self._maybe_stash_gate_prefetch(h)
         moe_input, carry, ffn_pre = self.attn_and_moe_input(
             h, pre_mix, positions, layer_cache, shared
         )
@@ -2843,6 +3670,14 @@ class DeepseekV41Backbone(nn.Module):
             engram_state = self.engram_hash.fresh() if self.engram_hash is not None else None
             cache = _make_cache(self.args, engram_state=engram_state)
 
+        # W107 (review LOW-A): admit the WHOLE prompt once, up front -- the chunk-major
+        # driver below feeds the prompt in spans, so a per-span check would only trip on
+        # span 2 with a partial prefix already written; fail at offset 0 instead.  No-op
+        # unless the bounded lanes are armed; _forward_layer_major hoists this too.
+        _admit = getattr(cache, "assert_can_admit", None)
+        if callable(_admit):
+            _admit(s)
+
         chunk = _resolve_prefill_chunk(self.args, s, prefill_chunk)
         if chunk <= 0 or chunk >= s:
             # one-shot (decode, short prompts, or chunking disabled): byte-for-byte
@@ -2923,6 +3758,12 @@ class DeepseekV41Backbone(nn.Module):
         chunked caller runs this only on the span carrying the position it drafts
         from, so the returned tensor's last row is the final prompt token."""
         b, s = input_ids.shape
+        # W107 (review LOW-1): fail an over-cap forward BEFORE any lane is written,
+        # so a misconfigured max_kv does not leave the cache half-updated (no-op
+        # unless the bounded lanes are armed).
+        _admit = getattr(cache, "assert_can_admit", None)
+        if callable(_admit):
+            _admit(s)
         positions = mx.arange(cache.offset, cache.offset + s)
 
         with _stime.stage("embed") as _st:
@@ -3174,6 +4015,10 @@ class DeepseekV41Backbone(nn.Module):
           prompt (its ``[:, -1:, :]`` slice is still the final prompt token)."""
         _stime.set_schedule("layer_major")
         b, s = input_ids.shape
+        # W107 (review LOW-1): fail an over-cap prefill BEFORE any lane is written.
+        _admit = getattr(cache, "assert_can_admit", None)
+        if callable(_admit):
+            _admit(s)
         offset0 = int(cache.offset)
         spans = [(start, min(start + chunk, s)) for start in range(0, s, chunk)]
         n_chunks = len(spans)

@@ -545,3 +545,135 @@ def test_launcher_in_model_1k_argv_parses_and_resolves_prompt(monkeypatch, tmp_p
     prompt_ids, prompt_meta = _MOD._resolve_in_model_prompt(ab, bench, args)
     assert isinstance(prompt_ids, list) and len(prompt_ids) > 0
     assert isinstance(prompt_meta, dict)
+
+
+# ---------------------------------------------------------------------------
+# --in-model --unfenced --attn-subops (W97): within-attention sub-op attribution
+# on the tiny FAKE full model (CPU).  Plumbing + attribution-identity + stub
+# restore + compile-restore checks; magnitudes are meaningless on CPU (the GPU
+# window measures the real in-situ frame walls).
+# ---------------------------------------------------------------------------
+def test_attn_subops_list_is_absorbed_port_shape():
+    # This port is MLA-absorbed: no per-head K/V up-projection sub-op exists.
+    assert _MOD._ATTN_SUBOPS == ["qkv_proj", "attn_core", "wo_a_dequant", "out_proj", "rope"]
+
+
+@pytest.fixture(scope="module")
+def subops_receipt():
+    return _MOD.run_in_model_attn_subops({
+        "tiny": True, "steps": 8, "warmup_steps": 2, "prompt_len": 40,
+    })
+
+
+def test_attn_subops_all_passes_run(subops_receipt):
+    r = subops_receipt
+    assert mx.default_device() == mx.cpu
+    assert r["device"] == "cpu" and r["tiny"] is True
+    assert r["mode"] == "in_model_unfenced_attn_subops"
+    assert set(r["passes"]) == {"full", *_MOD._ATTN_SUBOPS}
+    for key in ["full", *_MOD._ATTN_SUBOPS]:
+        s = r["passes"][key]["summary"]
+        assert isinstance(s["mean_ms_per_token"], float) and s["mean_ms_per_token"] > 0.0
+        assert s["measured_steps"] == 6  # 8 - 2 warmup
+
+
+def test_attn_subops_cost_is_full_minus_stub(subops_receipt):
+    r = subops_receipt
+    a = r["attribution"]
+    full = a["full_eager_ms_per_token"]
+    assert abs(full - r["passes"]["full"]["summary"]["mean_ms_per_token"]) < 1e-9
+    for sub in _MOD._ATTN_SUBOPS:
+        stubbed = r["passes"][sub]["summary"]["mean_ms_per_token"]
+        cost = a["subops"][sub]["cost_ms_per_token"]
+        assert abs(cost - (full - stubbed)) < 1e-9, (sub, cost, full, stubbed)
+
+
+def test_attn_subops_records_switch_workload_and_flags_token_change(subops_receipt):
+    """W97 review item 6: each pass records its switch workload (misses/bytes per
+    token + the route-stage hot counters) and its token sha; the attribution flags
+    any sub-op whose sha != full -- the zero-returning stubs (attn_core/qkv_proj/
+    out_proj) change routing so ``full - stub`` is contaminated, while the
+    byte-identical wo_a_dequant stub (it just precomputes the same dense weight) is
+    NOT flagged.  The route probe is off by default, so route_stage is None here."""
+    r = subops_receipt
+    for key in ["full", *_MOD._ATTN_SUBOPS]:
+        sw = r["passes"][key]["switch_workload"]
+        assert {"misses_per_token", "bytes_read_per_token", "hit_rate",
+                "route_stage", "route_probe_enabled"} <= set(sw)
+        assert sw["route_probe_enabled"] is False   # MTPLX_ROUTE_STAGE_PROBE unset
+        assert sw["route_stage"] is None            # so no per-pass hot-counter delta
+
+    subs = r["attribution"]["subops"]
+    # zero-returning stubs change the decoded tokens (different routing/misses).
+    for sub in ("qkv_proj", "attn_core", "out_proj"):
+        assert subs[sub]["token_sha_differs_from_full"] is True, sub
+    # wo_a_dequant returns the SAME dense weight the eager path computes -> tokens
+    # unchanged -> the one uncontaminated sub-op cost.
+    assert subs["wo_a_dequant"]["token_sha_differs_from_full"] is False
+    # every sub-op carries the switch delta keys (values may be None on the fake CPU
+    # model that has no expert-streaming runtime; the flag is the always-on signal).
+    for sub in _MOD._ATTN_SUBOPS:
+        assert set(subs[sub]["switch_delta"]) == {"d_misses_per_token", "d_bytes_read_per_token"}
+        assert isinstance(subs[sub]["token_sha_differs_from_full"], bool)
+
+
+def test_attn_subops_runs_with_compile_forced_off():
+    """The sub-op microscope forces the attention compile tapes off for its passes
+    (the tiny loader also sets it off), and the receipt records that it did so."""
+    r = _MOD.run_in_model_attn_subops({"tiny": True, "steps": 3, "warmup_steps": 1,
+                                       "prompt_len": 32})
+    assert _MOD.dsv41._ATTN_COMPILE is False   # tiny setup + microscope both off
+    assert "compile tapes forced OFF" in r["note"]
+
+
+def _forward_logits(model, ids):
+    cache = model.make_cache()
+    return model(mx.array([list(ids)]), cache=cache)
+
+
+@pytest.mark.parametrize("which", ["qkv_proj", "attn_core", "wo_a_dequant", "out_proj", "rope"])
+def test_apply_attn_subop_stub_restore_is_byte_identical(which):
+    """Applying then restoring a sub-op stub leaves the model producing bit-for-bit
+    the same logits as before the stub -- a functional restore check that does not
+    depend on (unstable) bound-method object identity.  The stubbed forward is only
+    required to RUN (shape-preserving); its logits may differ."""
+    ids = list(range(1, 41))
+    model, _args = _MOD._build_tiny_full_model(seed=2)
+    _MOD.dsv41._ATTN_COMPILE = False
+    base = _forward_logits(model, ids)
+    mx.eval(base)
+
+    st = _MOD._apply_attn_subop_stub(model, which)
+    try:
+        stubbed = _forward_logits(model, ids)
+        mx.eval(stubbed)                       # shape-preserving: just runs
+        assert stubbed.shape == base.shape
+    finally:
+        _MOD._restore_stub(st)
+
+    after = _forward_logits(model, ids)
+    mx.eval(after)
+    assert bool(mx.all(after == base).item()), f"{which}: restore not byte-identical"
+
+
+def test_attn_subops_cli_requires_in_model_unfenced():
+    p = _MOD.build_parser()
+    # --attn-subops without --unfenced must exit 2 (argparse error).
+    with pytest.raises(SystemExit):
+        _MOD.main(["--in-model", "--tiny", "--attn-subops", "--in-model-steps", "3"])
+
+
+def test_attn_subops_main_writes_json(tmp_path):
+    import json
+    out = tmp_path / "subops-tiny.json"
+    rc = _MOD.main([
+        "--in-model", "--unfenced", "--attn-subops", "--tiny",
+        "--context-tokens", "512", "--in-model-steps", "6", "--warmup-steps", "2",
+        "--out", str(out),
+    ])
+    assert rc == 0
+    receipt = json.loads(out.read_text())
+    assert receipt["mode"] == "in_model_unfenced_attn_subops"
+    assert receipt["device"] == "cpu" and receipt["tiny"] is True
+    assert set(receipt["passes"]) == {"full", *_MOD._ATTN_SUBOPS}
+    assert "subops" in receipt["attribution"]

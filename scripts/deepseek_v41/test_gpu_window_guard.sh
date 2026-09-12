@@ -49,6 +49,22 @@ chmod +x "${FAKE_VMSTAT}"
 
 run_vmstat() { GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" "$@"; }
 
+# --- a fake vm_stat summing to EXACTLY 103 GiB (over the W106 default 102 ceiling)
+#   wired 2600000 + anon 3596608 + comp 553600 = 6750208 pages * 16384 = 103.0 GiB
+FAKE_VMSTAT_103="${TMP}/vm_stat_103gib"
+cat > "${FAKE_VMSTAT_103}" <<'EOF'
+#!/bin/bash
+cat <<'V'
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                  100000.
+Anonymous pages:                            3596608.
+Pages wired down:                           2600000.
+Pages occupied by compressor:                553600.
+V
+EOF
+chmod +x "${FAKE_VMSTAT_103}"
+run_vmstat_103() { GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT_103}" "$@"; }
+
 # used_mem_bytes = exactly 100 GiB in bytes
 eq "used_mem_bytes sums wired+anonymous+occupied-compressor at the page size" \
    "107374182400" \
@@ -59,9 +75,13 @@ eq "used-mem-gib renders 100.0" \
    "$(run_vmstat bash "${SCRIPT}" --selftest used-mem-gib)"
 
 # ceiling decisions
-eq "100 GiB used is UNDER the default 105 GiB ceiling -> no" \
+eq "100 GiB used is UNDER the default 102 GiB ceiling (W106 HIGH-2) -> no" \
    "no" \
    "$(run_vmstat bash "${SCRIPT}" --selftest over-ceiling)"
+
+eq "103 GiB used is OVER the default 102 GiB ceiling (W106 HIGH-2) -> yes" \
+   "yes" \
+   "$(run_vmstat_103 bash "${SCRIPT}" --selftest over-ceiling)"
 
 eq "100 GiB used is OVER a 90 GiB ceiling -> yes" \
    "yes" \

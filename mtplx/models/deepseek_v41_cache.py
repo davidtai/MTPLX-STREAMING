@@ -166,6 +166,26 @@ def _rows_copied_total() -> int:
     return _KV_STATS["rows_copied"]
 
 
+# ---------------------------------------------------------------------------
+# W107 (review round-4): the append write primitive is ``mx.slice_update``.
+# ---------------------------------------------------------------------------
+# Round 3 switched the bounded lanes to in-place ``__setitem__`` on a CPU probe that
+# claimed slice_update "copies".  The re-review DISPROVED that at the source: both the
+# static ``SliceUpdate`` (``__setitem__``) and dynamic ``mx.slice_update`` go through
+# ``copy_{cpu,gpu}`` -> ``set_copy_output_data`` -> ``out.copy_shared_buffer(in)`` when
+# ``is_donatable(in)`` (mlx-fork common/copy.h), so in the cache's REBIND pattern
+# (``self._buf = write(self._buf)`` -- the previous descriptor is dropped) slice_update
+# is pointer-stable (donates) and IDENTICAL to __setitem__ (0 pointer flips on every
+# lane in the real AR + K+1-verify + rollback trace).  The probe's "COPY" verdict was
+# an artifact of its own ``out = w(buf); eval; buf = out`` alias keeping the old
+# descriptor alive.  In-place __setitem__ is also HAZARDOUS here: :meth:`_GrowBuffer.view`
+# / :meth:`_WindowRing.view` return the buffer IDENTITY when ``_len == cap``, so a held
+# ``lc.window`` / ``lc.state[0]`` would be mutated by the next in-place append.  So W107
+# keeps ``mx.slice_update`` (functional, donates in the rebind pattern) -- the reverted,
+# safe primitive.  W107 is a MEMORY-PLAN lever (bounded, priced, receipt-gated), not a
+# speed lever; window-42's flat ``cache_append`` is fence latency, not copies.
+
+
 class _GrowBuffer:
     """Geometric-capacity append backing for one store lane (W73 / K32).
 
@@ -183,18 +203,32 @@ class _GrowBuffer:
     the plain path) but the same bytes.
     """
 
-    __slots__ = ("_buf", "_len", "_init_cap")
+    __slots__ = ("_buf", "_len", "_init_cap", "_bounded_cap", "_lane")
 
-    def __init__(self, init_cap: int = 256):
+    def __init__(self, init_cap: int = 256, *, bounded_cap: Optional[int] = None,
+                 counter_lane: Optional[str] = None):
         self._buf: Optional[mx.array] = None
         self._len: int = 0
-        self._init_cap = int(init_cap)
+        #: W107: when ``bounded_cap`` is set the buffer is preallocated to it on the
+        #: first append and the logical length may never exceed it -- an append that
+        #: would overflow RAISES (no geometric resize), so the lane is hard-bounded
+        #: to ``max_kv``.  ``init_cap`` is then forced to ``bounded_cap`` so the first
+        #: (prefill) allocation is the full buffer and every later write is in place.
+        self._bounded_cap = int(bounded_cap) if bounded_cap else None
+        self._init_cap = int(bounded_cap) if bounded_cap else int(init_cap)
+        #: W107: lane name for the per-lane bounded engagement counters, or ``None``
+        #: for a non-bounded chunk-grow / window_ring lane (which uses ``_KV_STATS``).
+        self._lane = counter_lane
 
     @staticmethod
     def _starts(ndim: int, row: int) -> mx.array:
         return mx.array([0, int(row)] + [0] * (ndim - 2), dtype=mx.int32)
 
     def _write(self, buf: mx.array, new: mx.array, row: int) -> mx.array:
+        # W107 round-4: mx.slice_update donates in the cache's rebind pattern
+        # (``self._buf = _write(self._buf, ...)`` drops the old descriptor), so the
+        # write is pointer-stable; kept over in-place __setitem__ (which is unsafe --
+        # view() can return the buffer identity -- and no faster).
         axes = tuple(range(new.ndim))
         return mx.slice_update(buf, new, self._starts(new.ndim, row), axes=axes)
 
@@ -202,23 +236,37 @@ class _GrowBuffer:
         if new is None or (new.ndim >= 2 and new.shape[1] == 0):
             return
         n = int(new.shape[1])
+        # W107 hard bound: never exceed the preallocated cap (clean raise, no resize).
+        if self._bounded_cap is not None and self._len + n > self._bounded_cap:
+            raise ValueError(
+                f"bounded KV lane {self._lane or '?'}: append of {n} rows would "
+                f"exceed preallocated cap {self._bounded_cap} (have {self._len})"
+            )
         if self._buf is None:
             cap = max(self._init_cap, n)
             tail = tuple(new.shape[2:])
             buf = mx.zeros((new.shape[0], cap) + tail, dtype=new.dtype)
             self._buf = self._write(buf, new, 0)
             self._len = n
-            _KV_STATS["buffers"] += 1
-            _note_rows_copied(n)
+            if self._lane is None:
+                _KV_STATS["buffers"] += 1
+                _note_rows_copied(n)
+            else:
+                _note_bounded(self._lane, realloc=True, rows=n,
+                              alloc_bytes=int(buf.nbytes))
             return
         cap = int(self._buf.shape[1])
         if self._len + n <= cap:
             # in-place donated write of just the new rows
             self._buf = self._write(self._buf, new, self._len)
             self._len += n
-            _note_rows_copied(n)
+            if self._lane is None:
+                _note_rows_copied(n)
+            else:
+                _note_bounded(self._lane, inplace=True, rows=n)
             return
-        # geometric resize: copy the live prefix once into a larger buffer
+        # geometric resize: copy the live prefix once into a larger buffer.  Only
+        # reachable for a non-bounded lane (a bounded lane raised above).
         new_cap = max(cap * 2, self._len + n)
         head = self._buf[:, : self._len]
         tail = tuple(new.shape[2:])
@@ -226,8 +274,12 @@ class _GrowBuffer:
         buf = self._write(buf, head, 0)
         buf = self._write(buf, new, self._len)
         self._buf = buf
-        _KV_STATS["buffers"] += 1  # geometric resize allocation
-        _note_rows_copied(self._len + n)
+        if self._lane is None:
+            _KV_STATS["buffers"] += 1  # geometric resize allocation
+            _note_rows_copied(self._len + n)
+        else:
+            _note_bounded(self._lane, realloc=True, rows=self._len + n,
+                          alloc_bytes=int(buf.nbytes))
         self._len += n
 
     def view(self) -> Optional[mx.array]:
@@ -244,13 +296,12 @@ class _GrowBuffer:
         self.append(arr)
 
     def truncate_to(self, n: int) -> None:
-        """Drop back to the first ``n`` logical rows (length-only; keeps capacity)."""
-        n = max(0, int(n))
-        if n <= 0:
-            self._buf = None
-            self._len = 0
-        else:
-            self._len = min(n, self._len)
+        """Drop back to the first ``n`` logical rows (length-only; keeps capacity).
+
+        W107 (review LOW-2): ``n == 0`` keeps the preallocated buffer (only ``_len``
+        goes to 0) -- a trim/rollback to empty must NOT drop the prealloc and force a
+        realloc on the next append (that is what :meth:`set` is for)."""
+        self._len = min(max(0, int(n)), self._len)
 
     def rows(self) -> int:
         return 0 if self._buf is None else self._len
@@ -333,6 +384,201 @@ def _window_ring_config() -> tuple:
     )
 
 
+# ---------------------------------------------------------------------------
+# W107: MTPLX_DSV41_KV_BOUNDED -- one switch that bounds/preallocates EVERY KV lane
+# ---------------------------------------------------------------------------
+#: W107 (David: "controlling kv growth is crucial for everything").  The master
+#: switch that makes every KV lane bounded and preallocated to ``max_kv`` at
+#: prefill, so the per-token write is O(new rows) in place (a donated
+#: ``mx.slice_update`` on the preallocated buffer) with NO per-token realloc and NO
+#: O(T) ``concatenate``.  It composes the W80 window RING (the window is a genuine
+#: sliding window -> bounded to ``window_size + max_verify + slack``) with a
+#: PREALLOCATED ``_GrowBuffer`` for the compress_kv / index_k lanes (one row per
+#: completed group, capped to ``ceil(max_kv/ratio)`` + slack) AND -- the lane W80
+#: left untouched -- a PREALLOCATED backing for the compressor frontier
+#: (``comp_state.raw_kv`` / ``raw_score``, the "main latent KV"), which the shipped
+#: path grew with a per-token ``_grow`` (O(n_fed) concatenate == O(T^2) over the
+#: cell).  Under this flag that frontier is a ``_GrowBuffer`` capped to ``max_kv``,
+#: written in place.  Every reachable read is byte-identical by construction (pure
+#: prealloc + in-place reorder; the ring's drop_offset seam already proved
+#: byte-identity for the window).  Precedence: KV_BOUNDED > WINDOW_RING > chunk-grow.
+#: Read at construction (per request, after the harness stamps the key; NOT frozen
+#: at import -- [[env-flags-read-at-use-not-import]]).  Default OFF.
+_KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
+#: The preallocation capacity (``max_kv``, the runner's ``--max-kv``).  The ab
+#: harness stamps it from the resolved cell max_kv after ``_apply_arm_env``; falls
+#: back to :data:`_WINDOW_RING_MAXKV_ENV` (a bounded arm that only set that), and
+#: when NEITHER is set the lanes fall back to the geometric ``_GrowBuffer`` (still
+#: in-place amortized O(new rows), but with O(log T) doubling reallocs the counters
+#: surface -- ``kv_realloc_* > 1`` == not truly preallocated).  Read at construction.
+_KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+
+#: Slack rows added to the preallocated caps: the compress/index lanes get one extra
+#: partial group + a verify-block margin; the latent frontier a small verify margin.
+#: (A speculative verify forward appends up to ``max_verify`` rows in one call, which
+#: can carry the running count a hair past a group boundary before a trim.)
+_BOUNDED_COMP_SLACK = 8
+_BOUNDED_LATENT_SLACK = 8
+
+
+def _kv_bounded_enabled() -> bool:
+    """Whether ``MTPLX_DSV41_KV_BOUNDED`` arms the bounded/preallocated lanes.
+
+    Read at call time (never frozen at import): the serving harness stamps the key
+    after importing this module, and each request builds a fresh cache."""
+    return (os.environ.get(_KV_BOUNDED_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _kv_bounded_maxkv() -> Optional[int]:
+    """The bounded preallocation capacity from the env (``MTPLX_DSV41_KV_BOUNDED_MAXKV``,
+    else ``MTPLX_DSV41_WINDOW_RING_MAXKV``), or ``None`` when neither is set (the
+    lanes then fall back to geometric growth -- still in-place, but not preallocated)."""
+    raw = (os.environ.get(_KV_BOUNDED_MAXKV_ENV) or "").strip()
+    if not raw:
+        raw = (os.environ.get(_WINDOW_RING_MAXKV_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        raise ValueError(
+            f"{_KV_BOUNDED_MAXKV_ENV} must be a positive integer, got {raw!r}"
+        )
+    return v if v > 0 else None
+
+
+def _bounded_comp_cap(maxkv: Optional[int], ratio: int) -> Optional[int]:
+    """Preallocated row cap for the compress_kv / index_k lanes at ``max_kv``.
+
+    They hold one row per completed group of ``ratio`` tokens (``ratio == 1`` is one
+    row per token), so ``ceil(max_kv / ratio)`` rows, plus a slack partial group /
+    verify margin.  ``None`` (no max_kv) -> geometric fallback."""
+    if not maxkv:
+        return None
+    r = ratio if (ratio and ratio > 0) else 1
+    return (int(maxkv) + r - 1) // r + _BOUNDED_COMP_SLACK
+
+
+def _bounded_latent_cap(maxkv: Optional[int]) -> Optional[int]:
+    """Preallocated row cap for the compressor frontier (``raw_kv`` / ``raw_score``).
+
+    The frontier retains one fed row per processed token (``n_fed``), so it caps to
+    ``max_kv`` + a verify-block slack.  ``None`` -> geometric fallback."""
+    if not maxkv:
+        return None
+    return int(maxkv) + _BOUNDED_LATENT_SLACK
+
+
+def kv_bytes_breakdown_at_max_kv(
+    config, max_kv: int, *, batch: int = 1,
+    max_verify: int = 8, slack: int = 8, headroom: int = 64,
+    model_dtype_bytes: int = 2, store_dtype_bytes: int = 4,
+) -> dict:
+    """Per-lane preallocated KV bytes for a bounded cache at ``max_kv`` (W107).
+
+    A pure function of the model ``config`` (``num_hidden_layers``, ``window_size``,
+    ``head_dim``, ``index_head_dim``, ``compress_ratios``, ``kv_source_layer_ids``)
+    and ``max_kv``, matching what :class:`LayerAttentionCache` preallocates under
+    ``MTPLX_DSV41_KV_BOUNDED``.  W106 uses :func:`kv_bytes_at_max_kv` (the ``total``)
+    in the memory-plan derivation; this returns the breakdown behind it.  The ab
+    receipt gate ``kv_bounded.formula_matches_alloc`` verifies this against the live
+    ``alloc_bytes`` so a drift in the dtype model is caught at runtime.
+
+    **Per-layer store dtypes (review MEDIUM-A -- measured, not assumed).** Only the
+    layer-0 window store is the model's compute dtype (bf16); every other store is
+    **fp32**, because layer 0's post-attention o-LoRA einsum promotes the residual to
+    fp32 (``_o_lora_down``: ``o.astype(mx.float32)``, deepseek_v41.py) and it stays
+    fp32 down the stack, so layers 1..N-1's window KV and every kv-source layer's
+    compress/index/frontier are fp32.  (An all-fp32 run -- e.g. an fp32 tiny model --
+    is just ``model_dtype_bytes == store_dtype_bytes == 4``.)  No cast is added at any
+    append site (that would change bytes vs the shipped path); the formula models what
+    the runtime already stores.
+
+    Formula (bytes), summed over layers ``L`` (batch ``B``):
+
+      * **window** (every layer, the bounded SWA ring): two ping-pong buffers of
+        ``phys_cap = window_size + max_verify + slack + headroom`` rows ::
+
+            2 * B * phys_cap * head_dim * (model_dtype_bytes if L == 0 else store_dtype_bytes)
+
+        Bounded and INDEPENDENT of ``max_kv``.  (A prefill chunk wider than ``phys_cap``
+        grows it transiently; the decode-steady size compacts back -- review MEDIUM-1 --
+        so this is the steady bound; the cumulative ``alloc_bytes`` counter also counts
+        the transient, hence ``formula_matches_alloc`` is exact only when
+        ``kv_realloc_window == 1``.)
+      * **compress_kv** / **index_k** (``kv_source`` layers, all fp32): one row per
+        completed group, ``comp_cap = ceil(max_kv / ratio) + COMP_SLACK`` rows ::
+
+            B * comp_cap * head_dim       * store_dtype_bytes
+            B * comp_cap * index_head_dim * store_dtype_bytes
+      * **latent** frontier (``kv_source`` + ``ratio > 1`` layers, the "main latent
+        KV"): the two fp32 raw arrays (kv + gate score), ``latent_cap =
+        max_kv + LATENT_SLACK`` rows ::
+
+            2 * B * latent_cap * head_dim * store_dtype_bytes
+
+    ``model_dtype_bytes`` defaults to 2 (the released bf16 model); ``store_dtype_bytes``
+    to 4 (fp32).  ``COMP_SLACK`` / ``LATENT_SLACK`` are :data:`_BOUNDED_COMP_SLACK` /
+    :data:`_BOUNDED_LATENT_SLACK`.
+    """
+    max_kv = int(max_kv)
+    B = int(batch)
+    n_layers = int(config.num_hidden_layers)
+    window_size = int(getattr(config, "window_size", WINDOW_SIZE_DEFAULT))
+    head_dim = int(config.head_dim)
+    index_head_dim = int(getattr(config, "index_head_dim", head_dim))
+    ratios = list(getattr(config, "compress_ratios", None) or [0] * n_layers)
+    if len(ratios) < n_layers:
+        ratios = ratios + [0] * (n_layers - len(ratios))
+    kv_sources = set(int(i) for i in getattr(config, "kv_source_layer_ids", ()) or ())
+
+    phys_cap = window_size + int(max_verify) + int(slack) + int(headroom)
+    latent_cap = _bounded_latent_cap(max_kv)
+    m_bytes = int(model_dtype_bytes)
+    s_bytes = int(store_dtype_bytes)
+
+    window_bytes = 0
+    compress_bytes = 0
+    index_bytes = 0
+    latent_bytes = 0
+    for L in range(n_layers):
+        # window: layer 0 follows the model compute dtype; layers 1+ store the fp32
+        # residual (o-LoRA einsum promotes it at layer 0) -- review MEDIUM-A.
+        w_bytes = m_bytes if L == 0 else s_bytes
+        window_bytes += 2 * B * phys_cap * head_dim * w_bytes
+        if L in kv_sources:
+            ratio = int(ratios[L])
+            cc = _bounded_comp_cap(max_kv, ratio)
+            # compress/index are fp32 on every kv-source layer: ratio>1 pools in fp32,
+            # ratio==1 follows the fp32 residual (kv-source layers are all L>0).
+            compress_bytes += B * cc * head_dim * s_bytes
+            index_bytes += B * cc * index_head_dim * s_bytes
+            if ratio > 1:
+                latent_bytes += 2 * B * latent_cap * head_dim * s_bytes
+    total = window_bytes + compress_bytes + index_bytes + latent_bytes
+    return {
+        "window": int(window_bytes),
+        "compress": int(compress_bytes),
+        "index": int(index_bytes),
+        "latent": int(latent_bytes),
+        "total": int(total),
+        "max_kv": max_kv,
+        "phys_cap": int(phys_cap),
+        "comp_slack": _BOUNDED_COMP_SLACK,
+        "latent_slack": _BOUNDED_LATENT_SLACK,
+    }
+
+
+def kv_bytes_at_max_kv(config, max_kv: int, **kwargs) -> int:
+    """Total preallocated KV bytes across all lanes for a bounded cache at
+    ``max_kv`` (W107).  The ``total`` of :func:`kv_bytes_breakdown_at_max_kv`; see
+    that for the per-lane formula and the keyword overrides (batch, ring tuning,
+    per-lane dtype widths).  W106 uses this in the memory-plan derivation."""
+    return kv_bytes_breakdown_at_max_kv(config, max_kv, **kwargs)["total"]
+
+
 #: W80 engagement + drop/copy telemetry.  ``layers_ring`` proves engagement (how
 #: many layer caches chose the ring); ``capacity`` is the steady-state logical keep
 #: (window_size + max_verify + slack), ``phys_capacity`` the physical ping-pong
@@ -367,6 +613,138 @@ def window_ring_stats() -> dict:
     return s
 
 
+# ---------------------------------------------------------------------------
+# W107 per-lane bounded-KV engagement counters
+# ---------------------------------------------------------------------------
+#: W107 per-lane in-place / realloc telemetry, the engagement signal for the
+#: bounded lanes.  For each lane (``window`` == the SWA ring, ``compress`` ==
+#: compress_kv, ``index`` == index_k, ``latent`` == the compressor frontier /
+#: "main latent KV"):
+#:   * ``kv_inplace_writes_<lane>`` -- appends that wrote in place into an existing
+#:     preallocated buffer (a donated ``mx.slice_update`` of just the new rows, or a
+#:     ping-pong compaction that reused a buffer): the O(new-rows) decode path.
+#:   * ``kv_realloc_<lane>`` -- appends that ALLOCATED a buffer.  In a truly bounded
+#:     arm this is exactly 1 per lane (the one prefill preallocation); ``> 1`` means
+#:     the lane reallocated during the cell (max_kv unset -> geometric doubling, or a
+#:     prefill chunk wider than the preallocated cap) i.e. NOT preallocated-bounded.
+#:   * ``rows_<lane>`` -- logical rows written (appends + compaction carries).
+#: ``layers_bounded`` proves engagement (layer caches that chose the bounded path);
+#: ``maxkv`` the resolved preallocation cap; ``alloc_bytes`` the total bytes of all
+#: buffers this arm allocated (compare vs :func:`kv_bytes_at_max_kv`).  Process-global
+#: + cumulative (like the Sinkhorn / chunk-grow / ring counters); the ab harness
+#: resets after model load and snapshots after the run.
+_BOUNDED_LANES = ("window", "compress", "index", "latent")
+_BOUNDED_STATS = {"layers_bounded": 0, "maxkv": 0, "alloc_bytes": 0,
+                  "ptr_samples": 0}
+for _ln in _BOUNDED_LANES:
+    _BOUNDED_STATS[f"kv_inplace_writes_{_ln}"] = 0
+    _BOUNDED_STATS[f"kv_realloc_{_ln}"] = 0
+    _BOUNDED_STATS[f"rows_{_ln}"] = 0
+    #: W107 round-4 DONATION GATE: buffer data-pointer FLIPS per lane across decode
+    #: tokens (:meth:`DeepseekV41Cache.sample_ptr_flips`).  A donating append (the
+    #: rebind-pattern slice_update) keeps the pointer stable -> 0 flips on
+    #: compress/index/latent; the window lane flips once per ping-pong compaction, so
+    #: ``ptr_flips_window == window_ring.drops``.  A non-donating (copy) append flips
+    #: every token.  See :func:`kv_donation_gate`.
+    _BOUNDED_STATS[f"ptr_flips_{_ln}"] = 0
+del _ln
+
+
+def reset_kv_bounded_stats() -> None:
+    """Zero the W107 bounded-KV telemetry (call after model load to scope a run)."""
+    for k in _BOUNDED_STATS:
+        _BOUNDED_STATS[k] = 0
+
+
+def kv_bounded_stats() -> dict:
+    """Snapshot the W107 telemetry: ``enabled`` (any layer cache chose the bounded
+    path), the resolved ``maxkv``, allocated bytes, and per-lane in-place/realloc/row
+    counts."""
+    s = dict(_BOUNDED_STATS)
+    s["enabled"] = bool(_BOUNDED_STATS["layers_bounded"] > 0)
+    return s
+
+
+def _note_bounded(lane: Optional[str], *, inplace: bool = False,
+                  realloc: bool = False, rows: int = 0, alloc_bytes: int = 0) -> None:
+    """Record one bounded-lane append into :data:`_BOUNDED_STATS` (no-op when the
+    buffer carries no ``counter_lane``, i.e. a non-bounded chunk-grow / ring lane)."""
+    if lane is None:
+        return
+    if inplace:
+        _BOUNDED_STATS[f"kv_inplace_writes_{lane}"] += 1
+    if realloc:
+        _BOUNDED_STATS[f"kv_realloc_{lane}"] += 1
+    if rows:
+        _BOUNDED_STATS[f"rows_{lane}"] += int(rows)
+    if alloc_bytes:
+        _BOUNDED_STATS["alloc_bytes"] += int(alloc_bytes)
+
+
+def _array_data_ptr(a) -> Optional[int]:
+    """The buffer-protocol data pointer of an mx.array (for the W107 round-4 donation
+    gate), or ``None`` if the build/dtype refuses a zero-copy numpy view (guarded --
+    the reviewer's "if Metal refuses" case; e.g. bf16 has no numpy dtype).  The array
+    must already be evaluated for the pointer to be meaningful."""
+    if a is None:
+        return None
+    try:
+        import numpy as _np
+        return int(_np.array(a, copy=False).__array_interface__["data"][0])
+    except Exception:
+        return None
+
+
+def expected_bounded_reallocs(config) -> dict:
+    """The one-prealloc-per-lane-per-layer realloc counts a fully-donating bounded run
+    should show (for :func:`kv_donation_gate`): ``window`` on every layer, ``compress``
+    / ``index`` on each kv-source layer, ``latent`` on each ratio>1 kv-source layer
+    times two (kv + gate-score buffers)."""
+    n_layers = int(config.num_hidden_layers)
+    ratios = list(getattr(config, "compress_ratios", None) or [0] * n_layers)
+    if len(ratios) < n_layers:
+        ratios = ratios + [0] * (n_layers - len(ratios))
+    kv_src = set(int(i) for i in getattr(config, "kv_source_layer_ids", ()) or ())
+    n_comp = len(kv_src)
+    n_lat = sum(1 for L in kv_src if int(ratios[L]) > 1)
+    return {"window": n_layers, "compress": n_comp, "index": n_comp, "latent": 2 * n_lat}
+
+
+def kv_donation_gate(bounded_stats: dict, ring_stats: dict,
+                     expected_reallocs: Optional[dict] = None) -> dict:
+    """W107 round-4 donation gate (the reviewer's spec): the bounded lanes DONATE on
+    the real path iff, across the sampled decode tokens,
+    ``ptr_flips_window == window_ring.drops`` (the window pointer flips only on a
+    ping-pong compaction) and ``ptr_flips_{compress,index,latent} == 0`` (every append
+    reuses the buffer -- pointer-stable), with each ``kv_realloc_<lane>`` == its
+    one-prealloc-per-layer count (:func:`expected_bounded_reallocs`, i.e. no per-token
+    realloc).  Returns ``{ok, reasons, checks}``; ``ok`` is None when no pointer was
+    sampled (Metal refused the buffer-protocol pointer -> gate unavailable, not
+    failed)."""
+    checks = {}
+    reasons = []
+    if int(bounded_stats.get("ptr_samples", 0) or 0) == 0:
+        return {"ok": None, "reasons": ["no pointer samples (gate unavailable)"],
+                "checks": {}}
+    drops = int(ring_stats.get("drops", 0) or 0)
+    fw = int(bounded_stats.get("ptr_flips_window", 0) or 0)
+    checks["ptr_flips_window==drops"] = (fw == drops)
+    if fw != drops:
+        reasons.append(f"ptr_flips_window {fw} != window_ring.drops {drops}")
+    for lane in ("compress", "index", "latent"):
+        f = int(bounded_stats.get(f"ptr_flips_{lane}", 0) or 0)
+        checks[f"ptr_flips_{lane}==0"] = (f == 0)
+        if f != 0:
+            reasons.append(f"ptr_flips_{lane} {f} != 0 (append did not donate)")
+    if expected_reallocs:
+        for lane, want in expected_reallocs.items():
+            r = int(bounded_stats.get(f"kv_realloc_{lane}", 0) or 0)
+            checks[f"kv_realloc_{lane}=={want}"] = (r == want)
+            if r != want:
+                reasons.append(f"kv_realloc_{lane} {r} != {want} (not one prealloc/layer)")
+    return {"ok": all(checks.values()), "reasons": reasons, "checks": checks}
+
+
 class _WindowRing:
     """Bounded sliding-window store for one layer (W80 / K34).
 
@@ -395,14 +773,21 @@ class _WindowRing:
     """
 
     __slots__ = (
-        "window_size", "cap_keep", "phys_cap",
-        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail",
+        "window_size", "cap_keep", "phys_cap", "_base_phys_cap",
+        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail", "_lane",
     )
 
-    def __init__(self, window_size: int, max_verify: int, slack: int, headroom: int):
+    def __init__(self, window_size: int, max_verify: int, slack: int, headroom: int,
+                 *, counter_lane: Optional[str] = None):
         self.window_size = int(window_size)
         self.cap_keep = int(window_size) + int(max_verify) + int(slack)
         self.phys_cap = self.cap_keep + int(headroom)
+        #: W107 (review MEDIUM-1): the constructed (steady) ping-pong capacity.  A
+        #: prefill chunk wider than this grows ``phys_cap`` transiently; once decode
+        #: compactions no longer need the extra width the ring SHRINKS back to this,
+        #: so the decode-steady allocation matches :func:`kv_bytes_at_max_kv` (the
+        #: window term is ``2 * _base_phys_cap * head_dim``, independent of max_kv).
+        self._base_phys_cap = self.phys_cap
         self._bufs = [None, None]
         self._cur = 0
         self._len = 0
@@ -410,6 +795,9 @@ class _WindowRing:
         self._b: Optional[int] = None
         self._dtype = None
         self._tail: tuple = ()
+        #: W107: lane name for the per-lane bounded engagement counters (``"window"``
+        #: under KV_BOUNDED), or ``None`` for the plain W80 window_ring arm.
+        self._lane = counter_lane
 
     # -- absolute-position accessors ---------------------------------------
     @property
@@ -426,6 +814,7 @@ class _WindowRing:
     # -- internals ---------------------------------------------------------
     @staticmethod
     def _write(buf: mx.array, new: mx.array, row: int) -> mx.array:
+        # W107 round-4: mx.slice_update (donates in the rebind pattern; see _GrowBuffer).
         n = new.ndim
         starts = mx.array([0, int(row)] + [0] * (n - 2), dtype=mx.int32)
         return mx.slice_update(buf, new, starts, axes=tuple(range(n)))
@@ -438,7 +827,7 @@ class _WindowRing:
         self._dtype = new.dtype
         self._tail = tuple(new.shape[2:])
         n = int(new.shape[1])
-        cap = max(self.phys_cap, n)
+        cap = max(self._base_phys_cap, n)  # W107 MEDIUM-1: base, not a stale inflated cap
         self.phys_cap = cap
         self._bufs[0] = self._alloc(cap)
         self._bufs[1] = self._alloc(cap)
@@ -448,6 +837,9 @@ class _WindowRing:
         _RING_STATS["rows_copied"] += n
         _RING_STATS["capacity"] = self.cap_keep
         _RING_STATS["phys_capacity"] = self.phys_cap
+        # W107: both ping-pong buffers are allocated here -- one prefill preallocation.
+        _note_bounded(self._lane, realloc=True, rows=n,
+                      alloc_bytes=int(self._bufs[0].nbytes + self._bufs[1].nbytes))
 
     def append(self, new: Optional[mx.array]) -> None:
         if new is None or (new.ndim >= 2 and new.shape[1] == 0):
@@ -462,6 +854,7 @@ class _WindowRing:
             self._bufs[self._cur] = self._write(self._bufs[self._cur], new, self._len)
             self._len += n
             _RING_STATS["rows_copied"] += n
+            _note_bounded(self._lane, inplace=True, rows=n)
             return
         # Compaction: keep the last ``keep`` rows, drop the older ones.  ``keep``
         # covers the current forward's oldest query's full causal window
@@ -474,23 +867,26 @@ class _WindowRing:
         new_drop = L_new - keep
         retained = L - new_drop            # old rows carried over (>= 0)
         src = self._bufs[self._cur]        # read the retained suffix from OLD buffer
-        target_cap = self.phys_cap
-        if keep > target_cap:
-            # transient grow for a prefill chunk wider than the ping-pong buffers
-            # (allowed off the decode path; decode/verify appends never trip this)
-            target_cap = keep
-            _RING_STATS["reallocs"] += 1
+        # W107 (review MEDIUM-1): target the BASE cap, growing only for a prefill
+        # chunk wider than it and SHRINKING back to it once a decode compaction no
+        # longer needs the transient width -- so the decode-steady phys_cap returns
+        # to base (the old code set phys_cap = keep and only ever grew, leaving the
+        # window inflated by the widest prefill chunk for the rest of the sequence).
+        target_cap = max(self._base_phys_cap, keep)
         dst_idx = 1 - self._cur
         dst = self._bufs[dst_idx]
+        _grew = False
         if dst is None or int(dst.shape[1]) != target_cap:
-            dst = self._alloc(target_cap)  # only when growing (else reuse ping-pong)
+            dst = self._alloc(target_cap)  # only on a size change (else reuse ping-pong)
+            _grew = True
         if retained > 0:
             head = src[:, self._len - retained: self._len]   # OLD buffer != dst
             dst = self._write(dst, head, 0)
         dst = self._write(dst, new, retained)
         if target_cap != self.phys_cap:
-            self.phys_cap = target_cap
+            self.phys_cap = target_cap      # grow OR shrink back toward base
             self._bufs = [None, None]      # other slot re-allocated at next compaction
+            _RING_STATS["reallocs"] += 1
             _RING_STATS["phys_capacity"] = self.phys_cap
         self._bufs[dst_idx] = dst
         self._cur = dst_idx
@@ -499,6 +895,11 @@ class _WindowRing:
         _RING_STATS["drops"] += 1
         _RING_STATS["rows_dropped"] += max(0, new_drop - old_drop)
         _RING_STATS["rows_copied"] += retained + n
+        # W107: a steady compaction reuses the OTHER ping-pong buffer (in-place class,
+        # no new allocation); a transient grow to a wider prefill chunk allocated one.
+        _note_bounded(self._lane,
+                      inplace=(not _grew), realloc=_grew, rows=retained + n,
+                      alloc_bytes=int(dst.nbytes) if _grew else 0)
 
     def view(self) -> Optional[mx.array]:
         buf = self._bufs[self._cur]
@@ -520,6 +921,7 @@ class _WindowRing:
         self._cur = 0
         self._len = 0
         self._drop = 0
+        self.phys_cap = self._base_phys_cap  # W107 MEDIUM-1: don't carry a stale inflated cap
         if arr is not None:
             self.append(arr)
 
@@ -529,14 +931,40 @@ class _WindowRing:
         contiguous suffix, so ``drop == logical_len - resident``)."""
         self._drop = max(0, int(logical_len) - self._len)
 
+    def can_truncate_to_length(self, logical_len: int) -> bool:
+        """W107 (review HIGH-A): whether :meth:`truncate_to_length` would succeed --
+        i.e. the rollback target's causal window stays within the resident window (or
+        is a full reset).  ``LayerAttentionCache.trim`` calls this to return a clean
+        miss (0, no mutation) for the session-bank prefix restore instead of raising."""
+        logical_len = max(0, int(logical_len))
+        if logical_len > 0 and (logical_len - self.window_size + 1) < self._drop:
+            return False
+        return True
+
     def truncate_to_length(self, logical_len: int) -> None:
         """Drop back to logical length ``logical_len`` (trim/rollback).  ``_drop``
-        stays where it is (advanced by any compaction since the mark -- those rows
-        are unrecoverable but always beyond the window, so the reachable state is
-        exact); only the resident count shrinks."""
+        stays where it is (advanced by any compaction since the mark) and only the
+        resident count shrinks.
+
+        W107 (review MEDIUM-3, pre-existing W80): a rollback that pulls the frontier
+        back far enough that the newest retained / next query's causal window reaches
+        BELOW the drop frontier would silently read masked (dropped) rows -> silent
+        divergence.  Raise instead of corrupting (direct callers -- rollback, direct
+        ring use).  :meth:`can_truncate_to_length` is the non-raising predicate the
+        session-bank trim path checks first (review HIGH-A).  Shallow rollbacks (DSpark
+        one cycle, device-route depth 1) stay within the resident window and never trip
+        this; ``logical_len == 0`` is a full reset (no history needed) and is allowed.
+        """
         logical_len = max(0, int(logical_len))
+        if logical_len > 0 and (logical_len - self.window_size + 1) < self._drop:
+            raise ValueError(
+                f"window ring cannot roll back to logical length {logical_len}: its "
+                f"causal window reaches below the drop frontier {self._drop} "
+                f"(window_size {self.window_size}) -- those rows were compacted away "
+                f"and cannot be restored (deeper than the resident sliding window)"
+            )
         if logical_len <= self._drop:
-            # trimming at/under the drop frontier: nothing resident remains reachable
+            # full reset (logical_len == 0): nothing resident remains, start fresh
             self._len = 0
             self._drop = logical_len
             return
@@ -615,17 +1043,75 @@ class CompressorState:
     group boundary.
     """
 
-    def __init__(self, ratio: int):
+    def __init__(self, ratio: int, *, bounded: bool = False,
+                 maxkv: Optional[int] = None):
         if ratio <= 1:
             raise ValueError("CompressorState is only for compress_ratio > 1")
         self.ratio = int(ratio)
-        self.raw_kv: Optional[mx.array] = None      # [B, n_fed, head_dim] fp32
-        self.raw_score: Optional[mx.array] = None    # [B, n_fed, head_dim] fp32
+        #: W107 ("main latent KV"): the shipped path grows ``raw_kv`` / ``raw_score``
+        #: with a per-token ``_grow`` (an O(n_fed) concatenate == O(T^2) over the
+        #: cell), the ONE KV lane W80 left unbounded.  Under KV_BOUNDED the frontier
+        #: is a PREALLOCATED :class:`_GrowBuffer` capped to ``max_kv`` and written in
+        #: place (O(new rows)/token, no per-token realloc, no concatenate).  The
+        #: reachable rows are byte-identical (the buffer view == the concatenated
+        #: store).  ``None`` maxkv -> geometric fallback (still in place, counted).
+        self._bounded = bool(bounded)
+        if self._bounded:
+            cap = _bounded_latent_cap(maxkv)
+            self._kv_buf: Optional[_GrowBuffer] = _GrowBuffer(
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
+            self._sc_buf: Optional[_GrowBuffer] = _GrowBuffer(
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
+            self._raw_kv: Optional[mx.array] = None
+            self._raw_score: Optional[mx.array] = None
+        else:
+            self._kv_buf = None
+            self._sc_buf = None
+            self._raw_kv = None       # [B, n_fed, head_dim] fp32
+            self._raw_score = None    # [B, n_fed, head_dim] fp32
+
+    # -- raw frontier: plain array (default) or preallocated buffer (W107) ------
+    # Properties keep every reader/writer of ``raw_kv`` / ``raw_score`` unchanged
+    # (push/pool math, trim/rollback, mlx_lm ``state`` (de)serialisation, the census
+    # scripts' direct ``comp_state.raw_kv`` read); only the backing changes when
+    # bounded.  A bounded buffer's ``view()`` is byte-identical to the ``_grow`` store.
+    @property
+    def raw_kv(self) -> Optional[mx.array]:
+        return self._kv_buf.view() if self._bounded else self._raw_kv
+
+    @raw_kv.setter
+    def raw_kv(self, value: Optional[mx.array]) -> None:
+        if self._bounded:
+            self._kv_buf.set(value)
+        else:
+            self._raw_kv = value
+
+    @property
+    def raw_score(self) -> Optional[mx.array]:
+        return self._sc_buf.view() if self._bounded else self._raw_score
+
+    @raw_score.setter
+    def raw_score(self, value: Optional[mx.array]) -> None:
+        if self._bounded:
+            self._sc_buf.set(value)
+        else:
+            self._raw_score = value
+
+    def raw_backings(self) -> list:
+        """W107: the RAW backing arrays a settle fence should force -- the
+        preallocated buffer (:meth:`_GrowBuffer.raw_backing`) when bounded, NOT the
+        ``view()`` slice, so a per-token fence never materialises a fresh
+        ``[b, n_fed]`` copy; the plain arrays otherwise."""
+        if self._bounded:
+            return [self._kv_buf.raw_backing(), self._sc_buf.raw_backing()]
+        return [self._raw_kv, self._raw_score]
 
     @property
     def n_fed(self) -> int:
         """Rows fed so far == tokens this layer has processed."""
-        return _rows(self.raw_kv)
+        if self._bounded:
+            return self._kv_buf.rows()
+        return _rows(self._raw_kv)
 
     @property
     def n_groups(self) -> int:
@@ -645,8 +1131,12 @@ class CompressorState:
         own rows, so the result is independent of how the rows were chunked.
         """
         n_before = self.n_fed
-        self.raw_kv = _grow(self.raw_kv, kv)
-        self.raw_score = _grow(self.raw_score, score)
+        if self._bounded:
+            self._kv_buf.append(kv)
+            self._sc_buf.append(score)
+        else:
+            self._raw_kv = _grow(self._raw_kv, kv)
+            self._raw_score = _grow(self._raw_score, score)
         n_after = self.n_fed
         g_before = n_before // self.ratio
         g_after = n_after // self.ratio
@@ -654,10 +1144,12 @@ class CompressorState:
             return kv[:, :0]  # nothing completed; keep dtype/shape for concat
         lo = g_before * self.ratio
         hi = g_after * self.ratio
-        b = self.raw_kv.shape[0]
-        d = self.raw_kv.shape[-1]
-        grp_kv = self.raw_kv[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
-        grp_sc = self.raw_score[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
+        raw_kv = self.raw_kv
+        raw_score = self.raw_score
+        b = raw_kv.shape[0]
+        d = raw_kv.shape[-1]
+        grp_kv = raw_kv[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
+        grp_sc = raw_score[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
         # softmax over the ratio axis (reference softmax(dim=2)/(dim=1), L475/L482)
         pooled = mx.sum(grp_kv * mx.softmax(grp_sc, axis=2), axis=2)
         return pooled
@@ -671,8 +1163,12 @@ class CompressorState:
         keep = self.n_fed - n
         if keep < 0:
             raise ValueError(f"cannot trim {n} of {self.n_fed} compressor rows")
-        self.raw_kv = _truncate(self.raw_kv, keep)
-        self.raw_score = _truncate(self.raw_score, keep)
+        if self._bounded:
+            self._kv_buf.truncate_to(keep)
+            self._sc_buf.truncate_to(keep)
+        else:
+            self._raw_kv = _truncate(self._raw_kv, keep)
+            self._raw_score = _truncate(self._raw_score, keep)
 
     def mark(self) -> int:
         """Snapshot for :meth:`rollback` -- the row count fully determines the
@@ -680,8 +1176,12 @@ class CompressorState:
         return self.n_fed
 
     def rollback(self, mark: int) -> None:
-        self.raw_kv = _truncate(self.raw_kv, mark)
-        self.raw_score = _truncate(self.raw_score, mark)
+        if self._bounded:
+            self._kv_buf.truncate_to(mark)
+            self._sc_buf.truncate_to(mark)
+        else:
+            self._raw_kv = _truncate(self._raw_kv, mark)
+            self._raw_score = _truncate(self._raw_score, mark)
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +1265,48 @@ class LayerAttentionCache:
         #: plain ``mx.array`` attributes grown by :func:`_grow` (byte-for-byte the
         #: shipped cache); ON -> :class:`_GrowBuffer` lanes (chunk-grown append).
         self._chunk_grow = _kv_chunk_grow_enabled()
+        #: W107: the master bounded/preallocated switch.  When on, EVERY KV lane is
+        #: bounded/preallocated to ``max_kv`` and written in place (window ring +
+        #: preallocated compress/index + preallocated compressor frontier), with the
+        #: per-lane engagement counters.  Precedence: KV_BOUNDED > WINDOW_RING >
+        #: chunk-grow.  Picked once at construction (per request, after the harness
+        #: stamps the env key).  See :data:`_KV_BOUNDED_ENV`.
+        self._kv_bounded = _kv_bounded_enabled()
+        #: W107 (review LOW-1): the resolved preallocation cap, so the whole-cache
+        #: admission pre-check can fail an over-cap forward BEFORE any lane is written.
+        #: ``None`` unless bounded with an explicit/resolved max_kv (geometric fallback).
+        self._bounded_max_kv: Optional[int] = None
+        if self._kv_bounded:
+            _mv, _slk, _hr, _ = _window_ring_config()
+            _maxkv = _kv_bounded_maxkv()
+            self._bounded_max_kv = int(_maxkv) if _maxkv else None
+            _RING_STATS["layers_ring"] += 1          # the window lane IS a ring
+            _BOUNDED_STATS["layers_bounded"] += 1
+            if _maxkv:
+                _BOUNDED_STATS["maxkv"] = int(_maxkv)
+            #: window == the bounded ring (genuine sliding window); compress/index
+            #: == preallocated ``_GrowBuffer`` capped to ``ceil(max_kv/ratio)`` rows
+            #: (the indexer needs them in full, so they are preallocated to max_kv,
+            #: not shrunk); the compressor frontier (main latent KV) is preallocated
+            #: below.  ``max_kv`` unset -> geometric fallback (still in place, but the
+            #: ``kv_realloc_*`` counters flag it as not preallocated-bounded).
+            self._window = _WindowRing(self.window_size, _mv, _slk, _hr,
+                                       counter_lane="window")
+            _comp_cap = _bounded_comp_cap(_maxkv, self.compress_ratio)
+            self._compress_kv = _GrowBuffer(
+                init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
+                counter_lane="compress")
+            self._index_k = _GrowBuffer(
+                init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
+                counter_lane="index")
+            #: compressor frontier: preallocated to max_kv (W107 fixes the last O(T)
+            #: concatenate lane) for ratio>1 kv-source layers, else None.
+            self.comp_state: Optional[CompressorState] = (
+                CompressorState(self.compress_ratio, bounded=True, maxkv=_maxkv)
+                if self.is_kv_source and self.compress_ratio > 1
+                else None
+            )
+            return
         if self._window_ring:
             _mv, _slk, _hr, _maxkv = _window_ring_config()
             _RING_STATS["layers_ring"] += 1
@@ -787,7 +1329,7 @@ class LayerAttentionCache:
             self._compress_kv = _GrowBuffer() if self._chunk_grow else None
             self._index_k = _GrowBuffer() if self._chunk_grow else None
         #: compressor frontier (CompressorState for ratio>1, else None)
-        self.comp_state: Optional[CompressorState] = (
+        self.comp_state = (
             CompressorState(self.compress_ratio)
             if self.is_kv_source and self.compress_ratio > 1
             else None
@@ -808,6 +1350,21 @@ class LayerAttentionCache:
             lane.set(value)
             return lane
         return value
+
+    @staticmethod
+    def _lane_truncate(lane, n):
+        """Drop a compress/index lane back to ``n`` rows for trim/rollback.
+
+        W107 (review HIGH-1): a :class:`_GrowBuffer` lane truncates LENGTH-ONLY
+        (:meth:`_GrowBuffer.truncate_to`), keeping its preallocated buffer -- so a
+        rejected DSpark verify cycle does NOT reallocate the "preallocated" lane
+        (the old ``= _truncate(...)`` routed through the property setter ->
+        ``_GrowBuffer.set`` == fresh ``mx.zeros`` + full prefix copy every cycle).
+        A plain array lane still uses :func:`_truncate`."""
+        if isinstance(lane, _GrowBuffer):
+            lane.truncate_to(n)
+            return lane
+        return _truncate(lane, n)
 
     @property
     def window(self) -> Optional[mx.array]:
@@ -867,7 +1424,10 @@ class LayerAttentionCache:
             if a is not None:
                 out.append(a)
         if self.comp_state is not None:
-            for a in (self.comp_state.raw_kv, self.comp_state.raw_score):
+            # W107: force the RAW frontier backings (the preallocated buffer, not a
+            # fresh ``view()`` slice), so a bounded frontier's settle fence realises
+            # only this step's in-place write.
+            for a in self.comp_state.raw_backings():
                 if a is not None:
                     out.append(a)
         return out
@@ -907,6 +1467,34 @@ class LayerAttentionCache:
         layer forward itself; this only moves the entry offset."""
         self.offset += int(n)
 
+    def assert_can_admit(self, n: int) -> None:
+        """W107 (review LOW-1): raise if appending ``n`` more tokens would over-cap
+        one of THIS entry's bounded lanes -- checked BEFORE any lane is written, so
+        an over-cap forward fails cleanly instead of leaving the cache half-updated
+        (some entries' windows appended, a later kv-source entry's latent then
+        raising).  No-op unless bounded with a resolved ``max_kv``; the window lane
+        is a genuine ring (drops old rows) and is never a bound."""
+        if not self._kv_bounded or self._bounded_max_kv is None or n <= 0:
+            return
+        new_len = int(self.offset) + int(n)
+        if self.comp_state is not None:
+            cap = _bounded_latent_cap(self._bounded_max_kv)
+            if cap is not None and new_len > cap:
+                raise ValueError(
+                    f"bounded KV entry cannot admit {n} tokens at offset "
+                    f"{self.offset}: latent frontier cap {cap} rows "
+                    f"(max_kv {self._bounded_max_kv})"
+                )
+        if self.is_kv_source and self.compress_ratio >= 1:
+            cap = _bounded_comp_cap(self._bounded_max_kv, self.compress_ratio)
+            groups = new_len // self.compress_ratio
+            if cap is not None and groups > cap:
+                raise ValueError(
+                    f"bounded KV entry cannot admit {n} tokens at offset "
+                    f"{self.offset}: compress/index cap {cap} groups "
+                    f"(max_kv {self._bounded_max_kv}, ratio {self.compress_ratio})"
+                )
+
     def is_trimmable(self) -> bool:
         """Every lane here rewinds exactly -- window/compressed/index truncate to
         the shorter length, the compressor frontier and the engram history
@@ -930,7 +1518,14 @@ class LayerAttentionCache:
         compressor frontier re-exposes the shortened partial group; the engram
         history (only the entry that owns it) drops its last ``n`` fed positions.
         ``offset`` decreases by exactly ``n`` -- the per-entry property the
-        verify repair (``trim_verified_window_to_prefix``) checks."""
+        verify repair (``trim_verified_window_to_prefix``) checks.
+
+        W107 (review HIGH-A): when the window is a bounded ring and the trim is
+        DEEPER than its recoverable sliding window (the session-bank prefix restore
+        of a long-diverged turn), this returns ``0`` with NO mutation instead of
+        raising -- the bank's miss contract is "trim returned != delta", so it
+        records NO_SNAPSHOT_COVERAGE and falls back to a cold prefill (the raise
+        stays only for direct ``truncate_to_length`` callers)."""
         n = int(n)
         if n < 0:
             raise ValueError("trim count must be >= 0")
@@ -941,6 +1536,14 @@ class LayerAttentionCache:
         if new_len < 0:
             raise ValueError(f"cannot trim {n} of {cur} tokens")
         if isinstance(self._window, _WindowRing):
+            # W107 HIGH-A: bail cleanly (0, no mutation) if the ring can't recover to
+            # new_len, BEFORE touching any lane -- so a bank prefix-restore miss
+            # leaves the whole entry untouched.  (Every entry's ring has the same
+            # window_size and drop schedule, so entry 0 predicts the rest; the bank's
+            # per-entry loop stops at the first entry returning != delta.)
+            if not self._window.can_truncate_to_length(new_len):
+                return 0
+        if isinstance(self._window, _WindowRing):
             # W80 drop-aware: the ring restores its LOGICAL length; _drop stays
             # advanced (dropped rows are always beyond the window -> exact).
             self._window.truncate_to_length(new_len)
@@ -948,8 +1551,9 @@ class LayerAttentionCache:
             self.window = _truncate(self.window, new_len)
         if self.is_kv_source and self.compress_ratio >= 1:
             groups = new_len // self.compress_ratio
-            self.compress_kv = _truncate(self.compress_kv, groups)
-            self.index_k = _truncate(self.index_k, groups)
+            # W107 (HIGH-1): length-only truncate for _GrowBuffer lanes (no realloc).
+            self._compress_kv = self._lane_truncate(self._compress_kv, groups)
+            self._index_k = self._lane_truncate(self._index_k, groups)
             if self.comp_state is not None:
                 self.comp_state.trim(n)
         if self.engram_state is not None:
@@ -968,6 +1572,16 @@ class LayerAttentionCache:
 
     def rollback(self, mark) -> None:
         offset, nw, nc, ni, comp_mark = mark
+        # W107 (review HIGH-A): the window truncate is the only step that can raise
+        # (a deep rollback across a ring compaction -- MEDIUM-3), so do it FIRST,
+        # before the engram trim, so a failed deep rollback leaves nothing
+        # half-rewound (the engram would otherwise have already been trimmed).
+        if isinstance(self._window, _WindowRing):
+            # W80 drop-aware: restore to the marked LOGICAL length (== offset, the
+            # window advances one row per token); _drop stays advanced.
+            self._window.truncate_to_length(int(offset))
+        else:
+            self.window = _truncate(self.window, nw)
         # The engram history advances one position per token, in lockstep with
         # ``offset``, so the rollback depth is exactly the offset delta -- trim by
         # it (no dependence on the engram exposing a length, so a hook stand-in
@@ -976,14 +1590,9 @@ class LayerAttentionCache:
             back = int(self.offset) - int(offset)
             if back > 0:
                 self.engram_state.trim(back)
-        if isinstance(self._window, _WindowRing):
-            # W80 drop-aware: restore to the marked LOGICAL length (== offset, the
-            # window advances one row per token); _drop stays advanced.
-            self._window.truncate_to_length(int(offset))
-        else:
-            self.window = _truncate(self.window, nw)
-        self.compress_kv = _truncate(self.compress_kv, nc)
-        self.index_k = _truncate(self.index_k, ni)
+        # W107 (HIGH-1): length-only truncate for _GrowBuffer lanes (no realloc).
+        self._compress_kv = self._lane_truncate(self._compress_kv, nc)
+        self._index_k = self._lane_truncate(self._index_k, ni)
         if self.comp_state is not None and comp_mark is not None:
             self.comp_state.rollback(comp_mark)
         self.offset = int(offset)
@@ -1193,6 +1802,45 @@ class DeepseekV41Cache:
         #: property setter keeps that entry's reference in sync, so re-pointing
         #: ``cache.engram_state`` re-owns the history on the entry that trims it.
         self.engram_state = engram_state
+        #: W107 round-4 donation gate: per-(layer, lane) last-sampled buffer pointer,
+        #: for :meth:`sample_ptr_flips`.  ``None`` until the first sample.
+        self._prev_ptrs = None
+
+    # -- W107 round-4 donation gate ---------------------------------------
+    def sample_ptr_flips(self) -> None:
+        """Sample each bounded lane's raw-backing DATA POINTER and count flips since
+        the previous sample.  Call once per decode token AFTER the forward's eval
+        fence (only in the fenced stage-timing pass -- reading a pointer forces an
+        eval, so never in the timed headline loop).  A donating append (rebind-pattern
+        slice_update) keeps the pointer stable, so compress/index/latent never flip and
+        the window flips only on a ping-pong compaction; :func:`kv_donation_gate` reads
+        the counts.  No-op unless bounded / the pointer is available (guarded)."""
+        if not self.layers or not getattr(self.layers[0], "_kv_bounded", False):
+            return
+        first = self._prev_ptrs is None
+        if first:
+            self._prev_ptrs = {}
+        _BOUNDED_STATS["ptr_samples"] += 1
+        for li, lc in enumerate(self.layers):
+            win = lc._window if isinstance(lc._window, _WindowRing) else None
+            comp = lc._compress_kv if isinstance(lc._compress_kv, _GrowBuffer) else None
+            idx = lc._index_k if isinstance(lc._index_k, _GrowBuffer) else None
+            lat = lc.comp_state._kv_buf if (lc.comp_state is not None and
+                                            getattr(lc.comp_state, "_bounded", False)) else None
+            for lane, backing in (("window", win), ("compress", comp),
+                                  ("index", idx), ("latent", lat)):
+                if backing is None:
+                    continue
+                arr = backing.raw_backing()
+                if arr is None:
+                    continue
+                ptr = _array_data_ptr(arr)
+                if ptr is None:
+                    continue
+                key = (li, lane)
+                if (not first) and key in self._prev_ptrs and self._prev_ptrs[key] != ptr:
+                    _BOUNDED_STATS[f"ptr_flips_{lane}"] += 1
+                self._prev_ptrs[key] = ptr
 
     # -- mlx_lm sequence protocol (a list of per-layer caches) -------------
     def __iter__(self):
@@ -1241,6 +1889,15 @@ class DeepseekV41Cache:
         return SharedAttentionRuntime()
 
     # -- length bookkeeping -------------------------------------------------
+    def assert_can_admit(self, n: int) -> None:
+        """W107 (review LOW-1): raise if the next forward of ``n`` tokens would
+        over-cap any bounded lane of any entry -- called at the start of the
+        backbone forward, BEFORE any lane is written, so an over-cap forward fails
+        cleanly instead of half-updating the cache (early layers' windows appended,
+        a later kv-source layer's latent then raising).  No-op unless bounded."""
+        for layer in self.layers:
+            layer.assert_can_admit(n)
+
     def advance(self, n: int) -> None:
         """Record that ``n`` more tokens were processed (reference ``start_pos +=
         seqlen``) on every entry.  The per-layer stores are grown by the layers

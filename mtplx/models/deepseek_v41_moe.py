@@ -117,6 +117,77 @@ def _gate_prefix(gate):
     return _compiled(key, lambda: (lambda x, weight, bias: _gate_prefix_impl(x, weight, bias, temp, sf)))
 
 
+def gate_predict_topk(gate: "Gate", x: mx.array, k: int, margin: float = 0.0) -> mx.array:
+    """W93 gate-oracle prefetch prediction: the SET of the top-``k`` expert ids
+    layer L's router assigns to input ``x``, using the port's EXACT routing
+    transform.
+
+    This is the shipped :meth:`Gate.__call__` scoring (model.py L810-822: score
+    GEMM / gate_temp, ``sqrtsoftplus``, + ``e_score_correction_bias``) truncated
+    to the top ``k`` of ``(scores + bias)``.  ``k`` is the prefetch width (10/12),
+    WIDER than the gate's shipped top-6; prefetch needs the SET, not
+    ``torch.topk``'s descending order or the routing weights, so the ``argsort``
+    and weight gather that :meth:`Gate.__call__` performs (L823-824) are
+    deliberately dropped.  A pure read of ``x`` and the (frozen) gate weights: it
+    has no side effect and is never an ancestor of the layer's own output, so
+    evaluating it can only warm the expert cache, never change a logit
+    (W93_GATE_PREFETCH.md §2).
+
+    Scoring goes through the SAME code path :meth:`Gate.__call__` takes for this
+    row count (W93 review LOW-1): the shared K22 compiled ``_gate_prefix`` tape
+    when the router would compile (``_attn_compile_gate`` -> ``ATTN_COMPILE`` armed,
+    decode/verify rows), else the eager ``_gate_prefix_impl``.  Two payoffs:
+
+    * **exact alignment with the router (a'=1.0).**  Because the ``biased`` scores
+      here are produced by the byte-for-byte same (compiled *or* eager) prefix the
+      router runs, the predicted top-``k`` SET is bit-identical to the router's own
+      selection on the same input in *every* regime -- not merely byte-equal via
+      the K22 compiled==eager claim.  At ``k == gate.topk`` this reproduces
+      :meth:`Gate.__call__`'s ``indices`` set exactly.
+    * **no redundant f32 weight copy.**  The old body called ``_gate_prefix_impl``
+      unconditionally, so even inside a compile-armed decode window it eagerly
+      materialised a ``[n_routed, dim]`` f32 copy of the gate weight
+      (384x5120 -> 7.9 MiB) *per layer per token*.  Riding the router's compiled
+      tape fuses that upcast into the score GEMM (and reuses the single cached
+      tape the router already built -- same ``("gate_prefix", score_func,
+      gate_temp)`` key), so the predictor allocates no standalone f32 weight copy.
+
+    Returns ``[n, k]`` int32.
+    """
+    xf = x.reshape(-1, gate.dim)
+    if _attn_compile_gate(int(xf.shape[0])):
+        _scores, biased = _gate_prefix(gate)(
+            xf, gate.weight, gate.e_score_correction_bias
+        )
+    else:
+        _scores, biased = _gate_prefix_impl(
+            xf,
+            gate.weight,
+            gate.e_score_correction_bias,
+            float(gate.gate_temp),
+            str(gate.score_func),
+        )
+    width = int(biased.shape[-1])
+    k = max(1, min(int(k), width))
+    part = mx.argpartition(-biased, kth=k - 1, axis=-1)[..., :k].astype(mx.int32)
+    if margin:
+        # W95 confidence gate (retune): keep only candidates whose score is
+        # >= (the top-6 boundary score) - ``margin``, where the boundary is the
+        # 6th-highest score (DSV4.1 routes top-6).  ``margin`` < 0 TRIMS to the
+        # confident subset (threshold ABOVE the 6th -> raises the issued-set
+        # precision, cutting the wasted speculative reads that made k=12 net-slower
+        # in window 39); ``margin`` > 0 WIDENS below the boundary.  Gated-out
+        # entries become -1 (the issue site drops them).  Purely a read of ``x`` +
+        # the frozen gate weights -> never an ancestor of the routed output, so
+        # this only changes WHICH experts are pre-warmed, never a logit.
+        boundary_rank = min(6, k)
+        boundary = mx.sort(biased, axis=-1)[..., -boundary_rank]  # [n] 6th-highest
+        threshold = (boundary - float(margin))[..., None]         # [n, 1]
+        part_scores = mx.take_along_axis(biased, part, axis=-1)   # [n, k]
+        part = mx.where(part_scores >= threshold, part, mx.array(-1, dtype=mx.int32))
+    return part
+
+
 def _moe_combine_impl(routed, weights, shared):
     """The MoE combine: weighted routed sum (f32 accumulator) + shared add.
     Byte-identical to the eager ``(routed*weights).sum(-2) + shared``."""

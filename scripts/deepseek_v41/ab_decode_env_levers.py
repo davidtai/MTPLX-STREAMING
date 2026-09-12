@@ -38,7 +38,9 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import time
+import types
 from pathlib import Path
 
 import numpy as np  # CPU-only (no mlx); safe for the --dry-run path
@@ -48,6 +50,74 @@ DEFAULT_MODEL = Path(
 ).expanduser()
 GIB = 1024 ** 3
 DEFAULT_BOS_ID = 0
+
+# W113: repo-root-relative path to the standard chat-templated 16K cell ids file
+# (schema mtplx-server-cell-prompt-ids-v1, cell=sweep, target_tokens=16384,
+# seed=20260829).  The cell-prompt guard defaults --prompt-ids-file to this and
+# refuses to MEASURE a 16K cell on the raw builder without it (see the W113 block).
+STANDARD_CELL16K_PROMPT_IDS = (
+    "docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/"
+    "prompt-ids-deepseek-v41.json"
+)
+# W113 LOW-a: the seed + expected PROMPT-ids sha the auto-default pins the standard
+# cell to (sha of json.dumps(ids) over the sweep/16384/20260829 entry) so a
+# swapped/edited file is refused rather than silently measured.
+STANDARD_CELL16K_PROMPT_SEED = 20260829
+STANDARD_CELL16K_PROMPT_SHA256 = (
+    "1a45b35bae742fae0e26d4f40ee0dc1093a2038e5b514460a4f02e9e56d74565"
+)
+
+# W106 item 3: derive the MLX plan limit from David's TOTAL box budget while
+# COMPENSATING for the non-Metal requirements (the box has a 110 GB hard ceiling
+# and his budget is 100 GB TOTAL for everything):
+#
+#   plan_limit_gib = total - system_used_at_start - non_metal_overhead
+#                          - kv_growth_to_max_kv - safety
+#
+# Unlike the W62 --box-budget-gib path (fixed profile constants), this MEASURES
+# system_used_at_start (vm_stat, the gpu_window.sh formula) and the non-Metal
+# process overhead (process RSS - mx active) and prices the KV growth to --max-kv,
+# so the plan compensates for everything the MLX allocator peak does NOT see.
+# Every term lands in the receipt ``memory`` block.  See docs/deepseek-v41/
+# W106_WINDOW_MEMORY_ACCOUNTING.md for the once-only definition of each term.
+#
+# Pre-load estimate of the non-Metal process overhead (Python heap + positional-
+# expert bank read buffers + engram host-side row LRU + tokenizer).  The plan limit
+# must be fixed BEFORE the model loads (the loader takes it), so the derivation uses
+# this estimate first, then re-measures the real overhead after load (round-4 MEDIUM-2:
+# the REAL value is ~1-2 GiB; default 3, not 10 -- the plan overshoot is now a
+# separate term, so a 10 GiB overhead + 6 GiB overshoot double-counted and left the
+# plan ~63 GiB / peak ~86 GB, under-using the budget).
+DEFAULT_NON_METAL_OVERHEAD_GIB = 3.0
+# Safety headroom subtracted from the budget (flag --memory-safety-gb).
+DEFAULT_MEMORY_SAFETY_GIB = 3.0
+# W106 HIGH-1 (budget re-review): the MLX allocator PEAK overshoots the plan's
+# expert-cache ceiling by the KV + prefill transients that live OUTSIDE the plan
+# body (window 43: 60 GiB plan -> 65.1-65.5 GiB mlx_peak, ~5.5 GiB over).  Price
+# this explicitly so it is not silently absorbed by an inflated non_metal_overhead
+# (which would invite lowering the overhead into the window-41c pressure regime).
+DEFAULT_PLAN_OVERSHOOT_GIB = 6.0
+# HIGH-1: the real non-Metal overhead is ~1-2 GiB (system_used_peak - mlx_peak -
+# baseline); clamp the estimate to at least this so it never goes to zero once the
+# overshoot is a separate term.
+_MIN_NON_METAL_OVERHEAD_GIB = 2.0
+# Floor below which a derived plan limit is refused (flag --memory-budget-floor-gib).
+DEFAULT_MEMORY_BUDGET_FLOOR_GIB = 20.0
+# If the post-load re-measured overhead exceeds the pre-load estimate by more than
+# this, the two-phase step ABORTS before decode (HIGH-1: the MLX limit is never
+# lowered post-load).
+_BUDGET_REMEASURE_TOLERANCE_GIB = 0.5
+
+# W106 HIGH-2: RSS-vs-mlx_peak semantics on Metal are UNVERIFIED until one real GPU
+# window produces a receipt whose gpu_window.sh tree RSS can be compared against
+# this process's mlx_peak. Recorded on every memory block so a reader does not
+# treat process_peak_rss_gb and mlx_peak_gb as interchangeable.
+_RSS_SEMANTICS_NOTE = (
+    "UNVERIFIED on Metal: process_peak_rss_gb (phys_footprint) vs mlx_peak_gb "
+    "(allocator peak) have not been cross-checked against a real gpu_window.sh "
+    "tree-RSS receipt; unified memory may double-count. Compare a real-window "
+    "receipt before treating either as the box figure."
+)
 # W77: AR top-1/top-2 logit gap (logit units) below which a greedy DSpark
 # divergence is classed a tie-break flip rather than a genuine divergence.
 # 3x the bf16-class per-logit floor (~1e-2, the W40/K21 HEAD_MODE=bf16 head-GEMV
@@ -101,6 +171,11 @@ DRAFT_COMPILE_ENV = "MTPLX_DSV41_DRAFT_COMPILE"     # K33 (W65): DSpark draft-bl
 # graph from Python each cycle.  Byte-identical (draft tokens/logits/confidence),
 # fixed-shape + row-cap.  Only touches the DSpark-DIRECT draft path (--decode-mode
 # dspark), so it composes with the decode levers on the target verify forward.
+DRAFT_HEAD_BF16_ENV = "MTPLX_DSV41_DRAFT_HEAD_BF16"  # W103: DSpark draft-head
+# fp32-cast trap removal -- cast the draft hidden to the resident bf16 head dtype
+# (a bf16 GEMV, f32 logits after) instead of casting to f32 and promoting the head
+# weight to a per-cycle f32 temporary. Draft-head only (composes with the verify
+# forward); rounding-class on the draft logits (greedy verify == AR regardless).
 VERIFY_SINGLE_BARRIER_ENV = "MTPLX_DSV41_VERIFY_SINGLE_BARRIER"  # K31 (W61):
 # small-M (2..8-row) DECODE verify -- pin the whole route all-hit and gather
 # rows*top_k in ONE wave (K27 sorted gather) with one deferred release, so a
@@ -260,6 +335,80 @@ ATTN_SHAPE_STABLE_ENV = "MTPLX_DSV41_ATTN_SHAPE_STABLE"  # W90 / K36: shared sel
 # A pure cache change -> BYTE-IDENTICAL tokens/logits to cell16k_ring; the byte-
 # identity summary must show it clean.  Composes with the window ring (independent).
 SINGLE_SLOT_POOL_ENV = "MTPLX_DSV41_SINGLE_SLOT_POOL"
+GATE_PREFETCH_ENV = "MTPLX_DSV41_GATE_PREFETCH"  # W93: gate-oracle one-ahead prefetch width k
+GATE_PREFETCH_MIN_LAYER_ENV = "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER"  # W93: skip targets below this
+# W95: the single v2 runner switch -- ONE key composes the W93 gate-oracle prefetch +
+# the W87 single scan-resistant pool (no stacked sub-keys; the user sets only this).
+# Byte-identical to control's CLASS (residency-only: prefetch warms the cache on the
+# TRUE route, the pool only changes which loads happen). See W95_RUNNER_DESIGN.md.
+RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
+# W107: the master bounded-KV switch (David: "controlling kv growth is crucial for
+# everything").  ON => EVERY KV lane is bounded/preallocated to max_kv at prefill and
+# written in place (O(new rows)/token, no per-token concatenate/realloc): the W80
+# window ring + preallocated compress/index + the PREALLOCATED compressor frontier
+# (the "main latent KV", the one lane W80 left growing with a per-token _grow == O(T^2)
+# over the cell).  Byte-identical to the ring arm's CLASS by construction (pure
+# prealloc/in-place; the ring's drop_offset already proved the window byte-identity).
+# Default ON for the cell16k_ring* arms; MTPLX_DSV41_KV_BOUNDED=0 disables.  MAXKV is
+# stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
+KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
+KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+# W107 round-4: the round-3 MTPLX_DSV41_KV_INPLACE_WRITE lever was REMOVED -- the
+# re-review proved mx.slice_update already donates in the cache's rebind pattern, so
+# the in-place __setitem__ switch bought nothing and was unsafe (view() identity). The
+# append primitive is fixed at mx.slice_update; there is no write-primitive lever.
+# W110 (BENCH-ONLY DIAGNOSTIC -- not a perf lever): gate the per-record sha256
+# re-check on the DECODE/verify streaming path. Decode-path hashing has been OFF on
+# every ab/bench path (arg default False) and OFF in the served profile
+# (deepseek-v41-mxfp4-75: verify_record_hashes=false), so there is nothing to REMOVE.
+# The salvaged value runs the OTHER direction: "1" turns hashing ON to MEASURE its
+# io-thread cost (arm cell16k_ring_v2_hash), with the records_hashed / hash_thread_ns
+# counters. Honoured only by the loader/bench builder (build_streaming_config); the
+# served profile builder (expert_profiles.build_expert_streaming_config) deliberately
+# does NOT read it, so this env is NOT registered as a served lever. See W110 doc.
+VERIFY_RECORD_HASHES_ENV = "MTPLX_DSV41_VERIFY_RECORD_HASHES"
+
+# W97: cache the dequantized grouped o-LoRA (wo_a) weight per layer instead of
+# re-issuing mx.dequantize(wo_a) every decode token (the released wo_a is 8x1024x4096
+# = 33.55M params).  mx.dequantize returns bf16 for BOTH codecs (67 MB); _o_lora_down
+# then promotes it to a fresh 134 MB f32 array per token per layer.  The lever caches
+# that f32 promotion once (bf16->f32 is lossless), so the reference dequantizes it
+# ONCE at convert (docs/deepseek-v41/W97_ATTENTION_291MS.md).  BYTE-IDENTICAL (the
+# cached f32 array is the exact promotion of the dequantize output; the einsum's
+# per-token .astype(f32) becomes a no-op) -> the byte-identity summary must show it
+# clean.  Read at use (never import-frozen), so it works regardless of the lazy dsv41
+# import.  Holds a dense f32 wo_a copy resident per layer (40 x 134 MB ~= 5.4 GB for
+# BOTH codecs), so it is opt-in AND priced into the memory plan (deepseek_v41_loader).
+WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
+
+# W97: fixed-shape mx.compile of the decode-attention CORE (QK + mask + sink softmax
+# + PV over the gathered [b,s,k,hd] operand) -- one geometry-keyed tape at decode/
+# small-M verify, the scattered elementwise fused (~13 -> ~8 kernels; the gather
+# stays outside; docs/deepseek-v41/W97_ATTENTION_291MS.md).  ROUNDING-CLASS, NOT
+# byte-identical: the n=1 compile reassociates the fp32 einsum/reductions (the K35
+# lesson; measured max|Δ| ~9e-10 on CPU), so its arms are flagged in the byte-
+# identity summary and gated separately from the exact levers.  The K29 fused decode
+# kernel (DECODE_ATTN_KERNEL) collapses the SAME core to ONE dispatch on the GPU and
+# wins the early return before this path -- it is the lower-dispatch option; this is
+# the portable (CPU+GPU) fallback / A-B.  Read at use (never import-frozen).
+ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
+
+# W99: lean the decode-attention casts -- BYTE-IDENTICAL removal of the two genuinely
+# redundant f32 casts (the eager core casts KVg to f32 twice -> once; the per-head
+# sink is re-cast per token -> cached) plus the per-token numpy->device relift of the
+# layer's RoPE inv_freq (cached).  The bulk of the casts are reference f32 numerics
+# and the concatenates are structural RoPE (interleave + head-rejoin) -- NOT reducible
+# byte-identically (docs/deepseek-v41/W97_ATTENTION_291MS.md §8).  Read at use; OFF by
+# default.  Composes with the wo_a cache as the byte-identical cell16k_ring_lean stack.
+ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
+
+# W101 / K36: fused decode/verify attention PROJECTION-CHAIN kernels -- the qkv/out
+# rmsnorm + interleaved-RoPE + head/group layout GLUE between the (kept) quantized
+# matmuls and the (kept) grouped o-LoRA einsum, each fused into ONE metal_kernel.
+# ROUNDING-CLASS (fused rmsnorm reassociates the fp32 sum; the o-LoRA einsum reads
+# bf16 wo_a), GPU-only, small-M.  Independent of K29 (the SEPARATE core); composes
+# with the wo_a cache + lean casts (docs/deepseek-v41/W101_ATTN_FUSED_PROJ.md).
+ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -312,13 +461,38 @@ ALL_LEVER_ENVS = (
     SMALL_STAGES_FUSED_ENV,
     HC_PREMIX_KERNEL_ENV,
     SINGLE_SLOT_POOL_ENV,
+    GATE_PREFETCH_ENV,
+    GATE_PREFETCH_MIN_LAYER_ENV,
+    # W95 (appended; coordinate with any concurrent list extension):
+    RUNNER_ENV,
+    # W104 (appended; coordinate with any concurrent list extension):
+    DRAFT_HEAD_BF16_ENV,
+    # W107 (appended; coordinate with any concurrent list extension):
+    KV_BOUNDED_ENV,
+    KV_BOUNDED_MAXKV_ENV,
+    # W97 (appended; coordinate with any concurrent list extension):
+    WO_A_CACHE_ENV,
+    ATTN_CORE_COMPILE_ENV,
+    # W99 (appended):
+    ATTN_LEAN_CASTS_ENV,
+    # W101 (appended):
+    ATTN_FUSED_PROJ_ENV,
+    # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
+    # in-place write was reverted to slice_update + a donation gate), so it is no longer
+    # in this list -- the served-log snapshot dropped it too (superset invariant holds).
+    # NOTE: VERIFY_RECORD_HASHES_ENV is DELIBERATELY NOT in this list. It is a
+    # BENCH-ONLY diagnostic env (honoured on the loader/bench builder, NOT on the
+    # served profile builder) -- keeping it out of ALL_LEVER_ENVS also keeps it out
+    # of the served-log lever snapshot (openai._DSV41_LEVER_ENV_KEYS, which must be a
+    # superset), where it would be a DEAD served lever. See W110 doc + _preset.
 )
 
 
 def _preset(
     *, overlap=None, layer_major=None, sinkhorn=None, hc=None, small_stages=None,
     hc_premix_kernel=None, fastpath=None,
-    submit=None, attn=None, win_memo=None, draft=None, device_route=None,
+    submit=None, attn=None, win_memo=None, draft=None, draft_head_bf16=None,
+    device_route=None,
     verify_single=None,
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
@@ -331,6 +505,13 @@ def _preset(
     attn_shape_stable=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
     single_slot_pool=None,
+    gate_prefetch=None,
+    gate_prefetch_min_layer=None,
+    runner=None,
+    kv_bounded=None, kv_bounded_maxkv=None,
+    wo_a_cache=None, attn_core_compile=None,
+    attn_lean_casts=None, attn_fused_proj=None,
+    verify_record_hashes=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -358,6 +539,7 @@ def _preset(
         ATTN_COMPILE_ENV: attn,
         ATTN_WIN_MEMO_ENV: win_memo,
         DRAFT_COMPILE_ENV: draft,
+        DRAFT_HEAD_BF16_ENV: draft_head_bf16,
         DEVICE_ROUTE_ENV: device_route,
         VERIFY_SINGLE_BARRIER_ENV: verify_single,
         PREFILL_DENSE_ENV: prefill_dense,
@@ -386,6 +568,16 @@ def _preset(
         WINDOW_RING_MAXKV_ENV: window_ring_maxkv,
         ATTN_SHAPE_STABLE_ENV: attn_shape_stable,
         SINGLE_SLOT_POOL_ENV: single_slot_pool,
+        GATE_PREFETCH_ENV: gate_prefetch,
+        GATE_PREFETCH_MIN_LAYER_ENV: gate_prefetch_min_layer,
+        RUNNER_ENV: runner,
+        KV_BOUNDED_ENV: kv_bounded,
+        KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
+        WO_A_CACHE_ENV: wo_a_cache,
+        ATTN_CORE_COMPILE_ENV: attn_core_compile,
+        ATTN_LEAN_CASTS_ENV: attn_lean_casts,
+        ATTN_FUSED_PROJ_ENV: attn_fused_proj,
+        VERIFY_RECORD_HASHES_ENV: verify_record_hashes,
     }
 
 
@@ -625,23 +817,39 @@ ARM_PRESETS = {
     # (both run selected keys), so the byte-identity summary must show it matching
     # cell16k's class (cell16k itself is lossy vs control ONLY through head=bf16 +
     # the dense/lean prefill reassoc; the ring adds NO new lossiness).
+    # W107 (review round-2 finding 2): cell16k_ring is THE paired CONTROL in every
+    # window (39-42), so its env set is FROZEN -- it must NOT carry kv_bounded (a
+    # round-1 mistake defaulted it on, changing the timing basis vs windows 39-41 even
+    # though the lever is byte-identical).  The bounded lever is a CANDIDATE
+    # (cell16k_ring_bounded below); this control matches window-39's arm_env exactly.
     "cell16k_ring": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
-    # W81 (window 34 stacking): cell16k_ring + K33 DSpark draft-block tape collapse
-    # (--decode-mode dspark).  Exact key set of cell16k_ring plus draft="1"; the
-    # draft compile is a scheduling collapse on the DSpark draft head only, so it
-    # composes with the ring and does not change the verify math.  Runs at the
-    # profile's transient_slots by default (W81 slot-plan resolution), so the
-    # verify switch is single-admission (<=24 unique/layer <= 48 transient), letting
-    # this arm measure the draft-compile delta on top of a single-barrier verify.
+    # W107 (review round-2): the CLEAN bounded-KV candidate -- cell16k_ring's EXACT key
+    # set plus kv_bounded="1".  This is the paired candidate for the bounded lever
+    # (A/B: cell16k_ring vs cell16k_ring_bounded), replacing the round-1 "flip
+    # KV_BOUNDED=0 on the control" A/B (the control is now frozen without the lever).
+    "cell16k_ring_bounded": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+    ),
+    # W104 (was W81): cell16k_ring + BOTH DSpark draft-head levers -- K33 draft-block
+    # tape collapse (draft="1") AND the W103 draft-head fp32-cast fix
+    # (draft_head_bf16="1").  Exact key set of cell16k_ring plus those two; both touch
+    # the DSpark-DIRECT draft head only (--decode-mode dspark), so they compose with
+    # the ring and never change the verify math.  Runs at the profile's
+    # transient_slots by default, so the verify switch is single-admission, letting
+    # this arm measure the full draft-head delta on top of a single-barrier verify.
+    # NB (W104): before W104 this arm pinned draft="1" ONLY; DRAFT_COMPILE in
+    # isolation is still the standalone ``draft_compile`` arm.
     "cell16k_ring_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        draft="1",
+        draft="1", draft_head_bf16="1",
     ),
     # W81 (window 34 stacking): cell16k_ring + W64 working-set pin + W71 barrier-free
     # pinned device route (pin_working_set="all" + device_route + device_route_pinned).
@@ -711,6 +919,120 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         single_slot_pool="1",
     ),
+    # W97: cache the dequantized grouped o-LoRA wo_a per layer instead of re-issuing
+    # mx.dequantize(wo_a) every decode token (the largest per-token attention traffic
+    # item: 304 MB/layer q8 / 420 MB mxfp4; the reference dequantizes it once at
+    # convert).  ISOLATION arm (selected_keys on so the decode attention path is the
+    # shipped one).  BYTE-IDENTICAL to selected-keys control (the cached array is
+    # exactly the dequantize output; the einsum's .astype(f32) is unchanged) -- the
+    # byte-identity summary must show it clean.  Holds a dense wo_a copy resident per
+    # layer (q8 ~5.4 GB / native ~2.7 GB across 40), so mind the memory limit.
+    "wo_a_cache": _preset(selected_keys="1", wo_a_cache="1"),
+    # W97: cell16k_ring + the wo_a-dequant cache ONLY.  Exact key set of cell16k_ring
+    # plus wo_a_cache="1"; the direct A/B vs cell16k_ring isolates the per-token
+    # mx.dequantize(wo_a) + f32-astype cost (40 dequant dispatches + the ~10.7 GB/token
+    # f32 astype write+read the earlier bf16 cache left in place, BOTH codecs).
+    # BYTE-IDENTICAL to cell16k_ring -- the byte-identity summary must show it clean.
+    # The f32 cache is ~5.4 GB resident (40 x 134 MB, both codecs), priced into the
+    # memory plan (deepseek_v41_loader reserves it as fixed resident when armed, so the
+    # expert-cache allowance shrinks by it).  Watch peak memory: cell16k_ring already
+    # peaks ~65 GB at the 16K cell, so run this arm at a SMALLER cell if it OOMs -- do
+    # NOT raise --memory-limit-gib, which would raise the expert allowance by the same
+    # amount and re-open the overshoot.
+    "cell16k_ring_wo_a_cache": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1",
+    ),
+    # W97: fixed-shape mx.compile of the decode-attention core in ISOLATION
+    # (selected_keys on so _sparse_attend_selected -- and thus the core -- is the
+    # path).  ROUNDING-CLASS (n=1 compile reassociates the fp32 einsum/reductions),
+    # so the byte-identity summary MUST flag it (token-id sha differs vs control on a
+    # greedy near-tie flip -- [[dsv41-inexact-ok-if-tie-flips]]); the direct A/B vs
+    # selected_keys isolates the core-tape dispatch collapse (13 -> 8 kernels).
+    "attn_core_compile": _preset(selected_keys="1", attn_core_compile="1"),
+    # W97: cell16k_ring + the core compile ONLY.  Exact key set of cell16k_ring plus
+    # attn_core_compile="1".  ROUNDING-CLASS (adds the n=1 core reassociation on top
+    # of cell16k_ring's head=bf16 loss), so NOT byte-identical -- expected; the A/B vs
+    # cell16k_ring isolates the core collapse.  The K29 fused decode kernel
+    # (decode_attn_kernel) is the lower-dispatch alternative (core -> 1 dispatch) and,
+    # if also armed, wins the early return before this path.
+    "cell16k_ring_attn_core": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        attn_core_compile="1",
+    ),
+    # W97: cell16k_ring + the wo_a-dequant cache (exact) + the core compile (rounding-
+    # class) stacked -- the full W97 attention-dispatch program.  ROUNDING-CLASS via
+    # the core compile; the wo_a cache is byte-identical on its own.  Watch peak
+    # memory (the wo_a cache holds a dense wo_a copy resident per layer, ~5.4/2.7 GB).
+    "cell16k_ring_wo_a_core": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_core_compile="1",
+    ),
+    # W97 follow-on: cell16k_ring + the wo_a-dequant cache (exact) + the K29 FUSED
+    # decode-attention kernel (decode_attn_kernel="1"): the SINGLE-DISPATCH core
+    # (score+mask+sink softmax+PV in one metal_kernel) instead of the mx.compile core.
+    # K29 is ROUNDING-CLASS (its tile reduction reassociates the fp32 softmax), so the
+    # byte-identity summary flags it (token-id sha differs on a greedy tie flip); this
+    # arm lets window 40/41 measure the 1-dispatch core against the ~8-kernel compile
+    # core (cell16k_ring_wo_a_core) and the eager baseline (cell16k_ring_wo_a_cache).
+    "cell16k_ring_wo_a_k29": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", decode_attn_kernel="1",
+    ),
+    # W99: lean the decode-attention casts in ISOLATION (selected_keys on so the eager
+    # core -- where the redundant KVg double-cast lives -- is the path).  BYTE-IDENTICAL
+    # to selected_keys control (dedupes the KVg f32 cast, caches the f32 sink + the
+    # device inv_freq); the byte-identity summary must show it clean.
+    "attn_lean_casts": _preset(selected_keys="1", attn_lean_casts="1"),
+    # W99: cell16k_ring + the wo_a cache + lean casts -- the BYTE-IDENTICAL W97/W99
+    # attention stack (both levers are exact; the only loss vs control is
+    # cell16k_ring's own head=bf16).  A/B vs cell16k_ring isolates the exact-lever
+    # dispatch savings (wo_a per-token dequant removed + KVg/sink/inv_freq casts leaned).
+    "cell16k_ring_lean": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1",
+    ),
+    # W99: cell16k_ring_lean + the K29 fused decode core (1-dispatch score+softmax+PV).
+    # ROUNDING-CLASS via K29 (flagged in the byte-identity summary); the lowest-dispatch
+    # attention arm (exact wo_a cache + lean casts + the fused core).
+    "cell16k_ring_lean_k29": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
+    ),
+    # W101: fuse the qkv/out projection-chain GLUE in ISOLATION (selected_keys on so
+    # the fused out-prep's o-derope + bf16 o-LoRA einsum is the path; core runs
+    # eager -- fused-proj is INDEPENDENT of K29).  ROUNDING-CLASS (fused rmsnorm
+    # reassociates the fp32 sum; the o-LoRA einsum reads bf16 wo_a) -- the byte-
+    # identity summary flags it; the A/B vs attn_lean_casts / selected_keys isolates
+    # the projection-chain dispatch collapse.  GPU-only, small-M (b*s <= 8).
+    "attn_fused_proj": _preset(selected_keys="1", attn_fused_proj="1"),
+    # W101: cell16k_ring + the wo_a cache + lean casts + K29 (core -> 1 dispatch) +
+    # fused proj -- the FULL attention dispatch stack (qkv/out glue fused, core K29,
+    # per-token dequant + redundant casts gone).  ROUNDING-CLASS via K29 + fused
+    # proj (flagged in the byte-identity summary; token-id sha differs on a greedy
+    # tie flip -- [[dsv41-inexact-ok-if-tie-flips]]).  The lowest-dispatch attention
+    # arm; the direct A/B vs cell16k_ring_lean_k29 isolates the projection-chain
+    # fusion on top of the already-collapsed core.  Note the fused path holds a bf16
+    # wo_a copy resident per layer (~2.7 GB) -- watch peak memory at the 16K cell.
+    "cell16k_ring_fused": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_lean_casts="1", decode_attn_kernel="1",
+        attn_fused_proj="1",
+    ),
     # W92 (switch dispatch census): the minimal AR-decode host-sync-reduction arm in
     # ISOLATION -- the K23 variant-B fast-path (defer + async submit) plus verify
     # single-barrier (default ON, pinned explicit).  Window 33 (arm cell16k_ring)
@@ -746,7 +1068,208 @@ ARM_PRESETS = {
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         fastpath="1", submit="1", verify_single="1",
     ),
+    # W93: the gate-oracle one-layer-ahead prefetch in ISOLATION at k=10 (W89's
+    # b' predictor clears the 0.70 overlap threshold at width 10, missRed@10
+    # 0.736). During layer L-1's decode the residual entering L-1 is scored by
+    # layer L's own router and L's predicted top-10 experts stream from SSD into a
+    # bounded ring, so L's true-route misses are pre-warmed. BYTE-IDENTICAL to
+    # control: the MoE still gathers on the TRUE route (the prediction only warms
+    # the cache; a mispredict wastes a read), and the prediction rides L-1's
+    # existing indices barrier (no new host sync). The gate_prefetch receipt block
+    # reads the hit rate. Sizes the ring (prefetch_slots=10) via the loader flag.
+    "gate_prefetch": _preset(gate_prefetch="10"),
+    # W93: cell16k_ring + the gate-oracle prefetch at k=10 -- the standard 16K cell
+    # (ring + measured decode/prefill stack) with one-layer-ahead expert prefetch
+    # stacked on. The direct A/B against cell16k_ring that isolates how much of the
+    # ~19% AR I/O the one-ahead prefetch hides. Byte-identical to cell16k_ring
+    # (same lossy class -- head=bf16 + dense/lean prefill reassoc; the prefetch
+    # adds NO new lossiness), so the byte-identity summary must show it matching
+    # cell16k_ring's class.
+    "cell16k_ring_prefetch": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        gate_prefetch="10",
+    ),
+    # W95: the single v2 runner switch (docs/deepseek-v41/W95_RUNNER_DESIGN.md).
+    # ONE key (MTPLX_DSV41_RUNNER=v2) composes the W93 gate-oracle one-layer-ahead
+    # prefetch (k=12 default, ring 2*k) AND the W87 single scan-resistant pool
+    # (admit every miss) -- NOT the individual sub-keys stacked. First deliverable
+    # (post window-38, which withdrew the host-sync-drain premise): HIDE THE SSD
+    # MISS WAITS. BYTE-IDENTICAL to control's class -- residency-only (prefetch
+    # warms the cache on the TRUE route; the pool only changes which loads happen).
+    "runner_v2": _preset(runner="v2"),
+    # W95: cell16k_ring + the single v2 switch -- the standard 16K cell (ring +
+    # measured decode/prefill stack) with the composed SSD-hiding runner on ONE key.
+    # The paired A/B against cell16k_ring measures misses/token, bytes/token and the
+    # SSD-bound ms down (target >=60% at equal hit rate) and AR tok/s up (2.05 ->
+    # ~2.9, attention untouched). Byte-identical to cell16k_ring's class (head=bf16
+    # + dense/lean prefill reassoc; the runner adds NO new lossiness).
+    "cell16k_ring_v2": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+    ),
+    # W104: cell16k_ring_v2 + BOTH DSpark draft-head levers (K33 draft-block tape
+    # collapse + the W103 draft-head fp32-cast fix).  Exact key set of cell16k_ring_v2
+    # plus draft="1" + draft_head_bf16="1"; both touch the DSpark draft head only, so
+    # they compose with the v2 runner's SSD-hiding verify path and never change the
+    # verify math.  The direct A/B vs cell16k_ring_v2 isolates the two draft-head
+    # levers on the standard 16K cell with the v2 runner armed.  (W104 traced the draft
+    # MoE to an already barrier-free resident gather_qmm(mode="mxfp4") -- zero host
+    # syncs -- so there is NO draft-MoE lever to stack here; see
+    # docs/deepseek-v41/W104_DRAFT_RESIDENT_MOE.md.)
+    "cell16k_ring_v2_draft": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+    ),
+    # W97F composite: cell16k_ring_v2 + the byte-identical W97/W99 lean attention
+    # stack (wo_a f32 cache + leaned casts) + the W101/K36 fused projection-chain glue.
+    # EXACT KEY SET (13 keys) = cell16k_ring_v2's twelve keys
+    #   layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+    #   window_ring="1", layout_fix="1", kv_bounded="1", head="bf16", sinkhorn="1",
+    #   attn="1", win_memo="1", runner="v2"
+    # PLUS the three W97/W99/W101 attention keys
+    #   wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1".
+    # wo_a_cache + attn_lean_casts are the BYTE-IDENTICAL (exact) W97/W99 lean stack
+    # (cell16k_ring_lean); attn_fused_proj is the W101/K36 GPU-only small-M (b*s<=8)
+    # projection glue.  The K29 fused decode core (decode_attn_kernel) is DELIBERATELY
+    # NOT armed -- the eager core stays -- so the direct A/B vs cell16k_ring_v2 isolates
+    # the v2 SSD-hiding runner combined with the attention-dispatch reductions (lean
+    # stack + fused proj) without the fused core.  Watch peak memory (wo_a cache + the
+    # fused path each hold a per-layer wo_a copy resident at the 16K cell).
+    "cell16k_ring_v2_attn": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W97F composite (DSpark): cell16k_ring_v2_draft + the SAME three attention keys as
+    # cell16k_ring_v2_attn.  EXACT KEY SET (15 keys) = cell16k_ring_v2_draft's twelve
+    #   layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+    #   window_ring="1", layout_fix="1", kv_bounded="1", head="bf16", sinkhorn="1",
+    #   attn="1", win_memo="1", runner="v2", draft="1", draft_head_bf16="1"
+    # PLUS wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1".
+    # The draft + draft_head_bf16 keys drive the DSpark draft head (--decode-mode
+    # dspark); the three attention keys apply to the shared trunk attention exactly as
+    # in cell16k_ring_v2_attn.  The direct A/B vs cell16k_ring_v2_draft isolates the
+    # W97/W99/W101 attention stack under the DSpark decode lane.
+    "cell16k_ring_v2_draft_attn": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W107F pair for window 44: cell16k_ring_v2_attn + kv_bounded="1" (the
+    # dedicated bounded variant, per the W107 round-3 policy that composites do
+    # NOT carry kv_bounded -- it lives only in *_bounded arms).  EXACT KEY SET =
+    # cell16k_ring_v2_attn (layer_major, prefill_dense, score_path=lean,
+    # selected_keys, window_ring, layout_fix, head=bf16, sinkhorn, attn, win_memo,
+    # runner=v2, wo_a_cache, attn_lean_casts, attn_fused_proj) PLUS kv_bounded="1".
+    # Pairs A/B against cell16k_ring_v2_attn to isolate the bounded-KV lever on
+    # top of the full attention stack.
+    "cell16k_ring_v2_attn_bounded": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W107F pair for window 44 (DSpark): cell16k_ring_v2_draft_attn + kv_bounded="1".
+    # EXACT KEY SET = cell16k_ring_v2_draft_attn (its 16 keys incl. runner=v2,
+    # draft, draft_head_bf16, wo_a_cache, attn_lean_casts, attn_fused_proj) PLUS
+    # kv_bounded="1".  Pairs A/B against cell16k_ring_v2_draft_attn under DSpark.
+    "cell16k_ring_v2_draft_attn_bounded": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+    ),
+    # W110 (BENCH-ONLY DIAGNOSTIC): cell16k_ring_v2 + decode-path per-record sha256
+    # turned ON (MTPLX_DSV41_VERIFY_RECORD_HASHES=1, env-authoritative over the ab
+    # harness's --verify-record-hashes default False).  This is NOT a perf lever:
+    # decode hashing is already OFF on every ab/bench path and OFF in the served
+    # profile, so there was nothing to remove.  The A/B cell16k_ring_v2_hash vs
+    # cell16k_ring_v2 MEASURES the io-thread cost of hashing (records_hashed /
+    # hash_thread_ns) should a future policy ever require it -- the reverse of the
+    # withdrawn W109 §1.b "drop hashing" framing.  Byte-identical class either way
+    # (hashing never changes bytes, so token_ids_sha256 must match); the
+    # resolved_plan.verify_record_hashes stamp proves the two arms actually differ.
+    "cell16k_ring_v2_hash": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", verify_record_hashes="1",
+    ),
 }
+
+# W97 (review item 7): the rounding-class env keys, documented in ONE place with the
+# reason.  An arm whose preset arms ANY of these keys has decoded tokens that are
+# EXPECTED to differ from control by rounding (the lever reassociates the fp32
+# attention core / softmax, so a greedy near-tie can flip -- [[dsv41-inexact-ok-if-
+# tie-flips]]).  A token-id sha mismatch on such an arm is "expected (rounding-class)",
+# NOT a broken exact lever, so the byte-identity summary must not FAIL it; every other
+# arm keeps the FAIL (an exact lever that changed the tokens is a bug).
+#
+# ROUNDING_CLASS_ARMS is DERIVED from ARM_PRESETS (not a hand list), so a new arm is
+# classified automatically the moment its preset names one of these keys.  Each key's
+# reason (why reassociation, not a bug):
+#   DECODE_ATTN_KERNEL (K29): the fused decode/verify MLA kernel's online-softmax tile
+#       reduction reorders the fp32 softmax -- greedy-identical <=1e-6, NOT byte-ident
+#       (W60; GPU-only, CPU falls back to the eager one-shot).
+#   ATTN_CORE_COMPILE (W97): the n=1 fixed-shape mx.compile of the decode-attention
+#       core reassociates the fp32 einsum/reductions (the K35 lesson; measured max|Δ|
+#       ~9e-10 on CPU) -- NOT byte-identical, on CPU AND GPU.
+#   SMALL_STAGES_FUSED (K35): the fused per-layer small-stage graphs reassociate the
+#       fp32 GEMM/reductions on Metal (window-37: token-id sha DIFFERS on GPU;
+#       byte-identical only within the CPU mx.compile bit-exact regime).
+#   HC_PREMIX_KERNEL (K35): the fused HC-premix Sinkhorn kernel (rounding-class 1e-6,
+#       argmax-exact); pinned force-unset by every preset today, listed so a future
+#       arm that turns it on is classified automatically.
+#   MTPLX_DSV41_DRAFT_HEAD_BF16: a bf16 DSpark draft head would round the draft logits;
+#       no current preset arms it (no such constant yet), listed by name so a future
+#       arm classifies without a code change.
+# DELIBERATELY EXCLUDED (kept FAIL so a genuine exact-lever regression is caught):
+#   HC_COMPILE (K4) and SINKHORN_METAL (K3) are classed byte-identical execution
+#       reorders on this CPU A/B path (K4 is a byte-identical HC-premix compile; K3
+#       falls back to eager on CPU), and MANY exact composite arms carry sinkhorn="1"
+#       (cell16k_ring_wo_a_cache, cell16k_ring_lean, stack_*) -- excusing them would
+#       mask a real exact-lever divergence.  HEAD_MODE=bf16/mxfp8/q8 is a LOSSY-by-
+#       design LOAD-TIME codec, a different class (flagged separately, W40_HEAD_LEVER),
+#       not a rounding reorder -- so head=bf16 on an otherwise-exact arm is NOT what
+#       makes it rounding-class.  ATTN_LEAN_CASTS (W99) is a byte-identical cast dedupe.
+ROUNDING_CLASS_ENVS = (
+    DECODE_ATTN_KERNEL_ENV,
+    ATTN_CORE_COMPILE_ENV,
+    SMALL_STAGES_FUSED_ENV,
+    HC_PREMIX_KERNEL_ENV,
+    "MTPLX_DSV41_DRAFT_HEAD_BF16",
+    ATTN_FUSED_PROJ_ENV,  # W101: metal_kernel glue + cached pre-transposed wo_a (GPU numerics: rounding-class, 0 greedy flips / 65)
+)
+
+
+def _rounding_class_keys(arm: str) -> list:
+    """The rounding-class env keys (see ``ROUNDING_CLASS_ENVS``) an arm's preset
+    actually arms -- the reason its tokens are EXPECTED to differ from control by
+    rounding.  Empty list for an exact arm.  Derived from ``ARM_PRESETS``, never
+    hand-listed, so a new rounding-class arm is classified automatically."""
+    preset = ARM_PRESETS.get(arm, {})
+    return [k for k in ROUNDING_CLASS_ENVS if preset.get(k) not in (None, "")]
+
+
+def _is_rounding_class(arm: str) -> bool:
+    """True when ``arm`` arms any rounding-class env key (see ``_rounding_class_keys``)."""
+    return bool(_rounding_class_keys(arm))
+
+
+# Derived, not hand-listed: every arm whose preset arms a rounding-class env key.
+ROUNDING_CLASS_ARMS = frozenset(a for a in ARM_PRESETS if _is_rounding_class(a))
 
 
 def _load_bench_module():
@@ -993,6 +1516,117 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOTAL box-use budget GiB the plan is derived from (default: "
         "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
     )
+    # W106 item 3 / MEDIUM-1: derive the plan limit from the TOTAL box budget while
+    # COMPENSATING for the non-Metal requirements.  Canonical flags are GiB
+    # (`-gib`); the `-gb` spellings are DEPRECATED aliases that convert decimal GB
+    # -> GiB at the boundary (see _resolve_gib_flag).  When given, --memory-budget-
+    # total-* OVERRIDES --memory-limit-gib (derive, don't take it literally).
+    p.add_argument(
+        "--memory-budget-total-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="TOTAL box budget in GiB for EVERYTHING; derive the MLX plan limit as "
+        "total - system_used_at_start - non_metal_overhead - kv_growth_to_max_kv "
+        "- safety (compensates for the non-Metal requirements). Overrides "
+        "--memory-limit-gib. Refuses to start if the derived limit is below "
+        "--memory-budget-floor-gib.",
+    )
+    p.add_argument(
+        "--memory-budget-total-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --memory-budget-total-gib; the value is decimal "
+        "GB and is converted to GiB (x1e9/2^30).",
+    )
+    p.add_argument(
+        "--memory-safety-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=f"safety headroom in GiB subtracted in the budget derivation (default "
+        f"{DEFAULT_MEMORY_SAFETY_GIB:g}).",
+    )
+    p.add_argument(
+        "--memory-safety-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --memory-safety-gib (decimal GB -> GiB).",
+    )
+    p.add_argument(
+        "--memory-budget-floor-gib",
+        type=float,
+        default=DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
+        metavar="GIB",
+        help=f"refuse to start if the budget-derived plan limit is below this floor "
+        f"in GiB (default {DEFAULT_MEMORY_BUDGET_FLOOR_GIB:g}).",
+    )
+    p.add_argument(
+        "--non-metal-overhead-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="conservative pre-load estimate in GiB of the non-Metal process "
+        "overhead (python heap + expert-reader buffers + engram LRU + tokenizer) "
+        f"used in the budget derivation (default {DEFAULT_NON_METAL_OVERHEAD_GIB:g}); "
+        "the real value is re-measured after load (and aborts if it blows budget).",
+    )
+    p.add_argument(
+        "--non-metal-overhead-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --non-metal-overhead-gib (decimal GB -> GiB).",
+    )
+    p.add_argument(
+        "--plan-overshoot-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=f"GiB the MLX allocator PEAK overshoots the plan's expert-cache ceiling "
+        f"(KV + prefill transients that live outside the plan body); subtracted in "
+        f"the budget derivation so the forecast box peak stays under budget (default "
+        f"{DEFAULT_PLAN_OVERSHOOT_GIB:g}).",
+    )
+    p.add_argument(
+        "--plan-overshoot-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --plan-overshoot-gib (decimal GB -> GiB).",
+    )
+    # W106 LOW-4: pre-flight the budget derivation from a dry snapshot (no model
+    # load, no MLX) so the floor refusal happens BEFORE the guarded GPU window opens
+    # (a raise inside _load_model happens after Qwen is already unloaded).
+    p.add_argument(
+        "--memory-plan-preflight",
+        action="store_true",
+        default=False,
+        help="print the --memory-budget-total-* plan derivation from a dry snapshot "
+        "(no model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor), so "
+        "the budget can be checked BEFORE the guarded GPU window opens.",
+    )
+    p.add_argument(
+        "--memory-plan-from",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="PIN the MLX plan from a derived-plan.json sidecar (written by an "
+        "earlier --memory-budget-total-gib arm) instead of deriving live, so every "
+        "A/B arm uses the SAME plan_limit (reproducible residency). HIGH-2.",
+    )
+    p.add_argument(
+        "--preflight-freed-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="GiB the guarded window will FREE by booting out the resident agent "
+        "(com.tea.qwen); subtracted from the pre-flight 'now' baseline so it derives "
+        "from the expected in-window baseline. Default: best-effort read-only "
+        "auto-detect of the agent RSS, else 0 with a caveat. Pre-flight only.",
+    )
     p.add_argument(
         "--memory-profile",
         action="store_true",
@@ -1045,6 +1679,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
     )
     p.add_argument("--seed", type=int, default=0)
+    # W113: cell-prompt guard + EOS surfacing.
+    p.add_argument(
+        "--allow-raw-prompt",
+        action="store_true",
+        default=False,
+        help="ESCAPE HATCH (diagnostics): let a cell16k_* arm / --context-tokens "
+        "16384 run MEASURE the RAW prefill_bench builder prompt instead of the "
+        "standard chat-templated cell. Skips BOTH the W113 guard refusal and the "
+        "ctx-16384 --prompt-ids-file auto-default; stamps prompt_source='raw-"
+        "builder' loudly. The raw prompt's greedy first token is EOS, so a served "
+        "path returns EMPTY.",
+    )
+    p.add_argument(
+        "--stop-on-eos",
+        action="store_true",
+        default=False,
+        help="served-parity: stop the AR decode (and, in --decode-mode dspark, the "
+        "speculative decode) at the EOS id and report decode_tok_s over the tokens "
+        "ACTUALLY generated. Default OFF keeps the full fixed-step decode so the "
+        "throughput numbers are unchanged. Mirrors the serve_bench_1k W18 guard.",
+    )
+    p.add_argument(
+        "--eos-id",
+        type=int,
+        default=None,
+        help="override the EOS token id used by --stop-on-eos and the EOS-surfacing "
+        "receipt fields (default: resolve from the tokenizer files, no model load).",
+    )
     return p
 
 
@@ -1056,6 +1718,339 @@ def _apply_arm_env(arm: str) -> None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+
+
+# --------------------------------------------------------------------------
+# W113 cell-prompt guard + prompt provenance + EOS surfacing
+# --------------------------------------------------------------------------
+# Windows 39-42 MEASURED the RAW prefill_bench builder prompt (BOS + a 96x
+# ``# file_N.py`` filler ladder + DEFAULT_FINAL_REQUEST = 16,385 tokens, no chat
+# template, no generation prompt) whose greedy first token is EOS (id 1); the
+# classic/device decode loops had no EOS check, so 256 FORCED post-EOS filler
+# tokens were timed and a served (EOS-honouring) path would have returned an
+# EMPTY answer.  The standard 16K cell is the chat-templated ids file
+# STANDARD_CELL16K_PROMPT_IDS, reached ONLY via --prompt-ids-file
+# (bench._prompt_ids_override: exactly 16,384 ids, ending <｜Assistant｜></think>,
+# no BOS re-prepend).  A receipt tells the two apart by ``prompt_source`` /
+# ``prompt_tokens`` (16,384 file vs 16,385 raw+BOS) / ``prompt_chat_templated``.
+# The guard (real-measurement path) refuses to run a cell16k_* arm or a
+# --context-tokens 16384 run on the raw builder unless --allow-raw-prompt, and
+# defaults --prompt-ids-file to the standard file so launchers get the cell.
+
+
+def _repo_root() -> Path:
+    """Repo/worktree root: ``scripts/deepseek_v41/<this>.py`` -> ``parents[2]``."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _standard_cell16k_prompt_path() -> Path:
+    """Absolute path to the standard 16K cell ids file (repo-root relative)."""
+    return _repo_root() / STANDARD_CELL16K_PROMPT_IDS
+
+
+def _cell16k_arm(name) -> bool:
+    """True for the standard-cell arms.  W113 LOW-c: the bare ``cell16k`` preset
+    (no trailing underscore) is a 16K-cell arm too, so match it as well as the
+    ``cell16k_*`` family."""
+    s = str(name)
+    return s == "cell16k" or s.startswith("cell16k_")
+
+
+_SPECIAL_IDS_CACHE: dict = {}
+
+
+def _special_token_ids(model_path) -> dict:
+    """Resolve special-token ids from the tokenizer files WITHOUT a model/MLX.
+
+    Reads ``tokenizer_config.json`` (bos/eos/pad token contents) and
+    ``tokenizer.json`` (the ``added_tokens`` content->id map) under ``model_path``
+    and returns ``{bos, eos, pad, assistant, user, system, think, end_think}`` for
+    the ids that resolve.  CPU-only, read-only, cached by path; ``{}`` if the files
+    cannot be read (best-effort -- callers degrade to ``None`` flags).  This is the
+    "detect via tokenizer special ids, no model" path W113 needs when
+    --prompt-ids-file skips the tokenizer load.
+    """
+    key = str(model_path)
+    if key in _SPECIAL_IDS_CACHE:
+        return _SPECIAL_IDS_CACHE[key]
+    out: dict = {}
+    try:
+        base = Path(model_path).expanduser()
+        cfg = json.loads((base / "tokenizer_config.json").read_text())
+        tok = json.loads((base / "tokenizer.json").read_text())
+
+        def _content(v):
+            return v.get("content") if isinstance(v, dict) else v
+
+        by_content: dict = {}
+        for t in (tok.get("added_tokens") or []):
+            c = t.get("content")
+            if c is not None and t.get("id") is not None:
+                by_content[c] = int(t["id"])
+        wanted = {
+            "bos": _content(cfg.get("bos_token")),
+            "eos": _content(cfg.get("eos_token")),
+            "pad": _content(cfg.get("pad_token")),
+            "assistant": "<｜Assistant｜>",
+            "user": "<｜User｜>",
+            "system": "<｜System｜>",
+            "think": "<think>",
+            "end_think": "</think>",
+        }
+        for name, content in wanted.items():
+            if content is not None and content in by_content:
+                out[name] = by_content[content]
+        # config-level id fields win when present (both None for this model).
+        if cfg.get("eos_token_id") is not None:
+            out["eos"] = int(cfg["eos_token_id"])
+        if cfg.get("bos_token_id") is not None:
+            out["bos"] = int(cfg["bos_token_id"])
+    except Exception:  # pragma: no cover - defensive (missing/unreadable files)
+        out = {}
+    _SPECIAL_IDS_CACHE[key] = out
+    return out
+
+
+def _resolve_eos_id(args):
+    """The EOS token id: ``--eos-id`` override, else the tokenizer-file eos id,
+    else ``None`` (EOS surfacing then records ``None`` best-effort)."""
+    ov = getattr(args, "eos_id", None)
+    if ov is not None:
+        return int(ov)
+    eid = _special_token_ids(getattr(args, "model", None)).get("eos")
+    return int(eid) if eid is not None else None
+
+
+def _require_eos_id_for_stop(stop_on_eos, eos_id) -> None:
+    """W113 MEDIUM-3: refuse ``--stop-on-eos`` when no EOS id could be resolved.
+
+    Without this the flag silently no-ops (nothing stops the decode) while the
+    receipt still stamps ``stop_on_eos: true`` -- a served-parity run that did not
+    behave like the served path.  Raised in ``_run_arm`` before the model load.
+    """
+    if stop_on_eos and eos_id is None:
+        raise SystemExit(
+            "[ab] --stop-on-eos needs an EOS id but none could be resolved from "
+            "the tokenizer files (tokenizer_config.json + tokenizer.json) under "
+            "--model; pass --eos-id <id> (DeepSeek-V4.1 EOS is id 1)."
+        )
+
+
+def _prompt_chat_templated(prompt_ids, special):
+    """Best-effort: is ``prompt_ids`` chat-templated WITH a generation prompt?
+
+    ``True`` when the ids contain the ``<｜Assistant｜>`` special id AND end with a
+    generation prompt -- nothing follows the final assistant marker except the
+    think open/close markers (the assistant turn is opened but not yet answered,
+    e.g. ``... <｜Assistant｜></think>``).  ``False`` for the raw builder prompt (no
+    assistant marker) or a prompt whose assistant turn already has content after
+    the marker.  ``None`` when the assistant special id is unavailable.
+    """
+    assistant = (special or {}).get("assistant")
+    if assistant is None:
+        return None
+    ids = [int(t) for t in prompt_ids]
+    if assistant not in ids:
+        return False
+    last = max(i for i, t in enumerate(ids) if t == assistant)
+    opener = {
+        x
+        for x in ((special or {}).get("think"), (special or {}).get("end_think"))
+        if x is not None
+    }
+    return all(t in opener for t in ids[last + 1:])
+
+
+def _prompt_provenance(args, prompt_ids, prompt_meta) -> dict:
+    """The W113 receipt stamps that tell the standard cell from the raw builder.
+
+    ``prompt_source`` is ``"prompt-ids-file"`` when --prompt-ids-file fed the exact
+    served ids, else ``"raw-builder"`` (the prefill_bench builder).
+    ``prompt_ids_sha256`` is the sha of the PROMPT ids (NOT the generated ids --
+    that is ``token_ids_sha256``).  ``prompt_chat_templated`` is detected from the
+    tokenizer special ids (no model).  ``prompt_build`` carries the resolver's own
+    metadata block (its native ``prompt_source`` field is "prefill_bench"/"literal"
+    for the builder or "prompt-ids-file" for the override -- a finer label than the
+    two-value top-level one).
+    """
+    src = (
+        "prompt-ids-file"
+        if getattr(args, "prompt_ids_file", None)
+        else "raw-builder"
+    )
+    special = _special_token_ids(getattr(args, "model", None))
+    ids_sha = hashlib.sha256(
+        json.dumps([int(t) for t in prompt_ids]).encode("utf-8")
+    ).hexdigest()
+    return {
+        "prompt_source": src,
+        "prompt_ids_file": getattr(args, "prompt_ids_file", None),
+        "prompt_ids_sha256": ids_sha,
+        "prompt_seed": getattr(args, "prompt_seed", None),
+        "prompt_tokens": len(prompt_ids),
+        "prompt_chat_templated": _prompt_chat_templated(prompt_ids, special),
+        "allow_raw_prompt": bool(getattr(args, "allow_raw_prompt", False)),
+        "prompt_build": prompt_meta,
+    }
+
+
+def _eos_surfacing(generated_ids, eos_id) -> dict:
+    """EOS surfacing over a generated id stream (W113).
+
+    ``first_token_eos`` -- the FIRST generated token is EOS (a served path would
+    then return an EMPTY answer).  ``eos_index`` -- the first position of the EOS
+    id in the stream, or ``None``.  ``tokens_before_eos`` -- ``eos_index`` if
+    present, else the whole stream length.  ``answer_valid`` -- ``not
+    first_token_eos``: the answer is non-empty iff the first token is not EOS.
+    This is CAP-INDEPENDENT -- it does not change whether --stop-on-eos truncated
+    the stream or the full fixed-step decode ran -- unlike the withdrawn
+    ``eos_index > 0.5*N`` rule, which flipped a correct SHORT answer (e.g. a valid
+    60-token answer) to invalid once --stop-on-eos shrank N.  ``answer_truncated``
+    -- ``eos_index is None``: the decode hit the token cap without the model
+    emitting EOS (the answer may be cut off).  ``post_eos_tokens_timed`` -- when
+    EOS is present, the number of FORCED post-EOS tokens that were still timed
+    (``n_generated - eos_index - 1``; the wasted filler a served path would never
+    produce -- 256 on the windows 39-42 raw prompt, whose EOS was at index 0);
+    ``0`` when EOS is absent.  All fields are ``None`` when ``eos_id`` is unknown.
+    """
+    ids = [int(t) for t in (generated_ids or [])]
+    total = len(ids)
+    if eos_id is None:
+        return {
+            "first_token_eos": None,
+            "eos_index": None,
+            "tokens_before_eos": None,
+            "answer_valid": None,
+            "answer_truncated": None,
+            "post_eos_tokens_timed": None,
+            "eos_id": None,
+            "n_generated": total,
+        }
+    eos_id = int(eos_id)
+    eos_index = next((i for i, t in enumerate(ids) if t == eos_id), None)
+    first_token_eos = bool(ids and ids[0] == eos_id)
+    return {
+        "first_token_eos": first_token_eos,
+        "eos_index": eos_index,
+        "tokens_before_eos": int(eos_index if eos_index is not None else total),
+        "answer_valid": not first_token_eos,
+        "answer_truncated": eos_index is None,
+        "post_eos_tokens_timed": (
+            (total - eos_index - 1) if eos_index is not None else 0
+        ),
+        "eos_id": eos_id,
+        "n_generated": total,
+    }
+
+
+def _warn_if_first_token_eos(arm, lane, surf) -> None:
+    """The loud W113 warning when the first generated token is EOS."""
+    if surf.get("first_token_eos"):
+        print(
+            "[ab] " + "!" * 8 + " WARNING: first generated token is EOS -- answer "
+            "would be EMPTY on a served path " + "!" * 8
+            + f" (arm {arm!r}, {lane})",
+            flush=True,
+        )
+
+
+def _verify_standard_cell_prompt(path) -> None:
+    """W113 LOW-a: pin the auto-defaulted standard cell to its expected prompt sha.
+
+    Selects the ``(cell=sweep, target_tokens=16384, seed=STANDARD_CELL16K_PROMPT_
+    SEED)`` entry and refuses (``SystemExit``) if the sha of its prompt ids does
+    not match ``STANDARD_CELL16K_PROMPT_SHA256`` -- so a swapped/edited standard
+    file is caught before it is silently measured.  Only the auto-defaulted file is
+    pinned; an explicit --prompt-ids-file is the operator's own choice.
+    """
+    try:
+        data = json.loads(Path(path).read_text())
+        entry = next(
+            e
+            for e in (data.get("prompts") or [])
+            if str(e.get("cell")) == "sweep"
+            and int(e.get("target_tokens") or 0) == 16384
+            and e.get("seed") == STANDARD_CELL16K_PROMPT_SEED
+        )
+        ids = [int(t) for t in entry["token_ids"]]
+    except (StopIteration, KeyError, ValueError, TypeError,
+            json.JSONDecodeError, OSError) as exc:
+        raise SystemExit(
+            f"[ab] W113: cannot verify the standard cell file {path} "
+            f"(cell=sweep, target_tokens=16384, seed={STANDARD_CELL16K_PROMPT_SEED}"
+            f"): {exc!r}. Pass --prompt-ids-file explicitly or --allow-raw-prompt."
+        )
+    sha = hashlib.sha256(json.dumps(ids).encode("utf-8")).hexdigest()
+    if sha != STANDARD_CELL16K_PROMPT_SHA256:
+        raise SystemExit(
+            f"[ab] W113: the standard cell file {path} prompt-ids sha {sha} does "
+            f"NOT match the pinned {STANDARD_CELL16K_PROMPT_SHA256} -- the file was "
+            "edited/swapped. Pass --prompt-ids-file explicitly (if intended) or "
+            "--allow-raw-prompt."
+        )
+
+
+def _apply_cell_prompt_guard(args) -> None:
+    """W113 cell-prompt guard for the REAL measurement path (see the block note).
+
+    - Auto-default --prompt-ids-file to the standard 16K cell file when
+      --context-tokens 16384 and that file exists (repo-root relative), so a
+      launcher gets the standard cell without passing the path.
+    - REFUSE to run any ``cell16k_*`` arm or any --context-tokens 16384 run without
+      --prompt-ids-file (raise ``SystemExit`` naming the standard file).
+    - --allow-raw-prompt is the loud diagnostics escape hatch: it skips BOTH the
+      refusal and the auto-default and runs the raw builder.
+
+    Precedence: an explicit --prompt-ids-file wins over everything; then
+    --allow-raw-prompt (raw builder, loud); then the ctx-16384 auto-default; then
+    the refusal.  No-op when the run is neither a cell16k_* arm nor 16384-ctx.
+    """
+    ctx16k = int(getattr(args, "context_tokens", 0) or 0) == 16384
+    cell_arms = [a for a in (getattr(args, "arms", None) or []) if _cell16k_arm(a)]
+    if not (ctx16k or cell_arms):
+        return
+    if getattr(args, "prompt_ids_file", None):  # explicit file always wins
+        return
+    if getattr(args, "allow_raw_prompt", False):
+        print(
+            "[ab] " + "!" * 8 + " --allow-raw-prompt: measuring the RAW builder "
+            "prompt on a 16K cell " + "!" * 8 + "\n"
+            "[ab] WARNING: this is the DIAGNOSTIC raw prefill_bench prompt (no chat "
+            "template, no generation prompt); its greedy first token is EOS so a "
+            "served path returns EMPTY. NOT the standard cell. prompt_source is "
+            "stamped 'raw-builder'.",
+            flush=True,
+        )
+        return
+    std = _standard_cell16k_prompt_path()
+    if ctx16k and std.exists():
+        # W113 LOW-a: pin the file to its expected prompt sha (refuse on mismatch),
+        # then stamp the seed so the receipt's prompt_seed is not left null.
+        _verify_standard_cell_prompt(std)
+        args.prompt_ids_file = str(std)
+        if getattr(args, "prompt_seed", None) is None:
+            args.prompt_seed = STANDARD_CELL16K_PROMPT_SEED
+        print(
+            f"[ab] W113: defaulted --prompt-ids-file to the standard 16K cell {std} "
+            f"(--prompt-seed {args.prompt_seed}, prompt-ids sha pinned; "
+            "--allow-raw-prompt for the raw builder)",
+            flush=True,
+        )
+        return
+    reason = []
+    if cell_arms:
+        reason.append(f"cell16k_* arms {cell_arms}")
+    if ctx16k:
+        reason.append("--context-tokens 16384")
+    raise SystemExit(
+        "[ab] REFUSED (W113 cell-prompt guard): " + " and ".join(reason) + " require "
+        "the standard chat-templated 16K cell prompt, but --prompt-ids-file was not "
+        f"given and the standard file was not found at {std}. Pass --prompt-ids-file "
+        f"<{STANDARD_CELL16K_PROMPT_IDS}> --prompt-seed 20260829 (schema "
+        "mtplx-server-cell-prompt-ids-v1, cell=sweep, target_tokens=16384), or "
+        "--allow-raw-prompt to measure the diagnostic raw builder (its greedy first "
+        "token is EOS -> empty served answer)."
+    )
 
 
 def _arm_env_snapshot() -> dict:
@@ -1093,6 +2088,10 @@ def _dry_run_arm(args, arm, bench) -> dict:
     return {
         "arm": arm,
         "dry_run": True,
+        # W97 (review item 7): rounding-class flag + the reason keys the arm arms
+        # (see ROUNDING_CLASS_ENVS).  True => a token-id sha mismatch is EXPECTED.
+        "rounding_class": _is_rounding_class(arm),
+        "rounding_class_keys": _rounding_class_keys(arm),
         "overlap_env": os.environ.get(OVERLAP_ENV),
         "arm_env": _arm_env_snapshot(),
         # K14 (W63): the MLX command-buffer MB cap this arm pins (None = MLX
@@ -1103,8 +2102,12 @@ def _dry_run_arm(args, arm, bench) -> dict:
         "device_sample": _device_sample_resolved(args),
         "context_tokens": int(args.context_tokens),
         "decode_tokens": int(args.decode_tokens),
-        "prompt_tokens": len(prompt_ids),
-        "prompt_build": prompt_meta,
+        # W113 prompt provenance stamps (prompt_source / prompt_ids_file /
+        # prompt_ids_sha256 / prompt_seed / prompt_tokens / prompt_chat_templated /
+        # allow_raw_prompt / prompt_build).  In --dry-run this is always the raw
+        # builder (the guard/auto-default run only on the real path), so
+        # prompt_source == "raw-builder" and prompt_chat_templated is False.
+        **_prompt_provenance(args, prompt_ids, prompt_meta),
         # W37 pass toggles resolved offline (no model / MLX): proves the flags
         # thread through argument resolution before a GPU window burns on them.
         "stage_timing": bool(getattr(args, "stage_timing", False)),
@@ -1120,15 +2123,816 @@ def _dry_run_arm(args, arm, bench) -> dict:
     }
 
 
-def _resolve_derivation(args):
-    """The W62 budget->plan derivation for this run (override or budget)."""
+# --------------------------------------------------------------------------
+# W106 item 3: budget-total -> plan-limit derivation (compensates for the
+# non-Metal requirements).  Pure math in derive_budget_total_plan(); the
+# measurements are taken by the caller and INJECTED, so this is unit-testable on
+# CPU with no MLX, no model and no vm_stat.
+# --------------------------------------------------------------------------
+
+
+class BudgetTotalDerivation:
+    """The plan limit derived from a TOTAL box budget, and every term of it.
+
+    ``plan_limit_gib`` is what the MLX plan is fixed to; ``non_metal_overhead_gb``
+    is the pre-load estimate actually used to derive it, and
+    ``non_metal_overhead_measured_gb`` is the post-load re-measurement (None until
+    measured).  ``memory_keys()`` renders the receipt ``memory``-block keys.
+
+    A PLAIN immutable-by-convention class (not ``@dataclass``): this module is a
+    script loaded by file path in tests, and ``@dataclass`` under ``from __future__
+    import annotations`` needs the module registered in ``sys.modules`` to resolve
+    its string annotations -- which a file-path load does not do.
+    """
+
+    __slots__ = (
+        "source", "budget_total_gb", "system_used_at_start_gb",
+        "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
+        "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
+        "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
+        "kv_estimator", "rss_semantics", "system_used_live_gb",
+    )
+
+    def __init__(
+        self,
+        *,
+        source,
+        budget_total_gb,
+        system_used_at_start_gb,
+        non_metal_overhead_gb,
+        kv_growth_to_max_kv_gb,
+        safety_gb,
+        floor_gib,
+        plan_limit_gib,
+        plan_overshoot_gib=DEFAULT_PLAN_OVERSHOOT_GIB,
+        non_metal_overhead_measured_gb=None,
+        plan_limit_gib_effective=None,
+        kv_estimator=None,
+        rss_semantics="unmeasured",
+        system_used_live_gb=None,
+    ):
+        self.source = source
+        self.budget_total_gb = budget_total_gb
+        self.system_used_at_start_gb = system_used_at_start_gb
+        self.non_metal_overhead_gb = non_metal_overhead_gb
+        self.kv_growth_to_max_kv_gb = kv_growth_to_max_kv_gb
+        self.safety_gb = safety_gb
+        self.plan_overshoot_gib = plan_overshoot_gib
+        self.floor_gib = floor_gib
+        self.plan_limit_gib = plan_limit_gib
+        self.non_metal_overhead_measured_gb = non_metal_overhead_measured_gb
+        self.plan_limit_gib_effective = plan_limit_gib_effective
+        # W107 follow-up: which KV-growth estimator priced budget_kv_growth_to_max_kv_gb
+        # -- "w107" (mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv, the exact
+        # per-lane helper) or "local" (the conservative fallback in this module).
+        # None on the explicit path (no KV growth term is priced).
+        self.kv_estimator = kv_estimator
+        # HIGH-A: "ok" (footprint>=active, measured valid), "inverted" (footprint <
+        # mx active -> Metal not in phys_footprint, overhead unmeasurable), or
+        # "unmeasured" (pre-load / footprint unavailable).
+        self.rss_semantics = rss_semantics
+        # HIGH (round 4): the LIVE system-used baseline measured when a pinned plan
+        # is validated (None unless this run pinned a sidecar).
+        self.system_used_live_gb = system_used_live_gb
+
+    def replace(self, **changes) -> "BudgetTotalDerivation":
+        """A copy with the named fields overridden (dataclasses.replace-style)."""
+        current = {name: getattr(self, name) for name in self.__slots__}
+        current.update(changes)
+        return BudgetTotalDerivation(**current)
+
+    # W106 HIGH-2: serialize the derivation to a sidecar so later A/B arms PIN the
+    # SAME plan (a live per-process vm_stat would give each arm a different plan ->
+    # different residency -> byte-identity meaningless).
+    def to_plan_dict(self) -> dict:
+        return {name: getattr(self, name) for name in self.__slots__}
+
+    @staticmethod
+    def from_plan_dict(d: dict) -> "BudgetTotalDerivation":
+        fields = {
+            "source", "budget_total_gb", "system_used_at_start_gb",
+            "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
+            "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
+            "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
+            "rss_semantics", "system_used_live_gb",
+        }
+        return BudgetTotalDerivation(**{k: v for k, v in d.items() if k in fields})
+
+    def forecast_system_peak_gib(self):
+        """HIGH-1: the forecast whole-box peak = baseline + plan + plan_overshoot +
+        non_metal_overhead.  With the plan derived by subtracting overshoot/kv/safety
+        too, this stays <= budget_total (the invariant the derivation guarantees)."""
+        if self.budget_total_gb is None:
+            return None
+        return (
+            self.system_used_at_start_gb + self.plan_limit_gib
+            + self.plan_overshoot_gib + self.non_metal_overhead_gb
+        )
+
+    def formula(self) -> str:
+        fc = self.forecast_system_peak_gib()
+        return (
+            f"plan_limit = budget_total({self.budget_total_gb:.4g}) "
+            f"- system_used_at_start({self.system_used_at_start_gb:.4g}) "
+            f"- non_metal_overhead({self.non_metal_overhead_gb:.4g}) "
+            f"- kv_growth_to_max_kv({self.kv_growth_to_max_kv_gb:.4g}) "
+            f"- safety({self.safety_gb:.4g}) "
+            f"- plan_overshoot({self.plan_overshoot_gib:.4g}) "
+            f"= {self.plan_limit_gib:.4g} GiB (floor {self.floor_gib:.4g}; "
+            f"forecast_system_peak {fc:.4g} <= budget)"
+        )
+
+    def memory_keys(self) -> dict:
+        """The budget keys merged into the receipt ``memory`` block.  Always the
+        SAME key set (nulls where a term does not apply) so receipts are
+        self-describing regardless of which plan source ran."""
+
+        fc = self.forecast_system_peak_gib()
+        return {
+            "memory_plan_source": self.source,
+            "budget_total_gb": (
+                None if self.budget_total_gb is None
+                else round(self.budget_total_gb, 4)
+            ),
+            "plan_limit_gib_derived": round(self.plan_limit_gib, 4),
+            "plan_limit_gib_effective": (
+                None if self.plan_limit_gib_effective is None
+                else round(self.plan_limit_gib_effective, 4)
+            ),
+            "budget_system_used_at_start_gb": round(self.system_used_at_start_gb, 4),
+            "budget_non_metal_overhead_gb": round(self.non_metal_overhead_gb, 4),
+            "budget_non_metal_overhead_measured_gb": (
+                None if self.non_metal_overhead_measured_gb is None
+                else round(self.non_metal_overhead_measured_gb, 4)
+            ),
+            "budget_kv_growth_to_max_kv_gb": round(self.kv_growth_to_max_kv_gb, 4),
+            "budget_kv_estimator": self.kv_estimator,
+            "budget_safety_gb": round(self.safety_gb, 4),
+            "budget_plan_overshoot_gib": round(self.plan_overshoot_gib, 4),
+            "budget_forecast_system_peak_gb": (None if fc is None else round(fc, 4)),
+            "budget_floor_gib": round(self.floor_gib, 4),
+            "rss_semantics": self.rss_semantics,
+            "budget_system_used_live_gb": (
+                None if self.system_used_live_gb is None
+                else round(self.system_used_live_gb, 4)
+            ),
+        }
+
+
+def derive_budget_total_plan(
+    *,
+    budget_total_gb: float,
+    system_used_at_start_gb: float,
+    non_metal_overhead_gb: float,
+    kv_growth_to_max_kv_gb: float,
+    safety_gb: float = DEFAULT_MEMORY_SAFETY_GIB,
+    plan_overshoot_gib: float = DEFAULT_PLAN_OVERSHOOT_GIB,
+    floor_gib: float = DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
+    kv_estimator: str | None = None,
+) -> BudgetTotalDerivation:
+    """Derive the MLX plan limit from David's TOTAL box budget, compensating for
+    the non-Metal requirements.  All measurements are injected (pure math):
+
+        plan_limit = total - system_used_at_start - non_metal_overhead
+                           - kv_growth_to_max_kv - safety - plan_overshoot
+
+    ``plan_overshoot`` (HIGH-1) prices the MLX allocator peak that lands OVER the
+    plan's expert-cache ceiling (KV + prefill transients), so the forecast box peak
+    = baseline + plan + overshoot + overhead stays <= budget.  Raises ``ValueError``
+    (actionable) when the derived plan limit is below ``floor_gib``.
+    """
+
+    for name, value in (
+        ("budget_total_gb", budget_total_gb),
+        ("system_used_at_start_gb", system_used_at_start_gb),
+        ("non_metal_overhead_gb", non_metal_overhead_gb),
+        ("kv_growth_to_max_kv_gb", kv_growth_to_max_kv_gb),
+        ("safety_gb", safety_gb),
+        ("plan_overshoot_gib", plan_overshoot_gib),
+        ("floor_gib", floor_gib),
+    ):
+        if value < 0:
+            raise ValueError(f"{name} must be non-negative, got {value!r}")
+
+    plan_limit = (
+        float(budget_total_gb)
+        - float(system_used_at_start_gb)
+        - float(non_metal_overhead_gb)
+        - float(kv_growth_to_max_kv_gb)
+        - float(safety_gb)
+        - float(plan_overshoot_gib)
+    )
+    if plan_limit < float(floor_gib):
+        exc = ValueError(
+            f"--memory-budget-total-gib {budget_total_gb:.4g} derives a plan limit "
+            f"of {plan_limit:.4g} GiB, BELOW the floor of {floor_gib:.4g} GiB: "
+            f"plan_limit = {budget_total_gb:.4g} "
+            f"- system_used_at_start {system_used_at_start_gb:.4g} "
+            f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
+            f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
+            f"- safety {safety_gb:.4g} - plan_overshoot {plan_overshoot_gib:.4g}. "
+            f"Raise --memory-budget-total-gib, lower --memory-safety-gib / "
+            f"--non-metal-overhead-gib / --plan-overshoot-gib, reduce --max-kv, or "
+            f"lower --memory-budget-floor-gib (default "
+            f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
+        )
+        exc.dsv41_stage = "budget_derivation"  # W106 MEDIUM-C ledger stage
+        raise exc
+    return BudgetTotalDerivation(
+        source="budget",
+        budget_total_gb=float(budget_total_gb),
+        system_used_at_start_gb=float(system_used_at_start_gb),
+        non_metal_overhead_gb=float(non_metal_overhead_gb),
+        kv_growth_to_max_kv_gb=float(kv_growth_to_max_kv_gb),
+        safety_gb=float(safety_gb),
+        plan_overshoot_gib=float(plan_overshoot_gib),
+        floor_gib=float(floor_gib),
+        plan_limit_gib=plan_limit,
+        kv_estimator=kv_estimator,
+    )
+
+
+def _explicit_plan_derivation(plan_limit_gib: float) -> BudgetTotalDerivation:
+    """A BudgetTotalDerivation for the NON-budget path (explicit --memory-limit-gib
+    or the legacy --box-budget default): ``memory_plan_source == "explicit"``, the
+    budget terms null, so receipts still carry the full budget key set."""
+
+    return BudgetTotalDerivation(
+        source="explicit",
+        budget_total_gb=None,
+        system_used_at_start_gb=0.0,
+        non_metal_overhead_gb=0.0,
+        kv_growth_to_max_kv_gb=0.0,
+        safety_gb=0.0,
+        floor_gib=0.0,
+        plan_limit_gib=float(plan_limit_gib),
+        plan_limit_gib_effective=float(plan_limit_gib),
+    )
+
+
+# Released DeepSeek-V4.1-Flash text shapes the KV estimator falls back to when a
+# config field is absent (mtplx/models/deepseek_v41.py ModelArgs defaults).
+_KV_CONFIG_DEFAULTS = {
+    "num_hidden_layers": 40,
+    "head_dim": 512,
+    "qk_rope_head_dim": 64,
+    "index_head_dim": 128,
+    "window_size": 128,
+    "sliding_window": 128,
+    "compress_ratios": [],
+    # W106 LOW-1: only a FEW layers hold the compressed/index KV lanes (the released
+    # DeepSeek-V4.1-Flash kv_source_layer_ids); the rest keep only the window ring.
+    # Real config.json values override this default.
+    "kv_source_layer_ids": [2, 8, 14, 20],
+}
+
+
+def _read_kv_config_dims(model_path) -> dict:
+    """Read the KV-relevant config dims from the artifact's ``config.json`` WITHOUT
+    importing MLX or loading weights (CPU-safe).  Handles the flat and the nested
+    ``text_config`` spellings; missing fields fall back to the released shapes."""
+
+    dims = dict(_KV_CONFIG_DEFAULTS)
+    try:
+        cfg_path = Path(model_path).expanduser() / "config.json"
+        raw = json.loads(cfg_path.read_text())
+    except (OSError, ValueError, TypeError):
+        return dims
+    if not isinstance(raw, dict):
+        return dims
+    src = dict(raw)
+    text_cfg = raw.get("text_config")
+    if isinstance(text_cfg, dict):
+        src.update(text_cfg)  # text_config keys win (the model's real field names)
+    for key in dims:
+        if key in src and src[key] is not None:
+            dims[key] = src[key]
+    return dims
+
+
+def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
+    """LOCAL, APPROXIMATE estimate of the bytes the DeepSeek-V4.1 KV lanes grow to
+    at ``max_kv`` live tokens (batch 1, bf16).  Deliberately CONSERVATIVE (rounds
+    every lane UP: it prices the window lane at the full ``max_kv`` because the
+    bounded ring is opt-in, and treats an unknown compress_ratio as 1 = no
+    pooling), so the plan errs on the safe side of the 100 GB budget.
+
+    FALLBACK only.  As of the W107 merge the budget derivation prefers the exact
+    per-lane helper ``mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv`` (see
+    ``_kv_growth_estimate``); this local estimate runs only when that import is
+    unavailable (a config-only, MLX-less environment).  The receipt records which
+    ran as ``budget_kv_estimator`` ("w107" | "local").
+
+    Per the cache module (mtplx/models/deepseek_v41_cache.py docstring + ModelArgs)
+    each layer holds, at bf16 (2 bytes/element), batch 1:
+      * a sliding-window ring   [1, window_size, head_dim]           (every layer;
+        bounded ONLY under MTPLX_DSV41_WINDOW_RING -- else it grows append-only to
+        the sequence length, so priced here at max_kv rows, conservatively)
+      * a compressed/latent KV  [1, ceil(max_kv/ratio), head_dim]    (kv-source layers)
+      * a decoupled rope key    [1, ceil(max_kv/ratio), qk_rope_head_dim] (kv-source)
+      * an index-key lane       [1, ceil(max_kv/ratio), index_head_dim]  (kv-source)
+    A layer is a kv-source when it is in ``kv_source_layer_ids`` (authoritative when
+    present; else layers with a non-zero ``compress_ratios`` entry) -- LOW-1: only a
+    few layers, not all 40.  ``ratio == 1`` is per-token (no pooling), ``ratio > 1``
+    pools that many tokens.
+    """
+
+    def _cfg(name, default):
+        if isinstance(config, dict):
+            value = config.get(name, default)
+        else:
+            value = getattr(config, name, default)
+        return default if value is None else value
+
+    max_kv = int(max_kv)
+    if max_kv <= 0:
+        return 0
+    n_layers = int(_cfg("num_hidden_layers", 40))
+    head_dim = int(_cfg("head_dim", 512))
+    rope_dim = int(_cfg("qk_rope_head_dim", 64))
+    index_dim = int(_cfg("index_head_dim", 128))
+    window = int(_cfg("sliding_window", 0)) or int(_cfg("window_size", 128))
+    ratios = list(_cfg("compress_ratios", []) or [])
+    kv_src = {int(x) for x in (_cfg("kv_source_layer_ids", []) or [])}
+    bf16 = 2
+
+    def _rows_for_ratio(ratio: int) -> int:
+        if ratio <= 1:
+            return max_kv
+        return -(-max_kv // ratio)  # ceil
+
+    def _is_kv_source(layer: int) -> bool:
+        # LOW-1: kv_source_layer_ids is authoritative when present; else fall back
+        # to a non-zero compress_ratios entry.
+        if kv_src:
+            return layer in kv_src
+        return layer < len(ratios) and int(ratios[layer]) != 0
+
+    total = 0
+    for layer in range(n_layers):
+        # Window ring: conservatively priced at max_kv rows (ring is opt-in), EVERY
+        # layer.
+        total += max_kv * head_dim * bf16
+        if not _is_kv_source(layer):
+            continue  # not a kv-source layer: only the window ring above
+        # ratio from compress_ratios when known/positive, else 1 (no pooling).
+        ratio = int(ratios[layer]) if (layer < len(ratios) and int(ratios[layer]) > 0) else 1
+        rows = _rows_for_ratio(ratio)
+        total += rows * head_dim * bf16      # latent / compressed KV
+        total += rows * rope_dim * bf16      # decoupled rope key
+        total += rows * index_dim * bf16     # index key
+    return int(total)
+
+
+def _kv_growth_estimate(dims: dict, max_kv: int) -> tuple[int, str]:
+    """The KV-growth-to-``max_kv`` budget term (bytes) and the estimator that
+    produced it (``"w107"`` | ``"local"``), for the receipt ``budget_kv_estimator``.
+
+    Prefer the EXACT per-lane helper
+    ``mtplx.models.deepseek_v41_cache.kv_bytes_at_max_kv`` (W107): it prices the
+    bounded lanes exactly as the cache preallocates them -- the window ring bounded
+    and INDEPENDENT of ``max_kv``, and compress / index / latent only on the
+    ``kv_source`` layers -- so the derived plan matches what the bounded arm
+    actually allocates.  Fall back to the LOCAL conservative estimate
+    (:func:`_kv_bytes_at_max_kv`) only if that import is unavailable (a config-only,
+    MLX-less environment).  ``dims`` is the flat config dict from
+    :func:`_read_kv_config_dims`; the W107 helper reads it as attributes, so it is
+    wrapped in a ``SimpleNamespace``."""
+
+    try:
+        from mtplx.models.deepseek_v41_cache import (
+            kv_bytes_at_max_kv as _w107_kv_bytes_at_max_kv,
+        )
+    except Exception:
+        return int(_kv_bytes_at_max_kv(dims, int(max_kv))), "local"
+    cfg = types.SimpleNamespace(**dims)
+    return int(_w107_kv_bytes_at_max_kv(cfg, int(max_kv))), "w107"
+
+
+def _gb_to_gib(gb: float) -> float:
+    """Decimal GB -> GiB (the boundary conversion for the deprecated ``-gb``
+    aliases). 1 GB = 1e9 bytes; 1 GiB = 2**30 bytes."""
+
+    return float(gb) * 1_000_000_000 / GIB
+
+
+def _resolve_gib_flag(args, gib_attr, gb_attr, default, flag_label):
+    """Resolve a GiB quantity from the canonical ``-gib`` flag, else the deprecated
+    ``-gb`` alias (decimal GB, converted to GiB with a warning), else ``default``.
+    Refuses if BOTH are set (ambiguous)."""
+
+    gib = getattr(args, gib_attr, None)
+    gb = getattr(args, gb_attr, None)
+    if gib is not None and gb is not None:
+        raise ValueError(
+            f"pass only one of {flag_label}-gib / {flag_label}-gb (the -gb form is "
+            "a deprecated alias); got both"
+        )
+    if gib is not None:
+        return float(gib)
+    if gb is not None:
+        conv = _gb_to_gib(float(gb))
+        print(
+            f"[ab] WARN: {flag_label}-gb is DEPRECATED (decimal GB); converting "
+            f"{float(gb):g} GB -> {conv:.4g} GiB. Use {flag_label}-gib.",
+            flush=True,
+        )
+        return conv
+    return default
+
+
+def _measure_system_used_at_start_bytes(args, bench) -> int:
+    """The system-wide used-memory baseline (vm_stat, the SAME formula the
+    gpu_window.sh guard uses -- factored in bench._system_used_bytes).  Measured
+    ONCE at process start and cached on ``args`` so every arm derives from the
+    same baseline."""
+
+    cached = getattr(args, "_dsv41_system_used_at_start_bytes", None)
+    if cached is not None:
+        return int(cached)
+    used = int(bench._system_used_bytes())
+    args._dsv41_system_used_at_start_bytes = used
+    return used
+
+
+def _budget_total_gib(args):
+    """The resolved TOTAL box budget in GiB from --memory-budget-total-gib (or the
+    deprecated -gb alias), or None when neither is set."""
+
+    return _resolve_gib_flag(
+        args, "memory_budget_total_gib", "memory_budget_total_gb", None,
+        "--memory-budget-total",
+    )
+
+
+def _detect_qwen_rss_bytes(label="com.tea.qwen"):
+    """Best-effort, READ-ONLY estimate of the resident agent's RSS in bytes via
+    ``launchctl print`` (pid) + ``ps -o rss=`` -- neither mutates anything.  Used
+    ONLY by the pre-flight (below) to estimate what the guarded window will free by
+    booting the agent out; the in-window run measures the real post-bootout baseline
+    itself.  Returns None on any failure.  (Not invoked by the tests, which pass
+    --preflight-freed-gib explicitly.)"""
+
+    try:
+        uid = os.getuid()
+        out = subprocess.run(
+            ["/bin/launchctl", "print", f"gui/{uid}/{label}"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        pid = None
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith("pid = "):
+                pid = s.split("=", 1)[1].strip()
+                break
+        if not pid or not pid.isdigit():
+            return None
+        rss = subprocess.run(
+            ["/bin/ps", "-o", "rss=", "-p", pid],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return int(rss) * 1024 if rss.isdigit() else None
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _derive_budget_total(args, bench, max_kv, *, system_used_gb=None):
+    """Compute the item-3 ``BudgetTotalDerivation`` from the resolved flags + the
+    measured system-used baseline + the KV estimate, or return None when no budget
+    flag was given.  Shared by ``_resolve_derivation`` and the pre-flight.
+    ``system_used_gb`` overrides the measured baseline (the pre-flight passes a
+    freed-adjusted value)."""
+
+    budget_total = _budget_total_gib(args)
+    if budget_total is None:
+        return None
+    if bench is None or max_kv is None:
+        raise ValueError(
+            "--memory-budget-total-gib needs the bench module and resolved max_kv "
+            "to price the KV growth"
+        )
+    if system_used_gb is None:
+        system_used_gb = _measure_system_used_at_start_bytes(args, bench) / GIB
+    non_metal_gb = _resolve_gib_flag(
+        args, "non_metal_overhead_gib", "non_metal_overhead_gb",
+        DEFAULT_NON_METAL_OVERHEAD_GIB, "--non-metal-overhead",
+    )
+    # HIGH-1: clamp the non-Metal overhead to >= 2 GiB -- the real value is ~1-2 GiB
+    # once the plan overshoot is a separate term, and a 0 estimate would under-budget.
+    if non_metal_gb < _MIN_NON_METAL_OVERHEAD_GIB:
+        print(
+            f"[ab] NOTE: --non-metal-overhead {non_metal_gb:.4g} GiB is below the "
+            f"{_MIN_NON_METAL_OVERHEAD_GIB:.4g} GiB floor; clamping up "
+            "(the real non-Metal overhead is ~1-2 GiB and the plan overshoot is a "
+            "separate --plan-overshoot-gib term).",
+            flush=True,
+        )
+        non_metal_gb = _MIN_NON_METAL_OVERHEAD_GIB
+    safety_gb = _resolve_gib_flag(
+        args, "memory_safety_gib", "memory_safety_gb",
+        DEFAULT_MEMORY_SAFETY_GIB, "--memory-safety",
+    )
+    plan_overshoot_gib = _resolve_gib_flag(
+        args, "plan_overshoot_gib", "plan_overshoot_gb",
+        DEFAULT_PLAN_OVERSHOOT_GIB, "--plan-overshoot",
+    )
+    floor_gib = float(
+        getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
+    )
+    dims = _read_kv_config_dims(getattr(args, "model", None))
+    # W97F Fix 1 (preserved through the W106 refactor): price the KV growth with the
+    # EXACT W107 per-lane helper (deepseek_v41_cache.kv_bytes_at_max_kv) when it can be
+    # imported, falling back to the LOCAL estimator (_kv_bytes_at_max_kv, which carries
+    # W106's kv_source_layer_ids fix) only in an MLX-less config-only environment.  The
+    # estimator that actually ran is recorded on the plan as budget_kv_estimator.
+    kv_growth_bytes, kv_estimator = _kv_growth_estimate(dims, int(max_kv))
+    kv_growth_gb = kv_growth_bytes / GIB
+    return derive_budget_total_plan(
+        budget_total_gb=float(budget_total),
+        system_used_at_start_gb=system_used_gb,
+        non_metal_overhead_gb=non_metal_gb,
+        kv_growth_to_max_kv_gb=kv_growth_gb,
+        safety_gb=safety_gb,
+        plan_overshoot_gib=plan_overshoot_gib,
+        floor_gib=floor_gib,
+        kv_estimator=kv_estimator,
+    )
+
+
+def _derived_plan_sidecar_path(args):
+    """The <out-dir>/derived-plan.json sidecar path (HIGH-2)."""
+    out = getattr(args, "out", None)
+    if out is None:
+        return None
+    return Path(out).parent / "derived-plan.json"
+
+
+def _config_sha(model_path):
+    """A cheap sha256 of the artifact's config.json (keys the artifact without
+    hashing the 269 GiB bank).  None on any failure."""
+    try:
+        raw = (Path(model_path).expanduser() / "config.json").read_bytes()
+        return hashlib.sha256(raw).hexdigest()
+    except (OSError, TypeError):
+        return None
+
+
+def _plan_stamp(args, max_kv) -> dict:
+    """The identity keys stamped into (and re-validated against) a pinned plan
+    sidecar (round-4 HIGH): a pin must NOT be reused across a different model /
+    shape / budget."""
+    return {
+        "model_path": str(getattr(args, "model", "")),
+        "config_sha": _config_sha(getattr(args, "model", None)),
+        "max_kv": int(max_kv) if max_kv is not None else None,
+        "context_tokens": int(getattr(args, "context_tokens", 0) or 0),
+        "budget_total_gb": _budget_total_gib(args),
+    }
+
+
+def _write_derived_plan_sidecar(args, bt, max_kv) -> None:
+    """Persist the derived budget plan + its identity STAMP so later A/B arms can
+    PIN it, and only if it still matches (round-4 HIGH).  Atomic; guarded."""
+    path = _derived_plan_sidecar_path(args)
+    if path is None or bt is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = bt.to_plan_dict()
+        payload["_stamp"] = _plan_stamp(args, max_kv)
+        payload["_written_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        payload["_note"] = (
+            "W106 pinned plan; pass --memory-plan-from this file to later A/B arms "
+            "in the SAME window (same model/shape/budget) so every arm uses the SAME "
+            "plan_limit. The pin is re-validated (stamp + live over-budget) on load."
+        )
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, path)
+        print(f"[ab] wrote derived plan sidecar: {path}", flush=True)
+    except OSError as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: could not write derived plan sidecar ({exc!r})", flush=True)
+
+
+def _load_pinned_plan(path):
+    """Load ``(BudgetTotalDerivation, stamp)`` from a --memory-plan-from sidecar."""
+    data = json.loads(Path(path).read_text())
+    return BudgetTotalDerivation.from_plan_dict(data), (data.get("_stamp") or {})
+
+
+def _validate_pinned_plan(args, bench, max_kv, bt, stamp):
+    """Round-4 HIGH: refuse a pinned plan (raise ValueError, stage pin_validation)
+    that does NOT match the current run, or whose live footprint would exceed the
+    budget.  Returns the LIVE system-used baseline (GiB) it measured, recorded on
+    the derivation as ``budget_system_used_live_gb``."""
+    cur = _plan_stamp(args, max_kv)
+    mismatches = []
+    for key in ("config_sha", "max_kv", "context_tokens"):
+        want = stamp.get(key)
+        got = cur.get(key)
+        # A stale sidecar without the stamp (want None) is itself a mismatch.
+        if want != got:
+            mismatches.append(f"{key}: sidecar={want!r} run={got!r}")
+    # budget_total only conflicts if the run ALSO passed one and it differs.
+    if cur.get("budget_total_gb") is not None and \
+            stamp.get("budget_total_gb") != cur.get("budget_total_gb"):
+        mismatches.append(
+            f"budget_total_gb: sidecar={stamp.get('budget_total_gb')!r} "
+            f"run={cur.get('budget_total_gb')!r}"
+        )
+    if mismatches:
+        exc = ValueError(
+            "--memory-plan-from sidecar does not match this run; refusing to pin a "
+            "stale plan: " + "; ".join(mismatches)
+            + ". Re-derive with --memory-budget-total-gib in this window."
+        )
+        exc.dsv41_stage = "pin_validation"
+        raise exc
+
+    # Live over-budget check: the pinned plan + the CURRENT live baseline must fit.
+    live_gb = _measure_system_used_at_start_bytes(args, bench) / GIB if bench else 0.0
+    budget = stamp.get("budget_total_gb") or bt.budget_total_gb
+    if budget is not None:
+        forecast = (
+            live_gb + bt.plan_limit_gib + bt.plan_overshoot_gib
+            + bt.non_metal_overhead_gb
+        )
+        if forecast > float(budget):
+            exc = ValueError(
+                f"--memory-plan-from would exceed the budget under the CURRENT live "
+                f"baseline: forecast {forecast:.4g} = live {live_gb:.4g} + plan "
+                f"{bt.plan_limit_gib:.4g} + overshoot {bt.plan_overshoot_gib:.4g} + "
+                f"overhead {bt.non_metal_overhead_gb:.4g} > budget {float(budget):.4g}. "
+                "The box is more loaded than when the plan was derived; free memory "
+                "or re-derive."
+            )
+            exc.dsv41_stage = "pin_validation"
+            raise exc
+    return live_gb
+
+
+def _preflight_memory_plan(args, bench) -> int:
+    """W106 LOW-4 / HIGH-B pre-flight: derive the budget plan from a DRY snapshot (no
+    model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor), BEFORE the
+    guarded GPU window opens so a floor refusal never fires after Qwen is already
+    unloaded.
+
+    HIGH-B: the "now" baseline still has the resident agent (com.tea.qwen, ~45 GiB)
+    and any bench worker resident, but the guarded window BOOTS THAT OUT before the
+    step runs.  ``--preflight-freed-gib N`` (default: best-effort read-only
+    auto-detect of the agent RSS, else 0 with a caveat) is subtracted so the
+    pre-flight derives from the EXPECTED IN-WINDOW baseline, not the crowded "now"
+    baseline.  Both baselines are printed; the real in-window derivation (measured
+    after bootout) is authoritative."""
+
+    max_kv = bench.resolve_max_kv(
+        [args.context_tokens], args.decode_tokens, args.max_kv
+    )
+
+    # Round-4 HIGH: if pinning, VALIDATE the pin file here (stamp + live over-budget)
+    # so a stale/over-budget pin is caught BEFORE the guarded window opens.
+    pin_path = getattr(args, "memory_plan_from", None)
+    if pin_path:
+        try:
+            bt, stamp = _load_pinned_plan(pin_path)
+            live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
+        except (ValueError, OSError, json.JSONDecodeError) as exc:
+            print(f"[ab] memory-plan preflight: PIN REFUSED -- {exc}", flush=True)
+            return 3
+        print(
+            f"[ab] memory-plan preflight: PIN OK ({pin_path}); plan_limit "
+            f"{bt.plan_limit_gib:.4g} GiB, live baseline {live_gb:.2f} GiB; "
+            f"{bt.formula()}",
+            flush=True,
+        )
+        return 0
+
+    # LOW: a both-set flag error must exit 3, not traceback.
+    try:
+        budget = _budget_total_gib(args)
+    except ValueError as exc:
+        print(f"[ab] memory-plan preflight: REFUSED -- {exc}", flush=True)
+        return 3
+    if budget is None:
+        print(
+            "[ab] memory-plan preflight: no --memory-budget-total-gib/-gb given; "
+            "plan source is explicit (--memory-limit-gib / legacy box-budget). OK.",
+            flush=True,
+        )
+        return 0
+
+    used_now_gb = int(bench._system_used_bytes()) / GIB
+
+    # Resolve how much the window will free by booting out the resident agent.
+    freed = getattr(args, "preflight_freed_gib", None)
+    if freed is not None:
+        freed_gb = float(freed)
+        freed_src = "explicit --preflight-freed-gib"
+    else:
+        det = _detect_qwen_rss_bytes()
+        if det is not None:
+            freed_gb = det / GIB
+            freed_src = "auto-detected com.tea.qwen RSS (launchctl+ps, read-only)"
+        else:
+            freed_gb = 0.0
+            freed_src = ("0 -- could NOT detect the resident agent; pass "
+                         "--preflight-freed-gib to model the bootout")
+    baseline_in_window = max(0.0, used_now_gb - freed_gb)
+    print(
+        f"[ab] memory-plan preflight: system used now {used_now_gb:.2f} GiB; "
+        f"expected in-window {baseline_in_window:.2f} GiB "
+        f"(freed {freed_gb:.2f} GiB via {freed_src})",
+        flush=True,
+    )
+
+    try:
+        bt = _derive_budget_total(
+            args, bench, max_kv, system_used_gb=baseline_in_window
+        )
+    except ValueError as exc:
+        print(f"[ab] memory-plan preflight: REFUSED -- {exc}", flush=True)
+        return 3
+    print(
+        "[ab] memory-plan preflight: OK (plan >= floor)\n"
+        f"[ab]   max_kv={max_kv}\n"
+        f"[ab]   {bt.formula()}\n"
+        "[ab]   NB: the in-window derivation (measured after the agent is booted "
+        "out) is authoritative; this is a pre-check.",
+        flush=True,
+    )
+    return 0
+
+
+def _resolve_derivation(args, *, bench=None, max_kv=None):
+    """The plan->limit derivation for this run.
+
+    Precedence:
+      1. ``--memory-budget-total-gib`` (or the deprecated -gb alias) -> derive the
+         plan limit from the TOTAL box budget, COMPENSATING for the non-Metal
+         requirements (item 3).  This OVERRIDES ``--memory-limit-gib``.
+      2. ``--memory-limit-gib`` -> explicit plan (source "explicit").
+      3. otherwise the legacy W62 --box-budget derivation (source "explicit").
+
+    Returns the W62 ``BudgetDerivation`` (its memory_limit_bytes/reserve/cache
+    plumb into the loader unchanged); the item-3 ``BudgetTotalDerivation`` is
+    stashed on ``args._dsv41_budget_total`` for the receipt.
+    """
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
-    return derive_plan_from_budget(
+    pin_path = getattr(args, "memory_plan_from", None)
+    if pin_path:
+        # HIGH-2 + round-4 HIGH: PIN the plan from a sidecar an earlier arm wrote, so
+        # every A/B arm uses the SAME plan_limit -- but RE-VALIDATE it (stamp match +
+        # live over-budget) and refuse (exit 3, before load) a stale/over-budget pin.
+        bt, stamp = _load_pinned_plan(pin_path)
+        live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
+        bt = bt.replace(system_used_live_gb=live_gb)
+        print(
+            f"[ab] memory plan PINNED from {pin_path}: plan_limit "
+            f"{bt.plan_limit_gib:.4g} GiB, live baseline {live_gb:.2f} GiB "
+            f"({bt.formula()})",
+            flush=True,
+        )
+        args._dsv41_budget_total = bt
+        override = bt.plan_limit_gib
+    else:
+        bt = _derive_budget_total(args, bench, max_kv)
+        if bt is not None:
+            args._dsv41_budget_total = bt
+            override = bt.plan_limit_gib
+            _write_derived_plan_sidecar(args, bt, max_kv)  # so later arms can pin it
+        else:
+            override = getattr(args, "memory_limit_gib", None)
+            args._dsv41_budget_total = None
+
+    derivation = derive_plan_from_budget(
         box_budget_gib=getattr(args, "box_budget_gib", None),
-        override_memory_limit_gib=getattr(args, "memory_limit_gib", None),
+        override_memory_limit_gib=override,
     )
+    if args._dsv41_budget_total is None:
+        # Non-budget path: record the actually-used plan limit as "explicit" so the
+        # receipt memory block carries the full budget key set (nulls elsewhere).
+        args._dsv41_budget_total = _explicit_plan_derivation(derivation.plan_gib)
+    return derivation
+
+
+def _budget_memory_keys(args) -> dict:
+    """The item-3 budget keys to merge into a receipt ``memory`` block."""
+
+    bt = getattr(args, "_dsv41_budget_total", None)
+    if bt is None:
+        return _explicit_plan_derivation(0.0).memory_keys()
+    return bt.memory_keys()
+
+
+def _memory_block_extra_keys(args) -> dict:
+    """The W106 keys merged into every receipt ``memory`` block: the item-3 budget
+    derivation terms plus the HIGH-2 ``rss_semantics_note``."""
+
+    keys = _budget_memory_keys(args)
+    keys["rss_semantics_note"] = _RSS_SEMANTICS_NOTE
+    return keys
 
 
 # Plan fields the served profile sets that the loader would otherwise default
@@ -1170,6 +2974,33 @@ def _resolve_plan_overrides(args) -> dict:
     return overrides
 
 
+def _runtime_gate_prefetch_k(runtime) -> int | None:
+    """The gate-oracle predict width ``k`` the RUNTIME actually resolved, read from
+    the runtime's own runner receipt block (``resource_telemetry_snapshot()['runner']
+    ['prefetch_k']``, built by deepseek_v41._runner_snapshot).  Returns ``None`` when
+    the runtime cannot produce the block (e.g. an explicit GATE_PREFETCH-only arm with
+    no v2 runner), so the caller falls back to ``prefetch_slots//2``.
+
+    W110: this is the fix for the window-41 receipt bug -- reading the width from the
+    runtime, not from ``os.environ`` (which misses the v2 auto-arm), and not from
+    ``prefetch_slots//2`` (the v2 ring is sized to buffer the verify union, not 2*k).
+    """
+
+    try:
+        snap = runtime.resource_telemetry_snapshot()
+    except Exception:
+        return None
+    if not isinstance(snap, dict):
+        return None
+    runner = snap.get("runner")
+    if isinstance(runner, dict) and runner.get("prefetch_k") is not None:
+        try:
+            return int(runner["prefetch_k"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _resolved_plan(runtime, args) -> dict | None:
     """The runtime's ACTUAL slot plan, for the receipt/census header.
 
@@ -1181,22 +3012,79 @@ def _resolved_plan(runtime, args) -> dict | None:
     if plan is None:
         return None
     spec = getattr(runtime, "spec", None)
+    config = getattr(runtime, "config", None)
     record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
     transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
     persistent_slots = int(getattr(plan, "persistent_slots", 0) or 0)
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
+    prefetch_slots = int(getattr(config, "prefetch_slots", 0) or 0)
+    slots_per_layer = int(getattr(plan, "slots_per_layer", 0) or 0)
+    # W93 (review CRITICAL): an EXPLICIT gate-oracle lever must have ACTUALLY armed
+    # the GLOBAL ring on this cell -- otherwise the A/B is control-vs-control. Fail
+    # loudly rather than silently benchmarking an unarmed ring. (Explicit-lever guard
+    # only; the v2 auto-arm is handled below.)
+    gate_env = os.environ.get(GATE_PREFETCH_ENV)
+    gate_env_armed = bool(gate_env) and gate_env not in ("0", "")
+    if gate_env_armed and prefetch_slots <= 0:
+        raise AssertionError(
+            f"{GATE_PREFETCH_ENV}={gate_env!r} is armed but the runtime built NO "
+            "prefetch ring (prefetch_slots=0). The gate-oracle lever would measure "
+            "control-vs-control -- check build_streaming_config / the served "
+            "profile arm the env-authoritative ring."
+        )
+    # W110 (receipt fix): report the ACTUAL armed state, read from the runtime object
+    # the loader built -- NOT os.environ. The v2 runner AUTO-ARMS the gate-oracle ring
+    # (build_streaming_config sets prefetch_slots for MTPLX_DSV41_RUNNER=v2) with
+    # MTPLX_DSV41_GATE_PREFETCH UNSET, so the old env-only ``gate_armed`` reported
+    # armed=False / k=0 while the runner actually prefetched at k=6 (window 41:
+    # prefetch_committed=10513). A built ring (config.prefetch_slots>0) IS the armed
+    # signal; the predict WIDTH is the width the runtime resolved (its runner receipt
+    # block's ``prefetch_k``), NOT prefetch_slots//2 -- the v2 ring is sized 2*24=48
+    # to double-buffer the ~24-expert verify union one layer ahead, so //2 would
+    # misreport the width as 24 instead of 6.
+    gate_armed = prefetch_slots > 0
+    gate_k = _runtime_gate_prefetch_k(runtime) if gate_armed else 0
+    if gate_k is None:
+        # No runner block (e.g. an explicit GATE_PREFETCH-only arm, ring = 2*k):
+        # //2 recovers the explicit predict width.
+        gate_k = prefetch_slots // 2
+    # W93 (review MEDIUM-d): the 0.36 GiB ring comes out of the PERSISTENT budget,
+    # not free reserve. Show slots_per_layer WITHOUT vs WITH the ring so the LRU
+    # effect (kept the same only via floor-division slack) is auditable per run.
+    slots_per_layer_no_ring = slots_per_layer
+    if prefetch_slots > 0 and config is not None and spec is not None:
+        try:
+            import dataclasses
+
+            no_ring = dataclasses.replace(config, prefetch_slots=0)
+            slots_per_layer_no_ring = int(
+                getattr(no_ring.memory_plan(spec), "slots_per_layer", slots_per_layer)
+            )
+        except Exception:
+            slots_per_layer_no_ring = slots_per_layer
     return {
         "transient_slots": transient_slots,
         "persistent_slots": persistent_slots,
+        # review MEDIUM-d: LRU depth WITH the ring vs the hypothetical no-ring plan.
+        "slots_per_layer": slots_per_layer,
+        "slots_per_layer_no_ring": slots_per_layer_no_ring,
         "expert_record_bytes": record_bytes,
         "transient_bytes_per_layer": transient_slots * record_bytes,
         "transient_bytes_total": transient_slots * record_bytes * routed_layers,
-        "split_route_release": getattr(
-            getattr(runtime, "config", None), "split_route_release", None
-        ),
-        "prefetch_slots": getattr(
-            getattr(runtime, "config", None), "prefetch_slots", None
-        ),
+        "split_route_release": getattr(config, "split_route_release", None),
+        # GLOBAL ring: prefetch_slots records TOTAL (shared); k = predict width.
+        "prefetch_slots": prefetch_slots,
+        # W110: the ACTUAL armed state / predict width the runtime ran (v2 auto-arm
+        # included), not the explicit env. ``gate_prefetch_env`` keeps the raw env
+        # for provenance (None on a v2-auto-armed run).
+        "gate_prefetch_armed": gate_armed,
+        "gate_prefetch_k": gate_k,
+        "gate_prefetch_env": gate_env,
+        "gate_prefetch_ring_bytes": prefetch_slots * record_bytes,
+        # W110 (guard/stamp): the ACTUAL decode-path per-record sha256 state the
+        # runtime ran, so a hash-vs-parent A/B can never be control-vs-control
+        # silently (parent stamps False, cell16k_ring_v2_hash stamps True).
+        "verify_record_hashes": bool(getattr(config, "verify_record_hashes", False)),
         "source": (
             "explicit" if getattr(args, "transient_slots", None) is not None
             else f"profile:{getattr(args, 'expert_profile', 'none')}"
@@ -1220,8 +3108,35 @@ def _load_model(args, bench, mx):
         if args.expert_cache_limit_gib is None
         else int(args.expert_cache_limit_gib * GIB)
     )
-    derivation = _resolve_derivation(args)
+    derivation = _resolve_derivation(args, bench=bench, max_kv=max_kv)
     print("[ab] memory derivation: " + derivation.formula(), flush=True)
+    _bt = getattr(args, "_dsv41_budget_total", None)
+    if _bt is not None and _bt.source == "budget":
+        print("[ab] budget-total derivation: " + _bt.formula(), flush=True)
+    # W97: the fixed resident reserve the plan prices (SWA window + the f32 wo_a
+    # cache when MTPLX_DSV41_ATTN_WO_A_CACHE is armed).  The arm env is already set
+    # (_apply_arm_env ran), so this reflects THIS arm; the expert-cache allowance
+    # shrinks by the reserve rather than the process running over plan.
+    try:
+        from mtplx.models.deepseek_v41_loader import (
+            SWA_WINDOW_BYTES as _swa_bytes,
+            deepseek_v41_additional_resident_bytes as _addl_resident,
+        )
+
+        _addl = _addl_resident()
+        _wo_a_reserve = _addl - _swa_bytes
+        print(
+            f"[ab] additional resident reserve: SWA {_swa_bytes / GIB:.3f} GiB"
+            + (
+                f" + wo_a f32 cache {_wo_a_reserve / GIB:.3f} GiB"
+                if _wo_a_reserve
+                else ""
+            )
+            + f" = {_addl / GIB:.3f} GiB (priced into the plan)",
+            flush=True,
+        )
+    except Exception:  # pragma: no cover - display only, never fail the run
+        pass
     # --decode-mode dspark (or --with-mtp on AR) loads with the DSpark head
     # (with_mtp=True) and reprices the MTP residents against the expert cache so
     # the plan still fits.
@@ -1286,7 +3201,114 @@ def _load_model(args, bench, mx):
             "residents, or the config declares no MTP stages). Load a DSpark "
             "artifact or drop --decode-mode dspark."
         )
+    # W106 item 3 (two-phase): the plan limit had to be fixed BEFORE load with the
+    # conservative non_metal_overhead estimate; now the model is resident, re-MEASURE
+    # the real non-Metal overhead from the CURRENT process footprint and record
+    # estimate-vs-measured.  HIGH-1 fix: NEVER call mx.set_memory_limit post-load --
+    # residents are already allocated so it cannot shrink anything, and a limit
+    # below active memory would silently perturb the measured decode.  If the
+    # measured overhead blows the budget, ABORT here (before decode) instead.
+    _remeasure_non_metal_overhead(args, mx)
     return resident
+
+
+def _remeasure_non_metal_overhead(args, mx) -> None:
+    """Phase 2 of the item-3 budget derivation.  Measure the real non-Metal process
+    overhead as ``current phys_footprint (mach task_info) - mx active - mx cache``
+    (NOT ru_maxrss, a lifetime high-water) and record estimate-vs-measured, and:
+      * subtract the MLX freed-buffer CACHE (``get_cache_memory``) as well as active
+        -- the cache is load-transient Metal memory the allocator will reuse, NOT
+        non-Metal overhead; counting it caused false aborts (HIGH-A).  We do NOT
+        call ``mx.clear_cache()`` (it would perturb the first decode token's
+        allocations); subtracting the cache is the non-perturbing equivalent.
+      * NEVER call ``mx.set_memory_limit`` post-load (HIGH-1).
+      * if ``footprint < active`` (Metal not in phys_footprint on this platform) the
+        overhead is UNMEASURABLE: record ``None`` + ``rss_semantics="inverted"`` +
+        a WARN, and do NOT abort (never a bogus 0.0 that hides the inversion).
+      * otherwise ABORT (raise, before decode) when the measured overhead exceeds
+        the estimate by more than the tolerance (the real footprint would then
+        exceed the budget).
+    Measurement itself is guarded (a read failure records None, no abort)."""
+
+    bt = getattr(args, "_dsv41_budget_total", None)
+    if bt is None or bt.source != "budget" or mx is None:
+        return
+    try:
+        from mtplx.deepseek_v41_memory_profile import (
+            mlx_memory_snapshot,
+            process_rss_snapshot,
+        )
+
+        snap = process_rss_snapshot()
+        footprint = snap.get("phys_footprint_bytes") or snap.get("resident_bytes")
+        mlx = mlx_memory_snapshot(mx_module=mx)
+        active = int(mlx.get("active_bytes", 0) or 0)
+        cache = int(mlx.get("cache_bytes", 0) or 0)
+    except Exception:  # pragma: no cover - defensive
+        return
+
+    if footprint is None:
+        print(
+            "[ab] budget-total re-measure: process footprint unavailable "
+            "(non-darwin / mach); keeping the pre-load estimate, MLX limit unchanged",
+            flush=True,
+        )
+        args._dsv41_budget_total = bt.replace(
+            non_metal_overhead_measured_gb=None,
+            plan_limit_gib_effective=bt.plan_limit_gib,
+            rss_semantics="unmeasured",
+        )
+        return
+
+    footprint = int(footprint)
+    # MEDIUM-2: the inversion is footprint < active + CACHE (not just < active) --
+    # if the cache subtraction would drive the result negative, Metal is not fully
+    # in phys_footprint and the overhead is UNMEASURABLE; record None + inverted,
+    # never a bogus 0.0 stamped "ok".
+    if footprint < active + cache:
+        print(
+            f"[ab] budget-total re-measure: WARN phys_footprint "
+            f"{footprint / GIB:.2f} GiB < mx active {active / GIB:.2f} + cache "
+            f"{cache / GIB:.2f} GiB (Metal not fully in footprint); "
+            "non_metal_overhead UNMEASURABLE, recorded None "
+            "(rss_semantics=inverted); MLX limit unchanged, no abort",
+            flush=True,
+        )
+        args._dsv41_budget_total = bt.replace(
+            non_metal_overhead_measured_gb=None,
+            plan_limit_gib_effective=bt.plan_limit_gib,
+            rss_semantics="inverted",
+        )
+        return
+
+    measured_gb = (footprint - active - cache) / GIB
+    overage_gb = measured_gb - bt.non_metal_overhead_gb
+    # plan_limit is NEVER lowered post-load (HIGH-1).
+    args._dsv41_budget_total = bt.replace(
+        non_metal_overhead_measured_gb=measured_gb,
+        plan_limit_gib_effective=bt.plan_limit_gib,
+        rss_semantics="ok",
+    )
+    print(
+        f"[ab] budget-total re-measure: non_metal_overhead measured "
+        f"{measured_gb:.2f} GiB (phys_footprint {footprint / GIB:.2f} - mx active "
+        f"{active / GIB:.2f} - mx cache {cache / GIB:.2f}); estimate "
+        f"{bt.non_metal_overhead_gb:.2f} GiB; MLX limit unchanged "
+        "(set_memory_limit is NOT called post-load)",
+        flush=True,
+    )
+    if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:
+        exc = RuntimeError(
+            "budget-total re-measure ABORT (before decode): measured non-Metal "
+            f"overhead {measured_gb:.2f} GiB exceeds the pre-load estimate "
+            f"{bt.non_metal_overhead_gb:.2f} GiB by {overage_gb:.2f} GiB, so the real "
+            f"footprint would exceed --memory-budget-total-gib "
+            f"{bt.budget_total_gb:.4g} by ~{overage_gb:.2f} GiB. Re-run with "
+            f"--non-metal-overhead-gib >= {measured_gb:.2f}, a lower --max-kv, or a "
+            "higher budget; refusing to run the decode over budget."
+        )
+        exc.dsv41_stage = "budget_remeasure"  # W106 MEDIUM-C ledger stage
+        raise exc
 
 
 def _memory_profile_collector(args, mx, runtime, resident):
@@ -1337,6 +3359,30 @@ def _stream_counters_snapshot(model):
         return snapshot_stream_counters(rt)
     except Exception:
         return None
+
+
+def _runner_receipt_blocks(model) -> dict:
+    """W95f (review HIGH-3): lift the runtime's ``runner`` (v2) and ``gate_prefetch``
+    receipt blocks onto every A/B receipt (AR and DSpark), so the SSD-hiding counters
+    the paired window reads -- prefetch hit/wasted, demand vs speculative bytes,
+    budget_skips, margin, ring size, per-decode-token normalisations -- travel with
+    the cell receipt.  They lived only in resource_telemetry_snapshot, whose callers
+    were the other benchmark scripts + tests, NOT this harness.  Best-effort: a stub
+    runtime or the flags-off shipped path just omits the blocks (empty dict)."""
+    try:
+        rt = getattr(model, "_mtplx_expert_runtime", None)
+        if rt is None:
+            return {}
+        es = getattr(rt, "expert_streaming", None) or rt
+        snap = getattr(es, "resource_telemetry_snapshot", None)
+        if not callable(snap):
+            return {}
+        full = snap()
+        if not isinstance(full, dict):
+            return {}
+        return {key: full[key] for key in ("runner", "gate_prefetch") if key in full}
+    except Exception:
+        return {}
 
 
 def _cold_reset_expert_streaming(model) -> bool:
@@ -1409,8 +3455,18 @@ def _macmon():
 
 def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
               mem_profile_every=64, device_sample=False, cooldown_s=0.0,
-              util_sampler=None, stage_timing=False):
+              util_sampler=None, stage_timing=False, stop_on_eos=False,
+              eos_id=None):
     """Greedy prefill + ``steps`` decode; captures the decoded token ids.
+
+    W113: ``stop_on_eos`` (default off) stops the decode at ``eos_id`` for a
+    served-parity run and returns ``decode_steps_run`` = the number of DECODE
+    tokens actually generated (excludes the prefill argmax token that begins
+    ``generated``), so the caller can report decode_tok_s over the tokens actually
+    produced.  Default off runs the full fixed ``steps`` decode (numbers
+    unchanged) and ``decode_steps_run == steps``.  When the prefill's own first
+    token is already EOS and ``stop_on_eos``, the decode loop is skipped entirely
+    (a served path would emit nothing), so ``decode_steps_run == 0``.
 
     W90: ``cooldown_s`` idles AFTER prefill and BEFORE the timed decode (TTFT, from
     the prefill, is unaffected); ``util_sampler`` (a ``util_macmon.UtilizationSampler``
@@ -1430,156 +3486,187 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     classic argmax loop; the AR-reference byte-identity gate (this arm's
     ``token_ids_sha256`` vs the dspark ids) therefore still holds."""
     mem_probe.reset_peak()
-    t0 = time.perf_counter()
-    cache = model.make_cache()
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
-    ops.sync(logits)
-    ttft_s = time.perf_counter() - t0
-    token = ops.argmax_last(logits)
-    generated = [token]
-    if mem_profile is not None:
-        mem_profile("after_prefill")
-    # W90: idle after prefill, before the timed decode (TTFT already captured).
-    cooldown_block = None
-    if cooldown_s and float(cooldown_s) > 0:
-        cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
-    # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
-    # loop (prefill excluded) so the receipt reports per-layer host syncs
-    # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
-    # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
-    # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
-    # module even if the launch env did not.
-    # W94: clear the probe counters HERE -- immediately BEFORE the after_prefill
-    # ("before") snapshot below, and NOWHERE between it and the end snapshot -- so the
-    # DECODE-scoped route_probe_counts / route_probe_sums_ns delta (end - after_prefill,
-    # computed in _stream_counters_block via serve_stream_counters.stream_counters_delta)
-    # is EXACT.  The old order cleared AFTER the before-snapshot, so "before" still held
-    # the prefill accumulation while "after" held decode-only; stages the prefill
-    # dominates (e.g. hot.begin_split_route) then deltaed NEGATIVE, making the
-    # "eval(indices) time" a lower bound only (window-37 ar-ring-ref sums_ns).
-    _route_probe = None
-    _route_prev_enabled = None
-    if stage_timing:
-        try:
-            from mtplx import expert_route_probe as _route_probe
+    # W106: sample process RSS + system used memory off the hot path (daemon thread,
+    # 1 Hz, no MLX calls) over the whole generation, so the receipt's memory block
+    # carries the real envelope, not just the MLX allocator peak (peak_gb).
+    _mem_sampler = mem_probe.new_sampler()
+    _mem_sampler.start()
+    try:
+        t0 = time.perf_counter()
+        cache = model.make_cache()
+        logits = model(ops.input([list(prompt_ids)]), cache=cache)
+        ops.sync(logits)
+        ttft_s = time.perf_counter() - t0
+        token = ops.argmax_last(logits)
+        generated = [token]
+        if mem_profile is not None:
+            mem_profile("after_prefill")
+        # W90: idle after prefill, before the timed decode (TTFT already captured).
+        cooldown_block = None
+        if cooldown_s and float(cooldown_s) > 0:
+            cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
+        extra_forward_steps = 0
+        # W113: DECODE tokens actually generated (excludes the prefill argmax token
+        # that begins ``generated``).  == steps on the default full run; fewer under
+        # --stop-on-eos.
+        decode_steps_run = 0
+        _stop_eos = int(eos_id) if (stop_on_eos and eos_id is not None) else None
 
-            _route_prev_enabled = _route_probe.ENABLED
-            _route_probe.ENABLED = True
-            _route_probe._SUMS.clear()
-            _route_probe._COUNTS.clear()
-        except Exception:
-            _route_probe = None
+        # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
+        # loop (prefill excluded) so the receipt reports per-layer host syncs
+        # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
+        # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
+        # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
+        # module even if the launch env did not.
+        # W94: clear the probe counters HERE -- immediately BEFORE the after_prefill
+        # ("before") snapshot below, and NOWHERE between it and the end snapshot -- so the
+        # DECODE-scoped route_probe_counts / route_probe_sums_ns delta (end - after_prefill,
+        # computed in _stream_counters_block via serve_stream_counters.stream_counters_delta)
+        # is EXACT.  The old order cleared AFTER the before-snapshot, so "before" still held
+        # the prefill accumulation while "after" held decode-only; stages the prefill
+        # dominates (e.g. hot.begin_split_route) then deltaed NEGATIVE, making the
+        # "eval(indices) time" a lower bound only (window-37 ar-ring-ref sums_ns).
+        _route_probe = None
+        _route_prev_enabled = None
+        if stage_timing:
+            try:
+                from mtplx import expert_route_probe as _route_probe
 
-    # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
-    # excluded so the hit rate is the decode hit rate).  Taken AFTER the route-probe
-    # clear above, so its route_probe_* baseline is zero and the decode delta is exact.
-    _sc_after_prefill = _stream_counters_snapshot(model)
-    extra_forward_steps = 0
+                _route_prev_enabled = _route_probe.ENABLED
+                _route_probe.ENABLED = True
+                _route_probe._SUMS.clear()
+                _route_probe._COUNTS.clear()
+            except Exception:
+                _route_probe = None
 
-    _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
-    # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
-    # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
-    with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
-        decode_start = time.perf_counter()
-        try:  # W92: restore the probe ENABLED flag even if the decode loop raises
-            if device_sample:
-                from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+        # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
+        # excluded so the hit rate is the decode hit rate).  Taken AFTER the route-probe
+        # clear above, so its route_probe_* baseline is zero and the decode delta is exact.
+        _sc_after_prefill = _stream_counters_snapshot(model)
 
-                def _forward_row(ids):
-                    # ids is a device-side [1, 1] token-id array; the model's embedding
-                    # lookup consumes it directly (mx.take) -- no host round trip.
-                    return model(ids, cache=cache)[0, -1]
+        _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
+        # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
+        # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
+        with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
+            decode_start = time.perf_counter()
+            try:  # W92: restore the probe ENABLED flag even if the decode loop raises
+                if device_sample:
+                    from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
 
-                more, _finish, extra_forward_steps = run_device_sample_decode(
-                    forward_row=_forward_row,
-                    first_token=int(token),
-                    n_more=int(steps),
-                    sampler=None,  # greedy (byte-identical to the classic argmax loop)
-                    stop_ids=set(),
-                )
-                generated.extend(int(t) for t in more)
-            else:
-                every = max(1, int(mem_profile_every))
-                for step in range(int(steps)):
-                    logits = model(ops.input([[token]]), cache=cache)
-                    ops.sync(logits)
-                    token = ops.argmax_last(logits)
-                    generated.append(token)
-                    if mem_profile is not None and (step + 1) % every == 0:
-                        mem_profile("decode", token=step + 1)
-        finally:
-            # W92: restore the probe ENABLED flag even if the decode loop raised, so
-            # a failed arm never leaves the module armed for the rest of the process
-            # (the snapshot below reads _COUNTS regardless of ENABLED).
-            if _route_probe is not None and _route_prev_enabled is not None:
-                _route_probe.ENABLED = bool(_route_prev_enabled)
-        decode_wall_s = time.perf_counter() - decode_start
-    _sc_end = _stream_counters_snapshot(model)
-    switch_dispatch = None
-    if _route_probe is not None:
-        _snap = _route_probe.snapshot()
-        _stg = _snap.get("stages", {}) if isinstance(_snap, dict) else {}
+                    def _forward_row(ids):
+                        # ids is a device-side [1, 1] token-id array; the model's embedding
+                        # lookup consumes it directly (mx.take) -- no host round trip.
+                        return model(ids, cache=cache)[0, -1]
 
-        def _c(name):
-            return int(_stg.get(name, {}).get("count", 0))
+                    more, _finish, extra_forward_steps = run_device_sample_decode(
+                        forward_row=_forward_row,
+                        first_token=int(token),
+                        n_more=int(steps),
+                        sampler=None,  # greedy (byte-identical to the classic argmax loop)
+                        # W113: served-parity early stop (default off -> empty set ->
+                        # full fixed-step decode, byte-identical to the classic loop).
+                        stop_ids=({_stop_eos} if _stop_eos is not None else set()),
+                    )
+                    generated.extend(int(t) for t in more)
+                    decode_steps_run = len(more)
+                else:
+                    every = max(1, int(mem_profile_every))
+                    # W113: when the prefill's own first token is already EOS, a served
+                    # path emits nothing -- skip the decode loop entirely.
+                    if not (_stop_eos is not None and int(token) == _stop_eos):
+                        for step in range(int(steps)):
+                            logits = model(ops.input([[token]]), cache=cache)
+                            ops.sync(logits)
+                            token = ops.argmax_last(logits)
+                            generated.append(token)
+                            decode_steps_run += 1
+                            if mem_profile is not None and (step + 1) % every == 0:
+                                mem_profile("decode", token=step + 1)
+                            # W113: served-parity early stop at EOS (default off).
+                            if _stop_eos is not None and int(token) == _stop_eos:
+                                break
+            finally:
+                # W92: restore the probe ENABLED flag even if the decode loop raised, so
+                # a failed arm never leaves the module armed for the rest of the process
+                # (the snapshot below reads _COUNTS regardless of ENABLED).
+                if _route_probe is not None and _route_prev_enabled is not None:
+                    _route_probe.ENABLED = bool(_route_prev_enabled)
+            decode_wall_s = time.perf_counter() - decode_start
+        _sc_end = _stream_counters_snapshot(model)
+        switch_dispatch = None
+        if _route_probe is not None:
+            _snap = _route_probe.snapshot()
+            _stg = _snap.get("stages", {}) if isinstance(_snap, dict) else {}
 
-        _all_hit = _c("hot.all_hit")
-        _synced = _c("hot.allhit_fence_eval")
-        _deferred = _c("hot.allhit_defer")
-        _gather_qmm_total = _c("hot.switch_gather_qmm")   # all paths
-        _allhit_gather_qmm = _c("hot.allhit_gather_qmm")  # all-hit branch only
-        _decode_steps = max(1, int(steps))
-        switch_dispatch = {
-            # per-layer host round-trips over this DECODE pass (cumulative).
-            "eval_indices": _c("hot.eval_indices"),      # the one routing barrier/layer
-            "route_host_tolist": _c("hot.route_host"),   # .tolist()+int() host read/layer
-            # all-hit switch: fences DEFERRED (to the next routing barrier) vs SYNCED
-            # (the shipped blocking mx.eval(wave_output)). The whole win is the ratio.
-            "all_hit": _all_hit,
-            "allhit_fence_synced": _synced,
-            "allhit_fence_deferred": _deferred,
-            "allhit_defer_submit": _c("hot.allhit_defer_submit"),
-            "allhit_deferred_pct": (
-                round(100.0 * _deferred / _all_hit, 2) if _all_hit else None
-            ),
-            # miss/split switch: begin_split_route admissions + split-route layer-calls.
-            "split_route": _c("hot.split_route"),
-            "begin_split_route": _c("hot.begin_split_route"),
-            # dispatch census. switch_gather_qmm_total counts EVERY gather_qmm on
-            # the pass (all-hit + split parts + prefill waves); allhit_gather_qmm is
-            # the all-hit branch only, so gather_qmm_per_all_hit_call is exactly 3
-            # (gate/up/down grouped over the routed slots -- never per-expert).
-            "switch_gather_qmm_total": _gather_qmm_total,
-            "allhit_gather_qmm": _allhit_gather_qmm,
-            "gather_qmm_per_all_hit_call": (
-                round(_allhit_gather_qmm / _all_hit, 3) if _all_hit else None
-            ),
-            "note": "cumulative over this AR DECODE pass. Per layer the host round-trip "
-                    "is one mx.eval(indices) barrier; allhit_fence_synced counts the "
-                    "SECOND blocking eval the shipped path pays per all-hit layer "
-                    "(switch_lean defers it -> allhit_fence_deferred). "
-                    "allhit_gather_qmm/all_hit is 3 (gate/up/down); "
-                    "switch_gather_qmm_total also includes split parts + prefill waves.",
-        }
-        print(
-            "[ab] switch dispatch: "
-            f"all_hit={_all_hit} fence_synced={_synced} fence_deferred={_deferred} "
-            f"({switch_dispatch['allhit_deferred_pct']}% deferred) "
-            f"allhit_gather_qmm={_allhit_gather_qmm} "
-            f"(~{switch_dispatch['gather_qmm_per_all_hit_call']}/all-hit call) "
-            f"gather_qmm_total={_gather_qmm_total} "
-            f"split_route={switch_dispatch['split_route']} "
-            f"eval_indices={switch_dispatch['eval_indices']}",
-            flush=True,
-        )
+            def _c(name):
+                return int(_stg.get(name, {}).get("count", 0))
+
+            _all_hit = _c("hot.all_hit")
+            _synced = _c("hot.allhit_fence_eval")
+            _deferred = _c("hot.allhit_defer")
+            _gather_qmm_total = _c("hot.switch_gather_qmm")   # all paths
+            _allhit_gather_qmm = _c("hot.allhit_gather_qmm")  # all-hit branch only
+            _decode_steps = max(1, int(steps))
+            switch_dispatch = {
+                # per-layer host round-trips over this DECODE pass (cumulative).
+                "eval_indices": _c("hot.eval_indices"),      # the one routing barrier/layer
+                "route_host_tolist": _c("hot.route_host"),   # .tolist()+int() host read/layer
+                # all-hit switch: fences DEFERRED (to the next routing barrier) vs SYNCED
+                # (the shipped blocking mx.eval(wave_output)). The whole win is the ratio.
+                "all_hit": _all_hit,
+                "allhit_fence_synced": _synced,
+                "allhit_fence_deferred": _deferred,
+                "allhit_defer_submit": _c("hot.allhit_defer_submit"),
+                "allhit_deferred_pct": (
+                    round(100.0 * _deferred / _all_hit, 2) if _all_hit else None
+                ),
+                # miss/split switch: begin_split_route admissions + split-route layer-calls.
+                "split_route": _c("hot.split_route"),
+                "begin_split_route": _c("hot.begin_split_route"),
+                # dispatch census. switch_gather_qmm_total counts EVERY gather_qmm on
+                # the pass (all-hit + split parts + prefill waves); allhit_gather_qmm is
+                # the all-hit branch only, so gather_qmm_per_all_hit_call is exactly 3
+                # (gate/up/down grouped over the routed slots -- never per-expert).
+                "switch_gather_qmm_total": _gather_qmm_total,
+                "allhit_gather_qmm": _allhit_gather_qmm,
+                "gather_qmm_per_all_hit_call": (
+                    round(_allhit_gather_qmm / _all_hit, 3) if _all_hit else None
+                ),
+                "note": "cumulative over this AR DECODE pass. Per layer the host round-trip "
+                        "is one mx.eval(indices) barrier; allhit_fence_synced counts the "
+                        "SECOND blocking eval the shipped path pays per all-hit layer "
+                        "(switch_lean defers it -> allhit_fence_deferred). "
+                        "allhit_gather_qmm/all_hit is 3 (gate/up/down); "
+                        "switch_gather_qmm_total also includes split parts + prefill waves.",
+            }
+            print(
+                "[ab] switch dispatch: "
+                f"all_hit={_all_hit} fence_synced={_synced} fence_deferred={_deferred} "
+                f"({switch_dispatch['allhit_deferred_pct']}% deferred) "
+                f"allhit_gather_qmm={_allhit_gather_qmm} "
+                f"(~{switch_dispatch['gather_qmm_per_all_hit_call']}/all-hit call) "
+                f"gather_qmm_total={_gather_qmm_total} "
+                f"split_route={switch_dispatch['split_route']} "
+                f"eval_indices={switch_dispatch['eval_indices']}",
+                flush=True,
+            )
+    finally:
+        _mem_sampler.stop()
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
         "decode_wall_s": decode_wall_s,
         "peak_gb": mem_probe.peak_bytes() / GIB,
+        # W106: full memory envelope (mlx_peak_gb == peak_gb, + process RSS peak and
+        # the whole-box used-memory peak the gpu_window.sh guard aborts on).
+        "memory": mem_probe.memory_block(_mem_sampler),
         "extra_forward_steps": int(extra_forward_steps),
+        # W113: DECODE tokens actually generated (== steps unless --stop-on-eos).
+        "decode_steps_run": int(decode_steps_run),
         "stream_after_prefill": _sc_after_prefill,
         "stream_end": _sc_end,
+        # W95f: the v2 runner + gate_prefetch receipt blocks (present only when armed).
+        **_runner_receipt_blocks(model),
         "cooldown": cooldown_block,
         "utilization": (
             util_sampler.summarize() if util_sampler is not None else None
@@ -1640,8 +3727,42 @@ def _ar_logits_row_at_index(*, model, ops, mx, prompt_ids, ar_tokens, index):
     return np.asarray(logits[0, -1].astype(mx.float32)).reshape(-1)
 
 
+def _dspark_decode_wall_accounting(
+    *, pass_start: float, decode_start: "float | None", pass_end: float,
+    generated_tokens: int,
+) -> dict:
+    """Split a DSpark pass's wall clock into the re-prefill and the decode loop.
+
+    ``dspark_generate`` re-prefills the prompt and then runs the decode cycles in
+    one call, so timing the whole call folds the re-prefill (the pass's TTFT) into
+    what was reported as ``decode_wall_s`` -- W100: window 39 divided 257 tokens by
+    a 297 s wall (0.86 tok/s) whose decode phase was only ~93 s (2.75 tok/s). This
+    helper takes ``pass_start`` (before ``dspark_generate``), ``decode_start`` (the
+    instant the prefill callback fired -- prefill done, before the first draft), and
+    ``pass_end`` (after the call), and returns the DECODE-ONLY wall plus the full
+    pass wall so nothing is lost:
+
+    * ``pass_wall_s`` -- the whole call (prefill + decode), the old ``decode_wall_s``.
+    * ``decode_wall_s`` -- ``pass_end - decode_start`` (excludes the re-prefill);
+      falls back to the full pass wall when no prefill callback fired.
+    * ``decode_tok_s`` -- ``generated_tokens / decode_wall_s`` (None if the wall is
+      non-positive).
+    """
+    pass_wall_s = max(0.0, pass_end - pass_start)
+    if decode_start is None:
+        decode_wall_s = pass_wall_s
+    else:
+        decode_wall_s = max(0.0, pass_end - decode_start)
+    decode_tok_s = (generated_tokens / decode_wall_s) if decode_wall_s > 0 else None
+    return {
+        "pass_wall_s": pass_wall_s,
+        "decode_wall_s": decode_wall_s,
+        "decode_tok_s": decode_tok_s,
+    }
+
+
 def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
-                     stage_timing=False, ar_reference=None):
+                     stage_timing=False, ar_reference=None, stop_ids=None):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
     per-cycle accept + phase-timing statistics.  Total tokens == steps + 1 to match
     ``_generate`` (prefill token + ``steps`` decode tokens).
@@ -1662,42 +3783,66 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     from mtplx.sampling import SamplerConfig
 
     mem_probe.reset_peak()
-    stats = DSparkDecodeStats()
-    # W77: when an AR reference is supplied, capture (zero extra forwards) the
-    # verify logits row of the first committed token that diverges from it.
-    capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
-    route_probe = None
-    route_prev_enabled = None
-    # W81: snapshot the expert-streaming counters at the prefill->decode boundary
-    # (prefill_callback fires after prefill, before the decode cycles) and again
-    # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
-    # block (hit rate + streamed bytes/token) matching the served daemon's.
-    _sc: dict = {}
+    # W106: 1 Hz off-hot-path RSS + system-used sampler over the headline pass (see
+    # _generate). Stopped right after the headline peak_gb is captured, before the
+    # optional timed stage-timing pass, so the memory block matches that peak_gb.
+    _mem_sampler = mem_probe.new_sampler()
+    _mem_sampler.start()
+    try:
+        stats = DSparkDecodeStats()
+        # W77: when an AR reference is supplied, capture (zero extra forwards) the
+        # verify logits row of the first committed token that diverges from it.
+        capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
+        route_probe = None
+        route_prev_enabled = None
+        # W81: snapshot the expert-streaming counters at the prefill->decode boundary
+        # (prefill_callback fires after prefill, before the decode cycles) and again
+        # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
+        # block (hit rate + streamed bytes/token) matching the served daemon's.
+        _sc: dict = {}
 
-    def _stream_prefill_cb(_info):
-        _sc["after_prefill"] = _stream_counters_snapshot(model)
+        def _stream_prefill_cb(_info):
+            _sc["after_prefill"] = _stream_counters_snapshot(model)
+            # W100: mark the prefill->decode boundary so decode_wall_s can exclude the
+            # re-prefill (this callback fires after prefill, before the decode cycles).
+            _sc["decode_start"] = time.perf_counter()
 
-    # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
-    # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
-    # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
-    # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
-    # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
-    # per-stage attribution is a SECOND, timed pass below.
-    t0 = time.perf_counter()
-    toks = dspark_generate(
-        model,
-        [int(t) for t in prompt_ids],
-        max_tokens=int(steps) + 1,
-        sampler=SamplerConfig(temperature=0.0),
-        seed=0,
-        speculative_depth=int(depth),
-        stats=stats,
-        divergence_capture=capture,
-        prefill_callback=_stream_prefill_cb,
-    )
-    _sc["end"] = _stream_counters_snapshot(model)
-    wall = time.perf_counter() - t0
-    peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
+        # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
+        # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
+        # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
+        # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
+        # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
+        # per-stage attribution is a SECOND, timed pass below.
+        t0 = time.perf_counter()
+        toks = dspark_generate(
+            model,
+            [int(t) for t in prompt_ids],
+            max_tokens=int(steps) + 1,
+            sampler=SamplerConfig(temperature=0.0),
+            seed=0,
+            speculative_depth=int(depth),
+            stats=stats,
+            divergence_capture=capture,
+            prefill_callback=_stream_prefill_cb,
+            stop_ids=stop_ids,  # W113: served-parity early stop (--stop-on-eos)
+        )
+        _sc["end"] = _stream_counters_snapshot(model)
+        # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
+        # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
+        _wall_acct = _dspark_decode_wall_accounting(
+            pass_start=t0,
+            decode_start=_sc.get("decode_start"),
+            pass_end=time.perf_counter(),
+            # W113 LOW-b: DECODE-only token count (exclude the prefill/first token)
+            # so dspark decode_tok_s uses the SAME denominator as the AR lane
+            # (decode_steps_run), instead of steps+1.  Also correct under
+            # --stop-on-eos, where len(toks) is the truncated stream.
+            generated_tokens=max(0, len(toks) - 1),
+        )
+        peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
+    finally:
+        _mem_sampler.stop()
+    _dspark_memory_block = mem_probe.memory_block(_mem_sampler)
     report = None
     w61 = None
     if stage_timing:
@@ -1728,6 +3873,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
                 seed=0,
                 speculative_depth=int(depth),
                 stats=DSparkDecodeStats(),
+                stop_ids=stop_ids,  # W113: match the headline pass
             )
             report = model.stage_timing_report()
         finally:
@@ -1791,11 +3937,19 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         route_probe.ENABLED = bool(route_prev_enabled)
     out = {
         "generated": [int(t) for t in toks],
-        "decode_wall_s": wall,
+        # W100: decode-only wall (re-prefill excluded); pass_wall_s keeps the old
+        # whole-call figure; decode_tok_s = generated / decode_wall_s.
+        "decode_wall_s": _wall_acct["decode_wall_s"],
+        "pass_wall_s": _wall_acct["pass_wall_s"],
+        "decode_tok_s": _wall_acct["decode_tok_s"],
         "peak_gb": peak_gb,  # W91: headline (untimed) peak, not the timed 2nd pass
+        # W106: full memory envelope for the headline pass (see _generate).
+        "memory": _dspark_memory_block,
         "stats": stats.to_dict(),
         "stream_after_prefill": _sc.get("after_prefill"),
         "stream_end": _sc.get("end"),
+        # W95f: the v2 runner + gate_prefetch receipt blocks (present only when armed).
+        **_runner_receipt_blocks(model),
     }
     if report is not None:
         out["verify_stage_timing"] = report
@@ -1876,8 +4030,325 @@ def _device_route_pinned_telemetry(runtime) -> dict | None:
     return tel
 
 
+def _peak_process_gb(run) -> float | None:
+    """The whole-PROCESS peak RSS (incl. the non-Metal Python heap + expert-reader
+    buffers) from the in-process 1 Hz sampler, for the top-level receipt key
+    ``peak_process_gb``.  David's "peak memory must include non-Metal parts" fix:
+    the legacy ``peak_gb`` is the MLX allocator peak only.  ``None`` when a pass
+    produced no memory block."""
+
+    mem = (run or {}).get("memory") or {}
+    val = mem.get("process_peak_rss_gb")
+    return None if val is None else float(val)
+
+
+def _memory_headline(receipt) -> str:
+    """The ``[ab]`` console peak-memory fragment.  Prints the legacy MLX peak AND
+    the whole-process RSS peak + box used-memory peak (David's non-Metal fix), so
+    the operator sees the real footprint, not just the MLX allocator figure.
+    ``peak_gb`` stays MLX-only for old-receipt comparability; the process/system
+    figures come from the in-process sampler over prefill+decode (peak, not exit)."""
+
+    mem = receipt.get("memory") or {}
+    peak_gb = receipt.get("peak_gb", 0.0) or 0.0
+    return (
+        f"peak_gb={peak_gb:.2f}"
+        f" mlx_peak_gb={mem.get('mlx_peak_gb', peak_gb):.2f}"
+        f" process_peak_rss_gb={mem.get('process_peak_rss_gb', 0.0):.2f}"
+        f" system_used_peak_gb={mem.get('system_used_peak_gb', 0.0):.2f}"
+        f" (sys at decode start {mem.get('system_used_at_decode_start_gb', 0.0):.2f})"
+    )
+
+
+# --------------------------------------------------------------------------
+# W106 output persistence (David: "store the output so we can audit it").  Every
+# bench run persists the FULL generated output -- in the receipt (token_ids +
+# decoded_text + head/tail) and as a text sidecar next to the receipt -- so a
+# rounding-class result can be text-spot-checked, not just compared by sha.
+# Decoding reuses the ALREADY-LOADED bench tokenizer and is fully guarded: a
+# tokenizer failure records None and never kills the measured run.
+# --------------------------------------------------------------------------
+_TEXT_HEAD_CHARS = 600
+_TEXT_TAIL_CHARS = 600
+_DIVERGENCE_CONTEXT_CHARS = 200
+
+
+def _decode_ids(tok, ids):
+    """Decode token ids to text.  Returns ``(text_or_None, error_or_None)``: never a
+    SILENT empty string.  Tries the tokenizer's ``decode`` then the underlying HF
+    ``_tokenizer.decode``; a raise records its repr.
+
+    LOW (round 4): an empty result is only an ERROR when it is a genuine decode
+    failure.  If ``decode(ids)`` is empty but ``decode(ids, skip_special_tokens=
+    False)`` is NON-empty, the ids render only as SPECIAL tokens (e.g. an
+    all-EOS/pad stream) -- a LEGITIMATELY empty decoded text, not a failure: return
+    that with-specials rendering (so the audit shows what was produced) and no
+    error.  Only when BOTH are empty is it recorded as an error."""
+
+    if ids is None:
+        return None, "no ids"
+    if tok is None:
+        return None, "no tokenizer available for output decode"
+    ids_int = [int(t) for t in ids]
+    last_err = None
+    candidates = (
+        ("decode", getattr(tok, "decode", None)),
+        ("_tokenizer.decode", getattr(getattr(tok, "_tokenizer", None), "decode", None)),
+    )
+    for label, fn in candidates:
+        if not callable(fn):
+            continue
+        try:
+            text = fn(ids_int)
+        except Exception as exc:
+            last_err = f"{label} raised {exc!r}"
+            continue
+        if text:  # non-empty string -> success
+            return text, None
+        # Empty: distinguish a LEGITIMATE special-tokens-only decode from a broken
+        # one.  If the with-specials rendering is non-empty, the ids are special
+        # tokens -> legit empty; surface that rendering, no error.
+        try:
+            with_specials = fn(ids_int, skip_special_tokens=False)
+        except Exception:
+            with_specials = None
+        if with_specials:
+            return with_specials, None
+        last_err = f"{label} returned empty for {len(ids_int)} ids"
+    return None, (last_err or "no usable decode method on the tokenizer")
+
+
+def _text_output_fields(tok, ids) -> dict:
+    """The receipt text-audit fields for one id stream: the FULL id list, the full
+    decoded text + head/tail (first/last 600 chars), and ``decoded_text_error`` (the
+    reason decode produced no text, or None on success).  A failure is LOUD."""
+
+    ids_list = [int(t) for t in (ids or [])]
+    text, err = _decode_ids(tok, ids_list)
+    if err is not None:
+        print(
+            f"[ab] WARN: output decode produced no text ({err}); "
+            f"token_ids present ({len(ids_list)}), decoded_text_error recorded",
+            flush=True,
+        )
+    if text is None:
+        head = tail = None
+    else:
+        head = text[:_TEXT_HEAD_CHARS]
+        tail = text[-_TEXT_TAIL_CHARS:]
+    return {
+        "token_ids": ids_list,
+        "decoded_text": text,
+        "decoded_text_head": head,
+        "decoded_text_tail": tail,
+        "decoded_text_error": err,
+    }
+
+
+def _divergence_context(tok, ids, token_index, span=_DIVERGENCE_CONTEXT_CHARS):
+    """The decoded text ``span`` chars either side of the character offset that the
+    divergence TOKEN index maps to (decode the prefix to find the offset).  None
+    when the stream cannot be decoded."""
+
+    full, _ = _decode_ids(tok, ids)
+    if full is None:
+        return None
+    prefix, _ = _decode_ids(tok, list(ids)[: max(0, int(token_index))])
+    offset = len(prefix) if prefix is not None else 0
+    return full[max(0, offset - span): offset + span]
+
+
+def _receipt_stem(out_path) -> Path:
+    """The receipt path with a trailing ``.jsonl``/``.json`` stripped, so
+    ``<stem>.output.txt`` sits beside the receipt."""
+
+    p = Path(out_path)
+    if p.suffix in (".jsonl", ".json"):
+        return p.with_suffix("")
+    return p
+
+
+def _suffixed(path: Path, n: int) -> Path:
+    """``path`` for n==1, else ``<stem>-n<suffix>`` (e.g. ``x.output-2.txt``)."""
+
+    return path if n == 1 else path.with_name(f"{path.stem}-{n}{path.suffix}")
+
+
+def _reserve_paired(paths):
+    """Find the SMALLEST n for which every path in ``paths`` (at suffix n) is free,
+    and atomically reserve them all (O_CREAT|O_EXCL empty files); the SAME n is
+    applied to every path so a receipt's sidecars stay paired
+    (memory/never-overwrite-a-measurement).  Returns the reserved paths (in order),
+    or None on exhaustion/failure."""
+
+    n = 1
+    while n < 100000:
+        cands = [_suffixed(p, n) for p in paths]
+        reserved = []
+        clash = False
+        for cand in cands:
+            try:
+                fd = os.open(cand, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                clash = True
+                break
+            os.close(fd)
+            reserved.append(cand)
+        if clash:
+            for r in reserved:  # release partial reservations before trying n+1
+                try:
+                    os.unlink(r)
+                except OSError:
+                    pass
+            n += 1
+            continue
+        return cands
+    return None
+
+
+def _write_reserved(path: Path, content: str) -> None:
+    """Atomically write ``content`` over an already-reserved ``path`` (tmp + rename)."""
+
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as fh:
+        fh.write(content)
+    os.replace(tmp, path)
+
+
+def _sidecar_text(*, arm, kind, stream, divergence) -> str:
+    sha = stream.get("token_ids_sha256")
+    tok_s = stream.get("decode_tok_s")
+    text = stream.get("decoded_text")
+    header = "\n".join(
+        [
+            f"# arm: {arm}",
+            f"# stream: {kind}",
+            f"# token_ids_sha256: {sha}",
+            f"# decode_tok_s: {tok_s}",
+            "# divergence: "
+            + (json.dumps(divergence) if divergence is not None else "none"),
+            "",
+            "",
+        ]
+    )
+    body = (
+        text if text is not None
+        else "<decode unavailable (no tokenizer / decode failed)>"
+    )
+    return header + body + "\n"
+
+
+def _abort_receipt_row(arm, exc, args=None) -> dict:
+    """W106 MEDIUM-C: the ledger row for an arm that aborted before producing a
+    receipt (a budget/re-measure abort or a floor refusal).  Carries the arm, the
+    failure reason + stage, and (best-effort) the budget derivation captured so far
+    so the ledger shows why."""
+
+    stage = getattr(exc, "dsv41_stage", "run_arm")
+    row = {
+        "arm": arm,
+        "aborted": True,
+        "reason": str(exc),
+        "stage": stage,
+        "exception": type(exc).__name__,
+        # LOW: a human note so the ledger row is self-explanatory (this arm produced
+        # no measurement; the run exited 4 -- chain later arms with `&&`, not `;`).
+        "note": (
+            "arm aborted before producing a receipt; no measurement recorded. "
+            "The bench exited 4 at this arm -- with `&&` chaining the launcher stops "
+            "here rather than re-loading + re-aborting every later step."
+        ),
+    }
+    bt = getattr(args, "_dsv41_budget_total", None) if args is not None else None
+    if bt is not None:
+        try:
+            row["memory"] = bt.memory_keys()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return row
+
+
+def _append_receipt_row(out_path, row) -> None:
+    """Append one JSONL row to the append-only receipt (MEDIUM-C)."""
+
+    try:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        with Path(out_path).open("a") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except OSError as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: could not append abort row ({exc!r})", flush=True)
+
+
+def _write_output_sidecars(out_path, receipt) -> None:
+    """Persist the FULL decoded output beside the receipt (MEDIUM-3):
+    ``<stem>.<sha12>.output.txt`` for the measured stream and, for a DSpark run,
+    ``<stem>.<sha12>.ar-reference.output.txt`` for the AR comparison stream.  The
+    sha[:12] of the AR pass is in BOTH names (pairs them, and disambiguates arms),
+    and a single ``-n`` suffix is applied to BOTH when a name is taken, so the pair
+    never splits.  Fully guarded."""
+
+    try:
+        stem = _receipt_stem(out_path)
+        arm = receipt.get("arm")
+        sha12 = str(receipt.get("token_ids_sha256") or "nosha")[:12]
+        base = f"{stem.name}.{sha12}"
+        dsp = receipt.get("dspark")
+        if isinstance(dsp, dict):
+            primary_stream, primary_kind, div = dsp, "dspark", dsp.get("divergence")
+        else:
+            primary_stream, primary_kind, div = receipt, "ar", None
+
+        want = [stem.with_name(base + ".output.txt")]
+        if isinstance(dsp, dict):
+            want.append(stem.with_name(base + ".ar-reference.output.txt"))
+
+        reserved = _reserve_paired(want)
+        if reserved is None:
+            print("[ab] WARN: output sidecar names exhausted; skipping", flush=True)
+            return
+
+        _write_reserved(
+            reserved[0],
+            _sidecar_text(arm=arm, kind=primary_kind, stream=primary_stream,
+                          divergence=div),
+        )
+        print(f"[ab] output sidecar: {reserved[0]}", flush=True)
+        if isinstance(dsp, dict):
+            _write_reserved(
+                reserved[1],
+                _sidecar_text(arm=arm, kind="ar-reference", stream=receipt,
+                              divergence=div),
+            )
+            print(f"[ab] output sidecar: {reserved[1]}", flush=True)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[ab] WARN: output sidecar step failed ({exc!r})", flush=True)
+
+
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
+    # W107: a bounded arm that did not pin an explicit MTPLX_DSV41_KV_BOUNDED_MAXKV
+    # (the presets do not know the CLI --max-kv) preallocates every KV lane to the
+    # resolved cell max_kv.  Stamp it here, after the arm env is applied and BEFORE
+    # make_cache (per request), so the cache reads it at construction.  Read-at-use,
+    # not import.  A bounded arm with neither key set falls back to geometric growth
+    # (the kv_realloc_* counters then flag it).
+    #
+    # W113 fix: SKIP the stamp on the --dry-run path.  The CPU-only dry-run double
+    # never builds the cache (nothing reads KV_BOUNDED_MAXKV), and
+    # ``bench.resolve_max_kv`` RAISES for a large cell with no explicit --max-kv (the
+    # default 4096 is below the 16704 the 16K cell needs), which would abort a dry-run
+    # of a KV-bounded arm before its early return below.  Guarding the stamp keeps the
+    # dry-run resolution double CPU-safe for bounded arms at any --context-tokens.
+    if (
+        not getattr(args, "dry_run", False)
+        and (os.environ.get(KV_BOUNDED_ENV) or "").strip().lower()
+        in ("1", "true", "yes", "on")
+    ):
+        if not (os.environ.get(KV_BOUNDED_MAXKV_ENV) or "").strip():
+            _bounded_max_kv = bench.resolve_max_kv(
+                [args.context_tokens], args.decode_tokens, args.max_kv
+            )
+            os.environ[KV_BOUNDED_MAXKV_ENV] = str(int(_bounded_max_kv))
     if getattr(args, "decode_mode", "ar") == "dspark":
         # Arm K29 (fused decode/verify attention, b*s<=8) + K30 (selected keys) for
         # the WHOLE arm so both the AR reference (_generate) and the dspark verify
@@ -1898,6 +4369,28 @@ def _run_arm(args, arm, bench, mx) -> dict:
     prompt_ids, prompt_meta = bench._resolve_prompt(
         args, _tok, build_prompt, args.context_tokens
     )
+    # W113: resolve the EOS id (tokenizer files, no model) for the EOS-surfacing
+    # receipt fields and the optional --stop-on-eos served-parity early stop.
+    eos_id = _resolve_eos_id(args)
+    stop_on_eos = bool(getattr(args, "stop_on_eos", False))
+    # W113 MEDIUM-3: --stop-on-eos with no resolvable EOS id must refuse (not
+    # silently no-op while stamping stop_on_eos:true).  Before the model load.
+    _require_eos_id_for_stop(stop_on_eos, eos_id)
+    # W106 output persistence (window-43 fix): the prompt path leaves _tok None when
+    # --prompt-ids-file supplies the prompt ids -- but the OUTPUT still needs a
+    # tokenizer to be decoded for the audit.  Always obtain one for decoding
+    # (reusing _tok when present), guarded, so a decode is never silently skipped.
+    _out_tok = _tok
+    if _out_tok is None:
+        try:
+            _out_tok = _tokenizer(args, bench)
+        except Exception as exc:  # pragma: no cover - defensive
+            _out_tok = None
+            print(
+                "[ab] WARN: could not load a tokenizer for OUTPUT decode "
+                f"({exc!r}); receipts will carry decoded_text_error",
+                flush=True,
+            )
     resident = _load_model(args, bench, mx)
     model = resident.model
     runtime = getattr(model, "_mtplx_expert_runtime", None)
@@ -1916,6 +4409,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # receipt reports THIS arm's real fused-layer forwards vs eager fallbacks.
         _dsv41._reset_small_stages_calls()
         _dsv41._reset_hc_premix_kernel_calls()
+        # W97 (review item 3): zero the decode-attention-core compile engagement so
+        # the receipt reports THIS arm's compiled-tape calls vs eager fallbacks.
+        _dsv41._reset_attn_core_compile_calls()
     except Exception:  # pragma: no cover - defensive
         _dsv41 = None
     # W60/K29 engagement: zero the fused-decode-attention counters after model load
@@ -1926,6 +4422,14 @@ def _run_arm(args, arm, bench, mx) -> dict:
         _k29.reset_engagement()
     except Exception:  # pragma: no cover - defensive
         _k29 = None
+    # W101/K36 engagement: zero the fused projection-chain counters after model load
+    # so the receipt reports THIS arm's real fused-kernel dispatches (per phase) vs
+    # armed-but-eager fallbacks.
+    try:
+        from mtplx.models import deepseek_v41_fused_proj_kernels as _fp
+        _fp.reset_engagement()
+    except Exception:  # pragma: no cover - defensive
+        _fp = None
     # W73/K32 chunk-grow engagement: zero the cache telemetry after model load so
     # the receipt reports THIS arm's layer-backing choice + append counts.  enabled
     # == 0 means the flag did not reach cache construction (env timing / wrong
@@ -1939,6 +4443,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
         _reset_ring = getattr(_dsv41_cache, "reset_window_ring_stats", None)
         if callable(_reset_ring):
             _reset_ring()
+        # W107: zero the per-lane bounded-KV telemetry so the receipt reports THIS
+        # arm's bounded engagement + per-lane in-place/realloc counts.
+        _reset_bounded = getattr(_dsv41_cache, "reset_kv_bounded_stats", None)
+        if callable(_reset_bounded):
+            _reset_bounded()
     except Exception:  # pragma: no cover - defensive
         _dsv41_cache = None
     try:
@@ -1966,12 +4475,27 @@ def _run_arm(args, arm, bench, mx) -> dict:
             cooldown_s=float(getattr(args, "cooldown_s", 0.0) or 0.0),
             util_sampler=util_sampler,
             stage_timing=bool(getattr(args, "stage_timing", False)),
+            stop_on_eos=stop_on_eos,
+            eos_id=eos_id,
         )
         if util_sampler is not None:
             print(f"[ab] {arm}: {util_sampler.census()}", flush=True)
         ids = run["generated"]
+        # W113: the number of DECODE tokens actually generated (excludes the prefill
+        # argmax token).  == args.decode_tokens on the default full fixed-step run;
+        # fewer only under --stop-on-eos.  decode_tok_s is reported over it so a
+        # served-parity run's rate reflects the tokens actually produced.
+        _decode_generated = int(run.get("decode_steps_run", args.decode_tokens))
+        _ar_eos = _eos_surfacing(ids, eos_id)
+        _warn_if_first_token_eos(arm, "AR", _ar_eos)
         receipt = {
             "arm": arm,
+            # W97 (review item 7): True when this arm's tokens are EXPECTED to differ
+            # from control by rounding (a rounding-class attention lever), so the
+            # byte-identity summary reads a sha mismatch as "expected", not FAIL.
+            # ``rounding_class_keys`` are the reason keys (see ROUNDING_CLASS_ENVS).
+            "rounding_class": _is_rounding_class(arm),
+            "rounding_class_keys": _rounding_class_keys(arm),
             "overlap_env": os.environ.get(OVERLAP_ENV),
             "arm_env": _arm_env_snapshot(),
             # K14 (W63): the MLX command-buffer MB cap in effect for this arm
@@ -1984,16 +4508,30 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "device_sample_extra_forwards": int(run.get("extra_forward_steps", 0)),
             "context_tokens": int(args.context_tokens),
             "decode_tokens": int(args.decode_tokens),
+            # W113: DECODE tokens actually generated (== decode_tokens unless
+            # --stop-on-eos stopped early); decode_tok_s is reported over it.
+            "decode_tokens_generated": _decode_generated,
+            "stop_on_eos": stop_on_eos,
             "prompt_tokens": len(prompt_ids),
             "ttft_s": run["ttft_s"],
             "prefill_tok_s": (len(prompt_ids) / run["ttft_s"])
             if run["ttft_s"] > 0
             else None,
             "decode_wall_s": run["decode_wall_s"],
-            "decode_tok_s": (args.decode_tokens / run["decode_wall_s"])
-            if run["decode_wall_s"] > 0
+            "decode_tok_s": (_decode_generated / run["decode_wall_s"])
+            if (run["decode_wall_s"] > 0 and _decode_generated > 0)
             else None,
+            # peak_gb is the MLX allocator peak ONLY (kept as-is for old receipts'
+            # comparability); peak_process_gb is the whole-PROCESS peak RSS incl.
+            # the non-Metal footprint (David's fix). Both come off run["memory"].
             "peak_gb": run["peak_gb"],
+            "peak_process_gb": _peak_process_gb(run),
+            # W106: the memory envelope (mlx_peak_gb == the peak_gb above, plus the
+            # process RSS peak and the whole-box used-memory peak/at-start the
+            # gpu_window.sh guard measures). peak_gb alone is the MLX allocator peak
+            # of this process -- it excludes the Python heap, the expert-reader
+            # buffers, other processes, and the OS cache, so it is NOT the box usage.
+            "memory": run.get("memory"),
             # W90: GPU DVFS/utilization over the decode + optional post-prefill
             # cooldown (the discriminator for the mode-independent in-situ floor).
             "utilization": run.get("utilization"),
@@ -2002,6 +4540,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 json.dumps(ids).encode()
             ).hexdigest(),
             "first_token_ids": ids[:16],
+            # W106 output persistence: the FULL generated ids + decoded text (+
+            # head/tail) for the AR pass, so a rounding-class result is text-
+            # auditable, not just sha-comparable. Decoded with the loaded bench
+            # tokenizer; None if unavailable (guarded).
+            **_text_output_fields(_out_tok, ids),
             "overlap_telemetry": _overlap_telemetry(runtime)
             if runtime is not None
             else None,
@@ -2021,6 +4564,20 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "decode_attn_kernel_engagement": (
                 _k29.engagement() if _k29 is not None else None
             ),
+            # W97 (review item 3): decode-attention-core compile engagement --
+            # ``compiled`` selected-key core calls that ran the fixed-shape mx.compile
+            # tape vs ``eager`` calls (lever off / above the small-M cap).  compiled 0
+            # on an attn_core_compile arm means the tape never ran (all eager), so a
+            # measured delta cannot be credited to it -- proves the tape engaged.
+            "attn_core_compile_engagement": (
+                _dsv41._attn_core_compile_calls() if _dsv41 is not None else None
+            ),
+            # W101/K36 fused projection-chain engagement (qkv_calls/out_calls/rows/
+            # fallbacks over the whole arm); qkv_calls 0 on a fused arm means the
+            # fused kernels never ran (all eager) rather than ran-and-was-slow.
+            "fused_proj_engagement": (
+                _fp.engagement() if _fp is not None else None
+            ),
             # W81: the ACTUAL slot plan this arm ran (transient/persistent slot
             # counts + bytes + source), so an A/B is attributable to a capacity and
             # the in-process bench is comparable to the served profile plan.
@@ -2034,6 +4591,17 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # W92 switch-dispatch census (present only with --stage-timing): per-layer
             # host syncs + all-hit fences deferred vs synced + gather_qmm/switch-call.
             "switch_dispatch": run.get("switch_dispatch"),
+            # W113 EOS surfacing (AR top level): first_token_eos / eos_index /
+            # tokens_before_eos / answer_valid / eos_id / n_generated (see
+            # _eos_surfacing).  A first_token_eos=True means a served path returns
+            # an EMPTY answer -- the loud warning above fires too.
+            **_ar_eos,
+            # W113 prompt provenance stamps (prompt_source / prompt_ids_file /
+            # prompt_ids_sha256 [PROMPT ids, not the generated token_ids_sha256] /
+            # prompt_seed / prompt_tokens / prompt_chat_templated / allow_raw_prompt
+            # / prompt_build).  Tells the standard chat-templated cell apart from the
+            # raw builder that windows 39-42 measured.
+            **_prompt_provenance(args, prompt_ids, prompt_meta),
         }
         if mem_profile_snaps is not None:
             from mtplx.deepseek_v41_memory_profile import (
@@ -2063,8 +4631,15 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 depth=args.dspark_depth,
                 stage_timing=bool(getattr(args, "stage_timing", False)),
                 ar_reference=ids,
+                # W113: under --stop-on-eos both lanes stop at EOS so the AR-vs-
+                # DSpark byte-identity comparison stays like-for-like (default off
+                # -> stop_ids None -> full fixed-step decode, numbers unchanged).
+                stop_ids=({int(eos_id)} if (stop_on_eos and eos_id is not None)
+                          else None),
             )
             dsp_ids = dsp["generated"]
+            _dsp_eos = _eos_surfacing(dsp_ids, eos_id)
+            _warn_if_first_token_eos(arm, "DSpark", _dsp_eos)
             byte_identical = dsp_ids == ids
             st = dsp["stats"]
             receipt["dspark"] = {
@@ -2075,13 +4650,15 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "headline_pass": "untimed",
                 "cold_reset_before_pass": _dspark_cold_reset,
                 "byte_identical_vs_ar": byte_identical,
+                # W100: decode-only wall + rate (re-prefill excluded); pass_wall_s
+                # is the whole-call figure the pre-W100 decode_wall_s reported.
                 "decode_wall_s": dsp["decode_wall_s"],
-                "decode_tok_s": (
-                    (len(dsp_ids) / dsp["decode_wall_s"])
-                    if dsp["decode_wall_s"] > 0
-                    else None
-                ),
-                "peak_gb": dsp["peak_gb"],
+                "pass_wall_s": dsp.get("pass_wall_s"),
+                "decode_tok_s": dsp.get("decode_tok_s"),
+                "peak_gb": dsp["peak_gb"],  # MLX allocator peak only (legacy)
+                "peak_process_gb": _peak_process_gb(dsp),  # whole-process RSS peak
+                # W106: memory envelope for the dspark headline pass (see AR above).
+                "memory": dsp.get("memory"),
                 "tokens_per_cycle": st["tokens_per_cycle"],
                 "accept_rate": st["accept_rate"],
                 "accept_rate_by_depth": st["accept_rate_by_depth"],
@@ -2100,7 +4677,16 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "token_ids_sha256": hashlib.sha256(
                     json.dumps(dsp_ids).encode()
                 ).hexdigest(),
+                # W113 EOS surfacing (dspark block): first_token_eos / eos_index /
+                # tokens_before_eos / answer_valid / eos_id / n_generated over the
+                # DSpark stream (see _eos_surfacing).
+                **_dsp_eos,
             }
+            # W106 output persistence: the FULL DSpark stream (ids + decoded text)
+            # AND the AR comparison stream it is verified against, both under the
+            # dspark block so the divergence is text-auditable from the receipt.
+            receipt["dspark"].update(_text_output_fields(_out_tok, dsp_ids))
+            receipt["dspark"]["ar_reference"] = _text_output_fields(_out_tok, ids)
             if dsp.get("verify_stage_timing") is not None:
                 # W37 internal breakdown of the verify forward (attention +
                 # moe.routed_switch): the census that shows the routing phase.
@@ -2133,6 +4719,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     (i for i, (a, b) in enumerate(zip(dsp_ids, ids)) if a != b),
                     min(len(dsp_ids), len(ids)),
                 )
+                # W106: the decoded text ~200 chars either side of the divergence
+                # point, for BOTH streams, so the flip is readable in the receipt.
+                receipt["dspark"]["divergence_context"] = {
+                    "ar": _divergence_context(_out_tok, ids, first),
+                    "dspark": _divergence_context(_out_tok, dsp_ids, first),
+                }
                 ar_tok = ids[first] if first < len(ids) else None
                 dsp_tok = dsp_ids[first] if first < len(dsp_ids) else None
                 cap = dsp.get("divergence")
@@ -2169,12 +4761,21 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     )
             else:
                 receipt["dspark"]["divergence"] = None
+                receipt["dspark"]["divergence_context"] = None
         if getattr(args, "warm_repeat", False):
             receipt["warm"] = _warm_repeat_pass(
                 model=model, ops=ops, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
                 cold_ids=ids,
+                # W113 MEDIUM-2: stop the warm pass at the same point as the cold
+                # pass so denominators match and token_ids_match holds.
+                stop_on_eos=stop_on_eos, eos_id=eos_id,
             )
+        # W113 MEDIUM-2: the --stage-timing and --syncs passes below deliberately
+        # IGNORE --stop-on-eos -- they run the full requested step count for a
+        # fenced per-stage / host-sync census whose absolute tok/s is discarded
+        # (not a headline rate), so an early stop would only shrink the census
+        # sample.  Only the headline AR/DSpark and warm passes honour --stop-on-eos.
         if getattr(args, "stage_timing", False):
             steps = (
                 int(args.stage_timing_steps)
@@ -2275,6 +4876,70 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     "slack (bounded); rows_copied flat-per-token == amortized O(1)"
                 )
                 receipt["window_ring"] = rstats
+            # W107 per-lane bounded-KV engagement (cumulative over the arm).
+            # ``enabled`` false => MTPLX_DSV41_KV_BOUNDED never reached cache
+            # construction.  enabled true: for each lane ``kv_realloc_<lane>`` should
+            # be its one-time prealloc count (window 1, compress 1, index 1, latent 2
+            # == kv+score) and STAY there -- a growing ``kv_realloc_*`` over the cell
+            # means the lane was not preallocated (max_kv unset / prefill chunk wider
+            # than the cap).  ``kv_inplace_writes_<lane>`` is the O(new-rows) decode
+            # path; ``alloc_bytes`` should ~= kv_bytes_at_max_kv(config, max_kv).
+            bounded_stats_fn = getattr(_dsv41_cache, "kv_bounded_stats", None)
+            if callable(bounded_stats_fn):
+                bstats = bounded_stats_fn()
+                bstats["env"] = os.environ.get(KV_BOUNDED_ENV)
+                bstats["maxkv_env"] = os.environ.get(KV_BOUNDED_MAXKV_ENV)
+                # W107 round-4 DONATION GATE: prove the bounded lanes donate on the real
+                # path (mx.slice_update pointer-stable in the rebind pattern).
+                # sample_ptr_flips() is stamped by the fenced stage-timing pass; the gate
+                # passes iff ptr_flips_window == window_ring.drops, compress/index/latent
+                # flips == 0, and kv_realloc_<lane> == one prealloc/layer.
+                try:
+                    _cfg2 = getattr(model, "args", None)
+                    _rs = (_dsv41_cache.window_ring_stats()
+                           if hasattr(_dsv41_cache, "window_ring_stats") else {})
+                    if _cfg2 is not None and hasattr(_dsv41_cache, "kv_donation_gate"):
+                        _exp = _dsv41_cache.expected_bounded_reallocs(_cfg2)
+                        bstats["donation_gate"] = _dsv41_cache.kv_donation_gate(
+                            bstats, _rs, expected_reallocs=_exp)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                # W107 (review MEDIUM-A): receipt gate -- compare the memory-plan
+                # formula W106 will use against the bytes actually allocated, so a
+                # dtype-model drift is caught at runtime.  Exact when the window did
+                # not transiently grow during (chunked) prefill, i.e. kv_realloc_window
+                # == num_layers (one ring init per layer, no compaction realloc); a
+                # chunked prefill grows-then-shrinks the window (MEDIUM-1), so the
+                # cumulative alloc_bytes then exceeds the steady formula (expected).
+                _bmaxkv = os.environ.get(KV_BOUNDED_MAXKV_ENV)
+                _cfg = getattr(model, "args", None)
+                bytes_fn = getattr(_dsv41_cache, "kv_bytes_at_max_kv", None)
+                if _cfg is not None and _bmaxkv and callable(bytes_fn):
+                    try:
+                        _formula = int(bytes_fn(_cfg, int(_bmaxkv)))
+                        bstats["kv_bytes_formula"] = _formula
+                        bstats["formula_matches_alloc"] = bool(
+                            int(bstats.get("alloc_bytes", 0)) == _formula
+                        )
+                    except Exception:  # pragma: no cover - defensive
+                        bstats["kv_bytes_formula"] = None
+                        bstats["formula_matches_alloc"] = None
+                bstats["note"] = (
+                    "cumulative over this arm; kv_realloc_<lane> == one-time prealloc "
+                    "(>1 growing == not preallocated-bounded); kv_inplace_writes_<lane> "
+                    "== O(new-rows) decode path; formula_matches_alloc exact iff "
+                    "kv_realloc_window == num_layers (no transient prefill grow)"
+                )
+                receipt["kv_bounded"] = bstats
+        # W106 item 3: merge the budget-total derivation terms into every memory
+        # block (memory_plan_source + the derived plan limit + each term), so the
+        # receipt records how the plan compensated for the non-Metal requirements.
+        _extra_keys = _memory_block_extra_keys(args)
+        if isinstance(receipt.get("memory"), dict):
+            receipt["memory"].update(_extra_keys)
+        _dsp = receipt.get("dspark")
+        if isinstance(_dsp, dict) and isinstance(_dsp.get("memory"), dict):
+            _dsp["memory"].update(_extra_keys)
         return receipt
     finally:
         if runtime is not None:
@@ -2289,7 +4954,8 @@ def _tokenizer(args, bench):
     return load_tokenizer(Path(args.model))
 
 
-def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> dict:
+def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids,
+                      stop_on_eos=False, eos_id=None) -> dict:
     """Second prefill+decode of the SAME prompt in the same process.
 
     A fresh ``model.make_cache()`` resets the KV window and hands a fresh engram
@@ -2297,12 +4963,21 @@ def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> 
     the cold pass, so this pass bounds the no-miss decode ceiling.  Greedy decode
     is deterministic, so the warm token ids must match the cold pass -- recorded
     (``token_ids_match`` + both sha256), never asserted, so a mismatch is reported
-    instead of crashing the arm."""
+    instead of crashing the arm.
+
+    W113 MEDIUM-2: ``stop_on_eos`` / ``eos_id`` are threaded through so the warm
+    pass stops at the SAME point as the (also stopped) cold pass -- otherwise the
+    warm pass runs the full ``steps`` while the cold pass stopped early, mixing
+    denominators (warm_decode_tok_s over ``steps`` vs the cold rate over the tokens
+    it generated) and breaking ``token_ids_match``.  ``warm_decode_tok_s`` is over
+    the tokens ACTUALLY generated (``decode_steps_run``)."""
     run = _generate(
         model=model, ops=ops, mem_probe=mem_probe,
         prompt_ids=prompt_ids, steps=steps,
+        stop_on_eos=stop_on_eos, eos_id=eos_id,
     )
     warm_ids = run["generated"]
+    warm_generated = int(run.get("decode_steps_run", steps))
     cold = [int(t) for t in cold_ids]
     warm_sha = hashlib.sha256(json.dumps(warm_ids).encode()).hexdigest()
     cold_sha = hashlib.sha256(json.dumps(cold).encode()).hexdigest()
@@ -2312,8 +4987,10 @@ def _warm_repeat_pass(*, model, ops, mem_probe, prompt_ids, steps, cold_ids) -> 
         if run["ttft_s"] > 0
         else None,
         "warm_decode_wall_s": run["decode_wall_s"],
-        "warm_decode_tok_s": (steps / run["decode_wall_s"])
-        if run["decode_wall_s"] > 0
+        # W113: over the tokens actually generated (== steps unless --stop-on-eos).
+        "warm_decode_tokens_generated": warm_generated,
+        "warm_decode_tok_s": (warm_generated / run["decode_wall_s"])
+        if (run["decode_wall_s"] > 0 and warm_generated > 0)
         else None,
         "warm_peak_gb": run["peak_gb"],
         "warm_token_ids_sha256": warm_sha,
@@ -2437,6 +5114,11 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps, cooldown_s=0.0,
             route_probe._COUNTS.clear()
     except Exception:
         pass
+    # W107 round-4 donation gate: init the pointer baseline after prefill (this pass is
+    # already fenced, so reading a pointer per token does not perturb the headline tok/s).
+    _ptr_sample = getattr(cache, "sample_ptr_flips", None)
+    if callable(_ptr_sample):
+        _ptr_sample()
     _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
     stime.begin()
     with _util_cm:  # W90: macmon utilization over the fenced decode loop only
@@ -2445,6 +5127,8 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps, cooldown_s=0.0,
                 logits = model(ops.input([[token]]), cache=cache)
                 with stime.stage("sample"):
                     token = ops.argmax_last(logits)
+            if callable(_ptr_sample):
+                _ptr_sample()  # count per-lane buffer-pointer flips (donation gate)
     report = model.stage_timing_report()
     stime.end()
     report = report if report is not None else {"enabled": False}
@@ -2549,10 +5233,25 @@ def _run_dry(args, bench) -> int:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     bench = _load_bench_module()
+
+    # W106 LOW-4: pre-flight the budget plan BEFORE anything else (no MLX, no model,
+    # no --out needed), so a floor refusal happens before the GPU window opens.
+    if getattr(args, "memory_plan_preflight", False):
+        return _preflight_memory_plan(args, bench)
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run:
         return _run_dry(args, bench)
+
+    # W113 cell-prompt guard: refuse to MEASURE a 16K cell (any cell16k_* arm or
+    # --context-tokens 16384) on the raw builder, and default --prompt-ids-file to
+    # the standard chat-templated cell so launchers get it.  Real path only -- the
+    # --dry-run resolution double never measures throughput (it exercises the raw
+    # builder with the fake tokenizer on purpose), so it is exempt.  May raise
+    # SystemExit (a clear error naming the standard file) or set
+    # args.prompt_ids_file before any arm/model load.
+    _apply_cell_prompt_guard(args)
 
     if args.syncs > 0 or args.stage_timing or args.prefill_stage_timing:
         # The route-stage probe reads its ENABLED flag at import, so arm it before
@@ -2572,18 +5271,54 @@ def main(argv=None) -> int:
     receipts = []
     for arm in args.arms:
         print(f"[ab] arm={arm} ctx={args.context_tokens} decode={args.decode_tokens}")
-        receipt = _run_arm(args, arm, bench, mx)
+        try:
+            receipt = _run_arm(args, arm, bench, mx)
+        except (RuntimeError, ValueError) as exc:
+            # W106 MEDIUM-C: record the failure in the ledger (an abort row on
+            # args.out) and exit with a distinct code (4), so a budget/re-measure
+            # abort or a floor refusal is not a silent gap in the receipts.
+            row = _abort_receipt_row(arm, exc, args)
+            _append_receipt_row(args.out, row)
+            print(
+                f"[ab]   ABORTED arm={arm} stage={row['stage']} "
+                f"reason={row['reason']}",
+                flush=True,
+            )
+            return 4
         receipts.append(receipt)
         with args.out.open("a") as fh:
             fh.write(json.dumps(receipt) + "\n")
+        # W106 output persistence: the FULL decoded output as a text sidecar beside
+        # the receipt (never overwriting an existing one), so David can audit it.
+        _write_output_sidecars(args.out, receipt)
         print(
             f"[ab]   decode_tok_s={receipt['decode_tok_s']} "
-            f"peak_gb={receipt['peak_gb']:.2f} sha={receipt['token_ids_sha256'][:12]}"
+            f"{_memory_headline(receipt)} "
+            f"sha={receipt['token_ids_sha256'][:12]}"
         )
 
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.
     if len(receipts) >= 2:
         base = receipts[0]
+        # W106 HIGH-2: byte-identity across arms is only meaningful if every arm ran
+        # the SAME plan (same residency).  Assert equal plan_limit_gib_effective (or
+        # _derived) before trusting the comparison; a differing plan is flagged.
+        def _plan_of(r):
+            m = r.get("memory") or {}
+            return m.get("plan_limit_gib_effective", m.get("plan_limit_gib_derived"))
+        _base_plan = _plan_of(base)
+        _plans_equal = all(_plan_of(r) == _base_plan for r in receipts)
+        if not _plans_equal:
+            print(
+                "[ab] WARN: arms ran DIFFERENT plan_limit values "
+                f"({[_plan_of(r) for r in receipts]}); byte-identity/tok-s across "
+                "arms is NOT comparable -- pin the plan with --memory-plan-from "
+                "<out-dir>/derived-plan.json for every arm after the first.",
+                flush=True,
+            )
+        else:
+            print(f"[ab] plan reproducibility: all arms ran plan_limit={_base_plan}",
+                  flush=True)
         for cand in receipts[1:]:
             identical = cand["token_ids_sha256"] == base["token_ids_sha256"]
             d_base = base["decode_tok_s"] or 0.0
@@ -2598,10 +5333,43 @@ def main(argv=None) -> int:
                 else f"[ab] {cand['arm']} vs {base['arm']}: byte_identical={identical}"
             )
             if not identical:
-                print(
-                    f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
-                    "(the lever must be a pure execution reorder)"
-                )
+                # W97 (review item 7): a rounding-class attention lever (the n=1 core
+                # compile / K29 tile reduction reassociates the fp32 softmax) can flip
+                # a greedy near-tie -- that is EXPECTED, not a broken exact lever, so
+                # it must not read as FAIL.  Every other arm keeps the FAIL.  Read the
+                # machine label off the receipt (fall back to deriving it, so an older
+                # receipt without the field still classifies).
+                cand_rc = cand.get("rounding_class")
+                if cand_rc is None:
+                    cand_rc = _is_rounding_class(cand["arm"])
+                if cand_rc:
+                    # Name the reason keys so the label is machine-checkable, not a
+                    # bare "expected".
+                    keys = cand.get("rounding_class_keys") or _rounding_class_keys(
+                        cand["arm"]
+                    )
+                    keys_str = ", ".join(keys) if keys else "?"
+                    # When the receipt already classified a divergence (the dspark
+                    # decode path records one), add the first divergence index and the
+                    # control top-2 logit margin there -- a tiny margin corroborates a
+                    # rounding tie ([[dsv41-inexact-ok-if-tie-flips]]).
+                    div = (cand.get("dspark") or {}).get("divergence")
+                    div_str = ""
+                    if isinstance(div, dict) and div.get("divergence_index") is not None:
+                        div_str = (
+                            f"; first divergence @ {div['divergence_index']}, "
+                            f"control top-2 logit margin {_fmt(div.get('ar_top2_margin'))} "
+                            f"(cand {_fmt(div.get('dspark_top2_margin'))})"
+                        )
+                    print(
+                        f"[ab] {cand['arm']}: token-id sha differs -- expected "
+                        f"(rounding-class: {keys_str}){div_str}"
+                    )
+                else:
+                    print(
+                        f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
+                        "(the lever must be a pure execution reorder)"
+                    )
     return 0
 
 

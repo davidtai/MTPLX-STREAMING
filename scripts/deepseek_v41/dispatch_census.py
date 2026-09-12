@@ -17,6 +17,26 @@ exactly as the tape collapses (validated here on the Sinkhorn: 198 eager -> 80
 compiled).  The K3 worker's "~119 primitives per Sinkhorn call" is this same
 count of the ``_sinkhorn_ops`` graph.
 
+Caveat: a primitive count is a backend-independent LOWER BOUND on Metal
+dispatches, NOT the dispatch count itself.  The graph is the same on CPU and
+Metal, but the Metal backend can expand ONE primitive into several kernels (and
+never fewer), so the true GPU dispatch count is >= the number counted here:
+
+* ``Arange`` is a FILL kernel, not a view -- it writes a materialised buffer
+  (one dispatch), so counting it as free / zero-cost understates the token.
+* ``Concatenate`` costs one COPY kernel per input array (it materialises the
+  joined buffer), so an n-way concat is ~n dispatches, not one.
+* A large ``Reduce`` (sum/max/softmax denominator over a wide axis) runs as TWO
+  passes (partials then final) on Metal, so one reduction primitive is ~2
+  dispatches at width.
+* ``Slice`` / strided views are free in the graph but force a COPY downstream
+  the moment a non-view consumer (a matmul/kernel needing contiguous input)
+  reads them, so the copy shows up under the consumer, not the slice.
+
+So a stage's primitive count bounds its dispatch count from below; read the
+before/after DELTA (the point of this census) rather than the absolute as a GPU
+dispatch tally.
+
 Two censuses are produced:
 
 * **Full-model per-stage** -- a ``_CensusProbe`` is installed into the W37 stage
@@ -423,26 +443,29 @@ def _render_micro(micro):
 # (one cycle == one "token" here), and count primitives per stage before/after
 # MTPLX_DSV41_DRAFT_COMPILE -- the same _CensusProbe / count_prims machinery as the
 # full-model backbone census, so the reduction is a number.
-def _dspark_args():
+def _dspark_args(block_size=4):
     return ModelArgs(
         vocab_size=64, hidden_size=32, num_hidden_layers=5, num_attention_heads=4,
         head_dim=16, qk_rope_head_dim=8, q_lora_rank=16, o_lora_rank=8, o_groups=2,
         moe_intermediate_size=16, n_routed_experts=8, num_experts_per_tok=2,
         sliding_window=8, window_size=8, hc_mult=4, hc_sinkhorn_iters=2,
         scoring_func="sqrtsoftplus", routed_scaling_factor=1.5, swiglu_limit=0.0,
-        n_mtp_layers=3, dspark_block_size=4, dspark_noise_token_id=63,
+        n_mtp_layers=3, dspark_block_size=block_size, dspark_noise_token_id=63,
         dspark_target_layer_ids=[2, 3, 4], dspark_markov_rank=12,
         dspark_n_routed_experts=8, dspark_num_experts_per_tok=2,
     )
 
 
-def _build_dspark(seed=1):
-    """Tiny real-structure DSpark head (3 stages, block_size 4, resident 8-expert
-    top-2 MoE == the 128-expert top-3 structure at small scale).  Power-of-2
-    reductions (hidden 32, hc*dim 128, q_lora 16, head_dim 16) so every compiled
-    chain is bit-exact vs eager (the K22 tiny-config RMSNorm caveat)."""
+def _build_dspark(seed=1, block_size=4, head_bf16=False):
+    """Tiny real-structure DSpark head (3 stages, resident 8-expert top-2 MoE ==
+    the 128-expert top-3 structure at small scale).  Power-of-2 reductions
+    (hidden 32, hc*dim 128, q_lora 16, head_dim 16) so every compiled chain is
+    bit-exact vs eager (the K22 tiny-config RMSNorm caveat).  ``block_size`` sets
+    the draft depth (default 4, the existing K33 census; W103 uses 1 and 5);
+    ``head_bf16`` casts the shared trunk output head to bf16 so the census can
+    measure the fp32-cast trap (the native artifact keeps the real head bf16)."""
     mx.random.seed(seed)
-    args = _dspark_args()
+    args = _dspark_args(block_size=block_size)
     model = Model(args, quantize=False, mtp=True)
     filled = []
     for name, value in tree_flatten(model.parameters()):
@@ -454,6 +477,8 @@ def _build_dspark(seed=1):
             new = mx.random.normal(value.shape) * (value.shape[-1] ** -0.5)
         filled.append((name, new.astype(value.dtype)))
     model.update(tree_unflatten(filled))
+    if head_bf16:
+        model.head.weight = model.head.weight.astype(mx.bfloat16)
     mx.eval(model.parameters())
     return model, args
 
@@ -692,6 +717,450 @@ def _small_main(args):
     return receipt
 
 
+# ---------------------------------------------------------------------------
+# W103: DSpark DRAFT-STEP census -- per-step / per-phase dispatch + head bytes
+# ---------------------------------------------------------------------------
+# The DSpark decode lane brackets the whole draft cycle as ``dspark.draft`` and
+# tiles it with the head module's own stage brackets (forward_embed, attn.*, hc.*,
+# head, markov, confidence) plus the reused MoE's brackets (moe.*).  This census
+# runs ONE ``draft_block`` at decode geometry (one committed main token, windows
+# already seeded) at block_size 1 (ONE draft step -- the per-cycle FIXED cost) and
+# at block_size 5 (the production depth-5 phase), counts graph primitives /
+# non-view kernels / top ops per stage, and measures the bytes the shared trunk
+# output head materialises per cycle under the fp32-cast trap vs the W103 bf16 fix.
+# Eager (DRAFT_COMPILE OFF), matching GPU window 39's arm (DRAFT_COMPILE=None).
+
+#: MLX primitives that are pure views / metadata movement -- no heavy compute
+#: kernel; folded into the consuming kernel's strided access at eval -- separated
+#: so the census reports the "real" (non-view) dispatch count, the proxy for the
+#: ~100 us/kernel host-encode floor ([[b1-decode-dispatch-removal-hides]]).
+_VIEW_OPS = frozenset({
+    "Reshape", "Broadcast", "BroadcastAxes", "Transpose", "ExpandDims", "Squeeze",
+    "Slice", "Flatten", "Unflatten", "AsStrided", "StopGradient", "Split", "Depends",
+})
+
+#: Draft stage -> the group the task's split asks for (embed / attn / hc / moe /
+#: head / sample-and-commit glue).  ``moe.*`` are the reused MoE's own brackets;
+#: the resident switch gather is ``moe.routed_switch``.
+_DRAFT_STAGE_GROUP = {
+    "dspark.forward_embed": "embed",
+    "dspark.attn.main_kv": "attn",
+    "dspark.attn.qkv_prep": "attn",
+    "dspark.attn.sdpa": "attn",
+    "dspark.attn.out_prep": "attn",
+    "dspark.hc.attn_prep": "hc",
+    "dspark.hc.ffn_prep": "hc",
+    "dspark.hc.moe_combine": "hc",
+    "moe.gate_topk": "moe",
+    "moe.routed_switch": "moe",
+    "moe.shared_expert": "moe",
+    "moe.combine": "moe",
+    "dspark.head": "head",
+    "dspark.markov": "sample_commit_glue",
+    "dspark.confidence": "sample_commit_glue",
+    "sample": "sample_commit_glue",
+}
+_DRAFT_GROUP_ORDER = ("embed", "attn", "hc", "moe", "head", "sample_commit_glue")
+
+
+def _nonview(op_types: dict) -> int:
+    return int(sum(n for op, n in op_types.items() if op not in _VIEW_OPS))
+
+
+def _run_dspark_draft_census(block_size, seed=1, head_bf16=True):
+    """One ``draft_block`` at decode geometry under the census probe (DRAFT_COMPILE
+    forced OFF -- the eager dispatch structure GPU window 39 measured); returns the
+    per-stage snapshot for ``block_size`` draft rows.  ``head_bf16`` makes the
+    shared trunk head bf16 (the native artifact's real head), so the head stage's
+    op-types carry the production fp32-cast promotion."""
+    import mtplx.models.deepseek_v41_dspark as dsp
+    model, args = _build_dspark(seed=seed, block_size=block_size, head_bf16=head_bf16)
+    ids = mx.array(np.random.RandomState(0).randint(0, args.vocab_size, size=(1, 17)))
+    logits, main_hidden = model(ids, return_hidden=True)
+    mx.eval(logits, main_hidden)
+    caches = model.make_mtp_cache()
+    model.mtp.seed_main(main_hidden, caches)
+    primary = mx.array([int(mx.argmax(logits[0, -1]))])
+    main_h = main_hidden[:, -1:, :]
+    embed, head = model.model.embed_tokens, model.head
+    prev = dsp._DRAFT_COMPILE
+    dsp._DRAFT_COMPILE = False
+    try:
+        with _census_session() as probe:
+            probe._recording_now = True  # the draft block is a block-row chain
+            with _stime.frame():
+                out_ids, dlogits, conf = model.mtp.draft_block(
+                    main_h, primary, caches, embed, head
+                )
+                with probe._stage("sample") as _st:
+                    _st.add(out_ids, conf)
+                mx.eval(out_ids, dlogits, conf)
+    finally:
+        dsp._DRAFT_COMPILE = prev
+    return probe.snapshot()
+
+
+def _dspark_head_bytes(seed=1, block_size=5):
+    """Measure the bytes the SHARED trunk output head materialises per draft cycle
+    under the fp32-cast trap vs the W103 bf16 fix -- graph-verified on the tiny bf16
+    head, projected to the released head shape.
+
+    The draft head is ``head(rmsnorm(x).astype(mx.float32))``.  With a dense bf16
+    head MLX has no mixed-precision matmul, so ``f32 @ bf16.T`` promotes the whole
+    ``[vocab, hidden]`` weight to an f32 temporary before the GEMV.  Proof that the
+    f32 cast lands on the WEIGHT (not the tiny input): ``xf`` is a pre-eval'd f32
+    leaf and ``W`` a pre-eval'd bf16 leaf, so the only ``AsType`` in ``xf @ W.T`` is
+    the promotion of ``W``; with an f32 ``W`` leaf that ``AsType`` vanishes."""
+    model, args = _build_dspark(seed=seed, block_size=block_size, head_bf16=True)
+    W = model.head.weight
+    dim, vocab = int(args.hidden_size), int(args.vocab_size)
+    hidden = mx.random.normal((1, block_size, dim)) * 0.1
+    Wf32 = W.astype(mx.float32)
+    xf = hidden.astype(mx.float32)      # exactly what the trap feeds head()
+    xb = hidden.astype(W.dtype)         # what the fix feeds head()
+    mx.eval(W, Wf32, xf, xb)
+    trap = xf @ W.T                     # f32 @ bf16.T -> promotes W to f32
+    fix = (xb @ W.T).astype(mx.float32)  # bf16 GEMV, f32 logits after (W untouched)
+    ctrl = xf @ Wf32.T                  # control: W already f32 -> no promotion AsType
+    _, trap_ops = count_prims(trap)
+    _, fix_ops = count_prims(fix)
+    _, ctrl_ops = count_prims(ctrl)
+    mx.eval(trap, fix, ctrl)
+    weight_promo = trap_ops.get("AsType", 0) - ctrl_ops.get("AsType", 0)
+
+    def acct(v, d):
+        bf16 = v * d * 2
+        f32w = v * d * 4
+        logits_f32 = block_size * v * 4
+        return {
+            "weight_shape": [v, d],
+            "weight_bytes_bf16": bf16,
+            "trap_weight_promoted_bytes_f32": f32w,
+            "fix_logits_materialized_bytes_f32": logits_f32,
+            # per-cycle weight-related DRAM traffic (W40 model), block_size-independent
+            "trap_traffic_bytes_per_cycle": bf16 + f32w + f32w,  # read bf16 + write f32 + read f32
+            "fix_traffic_bytes_per_cycle": bf16 + logits_f32,    # read bf16 + write tiny f32 logits
+        }
+
+    PROD_VOCAB, PROD_DIM = 129280, 5120  # released head (W40, artifact safetensors header)
+    return {
+        "block_size": block_size,
+        "trap_out_dtype": str(trap.dtype),
+        "fix_out_dtype": str(fix.dtype),
+        "trap_weight_promotion_astype": int(weight_promo),   # == 1 (proves the promotion)
+        "fix_weight_promotion_astype": int(fix_ops.get("AsType", 0) - 1),  # 0: only logits cast
+        "tiny": acct(vocab, dim),
+        "production": acct(PROD_VOCAB, PROD_DIM),
+    }
+
+
+def _dspark_draft_main(args):
+    """W103 DSpark draft-step census: per-stage primitives / non-view kernels / top
+    ops for ONE draft step (block_size 1) and the full depth-5 draft phase
+    (block_size 5), plus the head-bytes finding (fp32-cast trap vs bf16 fix)."""
+    step = _run_dspark_draft_census(1, seed=args.seed)
+    phase = _run_dspark_draft_census(5, seed=args.seed)
+    head_bytes = _dspark_head_bytes(seed=args.seed, block_size=5)
+
+    def _stage_rows(snap):
+        rows = []
+        for name, st in snap["stages"].items():
+            ops = st["op_types"]
+            rows.append({
+                "stage": name,
+                "group": _DRAFT_STAGE_GROUP.get(name, "other"),
+                "calls": st["count_per_token"],
+                "primitives": st["primitives_per_token"],
+                "nonview": _nonview(ops),
+                "top_ops": Counter(ops).most_common(4),
+                "op_types": ops,
+            })
+        return rows
+
+    def _print_table(title, snap):
+        rows = _stage_rows(snap)
+        by_group = {}
+        for r in rows:
+            by_group.setdefault(r["group"], []).append(r)
+        print("=" * 92)
+        print(title)
+        print("=" * 92)
+        hdr = f"{'stage':<24}{'calls':>6}{'prim':>7}{'nonview':>9}   top ops (label:count)"
+        print(hdr)
+        print("-" * len(hdr))
+        gtot_p = gtot_nv = 0
+        for g in _DRAFT_GROUP_ORDER:
+            grp = by_group.get(g)
+            if not grp:
+                continue
+            gp = sum(r["primitives"] for r in grp)
+            gnv = sum(r["nonview"] for r in grp)
+            gtot_p += gp
+            gtot_nv += gnv
+            for r in grp:
+                tops = " ".join(f"{op}:{n}" for op, n in r["top_ops"])
+                print(f"{r['stage']:<24}{r['calls']:>6.0f}{r['primitives']:>7.0f}"
+                      f"{r['nonview']:>9.0f}   {tops}")
+            print(f"  {'-> group ' + g:<22}{'':>6}{gp:>7.0f}{gnv:>9.0f}")
+        print("-" * len(hdr))
+        print(f"{'TOTAL / draft cycle':<24}{'':>6}{gtot_p:>7.0f}{gtot_nv:>9.0f}")
+        return gtot_p, gtot_nv
+
+    p1, nv1 = _print_table(
+        "ONE DSpark draft step (block_size=1) -- primitives/non-view per stage, eager", step)
+    print()
+    p5, nv5 = _print_table(
+        "Full depth-5 DSpark draft phase (block_size=5) -- primitives/non-view per stage, eager",
+        phase)
+    print()
+    print(f"per-cycle FIXED vs per-step SCALING (block1 -> block5):")
+    print(f"  total primitives:  {p1:.0f} (step) -> {p5:.0f} (phase)   "
+          f"scaling {p5 - p1:.0f} over +4 draft rows ({(p5 - p1) / 4:.1f}/added row)")
+    print(f"  non-view kernels:  {nv1:.0f} (step) -> {nv5:.0f} (phase)   "
+          f"scaling {nv5 - nv1:.0f} over +4 rows")
+    print()
+    print("HEAD BYTES per draft cycle (shared trunk output head, W40 fp32-cast trap):")
+    hb = head_bytes
+    print(f"  trap weight-promotion AsType (proof, tiny): {hb['trap_weight_promotion_astype']} "
+          f"(control with f32 weight: {hb['fix_weight_promotion_astype']})")
+    print(f"  tiny head  {hb['tiny']['weight_shape']}: "
+          f"bf16 {hb['tiny']['weight_bytes_bf16']} B -> trap f32 temp "
+          f"{hb['tiny']['trap_weight_promoted_bytes_f32']} B; fix materializes only "
+          f"{hb['tiny']['fix_logits_materialized_bytes_f32']} B of f32 logits")
+    pr = hb["production"]
+    gib = 1024 ** 3
+    print(f"  PRODUCTION head {pr['weight_shape']} (bf16, released artifact):")
+    print(f"    trap: promotes bf16 {pr['weight_bytes_bf16'] / gib:.3f} GiB weight -> f32 "
+          f"{pr['trap_weight_promoted_bytes_f32'] / gib:.3f} GiB temp EVERY cycle")
+    print(f"    trap DRAM traffic/cycle {pr['trap_traffic_bytes_per_cycle'] / gib:.3f} GiB "
+          f"vs fix {pr['fix_traffic_bytes_per_cycle'] / gib:.3f} GiB "
+          f"({pr['trap_traffic_bytes_per_cycle'] / pr['fix_traffic_bytes_per_cycle']:.1f}x)")
+    print(f"    (block_size-independent: weight traffic dominates the {hb['block_size']} draft rows)")
+
+    receipt = {
+        "census": "dspark_draft_step",
+        "flag": {"W103": "MTPLX_DSV41_DRAFT_HEAD_BF16"},
+        "seed": args.seed,
+        "mlx_version": mx.__version__,
+        "draft_compile": "off",
+        "one_step_block1": step,
+        "full_phase_block5": phase,
+        "step_group_totals": {"primitives": p1, "nonview": nv1},
+        "phase_group_totals": {"primitives": p5, "nonview": nv5},
+        "head_bytes": head_bytes,
+    }
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
+_ATTN_CORE_VIEW_OPS = {"Reshape", "Flatten", "Unflatten", "ExpandDims", "Broadcast",
+                       "Transpose", "Squeeze", "Slice", "StopGradient", "Arange"}
+
+
+def _kern(counter):
+    return sum(v for k, v in counter.items() if k not in _ATTN_CORE_VIEW_OPS)
+
+
+def _attn_core_main(args):
+    """W97 attention-core dispatch census: the selected-key core (QK + mask + sink
+    softmax + PV over the gathered [b,s,k,hd] operand) at the REAL decode geometry,
+    eager vs the fixed-shape ``mx.compile`` tape (MTPLX_DSV41_ATTN_CORE_COMPILE), and
+    the K29-fused-kernel reference count.  Primitive count is shape-independent, so
+    the tiny model's per-op count equals the artifact's -- this uses the real dims
+    directly for clarity."""
+    geoms = {
+        "compress modes (k=window128+topk512=640)": (1, 1, 64, 512, 640),
+        "swa_only (k=window 128)": (1, 1, 64, 512, 128),
+    }
+    print("=" * 82)
+    print("W97 attention-CORE dispatch census -- selected-key core, real decode dims")
+    print("eager vs fixed-shape mx.compile (MTPLX_DSV41_ATTN_CORE_COMPILE); "
+          "K29 kernel = 1 dispatch")
+    print("=" * 82)
+    receipt = {"census": "attn_core", "mlx_version": mx.__version__, "geometries": {}}
+    for label, (b, s, H, hd, k) in geoms.items():
+        mx.random.seed(args.seed)
+        q = mx.random.normal((b, s, H, hd)) * 0.05
+        KVg = mx.random.normal((b, s, k, hd)) * 0.05
+        valid = mx.random.uniform(shape=(b, s, k)) > 0.1
+        sink = mx.random.normal((H,)) * 0.5
+        mx.eval(q, KVg, valid, sink)
+        scale = hd ** -0.5
+        dv41._ATTN_CORE_COMPILED.clear()
+        o_e = dv41._attn_core_impl(q, KVg, valid, sink, scale)
+        ne, ope = count_prims(o_e)
+        o_c = dv41._attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, sink)
+        nc, opc = count_prims(o_c)
+        mx.eval(o_e, o_c)
+        maxd = float(mx.max(mx.abs(o_e - o_c)).item())
+        print(f"\n-- {label} --")
+        print(f"  eager    : {ne:3d} graph prims, {_kern(ope):2d} non-view kernels  {dict(ope)}")
+        print(f"  compiled : {nc:3d} graph prims, {_kern(opc):2d} non-view kernels  {dict(opc)}")
+        print(f"  K29 fused: 1 dispatch (score+mask+softmax+PV in one metal_kernel; "
+              f"GPU-only) -- SHELVED: measured -38% at 1K (window-27)")
+        print(f"  compiled vs eager: prims -{ne - nc}, kernels -{_kern(ope) - _kern(opc)}; "
+              f"max|Δ| {maxd:.2e} (ROUNDING-CLASS, not byte-identical)")
+        receipt["geometries"][label] = {
+            "shape": {"b": b, "s": s, "H": H, "hd": hd, "k": k},
+            "eager": {"prims": ne, "kernels": _kern(ope), "ops": dict(ope)},
+            "compiled": {"prims": nc, "kernels": _kern(opc), "ops": dict(opc)},
+            "k29_fused_dispatches": 1,
+            "max_abs_delta": maxd,
+        }
+    print("\nverdict: K29 = 1 dispatch but measured -38% at 1K (decode_attn_kernel 3.71 "
+          "vs stack_a 6.01 tok/s, window-27, SHELVED, Delta ~1e-3 bf16-class); the "
+          "mx.compile core (~8 kernels, Delta 9.3e-10 f32-reassociation) is the unmeasured "
+          "candidate -- the fewer-kernels-lose-anyway lesson (dispatch count is not the win).")
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
+def _attn_proj_regions(seed=1):
+    """qkv-prep and out-prep non-view kernel counts (+ op dicts) on a tiny SIMPLE
+    (reuse) layer, eager vs the K22-compiled tape vs the W101 fused metal_kernels.
+    Primitive count is shape-independent, so these equal the artifact's per-layer
+    counts (real dims annotated in the doc)."""
+    import os
+    from mtplx.models.deepseek_v41 import (
+        _rmsnorm, _rope_last, _cos_sin, _lin_arrays, _attn_qkv_prep, _attn_out_prep,
+    )
+    os.environ["MTPLX_DSV41_ATTN_FUSED_PROJ"] = "0"
+    model, args = _build(seed=seed, engram=False)
+    attn = model.model.layers[6].attn         # ratio-1, non-source -> simple (reuse)
+    b, s, H, hd = 1, 1, attn.n_heads, attn.head_dim
+    x = 0.1 * mx.random.normal((1, 1, attn.dim))
+    qcos, qsin = _cos_sin(attn.inv_freq, mx.array([5]))
+    o = 0.1 * mx.random.normal((b, s, H, hd))
+    mx.eval(x, qcos, qsin, o)
+
+    def K(*outs):
+        n, ops = count_prims(*outs)
+        return _kern(ops), dict(ops)
+
+    # --- qkv-prep ---
+    qr = _rmsnorm(attn.wq_a(x), attn.q_norm_weight, attn.eps)
+    q = _rope_last(attn.wq_b(qr).reshape(b, s, H, hd), qcos, qsin)
+    kv = _rope_last(_rmsnorm(attn.wkv(x), attn.kv_norm_weight, attn.eps), qcos, qsin)
+    qkv_e = K(q, qr, kv)
+    with _attn_flag(True, 8):
+        qc = _attn_qkv_prep(attn)(
+            x, qcos, qsin, attn.q_norm_weight, attn.kv_norm_weight,
+            *_lin_arrays(attn.wq_a), *_lin_arrays(attn.wq_b), *_lin_arrays(attn.wkv))
+        qkv_k = K(*qc)
+    qkv_f = K(*attn._qkv_prep_fused(x, qcos, qsin, b, s, H, hd))
+
+    # --- out-prep ---
+    oo = _rope_last(o, qcos, qsin, inverse=True).reshape(b, s, attn.n_groups, -1)
+    out_e = K(attn.wo_b(attn._o_lora_down(oo).reshape(b, s, -1)))
+    with _attn_flag(True, 8):
+        out_k = K(_attn_out_prep(attn)(
+            o, qcos, qsin, attn._o_lora_dense_weight(), *_lin_arrays(attn.wo_b)))
+    out_f = K(attn._out_prep_fused(o, qcos, qsin, b, s))
+    return {
+        "qkv_prep": {"eager": qkv_e, "k22_compiled": qkv_k, "fused": qkv_f},
+        "out_prep": {"eager": out_e, "k22_compiled": out_k, "fused": out_f},
+    }
+
+
+def _attn_proj_whole_layer(seed=1):
+    """Whole decode-layer non-view kernels per (mode), eager vs the K22-compiled
+    tape, at ONE decode token (per-call = _kern / calls-per-token).  The fused
+    whole-layer is ASSEMBLED (K22 - K22 regions + fused regions); the fused path is
+    GPU-only so it cannot be evaluated in this CPU census -- the region counts are
+    measured, the assembly is arithmetic (graph-primitive lower bound)."""
+    import os
+    os.environ["MTPLX_DSV41_SELECTED_KEYS"] = "1"
+
+    def run(flag, wo_a=False, lean=False, core=False):
+        os.environ["MTPLX_DSV41_ATTN_WO_A_CACHE"] = "1" if wo_a else "0"
+        os.environ["MTPLX_DSV41_ATTN_LEAN_CASTS"] = "1" if lean else "0"
+        os.environ["MTPLX_DSV41_ATTN_CORE_COMPILE"] = "1" if core else "0"
+        m, a = _build(seed=seed)
+        with _attn_flag(flag, 8):
+            ids = mx.array(np.random.RandomState(0).randint(0, a.vocab_size, size=(1, 12)))
+            cache = m.make_cache()
+            mx.eval(m(ids, cache=cache, prefill_chunk=0))
+            with _census_session() as probe:
+                with _stime.frame():
+                    lg = m(mx.array([[3]]), cache=cache)
+                    mx.eval(mx.argmax(lg[:, -1, :], axis=-1))
+            snap = probe.snapshot()
+        out = {}
+        for name, st in snap["stages"].items():
+            if name.startswith("attn.") and "." not in name[5:]:
+                c = max(st["count_per_token"], 1)
+                out[name] = _kern(st["op_types"]) / c
+        return out
+
+    return {"eager": run(False), "k22": run(True)}
+
+
+def _attn_proj_main(args):
+    """W101 fused projection-chain dispatch census: the qkv-prep / out-prep GLUE
+    (rmsnorm + interleaved-RoPE + head/group layout between the kept quantized
+    matmuls and the o-LoRA matmul) collapsed to fused metal_kernels."""
+    regions = _attn_proj_regions(seed=args.seed)
+    whole = _attn_proj_whole_layer(seed=args.seed)
+    # core reference (from _attn_core_main geometry): eager / compile / K29
+    core = {"eager": 13, "compile": 8, "k29": 1}
+
+    print("=" * 82)
+    print("W101 fused PROJECTION-CHAIN dispatch census (tiny real-structure; counts")
+    print("are shape-independent -> equal the artifact's).  Non-view graph primitives")
+    print("= a LOWER BOUND on Metal dispatches (Concatenate/Slice/reduction copies).")
+    print("=" * 82)
+    for region in ("qkv_prep", "out_prep"):
+        r = regions[region]
+        print(f"\n-- {region} --")
+        for cfg in ("eager", "k22_compiled", "fused"):
+            k, ops = r[cfg]
+            print(f"  {cfg:14s}: {k:3d} non-view kernels  {ops}")
+        print(f"  fused vs K22-compiled: -{r['k22_compiled'][0] - r['fused'][0]} "
+              f"kernels (vs eager: -{r['eager'][0] - r['fused'][0]})")
+
+    print("\n-- attention core (from --attn-core; separate lever, W101 is independent) --")
+    print(f"  eager {core['eager']} / mx.compile {core['compile']} / K29 fused {core['k29']} "
+          "dispatch.  Window-40 in-model: core ~= 0 ms (do not rely on K29 for the win).")
+
+    qkv_f = regions["qkv_prep"]["fused"][0]
+    out_f = regions["out_prep"]["fused"][0]
+    qkv_k = regions["qkv_prep"]["k22_compiled"][0]
+    out_k = regions["out_prep"]["k22_compiled"][0]
+    print("\n-- whole decode layer (per-call non-view kernels, 1 token) --")
+    print(f"  {'mode':10s} {'eager':>7} {'K22':>7} {'K22+fused':>10} {'+K29 core':>10}")
+    receipt = {"census": "attn_proj", "mlx_version": mx.__version__,
+               "regions": {k: {c: {"kernels": v[c][0], "ops": v[c][1]} for c in v}
+                           for k, v in regions.items()},
+               "core_ref": core, "whole_layer": {}}
+    for mode in sorted(whole["k22"]):
+        e = whole["eager"].get(mode, 0.0)
+        k = whole["k22"][mode]
+        # fused-proj replaces the K22 qkv/out tapes with the fused kernels (core
+        # unchanged); +K29 additionally collapses the core (~13 -> 1).
+        fused = k - qkv_k - out_k + qkv_f + out_f
+        fused_k29 = fused - core["eager"] + core["k29"]
+        m = mode.split(".")[1]
+        print(f"  {m:10s} {e:7.0f} {k:7.0f} {fused:10.0f} {fused_k29:10.0f}")
+        receipt["whole_layer"][m] = {"eager": e, "k22": k,
+                                     "k22_fused": fused, "k22_fused_k29": fused_k29}
+    print("\nverdict: fused-proj collapses the SIMPLE-layer projection chains from "
+          f"{qkv_k + out_k} (K22) to {qkv_f + out_f} dispatches (qkv 3 qmm + 3 fused; "
+          "out 2 matmul + 1 fused).  The whole-layer <=25 target needs the core (K29) "
+          "AND the out-of-scope structural ops (gather/window-idx/cos-sin/cache-append) "
+          "collapsed too; fused-proj's scope is the projection chains.")
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -703,16 +1172,37 @@ def main():
                     help="census the DSpark-DIRECT draft block (K33, W65) instead of "
                          "the backbone decode: primitives per draft cycle per stage, "
                          "before/after MTPLX_DSV41_DRAFT_COMPILE")
+    ap.add_argument("--dspark-draft", action="store_true", dest="dspark_draft",
+                    help="W103 DSpark draft-STEP census: per-stage primitives / "
+                         "non-view kernels / top ops for one draft step (block_size 1) "
+                         "and the full depth-5 phase (block_size 5), plus the head "
+                         "fp32-cast-trap byte accounting (MTPLX_DSV41_DRAFT_HEAD_BF16)")
     ap.add_argument("--small-stages", action="store_true", dest="small_stages",
                     help="census the K35/W91 small-stages fusion: per-layer AR-decode "
                          "dispatch count before/after MTPLX_DSV41_SMALL_STAGES_FUSED "
                          "(+ the GPU K3-Sinkhorn-kernel projection)")
+    ap.add_argument("--attn-core", action="store_true", dest="attn_core",
+                    help="census the W97 attention-CORE compile: selected-key core "
+                         "(QK+mask+sink softmax+PV) primitive count eager vs the "
+                         "fixed-shape mx.compile tape (MTPLX_DSV41_ATTN_CORE_COMPILE), "
+                         "at the real decode geometry, + the K29 fused-kernel reference")
+    ap.add_argument("--attn-proj", action="store_true", dest="attn_proj",
+                    help="census the W101 fused PROJECTION-CHAIN kernels: qkv-prep / "
+                         "out-prep non-view kernel counts eager vs the K22-compiled "
+                         "tape vs the fused metal_kernels (MTPLX_DSV41_ATTN_FUSED_PROJ), "
+                         "+ the whole decode-layer before/after")
     args = ap.parse_args()
 
     if args.draft:
         return _draft_main(args)
+    if args.dspark_draft:
+        return _dspark_draft_main(args)
     if args.small_stages:
         return _small_main(args)
+    if args.attn_core:
+        return _attn_core_main(args)
+    if args.attn_proj:
+        return _attn_proj_main(args)
 
     # before = all off (eager); k22 = attention-tape compile only; after = K22 +
     # K24 window-mask memo (the full W45 attention-compile mode).

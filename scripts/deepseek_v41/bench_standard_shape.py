@@ -57,6 +57,7 @@ import os
 import resource
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -484,12 +485,142 @@ def write_receipt(out_dir: Path, receipt: dict) -> Path:
 
 
 def _process_rss_bytes() -> int:
-    """Resident set size of this process. macOS ru_maxrss is bytes, Linux KiB."""
+    """LIFETIME peak RSS of this process (``ru_maxrss``, a high-water mark). macOS
+    reports bytes, Linux KiB. This is NOT the current footprint -- use
+    :func:`_phys_footprint_bytes` for a point-in-time (bracketed-window) figure."""
 
     maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return int(maxrss)
     return int(maxrss) * 1024  # Linux reports KiB
+
+
+def _phys_footprint_bytes() -> int:
+    """The CURRENT process footprint in bytes (W106 MEDIUM-2): ``phys_footprint``
+    (falling back to ``resident_size``) from mach ``task_info`` via
+    ``mtplx.deepseek_v41_memory_profile.process_rss_snapshot`` -- a point-in-time
+    figure the 1 Hz sampler can bracket over prefill+decode, unlike the lifetime
+    ``ru_maxrss``. Off darwin / on any failure, falls back to ``ps`` RSS."""
+
+    try:
+        from mtplx.deepseek_v41_memory_profile import process_rss_snapshot
+
+        snap = process_rss_snapshot()
+        fp = snap.get("phys_footprint_bytes") or snap.get("resident_bytes")
+        if fp:
+            return int(fp)
+    except Exception:
+        pass
+    # Fallback: `ps -o rss=` for the current process (KiB -> bytes).
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-o", "rss=", "-p", str(os.getpid())],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    return int(out) * 1024 if out.isdigit() else 0
+
+
+def _vm_stat_count(line: str) -> int:
+    """Parse the trailing page count off one ``vm_stat`` line (``123456.``)."""
+
+    tok = line.split()[-1].rstrip(".") if line.split() else ""
+    return int(tok) if tok.isdigit() else 0
+
+
+def _system_used_bytes() -> int:
+    """System-wide used physical memory in bytes, the SAME signal the
+    ``gpu_window.sh`` phase-4 guard aborts on: ``(wired down + anonymous +
+    occupied-by-compressor) pages * page size`` from ``vm_stat``.  Anonymous (not
+    active) is deliberate -- active includes the file-backed page cache the 269 GiB
+    mmap'd expert bank fills, which the OS reclaims on demand.  Returns 0 off
+    macOS / on any parse failure (the caller treats 0 as "unknown")."""
+
+    if sys.platform != "darwin":
+        return 0
+    try:
+        out = subprocess.run(
+            ["/usr/bin/vm_stat"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    page = 16384
+    wired = anon = comp = 0
+    for line in out.splitlines():
+        if "page size of" in line:
+            for tok in line.replace(")", "").split():
+                if tok.isdigit():
+                    page = int(tok)
+                    break
+        elif line.startswith("Pages wired down"):
+            wired = _vm_stat_count(line)
+        elif line.startswith("Anonymous pages"):
+            anon = _vm_stat_count(line)
+        elif line.startswith("Pages occupied by compressor"):
+            comp = _vm_stat_count(line)
+    return (wired + anon + comp) * page
+
+
+class _MemorySampler:
+    """Off-hot-path background sampler of process RSS and system used memory.
+
+    A daemon thread reads, every ``interval_s`` (default 1 s), this process's RSS
+    (``psutil`` if importable, else ``ps -o rss=``) and the system-wide used-memory
+    figure :func:`_system_used_bytes` computes (the gpu_window.sh guard's formula),
+    keeping the high-water mark of each.  It touches NO MLX API and holds NO lock,
+    so it never perturbs the decode being measured -- the whole point is that
+    ``peak_gb`` (the MLX allocator peak) omits the Python heap, the expert-reader
+    buffers, and everything else resident, and this catches the real envelope.
+
+    ``start()`` records the system-used baseline (``system_used_at_start_bytes``)
+    and launches the thread; read ``peak_rss_bytes`` / ``peak_system_used_bytes``
+    after ``stop()``.
+    """
+
+    def __init__(self, interval_s: float = 1.0):
+        self._interval = max(0.01, float(interval_s))
+        self._stop = threading.Event()
+        self._thread: "threading.Thread | None" = None
+        self._pid = os.getpid()
+        self.peak_rss_bytes = 0
+        self.peak_system_used_bytes = 0
+        self.system_used_at_start_bytes = 0
+
+    def _read_rss(self) -> int:
+        # W106 MEDIUM-2: sample the CURRENT footprint (phys_footprint via mach
+        # task_info) so the peak is a genuine over-the-window high-water, not the
+        # lifetime ru_maxrss. Falls back to ps inside _phys_footprint_bytes.
+        return _phys_footprint_bytes()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            rss = self._read_rss()
+            if rss > self.peak_rss_bytes:
+                self.peak_rss_bytes = rss
+            used = _system_used_bytes()
+            if used > self.peak_system_used_bytes:
+                self.peak_system_used_bytes = used
+            self._stop.wait(self._interval)
+
+    def start(self) -> "_MemorySampler":
+        self.system_used_at_start_bytes = _system_used_bytes()
+        self.peak_system_used_bytes = self.system_used_at_start_bytes
+        self.peak_rss_bytes = self._read_rss()
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop, name="mem-sampler", daemon=True
+        )
+        self._thread.start()
+        return self
+
+    def stop(self) -> "_MemorySampler":
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=self._interval + 2.0)
+            self._thread = None
+        return self
 
 
 class _MLXMemProbe:
@@ -525,6 +656,56 @@ class _MLXMemProbe:
 
     def rss_bytes(self) -> int:
         return _process_rss_bytes()
+
+    def new_sampler(self, interval_s: float = 1.0) -> "_MemorySampler":
+        """A fresh 1 Hz background RSS + system-used sampler (start/stop it around
+        the timed decode; feed it to :meth:`memory_block`)."""
+
+        return _MemorySampler(interval_s=interval_s)
+
+    def memory_block(self, sampler: "_MemorySampler | None" = None) -> dict:
+        """The receipt ``memory`` block. W106 MEDIUM-2 decomposes the process figures
+        into three DISTINCT, single-meaning keys (no undecomposable ``max()``):
+
+          * ``mlx_peak_gb`` -- the MLX allocator peak of THIS process
+            (``mx.get_peak_memory``), the legacy ``peak_gb``.
+          * ``sampler_peak_rss_gb`` -- the 1 Hz sampler's peak CURRENT footprint
+            (``phys_footprint``, mach) BRACKETED over prefill+decode; None when no
+            sampler ran.
+          * ``ru_maxrss_gb`` -- the process LIFETIME peak RSS (``ru_maxrss``), which
+            also spans model load and earlier arms.
+          * ``process_peak_rss_gb`` -- the process peak over the RUN: the sampler
+            peak when a sampler ran, else ``ru_maxrss`` (documented fallback).
+          * ``system_used_*`` -- the whole-box used-memory envelope the gpu_window.sh
+            guard aborts on.
+        All values are GiB (bytes / 2**30)."""
+
+        mlx_peak = int(self.peak_bytes())
+        ru_maxrss = int(_process_rss_bytes())
+        sampled_rss = int(sampler.peak_rss_bytes) if sampler is not None else None
+        # W106 LOW: fall back to ru_maxrss when the sampler produced NO peak (None,
+        # or 0 because it never got a reading), so process_peak_rss_gb is never a
+        # misleading 0.0.  sampler_peak_rss_gb still reports the sampler's own value.
+        process_peak_rss = sampled_rss if sampled_rss else ru_maxrss
+        system_used_peak = (
+            int(sampler.peak_system_used_bytes) if sampler is not None else 0
+        )
+        system_used_start = (
+            int(sampler.system_used_at_start_bytes) if sampler is not None else 0
+        )
+        return {
+            "mlx_peak_gb": mlx_peak / GIB,
+            "sampler_peak_rss_gb": (
+                None if sampled_rss is None else sampled_rss / GIB
+            ),
+            "ru_maxrss_gb": ru_maxrss / GIB,
+            "process_peak_rss_gb": process_peak_rss / GIB,
+            "system_used_peak_gb": system_used_peak / GIB,
+            # W106 LOW: renamed from system_used_at_start_gb -- this is the box used
+            # baseline at DECODE start (post-load, when the sampler starts), distinct
+            # from the budget derivation's pre-load budget_system_used_at_start_gb.
+            "system_used_at_decode_start_gb": system_used_start / GIB,
+        }
 
 
 class _GatherProbe:

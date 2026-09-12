@@ -833,23 +833,23 @@ class ExpertSlotPool:
                     transient.append(_PhysicalSlot(label, buffer))
                     allocated += self._exemplar_record_bytes
             self._transient = tuple(transient)
-            self._prefetch: dict[tuple[int, int], _PhysicalSlot] = {}
-            if plan.prefetch_slots_per_layer:
+            # W93: ONE shared prefetch ring across all layers (like the transient
+            # pool), keyed by slot index. A ring slot holds any layer's uniform
+            # record (the ring is forbidden for mixed banks), so it sizes to
+            # ``prefetch_ring_slots`` records TOTAL, not per-layer.
+            self._prefetch: dict[int, _PhysicalSlot] = {}
+            if plan.prefetch_ring_slots:
                 if self.cache_scope == "global":
                     raise ExpertSlotError(
                         "the prefetch ring requires layer cache scope"
                     )
-                for layer in spec.routed_layer_indices:
-                    if layer in island_set:
-                        continue
-                    record_bytes = self._record_bytes_for_layer(layer)
-                    for slot_index in range(plan.prefetch_slots_per_layer):
-                        label = f"layer-{layer}-prefetch-{slot_index}"
-                        buffer = self._allocate_buffer(label, record_bytes)
-                        self._prefetch[(layer, slot_index)] = _PhysicalSlot(
-                            label, buffer
-                        )
-                        allocated += record_bytes
+                for slot_index in range(plan.prefetch_ring_slots):
+                    label = f"global-prefetch-{slot_index}"
+                    buffer = self._allocate_buffer(
+                        label, self._exemplar_record_bytes
+                    )
+                    self._prefetch[slot_index] = _PhysicalSlot(label, buffer)
+                    allocated += self._exemplar_record_bytes
         except Exception:
             self._persistent.clear()
             self._transient = ()
@@ -1227,7 +1227,8 @@ class ExpertSlotPool:
         if 0 <= transient_index < len(self._transient):
             return self._transient[transient_index]
         prefetch_index = transient_index - len(self._transient)
-        prefetch_slot = self._prefetch.get((layer, prefetch_index))
+        # W93: shared ring keyed by slot index (any layer's uniform record).
+        prefetch_slot = self._prefetch.get(prefetch_index)
         if prefetch_slot is None:
             raise ExpertSlotError("transient slot is outside the memory plan")
         return prefetch_slot

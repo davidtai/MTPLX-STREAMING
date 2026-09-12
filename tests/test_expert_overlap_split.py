@@ -580,3 +580,31 @@ def test_overlap_telemetry_stays_zero_with_knob_off(tmp_path: Path) -> None:
         assert metrics["overlap_exposed_wait_ns"] == 0
     finally:
         runtime.close()
+
+
+def test_split_route_overlap_on_single_pool_multirow(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """W95f: the v2 composition is single scan-resistant pool + overlap_miss_reads.
+    With the single pool armed (as MTPLX_DSV41_RUNNER=v2 does) AND overlap on, a
+    multi-row DECODE route with misses still submits ONE batched miss part and
+    streams every requested expert -- the single pool does not regress the coalesced
+    read path the 256-step v2 arm relies on."""
+    monkeypatch.setenv("MTPLX_DSV41_SINGLE_SLOT_POOL", "1")
+    root, spec, _manifest, manifest_path, _expected = _overlap_artifact(
+        tmp_path, expert_count=6, top_k=4
+    )
+    runtime = _open_overlap_runtime(root, spec, manifest_path, overlap=True)
+    try:
+        assert runtime._single_slot_pool is True  # armed (cache_scope == layer)
+        with runtime.begin_split_route(1, [0, 1, 2, 3], phase="decode") as pending:
+            assert len(pending._miss_futures) == 1  # ONE batched miss part
+            readies = _drain_split_route(pending)
+        assert len(readies) == 1
+        assert set(readies[0].plan.misses) == {0, 1, 2, 3}
+        metrics = runtime.slots.metrics.as_dict()
+        assert metrics["batched_miss_parts"] == 1
+        assert metrics["batched_miss_records"] == 4
+        assert metrics["load_failures"] == 0
+    finally:
+        runtime.close()

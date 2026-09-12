@@ -3218,6 +3218,36 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # W87 (appended): single-slot pool lever (MTPLX_DSV41_SINGLE_SLOT_POOL) -- keep
     # the served-log snapshot a superset of ab_decode_env_levers.ALL_LEVER_ENVS.
     "MTPLX_DSV41_SINGLE_SLOT_POOL",
+    # W93: gate-oracle one-layer-ahead expert prefetch (width k + target floor).
+    "MTPLX_DSV41_GATE_PREFETCH",
+    "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER",
+    # W107 (appended -- coordinate with any concurrent list extension): the bounded/
+    # preallocated KV master switch + its preallocation cap (MAXKV is server-plumbed
+    # from max_live_kv_tokens below, mirroring MTPLX_CONTEXT_WINDOW_TOKENS).
+    "MTPLX_DSV41_KV_BOUNDED",
+    "MTPLX_DSV41_KV_BOUNDED_MAXKV",
+    # W95 / W104: the served path must also stamp the runner + draft-head-bf16
+    # levers in its log snapshot (drift guard: superset of ALL_LEVER_ENVS).
+    # Appended at the end.
+    "MTPLX_DSV41_RUNNER",
+    "MTPLX_DSV41_DRAFT_HEAD_BF16",
+    # W97 / W99 / W101 (appended -- coordinate with any concurrent list extension):
+    # the decode-attention levers ab_decode_env_levers added to ALL_LEVER_ENVS at the
+    # w97/w101 merges (wo_a f32 cache + fixed-shape core compile + leaned casts + the
+    # K36 fused projection-chain kernels).  Kept here so the served-log snapshot stays
+    # a superset of ALL_LEVER_ENVS (the W46/W90 drift guard).
+    "MTPLX_DSV41_ATTN_WO_A_CACHE",
+    "MTPLX_DSV41_ATTN_CORE_COMPILE",
+    "MTPLX_DSV41_ATTN_LEAN_CASTS",
+    "MTPLX_DSV41_ATTN_FUSED_PROJ",
+    # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
+    # in-place write was reverted to slice_update + a donation gate), so it is gone from
+    # ALL_LEVER_ENVS and therefore removed here too -- the superset invariant holds.
+    # NOTE (W110): MTPLX_DSV41_VERIFY_RECORD_HASHES is intentionally NOT here. The
+    # served profile builder (expert_profiles.build_expert_streaming_config) does not
+    # read it, so it would be a DEAD served lever; it is a bench-only diagnostic env
+    # (see scripts/deepseek_v41/ab_decode_env_levers.py) and is likewise absent from
+    # ALL_LEVER_ENVS, so the W90 superset drift guard still holds.
 )
 
 
@@ -3226,6 +3256,16 @@ def _dsv41_resolved_lever_env(
 ) -> "OrderedDict[str, str | None]":
     """The resolved DeepSeek-V4.1 lever env (value or ``None`` = unset), ordered."""
     return OrderedDict((key, environ.get(key)) for key in _DSV41_LEVER_ENV_KEYS)
+
+
+def _plumb_kv_bounded_maxkv(max_live_kv_tokens: int) -> None:
+    """W107 (review HIGH-2 / MEDIUM-B): HARD-SET the bounded-KV preallocation cap env
+    from the authoritative ``max_live_kv_tokens`` (the streamed runtime's hard live-KV
+    ceiling), so a stale ``MTPLX_DSV41_KV_BOUNDED_MAXKV`` (shell / profile / earlier ab
+    run) never survives -- smaller would fail ``assert_can_admit`` on legit requests,
+    larger would over-preallocate.  Mirrors ``MTPLX_CONTEXT_WINDOW_TOKENS``; env is the
+    plumbing because ``mlx_lm.make_prompt_cache(model)`` has no handle for a parameter."""
+    os.environ["MTPLX_DSV41_KV_BOUNDED_MAXKV"] = str(int(max_live_kv_tokens))
 
 
 def _format_dsv41_lever_env(resolved: Mapping[str, str | None]) -> str:
@@ -3859,6 +3899,18 @@ class ServerState:
             self.context_window = min(
                 int(self.context_window), _max_live_kv_tokens
             )
+            # W107 (review HIGH-2 / MEDIUM-B): plumb the bounded-KV preallocation cap
+            # from the streamed runtime's hard live-KV ceiling, so a served
+            # MTPLX_DSV41_KV_BOUNDED run preallocates every KV lane to max_live_kv_tokens
+            # (the ab harness stamps this from --max-kv; the server had no path, so
+            # bounded lanes fell back to geometric growth).  Env is the plumbing for the
+            # SAME reason as MTPLX_CONTEXT_WINDOW_TOKENS below: make_cache reaches the
+            # cache through mlx_lm.make_prompt_cache(model) with no handle to pass a
+            # parameter.  HARD-SET (not setdefault): max_live_kv_tokens is authoritative,
+            # so a stale MTPLX_DSV41_KV_BOUNDED_MAXKV from a shell/profile/earlier ab run
+            # must NOT survive (smaller -> legit requests fail assert_can_admit; larger
+            # -> over-preallocation), exactly like MTPLX_CONTEXT_WINDOW_TOKENS.
+            _plumb_kv_bounded_maxkv(_max_live_kv_tokens)
         if (
             scheduler_config.mode == SchedulerMode.MTP_BATCH
             and self.mtp_batch_lane is not None

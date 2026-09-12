@@ -121,14 +121,31 @@ def _load_ab():
     return mod
 
 
+class _Sampler:
+    # W106: no-op stub for the off-hot-path RSS/system-used sampler the generation
+    # starts/stops around itself.
+    def start(self):
+        return None
+
+    def stop(self):
+        return None
+
+
 class _MemProbe:
-    """Minimal probe: ``_generate_dspark`` only calls reset_peak()/peak_bytes()."""
+    """Minimal probe for the ab harness: reset_peak()/peak_bytes() plus the W106
+    off-hot-path sampler hooks new_sampler()/memory_block()."""
 
     def reset_peak(self):
         pass
 
     def peak_bytes(self):
         return 0
+
+    def new_sampler(self):
+        return _Sampler()
+
+    def memory_block(self, sampler):
+        return {}
 
 
 def test_ab_generate_dspark_end_to_end_with_prefill_callback():

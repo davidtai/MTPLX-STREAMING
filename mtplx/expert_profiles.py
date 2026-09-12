@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -382,6 +383,28 @@ def build_expert_streaming_config(
         **profile.config,
         **normalized_overrides,
     }
+    # W93 (review CRITICAL): the served DeepSeek-V4.1 path never carries the
+    # loader's env hook, so arm the GLOBAL gate-oracle prefetch ring here when
+    # MTPLX_DSV41_GATE_PREFETCH is set. The env is AUTHORITATIVE (max(existing,
+    # 2*k)): the profile seeds an explicit prefetch_slots=0, which must not disable
+    # an armed ring, or the lever measures control-vs-control. Gated to DeepSeek-
+    # V4.1 profiles so the DSV4.1-named env never arms another model's ring (e.g.
+    # hy3's lookahead, which shares prefetch_slots). Off -> values unchanged.
+    if profile.model_key.startswith("deepseek-v41"):
+        from .models.deepseek_v41_loader import resolve_gate_prefetch_ring_slots
+
+        resolved_ring = resolve_gate_prefetch_ring_slots(values.get("prefetch_slots", 0))
+        if resolved_ring:
+            values["prefetch_slots"] = resolved_ring
+        # W95: the served v2 runner arms overlap_miss_reads too (all of a layer's
+        # decode misses issued as ONE part -> higher SSD queue depth; W96 D2).
+        # Byte-identical (scheduling, not math); DSV4.1-gated like the ring; an
+        # explicit profile value wins; off when MTPLX_DSV41_RUNNER is unset.
+        if (
+            os.environ.get("MTPLX_DSV41_RUNNER") == "v2"
+            and "overlap_miss_reads" not in values
+        ):
+            values["overlap_miss_reads"] = True
     config = ExpertStreamingConfig(**values)
     if config.model_key != profile.model_key:
         raise ValueError(
