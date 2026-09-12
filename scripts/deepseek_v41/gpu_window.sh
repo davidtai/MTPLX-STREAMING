@@ -128,7 +128,10 @@ _require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
 # break the arithmetic; refuse either.
 CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"
 _require_int GPU_WINDOW_CHILD_RSS_CAP_BYTES "${CHILD_RSS_CAP_BYTES}" $(( 1024 * 1024 * 1024 )) || exit 2
-RSS_POLL_SECONDS="$(_int_or_default "${GPU_WINDOW_RSS_POLL_SECONDS:-1}" 1 GPU_WINDOW_RSS_POLL_SECONDS)"  # MEDIUM-1: default 1s (streaming grows fast)
+# MEDIUM-1: default 1s (streaming grows fast).  LOW (round 4): REFUSE 0 -- `sleep 0`
+# is a busy-loop that pins a core and inflates the host-encode-sensitive window.
+RSS_POLL_SECONDS="${GPU_WINDOW_RSS_POLL_SECONDS:-1}"
+_require_int GPU_WINDOW_RSS_POLL_SECONDS "${RSS_POLL_SECONDS}" 1 || exit 2
 # W106 MEDIUM-1: the child-tree cap compares `ps` RSS, which UNDERCOUNTS unified
 # Metal memory by ~18 GiB (window 43: tree RSS 51.2 vs system-baseline 69.5), so it
 # could never fire before the (accurate, vm_stat-based) system ceiling. Lower the
@@ -258,15 +261,19 @@ _step_tree_rss() {
 _step_tree_pids() {
   local root="${1:-}"
   [[ -n "${root}" ]] || return 0
+  # MEDIUM-1: emit only pids PRESENT in the ps snapshot.  The old walk seeded the
+  # root unconditionally, so `--selftest tree-pids 999999` (or an already-dead
+  # STEP_PID) printed a bogus pid -> the abort rescan logged false "ORPHAN survived"
+  # ERRORs and KILLed a dead pid.
   "${PS_CMD}" -axo pid=,ppid= 2>/dev/null | awk -v root="${root}" '
-    { pid = $1 + 0; ppid = $2 + 0; kids[ppid] = kids[ppid] " " pid }
+    { pid = $1 + 0; ppid = $2 + 0; present[pid] = 1; kids[ppid] = kids[ppid] " " pid }
     END {
       head = 1; tail = 0; wl[++tail] = root + 0; out = "";
       while (head <= tail) {
         p = wl[head]; head++;
         if (p in seen) continue;
         seen[p] = 1;
-        out = out " " p;
+        if (p in present) out = out " " p;   # only live pids
         if (p in kids) {
           n = split(kids[p], cc, " ");
           for (i = 1; i <= n; i++) if (cc[i] != "") wl[++tail] = cc[i] + 0;
@@ -301,14 +308,18 @@ _resolve_restore_plist() {
 # is already loaded now.  On failure it prints the exact manual command.
 _do_restore() {
   local was_loaded="${1:-0}" discovered="${2:-}"
+  # LOW (round 4): if the service is ALREADY loaded now, there is nothing to
+  # restore -- for BOTH branches (a bootout that failed and never stopped it, or a
+  # retry).  Short-circuit so a spurious "service already loaded" bootstrap failure
+  # never prints a false "may be DOWN".
+  if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
+    log "restore: ${QWEN_LABEL} already loaded; nothing to do"
+    return 0
+  fi
   local want=0
   if (( was_loaded == 1 )); then
     want=1
   elif [[ "${RESTORE_QWEN_ALWAYS}" == "1" ]]; then
-    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
-      log "restore: ${QWEN_LABEL} already loaded; nothing to do (RESTORE_QWEN_ALWAYS=1)"
-      return 0
-    fi
     want=1
     log "restore: ${QWEN_LABEL} was NOT loaded at entry, but GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 -> bootstrapping anyway (guards against a cascaded prior failure)"
   else
@@ -497,6 +508,16 @@ fi
 # (_GPU_WINDOW_STEP_TAG), inherited by every descendant and UNCHANGED by
 # reparenting; `_pids_with_tag` finds them via `ps -E` regardless of ppid.  The
 # grep uses the [x]-bracket trick so the grep/awk pipeline never matches itself.
+#
+# W106 MEDIUM-3 LIMITATION: `ps -E` does NOT expose the environment of macOS
+# PLATFORM binaries (SIP-signed: /bin/bash, /bin/sleep, /usr/bin/tee, ...), so a
+# reparented platform-binary descendant is INVISIBLE to this tag scan (verified:
+# a tagged /bin/sleep shows no env; a tagged .venv python does).  It reliably
+# catches the descendant that MATTERS -- the venv python holding the model -- so
+# KEEP THE STEP A SINGLE venv-python process (no `python ... | tee`, no wrapping
+# `bash -c` that itself outlives the python) to guarantee the heavy orphan is
+# reaped.  The ppid tree + post-KILL rescan still catch non-reparented platform
+# children; the vm_stat SYSTEM ceiling is the backstop for anything missed.
 _pids_with_tag() {
   [[ -n "${_STEP_TAG:-}" ]] || return 0
   local pat="_GPU_WINDOW_STEP_TAG=[${_STEP_TAG:0:1}]${_STEP_TAG:1}"
@@ -537,14 +558,20 @@ _kill_step_tree() {
     done
   fi
   # Re-scan: catch anything that forked/reparented AFTER the snapshot (the window-42
-  # orphan). Log each survivor as an ORPHAN and KILL it.
+  # orphan). Log each survivor as an ORPHAN and KILL it.  MEDIUM-1: re-confirm each
+  # pid is ALIVE (kill -0) before logging/KILLing, so a dead pid never produces a
+  # false "ORPHAN survived" line.
   for _r in 1 2 3; do
     local survivors; survivors="$(_collect_step_pids)"
     [[ -z "${survivors}" ]] && break
+    local _any=0
     for _p in ${survivors}; do
+      kill -0 "${_p}" 2>/dev/null || continue
+      _any=1
       err "phase 4: ORPHAN survived tree-kill: pid ${_p} ($("${PS_CMD}" -o command= -p "${_p}" 2>/dev/null | tr '\n' ' ' | cut -c1-100)); KILLing"
       kill -KILL "${_p}" 2>/dev/null || true
     done
+    (( _any == 0 )) && break
     sleep 0.3
   done
   [[ -n "${STEP_PID:-}" ]] && { wait "${STEP_PID}" 2>/dev/null || true; }
@@ -581,7 +608,11 @@ restore_qwen() {
 
 teardown() {
   local ec=$?
-  trap - EXIT INT TERM
+  # LOW (round 4): IGNORE further INT/TERM during teardown (do not reset to the
+  # DEFAULT disposition -- a second TERM mid-restore would kill the process and
+  # leave the agent down).  Remove only the EXIT trap so teardown does not re-enter.
+  trap - EXIT
+  trap '' INT TERM
   # W106 item 4: a TERM/INT to the wrapper (or any non-abort exit with the step
   # still running) tree-kills the WHOLE step process tree, not just STEP_PID, so a
   # `bash -c` chain never starts its next step and no python descendant survives.

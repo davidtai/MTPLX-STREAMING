@@ -315,6 +315,21 @@ else
   bad "HIGH-3 child-cap bytes refusal" "rc=${CAP_RC}; log: $(cat "${CAP_LOG}")"
 fi
 
+# 15b. W106 LOW (round 4): GPU_WINDOW_RSS_POLL_SECONDS=0 is REFUSED (a `sleep 0`
+#      busy-loop would pin a core and inflate the host-encode-sensitive window).
+POLL_LOG="${TMP}/poll.log"
+GPU_WINDOW_TEST_MODE=1 \
+MTPLX_GPU_LOCK="${TMP}/poll.lock" \
+GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
+GPU_WINDOW_RSS_POLL_SECONDS=0 \
+  bash "${SCRIPT}" bash -c "true" >"${POLL_LOG}" 2>&1
+POLL_RC=$?
+if [[ "${POLL_RC}" -eq 2 ]] && grep -q "GPU_WINDOW_RSS_POLL_SECONDS=0 is invalid" "${POLL_LOG}"; then
+  ok "LOW: GPU_WINDOW_RSS_POLL_SECONDS=0 REFUSED (exit 2)"
+else
+  bad "LOW poll=0 refusal" "rc=${POLL_RC}; log: $(cat "${POLL_LOG}")"
+fi
+
 # 16. W106 MEDIUM-1: the child cap is lowered by the ps-vs-Metal RSS undercount.
 UC_LOG="${TMP}/undercount.log"
 GPU_WINDOW_TEST_MODE=1 \

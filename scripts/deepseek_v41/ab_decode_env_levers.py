@@ -81,14 +81,14 @@ STANDARD_CELL16K_PROMPT_SHA256 = (
 # Every term lands in the receipt ``memory`` block.  See docs/deepseek-v41/
 # W106_WINDOW_MEMORY_ACCOUNTING.md for the once-only definition of each term.
 #
-# Conservative pre-load estimate of the non-Metal process overhead (Python heap +
-# positional-expert bank read buffers + engram host-side row LRU + tokenizer).
-# The plan limit must be fixed BEFORE the model loads (the loader takes it), so
-# the derivation uses this estimate first, then re-measures the real overhead
-# after load (process RSS - mx active) and lowers the MLX active limit if the
-# measurement exceeds it (two-phase).  Mirrors the W62 profile constant
-# HOST_OVERHEAD_GIB (mtplx.deepseek_v41_memory_profile.HOST_OVERHEAD_GIB = 10).
-DEFAULT_NON_METAL_OVERHEAD_GIB = 10.0
+# Pre-load estimate of the non-Metal process overhead (Python heap + positional-
+# expert bank read buffers + engram host-side row LRU + tokenizer).  The plan limit
+# must be fixed BEFORE the model loads (the loader takes it), so the derivation uses
+# this estimate first, then re-measures the real overhead after load (round-4 MEDIUM-2:
+# the REAL value is ~1-2 GiB; default 3, not 10 -- the plan overshoot is now a
+# separate term, so a 10 GiB overhead + 6 GiB overshoot double-counted and left the
+# plan ~63 GiB / peak ~86 GB, under-using the budget).
+DEFAULT_NON_METAL_OVERHEAD_GIB = 3.0
 # Safety headroom subtracted from the budget (flag --memory-safety-gb).
 DEFAULT_MEMORY_SAFETY_GIB = 3.0
 # W106 HIGH-1 (budget re-review): the MLX allocator PEAK overshoots the plan's
@@ -2150,7 +2150,7 @@ class BudgetTotalDerivation:
         "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
         "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
         "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
-        "kv_estimator", "rss_semantics",
+        "kv_estimator", "rss_semantics", "system_used_live_gb",
     )
 
     def __init__(
@@ -2169,6 +2169,7 @@ class BudgetTotalDerivation:
         plan_limit_gib_effective=None,
         kv_estimator=None,
         rss_semantics="unmeasured",
+        system_used_live_gb=None,
     ):
         self.source = source
         self.budget_total_gb = budget_total_gb
@@ -2190,6 +2191,9 @@ class BudgetTotalDerivation:
         # mx active -> Metal not in phys_footprint, overhead unmeasurable), or
         # "unmeasured" (pre-load / footprint unavailable).
         self.rss_semantics = rss_semantics
+        # HIGH (round 4): the LIVE system-used baseline measured when a pinned plan
+        # is validated (None unless this run pinned a sidecar).
+        self.system_used_live_gb = system_used_live_gb
 
     def replace(self, **changes) -> "BudgetTotalDerivation":
         """A copy with the named fields overridden (dataclasses.replace-style)."""
@@ -2210,7 +2214,7 @@ class BudgetTotalDerivation:
             "non_metal_overhead_gb", "kv_growth_to_max_kv_gb", "safety_gb",
             "plan_overshoot_gib", "floor_gib", "plan_limit_gib",
             "non_metal_overhead_measured_gb", "plan_limit_gib_effective",
-            "rss_semantics",
+            "rss_semantics", "system_used_live_gb",
         }
         return BudgetTotalDerivation(**{k: v for k, v in d.items() if k in fields})
 
@@ -2268,6 +2272,10 @@ class BudgetTotalDerivation:
             "budget_forecast_system_peak_gb": (None if fc is None else round(fc, 4)),
             "budget_floor_gib": round(self.floor_gib, 4),
             "rss_semantics": self.rss_semantics,
+            "budget_system_used_live_gb": (
+                None if self.system_used_live_gb is None
+                else round(self.system_used_live_gb, 4)
+            ),
         }
 
 
@@ -2659,18 +2667,44 @@ def _derived_plan_sidecar_path(args):
     return Path(out).parent / "derived-plan.json"
 
 
-def _write_derived_plan_sidecar(args, bt) -> None:
-    """Persist the derived budget plan so later A/B arms can PIN it (HIGH-2).
-    Atomic (tmp + rename); guarded."""
+def _config_sha(model_path):
+    """A cheap sha256 of the artifact's config.json (keys the artifact without
+    hashing the 269 GiB bank).  None on any failure."""
+    try:
+        raw = (Path(model_path).expanduser() / "config.json").read_bytes()
+        return hashlib.sha256(raw).hexdigest()
+    except (OSError, TypeError):
+        return None
+
+
+def _plan_stamp(args, max_kv) -> dict:
+    """The identity keys stamped into (and re-validated against) a pinned plan
+    sidecar (round-4 HIGH): a pin must NOT be reused across a different model /
+    shape / budget."""
+    return {
+        "model_path": str(getattr(args, "model", "")),
+        "config_sha": _config_sha(getattr(args, "model", None)),
+        "max_kv": int(max_kv) if max_kv is not None else None,
+        "context_tokens": int(getattr(args, "context_tokens", 0) or 0),
+        "budget_total_gb": _budget_total_gib(args),
+    }
+
+
+def _write_derived_plan_sidecar(args, bt, max_kv) -> None:
+    """Persist the derived budget plan + its identity STAMP so later A/B arms can
+    PIN it, and only if it still matches (round-4 HIGH).  Atomic; guarded."""
     path = _derived_plan_sidecar_path(args)
     if path is None or bt is None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = bt.to_plan_dict()
+        payload["_stamp"] = _plan_stamp(args, max_kv)
+        payload["_written_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         payload["_note"] = (
-            "W106 HIGH-2 pinned plan; pass --memory-plan-from this file to later "
-            "A/B arms so every arm uses the SAME plan_limit (reproducible residency)."
+            "W106 pinned plan; pass --memory-plan-from this file to later A/B arms "
+            "in the SAME window (same model/shape/budget) so every arm uses the SAME "
+            "plan_limit. The pin is re-validated (stamp + live over-budget) on load."
         )
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2))
@@ -2681,9 +2715,60 @@ def _write_derived_plan_sidecar(args, bt) -> None:
 
 
 def _load_pinned_plan(path):
-    """Load a BudgetTotalDerivation from a --memory-plan-from sidecar (HIGH-2)."""
+    """Load ``(BudgetTotalDerivation, stamp)`` from a --memory-plan-from sidecar."""
     data = json.loads(Path(path).read_text())
-    return BudgetTotalDerivation.from_plan_dict(data)
+    return BudgetTotalDerivation.from_plan_dict(data), (data.get("_stamp") or {})
+
+
+def _validate_pinned_plan(args, bench, max_kv, bt, stamp):
+    """Round-4 HIGH: refuse a pinned plan (raise ValueError, stage pin_validation)
+    that does NOT match the current run, or whose live footprint would exceed the
+    budget.  Returns the LIVE system-used baseline (GiB) it measured, recorded on
+    the derivation as ``budget_system_used_live_gb``."""
+    cur = _plan_stamp(args, max_kv)
+    mismatches = []
+    for key in ("config_sha", "max_kv", "context_tokens"):
+        want = stamp.get(key)
+        got = cur.get(key)
+        # A stale sidecar without the stamp (want None) is itself a mismatch.
+        if want != got:
+            mismatches.append(f"{key}: sidecar={want!r} run={got!r}")
+    # budget_total only conflicts if the run ALSO passed one and it differs.
+    if cur.get("budget_total_gb") is not None and \
+            stamp.get("budget_total_gb") != cur.get("budget_total_gb"):
+        mismatches.append(
+            f"budget_total_gb: sidecar={stamp.get('budget_total_gb')!r} "
+            f"run={cur.get('budget_total_gb')!r}"
+        )
+    if mismatches:
+        exc = ValueError(
+            "--memory-plan-from sidecar does not match this run; refusing to pin a "
+            "stale plan: " + "; ".join(mismatches)
+            + ". Re-derive with --memory-budget-total-gib in this window."
+        )
+        exc.dsv41_stage = "pin_validation"
+        raise exc
+
+    # Live over-budget check: the pinned plan + the CURRENT live baseline must fit.
+    live_gb = _measure_system_used_at_start_bytes(args, bench) / GIB if bench else 0.0
+    budget = stamp.get("budget_total_gb") or bt.budget_total_gb
+    if budget is not None:
+        forecast = (
+            live_gb + bt.plan_limit_gib + bt.plan_overshoot_gib
+            + bt.non_metal_overhead_gb
+        )
+        if forecast > float(budget):
+            exc = ValueError(
+                f"--memory-plan-from would exceed the budget under the CURRENT live "
+                f"baseline: forecast {forecast:.4g} = live {live_gb:.4g} + plan "
+                f"{bt.plan_limit_gib:.4g} + overshoot {bt.plan_overshoot_gib:.4g} + "
+                f"overhead {bt.non_metal_overhead_gb:.4g} > budget {float(budget):.4g}. "
+                "The box is more loaded than when the plan was derived; free memory "
+                "or re-derive."
+            )
+            exc.dsv41_stage = "pin_validation"
+            raise exc
+    return live_gb
 
 
 def _preflight_memory_plan(args, bench) -> int:
@@ -2700,6 +2785,28 @@ def _preflight_memory_plan(args, bench) -> int:
     baseline.  Both baselines are printed; the real in-window derivation (measured
     after bootout) is authoritative."""
 
+    max_kv = bench.resolve_max_kv(
+        [args.context_tokens], args.decode_tokens, args.max_kv
+    )
+
+    # Round-4 HIGH: if pinning, VALIDATE the pin file here (stamp + live over-budget)
+    # so a stale/over-budget pin is caught BEFORE the guarded window opens.
+    pin_path = getattr(args, "memory_plan_from", None)
+    if pin_path:
+        try:
+            bt, stamp = _load_pinned_plan(pin_path)
+            live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
+        except (ValueError, OSError, json.JSONDecodeError) as exc:
+            print(f"[ab] memory-plan preflight: PIN REFUSED -- {exc}", flush=True)
+            return 3
+        print(
+            f"[ab] memory-plan preflight: PIN OK ({pin_path}); plan_limit "
+            f"{bt.plan_limit_gib:.4g} GiB, live baseline {live_gb:.2f} GiB; "
+            f"{bt.formula()}",
+            flush=True,
+        )
+        return 0
+
     # LOW: a both-set flag error must exit 3, not traceback.
     try:
         budget = _budget_total_gib(args)
@@ -2714,9 +2821,6 @@ def _preflight_memory_plan(args, bench) -> int:
         )
         return 0
 
-    max_kv = bench.resolve_max_kv(
-        [args.context_tokens], args.decode_tokens, args.max_kv
-    )
     used_now_gb = int(bench._system_used_bytes()) / GIB
 
     # Resolve how much the window will free by booting out the resident agent.
@@ -2778,12 +2882,16 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     pin_path = getattr(args, "memory_plan_from", None)
     if pin_path:
-        # HIGH-2: PIN the plan from a sidecar written by an earlier arm, so every
-        # A/B arm uses the SAME plan_limit (no per-process vm_stat drift).
-        bt = _load_pinned_plan(pin_path)
+        # HIGH-2 + round-4 HIGH: PIN the plan from a sidecar an earlier arm wrote, so
+        # every A/B arm uses the SAME plan_limit -- but RE-VALIDATE it (stamp match +
+        # live over-budget) and refuse (exit 3, before load) a stale/over-budget pin.
+        bt, stamp = _load_pinned_plan(pin_path)
+        live_gb = _validate_pinned_plan(args, bench, max_kv, bt, stamp)
+        bt = bt.replace(system_used_live_gb=live_gb)
         print(
             f"[ab] memory plan PINNED from {pin_path}: plan_limit "
-            f"{bt.plan_limit_gib:.4g} GiB ({bt.formula()})",
+            f"{bt.plan_limit_gib:.4g} GiB, live baseline {live_gb:.2f} GiB "
+            f"({bt.formula()})",
             flush=True,
         )
         args._dsv41_budget_total = bt
@@ -2793,7 +2901,7 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
         if bt is not None:
             args._dsv41_budget_total = bt
             override = bt.plan_limit_gib
-            _write_derived_plan_sidecar(args, bt)  # so later arms can pin it
+            _write_derived_plan_sidecar(args, bt, max_kv)  # so later arms can pin it
         else:
             override = getattr(args, "memory_limit_gib", None)
             args._dsv41_budget_total = None
@@ -3958,10 +4066,14 @@ _DIVERGENCE_CONTEXT_CHARS = 200
 def _decode_ids(tok, ids):
     """Decode token ids to text.  Returns ``(text_or_None, error_or_None)``: never a
     SILENT empty string.  Tries the tokenizer's ``decode`` then the underlying HF
-    ``_tokenizer.decode``; a raise records its repr, and an EMPTY result for a
-    non-empty id list is itself recorded as an error (window 43: the decode was
-    skipped entirely because --prompt-ids-file left the tokenizer None; now the
-    caller always supplies an output tokenizer and any failure is loud + recorded)."""
+    ``_tokenizer.decode``; a raise records its repr.
+
+    LOW (round 4): an empty result is only an ERROR when it is a genuine decode
+    failure.  If ``decode(ids)`` is empty but ``decode(ids, skip_special_tokens=
+    False)`` is NON-empty, the ids render only as SPECIAL tokens (e.g. an
+    all-EOS/pad stream) -- a LEGITIMATELY empty decoded text, not a failure: return
+    that with-specials rendering (so the audit shows what was produced) and no
+    error.  Only when BOTH are empty is it recorded as an error."""
 
     if ids is None:
         return None, "no ids"
@@ -3983,8 +4095,15 @@ def _decode_ids(tok, ids):
             continue
         if text:  # non-empty string -> success
             return text, None
-        # An empty result for a non-empty id list is suspicious: record it and try
-        # the next method (never return a silent '').
+        # Empty: distinguish a LEGITIMATE special-tokens-only decode from a broken
+        # one.  If the with-specials rendering is non-empty, the ids are special
+        # tokens -> legit empty; surface that rendering, no error.
+        try:
+            with_specials = fn(ids_int, skip_special_tokens=False)
+        except Exception:
+            with_specials = None
+        if with_specials:
+            return with_specials, None
         last_err = f"{label} returned empty for {len(ids_int)} ids"
     return None, (last_err or "no usable decode method on the tokenizer")
 

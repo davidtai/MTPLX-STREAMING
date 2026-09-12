@@ -181,5 +181,44 @@ else
   ok "orphan reap verified (ppid line not captured, non-fatal)"
 fi
 
+# The abort-a run (a real tree-kill of live pids) must produce NO false ORPHAN
+# lines once the tree is dead (MEDIUM-1: the rescan re-confirms kill -0).
+if ! grep -q "ORPHAN survived tree-kill" "${LOG}"; then
+  ok "MEDIUM-1: abort-a killed the tree cleanly, no false ORPHAN lines"
+else
+  bad "MEDIUM-1 no false ORPHAN on abort-a" "$(grep 'ORPHAN survived' "${LOG}")"
+fi
+
+# =============================================================================
+# W106 MEDIUM-1: _step_tree_pids must emit ONLY present pids (an absent root prints
+# nothing), and a DEAD step (clean fast exit) must be reaped with ZERO false ORPHAN
+# lines and no KILL of a dead pid.
+# =============================================================================
+if [[ -z "$(bash "${SCRIPT}" --selftest tree-pids 999999 | tr -d ' \n')" ]]; then
+  ok "MEDIUM-1: --selftest tree-pids 999999 (absent root) prints nothing"
+else
+  bad "MEDIUM-1 absent root not emitted" "got '$(bash "${SCRIPT}" --selftest tree-pids 999999)'"
+fi
+
+DEAD_LOG="${TMP}/dead.log"
+GPU_WINDOW_TEST_MODE=1 MTPLX_GPU_LOCK="${TMP}/dead.lock" \
+GPU_WINDOW_VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD}" GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
+  bash "${SCRIPT}" bash -c "true" >"${DEAD_LOG}" 2>&1
+DEAD_RC=$?
+if [[ "${DEAD_RC}" -eq 0 ]] && ! grep -q "ORPHAN survived tree-kill" "${DEAD_LOG}"; then
+  ok "MEDIUM-1: a dead step is reaped with ZERO false ORPHAN lines (rc 0)"
+else
+  bad "MEDIUM-1 dead-step zero ORPHAN" "rc=${DEAD_RC}; $(grep 'ORPHAN' "${DEAD_LOG}" || echo none)"
+fi
+
+# W106 LOW (round 4): teardown must IGNORE (not default) INT/TERM so a second
+# signal mid-restore cannot kill it and leave the agent down.  Deterministic source
+# guard for the exact disposition (a behaviour race-test would be flaky).
+if grep -q "trap '' INT TERM" "${SCRIPT}"; then
+  ok "LOW: teardown ignores further INT/TERM (trap '' INT TERM), not reset to default"
+else
+  bad "LOW teardown trap ''" "no \"trap '' INT TERM\" in gpu_window.sh"
+fi
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [[ "${FAIL}" -eq 0 ]]

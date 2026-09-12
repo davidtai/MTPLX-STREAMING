@@ -123,5 +123,20 @@ else
   bad "E: ALWAYS=0 leaves stopped" "rc=${E_RC} bootstrapped='$(_bootstrapped)'; log: $(cat "${TMP}/e.log")"
 fi
 
+# F) LOW (round 4): was_loaded=1 but the service is ALREADY loaded now (a bootout
+#    that failed and never stopped it) -> short-circuit: rc 0, NO bootstrap, NO
+#    false "may be DOWN".
+_reset_state; : > "${TMP}/loaded"   # already up
+GPU_WINDOW_QWEN_PLIST="${CANON}" GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 \
+  bash "${SCRIPT}" --selftest restore-run 1 "${CANON}" >"${TMP}/f.log" 2>&1
+F_RC=$?
+if [[ "${F_RC}" -eq 0 ]] && [[ -z "$(_bootstrapped)" ]] \
+   && grep -q "already loaded; nothing to do" "${TMP}/f.log" \
+   && ! grep -q "may be DOWN" "${TMP}/f.log"; then
+  ok "F: was_loaded=1 + already-loaded -> short-circuit, no bootstrap, no false DOWN"
+else
+  bad "F: was_loaded=1 already-loaded short-circuit" "rc=${F_RC} bootstrapped='$(_bootstrapped)'; log: $(cat "${TMP}/f.log")"
+fi
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [[ "${FAIL}" -eq 0 ]]
