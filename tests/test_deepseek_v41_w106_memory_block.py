@@ -78,8 +78,11 @@ def test_memory_block_has_all_keys_and_process_rss_ge_mlx_peak():
 
     block = probe.memory_block(sampler)
 
+    # W106 MEDIUM-2: three distinct, single-meaning process keys (no max() blob).
     for key in (
         "mlx_peak_gb",
+        "sampler_peak_rss_gb",
+        "ru_maxrss_gb",
         "process_peak_rss_gb",
         "system_used_peak_gb",
         "system_used_at_start_gb",
@@ -90,12 +93,12 @@ def test_memory_block_has_all_keys_and_process_rss_ge_mlx_peak():
     # mlx_peak_gb is exactly the fake allocator peak.
     assert block["mlx_peak_gb"] == (8 * 1024 * 1024) / GIB
 
-    # The core invariant: process RSS peak includes the non-Metal footprint the MLX
-    # peak omits, so it is >= mlx_peak_gb ...
-    assert block["process_peak_rss_gb"] >= block["mlx_peak_gb"]
-    # ... and here, with a tiny fake MLX peak, strictly greater (the ~200 MiB blob
-    # + the interpreter dwarf 8 MiB), so the block is measuring real RSS.
+    # With a sampler, process_peak_rss_gb IS the sampler peak (bracketed), not a
+    # max() with mlx/ru_maxrss.
+    assert block["process_peak_rss_gb"] == block["sampler_peak_rss_gb"]
+    # The sampler caught the ~200 MiB blob, so it dwarfs the 8 MiB fake MLX peak.
     assert block["process_peak_rss_gb"] > block["mlx_peak_gb"]
+    assert block["sampler_peak_rss_gb"] > 0.1  # >100 MiB, the touched blob
 
     # Non-negative envelope figures (system_used is >0 on darwin, 0 elsewhere).
     assert block["system_used_peak_gb"] >= 0.0
@@ -106,18 +109,21 @@ def test_memory_block_has_all_keys_and_process_rss_ge_mlx_peak():
 
 
 def test_memory_block_without_sampler_still_builds():
-    """With no sampler, the block still carries mlx_peak_gb and a process RSS peak
-    (from ru_maxrss) >= it; system-used fields are 0 (unsampled)."""
+    """With no sampler, process_peak_rss_gb falls back to ru_maxrss (lifetime),
+    sampler_peak_rss_gb is None, and system-used fields are 0 (unsampled)."""
     bench = _bench()
     probe = bench._MLXMemProbe(_FakeMx(4 * 1024 * 1024))
     block = probe.memory_block(None)
     assert set(block) == {
         "mlx_peak_gb",
+        "sampler_peak_rss_gb",
+        "ru_maxrss_gb",
         "process_peak_rss_gb",
         "system_used_peak_gb",
         "system_used_at_start_gb",
     }
-    assert block["process_peak_rss_gb"] >= block["mlx_peak_gb"]
+    assert block["sampler_peak_rss_gb"] is None  # no sampler ran
+    assert block["process_peak_rss_gb"] == block["ru_maxrss_gb"]  # documented fallback
     assert block["system_used_peak_gb"] == 0.0
     assert block["system_used_at_start_gb"] == 0.0
 

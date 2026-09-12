@@ -9,85 +9,96 @@ the entire step process tree on abort, and every run persists its full output fo
 a text audit.
 
 Files:
-- `scripts/deepseek_v41/ab_decode_env_levers.py` — the A/B bench (items 3, the
+- `scripts/deepseek_v41/ab_decode_env_levers.py` — the A/B bench (item 3, the
   peak-memory directive, output persistence).
 - `scripts/deepseek_v41/bench_standard_shape.py` — the shared memory probe /
-  sampler (`_MLXMemProbe`, `_MemorySampler`, `_system_used_bytes`); item 2.
+  sampler (`_MLXMemProbe`, `_MemorySampler`, `_system_used_bytes`,
+  `_phys_footprint_bytes`); item 2 + MEDIUM-2.
 - `scripts/deepseek_v41/gpu_window.sh` — the guarded GPU window (items 1, 4).
 
----
+## Units — defined ONCE
+
+- **All flags** that name a memory quantity are **GiB** and end in `-gib`
+  (`--memory-budget-total-gib`, `--memory-safety-gib`, `--non-metal-overhead-gib`,
+  `--memory-budget-floor-gib`). The `-gb` spellings are **deprecated aliases**:
+  their value is **decimal GB** and is converted to GiB at the boundary
+  (`GiB = GB × 1e9 / 2^30`), with a warning. Passing both forms of one quantity is
+  refused.
+- **All receipt memory values** (`*_gb` and `*_gib` keys alike) are **GiB**
+  (bytes / 2^30). The legacy `_gb` key spellings are kept for old-receipt
+  comparability; the value is GiB.
+- **`gpu_window.sh` guard caps** are GiB: 1 GiB = 2^30 bytes. Their `~GB`
+  equivalents are printed alongside for the operator.
+- 1 GiB ≈ 1.0737 GB. So 100 GB ≈ 93.13 GiB, 102 GiB ≈ 109.5 GB, 93 GiB ≈ 99.9 GB.
 
 ## Definitions (every memory term, once)
-
-These names are used verbatim in the receipts, the console lines, and the guard
-log. Each is defined here **once**.
 
 ### Peak / envelope figures (receipt `memory` block + top level)
 
 - **`mlx_peak_gb`** (== the legacy top-level **`peak_gb`**) — the MLX allocator
-  peak of *this* process (`mx.get_peak_memory`). It EXCLUDES the Python heap, the
-  positional-expert bank read buffers, the engram host-side row LRU, the
-  tokenizer, other processes, and the OS file cache. It is **not** the box usage.
-  `peak_gb` is kept as-is for old receipts' comparability and is documented as
-  MLX-only.
-- **`process_peak_rss_gb`** (top-level alias **`peak_process_gb`**) — the whole
-  **process** peak RSS: `max(ru_maxrss, the 1 Hz in-process sampler's peak,
-  mlx_peak)`. This INCLUDES the non-Metal footprint the MLX peak omits, so it is
-  always ≥ `mlx_peak_gb`. This is David's "peak memory must include the non-Metal
-  parts" figure. It is a PEAK over prefill+decode (the sampler brackets both),
-  never the value at exit.
+  peak of *this* process (`mx.get_peak_memory`). EXCLUDES the Python heap, the
+  positional-expert bank read buffers, the engram host LRU, the tokenizer, other
+  processes, and the OS file cache. It is **not** the box usage. Kept as-is for
+  old-receipt comparability; documented as MLX-only.
+- **`sampler_peak_rss_gb`** — the 1 Hz in-process sampler's peak of the CURRENT
+  process footprint (`phys_footprint`, mach `task_info`), **bracketed over
+  prefill+decode**; `null` when no sampler ran. (MEDIUM-2.)
+- **`ru_maxrss_gb`** — the process LIFETIME peak RSS (`ru_maxrss`), which also
+  spans model load and earlier arms. (MEDIUM-2.)
+- **`process_peak_rss_gb`** (top-level alias **`peak_process_gb`**) — the process
+  peak over the RUN: the **sampler peak when a sampler ran, else `ru_maxrss`**. A
+  single, decomposable meaning (no `max()` blob). This is David's "peak memory must
+  include the non-Metal parts" figure, and it is a PEAK over the window, never the
+  value at exit.
 - **`system_used_peak_gb`** — the whole-**box** used-memory peak over the run:
   `(wired down + anonymous + occupied-by-compressor) pages × page size` from
   `vm_stat` — the SAME formula the `gpu_window.sh` phase-4 guard aborts on
-  (anonymous, not active: active counts the file-backed page cache the 269 GiB
-  mmap'd expert bank fills and the OS reclaims on demand). Shared helper:
-  `bench_standard_shape._system_used_bytes`.
+  (anonymous, not active). Shared helper `bench._system_used_bytes`.
 - **`system_used_at_start_gb`** — the same box figure sampled once when the
-  in-process sampler starts (the decode baseline).
+  sampler starts (the decode baseline).
+- **`rss_semantics_note`** — a fixed note (HIGH-2): RSS-vs-`mlx_peak` semantics on
+  Metal are **UNVERIFIED** until one real GPU-window receipt lets the
+  `gpu_window.sh` tree RSS be compared against this process's `mlx_peak` (unified
+  memory may double-count). Do not treat `process_peak_rss_gb` and `mlx_peak_gb`
+  as interchangeable until then.
 
-Two independent sources record the process peak, and **both** are kept:
-1. the **in-process sampler** (in the receipt, always present — even when the run
-   is not under `gpu_window.sh`), and
-2. the wrapper's **process-tree RSS** (in the `gpu_window.sh` log): the SUM of RSS
-   across STEP_PID and every descendant, plus the MAX single-process RSS.
+Two independent sources record the process peak, and **both** are kept: the
+in-process sampler (in the receipt, always present) and the wrapper's
+process-tree RSS (in the `gpu_window.sh` log).
 
 ### Budget-derivation terms (item 3; receipt `memory` block)
 
-- **`budget_total_gb`** — `--memory-budget-total-gb N`: the TOTAL box budget for
-  everything.
-- **`budget_system_used_at_start_gb`** — the box used-memory baseline measured
-  ONCE at process start (`bench._system_used_bytes`, the wrapper's formula), i.e.
-  everything already resident before this bench allocates.
-- **`budget_non_metal_overhead_gb`** — the process RSS *above* the MLX allocator's
-  own accounting (Python heap + expert-reader buffers + engram host LRU +
-  tokenizer). Used as a **conservative pre-load estimate** (default 10 GiB,
-  `--non-metal-overhead-gb`) because the plan limit must be fixed before the model
-  loads; see the two-phase note below.
+- **`budget_total_gb`** — `--memory-budget-total-gib N` (or the `-gb` alias): the
+  TOTAL box budget for everything, in GiB.
+- **`budget_system_used_at_start_gb`** — the box used-memory baseline measured ONCE
+  at process start (`bench._system_used_bytes`, the wrapper's formula).
+- **`budget_non_metal_overhead_gb`** — the process footprint *above* the MLX
+  allocator (Python heap + expert-reader buffers + engram LRU + tokenizer). Used
+  as a **conservative pre-load estimate** (default 10 GiB,
+  `--non-metal-overhead-gib`) because the plan must be fixed before the model
+  loads; see the two-phase note.
 - **`budget_non_metal_overhead_measured_gb`** — the same overhead **re-measured
-  after load** as `process RSS − mx active memory` (None until measured).
+  after load** as `current phys_footprint (mach task_info) − mx active memory`
+  (NOT `ru_maxrss`); `null` until measured / when unmeasurable.
 - **`budget_kv_growth_to_max_kv_gb`** — the bytes the KV lanes grow to at
   `--max-kv`, from config dims × max_kv × bf16 (see the KV estimator note).
-- **`budget_safety_gb`** — `--memory-safety-gb` headroom (default 3 GiB).
-- **`budget_floor_gib`** — `--memory-budget-floor-gib` (default 20 GiB): the run
-  refuses to start if the derived plan limit is below this.
+- **`budget_safety_gb`** — `--memory-safety-gib` headroom (default 3 GiB).
+- **`budget_floor_gib`** — `--memory-budget-floor-gib` (default 20 GiB).
 - **`plan_limit_gib_derived`** — the plan limit the derivation produced (pre-load).
-- **`plan_limit_gib_effective`** — the plan limit actually in force after the
-  two-phase re-measure (== derived unless the MLX active limit was lowered).
-- **`memory_plan_source`** — `"budget"` when `--memory-budget-total-gb` drove the
-  plan, else `"explicit"` (`--memory-limit-gib` taken literally / legacy
-  `--box-budget` default). The full budget key set is always present, with nulls
-  on the explicit path, so receipts are self-describing.
+- **`plan_limit_gib_effective`** — the plan limit in force after the two-phase
+  re-measure. Always equals `plan_limit_gib_derived` (HIGH-1: the MLX limit is
+  never lowered post-load).
+- **`memory_plan_source`** — `"budget"` when `--memory-budget-total-gib`/`-gb`
+  drove the plan, else `"explicit"`. The full budget key set is always present
+  (nulls on the explicit path), so receipts are self-describing.
 
 ### Guard terms (`gpu_window.sh`)
 
 - **step tree RSS (sum)** — SUM of RSS across STEP_PID and every descendant.
 - **max single process** — the MAX single-process RSS in that tree.
-- **step process tree** — STEP_PID (the `bash -c "…"` chain) AND every descendant
-  (the python benchmark, its `sleep`/subprocess grandchildren, …).
+- **step process tree** — STEP_PID (the `bash -c "…"` chain) AND every descendant.
 
----
-
-## Item 3 — `--memory-budget-total-gb`: derive the plan, compensate for non-Metal
+## Item 3 — `--memory-budget-total-gib`: derive the plan, compensate for non-Metal
 
 Instead of taking `--memory-limit-gib` literally, derive the MLX plan limit from
 the TOTAL box budget:
@@ -95,32 +106,33 @@ the TOTAL box budget:
 ```
 plan_limit_gib = budget_total
                − system_used_at_start      (measured at process start, vm_stat)
-               − non_metal_overhead        (process RSS − mx active; see two-phase)
+               − non_metal_overhead        (pre-load estimate; re-measured after load)
                − kv_growth_to_max_kv        (config dims × max_kv × bf16)
                − safety                     (default 3 GiB)
 ```
 
-`--memory-budget-total-gb` **overrides** `--memory-limit-gib` (derive, don't take
-the literal). The derived limit is fed into the existing W62
-`derive_plan_from_budget(..., override_memory_limit_gib=…)` so the runtime
+`--memory-budget-total-gib` (or the deprecated `-gb` alias) **overrides**
+`--memory-limit-gib`. The derived limit is fed into the W62
+`derive_plan_from_budget(..., override_memory_limit_gib=…)`, so the runtime
 reserve / allocator-cache plumbing is unchanged; only the plan ceiling changes.
 
-**Floor refusal.** If `plan_limit_gib < --memory-budget-floor-gib` (default 20)
-the run refuses to start with a clear, actionable error (naming every term and how
-to raise the budget / lower safety / reduce max-kv). It never opens a GPU window
-on a plan too small to hold the model.
+**Floor refusal.** If `plan_limit_gib < --memory-budget-floor-gib` (default 20) the
+run refuses to start with a clear, actionable error (naming every term). Use
+`--memory-plan-preflight` (below) to hit this **before** the GPU window opens.
 
-**Two-phase non-Metal overhead.** The plan limit must be fixed *before* the model
-loads (the loader takes `memory_limit_bytes`). So:
-1. **Estimate** — derive with the conservative `--non-metal-overhead-gb` estimate
-   (default 10 GiB, mirroring the W62 `HOST_OVERHEAD_GIB` profile constant) and
-   fix the plan.
+**Two-phase non-Metal overhead (HIGH-1).** The plan limit must be fixed *before*
+the model loads. So:
+1. **Estimate** — derive with the conservative `--non-metal-overhead-gib` estimate
+   (default 10 GiB) and fix the plan.
 2. **Load** the model.
-3. **Re-measure** the real overhead as `process RSS − mx active memory` and record
-   it (`budget_non_metal_overhead_measured_gb`). If it exceeds the estimate by
-   more than 0.5 GiB, **lower the MLX active-allocation limit** by the overage so
-   the TOTAL still fits the budget, and record the lowered limit
-   (`plan_limit_gib_effective`). Best-effort + guarded — it never crashes the run.
+3. **Re-measure** the real overhead as `current phys_footprint (mach task_info) −
+   mx active memory` and record it (`budget_non_metal_overhead_measured_gb`). The
+   MLX active limit is **never** lowered post-load (residents are already
+   allocated, so it cannot shrink, and a limit below active memory would route
+   later allocations onto the over-limit path and perturb the decode). Instead, if
+   the measured overhead exceeds the estimate by more than 0.5 GiB — so the real
+   footprint would blow the budget — the run **ABORTS with a clear error before
+   the decode starts**.
 
 **KV growth estimator.** `_kv_growth_estimate(dims, max_kv)` prices the
 KV-growth-to-`max_kv` term. As of the **W107 merge** it prefers the exact per-lane
@@ -129,115 +141,118 @@ the bounded lanes exactly as the cache preallocates them — the window ring bou
 and *independent* of `max_kv`, and compress/index/latent only on the `kv_source`
 layers — so the derived plan matches what the bounded arm actually allocates. The
 receipt records which ran as **`budget_kv_estimator`** (`"w107"` | `"local"`). The
-LOCAL `_kv_bytes_at_max_kv(config, max_kv)` is now the **fallback**, used only when
-that import is unavailable (a config-only, MLX-less environment): a deliberately
-conservative estimate that per layer prices the sliding-window ring at the full
-`max_kv` (the bounded ring is opt-in), and on kv-source layers the
-latent/compressed KV `[max_kv/ratio, head_dim]`, the decoupled rope key
-`[max_kv/ratio, qk_rope_head_dim]`, and the index key `[max_kv/ratio,
-index_head_dim]`, all bf16. Config dims are read from the artifact `config.json`
-(flat or `text_config`-nested) without importing MLX or loading weights.
+LOCAL `_kv_bytes_at_max_kv(config, max_kv)` is now the **fallback** (W106 LOW-1),
+used only when that import is unavailable (a config-only, MLX-less environment): a
+deliberately conservative estimate that per layer prices the sliding-window ring at
+the full `max_kv` (the bounded ring is opt-in), and only on the **kv-source layers**
+(`kv_source_layer_ids`, released `[2,8,14,20]`, authoritative when present; else
+layers with a non-zero `compress_ratios`) adds the latent/compressed KV
+`[max_kv/ratio, head_dim]`, the decoupled rope key `[max_kv/ratio,
+qk_rope_head_dim]`, and the index key `[max_kv/ratio, index_head_dim]`, all bf16.
+Config dims are read from the artifact `config.json` (flat or `text_config`-nested)
+without importing MLX or loading weights.
 
-**Receipt keys** (in the `memory` block, alongside the item-2 envelope keys):
+**Receipt keys** (in the `memory` block, alongside the peak/envelope keys):
 `memory_plan_source`, `budget_total_gb`, `plan_limit_gib_derived`,
 `plan_limit_gib_effective`, `budget_system_used_at_start_gb`,
 `budget_non_metal_overhead_gb`, `budget_non_metal_overhead_measured_gb`,
 `budget_kv_growth_to_max_kv_gb`, `budget_kv_estimator`, `budget_safety_gb`,
-`budget_floor_gib`.
+`budget_floor_gib`, `rss_semantics_note`.
+
+**Pre-flight (LOW-4).** `--memory-plan-preflight` derives the plan from a dry
+snapshot (measure system-used now, estimate overhead, price KV from `config.json`
+— no model load, no MLX) and exits 0 (plan ≥ floor) or 3 (below floor), so the
+budget is checked before the guarded window opens. NB: a `bash -c "a; b; c"` step
+chain continues to `b` after `a` fails, so the pre-flight (a separate step that
+exits nonzero) is the reliable gate, not an in-chain failure.
 
 **Bench command line — item 3 on the 16K cell** (do not run here; a GPU window is
-held by another worktree):
+held by another worktree). Canonical GiB form (~100 GB budget):
 
 ```
 .venv/bin/python3 scripts/deepseek_v41/ab_decode_env_levers.py \
   --context-tokens 16384 --decode-tokens 256 --max-kv 17408 \
-  --memory-budget-total-gb 100 \
+  --memory-budget-total-gib 93 \
   --out <receipt>.jsonl
 ```
 
-(`--memory-safety-gb`, `--memory-budget-floor-gib`, `--non-metal-overhead-gb`
-default to 3 / 20 / 10 GiB.)
-
----
+(`--memory-budget-total-gb 100` — the decimal-GB alias — resolves to the same
+~93.13 GiB. `--memory-safety-gib` / `--memory-budget-floor-gib` /
+`--non-metal-overhead-gib` default to 3 / 20 / 10 GiB. Add `--memory-plan-preflight`
+to check the derivation and exit without loading the model.)
 
 ## Item 4 — tree-kill the whole step process tree on abort
 
 On any abort — the child-tree RSS cap, the system-used ceiling, or a TERM/INT to
 the wrapper — `gpu_window.sh` kills the ENTIRE process tree of the step, not just
-STEP_PID.
+STEP_PID (the `bash -c` chain), so no python descendant is orphaned and a chained
+next command never starts after the abort.
 
-The step is a `bash -c "a; b; c"` chain whose python benchmark underneath holds
-the memory. Killing only STEP_PID (pre-W106) left the python orphaned (reparented
-to launchd), still holding GPU/host memory, and a chained next command could still
-start after the abort.
+- `_step_tree_pids <root>` — every pid in the tree from a single `ps` snapshot.
+- `_kill_step_tree` — snapshot the tree pids BEFORE signalling, `TERM` them all,
+  poll up to `GPU_WINDOW_KILL_GRACE_SECONDS` (default 2), then `KILL` any survivor;
+  reap STEP_PID. `_kill_step_child` (the RSS-cap / ceiling abort sites) and the
+  `teardown` trap both delegate to it. `GPU_WINDOW_KILL_GRACE_SECONDS` is validated
+  as a non-negative integer (LOW-2: it drives `× 4` bash arithmetic) — a
+  non-integer warns and falls back to 2.
 
-- `_step_tree_pids <root>` — every pid in the tree from a single `ps` snapshot,
-  root first, robust to pid-reuse cycles.
-- `_kill_step_tree` — snapshot the tree pids BEFORE signalling (killing
-  reparents/removes members), `TERM` them all, poll up to
-  `GPU_WINDOW_KILL_GRACE_SECONDS` (default 2 s), then `KILL` any survivor; reap
-  STEP_PID. `_kill_step_child` (the RSS-cap / ceiling abort call sites) delegates
-  to it, and the `teardown` trap tree-kills too.
+Qwen is still restored and the lock released from the EXIT trap (restore before
+release).
 
-Qwen is still restored and the exclusive lock released from the EXIT trap exactly
-as before (restore before release, so a queued window never races the reload).
+## Guard caps (HIGH-2) — under David's limits
 
----
+- System used-memory **ceiling = 102 GiB** (~109.5 GB, under the 110 GB hard
+  line). Default was 105 GiB ≈ 112.7 GB, which was OVER the hard line.
+- Child-tree **RSS cap = 93 GiB** (~100 GB = David's "100 GB total"). This cap is
+  LIVE for the first time under W106 (pre-W106 the poll read the ~0 `bash -c`
+  shell RSS). Both caps are printed explicitly (GiB + ~GB) at step start.
 
 ## Peak-memory directive — report the whole-process peak, not only MLX
 
-David: "fix the peak memory measurement so it includes non-Metal parts."
-
-- The `[ab]` console headline prints `peak_gb` (MLX allocator peak, unchanged for
-  comparability) alongside `mlx_peak_gb`, `process_peak_rss_gb` and
-  `system_used_peak_gb` (helper `_memory_headline`).
-- Both the AR and the DSpark receipts carry a top-level **`peak_process_gb`** (the
-  whole-process RSS peak incl. non-Metal) next to the MLX-only `peak_gb`.
-- The in-process sampler (item 2) brackets prefill+decode and keeps the
-  high-water mark, so the receipt has a real peak even when NOT run under
-  `gpu_window.sh`; the wrapper's process-tree RSS is the second source (recorded
-  in the window log). The value is the PEAK over the run, not the value at exit.
-
----
+- The `[ab]` headline prints `peak_gb` (MLX allocator peak, unchanged) alongside
+  `mlx_peak_gb`, `process_peak_rss_gb` and `system_used_peak_gb`.
+- Both the AR and DSpark receipts carry a top-level `peak_process_gb`.
+- The in-process sampler brackets prefill+decode (peak, not exit) and samples
+  `phys_footprint`, so the receipt has a real peak even without `gpu_window.sh`.
 
 ## Output persistence — store the output so we can audit it
 
-Every bench run persists its FULL generated output (rounding-class results must be
-text-spot-checkable, not just sha-comparable):
-
-**In the receipt** — for the AR pass (top level) and, under the `dspark` block,
-for BOTH the DSpark stream and the AR comparison stream it verifies against:
-`token_ids` (the full id list), `decoded_text`, `decoded_text_head` (first 600
-chars), `decoded_text_tail` (last 600 chars). For DSpark,
+**In the receipt** — AR pass (top level) and, under the `dspark` block, both the
+DSpark stream and the AR comparison stream: `token_ids` (full), `decoded_text`,
+`decoded_text_head` (first 600), `decoded_text_tail` (last 600). For DSpark,
 `dspark.divergence_context = {ar, dspark}` is the decoded text ~200 chars either
 side of the divergence index in each stream (null when identical).
 
-**As a text sidecar** beside the receipt (`<stem>` = `--out` with `.jsonl`
-stripped):
-- `<stem>.output.txt` — header (arm, sha, decode_tok_s, divergence) + the full
-  decoded text of the measured stream (the DSpark stream in dspark mode, else AR).
-- `<stem>.ar-reference.output.txt` — the AR comparison stream (dspark runs only).
-
-Sidecars are written **atomically** (tmp + `os.replace`) and **never overwrite**
-an existing sidecar (suffix `-2`, `-3`, matching the receipts /
-never-overwrite-a-measurement). Decoding reuses the tokenizer already loaded in
-the bench (no extra model load) and is fully guarded: a tokenizer failure records
-`None` / `"<decode unavailable>"` and never kills the measured run.
-
----
+**As text sidecars** beside the receipt (`<stem>` = `--out` with `.jsonl`
+stripped), with the AR pass **sha[:12] in both names** and a **single paired
+`-n` suffix** (MEDIUM-3), so the pair never splits:
+- `<stem>.<sha12>.output.txt` — the measured stream (DSpark in dspark mode, else
+  AR): header (arm, sha, decode_tok_s, divergence) + full decoded text.
+- `<stem>.<sha12>.ar-reference.output.txt` — the AR comparison stream (dspark
+  runs only).
+Written atomically (tmp + `os.replace`) and **never** overwriting an existing
+sidecar. Decoding reuses the already-loaded tokenizer and is fully guarded (a
+failure records `null` / `"<decode unavailable>"` and never kills the run).
 
 ## Tests (CPU, MLX pinned to CPU; `nice -n 19`, one file per process)
 
-- `tests/test_deepseek_v41_w106_memory_budget.py` — the item-3 derivation math
-  (injected measurements), floor refusal, the exact receipt key set, the KV
-  estimator, the config reader, and `_resolve_derivation` end-to-end.
-- `tests/test_deepseek_v41_w106_memory_block.py` — the item-2 sampler + memory
-  block, plus the directive's `_peak_process_gb` / `_memory_headline` and a
-  sampler high-water (peak-not-exit) test.
+- `tests/test_deepseek_v41_w106_memory_budget.py` — derivation math (injected
+  measurements), floor refusal, the exact receipt key set, the KV estimator
+  (kv_source_layer_ids), the config reader, `_resolve_derivation`, the HIGH-1
+  re-measure (never calls `set_memory_limit`; aborts over budget), the MEDIUM-1
+  `-gib`/`-gb` resolution, the HIGH-2 `rss_semantics_note`, and the LOW-4
+  pre-flight exit codes.
+- `tests/test_deepseek_v41_w106_memory_block.py` — the item-2 sampler + the
+  MEDIUM-2 decomposed keys (`sampler_peak_rss_gb` / `ru_maxrss_gb` /
+  `process_peak_rss_gb`), `_peak_process_gb` / `_memory_headline`, and a
+  high-water (peak-not-exit) test.
 - `tests/test_deepseek_v41_w106_receipt_output.py` — decode guards, token_ids /
-  head / tail, divergence-context spans, atomic no-clobber sidecar writes.
-- `tests/test_gpu_window_memory_accounting.sh` — the item-1 tree-RSS accounting
-  plus the item-4 tree-kill (a fake `bash -c` step spawns a `sleep` grandchild;
-  after abort neither the python child nor the grandchild survives), in
-  `GPU_WINDOW_TEST_MODE=1` with a temp lock + fake `vm_stat` (no sysctl, no
-  launchctl, no real GPU lock, no Metal).
+  head / tail, divergence-context spans, and the MEDIUM-3 paired sha-named
+  sidecars.
+- `tests/test_gpu_window_memory_accounting.sh` — item-1 tree-RSS accounting, the
+  item-4 tree-kill (a `sleep` grandchild does not survive the abort), the HIGH-2
+  step-start caps line (93/102 GiB), and the LOW-2 non-integer-grace fallback — in
+  `GPU_WINDOW_TEST_MODE=1` with a hermetic temp lock (no sysctl, no launchctl, no
+  real GPU lock, no Metal).
+- `scripts/deepseek_v41/test_gpu_window_guard.sh` — the phase-4 guard math + the
+  HIGH-2 102 GiB default ceiling.

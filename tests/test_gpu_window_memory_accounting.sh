@@ -23,6 +23,16 @@ SCRIPT="${HERE}/../scripts/deepseek_v41/gpu_window.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
+# HARD SAFETY NET: a GPU window may be holding the REAL exclusive lock
+# (/tmp/mtplx-gpu-exclusive.lock).  Export a hermetic temp lock + TEST MODE for the
+# WHOLE test, so even a malformed per-invocation env line can NEVER fall back to the
+# real lock and block on it.  Per-scenario MTPLX_GPU_LOCK= still overrides this.
+export GPU_WINDOW_TEST_MODE=1
+export MTPLX_GPU_LOCK="${TMP}/hermetic_testmode.lock"
+# Never block: if some invocation still reached a held lock, fail fast instead of
+# hanging the suite (0 = block forever; a few seconds is plenty for a temp lock).
+export GPU_WINDOW_LOCK_TIMEOUT="${GPU_WINDOW_LOCK_TIMEOUT:-20}"
+
 PASS=0
 FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$1"; }
@@ -142,6 +152,17 @@ else
   bad "used the temp lock path" "lock line did not reference ${LOCK}"
 fi
 
+# 7b. W106 HIGH-2: the step-start log states BOTH guard caps explicitly, with the
+#     new defaults (child-tree 93 GiB ~= 100 GB, system ceiling 102 GiB < 110 GB).
+#     (This scenario runs with the DEFAULT caps -- no cap env overrides.)
+if grep -q "phase 4: guard caps -- child-tree RSS cap 93.0 GiB" "${LOG}" \
+   && grep -q "system used ceiling 102 GiB" "${LOG}"; then
+  ok "step-start states both guard caps at the W106 defaults (93 GiB / 102 GiB)"
+else
+  bad "step-start states both guard caps (93 GiB child, 102 GiB ceiling)" \
+      "$(grep 'guard caps' "${LOG}" || echo 'no guard-caps line')"
+fi
+
 # =============================================================================
 # W106 item 4: TREE-KILL on abort.  A fake step is a `bash -c` chain that launches
 # a python child which spawns a long-lived `sleep` GRANDCHILD, then allocates
@@ -174,13 +195,17 @@ EOF
 TK_STEP="python3 '${TK_CHILD_PY}' & _cp=\$!; wait \$_cp"
 TK_LOG="${TMP}/treekill.log"
 
+# W106 LOW-2: pass a NON-INTEGER grace so we also assert the wrapper validates it
+# (falls back to 2) instead of breaking the KILL loop's bash arithmetic.  (NB: no
+# comments INSIDE the backslash-continued env chain below -- a `#` there truncates
+# the command and drops GPU_WINDOW_TEST_MODE/MTPLX_GPU_LOCK.)
 GPU_WINDOW_TEST_MODE=1 \
 MTPLX_GPU_LOCK="${TMP}/treekill.lock" \
 GPU_WINDOW_VM_STAT_CMD="${FAKE_VMSTAT}" \
 GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
 GPU_WINDOW_RSS_POLL_SECONDS=1 \
 GPU_WINDOW_CHILD_RSS_CAP_BYTES=$(( 200 * 1024 * 1024 )) \
-GPU_WINDOW_KILL_GRACE_SECONDS=1 \
+GPU_WINDOW_KILL_GRACE_SECONDS=abc \
 TK_PIDFILE="${TK_PIDFILE}" \
   bash "${SCRIPT}" bash -c "${TK_STEP}" >"${TK_LOG}" 2>&1
 TK_RC=$?
@@ -237,6 +262,14 @@ if grep -q "step tree RSS.*exceeded cap" "${TK_LOG}"; then
   ok "abort log names the step-TREE RSS cap breach"
 else
   bad "abort log names the step-TREE RSS cap breach" "cap line not found"
+fi
+
+# 13. W106 LOW-2: the non-integer GPU_WINDOW_KILL_GRACE_SECONDS was validated
+#     (warned + fell back to 2) rather than breaking the tree-kill's arithmetic.
+if grep -q "GPU_WINDOW_KILL_GRACE_SECONDS='abc' is not a non-negative integer; using 2" "${TK_LOG}"; then
+  ok "non-integer kill-grace is validated and falls back to 2 (LOW-2)"
+else
+  bad "non-integer kill-grace validation" "warning line not found"
 fi
 
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"

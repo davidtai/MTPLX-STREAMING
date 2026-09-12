@@ -77,8 +77,20 @@ DEFAULT_MEMORY_SAFETY_GIB = 3.0
 # Floor below which a derived plan limit is refused (flag --memory-budget-floor-gib).
 DEFAULT_MEMORY_BUDGET_FLOOR_GIB = 20.0
 # If the post-load re-measured overhead exceeds the pre-load estimate by more than
-# this, the two-phase step lowers the MLX active-allocation limit by the overage.
+# this, the two-phase step ABORTS before decode (HIGH-1: the MLX limit is never
+# lowered post-load).
 _BUDGET_REMEASURE_TOLERANCE_GIB = 0.5
+
+# W106 HIGH-2: RSS-vs-mlx_peak semantics on Metal are UNVERIFIED until one real GPU
+# window produces a receipt whose gpu_window.sh tree RSS can be compared against
+# this process's mlx_peak. Recorded on every memory block so a reader does not
+# treat process_peak_rss_gb and mlx_peak_gb as interchangeable.
+_RSS_SEMANTICS_NOTE = (
+    "UNVERIFIED on Metal: process_peak_rss_gb (phys_footprint) vs mlx_peak_gb "
+    "(allocator peak) have not been cross-checked against a real gpu_window.sh "
+    "tree-RSS receipt; unified memory may double-count. Compare a real-window "
+    "receipt before treating either as the box figure."
+)
 # W77: AR top-1/top-2 logit gap (logit units) below which a greedy DSpark
 # divergence is classed a tie-break flip rather than a genuine divergence.
 # 3x the bf16-class per-logit floor (~1e-2, the W40/K21 HEAD_MODE=bf16 head-GEMV
@@ -1357,46 +1369,80 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOTAL box-use budget GiB the plan is derived from (default: "
         "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
     )
-    # W106 item 3: derive the plan limit from the TOTAL box budget while
-    # COMPENSATING for the non-Metal requirements.  When given this OVERRIDES
-    # --memory-limit-gib (derive, don't take it literally); see the W106 doc.
+    # W106 item 3 / MEDIUM-1: derive the plan limit from the TOTAL box budget while
+    # COMPENSATING for the non-Metal requirements.  Canonical flags are GiB
+    # (`-gib`); the `-gb` spellings are DEPRECATED aliases that convert decimal GB
+    # -> GiB at the boundary (see _resolve_gib_flag).  When given, --memory-budget-
+    # total-* OVERRIDES --memory-limit-gib (derive, don't take it literally).
     p.add_argument(
-        "--memory-budget-total-gb",
+        "--memory-budget-total-gib",
         type=float,
         default=None,
-        metavar="N",
-        help="TOTAL box budget GiB for EVERYTHING; derive the MLX plan limit as "
+        metavar="GIB",
+        help="TOTAL box budget in GiB for EVERYTHING; derive the MLX plan limit as "
         "total - system_used_at_start - non_metal_overhead - kv_growth_to_max_kv "
         "- safety (compensates for the non-Metal requirements). Overrides "
         "--memory-limit-gib. Refuses to start if the derived limit is below "
         "--memory-budget-floor-gib.",
     )
     p.add_argument(
+        "--memory-budget-total-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help="DEPRECATED alias of --memory-budget-total-gib; the value is decimal "
+        "GB and is converted to GiB (x1e9/2^30).",
+    )
+    p.add_argument(
+        "--memory-safety-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=f"safety headroom in GiB subtracted in the budget derivation (default "
+        f"{DEFAULT_MEMORY_SAFETY_GIB:g}).",
+    )
+    p.add_argument(
         "--memory-safety-gb",
         type=float,
-        default=DEFAULT_MEMORY_SAFETY_GIB,
+        default=None,
         metavar="GB",
-        help=f"safety headroom GiB subtracted in the --memory-budget-total-gb "
-        f"derivation (default {DEFAULT_MEMORY_SAFETY_GIB:g}).",
+        help="DEPRECATED alias of --memory-safety-gib (decimal GB -> GiB).",
     )
     p.add_argument(
         "--memory-budget-floor-gib",
         type=float,
         default=DEFAULT_MEMORY_BUDGET_FLOOR_GIB,
-        metavar="GB",
-        help=f"refuse to start if the --memory-budget-total-gb derived plan limit "
-        f"is below this floor (default {DEFAULT_MEMORY_BUDGET_FLOOR_GIB:g}).",
+        metavar="GIB",
+        help=f"refuse to start if the budget-derived plan limit is below this floor "
+        f"in GiB (default {DEFAULT_MEMORY_BUDGET_FLOOR_GIB:g}).",
+    )
+    p.add_argument(
+        "--non-metal-overhead-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="conservative pre-load estimate in GiB of the non-Metal process "
+        "overhead (python heap + expert-reader buffers + engram LRU + tokenizer) "
+        f"used in the budget derivation (default {DEFAULT_NON_METAL_OVERHEAD_GIB:g}); "
+        "the real value is re-measured after load (and aborts if it blows budget).",
     )
     p.add_argument(
         "--non-metal-overhead-gb",
         type=float,
         default=None,
         metavar="GB",
-        help="conservative pre-load estimate GiB of the non-Metal process overhead "
-        "(python heap + expert-reader buffers + engram LRU + tokenizer) used in "
-        f"the --memory-budget-total-gb derivation (default "
-        f"{DEFAULT_NON_METAL_OVERHEAD_GIB:g}); the real value is re-measured after "
-        "load and the MLX limit lowered if it exceeds this.",
+        help="DEPRECATED alias of --non-metal-overhead-gib (decimal GB -> GiB).",
+    )
+    # W106 LOW-4: pre-flight the budget derivation from a dry snapshot (no model
+    # load, no MLX) so the floor refusal happens BEFORE the guarded GPU window opens
+    # (a raise inside _load_model happens after Qwen is already unloaded).
+    p.add_argument(
+        "--memory-plan-preflight",
+        action="store_true",
+        default=False,
+        help="print the --memory-budget-total-* plan derivation from a dry snapshot "
+        "(no model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor), so "
+        "the budget can be checked BEFORE the guarded GPU window opens.",
     )
     p.add_argument(
         "--memory-profile",
@@ -1675,14 +1721,14 @@ def derive_budget_total_plan(
     )
     if plan_limit < float(floor_gib):
         raise ValueError(
-            f"--memory-budget-total-gb {budget_total_gb:.4g} derives a plan limit "
+            f"--memory-budget-total-gib {budget_total_gb:.4g} derives a plan limit "
             f"of {plan_limit:.4g} GiB, BELOW the floor of {floor_gib:.4g} GiB: "
             f"plan_limit = {budget_total_gb:.4g} "
             f"- system_used_at_start {system_used_at_start_gb:.4g} "
             f"- non_metal_overhead {non_metal_overhead_gb:.4g} "
             f"- kv_growth_to_max_kv {kv_growth_to_max_kv_gb:.4g} "
-            f"- safety {safety_gb:.4g}. Raise --memory-budget-total-gb, lower "
-            f"--memory-safety-gb / --non-metal-overhead-gb, reduce --max-kv, or "
+            f"- safety {safety_gb:.4g}. Raise --memory-budget-total-gib, lower "
+            f"--memory-safety-gib / --non-metal-overhead-gib, reduce --max-kv, or "
             f"lower --memory-budget-floor-gib (default "
             f"{DEFAULT_MEMORY_BUDGET_FLOOR_GIB:.4g})."
         )
@@ -1727,7 +1773,10 @@ _KV_CONFIG_DEFAULTS = {
     "window_size": 128,
     "sliding_window": 128,
     "compress_ratios": [],
-    "kv_source_layer_ids": [],
+    # W106 LOW-1: only a FEW layers hold the compressed/index KV lanes (the released
+    # DeepSeek-V4.1-Flash kv_source_layer_ids); the rest keep only the window ring.
+    # Real config.json values override this default.
+    "kv_source_layer_ids": [2, 8, 14, 20],
 }
 
 
@@ -1775,8 +1824,10 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
       * a compressed/latent KV  [1, ceil(max_kv/ratio), head_dim]    (kv-source layers)
       * a decoupled rope key    [1, ceil(max_kv/ratio), qk_rope_head_dim] (kv-source)
       * an index-key lane       [1, ceil(max_kv/ratio), index_head_dim]  (kv-source)
-    A layer is a kv-source when its ``compress_ratios`` entry is non-zero;
-    ``ratio == 1`` is per-token (no pooling), ``ratio > 1`` pools that many tokens.
+    A layer is a kv-source when it is in ``kv_source_layer_ids`` (authoritative when
+    present; else layers with a non-zero ``compress_ratios`` entry) -- LOW-1: only a
+    few layers, not all 40.  ``ratio == 1`` is per-token (no pooling), ``ratio > 1``
+    pools that many tokens.
     """
 
     def _cfg(name, default):
@@ -1795,6 +1846,7 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
     index_dim = int(_cfg("index_head_dim", 128))
     window = int(_cfg("sliding_window", 0)) or int(_cfg("window_size", 128))
     ratios = list(_cfg("compress_ratios", []) or [])
+    kv_src = {int(x) for x in (_cfg("kv_source_layer_ids", []) or [])}
     bf16 = 2
 
     def _rows_for_ratio(ratio: int) -> int:
@@ -1802,15 +1854,22 @@ def _kv_bytes_at_max_kv(config, max_kv: int) -> int:
             return max_kv
         return -(-max_kv // ratio)  # ceil
 
+    def _is_kv_source(layer: int) -> bool:
+        # LOW-1: kv_source_layer_ids is authoritative when present; else fall back
+        # to a non-zero compress_ratios entry.
+        if kv_src:
+            return layer in kv_src
+        return layer < len(ratios) and int(ratios[layer]) != 0
+
     total = 0
     for layer in range(n_layers):
-        # Window ring: conservatively priced at max_kv rows (ring is opt-in).
+        # Window ring: conservatively priced at max_kv rows (ring is opt-in), EVERY
+        # layer.
         total += max_kv * head_dim * bf16
-        # kv-source lanes: use the per-layer ratio when known, else ratio 1
-        # (no pooling = the conservative maximum).
-        ratio = int(ratios[layer]) if layer < len(ratios) else 1
-        if ratio == 0:
+        if not _is_kv_source(layer):
             continue  # not a kv-source layer: only the window ring above
+        # ratio from compress_ratios when known/positive, else 1 (no pooling).
+        ratio = int(ratios[layer]) if (layer < len(ratios) and int(ratios[layer]) > 0) else 1
         rows = _rows_for_ratio(ratio)
         total += rows * head_dim * bf16      # latent / compressed KV
         total += rows * rope_dim * bf16      # decoupled rope key
@@ -1843,6 +1902,38 @@ def _kv_growth_estimate(dims: dict, max_kv: int) -> tuple[int, str]:
     return int(_w107_kv_bytes_at_max_kv(cfg, int(max_kv))), "w107"
 
 
+def _gb_to_gib(gb: float) -> float:
+    """Decimal GB -> GiB (the boundary conversion for the deprecated ``-gb``
+    aliases). 1 GB = 1e9 bytes; 1 GiB = 2**30 bytes."""
+
+    return float(gb) * 1_000_000_000 / GIB
+
+
+def _resolve_gib_flag(args, gib_attr, gb_attr, default, flag_label):
+    """Resolve a GiB quantity from the canonical ``-gib`` flag, else the deprecated
+    ``-gb`` alias (decimal GB, converted to GiB with a warning), else ``default``.
+    Refuses if BOTH are set (ambiguous)."""
+
+    gib = getattr(args, gib_attr, None)
+    gb = getattr(args, gb_attr, None)
+    if gib is not None and gb is not None:
+        raise ValueError(
+            f"pass only one of {flag_label}-gib / {flag_label}-gb (the -gb form is "
+            "a deprecated alias); got both"
+        )
+    if gib is not None:
+        return float(gib)
+    if gb is not None:
+        conv = _gb_to_gib(float(gb))
+        print(
+            f"[ab] WARN: {flag_label}-gb is DEPRECATED (decimal GB); converting "
+            f"{float(gb):g} GB -> {conv:.4g} GiB. Use {flag_label}-gib.",
+            flush=True,
+        )
+        return conv
+    return default
+
+
 def _measure_system_used_at_start_bytes(args, bench) -> int:
     """The system-wide used-memory baseline (vm_stat, the SAME formula the
     gpu_window.sh guard uses -- factored in bench._system_used_bytes).  Measured
@@ -1857,16 +1948,101 @@ def _measure_system_used_at_start_bytes(args, bench) -> int:
     return used
 
 
+def _budget_total_gib(args):
+    """The resolved TOTAL box budget in GiB from --memory-budget-total-gib (or the
+    deprecated -gb alias), or None when neither is set."""
+
+    return _resolve_gib_flag(
+        args, "memory_budget_total_gib", "memory_budget_total_gb", None,
+        "--memory-budget-total",
+    )
+
+
+def _derive_budget_total(args, bench, max_kv):
+    """Compute the item-3 ``BudgetTotalDerivation`` from the resolved flags + the
+    measured system-used baseline + the KV estimate, or return None when no budget
+    flag was given.  Shared by ``_resolve_derivation`` and the pre-flight."""
+
+    budget_total = _budget_total_gib(args)
+    if budget_total is None:
+        return None
+    if bench is None or max_kv is None:
+        raise ValueError(
+            "--memory-budget-total-gib needs the bench module and resolved max_kv "
+            "to price the KV growth"
+        )
+    system_used_gb = _measure_system_used_at_start_bytes(args, bench) / GIB
+    non_metal_gb = _resolve_gib_flag(
+        args, "non_metal_overhead_gib", "non_metal_overhead_gb",
+        DEFAULT_NON_METAL_OVERHEAD_GIB, "--non-metal-overhead",
+    )
+    safety_gb = _resolve_gib_flag(
+        args, "memory_safety_gib", "memory_safety_gb",
+        DEFAULT_MEMORY_SAFETY_GIB, "--memory-safety",
+    )
+    floor_gib = float(
+        getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
+    )
+    dims = _read_kv_config_dims(getattr(args, "model", None))
+    # W97F Fix 1 (preserved through the W106 refactor): price the KV growth with the
+    # EXACT W107 per-lane helper (deepseek_v41_cache.kv_bytes_at_max_kv) when it can be
+    # imported, falling back to the LOCAL estimator (_kv_bytes_at_max_kv, which carries
+    # W106's kv_source_layer_ids fix) only in an MLX-less config-only environment.  The
+    # estimator that actually ran is recorded on the plan as budget_kv_estimator.
+    kv_growth_bytes, kv_estimator = _kv_growth_estimate(dims, int(max_kv))
+    kv_growth_gb = kv_growth_bytes / GIB
+    return derive_budget_total_plan(
+        budget_total_gb=float(budget_total),
+        system_used_at_start_gb=system_used_gb,
+        non_metal_overhead_gb=non_metal_gb,
+        kv_growth_to_max_kv_gb=kv_growth_gb,
+        safety_gb=safety_gb,
+        floor_gib=floor_gib,
+        kv_estimator=kv_estimator,
+    )
+
+
+def _preflight_memory_plan(args, bench) -> int:
+    """W106 LOW-4 pre-flight: derive the budget plan from a DRY snapshot (measure
+    system-used now, estimate the overhead, price the KV growth from config.json --
+    no model load, no MLX) and exit 0 (plan >= floor) or 3 (below floor).  Run this
+    BEFORE the guarded GPU window opens so a floor refusal never fires after Qwen is
+    already unloaded.  With no --memory-budget-total-* it reports the explicit plan
+    and exits 0."""
+
+    if _budget_total_gib(args) is None:
+        print(
+            "[ab] memory-plan preflight: no --memory-budget-total-gib/-gb given; "
+            "plan source is explicit (--memory-limit-gib / legacy box-budget). OK.",
+            flush=True,
+        )
+        return 0
+    max_kv = bench.resolve_max_kv(
+        [args.context_tokens], args.decode_tokens, args.max_kv
+    )
+    try:
+        bt = _derive_budget_total(args, bench, max_kv)
+    except ValueError as exc:
+        print(f"[ab] memory-plan preflight: REFUSED -- {exc}", flush=True)
+        return 3
+    print(
+        "[ab] memory-plan preflight: OK (plan >= floor)\n"
+        f"[ab]   max_kv={max_kv}\n"
+        f"[ab]   {bt.formula()}",
+        flush=True,
+    )
+    return 0
+
+
 def _resolve_derivation(args, *, bench=None, max_kv=None):
     """The plan->limit derivation for this run.
 
     Precedence:
-      1. ``--memory-budget-total-gb`` -> derive the plan limit from the TOTAL box
-         budget, COMPENSATING for the non-Metal requirements (item 3).  This
-         OVERRIDES ``--memory-limit-gib`` (derive instead of taking it literally).
+      1. ``--memory-budget-total-gib`` (or the deprecated -gb alias) -> derive the
+         plan limit from the TOTAL box budget, COMPENSATING for the non-Metal
+         requirements (item 3).  This OVERRIDES ``--memory-limit-gib``.
       2. ``--memory-limit-gib`` -> explicit plan (source "explicit").
-      3. otherwise the legacy W62 --box-budget derivation (source "explicit" from
-         the item-3 receipt's point of view: the new budget formula did not run).
+      3. otherwise the legacy W62 --box-budget derivation (source "explicit").
 
     Returns the W62 ``BudgetDerivation`` (its memory_limit_bytes/reserve/cache
     plumb into the loader unchanged); the item-3 ``BudgetTotalDerivation`` is
@@ -1875,35 +2051,8 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
-    budget_total = getattr(args, "memory_budget_total_gb", None)
-    if budget_total is not None:
-        if bench is None or max_kv is None:
-            raise ValueError(
-                "--memory-budget-total-gb needs the bench module and resolved "
-                "max_kv to price the KV growth"
-            )
-        system_used_gb = (
-            _measure_system_used_at_start_bytes(args, bench) / GIB
-        )
-        non_metal_gb = float(
-            getattr(args, "non_metal_overhead_gb", None)
-            if getattr(args, "non_metal_overhead_gb", None) is not None
-            else DEFAULT_NON_METAL_OVERHEAD_GIB
-        )
-        dims = _read_kv_config_dims(getattr(args, "model", None))
-        kv_growth_bytes, kv_estimator = _kv_growth_estimate(dims, int(max_kv))
-        kv_growth_gb = kv_growth_bytes / GIB
-        bt = derive_budget_total_plan(
-            budget_total_gb=float(budget_total),
-            system_used_at_start_gb=system_used_gb,
-            non_metal_overhead_gb=non_metal_gb,
-            kv_growth_to_max_kv_gb=kv_growth_gb,
-            safety_gb=float(getattr(args, "memory_safety_gb", DEFAULT_MEMORY_SAFETY_GIB)),
-            floor_gib=float(
-                getattr(args, "memory_budget_floor_gib", DEFAULT_MEMORY_BUDGET_FLOOR_GIB)
-            ),
-            kv_estimator=kv_estimator,
-        )
+    bt = _derive_budget_total(args, bench, max_kv)
+    if bt is not None:
         args._dsv41_budget_total = bt
         override = bt.plan_limit_gib
     else:
@@ -1928,6 +2077,15 @@ def _budget_memory_keys(args) -> dict:
     if bt is None:
         return _explicit_plan_derivation(0.0).memory_keys()
     return bt.memory_keys()
+
+
+def _memory_block_extra_keys(args) -> dict:
+    """The W106 keys merged into every receipt ``memory`` block: the item-3 budget
+    derivation terms plus the HIGH-2 ``rss_semantics_note``."""
+
+    keys = _budget_memory_keys(args)
+    keys["rss_semantics_note"] = _RSS_SEMANTICS_NOTE
+    return keys
 
 
 # Plan fields the served profile sets that the loader would otherwise default
@@ -2146,24 +2304,37 @@ def _load_model(args, bench, mx):
         )
     # W106 item 3 (two-phase): the plan limit had to be fixed BEFORE load with the
     # conservative non_metal_overhead estimate; now the model is resident, re-MEASURE
-    # the real non-Metal overhead (process RSS - mx active) and record it.  If it
-    # exceeds the estimate, lower the MLX active-allocation limit by the overage so
-    # the TOTAL still fits the budget -- then record both figures on the derivation.
-    _remeasure_non_metal_overhead(args, bench, mx, derivation)
+    # the real non-Metal overhead from the CURRENT process footprint and record
+    # estimate-vs-measured.  HIGH-1 fix: NEVER call mx.set_memory_limit post-load --
+    # residents are already allocated so it cannot shrink anything, and a limit
+    # below active memory would silently perturb the measured decode.  If the
+    # measured overhead blows the budget, ABORT here (before decode) instead.
+    _remeasure_non_metal_overhead(args, mx)
     return resident
 
 
-def _remeasure_non_metal_overhead(args, bench, mx, derivation) -> None:
-    """Phase 2 of the item-3 budget derivation: measure the real non-Metal process
-    overhead after load and, when it overshoots the pre-load estimate, lower the
-    MLX active limit so the box budget still holds.  Best-effort + guarded: it
-    never crashes the harness (records what it can and returns)."""
+def _remeasure_non_metal_overhead(args, mx) -> None:
+    """Phase 2 of the item-3 budget derivation.  Measure the real non-Metal process
+    overhead as ``current process footprint (phys_footprint, mach task_info) - mx
+    active memory`` (NOT ru_maxrss, which is a lifetime high-water incl. load
+    transients and earlier arms), record estimate-vs-measured on the derivation,
+    and:
+      * NEVER call ``mx.set_memory_limit`` (residents are allocated; it cannot
+        shrink, and a limit below active memory routes every later allocation onto
+        the over-limit path -- silent perturbation of the measured decode), and
+      * ABORT (raise, before the decode starts) when the measured overhead exceeds
+        the pre-load estimate by more than the tolerance, because the real total
+        footprint would then exceed the budget.
+    Measurement itself is guarded (a mach/read failure records None, no abort)."""
 
     bt = getattr(args, "_dsv41_budget_total", None)
     if bt is None or bt.source != "budget" or mx is None:
         return
     try:
-        rss = int(bench._process_rss_bytes())
+        from mtplx.deepseek_v41_memory_profile import process_rss_snapshot
+
+        snap = process_rss_snapshot()
+        footprint = snap.get("phys_footprint_bytes") or snap.get("resident_bytes")
         active = 0
         for owner in (mx, getattr(mx, "metal", None)):
             getter = getattr(owner, "get_active_memory", None)
@@ -2173,41 +2344,47 @@ def _remeasure_non_metal_overhead(args, bench, mx, derivation) -> None:
                     break
                 except Exception:
                     active = 0
-        measured_gb = max(0.0, (rss - active) / GIB)
     except Exception:  # pragma: no cover - defensive
         return
 
-    effective_gib = bt.plan_limit_gib
-    overage_gb = measured_gb - bt.non_metal_overhead_gb
-    if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:
-        effective_gib = max(0.0, bt.plan_limit_gib - overage_gb)
+    if footprint is None:
+        # No current-footprint figure (non-darwin / mach unavailable): keep the
+        # estimate, record None, do NOT abort.
         print(
-            f"[ab] budget-total re-measure: non_metal_overhead measured "
-            f"{measured_gb:.2f} GiB > estimate {bt.non_metal_overhead_gb:.2f} GiB "
-            f"(+{overage_gb:.2f}); lowering MLX active limit "
-            f"{bt.plan_limit_gib:.2f} -> {effective_gib:.2f} GiB to hold the budget",
+            "[ab] budget-total re-measure: process footprint unavailable "
+            "(non-darwin / mach); keeping the pre-load estimate, MLX limit unchanged",
             flush=True,
         )
-        setter = getattr(mx, "set_memory_limit", None) or getattr(
-            getattr(mx, "metal", None), "set_memory_limit", None
+        args._dsv41_budget_total = bt.replace(
+            non_metal_overhead_measured_gb=None,
+            plan_limit_gib_effective=bt.plan_limit_gib,
         )
-        if callable(setter):
-            try:
-                setter(int(round(effective_gib * GIB)))
-            except Exception:  # pragma: no cover - defensive
-                pass
-    else:
-        print(
-            f"[ab] budget-total re-measure: non_metal_overhead measured "
-            f"{measured_gb:.2f} GiB (estimate {bt.non_metal_overhead_gb:.2f} GiB); "
-            f"plan limit unchanged at {effective_gib:.2f} GiB",
-            flush=True,
-        )
+        return
 
+    measured_gb = max(0.0, (int(footprint) - int(active)) / GIB)
+    overage_gb = measured_gb - bt.non_metal_overhead_gb
+    # plan_limit is NEVER lowered post-load (HIGH-1).
     args._dsv41_budget_total = bt.replace(
         non_metal_overhead_measured_gb=measured_gb,
-        plan_limit_gib_effective=effective_gib,
+        plan_limit_gib_effective=bt.plan_limit_gib,
     )
+    print(
+        f"[ab] budget-total re-measure: non_metal_overhead measured "
+        f"{measured_gb:.2f} GiB (phys_footprint {int(footprint) / GIB:.2f} - mx "
+        f"active {int(active) / GIB:.2f}); estimate {bt.non_metal_overhead_gb:.2f} "
+        f"GiB; MLX limit unchanged (set_memory_limit is NOT called post-load)",
+        flush=True,
+    )
+    if overage_gb > _BUDGET_REMEASURE_TOLERANCE_GIB:
+        raise RuntimeError(
+            "budget-total re-measure ABORT (before decode): measured non-Metal "
+            f"overhead {measured_gb:.2f} GiB exceeds the pre-load estimate "
+            f"{bt.non_metal_overhead_gb:.2f} GiB by {overage_gb:.2f} GiB, so the real "
+            f"footprint would exceed --memory-budget-total-gib "
+            f"{bt.budget_total_gb:.4g} by ~{overage_gb:.2f} GiB. Re-run with "
+            f"--non-metal-overhead-gib >= {measured_gb:.2f}, a lower --max-kv, or a "
+            "higher budget; refusing to run the decode over budget."
+        )
 
 
 def _memory_profile_collector(args, mx, runtime, resident):
@@ -2380,140 +2557,142 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     # carries the real envelope, not just the MLX allocator peak (peak_gb).
     _mem_sampler = mem_probe.new_sampler()
     _mem_sampler.start()
-    t0 = time.perf_counter()
-    cache = model.make_cache()
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
-    ops.sync(logits)
-    ttft_s = time.perf_counter() - t0
-    token = ops.argmax_last(logits)
-    generated = [token]
-    if mem_profile is not None:
-        mem_profile("after_prefill")
-    # W90: idle after prefill, before the timed decode (TTFT already captured).
-    cooldown_block = None
-    if cooldown_s and float(cooldown_s) > 0:
-        cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
-    # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
-    # excluded so the hit rate is the decode hit rate).
-    _sc_after_prefill = _stream_counters_snapshot(model)
-    extra_forward_steps = 0
+    try:
+        t0 = time.perf_counter()
+        cache = model.make_cache()
+        logits = model(ops.input([list(prompt_ids)]), cache=cache)
+        ops.sync(logits)
+        ttft_s = time.perf_counter() - t0
+        token = ops.argmax_last(logits)
+        generated = [token]
+        if mem_profile is not None:
+            mem_profile("after_prefill")
+        # W90: idle after prefill, before the timed decode (TTFT already captured).
+        cooldown_block = None
+        if cooldown_s and float(cooldown_s) > 0:
+            cooldown_block = _macmon().cooldown(float(cooldown_s), label="ab")
+        # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
+        # excluded so the hit rate is the decode hit rate).
+        _sc_after_prefill = _stream_counters_snapshot(model)
+        extra_forward_steps = 0
 
-    # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
-    # loop (prefill excluded) so the receipt reports per-layer host syncs
-    # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
-    # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
-    # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
-    # module even if the launch env did not; counters cleared to scope to decode.
-    _route_probe = None
-    _route_prev_enabled = None
-    if stage_timing:
-        try:
-            from mtplx import expert_route_probe as _route_probe
+        # W92 switch-dispatch census: arm the route-stage probe scoped to the DECODE
+        # loop (prefill excluded) so the receipt reports per-layer host syncs
+        # (hot.eval_indices), all-hit fences deferred vs synced (hot.allhit_defer vs
+        # hot.allhit_fence_eval), and gather_qmm dispatches per switch call
+        # (hot.allhit_gather_qmm).  ENABLED is read at use, so setting it here arms the
+        # module even if the launch env did not; counters cleared to scope to decode.
+        _route_probe = None
+        _route_prev_enabled = None
+        if stage_timing:
+            try:
+                from mtplx import expert_route_probe as _route_probe
 
-            _route_prev_enabled = _route_probe.ENABLED
-            _route_probe.ENABLED = True
-            _route_probe._SUMS.clear()
-            _route_probe._COUNTS.clear()
-        except Exception:
-            _route_probe = None
+                _route_prev_enabled = _route_probe.ENABLED
+                _route_probe.ENABLED = True
+                _route_probe._SUMS.clear()
+                _route_probe._COUNTS.clear()
+            except Exception:
+                _route_probe = None
 
-    _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
-    # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
-    # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
-    with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
-        decode_start = time.perf_counter()
-        try:  # W92: restore the probe ENABLED flag even if the decode loop raises
-            if device_sample:
-                from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+        _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
+        # W90: the sampler's macmon Popen/terminate happen on the context enter/exit; take
+        # decode_start AFTER enter and decode_wall_s BEFORE exit, so tok/s excludes them.
+        with _util_cm:  # W90: macmon utilization sampled over the DECODE loop only
+            decode_start = time.perf_counter()
+            try:  # W92: restore the probe ENABLED flag even if the decode loop raises
+                if device_sample:
+                    from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
 
-                def _forward_row(ids):
-                    # ids is a device-side [1, 1] token-id array; the model's embedding
-                    # lookup consumes it directly (mx.take) -- no host round trip.
-                    return model(ids, cache=cache)[0, -1]
+                    def _forward_row(ids):
+                        # ids is a device-side [1, 1] token-id array; the model's embedding
+                        # lookup consumes it directly (mx.take) -- no host round trip.
+                        return model(ids, cache=cache)[0, -1]
 
-                more, _finish, extra_forward_steps = run_device_sample_decode(
-                    forward_row=_forward_row,
-                    first_token=int(token),
-                    n_more=int(steps),
-                    sampler=None,  # greedy (byte-identical to the classic argmax loop)
-                    stop_ids=set(),
-                )
-                generated.extend(int(t) for t in more)
-            else:
-                every = max(1, int(mem_profile_every))
-                for step in range(int(steps)):
-                    logits = model(ops.input([[token]]), cache=cache)
-                    ops.sync(logits)
-                    token = ops.argmax_last(logits)
-                    generated.append(token)
-                    if mem_profile is not None and (step + 1) % every == 0:
-                        mem_profile("decode", token=step + 1)
-        finally:
-            # W92: restore the probe ENABLED flag even if the decode loop raised, so
-            # a failed arm never leaves the module armed for the rest of the process
-            # (the snapshot below reads _COUNTS regardless of ENABLED).
-            if _route_probe is not None and _route_prev_enabled is not None:
-                _route_probe.ENABLED = bool(_route_prev_enabled)
-        decode_wall_s = time.perf_counter() - decode_start
-    _sc_end = _stream_counters_snapshot(model)
-    switch_dispatch = None
-    if _route_probe is not None:
-        _snap = _route_probe.snapshot()
-        _stg = _snap.get("stages", {}) if isinstance(_snap, dict) else {}
+                    more, _finish, extra_forward_steps = run_device_sample_decode(
+                        forward_row=_forward_row,
+                        first_token=int(token),
+                        n_more=int(steps),
+                        sampler=None,  # greedy (byte-identical to the classic argmax loop)
+                        stop_ids=set(),
+                    )
+                    generated.extend(int(t) for t in more)
+                else:
+                    every = max(1, int(mem_profile_every))
+                    for step in range(int(steps)):
+                        logits = model(ops.input([[token]]), cache=cache)
+                        ops.sync(logits)
+                        token = ops.argmax_last(logits)
+                        generated.append(token)
+                        if mem_profile is not None and (step + 1) % every == 0:
+                            mem_profile("decode", token=step + 1)
+            finally:
+                # W92: restore the probe ENABLED flag even if the decode loop raised, so
+                # a failed arm never leaves the module armed for the rest of the process
+                # (the snapshot below reads _COUNTS regardless of ENABLED).
+                if _route_probe is not None and _route_prev_enabled is not None:
+                    _route_probe.ENABLED = bool(_route_prev_enabled)
+            decode_wall_s = time.perf_counter() - decode_start
+        _sc_end = _stream_counters_snapshot(model)
+        switch_dispatch = None
+        if _route_probe is not None:
+            _snap = _route_probe.snapshot()
+            _stg = _snap.get("stages", {}) if isinstance(_snap, dict) else {}
 
-        def _c(name):
-            return int(_stg.get(name, {}).get("count", 0))
+            def _c(name):
+                return int(_stg.get(name, {}).get("count", 0))
 
-        _all_hit = _c("hot.all_hit")
-        _synced = _c("hot.allhit_fence_eval")
-        _deferred = _c("hot.allhit_defer")
-        _gather_qmm_total = _c("hot.switch_gather_qmm")   # all paths
-        _allhit_gather_qmm = _c("hot.allhit_gather_qmm")  # all-hit branch only
-        _decode_steps = max(1, int(steps))
-        switch_dispatch = {
-            # per-layer host round-trips over this DECODE pass (cumulative).
-            "eval_indices": _c("hot.eval_indices"),      # the one routing barrier/layer
-            "route_host_tolist": _c("hot.route_host"),   # .tolist()+int() host read/layer
-            # all-hit switch: fences DEFERRED (to the next routing barrier) vs SYNCED
-            # (the shipped blocking mx.eval(wave_output)). The whole win is the ratio.
-            "all_hit": _all_hit,
-            "allhit_fence_synced": _synced,
-            "allhit_fence_deferred": _deferred,
-            "allhit_defer_submit": _c("hot.allhit_defer_submit"),
-            "allhit_deferred_pct": (
-                round(100.0 * _deferred / _all_hit, 2) if _all_hit else None
-            ),
-            # miss/split switch: begin_split_route admissions + split-route layer-calls.
-            "split_route": _c("hot.split_route"),
-            "begin_split_route": _c("hot.begin_split_route"),
-            # dispatch census. switch_gather_qmm_total counts EVERY gather_qmm on
-            # the pass (all-hit + split parts + prefill waves); allhit_gather_qmm is
-            # the all-hit branch only, so gather_qmm_per_all_hit_call is exactly 3
-            # (gate/up/down grouped over the routed slots -- never per-expert).
-            "switch_gather_qmm_total": _gather_qmm_total,
-            "allhit_gather_qmm": _allhit_gather_qmm,
-            "gather_qmm_per_all_hit_call": (
-                round(_allhit_gather_qmm / _all_hit, 3) if _all_hit else None
-            ),
-            "note": "cumulative over this AR DECODE pass. Per layer the host round-trip "
-                    "is one mx.eval(indices) barrier; allhit_fence_synced counts the "
-                    "SECOND blocking eval the shipped path pays per all-hit layer "
-                    "(switch_lean defers it -> allhit_fence_deferred). "
-                    "allhit_gather_qmm/all_hit is 3 (gate/up/down); "
-                    "switch_gather_qmm_total also includes split parts + prefill waves.",
-        }
-        print(
-            "[ab] switch dispatch: "
-            f"all_hit={_all_hit} fence_synced={_synced} fence_deferred={_deferred} "
-            f"({switch_dispatch['allhit_deferred_pct']}% deferred) "
-            f"allhit_gather_qmm={_allhit_gather_qmm} "
-            f"(~{switch_dispatch['gather_qmm_per_all_hit_call']}/all-hit call) "
-            f"gather_qmm_total={_gather_qmm_total} "
-            f"split_route={switch_dispatch['split_route']} "
-            f"eval_indices={switch_dispatch['eval_indices']}",
-            flush=True,
-        )
-    _mem_sampler.stop()
+            _all_hit = _c("hot.all_hit")
+            _synced = _c("hot.allhit_fence_eval")
+            _deferred = _c("hot.allhit_defer")
+            _gather_qmm_total = _c("hot.switch_gather_qmm")   # all paths
+            _allhit_gather_qmm = _c("hot.allhit_gather_qmm")  # all-hit branch only
+            _decode_steps = max(1, int(steps))
+            switch_dispatch = {
+                # per-layer host round-trips over this DECODE pass (cumulative).
+                "eval_indices": _c("hot.eval_indices"),      # the one routing barrier/layer
+                "route_host_tolist": _c("hot.route_host"),   # .tolist()+int() host read/layer
+                # all-hit switch: fences DEFERRED (to the next routing barrier) vs SYNCED
+                # (the shipped blocking mx.eval(wave_output)). The whole win is the ratio.
+                "all_hit": _all_hit,
+                "allhit_fence_synced": _synced,
+                "allhit_fence_deferred": _deferred,
+                "allhit_defer_submit": _c("hot.allhit_defer_submit"),
+                "allhit_deferred_pct": (
+                    round(100.0 * _deferred / _all_hit, 2) if _all_hit else None
+                ),
+                # miss/split switch: begin_split_route admissions + split-route layer-calls.
+                "split_route": _c("hot.split_route"),
+                "begin_split_route": _c("hot.begin_split_route"),
+                # dispatch census. switch_gather_qmm_total counts EVERY gather_qmm on
+                # the pass (all-hit + split parts + prefill waves); allhit_gather_qmm is
+                # the all-hit branch only, so gather_qmm_per_all_hit_call is exactly 3
+                # (gate/up/down grouped over the routed slots -- never per-expert).
+                "switch_gather_qmm_total": _gather_qmm_total,
+                "allhit_gather_qmm": _allhit_gather_qmm,
+                "gather_qmm_per_all_hit_call": (
+                    round(_allhit_gather_qmm / _all_hit, 3) if _all_hit else None
+                ),
+                "note": "cumulative over this AR DECODE pass. Per layer the host round-trip "
+                        "is one mx.eval(indices) barrier; allhit_fence_synced counts the "
+                        "SECOND blocking eval the shipped path pays per all-hit layer "
+                        "(switch_lean defers it -> allhit_fence_deferred). "
+                        "allhit_gather_qmm/all_hit is 3 (gate/up/down); "
+                        "switch_gather_qmm_total also includes split parts + prefill waves.",
+            }
+            print(
+                "[ab] switch dispatch: "
+                f"all_hit={_all_hit} fence_synced={_synced} fence_deferred={_deferred} "
+                f"({switch_dispatch['allhit_deferred_pct']}% deferred) "
+                f"allhit_gather_qmm={_allhit_gather_qmm} "
+                f"(~{switch_dispatch['gather_qmm_per_all_hit_call']}/all-hit call) "
+                f"gather_qmm_total={_gather_qmm_total} "
+                f"split_route={switch_dispatch['split_route']} "
+                f"eval_indices={switch_dispatch['eval_indices']}",
+                flush=True,
+            )
+    finally:
+        _mem_sampler.stop()
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
@@ -2648,53 +2827,55 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     # optional timed stage-timing pass, so the memory block matches that peak_gb.
     _mem_sampler = mem_probe.new_sampler()
     _mem_sampler.start()
-    stats = DSparkDecodeStats()
-    # W77: when an AR reference is supplied, capture (zero extra forwards) the
-    # verify logits row of the first committed token that diverges from it.
-    capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
-    route_probe = None
-    route_prev_enabled = None
-    # W81: snapshot the expert-streaming counters at the prefill->decode boundary
-    # (prefill_callback fires after prefill, before the decode cycles) and again
-    # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
-    # block (hit rate + streamed bytes/token) matching the served daemon's.
-    _sc: dict = {}
+    try:
+        stats = DSparkDecodeStats()
+        # W77: when an AR reference is supplied, capture (zero extra forwards) the
+        # verify logits row of the first committed token that diverges from it.
+        capture = DivergenceCapture(ar_reference) if ar_reference is not None else None
+        route_probe = None
+        route_prev_enabled = None
+        # W81: snapshot the expert-streaming counters at the prefill->decode boundary
+        # (prefill_callback fires after prefill, before the decode cycles) and again
+        # after the pass, so the receipt carries a DECODE-scoped serve_stream_counters
+        # block (hit rate + streamed bytes/token) matching the served daemon's.
+        _sc: dict = {}
 
-    def _stream_prefill_cb(_info):
-        _sc["after_prefill"] = _stream_counters_snapshot(model)
-        # W100: mark the prefill->decode boundary so decode_wall_s can exclude the
-        # re-prefill (this callback fires after prefill, before the decode cycles).
-        _sc["decode_start"] = time.perf_counter()
+        def _stream_prefill_cb(_info):
+            _sc["after_prefill"] = _stream_counters_snapshot(model)
+            # W100: mark the prefill->decode boundary so decode_wall_s can exclude the
+            # re-prefill (this callback fires after prefill, before the decode cycles).
+            _sc["decode_start"] = time.perf_counter()
 
-    # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
-    # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
-    # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
-    # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
-    # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
-    # per-stage attribution is a SECOND, timed pass below.
-    t0 = time.perf_counter()
-    toks = dspark_generate(
-        model,
-        [int(t) for t in prompt_ids],
-        max_tokens=int(steps) + 1,
-        sampler=SamplerConfig(temperature=0.0),
-        seed=0,
-        speculative_depth=int(depth),
-        stats=stats,
-        divergence_capture=capture,
-        prefill_callback=_stream_prefill_cb,
-    )
-    _sc["end"] = _stream_counters_snapshot(model)
-    # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
-    # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
-    _wall_acct = _dspark_decode_wall_accounting(
-        pass_start=t0,
-        decode_start=_sc.get("decode_start"),
-        pass_end=time.perf_counter(),
-        generated_tokens=len(toks),
-    )
-    peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
-    _mem_sampler.stop()
+        # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
+        # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
+        # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
+        # headline would measure K35 OFF while the arm env says ON.  Mirrors the AR path
+        # (untimed ``_generate`` headline + a separate ``_stage_timing_pass``): the
+        # per-stage attribution is a SECOND, timed pass below.
+        t0 = time.perf_counter()
+        toks = dspark_generate(
+            model,
+            [int(t) for t in prompt_ids],
+            max_tokens=int(steps) + 1,
+            sampler=SamplerConfig(temperature=0.0),
+            seed=0,
+            speculative_depth=int(depth),
+            stats=stats,
+            divergence_capture=capture,
+            prefill_callback=_stream_prefill_cb,
+        )
+        _sc["end"] = _stream_counters_snapshot(model)
+        # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
+        # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
+        _wall_acct = _dspark_decode_wall_accounting(
+            pass_start=t0,
+            decode_start=_sc.get("decode_start"),
+            pass_end=time.perf_counter(),
+            generated_tokens=len(toks),
+        )
+        peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
+    finally:
+        _mem_sampler.stop()
     _dspark_memory_block = mem_probe.memory_block(_mem_sampler)
     report = None
     w61 = None
@@ -2985,41 +3166,54 @@ def _receipt_stem(out_path) -> Path:
     return p
 
 
-def _nonclobber_write(desired: Path, content: str):
-    """Write ``content`` to ``desired`` (or ``-2``/``-3``... when taken) ATOMICALLY
-    (tmp + rename) and NEVER overwrite an existing sidecar
-    (memory/never-overwrite-a-measurement).  Returns the path written, or None on
-    failure (guarded)."""
+def _suffixed(path: Path, n: int) -> Path:
+    """``path`` for n==1, else ``<stem>-n<suffix>`` (e.g. ``x.output-2.txt``)."""
 
-    try:
-        n = 1
-        target = None
-        while n < 10000:
-            cand = (
-                desired if n == 1
-                else desired.with_name(f"{desired.stem}-{n}{desired.suffix}")
-            )
+    return path if n == 1 else path.with_name(f"{path.stem}-{n}{path.suffix}")
+
+
+def _reserve_paired(paths):
+    """Find the SMALLEST n for which every path in ``paths`` (at suffix n) is free,
+    and atomically reserve them all (O_CREAT|O_EXCL empty files); the SAME n is
+    applied to every path so a receipt's sidecars stay paired
+    (memory/never-overwrite-a-measurement).  Returns the reserved paths (in order),
+    or None on exhaustion/failure."""
+
+    n = 1
+    while n < 100000:
+        cands = [_suffixed(p, n) for p in paths]
+        reserved = []
+        clash = False
+        for cand in cands:
             try:
                 fd = os.open(cand, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             except FileExistsError:
-                n += 1
-                continue
-            os.close(fd)  # reserve the name (empty) so no concurrent run reuses it
-            target = cand
-            break
-        if target is None:
-            return None
-        tmp = target.with_name(target.name + ".tmp")
-        with open(tmp, "w") as fh:
-            fh.write(content)
-        os.replace(tmp, target)  # atomic swap over the reserved empty file
-        return target
-    except OSError as exc:  # pragma: no cover - defensive
-        print(f"[ab] WARN: output sidecar write failed ({exc!r})", flush=True)
-        return None
+                clash = True
+                break
+            os.close(fd)
+            reserved.append(cand)
+        if clash:
+            for r in reserved:  # release partial reservations before trying n+1
+                try:
+                    os.unlink(r)
+                except OSError:
+                    pass
+            n += 1
+            continue
+        return cands
+    return None
 
 
-def _emit_sidecar(path: Path, *, arm, kind, stream, divergence) -> None:
+def _write_reserved(path: Path, content: str) -> None:
+    """Atomically write ``content`` over an already-reserved ``path`` (tmp + rename)."""
+
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as fh:
+        fh.write(content)
+    os.replace(tmp, path)
+
+
+def _sidecar_text(*, arm, kind, stream, divergence) -> str:
     sha = stream.get("token_ids_sha256")
     tok_s = stream.get("decode_tok_s")
     text = stream.get("decoded_text")
@@ -3029,7 +3223,7 @@ def _emit_sidecar(path: Path, *, arm, kind, stream, divergence) -> None:
             f"# stream: {kind}",
             f"# token_ids_sha256: {sha}",
             f"# decode_tok_s: {tok_s}",
-            f"# divergence: "
+            "# divergence: "
             + (json.dumps(divergence) if divergence is not None else "none"),
             "",
             "",
@@ -3039,33 +3233,50 @@ def _emit_sidecar(path: Path, *, arm, kind, stream, divergence) -> None:
         text if text is not None
         else "<decode unavailable (no tokenizer / decode failed)>"
     )
-    written = _nonclobber_write(path, header + body + "\n")
-    if written is not None:
-        print(f"[ab] output sidecar: {written}", flush=True)
+    return header + body + "\n"
 
 
 def _write_output_sidecars(out_path, receipt) -> None:
-    """Persist the FULL decoded output beside the receipt: ``<stem>.output.txt`` for
-    the measured stream and, for a DSpark run, ``<stem>.ar-reference.output.txt``
-    for the AR comparison stream it diverges against.  Fully guarded."""
+    """Persist the FULL decoded output beside the receipt (MEDIUM-3):
+    ``<stem>.<sha12>.output.txt`` for the measured stream and, for a DSpark run,
+    ``<stem>.<sha12>.ar-reference.output.txt`` for the AR comparison stream.  The
+    sha[:12] of the AR pass is in BOTH names (pairs them, and disambiguates arms),
+    and a single ``-n`` suffix is applied to BOTH when a name is taken, so the pair
+    never splits.  Fully guarded."""
 
     try:
         stem = _receipt_stem(out_path)
         arm = receipt.get("arm")
+        sha12 = str(receipt.get("token_ids_sha256") or "nosha")[:12]
+        base = f"{stem.name}.{sha12}"
         dsp = receipt.get("dspark")
         if isinstance(dsp, dict):
-            primary, kind, div = dsp, "dspark", dsp.get("divergence")
+            primary_stream, primary_kind, div = dsp, "dspark", dsp.get("divergence")
         else:
-            primary, kind, div = receipt, "ar", None
-        _emit_sidecar(
-            stem.with_name(stem.name + ".output.txt"),
-            arm=arm, kind=kind, stream=primary, divergence=div,
-        )
+            primary_stream, primary_kind, div = receipt, "ar", None
+
+        want = [stem.with_name(base + ".output.txt")]
         if isinstance(dsp, dict):
-            _emit_sidecar(
-                stem.with_name(stem.name + ".ar-reference.output.txt"),
-                arm=arm, kind="ar-reference", stream=receipt, divergence=div,
+            want.append(stem.with_name(base + ".ar-reference.output.txt"))
+
+        reserved = _reserve_paired(want)
+        if reserved is None:
+            print("[ab] WARN: output sidecar names exhausted; skipping", flush=True)
+            return
+
+        _write_reserved(
+            reserved[0],
+            _sidecar_text(arm=arm, kind=primary_kind, stream=primary_stream,
+                          divergence=div),
+        )
+        print(f"[ab] output sidecar: {reserved[0]}", flush=True)
+        if isinstance(dsp, dict):
+            _write_reserved(
+                reserved[1],
+                _sidecar_text(arm=arm, kind="ar-reference", stream=receipt,
+                              divergence=div),
             )
+            print(f"[ab] output sidecar: {reserved[1]}", flush=True)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[ab] WARN: output sidecar step failed ({exc!r})", flush=True)
 
@@ -3568,12 +3779,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # W106 item 3: merge the budget-total derivation terms into every memory
         # block (memory_plan_source + the derived plan limit + each term), so the
         # receipt records how the plan compensated for the non-Metal requirements.
-        _budget_keys = _budget_memory_keys(args)
+        _extra_keys = _memory_block_extra_keys(args)
         if isinstance(receipt.get("memory"), dict):
-            receipt["memory"].update(_budget_keys)
+            receipt["memory"].update(_extra_keys)
         _dsp = receipt.get("dspark")
         if isinstance(_dsp, dict) and isinstance(_dsp.get("memory"), dict):
-            _dsp["memory"].update(_budget_keys)
+            _dsp["memory"].update(_extra_keys)
         return receipt
     finally:
         if runtime is not None:
@@ -3848,6 +4059,12 @@ def _run_dry(args, bench) -> int:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     bench = _load_bench_module()
+
+    # W106 LOW-4: pre-flight the budget plan BEFORE anything else (no MLX, no model,
+    # no --out needed), so a floor refusal happens before the GPU window opens.
+    if getattr(args, "memory_plan_preflight", False):
+        return _preflight_memory_plan(args, bench)
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run:

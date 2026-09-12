@@ -109,7 +109,7 @@ def test_floor_refusal_raises_clear_error():
         )
     msg = str(exc.value)
     assert "below the floor" in msg.lower()
-    assert "--memory-budget-total-gb" in msg  # actionable
+    assert "--memory-budget-total-gib" in msg  # actionable
 
 
 def test_negative_term_rejected():
@@ -242,19 +242,47 @@ def test_kv_estimator_zero_max_kv_is_zero():
     assert mod._kv_bytes_at_max_kv(dict(mod._KV_CONFIG_DEFAULTS), 0) == 0
 
 
-def test_kv_estimator_unknown_ratio_defaults_to_no_pooling():
+def test_kv_estimator_honors_kv_source_layer_ids():
+    # W106 LOW-1: only the layers in kv_source_layer_ids hold the compressed/index
+    # lanes; every layer keeps the window ring.
     mod = _mod()
-    # compress_ratios shorter than num_hidden_layers -> the extra layers default
-    # to ratio 1 (no pooling, the conservative maximum).
-    dims = dict(mod._KV_CONFIG_DEFAULTS)
-    dims["num_hidden_layers"] = 1
-    dims["compress_ratios"] = []
+    dims = {
+        "num_hidden_layers": 4, "head_dim": 512, "qk_rope_head_dim": 64,
+        "index_head_dim": 128, "window_size": 128,
+        "compress_ratios": [0, 0, 4, 0], "kv_source_layer_ids": [2],
+    }
     got = mod._kv_bytes_at_max_kv(dims, 1000)
-    window = 1000 * 512 * 2
-    latent = 1000 * 512 * 2
-    rope = 1000 * 64 * 2
-    index = 1000 * 128 * 2
-    assert got == window + latent + rope + index
+    window = 4 * (1000 * 512 * 2)          # every layer
+    rows = -(-1000 // 4)                    # layer 2 ratio 4 -> ceil = 250
+    src = rows * 512 * 2 + rows * 64 * 2 + rows * 128 * 2
+    assert got == window + src
+
+
+def test_kv_estimator_kv_source_ids_override_compress_ratios():
+    # kv_source_layer_ids is authoritative: layer 0 has compress_ratios=1 but is NOT
+    # in kv_source_layer_ids, so it is window-only.
+    mod = _mod()
+    dims = {
+        "num_hidden_layers": 2, "head_dim": 512, "qk_rope_head_dim": 64,
+        "index_head_dim": 128, "window_size": 128,
+        "compress_ratios": [1, 1], "kv_source_layer_ids": [1],
+    }
+    got = mod._kv_bytes_at_max_kv(dims, 1000)
+    window = 2 * (1000 * 512 * 2)
+    src = 1000 * 512 * 2 + 1000 * 64 * 2 + 1000 * 128 * 2  # only layer 1, ratio 1
+    assert got == window + src
+
+
+def test_kv_estimator_default_config_prices_only_four_source_layers():
+    # The released default kv_source_layer_ids has 4 entries -> only 4 of the 40
+    # layers get the compressed/index lanes (LOW-1 regression: not all 38/40).
+    mod = _mod()
+    dims = dict(mod._KV_CONFIG_DEFAULTS)  # 40 layers, kv_source_layer_ids=[2,8,14,20]
+    got = mod._kv_bytes_at_max_kv(dims, 1000)
+    window = 40 * (1000 * 512 * 2)
+    rows = 1000  # compress_ratios empty -> ratio defaults to 1
+    per_src = rows * 512 * 2 + rows * 64 * 2 + rows * 128 * 2
+    assert got == window + 4 * per_src
 
 
 # --------------------------------------------------------------------------
@@ -352,7 +380,7 @@ def _budget_args(mod, tmp_path, **over):
     argv = [
         "--out", str(tmp_path / "out.jsonl"),
         "--model", str(tmp_path),
-        "--memory-budget-total-gb", "100",
+        "--memory-budget-total-gib", "100",
         "--max-kv", "1000",
     ]
     args = mod.build_parser().parse_args(argv)
@@ -399,14 +427,14 @@ def test_resolve_derivation_budget_overrides_memory_limit(tmp_path):
     args._dsv41_system_used_at_start_bytes = int(20 * GIB)
     bench = _FakeBench(int(20 * GIB))
     derivation = mod._resolve_derivation(args, bench=bench, max_kv=1000)
-    # --memory-budget-total-gb overrides --memory-limit-gib (derives, not literal).
+    # --memory-budget-total-gib overrides --memory-limit-gib (derives, not literal).
     assert args._dsv41_budget_total.source == "budget"
     assert derivation.plan_gib != pytest.approx(42.0)
 
 
 def test_resolve_derivation_explicit_path(tmp_path):
     mod = _mod()
-    args = _budget_args(mod, tmp_path, memory_budget_total_gb=None, memory_limit_gib=70.0)
+    args = _budget_args(mod, tmp_path, memory_budget_total_gib=None, memory_limit_gib=70.0)
     derivation = mod._resolve_derivation(args, bench=None, max_kv=None)
     assert derivation.plan_gib == pytest.approx(70.0)
     bt = args._dsv41_budget_total
@@ -420,8 +448,263 @@ def test_resolve_derivation_explicit_path(tmp_path):
 def test_resolve_derivation_floor_refusal_propagates(tmp_path):
     mod = _mod()
     # budget 40 - 20 - 10 - kv - 3 < 20 floor -> refuse.
-    args = _budget_args(mod, tmp_path, memory_budget_total_gb=40.0)
+    args = _budget_args(mod, tmp_path, memory_budget_total_gib=40.0)
     args._dsv41_system_used_at_start_bytes = int(20 * GIB)
     bench = _FakeBench(int(20 * GIB))
     with pytest.raises(ValueError, match="(?i)below the floor"):
         mod._resolve_derivation(args, bench=bench, max_kv=1000)
+
+
+# --------------------------------------------------------------------------
+# HIGH-1: _remeasure_non_metal_overhead must NEVER call mx.set_memory_limit
+# post-load, must measure the CURRENT footprint (phys_footprint), and must ABORT
+# (not lower the limit) when the measured overhead blows the budget.
+# --------------------------------------------------------------------------
+
+
+class _FakeMx:
+    def __init__(self, active_bytes):
+        self._active = int(active_bytes)
+        self.set_memory_limit_calls = []
+        self.metal = None
+
+    def get_active_memory(self):
+        return self._active
+
+    def set_memory_limit(self, n):  # must NEVER be called post-load
+        self.set_memory_limit_calls.append(int(n))
+        return 0
+
+
+def _budget_bt(mod, *, estimate_gib):
+    return mod.BudgetTotalDerivation(
+        source="budget",
+        budget_total_gb=93.0,
+        system_used_at_start_gb=20.0,
+        non_metal_overhead_gb=float(estimate_gib),
+        kv_growth_to_max_kv_gb=2.0,
+        safety_gb=3.0,
+        floor_gib=20.0,
+        plan_limit_gib=50.0,
+    )
+
+
+def _patch_footprint(mod, monkeypatch, footprint_gib):
+    import mtplx.deepseek_v41_memory_profile as mp
+
+    monkeypatch.setattr(
+        mp, "process_rss_snapshot",
+        lambda: {"phys_footprint_bytes": int(footprint_gib * GIB),
+                 "resident_bytes": int(footprint_gib * GIB),
+                 "peak_maxrss_bytes": int(footprint_gib * GIB)},
+    )
+
+
+def test_remeasure_never_calls_set_memory_limit_and_aborts_over_budget(monkeypatch):
+    mod = _mod()
+    # active 70 GiB, footprint 90 GiB -> measured overhead 20 GiB, estimate 10 ->
+    # overage 10 GiB > tolerance -> ABORT, and set_memory_limit NEVER called.
+    _patch_footprint(mod, monkeypatch, 90.0)
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    with pytest.raises(RuntimeError, match="(?i)ABORT .*before decode"):
+        mod._remeasure_non_metal_overhead(args, mx)
+    assert mx.set_memory_limit_calls == []  # the core HIGH-1 assertion
+
+
+def test_remeasure_within_tolerance_records_measured_no_limit_change(monkeypatch):
+    mod = _mod()
+    # active 70 GiB, footprint 80 GiB -> measured 10 == estimate 10 -> no abort.
+    _patch_footprint(mod, monkeypatch, 80.0)
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # no raise
+    bt = args._dsv41_budget_total
+    assert bt.non_metal_overhead_measured_gb == pytest.approx(10.0, abs=0.01)
+    assert bt.plan_limit_gib_effective == pytest.approx(50.0)  # NEVER lowered
+    assert mx.set_memory_limit_calls == []
+
+
+def test_remeasure_footprint_unavailable_keeps_estimate(monkeypatch):
+    mod = _mod()
+    import mtplx.deepseek_v41_memory_profile as mp
+    monkeypatch.setattr(mp, "process_rss_snapshot",
+                        lambda: {"phys_footprint_bytes": None, "resident_bytes": None})
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = _budget_bt(mod, estimate_gib=10.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # no raise, no crash
+    bt = args._dsv41_budget_total
+    assert bt.non_metal_overhead_measured_gb is None
+    assert bt.plan_limit_gib_effective == pytest.approx(50.0)
+    assert mx.set_memory_limit_calls == []
+
+
+def test_remeasure_noop_for_explicit_plan():
+    mod = _mod()
+    mx = _FakeMx(active_bytes=int(70 * GIB))
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = mod._explicit_plan_derivation(50.0)
+    mod._remeasure_non_metal_overhead(args, mx)  # explicit -> noop
+    assert mx.set_memory_limit_calls == []
+
+
+# --------------------------------------------------------------------------
+# HIGH-2: the receipt memory block carries an rss_semantics_note stating that
+# RSS-vs-mlx_peak on Metal is unverified.
+# --------------------------------------------------------------------------
+
+
+def test_memory_block_extra_keys_carry_rss_semantics_note(tmp_path):
+    mod = _mod()
+    args = _budget_args(mod, tmp_path)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    extra = mod._memory_block_extra_keys(args)
+    assert "rss_semantics_note" in extra
+    assert "UNVERIFIED" in extra["rss_semantics_note"]
+    assert "mlx_peak_gb" in extra["rss_semantics_note"]
+    # the budget keys are still present alongside the note
+    assert extra["memory_plan_source"] == "budget"
+
+
+def test_memory_block_extra_keys_explicit_still_has_note():
+    mod = _mod()
+
+    class _A:
+        pass
+
+    args = _A()
+    args._dsv41_budget_total = mod._explicit_plan_derivation(50.0)
+    extra = mod._memory_block_extra_keys(args)
+    assert extra["memory_plan_source"] == "explicit"
+    assert "rss_semantics_note" in extra
+
+
+# --------------------------------------------------------------------------
+# MEDIUM-1: flags are GiB (-gib canonical); -gb is a deprecated alias that
+# converts decimal GB -> GiB at the boundary.
+# --------------------------------------------------------------------------
+
+
+def test_gb_to_gib_conversion():
+    mod = _mod()
+    # 100 decimal GB = 100e9 bytes = 100e9 / 2**30 GiB ~= 93.13 GiB.
+    assert mod._gb_to_gib(100.0) == pytest.approx(93.1322574, abs=1e-4)
+
+
+def test_deprecated_gb_alias_converts(tmp_path):
+    mod = _mod()
+    cfg = {"num_hidden_layers": 1, "head_dim": 512, "qk_rope_head_dim": 64,
+           "index_head_dim": 128, "sliding_window": 128, "compress_ratios": [0],
+           "kv_source_layer_ids": []}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--memory-budget-total-gb", "100", "--max-kv", "1000"]
+    args = mod.build_parser().parse_args(argv)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    # the -gb 100 is decimal GB -> ~93.13 GiB (NOT 100 GiB).
+    assert args._dsv41_budget_total.budget_total_gb == pytest.approx(93.1322574, abs=1e-3)
+
+
+def test_gib_and_gb_both_set_refused(tmp_path):
+    mod = _mod()
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"num_hidden_layers": 1, "kv_source_layer_ids": []}))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--memory-budget-total-gib", "93", "--memory-budget-total-gb", "100",
+            "--max-kv", "1000"]
+    args = mod.build_parser().parse_args(argv)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    with pytest.raises(ValueError, match="only one of"):
+        mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+
+
+def test_safety_and_overhead_gib_flags(tmp_path):
+    mod = _mod()
+    cfg = {"num_hidden_layers": 1, "kv_source_layer_ids": [], "compress_ratios": [0],
+           "head_dim": 512, "qk_rope_head_dim": 64, "index_head_dim": 128,
+           "sliding_window": 128}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--memory-budget-total-gib", "100", "--max-kv", "1000",
+            "--memory-safety-gib", "5", "--non-metal-overhead-gib", "8"]
+    args = mod.build_parser().parse_args(argv)
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    mod._resolve_derivation(args, bench=_FakeBench(int(20 * GIB)), max_kv=1000)
+    bt = args._dsv41_budget_total
+    assert bt.safety_gb == pytest.approx(5.0)
+    assert bt.non_metal_overhead_gb == pytest.approx(8.0)
+
+
+# --------------------------------------------------------------------------
+# LOW-4: --memory-plan-preflight derives from a dry snapshot and exits 0/3
+# BEFORE any model load / GPU window.
+# --------------------------------------------------------------------------
+
+
+class _FakeBenchPF:
+    def __init__(self, system_used_bytes):
+        self._sys = int(system_used_bytes)
+
+    def _system_used_bytes(self):
+        return self._sys
+
+    def resolve_max_kv(self, cells, steps, max_kv):
+        return int(max_kv)
+
+
+def _pf_args(mod, tmp_path, **over):
+    cfg = {"num_hidden_layers": 40, "head_dim": 512, "qk_rope_head_dim": 64,
+           "index_head_dim": 128, "sliding_window": 128,
+           "kv_source_layer_ids": [2, 8, 14, 20], "compress_ratios": []}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    argv = ["--out", str(tmp_path / "o.jsonl"), "--model", str(tmp_path),
+            "--context-tokens", "16384", "--decode-tokens", "256",
+            "--max-kv", "17408", "--memory-plan-preflight"]
+    for k, v in over.items():
+        if k == "argv_extra":
+            argv += v
+    args = mod.build_parser().parse_args(argv + over.get("argv_extra", []))
+    args._dsv41_system_used_at_start_bytes = int(20 * GIB)
+    return args
+
+
+def test_preflight_ok_returns_0(tmp_path):
+    mod = _mod()
+    args = _pf_args(mod, tmp_path, argv_extra=["--memory-budget-total-gib", "93"])
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
+    assert rc == 0
+
+
+def test_preflight_below_floor_returns_3(tmp_path):
+    mod = _mod()
+    args = _pf_args(mod, tmp_path, argv_extra=["--memory-budget-total-gib", "40"])
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
+    assert rc == 3  # 40 - 20 - 10 - kv - 3 < 20 floor
+
+
+def test_preflight_no_budget_flag_returns_0(tmp_path):
+    mod = _mod()
+    args = _pf_args(mod, tmp_path)  # no --memory-budget-total-*
+    rc = mod._preflight_memory_plan(args, _FakeBenchPF(int(20 * GIB)))
+    assert rc == 0
