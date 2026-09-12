@@ -948,3 +948,84 @@ def test_medium_a_formula_matches_alloc_on_bf16_model(monkeypatch):
     assert cache.layers[0]._window.raw_backing().dtype == mx.bfloat16
     assert cache.layers[1]._window.raw_backing().dtype == mx.float32
     assert cache.layers[2]._compress_kv.raw_backing().dtype == mx.float32
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH-A: the session-bank prefix restore must MISS cleanly (trim returns
+# != delta, no mutation) when the divergence exceeds the ring's recoverable depth,
+# so the served single-request lane falls back to a cold prefill (not a ValueError).
+# ---------------------------------------------------------------------------
+def _prefill_ring_cache(monkeypatch, tokens, *, maxkv=1024):
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(maxkv))
+    cfg = _Cfg()
+    cache = _make_cache(cfg)
+    # decode-style 1-row appends so the ring compacts and the drop frontier advances
+    for _ in range(tokens):
+        for L, lc in enumerate(cache.layers):
+            lc.append_window(_row(1, cfg.head_dim))
+            if L in set(cfg.kv_source_layer_ids):
+                ratio = cfg.compress_ratios[L]
+                if ratio > 1:
+                    p = lc.comp_state.push(_row(1, cfg.head_dim), _row(1, cfg.head_dim))
+                    if p.shape[1] > 0:
+                        lc.append_compress(_row(p.shape[1], cfg.head_dim))
+                        lc.append_index_k(_row(p.shape[1], cfg.index_head_dim))
+                else:
+                    lc.append_compress(_row(1, cfg.head_dim))
+                    lc.append_index_k(_row(1, cfg.index_head_dim))
+        cache.advance(1)
+    return cache
+
+
+def test_session_bank_deep_prefix_restore_misses_cleanly(monkeypatch):
+    from mtplx.session_bank import _trim_cache_ref_to_prefix
+    cache = _prefill_ring_cache(monkeypatch, 600)
+    assert cache.layers[0]._window.drop_offset > 0, "ring must have compacted"
+    offs = [lc.offset for lc in cache.layers]
+    wlens = [lc.window_len() for lc in cache.layers]
+    clens = [_r(lc.compress_kv) for lc in cache.layers]
+
+    # a deep prefix restore (divergence ~300 >> the ~24-row recoverable window) must
+    # MISS -- returns False WITHOUT raising and WITHOUT mutating the cache
+    assert _trim_cache_ref_to_prefix(cache, 300) is False
+    assert [lc.offset for lc in cache.layers] == offs, "cache mutated on a deep miss"
+    assert [lc.window_len() for lc in cache.layers] == wlens
+    assert [_r(lc.compress_kv) for lc in cache.layers] == clens
+
+
+def test_session_bank_shallow_prefix_restore_hits(monkeypatch):
+    """A within-window divergence still restores (trim returns delta) -- the miss
+    guard must not break the common short-tail regenerate case."""
+    from mtplx.session_bank import _trim_cache_ref_to_prefix
+    cache = _prefill_ring_cache(monkeypatch, 600)
+    # prefix 599 -> divergence of 2 tokens, well inside the resident window
+    assert _trim_cache_ref_to_prefix(cache, 599) is True
+    assert all(lc.offset == 598 for lc in cache.layers)  # target_offset = prefix - 1
+
+
+def test_rollback_deep_leaves_engram_untouched(monkeypatch):
+    """Review HIGH-A: a failed deep rollback (window raises) must not have already
+    rewound the engram -- the ring truncate now runs before the engram trim."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "1024")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_HEADROOM", "2")
+
+    class _EngramSpy:
+        def __init__(self): self.trims = []
+        def trim(self, n): self.trims.append(int(n))
+
+    spy = _EngramSpy()
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=0, is_kv_source=False,
+                               engram_state=spy)
+    for _ in range(20):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    m = lc.mark()
+    for _ in range(60):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    assert lc._window.drop_offset > 20
+    with pytest.raises(ValueError, match="below the drop frontier"):
+        lc.rollback(m)
+    assert spy.trims == [], "engram was trimmed before the window raise (half-rewound)"

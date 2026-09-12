@@ -834,6 +834,16 @@ class _WindowRing:
         contiguous suffix, so ``drop == logical_len - resident``)."""
         self._drop = max(0, int(logical_len) - self._len)
 
+    def can_truncate_to_length(self, logical_len: int) -> bool:
+        """W107 (review HIGH-A): whether :meth:`truncate_to_length` would succeed --
+        i.e. the rollback target's causal window stays within the resident window (or
+        is a full reset).  ``LayerAttentionCache.trim`` calls this to return a clean
+        miss (0, no mutation) for the session-bank prefix restore instead of raising."""
+        logical_len = max(0, int(logical_len))
+        if logical_len > 0 and (logical_len - self.window_size + 1) < self._drop:
+            return False
+        return True
+
     def truncate_to_length(self, logical_len: int) -> None:
         """Drop back to logical length ``logical_len`` (trim/rollback).  ``_drop``
         stays where it is (advanced by any compaction since the mark) and only the
@@ -842,8 +852,10 @@ class _WindowRing:
         W107 (review MEDIUM-3, pre-existing W80): a rollback that pulls the frontier
         back far enough that the newest retained / next query's causal window reaches
         BELOW the drop frontier would silently read masked (dropped) rows -> silent
-        divergence.  Raise instead of corrupting.  Shallow rollbacks (DSpark one
-        cycle, device-route depth 1) stay within the resident window and never trip
+        divergence.  Raise instead of corrupting (direct callers -- rollback, direct
+        ring use).  :meth:`can_truncate_to_length` is the non-raising predicate the
+        session-bank trim path checks first (review HIGH-A).  Shallow rollbacks (DSpark
+        one cycle, device-route depth 1) stay within the resident window and never trip
         this; ``logical_len == 0`` is a full reset (no history needed) and is allowed.
         """
         logical_len = max(0, int(logical_len))
@@ -1409,7 +1421,14 @@ class LayerAttentionCache:
         compressor frontier re-exposes the shortened partial group; the engram
         history (only the entry that owns it) drops its last ``n`` fed positions.
         ``offset`` decreases by exactly ``n`` -- the per-entry property the
-        verify repair (``trim_verified_window_to_prefix``) checks."""
+        verify repair (``trim_verified_window_to_prefix``) checks.
+
+        W107 (review HIGH-A): when the window is a bounded ring and the trim is
+        DEEPER than its recoverable sliding window (the session-bank prefix restore
+        of a long-diverged turn), this returns ``0`` with NO mutation instead of
+        raising -- the bank's miss contract is "trim returned != delta", so it
+        records NO_SNAPSHOT_COVERAGE and falls back to a cold prefill (the raise
+        stays only for direct ``truncate_to_length`` callers)."""
         n = int(n)
         if n < 0:
             raise ValueError("trim count must be >= 0")
@@ -1419,6 +1438,14 @@ class LayerAttentionCache:
         new_len = cur - n
         if new_len < 0:
             raise ValueError(f"cannot trim {n} of {cur} tokens")
+        if isinstance(self._window, _WindowRing):
+            # W107 HIGH-A: bail cleanly (0, no mutation) if the ring can't recover to
+            # new_len, BEFORE touching any lane -- so a bank prefix-restore miss
+            # leaves the whole entry untouched.  (Every entry's ring has the same
+            # window_size and drop schedule, so entry 0 predicts the rest; the bank's
+            # per-entry loop stops at the first entry returning != delta.)
+            if not self._window.can_truncate_to_length(new_len):
+                return 0
         if isinstance(self._window, _WindowRing):
             # W80 drop-aware: the ring restores its LOGICAL length; _drop stays
             # advanced (dropped rows are always beyond the window -> exact).
@@ -1448,6 +1475,16 @@ class LayerAttentionCache:
 
     def rollback(self, mark) -> None:
         offset, nw, nc, ni, comp_mark = mark
+        # W107 (review HIGH-A): the window truncate is the only step that can raise
+        # (a deep rollback across a ring compaction -- MEDIUM-3), so do it FIRST,
+        # before the engram trim, so a failed deep rollback leaves nothing
+        # half-rewound (the engram would otherwise have already been trimmed).
+        if isinstance(self._window, _WindowRing):
+            # W80 drop-aware: restore to the marked LOGICAL length (== offset, the
+            # window advances one row per token); _drop stays advanced.
+            self._window.truncate_to_length(int(offset))
+        else:
+            self.window = _truncate(self.window, nw)
         # The engram history advances one position per token, in lockstep with
         # ``offset``, so the rollback depth is exactly the offset delta -- trim by
         # it (no dependence on the engram exposing a length, so a hook stand-in
@@ -1456,12 +1493,6 @@ class LayerAttentionCache:
             back = int(self.offset) - int(offset)
             if back > 0:
                 self.engram_state.trim(back)
-        if isinstance(self._window, _WindowRing):
-            # W80 drop-aware: restore to the marked LOGICAL length (== offset, the
-            # window advances one row per token); _drop stays advanced.
-            self._window.truncate_to_length(int(offset))
-        else:
-            self.window = _truncate(self.window, nw)
         # W107 (HIGH-1): length-only truncate for _GrowBuffer lanes (no realloc).
         self._compress_kv = self._lane_truncate(self._compress_kv, nc)
         self._index_k = self._lane_truncate(self._index_k, ni)
