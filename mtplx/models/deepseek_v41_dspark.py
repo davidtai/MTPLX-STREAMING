@@ -38,9 +38,20 @@ the reused ``_hc_post_impl``, and the ``MoE`` switch seam) is imported from
 
 Expert execution: the 3 MTP stages' 128 routed experts are RESIDENT mxfp4 gs32
 tensors (W18_REPORT), executed through mlx-lm's quantised :class:`SwitchGLU`
-carrying the reference clamped SwiGLU (the ``MoE`` seam this module reuses) --
-``mx.gather_qmm`` in mlx 0.32.2 has no ``mode=`` argument, so the resident
-mxfp4 path is the SwitchGLU quantised matmul, not a bespoke gather_qmm(mode=).
+carrying the reference clamped SwiGLU (the ``MoE`` seam this module reuses).  The
+resident SwitchGLU quantised matmul **is** ``mx.gather_qmm(mode="mxfp4")``: on this
+box (mlx 0.32.2) both ``mx.gather_qmm`` and ``mx.quantized_matmul`` take
+``mode: str = 'affine'`` with an optional ``biases`` (mxfp4 gs32 = uint32 codes +
+uint8 E8M0 scales, no bias), and ``mlx_lm``'s ``QuantizedSwitchLinear.__call__`` calls
+exactly ``mx.gather_qmm(..., mode="mxfp4")`` per projection -- they are the same op,
+not alternatives (W104 corrects the earlier "no ``mode=`` argument" note).  The path
+is barrier-free: the MTP stages live in ``model.mtp.layers``, never in
+``model.model.layers``, so ``bind_streamed_switches`` cannot rebind them to the
+streamed ``HotExpertSwitchGLU`` -- no ``mx.eval(indices)`` routing barrier, no
+``.tolist()`` route plan, no layer lock, no deferred release, no per-call dequant /
+repack.  ``self.mlp(moe_input)`` issues ZERO host syncs per draft cycle (W104 sync
+census, ``scripts/deepseek_v41/w104_draft_moe_sync_census.py``); the one sync per cycle
+is the decode driver's terminal ``mx.eval``.
 """
 
 from __future__ import annotations

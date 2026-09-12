@@ -101,6 +101,11 @@ DRAFT_COMPILE_ENV = "MTPLX_DSV41_DRAFT_COMPILE"     # K33 (W65): DSpark draft-bl
 # graph from Python each cycle.  Byte-identical (draft tokens/logits/confidence),
 # fixed-shape + row-cap.  Only touches the DSpark-DIRECT draft path (--decode-mode
 # dspark), so it composes with the decode levers on the target verify forward.
+DRAFT_HEAD_BF16_ENV = "MTPLX_DSV41_DRAFT_HEAD_BF16"  # W103: DSpark draft-head
+# fp32-cast trap removal -- cast the draft hidden to the resident bf16 head dtype
+# (a bf16 GEMV, f32 logits after) instead of casting to f32 and promoting the head
+# weight to a per-cycle f32 temporary. Draft-head only (composes with the verify
+# forward); rounding-class on the draft logits (greedy verify == AR regardless).
 VERIFY_SINGLE_BARRIER_ENV = "MTPLX_DSV41_VERIFY_SINGLE_BARRIER"  # K31 (W61):
 # small-M (2..8-row) DECODE verify -- pin the whole route all-hit and gather
 # rows*top_k in ONE wave (K27 sorted gather) with one deferred release, so a
@@ -323,13 +328,16 @@ ALL_LEVER_ENVS = (
     GATE_PREFETCH_MIN_LAYER_ENV,
     # W95 (appended; coordinate with any concurrent list extension):
     RUNNER_ENV,
+    # W104 (appended; coordinate with any concurrent list extension):
+    DRAFT_HEAD_BF16_ENV,
 )
 
 
 def _preset(
     *, overlap=None, layer_major=None, sinkhorn=None, hc=None, small_stages=None,
     hc_premix_kernel=None, fastpath=None,
-    submit=None, attn=None, win_memo=None, draft=None, device_route=None,
+    submit=None, attn=None, win_memo=None, draft=None, draft_head_bf16=None,
+    device_route=None,
     verify_single=None,
     prefill_dense=None, prefill_dense_min_rows=None, prefill_dense_batch=None,
     prefill_dense_matmul_dtype=None,
@@ -372,6 +380,7 @@ def _preset(
         ATTN_COMPILE_ENV: attn,
         ATTN_WIN_MEMO_ENV: win_memo,
         DRAFT_COMPILE_ENV: draft,
+        DRAFT_HEAD_BF16_ENV: draft_head_bf16,
         DEVICE_ROUTE_ENV: device_route,
         VERIFY_SINGLE_BARRIER_ENV: verify_single,
         PREFILL_DENSE_ENV: prefill_dense,
@@ -647,18 +656,20 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
-    # W81 (window 34 stacking): cell16k_ring + K33 DSpark draft-block tape collapse
-    # (--decode-mode dspark).  Exact key set of cell16k_ring plus draft="1"; the
-    # draft compile is a scheduling collapse on the DSpark draft head only, so it
-    # composes with the ring and does not change the verify math.  Runs at the
-    # profile's transient_slots by default (W81 slot-plan resolution), so the
-    # verify switch is single-admission (<=24 unique/layer <= 48 transient), letting
-    # this arm measure the draft-compile delta on top of a single-barrier verify.
+    # W104 (was W81): cell16k_ring + BOTH DSpark draft-head levers -- K33 draft-block
+    # tape collapse (draft="1") AND the W103 draft-head fp32-cast fix
+    # (draft_head_bf16="1").  Exact key set of cell16k_ring plus those two; both touch
+    # the DSpark-DIRECT draft head only (--decode-mode dspark), so they compose with
+    # the ring and never change the verify math.  Runs at the profile's
+    # transient_slots by default, so the verify switch is single-admission, letting
+    # this arm measure the full draft-head delta on top of a single-barrier verify.
+    # NB (W104): before W104 this arm pinned draft="1" ONLY; DRAFT_COMPILE in
+    # isolation is still the standalone ``draft_compile`` arm.
     "cell16k_ring_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        draft="1",
+        draft="1", draft_head_bf16="1",
     ),
     # W81 (window 34 stacking): cell16k_ring + W64 working-set pin + W71 barrier-free
     # pinned device route (pin_working_set="all" + device_route + device_route_pinned).
@@ -805,6 +816,21 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2",
+    ),
+    # W104: cell16k_ring_v2 + BOTH DSpark draft-head levers (K33 draft-block tape
+    # collapse + the W103 draft-head fp32-cast fix).  Exact key set of cell16k_ring_v2
+    # plus draft="1" + draft_head_bf16="1"; both touch the DSpark draft head only, so
+    # they compose with the v2 runner's SSD-hiding verify path and never change the
+    # verify math.  The direct A/B vs cell16k_ring_v2 isolates the two draft-head
+    # levers on the standard 16K cell with the v2 runner armed.  (W104 traced the draft
+    # MoE to an already barrier-free resident gather_qmm(mode="mxfp4") -- zero host
+    # syncs -- so there is NO draft-MoE lever to stack here; see
+    # docs/deepseek-v41/W104_DRAFT_RESIDENT_MOE.md.)
+    "cell16k_ring_v2_draft": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
     ),
 }
 
