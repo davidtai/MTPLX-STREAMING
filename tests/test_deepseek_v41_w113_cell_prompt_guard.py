@@ -191,6 +191,30 @@ def test_guard_wired_into_main_refuses_before_mlx(env_levers, tmp_path):
         )
 
 
+def test_dry_run_bounded_arm_at_16k_without_max_kv_does_not_raise(env_levers, tmp_path):
+    # W113 fix (regression): the W107 KV_BOUNDED_MAXKV stamp in _run_arm calls
+    # bench.resolve_max_kv(), which RAISES for the 16K cell with no explicit --max-kv
+    # (the default 4096 is below the 16704 the cell needs).  On the --dry-run path the
+    # CPU-only double builds no cache, so nothing reads KV_BOUNDED_MAXKV; the stamp is
+    # now guarded to skip in dry-run so a dry-run of a KV-bounded cell16k_* arm at
+    # --context-tokens 16384 (no --max-kv) COMPLETES instead of aborting before its
+    # early return.  (Dry-run bypasses the cell-prompt guard, so this reaches _run_arm.)
+    out = tmp_path / "dry-bounded.jsonl"
+    rc = env_levers.main(
+        ["--dry-run", "--context-tokens", "16384",
+         "--arms", "cell16k_ring_bounded", "--out", str(out)]
+    )
+    assert rc == 0
+    recs = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["arm"] == "cell16k_ring_bounded" and r["dry_run"] is True
+    # The bounded lever is armed, but the MAXKV stamp was SKIPPED (dry-run never
+    # pins it -- the guard is what keeps resolve_max_kv from raising here).
+    assert r["arm_env"]["MTPLX_DSV41_KV_BOUNDED"] == "1"
+    assert r["arm_env"]["MTPLX_DSV41_KV_BOUNDED_MAXKV"] is None
+
+
 # ---------------------------------------------------------------------------
 # 2. special-token-id resolver (tokenizer files only, no model)
 # ---------------------------------------------------------------------------

@@ -3959,7 +3959,18 @@ def _run_arm(args, arm, bench, mx) -> dict:
     # make_cache (per request), so the cache reads it at construction.  Read-at-use,
     # not import.  A bounded arm with neither key set falls back to geometric growth
     # (the kv_realloc_* counters then flag it).
-    if (os.environ.get(KV_BOUNDED_ENV) or "").strip().lower() in ("1", "true", "yes", "on"):
+    #
+    # W113 fix: SKIP the stamp on the --dry-run path.  The CPU-only dry-run double
+    # never builds the cache (nothing reads KV_BOUNDED_MAXKV), and
+    # ``bench.resolve_max_kv`` RAISES for a large cell with no explicit --max-kv (the
+    # default 4096 is below the 16704 the 16K cell needs), which would abort a dry-run
+    # of a KV-bounded arm before its early return below.  Guarding the stamp keeps the
+    # dry-run resolution double CPU-safe for bounded arms at any --context-tokens.
+    if (
+        not getattr(args, "dry_run", False)
+        and (os.environ.get(KV_BOUNDED_ENV) or "").strip().lower()
+        in ("1", "true", "yes", "on")
+    ):
         if not (os.environ.get(KV_BOUNDED_MAXKV_ENV) or "").strip():
             _bounded_max_kv = bench.resolve_max_kv(
                 [args.context_tokens], args.decode_tokens, args.max_kv
