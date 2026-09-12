@@ -2887,13 +2887,26 @@ class DecoderLayer(nn.Module):
         link = getattr(self.mlp, "_mtplx_gate_prefetch_next", None)
         if link is None:
             return
-        # h is [B, T, hc_mult, dim]. AR decode (T==1) always; the DSpark verify row
-        # batch (T = K+1, 2..MAX) only under the v2 runner -- an AR-only
+        # h is [B, T, hc_mult, dim]. AR decode (T==1); the DSpark verify row batch
+        # (T = K+1, 2..MAX) only under the v2 runner -- an AR-only
         # MTPLX_DSV41_GATE_PREFETCH stays inert on T>1 (the lane-D multi-row
-        # contract); prefill (large T) never predicts.
+        # contract).
         if h.ndim != 4:
             return
         _T = int(h.shape[1])
+        # W95f (review MEDIUM): gate on the ROUTING PHASE, not the row count alone.
+        # A 2..8-token PREFILL (a short prompt, or a short appended turn on a cached
+        # prefix) has the SAME T as a DSpark verify row batch, but must NOT
+        # speculate -- prefill would burn ring slots + drive time and inflate
+        # prefetch_predicted/issued.  The DSpark verify runs under
+        # ``expert_routing_phase(DECODE)`` (deepseek_v41_dspark_decode.py) and AR
+        # decode is T==1/DECODE, so the phase -- not the shape -- separates a verify
+        # from a prefill.  Local import keeps the module import graph acyclic.
+        from mtplx.expert_streaming import RoutingPhase
+        from mtplx.models.expert_mlx import current_expert_routing_phase
+
+        if current_expert_routing_phase(token_count=_T) is not RoutingPhase.DECODE:
+            return  # PREFILL (any T) never predicts
         if _T == 1:
             _verify = False
         elif _runner_v2_enabled() and 2 <= _T <= _RUNNER_V2_VERIFY_MAX_ROWS:

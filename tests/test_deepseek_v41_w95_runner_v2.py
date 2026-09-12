@@ -58,8 +58,10 @@ from mtplx.models.deepseek_v41_loader import (  # noqa: E402
     build_streaming_config,
     resolve_gate_prefetch_ring_slots,
 )
+from mtplx.expert_streaming import RoutingPhase  # noqa: E402
 from mtplx.models.expert_mlx import (  # noqa: E402
     HotExpertSwitchGLU,
+    expert_routing_phase,
     make_mlx_component_bank_allocator,
 )
 
@@ -462,7 +464,10 @@ def test_confidence_margin_trims_to_confident():
 def test_runner_v2_verify_forward_predicts_union(monkeypatch):
     """Under v2 an M=(K+1) verify forward predicts the per-row route for the next
     layer (NOT inert, unlike an AR-only GATE_PREFETCH which stays inert on T>1).
-    Model-level with the predict suite's fake runtime."""
+    Model-level with the predict suite's fake runtime.  The forward runs under
+    ``expert_routing_phase(DECODE)`` -- exactly the context the DSpark verify sets
+    (deepseek_v41_dspark_decode.py) -- since the predictor now gates on the phase,
+    not the row count (a same-shaped short PREFILL must NOT predict)."""
     from tests.models.test_deepseek_v41_w93_gate_prefetch_predict import (
         _arm, _new_model, _prefill,
     )
@@ -473,9 +478,10 @@ def test_runner_v2_verify_forward_predicts_union(monkeypatch):
     cache, token = _prefill(model, args, s=6, seed=9)
     for layer in model.model.layers:
         layer.mlp.switch_mlp._mtplx_gate_prefetch_pending = None
-    # a T=6 verify row batch (the DSpark depth-5 shape)
+    # a T=6 verify row batch (the DSpark depth-5 shape) in the verify's DECODE phase
     verify_ids = mx.array([[token] * 6])
-    mx.eval(model(verify_ids, cache=cache))
+    with expert_routing_phase(RoutingPhase.DECODE):
+        mx.eval(model(verify_ids, cache=cache))
     stashed = [
         i for i, layer in enumerate(model.model.layers)
         if getattr(layer.mlp.switch_mlp, "_mtplx_gate_prefetch_pending", None)
@@ -486,6 +492,45 @@ def test_runner_v2_verify_forward_predicts_union(monkeypatch):
     pred = model.model.layers[stashed[0]].mlp.switch_mlp._mtplx_gate_prefetch_pending[1]
     _REAL_EVAL(pred)
     assert pred.shape[0] == 6, "verify prediction must be per-row (T=6)"
+
+
+def test_v2_predictor_prefill_vs_verify_phase(monkeypatch):
+    """W95f (review MEDIUM): the verify predictor gates on the routing PHASE, not
+    the row count.  A T=4 forward in the PREFILL phase (a short prompt / short
+    appended turn -- same shape as a DSpark depth-3 verify) must issue NO prefetch
+    prediction; the same T=4 forward in the DECODE (verify) phase must.  At HEAD
+    both stashed (T in [2,8] alone), so short prefills speculated -- burning ring
+    slots + drive time and inflating prefetch_predicted/issued."""
+    from tests.models.test_deepseek_v41_w93_gate_prefetch_predict import (
+        _arm, _new_model, _prefill,
+    )
+
+    monkeypatch.setenv("MTPLX_DSV41_RUNNER", "v2")
+    model, args = _new_model(num_hidden_layers=8)
+    _arm(model, _RUNNER_V2_GATE_PREFETCH_K)
+    cache, token = _prefill(model, args, s=6, seed=9)
+    verify_ids = mx.array([[token] * 4])  # a T=4 (DSpark depth-3) row shape
+
+    def _stashed():
+        return [
+            i for i, layer in enumerate(model.model.layers)
+            if getattr(layer.mlp.switch_mlp, "_mtplx_gate_prefetch_pending", None)
+            is not None
+        ]
+
+    # (a) PREFILL phase: a same-shaped short prefill must NOT predict.
+    for layer in model.model.layers:
+        layer.mlp.switch_mlp._mtplx_gate_prefetch_pending = None
+    with expert_routing_phase(RoutingPhase.PREFILL):
+        mx.eval(model(verify_ids, cache=cache))
+    assert _stashed() == [], "a PREFILL-phase T=4 forward speculated (should not)"
+
+    # (b) DECODE (verify) phase: the same shape DOES predict.
+    for layer in model.model.layers:
+        layer.mlp.switch_mlp._mtplx_gate_prefetch_pending = None
+    with expert_routing_phase(RoutingPhase.DECODE):
+        mx.eval(model(verify_ids, cache=cache))
+    assert _stashed(), "a DECODE verify-phase T=4 forward did not predict"
 
 
 def test_v2_issue_site_drops_sentinels_no_crash(tmp_path):
