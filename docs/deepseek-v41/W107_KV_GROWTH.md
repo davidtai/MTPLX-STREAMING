@@ -349,14 +349,16 @@ Each fix is its own commit with a regression test in `test_deepseek_v41_w107_kv_
 
 ---
 
-## §8 — GPU window-42 evidence + round-3 fixes
+## §8 — GPU window-42 evidence + round-3/4 fixes
 
 First GPU evidence (window 42, 16K cell, `--stage-timing`; receipts
 `.../receipts/gpu-windows/window-42/ar-ring-{ref,v2}.json`, code `0cc4dd7d3` =
-round-1 fixes, NOT round-2). **The per-token O(T) KV stages did not move**:
-KV-append 11.1 / compress-append 3.3 / indexer-select 6.9 ms/tok (ref) and 11.9 /
-4.3 / 7.4 (v2) — same as window 41 (12.0 / 8.3 / 7.8) when the lever did not exist.
-The lever preallocated the lanes but the copy stayed.
+round-1 fixes, NOT round-2). The per-token KV stages did not move: KV-append 11.1 /
+compress-append 3.3 / indexer-select 6.9 ms/tok (ref) and 11.9 / 4.3 / 7.4 (v2) —
+same as window 41 (12.0 / 8.3 / 7.8) when the lever did not exist.  **Round 3 misread
+this as "the copy stayed"; round 4 (below) proves there was never a per-token copy in
+`cache_append` — `mx.slice_update` donates in the cache's rebind pattern, and the flat
+11.9 ms/tok is fence latency.  W107 is a memory-plan lever, not a speed lever.**
 
 Receipt `kv_bounded`: `layers_bounded` 80, `maxkv` 17408, `alloc_bytes`
 1,422,102,528, `kv_realloc_window` 400, `kv_realloc_compress`/`index` 8,
@@ -386,66 +388,81 @@ the post-grow ping-pong re-alloc.) This receipt is round-1 (grow-only); round-2
 MEDIUM-1 adds a shrink-back at the prefill→decode transition — orthogonal to (c). The
 realloc churn is PREFILL-time; it does not touch the per-decode-token `cache_append`.
 
-**(c) KV-append ms/tok unchanged — root cause.** `mx.slice_update` on Metal does NOT
-donate into the preallocated buffer: it is a FUNCTIONAL op that allocates a fresh
-output plane and copies the whole resident window every append (O(resident)). The
-round-1/2 CPU "donation proof" measured cumulative memory flatness (no growth across N
-appends — true, each copy's transient is freed) but NOT the per-append copy COST.
-`scripts/deepseek_v41/kv_donation_probe.py` measures the per-append ms-vs-T slope +
-memory delta and shows, **even on CPU**, `slice_update` is O(T) COPY (ms ×3.8 over N
-2048→16384, peak +1 buffer plane) while in-place `buf[:, r:r+n] = new` DONATES (ms
-flat ×1.0, peak ≈ 0) when the buffer is uniquely referenced and COPIES safely
-(byte-identical, held view untouched) when a live `view()` alias is held. **Both the
-primitive AND the read-time alias matter.**
+**(c) KV-append ms/tok unchanged — root cause (CORRECTED in round 4).** Round 3 read
+this as "`slice_update` copies, switch to in-place `__setitem__`". **That was wrong.**
+The re-review proved at the mlx-fork source that BOTH the static `SliceUpdate`
+(`__setitem__`) and dynamic `mx.slice_update` go through `copy_{cpu,gpu}` →
+`set_copy_output_data` → `out.copy_shared_buffer(in)` when `is_donatable(in)`
+(`common/copy.h`).  In the cache's REBIND pattern (`self._buf = write(self._buf, …)`,
+which drops the old descriptor) the input is uniquely referenced, so `slice_update`
+DONATES — pointer-stable, 0 flips on every lane in the real AR + K+1-verify + rollback
+trace, identical to `__setitem__`.  Round 3's "copy" verdict was an artifact of the
+probe's own `out = w(buf); eval; buf = out` alias keeping the old descriptor alive
+(refcount 2 → not donatable).  So **`cache_append` was never the copy** — window 42's
+flat 11.9 ms/tok is **fence latency** (40 per-layer eval fences in the `--stage-timing`
+pass), and it is NOT expected to fall.  The corrected probe (round-4 fix) uses the
+rebind pattern and the buffer data POINTER: `slice_update hold_view=False` → 0 ptr
+flips (DONATE); `hold_view=True` (a live `view()` alias at the write) → flips (COPY).
 
-**Round-3 fix.** Switch the BOUNDED lanes to the donating in-place `__setitem__`
-(byte-identical — the model bit-identity tests + `test_inplace_row_write_byte_identical_to_slice_update`
-+ `test_model_bit_identical_inplace_vs_slice_update`); keep `slice_update` on the
-frozen `window_ring`/chunk-grow lanes so the control's basis is unchanged (finding 2).
-`MTPLX_DSV41_KV_INPLACE_WRITE` overrides for the A/B (arm `cell16k_ring_bounded_copy`
-= bounded + forced `slice_update`).
+**Round-4 decision.** REVERT to `mx.slice_update` (round-3's in-place `__setitem__` is
+reverted: it bought nothing and is HAZARDOUS — `view()` returns the buffer IDENTITY
+when `_len == cap`, so a held `lc.window` / `lc.state[0]` would be mutated by the next
+in-place append).  The `MTPLX_DSV41_KV_INPLACE_WRITE` lever and the
+`cell16k_ring_bounded_copy` arm are removed.
+
+**W107 is a MEMORY-PLAN lever, not a speed lever.** It bounds and preallocates every KV
+lane (the 359 MB formula, priced by `kv_bytes_at_max_kv`) and is receipt-gated for
+donation — it is NOT expected to move decode tok/s.  `cache_append`/`compress_append`
+ms/tok are fence/dispatch latency at the cell, not copies; do not expect them to fall.
+
+### Donation receipt gate (round-4, real-path proof)
+
+`--stage-timing` calls `cache.sample_ptr_flips()` per decode token (fenced pass only —
+reading a pointer forces an eval, never in the timed headline loop); it counts each
+bounded lane's `raw_backing()` DATA-POINTER flips.  The receipt `kv_bounded.donation_gate`
+= `kv_donation_gate(...)` **passes** iff:
+`ptr_flips_window == window_ring.drops` (the window flips only on a ping-pong
+compaction), `ptr_flips_{compress,index,latent} == 0` (every append donates), and each
+`kv_realloc_<lane>` == its one-prealloc-per-layer count
+(`expected_bounded_reallocs(config)`).  `ok` is `None` when Metal refuses the
+buffer-protocol pointer (gate unavailable, not failed).  This is the real donation
+proof the reviewer specified; it replaces the misleading ms/memory verdict.
 
 ### GPU probe run plan (orchestrator, in a lock gap; do NOT run here)
 
 ```
-# window/latent lane width (512), the real store dtype (fp32) at the cell:
 python scripts/deepseek_v41/kv_donation_probe.py --gpu \
-    --sizes 16384,16896,17408 --dim 512 --dtype fp32 --reps 50 --json <out-512.json>
-# index lane width (128):
+    --sizes 2048,8192,16384,17408 --dim 512 --dtype fp32 --reps 50 --json <out-512.json>
 python scripts/deepseek_v41/kv_donation_probe.py --gpu \
-    --sizes 16384,16896,17408 --dim 128 --dtype fp32 --reps 50 --json <out-128.json>
+    --sizes 2048,8192,16384,17408 --dim 128 --dtype fp32 --reps 50 --json <out-128.json>
+# CPU self-test (asserts slice_update is pointer-stable in the rebind pattern):
+python scripts/deepseek_v41/kv_donation_probe.py --self-test
 ```
 
-Read the verdict (DONATE = ms flat & peak ≪ buffer; COPY(O(T)) otherwise). Decisive rows:
-- `slice_update hold_view=False` — if COPY on Metal, confirms (c).
-- `setitem hold_view=False` — if DONATE on Metal, the fix works when the buffer is unique.
-- `setitem hold_view=True` — if COPY, the read-time `view()` alias must ALSO be removed
-  (architectural follow-up: no `window_all` / `shared.compress_kv` slice alive at the
-  next append; append before read, or read via `raw_backing`).
-- `metal_kernel` — the fallback if no MLX primitive donates on Metal.
+Read the verdict by the buffer pointer: `slice_update hold_view=False` should be
+`DONATE(ptr-stable)` on Metal (0 flips) — confirming the cache's rebind donates;
+`hold_view=True` `COPY(ptr-flips=…)` shows a live `view()` alias would defeat it.  On
+CPU both hold: rebind 0 flips, held-view = reps flips.
 
-### Expected sign once donation works (finding 3)
+### Expected sign (finding 3, corrected)
 
-Window 42's v2 was 1.996 vs ref 2.167 tok/s (−8%) with BOTH arms carrying kv_bounded —
-the lever added prealloc cost without removing the copy (c), so it can only be
-neutral-to-negative until donation works. Once the donating write lands AND the buffer
-is unique at append time, the expected sign is **positive**: `cache_append` (≈11.9) +
-`compress_append` (≈4.3) ms/tok fall toward O(new-rows) (~0), lifting decode tok/s by
-the fraction those stages are of the ~460 ms/token step. **The receipt line that proves
-it:** on `cell16k_ring_bounded` vs `cell16k_ring_bounded_copy`,
-`stage_timing.decode_breakdown` `cache_append`/`compress_append` ms/tok DOWN **and**
-`kv_bounded.kv_realloc_*` flat (one prealloc per layer, no per-token realloc) **and**
-`byte_identical_vs_ar` holds. `indexer-select` (≈6.9) is a READ/gather over the full
-compress store, not an append — untouched by the write primitive (a separate lever).
+**Neutral for decode tok/s.**  Window 42's v2 −8% is the runner + prealloc cost, not a
+copy that a "donating write" removes — there is no copy to remove (slice_update already
+donates).  W107's value is the bounded, priced, receipt-gated memory plan (W106 consumes
+`kv_bytes_at_max_kv`; the donation gate proves the lanes stay preallocated).  Do NOT
+expect `cache_append`/`compress_append` ms/tok to fall — they are fence latency.  The
+receipt line that PROVES W107 is doing its job is `kv_bounded.donation_gate.ok == true`
+(pointers stable, `kv_realloc_*` == one prealloc/layer) with `byte_identical_vs_ar`, and
+`kv_bytes_formula` matching the memory plan — not a tok/s delta.
 
 ### Arm taxonomy (controls vs candidates)
 
-- **CONTROL** (frozen, windows 39–42): `cell16k_ring` — no `kv_bounded`, no
-  `kv_inplace_write` (its `window_ring` lane uses `slice_update`). Its SET env equals
-  the window-39 basis (enforced by `test_control_arm_frozen_matches_window39`).
-- **Bounded candidates**: `cell16k_ring_bounded` (bounded + donating in-place),
-  `cell16k_ring_bounded_copy` (bounded + forced `slice_update` — the write-primitive
-  A/B pair).
+- **CONTROL** (frozen, windows 39–42): `cell16k_ring` — no `kv_bounded` (its
+  `window_ring` lane uses `slice_update`).  Its SET env equals the window-39 basis
+  (enforced by `test_control_arm_frozen_matches_window39`).
+- **Bounded candidate**: `cell16k_ring_bounded` (= frozen control + `kv_bounded=1`;
+  the clean A/B `cell16k_ring` vs `cell16k_ring_bounded`).  (Round 3's
+  `cell16k_ring_bounded_copy` was removed with the in-place lever.)
 - **Other candidates** (each isolates its OWN lever vs the control):
   `cell16k_ring_v2` / `_draft` / `_pinned` / `_stable` / `_pool` / `_switch` /
   `_prefetch` / `_v2_draft` — round-2 stripped `kv_bounded` from these so they stay
@@ -453,3 +470,18 @@ compress store, not an append — untouched by the write primitive (a separate l
 - The merge worker's `int/w97f-lanes` commit `0199d92db` added `kv_bounded` to seven
   older attention arms; those live on `int`, not this branch — flag for the coordinator
   to strip if they are meant as clean isolations.
+
+### Round-4 changelog
+
+- **Finding 1** — reverted round-3's in-place `__setitem__` to `mx.slice_update`
+  (donates in the rebind pattern; in-place is unsafe via `view()` identity).  Dropped
+  the `MTPLX_DSV41_KV_INPLACE_WRITE` lever + `cell16k_ring_bounded_copy` arm; de-registered
+  from `ALL_LEVER_ENVS` / `_DSV41_LEVER_ENV_KEYS`.
+- **Finding 2** — fixed the probe: rebind pattern (no lingering alias), buffer-pointer
+  signal, sizes 2048/8192/16384/17408, `self_test()`.
+- **Finding 3** — added the real donation gate (`sample_ptr_flips` + `kv_donation_gate`
+  + `expected_bounded_reallocs`), wired into `--stage-timing`, stamped as
+  `kv_bounded.donation_gate`.
+- **Finding 5** — this rewrite: W107 is a memory-plan lever, not a speed lever;
+  window-42 `cache_append` is fence latency.  Frozen control + fixture +
+  `cell16k_ring_bounded` kept.

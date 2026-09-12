@@ -353,13 +353,10 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
-# W107 round-3: the KV append WRITE PRIMITIVE.  The bounded lanes default to the
-# donating in-place __setitem__ (mx.slice_update is an O(T) COPY even on CPU -- the GPU
-# window-42 finding + kv_donation_probe.py).  This env OVERRIDES either way to isolate
-# the write primitive within a bounded arm: "0" forces slice_update (the copy), "1"
-# forces in-place.  Unset => construction default (bounded lanes in-place; the frozen
-# window_ring/chunk-grow lanes slice_update).  Logged in the receipt arm_env.
-KV_INPLACE_WRITE_ENV = "MTPLX_DSV41_KV_INPLACE_WRITE"
+# W107 round-4: the round-3 MTPLX_DSV41_KV_INPLACE_WRITE lever was REMOVED -- the
+# re-review proved mx.slice_update already donates in the cache's rebind pattern, so
+# the in-place __setitem__ switch bought nothing and was unsafe (view() identity). The
+# append primitive is fixed at mx.slice_update; there is no write-primitive lever.
 # W110 (BENCH-ONLY DIAGNOSTIC -- not a perf lever): gate the per-record sha256
 # re-check on the DECODE/verify streaming path. Decode-path hashing has been OFF on
 # every ab/bench path (arg default False) and OFF in the served profile
@@ -480,8 +477,9 @@ ALL_LEVER_ENVS = (
     ATTN_LEAN_CASTS_ENV,
     # W101 (appended):
     ATTN_FUSED_PROJ_ENV,
-    # W107 round-3 (appended):
-    KV_INPLACE_WRITE_ENV,
+    # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
+    # in-place write was reverted to slice_update + a donation gate), so it is no longer
+    # in this list -- the served-log snapshot dropped it too (superset invariant holds).
     # NOTE: VERIFY_RECORD_HASHES_ENV is DELIBERATELY NOT in this list. It is a
     # BENCH-ONLY diagnostic env (honoured on the loader/bench builder, NOT on the
     # served profile builder) -- keeping it out of ALL_LEVER_ENVS also keeps it out
@@ -510,7 +508,7 @@ def _preset(
     gate_prefetch=None,
     gate_prefetch_min_layer=None,
     runner=None,
-    kv_bounded=None, kv_bounded_maxkv=None, kv_inplace_write=None,
+    kv_bounded=None, kv_bounded_maxkv=None,
     wo_a_cache=None, attn_core_compile=None,
     attn_lean_casts=None, attn_fused_proj=None,
     verify_record_hashes=None,
@@ -575,7 +573,6 @@ def _preset(
         RUNNER_ENV: runner,
         KV_BOUNDED_ENV: kv_bounded,
         KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
-        KV_INPLACE_WRITE_ENV: kv_inplace_write,
         WO_A_CACHE_ENV: wo_a_cache,
         ATTN_CORE_COMPILE_ENV: attn_core_compile,
         ATTN_LEAN_CASTS_ENV: attn_lean_casts,
@@ -837,17 +834,6 @@ ARM_PRESETS = {
     "cell16k_ring_bounded": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
-        head="bf16", sinkhorn="1", attn="1", win_memo="1",
-    ),
-    # W107 round-3: the bounded lanes with the write primitive FORCED to slice_update
-    # (kv_inplace_write="0"), so the pair (cell16k_ring_bounded vs
-    # cell16k_ring_bounded_copy) ISOLATES the donating in-place __setitem__ from the
-    # functional slice_update copy.  Byte-identical output; the receipt line that
-    # proves the fix is cache_append ms/tok DOWN on cell16k_ring_bounded with
-    # kv_realloc_* flat (see W107_KV_GROWTH.md §6).
-    "cell16k_ring_bounded_copy": _preset(
-        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1", kv_bounded="1", kv_inplace_write="0",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
     # W104 (was W81): cell16k_ring + BOTH DSpark draft-head levers -- K33 draft-block
@@ -4774,10 +4760,21 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 bstats = bounded_stats_fn()
                 bstats["env"] = os.environ.get(KV_BOUNDED_ENV)
                 bstats["maxkv_env"] = os.environ.get(KV_BOUNDED_MAXKV_ENV)
-                # W107 round-3: which append write primitive the lanes used (in-place
-                # donating __setitem__ vs slice_update copy); unset => bounded default
-                # (in-place).  Pair cell16k_ring_bounded vs cell16k_ring_bounded_copy.
-                bstats["inplace_write_env"] = os.environ.get(KV_INPLACE_WRITE_ENV)
+                # W107 round-4 DONATION GATE: prove the bounded lanes donate on the real
+                # path (mx.slice_update pointer-stable in the rebind pattern).
+                # sample_ptr_flips() is stamped by the fenced stage-timing pass; the gate
+                # passes iff ptr_flips_window == window_ring.drops, compress/index/latent
+                # flips == 0, and kv_realloc_<lane> == one prealloc/layer.
+                try:
+                    _cfg2 = getattr(model, "args", None)
+                    _rs = (_dsv41_cache.window_ring_stats()
+                           if hasattr(_dsv41_cache, "window_ring_stats") else {})
+                    if _cfg2 is not None and hasattr(_dsv41_cache, "kv_donation_gate"):
+                        _exp = _dsv41_cache.expected_bounded_reallocs(_cfg2)
+                        bstats["donation_gate"] = _dsv41_cache.kv_donation_gate(
+                            bstats, _rs, expected_reallocs=_exp)
+                except Exception:  # pragma: no cover - defensive
+                    pass
                 # W107 (review MEDIUM-A): receipt gate -- compare the memory-plan
                 # formula W106 will use against the bytes actually allocated, so a
                 # dtype-model drift is caught at runtime.  Exact when the window did
@@ -4988,6 +4985,11 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps, cooldown_s=0.0,
             route_probe._COUNTS.clear()
     except Exception:
         pass
+    # W107 round-4 donation gate: init the pointer baseline after prefill (this pass is
+    # already fenced, so reading a pointer per token does not perturb the headline tok/s).
+    _ptr_sample = getattr(cache, "sample_ptr_flips", None)
+    if callable(_ptr_sample):
+        _ptr_sample()
     _util_cm = util_sampler if util_sampler is not None else contextlib.nullcontext()
     stime.begin()
     with _util_cm:  # W90: macmon utilization over the fenced decode loop only
@@ -4996,6 +4998,8 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps, cooldown_s=0.0,
                 logits = model(ops.input([[token]]), cache=cache)
                 with stime.stage("sample"):
                     token = ops.argmax_last(logits)
+            if callable(_ptr_sample):
+                _ptr_sample()  # count per-lane buffer-pointer flips (donation gate)
     report = model.stage_timing_report()
     stime.end()
     report = report if report is not None else {"enabled": False}
