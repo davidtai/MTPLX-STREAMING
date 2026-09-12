@@ -162,11 +162,18 @@ def test_runner_v2_arms_overlap_miss_reads():
 # B/C. runtime arming + exactness (tiny real component-bank runtime)
 # ---------------------------------------------------------------------------
 def _open_runtime(tmp_path, *, runner_v2, expert_count=8, top_k=2,
-                  resident_slots=2, transient=8, prefetch=10, overlap=None):
+                  resident_slots=2, transient=8, prefetch=10, overlap=None,
+                  exact_pool=False):
     """Open a tiny real streamed runtime.  ``runner_v2`` sets the env BEFORE open
     so ``ExpertStreamingRuntime.open`` reads it for the single-pool gate.
     ``overlap`` (default = ``runner_v2``) sets the config's overlap_miss_reads --
-    the v2 composition is single pool + prefetch ring + overlap_miss_reads."""
+    the v2 composition is single pool + prefetch ring + overlap_miss_reads.
+
+    ``exact_pool`` caps the persistent cache at exactly ``resident_slots`` per layer
+    via ``expert_cache_limit_bytes`` (the stricter secondary cap in
+    ``plan_expert_memory``).  Without it the ``ring_pad`` headroom + a small expert
+    count let the planner fit ALL experts resident (slots_per_layer == expert_count),
+    so a churn test never evicts -- the review's all-hit finding."""
     from tests.test_streamed_models import _integrated_hy3_artifact
 
     if runner_v2:
@@ -192,6 +199,9 @@ def _open_runtime(tmp_path, *, runner_v2, expert_count=8, top_k=2,
         prefetch_slots=prefetch,
         overlap_miss_reads=overlap,
         resource_telemetry=True,
+        expert_cache_limit_bytes=(
+            resident_slots * spec.expert_record_bytes if exact_pool else None
+        ),
     )
     plan = sc.memory_plan(spec)
     rt = ExpertStreamingRuntime.open(
@@ -330,54 +340,73 @@ def test_runner_v2_switch_byte_identical_to_shipped(tmp_path, rows):
     )
 
 
-def _route_seq(n_steps, n_experts, top_k, seed=95):
-    """A deterministic decode-like route sequence: mostly M=1 (AR) with periodic
-    M=4 / M=6 (the DSpark depth-3 / depth-5 verify row batches), over a rotating
-    expert set that churns a small resident pool (misses + evictions + re-hits)."""
-    rng = np.random.RandomState(seed)
-    seq = []
-    for i in range(n_steps):
-        if i % 37 == 36:
-            rows = 6            # DSpark depth-5 verify shape (K+1 = 6 rows)
-        elif i % 17 == 16:
-            rows = 4            # DSpark depth-3 verify shape
-        else:
-            rows = 1            # AR decode
-        experts = sorted(int(e) for e in rng.choice(n_experts, size=top_k, replace=False))
-        seq.append((rows, experts))
-    return seq
+def _churn_schedule(n_steps):
+    """Per-step row count: mostly M=1 (AR) with periodic M=4 / M=6 (the DSpark
+    depth-3 / depth-5 verify row batches)."""
+    return [
+        6 if i % 37 == 36 else (4 if i % 17 == 16 else 1) for i in range(n_steps)
+    ]
+
+
+def _churn_inputs(rows, top_k, hidden, step, n_experts):
+    """A deterministic decode-like route with PER-ROW varied experts from a ROTATING
+    disjoint window over ``n_experts`` -- consecutive steps churn a small resident
+    pool (misses + evictions + re-hits) and each verify row batch touches up to
+    ``rows*top_k`` distinct experts (not the same two every row).  Returns
+    ``(x, idx, unique_experts)``."""
+    mx.random.seed(95 + rows + 1000 * step)
+    x = (0.3 * mx.random.normal((rows, 1, hidden))).astype(mx.bfloat16)
+    base = (step * rows * top_k) % n_experts
+    flat = [(base + j) % n_experts for j in range(rows * top_k)]
+    idx = mx.array(flat, dtype=mx.int32).reshape((rows, top_k))
+    _REAL_EVAL(x, idx)
+    return x, idx, sorted({int(e) for e in flat})
 
 
 def test_runner_v2_256_step_byte_identical_streamed(tmp_path):
     """256 decode-like routes over a REAL streamed runtime: v2 (single pool +
     prefetch ring + overlap_miss_reads) is byte-identical to the shipped two-tier
-    path at EVERY step, across a churning resident pool (misses / evictions /
-    re-hits) and the M=4 / M=6 DSpark verify shapes -- residency evolution never
-    changes a gathered value.  Also proves v2 actually ENGAGES: the ring serves
-    hits (not a silent no-op)."""
-    n_experts, top_k = 8, 2
-    seq = _route_seq(256, n_experts, top_k)
+    path at EVERY step -- residency evolution never changes a gathered value
+    (gathers are row-independent, so identity is EXPECTED).  With an EXACT 3-slot
+    pool over 16 experts and per-row-varied rotating routes the pool genuinely
+    churns (misses / EVICTIONS / re-hits), and predicting the NEXT step one beat
+    ahead makes the ring both serve hits AND recycle some mispredictions
+    (prefetch_wasted).  This is the review's all-hit finding fixed: slots_per_layer
+    was silently 8 (ring_pad headroom over 8 experts), every M=4/M=6 row routed to
+    the same two experts, and evictions / prefetch_wasted were 0."""
+    n_experts, top_k, resident_slots = 16, 2, 3
+    schedule = _churn_schedule(256)
 
     rt_off, spec = _open_runtime(
         tmp_path / "off", runner_v2=False, expert_count=n_experts, top_k=top_k,
-        resident_slots=3, transient=8, prefetch=0,
+        resident_slots=resident_slots, transient=8, prefetch=0, exact_pool=True,
     )
     rt_v2, spec2 = _open_runtime(
         tmp_path / "v2", runner_v2=True, expert_count=n_experts, top_k=top_k,
-        resident_slots=3, transient=8, prefetch=6,
+        resident_slots=resident_slots, transient=8, prefetch=6, exact_pool=True,
     )
     try:
+        # the review's silent override: assert the pool is REALLY resident_slots
+        # (not the planner-inflated slots_per_layer that made the churn all-hit).
+        assert rt_off.plan.slots_per_layer == resident_slots
+        assert rt_v2.plan.slots_per_layer == resident_slots
         assert rt_v2._single_slot_pool is True
         assert rt_v2.config.overlap_miss_reads is True
         assert rt_off._single_slot_pool is False
+        layer = spec.routed_layer_start
         sw_off = _switch(rt_off, spec)
         sw_v2 = _switch(rt_v2, spec2)
-        for i, (rows, experts) in enumerate(seq):
-            # v2: prefetch this step's experts a beat early so the true route can
-            # consume them as ring hits (the SSD-hiding mechanism engaged).
-            rt_v2.prefetch_experts(spec2.routed_layer_start, experts)
+        for i, rows in enumerate(schedule):
+            # v2: predict the NEXT step's experts one beat ahead (the gate-oracle
+            # one-token-ahead contract) so the ring both serves hits and recycles
+            # some mispredicted commits unused (prefetch_wasted).
+            nxt_rows = schedule[i + 1] if i + 1 < len(schedule) else 1
+            _, _, nxt_experts = _churn_inputs(
+                nxt_rows, top_k, spec.hidden_size, i + 1, n_experts
+            )
+            rt_v2.prefetch_experts(layer, nxt_experts)
             _settle_prefetch(rt_v2)
-            x, idx = _inputs(rows, top_k, spec.hidden_size, experts, step=i)
+            x, idx, _ = _churn_inputs(rows, top_k, spec.hidden_size, i, n_experts)
             o_off = sw_off(x, idx)
             _REAL_EVAL(o_off)
             rt_off.flush_deferred_slot_releases(evaluate=True)
@@ -385,9 +414,12 @@ def test_runner_v2_256_step_byte_identical_streamed(tmp_path):
             _REAL_EVAL(o_v2)
             rt_v2.flush_deferred_slot_releases(evaluate=True)
             assert mx.array_equal(o_off, o_v2), (
-                f"step {i} (rows={rows}, experts={experts}): v2 diverged from shipped"
+                f"step {i} (rows={rows}): v2 diverged from shipped"
             )
-        assert rt_v2.counters.prefetch_hit_on_true_route > 0, "ring never served a hit"
+        c = rt_v2.counters
+        assert c.prefetch_hit_on_true_route > 0, "ring never served a hit"
+        assert c.evictions > 0, "resident pool never evicted (all-hit again)"
+        assert c.prefetch_wasted > 0, "no mispredicted prefetch was ever recycled"
     finally:
         rt_off.close()
         rt_v2.close()
