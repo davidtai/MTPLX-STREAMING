@@ -183,12 +183,22 @@ class _GrowBuffer:
     the plain path) but the same bytes.
     """
 
-    __slots__ = ("_buf", "_len", "_init_cap")
+    __slots__ = ("_buf", "_len", "_init_cap", "_bounded_cap", "_lane")
 
-    def __init__(self, init_cap: int = 256):
+    def __init__(self, init_cap: int = 256, *, bounded_cap: Optional[int] = None,
+                 counter_lane: Optional[str] = None):
         self._buf: Optional[mx.array] = None
         self._len: int = 0
-        self._init_cap = int(init_cap)
+        #: W107: when ``bounded_cap`` is set the buffer is preallocated to it on the
+        #: first append and the logical length may never exceed it -- an append that
+        #: would overflow RAISES (no geometric resize), so the lane is hard-bounded
+        #: to ``max_kv``.  ``init_cap`` is then forced to ``bounded_cap`` so the first
+        #: (prefill) allocation is the full buffer and every later write is in place.
+        self._bounded_cap = int(bounded_cap) if bounded_cap else None
+        self._init_cap = int(bounded_cap) if bounded_cap else int(init_cap)
+        #: W107: lane name for the per-lane bounded engagement counters, or ``None``
+        #: for a non-bounded chunk-grow / window_ring lane (which uses ``_KV_STATS``).
+        self._lane = counter_lane
 
     @staticmethod
     def _starts(ndim: int, row: int) -> mx.array:
@@ -202,23 +212,37 @@ class _GrowBuffer:
         if new is None or (new.ndim >= 2 and new.shape[1] == 0):
             return
         n = int(new.shape[1])
+        # W107 hard bound: never exceed the preallocated cap (clean raise, no resize).
+        if self._bounded_cap is not None and self._len + n > self._bounded_cap:
+            raise ValueError(
+                f"bounded KV lane {self._lane or '?'}: append of {n} rows would "
+                f"exceed preallocated cap {self._bounded_cap} (have {self._len})"
+            )
         if self._buf is None:
             cap = max(self._init_cap, n)
             tail = tuple(new.shape[2:])
             buf = mx.zeros((new.shape[0], cap) + tail, dtype=new.dtype)
             self._buf = self._write(buf, new, 0)
             self._len = n
-            _KV_STATS["buffers"] += 1
-            _note_rows_copied(n)
+            if self._lane is None:
+                _KV_STATS["buffers"] += 1
+                _note_rows_copied(n)
+            else:
+                _note_bounded(self._lane, realloc=True, rows=n,
+                              alloc_bytes=int(buf.nbytes))
             return
         cap = int(self._buf.shape[1])
         if self._len + n <= cap:
             # in-place donated write of just the new rows
             self._buf = self._write(self._buf, new, self._len)
             self._len += n
-            _note_rows_copied(n)
+            if self._lane is None:
+                _note_rows_copied(n)
+            else:
+                _note_bounded(self._lane, inplace=True, rows=n)
             return
-        # geometric resize: copy the live prefix once into a larger buffer
+        # geometric resize: copy the live prefix once into a larger buffer.  Only
+        # reachable for a non-bounded lane (a bounded lane raised above).
         new_cap = max(cap * 2, self._len + n)
         head = self._buf[:, : self._len]
         tail = tuple(new.shape[2:])
@@ -226,8 +250,12 @@ class _GrowBuffer:
         buf = self._write(buf, head, 0)
         buf = self._write(buf, new, self._len)
         self._buf = buf
-        _KV_STATS["buffers"] += 1  # geometric resize allocation
-        _note_rows_copied(self._len + n)
+        if self._lane is None:
+            _KV_STATS["buffers"] += 1  # geometric resize allocation
+            _note_rows_copied(self._len + n)
+        else:
+            _note_bounded(self._lane, realloc=True, rows=self._len + n,
+                          alloc_bytes=int(buf.nbytes))
         self._len += n
 
     def view(self) -> Optional[mx.array]:
@@ -333,6 +361,183 @@ def _window_ring_config() -> tuple:
     )
 
 
+# ---------------------------------------------------------------------------
+# W107: MTPLX_DSV41_KV_BOUNDED -- one switch that bounds/preallocates EVERY KV lane
+# ---------------------------------------------------------------------------
+#: W107 (David: "controlling kv growth is crucial for everything").  The master
+#: switch that makes every KV lane bounded and preallocated to ``max_kv`` at
+#: prefill, so the per-token write is O(new rows) in place (a donated
+#: ``mx.slice_update`` on the preallocated buffer) with NO per-token realloc and NO
+#: O(T) ``concatenate``.  It composes the W80 window RING (the window is a genuine
+#: sliding window -> bounded to ``window_size + max_verify + slack``) with a
+#: PREALLOCATED ``_GrowBuffer`` for the compress_kv / index_k lanes (one row per
+#: completed group, capped to ``ceil(max_kv/ratio)`` + slack) AND -- the lane W80
+#: left untouched -- a PREALLOCATED backing for the compressor frontier
+#: (``comp_state.raw_kv`` / ``raw_score``, the "main latent KV"), which the shipped
+#: path grew with a per-token ``_grow`` (O(n_fed) concatenate == O(T^2) over the
+#: cell).  Under this flag that frontier is a ``_GrowBuffer`` capped to ``max_kv``,
+#: written in place.  Every reachable read is byte-identical by construction (pure
+#: prealloc + in-place reorder; the ring's drop_offset seam already proved
+#: byte-identity for the window).  Precedence: KV_BOUNDED > WINDOW_RING > chunk-grow.
+#: Read at construction (per request, after the harness stamps the key; NOT frozen
+#: at import -- [[env-flags-read-at-use-not-import]]).  Default OFF.
+_KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
+#: The preallocation capacity (``max_kv``, the runner's ``--max-kv``).  The ab
+#: harness stamps it from the resolved cell max_kv after ``_apply_arm_env``; falls
+#: back to :data:`_WINDOW_RING_MAXKV_ENV` (a bounded arm that only set that), and
+#: when NEITHER is set the lanes fall back to the geometric ``_GrowBuffer`` (still
+#: in-place amortized O(new rows), but with O(log T) doubling reallocs the counters
+#: surface -- ``kv_realloc_* > 1`` == not truly preallocated).  Read at construction.
+_KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+
+#: Slack rows added to the preallocated caps: the compress/index lanes get one extra
+#: partial group + a verify-block margin; the latent frontier a small verify margin.
+#: (A speculative verify forward appends up to ``max_verify`` rows in one call, which
+#: can carry the running count a hair past a group boundary before a trim.)
+_BOUNDED_COMP_SLACK = 8
+_BOUNDED_LATENT_SLACK = 8
+
+
+def _kv_bounded_enabled() -> bool:
+    """Whether ``MTPLX_DSV41_KV_BOUNDED`` arms the bounded/preallocated lanes.
+
+    Read at call time (never frozen at import): the serving harness stamps the key
+    after importing this module, and each request builds a fresh cache."""
+    return (os.environ.get(_KV_BOUNDED_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _kv_bounded_maxkv() -> Optional[int]:
+    """The bounded preallocation capacity from the env (``MTPLX_DSV41_KV_BOUNDED_MAXKV``,
+    else ``MTPLX_DSV41_WINDOW_RING_MAXKV``), or ``None`` when neither is set (the
+    lanes then fall back to geometric growth -- still in-place, but not preallocated)."""
+    raw = (os.environ.get(_KV_BOUNDED_MAXKV_ENV) or "").strip()
+    if not raw:
+        raw = (os.environ.get(_WINDOW_RING_MAXKV_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        raise ValueError(
+            f"{_KV_BOUNDED_MAXKV_ENV} must be a positive integer, got {raw!r}"
+        )
+    return v if v > 0 else None
+
+
+def _bounded_comp_cap(maxkv: Optional[int], ratio: int) -> Optional[int]:
+    """Preallocated row cap for the compress_kv / index_k lanes at ``max_kv``.
+
+    They hold one row per completed group of ``ratio`` tokens (``ratio == 1`` is one
+    row per token), so ``ceil(max_kv / ratio)`` rows, plus a slack partial group /
+    verify margin.  ``None`` (no max_kv) -> geometric fallback."""
+    if not maxkv:
+        return None
+    r = ratio if (ratio and ratio > 0) else 1
+    return (int(maxkv) + r - 1) // r + _BOUNDED_COMP_SLACK
+
+
+def _bounded_latent_cap(maxkv: Optional[int]) -> Optional[int]:
+    """Preallocated row cap for the compressor frontier (``raw_kv`` / ``raw_score``).
+
+    The frontier retains one fed row per processed token (``n_fed``), so it caps to
+    ``max_kv`` + a verify-block slack.  ``None`` -> geometric fallback."""
+    if not maxkv:
+        return None
+    return int(maxkv) + _BOUNDED_LATENT_SLACK
+
+
+def kv_bytes_breakdown_at_max_kv(
+    config, max_kv: int, *, batch: int = 1,
+    max_verify: int = 8, slack: int = 8, headroom: int = 64,
+    window_dtype_bytes: int = 2, compress_dtype_bytes: int = 2,
+    index_dtype_bytes: int = 2, latent_dtype_bytes: int = 4,
+) -> dict:
+    """Per-lane preallocated KV bytes for a bounded cache at ``max_kv`` (W107).
+
+    A pure function of the model ``config`` (``num_hidden_layers``, ``window_size``,
+    ``head_dim``, ``index_head_dim``, ``compress_ratios``, ``kv_source_layer_ids``)
+    and ``max_kv``, matching exactly what :class:`LayerAttentionCache` preallocates
+    under ``MTPLX_DSV41_KV_BOUNDED``.  W106 uses :func:`kv_bytes_at_max_kv` (the
+    ``total``) in the memory-plan derivation; this returns the breakdown behind it.
+
+    Formula (bytes), summed over layers ``L`` (batch ``B``):
+
+      * **window** (every layer, the bounded SWA ring): two ping-pong buffers of
+        ``phys_cap = window_size + max_verify + slack + headroom`` rows ::
+
+            2 * B * phys_cap * head_dim * window_dtype_bytes
+
+        Bounded and INDEPENDENT of ``max_kv`` (the win: the window does not grow with
+        context).  (A prefill chunk wider than ``phys_cap`` grows it transiently; the
+        decode-steady size compacts back to this, so the steady bound is this value.)
+      * **compress_kv** / **index_k** (``kv_source`` layers only): one row per
+        completed group, ``comp_cap = ceil(max_kv / ratio) + COMP_SLACK`` rows ::
+
+            B * comp_cap * head_dim       * compress_dtype_bytes   (compress_kv)
+            B * comp_cap * index_head_dim * index_dtype_bytes      (index_k)
+      * **latent** frontier (``kv_source`` + ``ratio > 1`` layers, the "main latent
+        KV"): the two fp32 raw arrays (kv + gate score), ``latent_cap =
+        max_kv + LATENT_SLACK`` rows ::
+
+            2 * B * latent_cap * head_dim * latent_dtype_bytes
+
+    ``*_dtype_bytes`` default to the streaming runtime's dtypes (bf16 post-RoPE
+    stores, fp32 compressor frontier); pass the measured widths to match a specific
+    build.  ``COMP_SLACK`` / ``LATENT_SLACK`` are :data:`_BOUNDED_COMP_SLACK` /
+    :data:`_BOUNDED_LATENT_SLACK`.
+    """
+    max_kv = int(max_kv)
+    B = int(batch)
+    n_layers = int(config.num_hidden_layers)
+    window_size = int(getattr(config, "window_size", WINDOW_SIZE_DEFAULT))
+    head_dim = int(config.head_dim)
+    index_head_dim = int(getattr(config, "index_head_dim", head_dim))
+    ratios = list(getattr(config, "compress_ratios", None) or [0] * n_layers)
+    if len(ratios) < n_layers:
+        ratios = ratios + [0] * (n_layers - len(ratios))
+    kv_sources = set(int(i) for i in getattr(config, "kv_source_layer_ids", ()) or ())
+
+    phys_cap = window_size + int(max_verify) + int(slack) + int(headroom)
+    latent_cap = _bounded_latent_cap(max_kv)
+
+    window_bytes = 0
+    compress_bytes = 0
+    index_bytes = 0
+    latent_bytes = 0
+    for L in range(n_layers):
+        # every layer keeps a window ring (two ping-pong buffers)
+        window_bytes += 2 * B * phys_cap * head_dim * int(window_dtype_bytes)
+        if L in kv_sources:
+            ratio = int(ratios[L])
+            cc = _bounded_comp_cap(max_kv, ratio)
+            compress_bytes += B * cc * head_dim * int(compress_dtype_bytes)
+            index_bytes += B * cc * index_head_dim * int(index_dtype_bytes)
+            if ratio > 1:
+                latent_bytes += 2 * B * latent_cap * head_dim * int(latent_dtype_bytes)
+    total = window_bytes + compress_bytes + index_bytes + latent_bytes
+    return {
+        "window": int(window_bytes),
+        "compress": int(compress_bytes),
+        "index": int(index_bytes),
+        "latent": int(latent_bytes),
+        "total": int(total),
+        "max_kv": max_kv,
+        "phys_cap": int(phys_cap),
+        "comp_slack": _BOUNDED_COMP_SLACK,
+        "latent_slack": _BOUNDED_LATENT_SLACK,
+    }
+
+
+def kv_bytes_at_max_kv(config, max_kv: int, **kwargs) -> int:
+    """Total preallocated KV bytes across all lanes for a bounded cache at
+    ``max_kv`` (W107).  The ``total`` of :func:`kv_bytes_breakdown_at_max_kv`; see
+    that for the per-lane formula and the keyword overrides (batch, ring tuning,
+    per-lane dtype widths).  W106 uses this in the memory-plan derivation."""
+    return kv_bytes_breakdown_at_max_kv(config, max_kv, **kwargs)["total"]
+
+
 #: W80 engagement + drop/copy telemetry.  ``layers_ring`` proves engagement (how
 #: many layer caches chose the ring); ``capacity`` is the steady-state logical keep
 #: (window_size + max_verify + slack), ``phys_capacity`` the physical ping-pong
@@ -367,6 +572,66 @@ def window_ring_stats() -> dict:
     return s
 
 
+# ---------------------------------------------------------------------------
+# W107 per-lane bounded-KV engagement counters
+# ---------------------------------------------------------------------------
+#: W107 per-lane in-place / realloc telemetry, the engagement signal for the
+#: bounded lanes.  For each lane (``window`` == the SWA ring, ``compress`` ==
+#: compress_kv, ``index`` == index_k, ``latent`` == the compressor frontier /
+#: "main latent KV"):
+#:   * ``kv_inplace_writes_<lane>`` -- appends that wrote in place into an existing
+#:     preallocated buffer (a donated ``mx.slice_update`` of just the new rows, or a
+#:     ping-pong compaction that reused a buffer): the O(new-rows) decode path.
+#:   * ``kv_realloc_<lane>`` -- appends that ALLOCATED a buffer.  In a truly bounded
+#:     arm this is exactly 1 per lane (the one prefill preallocation); ``> 1`` means
+#:     the lane reallocated during the cell (max_kv unset -> geometric doubling, or a
+#:     prefill chunk wider than the preallocated cap) i.e. NOT preallocated-bounded.
+#:   * ``rows_<lane>`` -- logical rows written (appends + compaction carries).
+#: ``layers_bounded`` proves engagement (layer caches that chose the bounded path);
+#: ``maxkv`` the resolved preallocation cap; ``alloc_bytes`` the total bytes of all
+#: buffers this arm allocated (compare vs :func:`kv_bytes_at_max_kv`).  Process-global
+#: + cumulative (like the Sinkhorn / chunk-grow / ring counters); the ab harness
+#: resets after model load and snapshots after the run.
+_BOUNDED_LANES = ("window", "compress", "index", "latent")
+_BOUNDED_STATS = {"layers_bounded": 0, "maxkv": 0, "alloc_bytes": 0}
+for _ln in _BOUNDED_LANES:
+    _BOUNDED_STATS[f"kv_inplace_writes_{_ln}"] = 0
+    _BOUNDED_STATS[f"kv_realloc_{_ln}"] = 0
+    _BOUNDED_STATS[f"rows_{_ln}"] = 0
+del _ln
+
+
+def reset_kv_bounded_stats() -> None:
+    """Zero the W107 bounded-KV telemetry (call after model load to scope a run)."""
+    for k in _BOUNDED_STATS:
+        _BOUNDED_STATS[k] = 0
+
+
+def kv_bounded_stats() -> dict:
+    """Snapshot the W107 telemetry: ``enabled`` (any layer cache chose the bounded
+    path), the resolved ``maxkv``, allocated bytes, and per-lane in-place/realloc/row
+    counts."""
+    s = dict(_BOUNDED_STATS)
+    s["enabled"] = bool(_BOUNDED_STATS["layers_bounded"] > 0)
+    return s
+
+
+def _note_bounded(lane: Optional[str], *, inplace: bool = False,
+                  realloc: bool = False, rows: int = 0, alloc_bytes: int = 0) -> None:
+    """Record one bounded-lane append into :data:`_BOUNDED_STATS` (no-op when the
+    buffer carries no ``counter_lane``, i.e. a non-bounded chunk-grow / ring lane)."""
+    if lane is None:
+        return
+    if inplace:
+        _BOUNDED_STATS[f"kv_inplace_writes_{lane}"] += 1
+    if realloc:
+        _BOUNDED_STATS[f"kv_realloc_{lane}"] += 1
+    if rows:
+        _BOUNDED_STATS[f"rows_{lane}"] += int(rows)
+    if alloc_bytes:
+        _BOUNDED_STATS["alloc_bytes"] += int(alloc_bytes)
+
+
 class _WindowRing:
     """Bounded sliding-window store for one layer (W80 / K34).
 
@@ -396,10 +661,11 @@ class _WindowRing:
 
     __slots__ = (
         "window_size", "cap_keep", "phys_cap",
-        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail",
+        "_bufs", "_cur", "_len", "_drop", "_b", "_dtype", "_tail", "_lane",
     )
 
-    def __init__(self, window_size: int, max_verify: int, slack: int, headroom: int):
+    def __init__(self, window_size: int, max_verify: int, slack: int, headroom: int,
+                 *, counter_lane: Optional[str] = None):
         self.window_size = int(window_size)
         self.cap_keep = int(window_size) + int(max_verify) + int(slack)
         self.phys_cap = self.cap_keep + int(headroom)
@@ -410,6 +676,9 @@ class _WindowRing:
         self._b: Optional[int] = None
         self._dtype = None
         self._tail: tuple = ()
+        #: W107: lane name for the per-lane bounded engagement counters (``"window"``
+        #: under KV_BOUNDED), or ``None`` for the plain W80 window_ring arm.
+        self._lane = counter_lane
 
     # -- absolute-position accessors ---------------------------------------
     @property
@@ -448,6 +717,9 @@ class _WindowRing:
         _RING_STATS["rows_copied"] += n
         _RING_STATS["capacity"] = self.cap_keep
         _RING_STATS["phys_capacity"] = self.phys_cap
+        # W107: both ping-pong buffers are allocated here -- one prefill preallocation.
+        _note_bounded(self._lane, realloc=True, rows=n,
+                      alloc_bytes=int(self._bufs[0].nbytes + self._bufs[1].nbytes))
 
     def append(self, new: Optional[mx.array]) -> None:
         if new is None or (new.ndim >= 2 and new.shape[1] == 0):
@@ -462,6 +734,7 @@ class _WindowRing:
             self._bufs[self._cur] = self._write(self._bufs[self._cur], new, self._len)
             self._len += n
             _RING_STATS["rows_copied"] += n
+            _note_bounded(self._lane, inplace=True, rows=n)
             return
         # Compaction: keep the last ``keep`` rows, drop the older ones.  ``keep``
         # covers the current forward's oldest query's full causal window
@@ -482,8 +755,10 @@ class _WindowRing:
             _RING_STATS["reallocs"] += 1
         dst_idx = 1 - self._cur
         dst = self._bufs[dst_idx]
+        _grew = False
         if dst is None or int(dst.shape[1]) != target_cap:
             dst = self._alloc(target_cap)  # only when growing (else reuse ping-pong)
+            _grew = True
         if retained > 0:
             head = src[:, self._len - retained: self._len]   # OLD buffer != dst
             dst = self._write(dst, head, 0)
@@ -499,6 +774,11 @@ class _WindowRing:
         _RING_STATS["drops"] += 1
         _RING_STATS["rows_dropped"] += max(0, new_drop - old_drop)
         _RING_STATS["rows_copied"] += retained + n
+        # W107: a steady compaction reuses the OTHER ping-pong buffer (in-place class,
+        # no new allocation); a transient grow to a wider prefill chunk allocated one.
+        _note_bounded(self._lane,
+                      inplace=(not _grew), realloc=_grew, rows=retained + n,
+                      alloc_bytes=int(dst.nbytes) if _grew else 0)
 
     def view(self) -> Optional[mx.array]:
         buf = self._bufs[self._cur]
@@ -615,17 +895,75 @@ class CompressorState:
     group boundary.
     """
 
-    def __init__(self, ratio: int):
+    def __init__(self, ratio: int, *, bounded: bool = False,
+                 maxkv: Optional[int] = None):
         if ratio <= 1:
             raise ValueError("CompressorState is only for compress_ratio > 1")
         self.ratio = int(ratio)
-        self.raw_kv: Optional[mx.array] = None      # [B, n_fed, head_dim] fp32
-        self.raw_score: Optional[mx.array] = None    # [B, n_fed, head_dim] fp32
+        #: W107 ("main latent KV"): the shipped path grows ``raw_kv`` / ``raw_score``
+        #: with a per-token ``_grow`` (an O(n_fed) concatenate == O(T^2) over the
+        #: cell), the ONE KV lane W80 left unbounded.  Under KV_BOUNDED the frontier
+        #: is a PREALLOCATED :class:`_GrowBuffer` capped to ``max_kv`` and written in
+        #: place (O(new rows)/token, no per-token realloc, no concatenate).  The
+        #: reachable rows are byte-identical (the buffer view == the concatenated
+        #: store).  ``None`` maxkv -> geometric fallback (still in place, counted).
+        self._bounded = bool(bounded)
+        if self._bounded:
+            cap = _bounded_latent_cap(maxkv)
+            self._kv_buf: Optional[_GrowBuffer] = _GrowBuffer(
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
+            self._sc_buf: Optional[_GrowBuffer] = _GrowBuffer(
+                init_cap=(cap or 256), bounded_cap=cap, counter_lane="latent")
+            self._raw_kv: Optional[mx.array] = None
+            self._raw_score: Optional[mx.array] = None
+        else:
+            self._kv_buf = None
+            self._sc_buf = None
+            self._raw_kv = None       # [B, n_fed, head_dim] fp32
+            self._raw_score = None    # [B, n_fed, head_dim] fp32
+
+    # -- raw frontier: plain array (default) or preallocated buffer (W107) ------
+    # Properties keep every reader/writer of ``raw_kv`` / ``raw_score`` unchanged
+    # (push/pool math, trim/rollback, mlx_lm ``state`` (de)serialisation, the census
+    # scripts' direct ``comp_state.raw_kv`` read); only the backing changes when
+    # bounded.  A bounded buffer's ``view()`` is byte-identical to the ``_grow`` store.
+    @property
+    def raw_kv(self) -> Optional[mx.array]:
+        return self._kv_buf.view() if self._bounded else self._raw_kv
+
+    @raw_kv.setter
+    def raw_kv(self, value: Optional[mx.array]) -> None:
+        if self._bounded:
+            self._kv_buf.set(value)
+        else:
+            self._raw_kv = value
+
+    @property
+    def raw_score(self) -> Optional[mx.array]:
+        return self._sc_buf.view() if self._bounded else self._raw_score
+
+    @raw_score.setter
+    def raw_score(self, value: Optional[mx.array]) -> None:
+        if self._bounded:
+            self._sc_buf.set(value)
+        else:
+            self._raw_score = value
+
+    def raw_backings(self) -> list:
+        """W107: the RAW backing arrays a settle fence should force -- the
+        preallocated buffer (:meth:`_GrowBuffer.raw_backing`) when bounded, NOT the
+        ``view()`` slice, so a per-token fence never materialises a fresh
+        ``[b, n_fed]`` copy; the plain arrays otherwise."""
+        if self._bounded:
+            return [self._kv_buf.raw_backing(), self._sc_buf.raw_backing()]
+        return [self._raw_kv, self._raw_score]
 
     @property
     def n_fed(self) -> int:
         """Rows fed so far == tokens this layer has processed."""
-        return _rows(self.raw_kv)
+        if self._bounded:
+            return self._kv_buf.rows()
+        return _rows(self._raw_kv)
 
     @property
     def n_groups(self) -> int:
@@ -645,8 +983,12 @@ class CompressorState:
         own rows, so the result is independent of how the rows were chunked.
         """
         n_before = self.n_fed
-        self.raw_kv = _grow(self.raw_kv, kv)
-        self.raw_score = _grow(self.raw_score, score)
+        if self._bounded:
+            self._kv_buf.append(kv)
+            self._sc_buf.append(score)
+        else:
+            self._raw_kv = _grow(self._raw_kv, kv)
+            self._raw_score = _grow(self._raw_score, score)
         n_after = self.n_fed
         g_before = n_before // self.ratio
         g_after = n_after // self.ratio
@@ -654,10 +996,12 @@ class CompressorState:
             return kv[:, :0]  # nothing completed; keep dtype/shape for concat
         lo = g_before * self.ratio
         hi = g_after * self.ratio
-        b = self.raw_kv.shape[0]
-        d = self.raw_kv.shape[-1]
-        grp_kv = self.raw_kv[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
-        grp_sc = self.raw_score[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
+        raw_kv = self.raw_kv
+        raw_score = self.raw_score
+        b = raw_kv.shape[0]
+        d = raw_kv.shape[-1]
+        grp_kv = raw_kv[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
+        grp_sc = raw_score[:, lo:hi].reshape(b, g_after - g_before, self.ratio, d)
         # softmax over the ratio axis (reference softmax(dim=2)/(dim=1), L475/L482)
         pooled = mx.sum(grp_kv * mx.softmax(grp_sc, axis=2), axis=2)
         return pooled
@@ -671,8 +1015,12 @@ class CompressorState:
         keep = self.n_fed - n
         if keep < 0:
             raise ValueError(f"cannot trim {n} of {self.n_fed} compressor rows")
-        self.raw_kv = _truncate(self.raw_kv, keep)
-        self.raw_score = _truncate(self.raw_score, keep)
+        if self._bounded:
+            self._kv_buf.truncate_to(keep)
+            self._sc_buf.truncate_to(keep)
+        else:
+            self._raw_kv = _truncate(self._raw_kv, keep)
+            self._raw_score = _truncate(self._raw_score, keep)
 
     def mark(self) -> int:
         """Snapshot for :meth:`rollback` -- the row count fully determines the
@@ -680,8 +1028,12 @@ class CompressorState:
         return self.n_fed
 
     def rollback(self, mark: int) -> None:
-        self.raw_kv = _truncate(self.raw_kv, mark)
-        self.raw_score = _truncate(self.raw_score, mark)
+        if self._bounded:
+            self._kv_buf.truncate_to(mark)
+            self._sc_buf.truncate_to(mark)
+        else:
+            self._raw_kv = _truncate(self._raw_kv, mark)
+            self._raw_score = _truncate(self._raw_score, mark)
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +1117,43 @@ class LayerAttentionCache:
         #: plain ``mx.array`` attributes grown by :func:`_grow` (byte-for-byte the
         #: shipped cache); ON -> :class:`_GrowBuffer` lanes (chunk-grown append).
         self._chunk_grow = _kv_chunk_grow_enabled()
+        #: W107: the master bounded/preallocated switch.  When on, EVERY KV lane is
+        #: bounded/preallocated to ``max_kv`` and written in place (window ring +
+        #: preallocated compress/index + preallocated compressor frontier), with the
+        #: per-lane engagement counters.  Precedence: KV_BOUNDED > WINDOW_RING >
+        #: chunk-grow.  Picked once at construction (per request, after the harness
+        #: stamps the env key).  See :data:`_KV_BOUNDED_ENV`.
+        self._kv_bounded = _kv_bounded_enabled()
+        if self._kv_bounded:
+            _mv, _slk, _hr, _ = _window_ring_config()
+            _maxkv = _kv_bounded_maxkv()
+            _RING_STATS["layers_ring"] += 1          # the window lane IS a ring
+            _BOUNDED_STATS["layers_bounded"] += 1
+            if _maxkv:
+                _BOUNDED_STATS["maxkv"] = int(_maxkv)
+            #: window == the bounded ring (genuine sliding window); compress/index
+            #: == preallocated ``_GrowBuffer`` capped to ``ceil(max_kv/ratio)`` rows
+            #: (the indexer needs them in full, so they are preallocated to max_kv,
+            #: not shrunk); the compressor frontier (main latent KV) is preallocated
+            #: below.  ``max_kv`` unset -> geometric fallback (still in place, but the
+            #: ``kv_realloc_*`` counters flag it as not preallocated-bounded).
+            self._window = _WindowRing(self.window_size, _mv, _slk, _hr,
+                                       counter_lane="window")
+            _comp_cap = _bounded_comp_cap(_maxkv, self.compress_ratio)
+            self._compress_kv = _GrowBuffer(
+                init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
+                counter_lane="compress")
+            self._index_k = _GrowBuffer(
+                init_cap=(_comp_cap or 256), bounded_cap=_comp_cap,
+                counter_lane="index")
+            #: compressor frontier: preallocated to max_kv (W107 fixes the last O(T)
+            #: concatenate lane) for ratio>1 kv-source layers, else None.
+            self.comp_state: Optional[CompressorState] = (
+                CompressorState(self.compress_ratio, bounded=True, maxkv=_maxkv)
+                if self.is_kv_source and self.compress_ratio > 1
+                else None
+            )
+            return
         if self._window_ring:
             _mv, _slk, _hr, _maxkv = _window_ring_config()
             _RING_STATS["layers_ring"] += 1
@@ -787,7 +1176,7 @@ class LayerAttentionCache:
             self._compress_kv = _GrowBuffer() if self._chunk_grow else None
             self._index_k = _GrowBuffer() if self._chunk_grow else None
         #: compressor frontier (CompressorState for ratio>1, else None)
-        self.comp_state: Optional[CompressorState] = (
+        self.comp_state = (
             CompressorState(self.compress_ratio)
             if self.is_kv_source and self.compress_ratio > 1
             else None
@@ -867,7 +1256,10 @@ class LayerAttentionCache:
             if a is not None:
                 out.append(a)
         if self.comp_state is not None:
-            for a in (self.comp_state.raw_kv, self.comp_state.raw_score):
+            # W107: force the RAW frontier backings (the preallocated buffer, not a
+            # fresh ``view()`` slice), so a bounded frontier's settle fence realises
+            # only this step's in-place write.
+            for a in self.comp_state.raw_backings():
                 if a is not None:
                     out.append(a)
         return out

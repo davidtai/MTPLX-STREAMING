@@ -302,6 +302,17 @@ GATE_PREFETCH_MIN_LAYER_ENV = "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER"  # W93: skip
 # Byte-identical to control's CLASS (residency-only: prefetch warms the cache on the
 # TRUE route, the pool only changes which loads happen). See W95_RUNNER_DESIGN.md.
 RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
+# W107: the master bounded-KV switch (David: "controlling kv growth is crucial for
+# everything").  ON => EVERY KV lane is bounded/preallocated to max_kv at prefill and
+# written in place (O(new rows)/token, no per-token concatenate/realloc): the W80
+# window ring + preallocated compress/index + the PREALLOCATED compressor frontier
+# (the "main latent KV", the one lane W80 left growing with a per-token _grow == O(T^2)
+# over the cell).  Byte-identical to the ring arm's CLASS by construction (pure
+# prealloc/in-place; the ring's drop_offset already proved the window byte-identity).
+# Default ON for the cell16k_ring* arms; MTPLX_DSV41_KV_BOUNDED=0 disables.  MAXKV is
+# stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
+KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
+KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -360,6 +371,9 @@ ALL_LEVER_ENVS = (
     RUNNER_ENV,
     # W104 (appended; coordinate with any concurrent list extension):
     DRAFT_HEAD_BF16_ENV,
+    # W107 (appended; coordinate with any concurrent list extension):
+    KV_BOUNDED_ENV,
+    KV_BOUNDED_MAXKV_ENV,
 )
 
 
@@ -383,6 +397,7 @@ def _preset(
     gate_prefetch=None,
     gate_prefetch_min_layer=None,
     runner=None,
+    kv_bounded=None, kv_bounded_maxkv=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -442,6 +457,8 @@ def _preset(
         GATE_PREFETCH_ENV: gate_prefetch,
         GATE_PREFETCH_MIN_LAYER_ENV: gate_prefetch_min_layer,
         RUNNER_ENV: runner,
+        KV_BOUNDED_ENV: kv_bounded,
+        KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
     }
 
 
@@ -683,7 +700,7 @@ ARM_PRESETS = {
     # the dense/lean prefill reassoc; the ring adds NO new lossiness).
     "cell16k_ring": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
     ),
     # W104 (was W81): cell16k_ring + BOTH DSpark draft-head levers -- K33 draft-block
@@ -697,7 +714,7 @@ ARM_PRESETS = {
     # isolation is still the standalone ``draft_compile`` arm.
     "cell16k_ring_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         draft="1", draft_head_bf16="1",
     ),
@@ -709,7 +726,7 @@ ARM_PRESETS = {
     # the profile transient_slots measures the barrier-free decode route at 16K.
     "cell16k_ring_pinned": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         pin_working_set="all", device_route="1", device_route_pinned="1",
     ),
@@ -736,7 +753,7 @@ ARM_PRESETS = {
     # the dense/lean prefill reassoc, cf. cell16k).
     "cell16k_ring_stable": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         attn_shape_stable="1",
     ),
@@ -765,7 +782,7 @@ ARM_PRESETS = {
     # (decode_hit_rate_first_64_steps vs steady_state, populated by BOTH arms).
     "cell16k_ring_pool": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         single_slot_pool="1",
     ),
@@ -800,7 +817,7 @@ ARM_PRESETS = {
     # 16, ab-1024-fastpath-b.json), not 16K.  Primarily a host-sync-hygiene lever.
     "cell16k_ring_switch": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         fastpath="1", submit="1", verify_single="1",
     ),
@@ -823,7 +840,7 @@ ARM_PRESETS = {
     # cell16k_ring's class.
     "cell16k_ring_prefetch": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         gate_prefetch="10",
     ),
@@ -843,7 +860,7 @@ ARM_PRESETS = {
     # + dense/lean prefill reassoc; the runner adds NO new lossiness).
     "cell16k_ring_v2": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2",
     ),
@@ -858,7 +875,7 @@ ARM_PRESETS = {
     # docs/deepseek-v41/W104_DRAFT_RESIDENT_MOE.md.)
     "cell16k_ring_v2_draft": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
     ),
@@ -2758,6 +2775,18 @@ def _write_output_sidecars(out_path, receipt) -> None:
 
 def _run_arm(args, arm, bench, mx) -> dict:
     _apply_arm_env(arm)
+    # W107: a bounded arm that did not pin an explicit MTPLX_DSV41_KV_BOUNDED_MAXKV
+    # (the presets do not know the CLI --max-kv) preallocates every KV lane to the
+    # resolved cell max_kv.  Stamp it here, after the arm env is applied and BEFORE
+    # make_cache (per request), so the cache reads it at construction.  Read-at-use,
+    # not import.  A bounded arm with neither key set falls back to geometric growth
+    # (the kv_realloc_* counters then flag it).
+    if (os.environ.get(KV_BOUNDED_ENV) or "").strip().lower() in ("1", "true", "yes", "on"):
+        if not (os.environ.get(KV_BOUNDED_MAXKV_ENV) or "").strip():
+            _bounded_max_kv = bench.resolve_max_kv(
+                [args.context_tokens], args.decode_tokens, args.max_kv
+            )
+            os.environ[KV_BOUNDED_MAXKV_ENV] = str(int(_bounded_max_kv))
     if getattr(args, "decode_mode", "ar") == "dspark":
         # Arm K29 (fused decode/verify attention, b*s<=8) + K30 (selected keys) for
         # the WHOLE arm so both the AR reference (_generate) and the dspark verify
@@ -2819,6 +2848,11 @@ def _run_arm(args, arm, bench, mx) -> dict:
         _reset_ring = getattr(_dsv41_cache, "reset_window_ring_stats", None)
         if callable(_reset_ring):
             _reset_ring()
+        # W107: zero the per-lane bounded-KV telemetry so the receipt reports THIS
+        # arm's bounded engagement + per-lane in-place/realloc counts.
+        _reset_bounded = getattr(_dsv41_cache, "reset_kv_bounded_stats", None)
+        if callable(_reset_bounded):
+            _reset_bounded()
     except Exception:  # pragma: no cover - defensive
         _dsv41_cache = None
     try:
@@ -3184,6 +3218,25 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     "slack (bounded); rows_copied flat-per-token == amortized O(1)"
                 )
                 receipt["window_ring"] = rstats
+            # W107 per-lane bounded-KV engagement (cumulative over the arm).
+            # ``enabled`` false => MTPLX_DSV41_KV_BOUNDED never reached cache
+            # construction.  enabled true: for each lane ``kv_realloc_<lane>`` should
+            # be its one-time prealloc count (window 1, compress 1, index 1, latent 2
+            # == kv+score) and STAY there -- a growing ``kv_realloc_*`` over the cell
+            # means the lane was not preallocated (max_kv unset / prefill chunk wider
+            # than the cap).  ``kv_inplace_writes_<lane>`` is the O(new-rows) decode
+            # path; ``alloc_bytes`` should ~= kv_bytes_at_max_kv(config, max_kv).
+            bounded_stats_fn = getattr(_dsv41_cache, "kv_bounded_stats", None)
+            if callable(bounded_stats_fn):
+                bstats = bounded_stats_fn()
+                bstats["env"] = os.environ.get(KV_BOUNDED_ENV)
+                bstats["maxkv_env"] = os.environ.get(KV_BOUNDED_MAXKV_ENV)
+                bstats["note"] = (
+                    "cumulative over this arm; kv_realloc_<lane> == one-time prealloc "
+                    "(>1 growing == not preallocated-bounded); kv_inplace_writes_<lane> "
+                    "== O(new-rows) decode path; alloc_bytes ~= kv_bytes_at_max_kv"
+                )
+                receipt["kv_bounded"] = bstats
         # W106 item 3: merge the budget-total derivation terms into every memory
         # block (memory_plan_source + the derived plan limit + each term), so the
         # receipt records how the plan compensated for the non-Metal requirements.
