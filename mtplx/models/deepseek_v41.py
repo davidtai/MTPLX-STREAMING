@@ -89,6 +89,16 @@ from mtplx.models import deepseek_v41_stage_timing as _stime
 # snapshot to confirm the Sinkhorn kernel actually engaged per arm (W38/K3).
 from mtplx import expert_route_probe as _route_probe
 
+# W115: the verify-attention fast path scopes itself to the DSpark target-verify
+# forward via the attention-phase context (``decode_verify``), so a short (<=8-row)
+# prefill chunk never trips the small-M auto-arm.  Lightweight (contextvars only), so
+# a top-level import is cycle-safe; guarded to a stub if the module ever moves.
+try:
+    from mtplx.attention_context import current_attention_phase as _current_attention_phase
+except Exception:  # pragma: no cover - defensive
+    def _current_attention_phase() -> str:
+        return "unknown"
+
 # ---------------------------------------------------------------------------
 # Hyper-Connection Sinkhorn normalisation (kernel-ledger K3, W32)
 # ---------------------------------------------------------------------------
@@ -1214,7 +1224,12 @@ class Attention(nn.Module):
         # through this rounding-class tape -- keep prompts/prefill chunks > the cap
         # for byte-identical prefill, or accept prefill as rounding-class there.
         rows = b * s
-        if (_resolve_attn_core_compile() and rows <= _ATTN_CORE_COMPILE_MAX_ROWS
+        # W115: the verify fast path auto-arms this compiled core for the K+1 verify
+        # batch (phase-scoped to ``decode_verify``, so no untimed-prefill caveat) even
+        # when the M=1 ``attn_core_compile`` lever is off -- on CPU / when K29 declined
+        # this is the batched decode SDPA core the verify reuses.
+        if ((_resolve_attn_core_compile() or _verify_attn_fastpath_use(rows))
+                and rows <= _ATTN_CORE_COMPILE_MAX_ROWS
                 and not _stime.is_prefill()):
             _note_attn_core_call(True)
             with _stime.stage_attn("attn." + mode + ".score.core_compiled") as _st:
@@ -1475,6 +1490,24 @@ class Attention(nn.Module):
         # [1,64,T] every token; K30 makes it T-independent (k = window + index_topk).
         # Composes with W60's K29 fused decode kernel (see _sparse_attend_selected).
         use_selected = _resolve_selected_keys()
+        # W115: verify-attention fast-path engagement census.  Scoped to the DSpark
+        # ``decode_verify`` forward (so prefill chunks never count) and to the K+1
+        # verify batch (b*s > 1).  A lever-on verify call either engages the fast core
+        # (counted via _note_verify_attn_fastpath -- the small-M gates then auto-arm
+        # K29/core-compile + fused proj through _verify_attn_fastpath_use) or falls
+        # back with a reason: ``rows_gt_max`` (batch wider than MAX_ROWS -> the core
+        # caps decline it) or ``selected_keys_off`` (the fused/compiled core lives on
+        # the selected-key path; without SELECTED_KEYS the verify runs the masked
+        # _sparse_attend core, so only the projections can fuse).
+        if _resolve_verify_attn_fastpath() and (b * s) > 1 \
+                and _current_attention_phase() == "decode_verify":
+            _vrows = b * s
+            if _vrows > _resolve_verify_attn_max_rows():
+                _note_verify_attn_fastpath_fallback("rows_gt_max")
+            elif not use_selected:
+                _note_verify_attn_fastpath_fallback("selected_keys_off")
+            else:
+                _note_verify_attn_fastpath(_vrows)
         # K24 (W45): the sliding-window attend mask is identical across every layer
         # of this forward; memoize it on the per-forward shared runtime under
         # MTPLX_DSV41_ATTN_WIN_MEMO (byte-identical, a pure host-dispatch cut).
@@ -2149,9 +2182,18 @@ def _decode_attn_kernel_use(q) -> bool:
     armed, a Metal GPU is the default device, AND the query is small-M (decode /
     verify, ``b*s <= _DECODE_ATTN_KERNEL_MAX_ROWS``).  A CPU-pinned worker test (or
     a no-Metal host) returns ``False`` so the eager path runs and no Metal is
-    dispatched -- the GPU route is proven by a spy in the tests."""
+    dispatched -- the GPU route is proven by a spy in the tests.
+
+    W115: when the M=1 ``decode_attn_kernel`` lever is off, the verify fast path may
+    still auto-arm the kernel for the K+1 verify batch (``_verify_attn_fastpath_use``,
+    phase- and row-scoped)."""
     if not _resolve_decode_attn_kernel():
-        return False
+        try:
+            rows0 = int(q.shape[0]) * int(q.shape[1])
+        except Exception:
+            return False
+        if not _verify_attn_fastpath_use(rows0):
+            return False
     try:
         if not mx.metal.is_available() or mx.default_device() != mx.gpu:
             return False
@@ -2401,8 +2443,13 @@ def _fused_proj_use(rows: int) -> bool:
     test (or a no-Metal host) returns ``False`` so the eager path runs and no Metal
     is dispatched -- the GPU route is proven by the engagement counter in the
     tests.  Mirrors :func:`_decode_attn_kernel_use`'s gate so the two levers arm on
-    the same regime."""
-    if not _resolve_attn_fused_proj():
+    the same regime.
+
+    W115: when the M=1 ``attn_fused_proj`` lever is off, the verify fast path may still
+    auto-arm the fused projections for the K+1 verify batch
+    (``_verify_attn_fastpath_use``, phase- and row-scoped) so the verify's projections
+    engage W101 and ``fused_proj_engagement`` counts its rows."""
+    if not (_resolve_attn_fused_proj() or _verify_attn_fastpath_use(rows)):
         return False
     try:
         if not mx.metal.is_available() or mx.default_device() != mx.gpu:
@@ -2410,6 +2457,141 @@ def _fused_proj_use(rows: int) -> bool:
     except Exception:
         return False
     return int(rows) <= _DECODE_ATTN_KERNEL_MAX_ROWS
+
+
+# --- W115: verify-attention fast path (decode SDPA core for the K+1 verify batch) --
+#: The DSpark verify is a small-M (``1 < rows = K+1 <= 8``) target-verify forward.
+#: The M=1 decode machinery -- W101 fused projections, the cached pre-transposed
+#: wo_a, W99 lean casts, and the fused/compiled SDPA core (the K29 kernel on GPU, the
+#: W97 core-compile tape on CPU/GPU) -- is already row-generic and accepts a small
+#: batch of rows.  But a bench/served arm can arm the fused PROJECTIONS while
+#: DELIBERATELY keeping the eager SDPA core (``cell16k_ring_v2_draft_attn``: K29 and
+#: core-compile OFF -- see the arm comment), so the K+1 verify runs the eager
+#: selected-key core at ~M x the M=1 cost (window-43: verify attention ~372 ms/cycle
+#: for the 6-row batch vs 64 ms/token at M=1 -- ~6x, the per-row eager gather-softmax
+#: never amortising the shared KV read).  This lever AUTO-ARMS the fused decode SDPA
+#: core (K29 + the core-compile tape) for the verify rows ONLY, independent of whether
+#: the M=1 decode-core levers are armed, so the batched verify reuses the same
+#: single-dispatch core: one SDPA over the selected window/compress KV with the
+#: per-query causal mask among the K+1 rows (positions increase within the block, so
+#: ``_window_selected_idx`` already makes each query causal).  ``rows == 1`` is
+#: untouched (the M=1 core levers still govern it), and the fast path scopes itself to
+#: the ``decode_verify`` attention phase so a short (<=8-row) prefill chunk never trips
+#: it.  ROUNDING-CLASS: the fused/compiled core reassociates the fp32 softmax vs the
+#: eager core (greedy-identical, never byte-identical -- [[dsv41-inexact-ok-if-tie-
+#: flips]]).  Read at use ([[env-flags-read-at-use-not-import]]); default OFF.
+_VERIFY_ATTN_FASTPATH_ENV = "MTPLX_DSV41_VERIFY_ATTN_FASTPATH"
+#: Row cap (``b*s``) for the verify fast path.  The K29 kernel and the core-compile
+#: tape both hard-cap at ``_DECODE_ATTN_KERNEL_MAX_ROWS`` (8), so a larger value never
+#: engages more rows; a smaller value narrows the batch that auto-arms.  Default 8
+#: (matches ``_RUNNER_V2_VERIFY_MAX_ROWS`` -- the widest DSpark verify block).
+_VERIFY_ATTN_MAX_ROWS_ENV = "MTPLX_DSV41_VERIFY_ATTN_MAX_ROWS"
+_VERIFY_ATTN_MAX_ROWS_DEFAULT = 8
+
+
+def _resolve_verify_attn_fastpath(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_VERIFY_ATTN_FASTPATH`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_VERIFY_ATTN_FASTPATH_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_VERIFY_ATTN_FASTPATH_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager verify attention core)"
+    )
+
+
+def _resolve_verify_attn_max_rows(raw=None) -> int:
+    """Resolve ``MTPLX_DSV41_VERIFY_ATTN_MAX_ROWS`` to an int >= 2 (default 8).
+
+    Unset/empty -> the default; a non-integer or ``< 2`` value raises (a verify batch
+    is ``1 < rows``, so a cap below 2 is meaningless)."""
+    val = os.environ.get(_VERIFY_ATTN_MAX_ROWS_ENV) if raw is None else raw
+    val = (val or "").strip()
+    if val == "":
+        return _VERIFY_ATTN_MAX_ROWS_DEFAULT
+    try:
+        n = int(val)
+    except ValueError:
+        raise ValueError(
+            f"{_VERIFY_ATTN_MAX_ROWS_ENV}={val!r} is not an integer "
+            f"(default {_VERIFY_ATTN_MAX_ROWS_DEFAULT})"
+        )
+    if n < 2:
+        raise ValueError(
+            f"{_VERIFY_ATTN_MAX_ROWS_ENV}={n} must be >= 2 (a verify batch is 1 < rows)"
+        )
+    return n
+
+
+def _verify_attn_fastpath_use(rows) -> bool:
+    """Whether the verify fast path governs THIS attention call: the lever is armed,
+    the current attention phase is the DSpark ``decode_verify`` forward, AND the row
+    count is a verify batch within the cap (``1 < rows <= min(MAX_ROWS, kernel cap)``).
+
+    Consulted by the small-M core gates (:func:`_decode_attn_kernel_use`,
+    :func:`_fused_proj_use`, the core-compile gate) to auto-arm the fused decode core
+    for the verify rows even when the M=1 core levers are off.  Phase-scoped so it
+    NEVER fires for a prefill chunk (unlike the raw ``rows <= 8`` core gates, which the
+    M=1 levers still key off directly)."""
+    if not _resolve_verify_attn_fastpath():
+        return False
+    if _current_attention_phase() != "decode_verify":
+        return False
+    try:
+        r = int(rows)
+    except Exception:
+        return False
+    if r <= 1:
+        return False
+    return r <= min(_resolve_verify_attn_max_rows(), _DECODE_ATTN_KERNEL_MAX_ROWS)
+
+
+#: W115 engagement counters: verify (``decode_verify``) attention calls the fast path
+#: governed (``calls``), the summed row count (``rows`` = Σ b*s), and the reasons a
+#: lever-on verify call could NOT take the fast core (``fallbacks``).  Recorded in the
+#: ab receipt under ``verify_attn_fastpath_engagement`` (AR pass) and the ``dspark``
+#: block (verify pass), so a window proves the verify rows actually engaged rather
+#: than silently running eager -- and that ``fused_proj_engagement`` then counts them.
+_VERIFY_FASTPATH_CALLS = 0
+_VERIFY_FASTPATH_ROWS = 0
+_VERIFY_FASTPATH_FALLBACKS: dict = {}
+
+
+def _reset_verify_attn_fastpath_calls() -> None:
+    """Zero the verify-fast-path engagement counters (call before each A/B pass)."""
+    global _VERIFY_FASTPATH_CALLS, _VERIFY_FASTPATH_ROWS, _VERIFY_FASTPATH_FALLBACKS
+    _VERIFY_FASTPATH_CALLS = 0
+    _VERIFY_FASTPATH_ROWS = 0
+    _VERIFY_FASTPATH_FALLBACKS = {}
+
+
+def _note_verify_attn_fastpath(rows: int) -> None:
+    """Record one verify attention call the fast path governed (rows = b*s)."""
+    global _VERIFY_FASTPATH_CALLS, _VERIFY_FASTPATH_ROWS
+    _VERIFY_FASTPATH_CALLS += 1
+    _VERIFY_FASTPATH_ROWS += int(rows)
+
+
+def _note_verify_attn_fastpath_fallback(reason: str) -> None:
+    """Record one lever-on verify call that could NOT take the fast core, by reason."""
+    _VERIFY_FASTPATH_FALLBACKS[reason] = _VERIFY_FASTPATH_FALLBACKS.get(reason, 0) + 1
+
+
+def _verify_attn_fastpath_engagement() -> dict:
+    """Counters since the last reset: ``calls`` (verify attention calls the fast path
+    governed), ``rows`` (Σ b*s over them), and ``fallbacks`` ({reason: count} for
+    lever-on verify calls that fell back to the eager/masked core)."""
+    return {
+        "calls": int(_VERIFY_FASTPATH_CALLS),
+        "rows": int(_VERIFY_FASTPATH_ROWS),
+        "fallbacks": dict(_VERIFY_FASTPATH_FALLBACKS),
+    }
 
 
 def _attn_core_impl(q, KVg, valid, sink, scale):
