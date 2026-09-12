@@ -1,0 +1,657 @@
+{
+  "layer_attn": {
+    "full": {
+      "affine8g64": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "full",
+        "ms_per_layer_fenced": 2.3311,
+        "ms_per_layer_pipelined": 2.2897,
+        "proj_bytes": 134529024,
+        "quantized": true,
+        "repeats": 3
+      },
+      "bf16": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "full",
+        "ms_per_layer_fenced": 2.7963,
+        "ms_per_layer_pipelined": 2.9658,
+        "proj_bytes": 253231104,
+        "quantized": false,
+        "repeats": 3
+      },
+      "mxfp4": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "full",
+        "ms_per_layer_fenced": 2.1522,
+        "ms_per_layer_pipelined": 2.2548,
+        "proj_bytes": 67264512,
+        "quantized": true,
+        "repeats": 3
+      },
+      "mxfp8": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "full",
+        "ms_per_layer_fenced": 2.3427,
+        "ms_per_layer_pipelined": 2.2556,
+        "proj_bytes": 130572288,
+        "quantized": true,
+        "repeats": 3
+      }
+    },
+    "swa_only": {
+      "affine8g64": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "swa_only",
+        "ms_per_layer_fenced": 1.4324,
+        "ms_per_layer_pipelined": 1.259,
+        "proj_bytes": 134529024,
+        "quantized": true,
+        "repeats": 3
+      },
+      "bf16": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "swa_only",
+        "ms_per_layer_fenced": 1.9404,
+        "ms_per_layer_pipelined": 1.9058,
+        "proj_bytes": 253231104,
+        "quantized": false,
+        "repeats": 3
+      },
+      "mxfp4": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "swa_only",
+        "ms_per_layer_fenced": 1.2957,
+        "ms_per_layer_pipelined": 1.1772,
+        "proj_bytes": 67264512,
+        "quantized": true,
+        "repeats": 3
+      },
+      "mxfp8": {
+        "T": 16384,
+        "finite": true,
+        "iters": 40,
+        "mode": "swa_only",
+        "ms_per_layer_fenced": 1.4585,
+        "ms_per_layer_pipelined": 1.2962,
+        "proj_bytes": 130572288,
+        "quantized": true,
+        "repeats": 3
+      }
+    }
+  },
+  "matmul": {
+    "affine4g64": {
+      "wkv": {
+        "M1": {
+          "finite": true,
+          "gbps": 124.93,
+          "us_per_call": 11.8034,
+          "weight_bytes": 1474560
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 77.67,
+          "us_per_call": 18.985,
+          "weight_bytes": 1474560
+        }
+      },
+      "wo_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 645.52,
+          "us_per_call": 29.2389,
+          "weight_bytes": 18874368
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 277.19,
+          "us_per_call": 68.0911,
+          "weight_bytes": 18874368
+        }
+      },
+      "wo_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 699.24,
+          "us_per_call": 33.7409,
+          "weight_bytes": 23592960
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 280.29,
+          "us_per_call": 84.1732,
+          "weight_bytes": 23592960
+        }
+      },
+      "wq_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 299.42,
+          "us_per_call": 12.3119,
+          "weight_bytes": 3686400
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 168.15,
+          "us_per_call": 21.9238,
+          "weight_bytes": 3686400
+        }
+      },
+      "wq_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 654.79,
+          "us_per_call": 36.0312,
+          "weight_bytes": 23592960
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 248.47,
+          "us_per_call": 94.9512,
+          "weight_bytes": 23592960
+        }
+      }
+    },
+    "affine8g32": {
+      "wkv": {
+        "M1": {
+          "finite": true,
+          "gbps": 241.76,
+          "us_per_call": 12.1986,
+          "weight_bytes": 2949120
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 150.94,
+          "us_per_call": 19.5378,
+          "weight_bytes": 2949120
+        }
+      },
+      "wo_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 782.09,
+          "us_per_call": 48.2663,
+          "weight_bytes": 37748736
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 484.74,
+          "us_per_call": 77.8737,
+          "weight_bytes": 37748736
+        }
+      },
+      "wo_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 810.79,
+          "us_per_call": 58.1973,
+          "weight_bytes": 47185920
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 466.92,
+          "us_per_call": 101.0573,
+          "weight_bytes": 47185920
+        }
+      },
+      "wq_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 549.9,
+          "us_per_call": 13.4075,
+          "weight_bytes": 7372800
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 314.58,
+          "us_per_call": 23.4369,
+          "weight_bytes": 7372800
+        }
+      },
+      "wq_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 838.1,
+          "us_per_call": 56.3008,
+          "weight_bytes": 47185920
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 509.67,
+          "us_per_call": 92.5807,
+          "weight_bytes": 47185920
+        }
+      }
+    },
+    "affine8g64": {
+      "wkv": {
+        "M1": {
+          "finite": true,
+          "gbps": 228.23,
+          "us_per_call": 12.2038,
+          "weight_bytes": 2785280
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 142.35,
+          "us_per_call": 19.5664,
+          "weight_bytes": 2785280
+        }
+      },
+      "wo_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 766.68,
+          "us_per_call": 46.5013,
+          "weight_bytes": 35651584
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 431.53,
+          "us_per_call": 82.6159,
+          "weight_bytes": 35651584
+        }
+      },
+      "wo_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 796.88,
+          "us_per_call": 55.9238,
+          "weight_bytes": 44564480
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 432.72,
+          "us_per_call": 102.9876,
+          "weight_bytes": 44564480
+        }
+      },
+      "wq_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 535.34,
+          "us_per_call": 13.0072,
+          "weight_bytes": 6963200
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 286.89,
+          "us_per_call": 24.2715,
+          "weight_bytes": 6963200
+        }
+      },
+      "wq_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 830.4,
+          "us_per_call": 53.666,
+          "weight_bytes": 44564480
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 413.19,
+          "us_per_call": 107.8542,
+          "weight_bytes": 44564480
+        }
+      }
+    },
+    "bf16": {
+      "wkv": {
+        "M1": {
+          "finite": true,
+          "gbps": 367.5,
+          "us_per_call": 14.2663,
+          "weight_bytes": 5242880
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 360.49,
+          "us_per_call": 14.5436,
+          "weight_bytes": 5242880
+        }
+      },
+      "wo_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 619.8,
+          "us_per_call": 108.2747,
+          "weight_bytes": 67108864
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 603.05,
+          "us_per_call": 111.2832,
+          "weight_bytes": 67108864
+        }
+      },
+      "wo_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 544.66,
+          "us_per_call": 154.0156,
+          "weight_bytes": 83886080
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 541.02,
+          "us_per_call": 155.0527,
+          "weight_bytes": 83886080
+        }
+      },
+      "wq_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 474.65,
+          "us_per_call": 27.6146,
+          "weight_bytes": 13107200
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 421.5,
+          "us_per_call": 31.0964,
+          "weight_bytes": 13107200
+        }
+      },
+      "wq_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 549.68,
+          "us_per_call": 152.61,
+          "weight_bytes": 83886080
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 503.65,
+          "us_per_call": 166.5573,
+          "weight_bytes": 83886080
+        }
+      }
+    },
+    "mxfp4": {
+      "wkv": {
+        "M1": {
+          "finite": true,
+          "gbps": 110.68,
+          "us_per_call": 12.582,
+          "weight_bytes": 1392640
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 76.04,
+          "us_per_call": 18.3158,
+          "weight_bytes": 1392640
+        }
+      },
+      "wo_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 616.62,
+          "us_per_call": 28.9089,
+          "weight_bytes": 17825792
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 243.26,
+          "us_per_call": 73.2799,
+          "weight_bytes": 17825792
+        }
+      },
+      "wo_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 680.0,
+          "us_per_call": 32.7682,
+          "weight_bytes": 22282240
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 242.42,
+          "us_per_call": 91.9141,
+          "weight_bytes": 22282240
+        }
+      },
+      "wq_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 249.61,
+          "us_per_call": 13.9479,
+          "weight_bytes": 3481600
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 144.82,
+          "us_per_call": 24.0417,
+          "weight_bytes": 3481600
+        }
+      },
+      "wq_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 559.98,
+          "us_per_call": 39.791,
+          "weight_bytes": 22282240
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 212.98,
+          "us_per_call": 104.6237,
+          "weight_bytes": 22282240
+        }
+      }
+    },
+    "mxfp8": {
+      "wkv": {
+        "M1": {
+          "finite": true,
+          "gbps": 170.8,
+          "us_per_call": 15.8275,
+          "weight_bytes": 2703360
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 128.23,
+          "us_per_call": 21.0814,
+          "weight_bytes": 2703360
+        }
+      },
+      "wo_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 730.6,
+          "us_per_call": 47.3626,
+          "weight_bytes": 34603008
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 355.68,
+          "us_per_call": 97.2871,
+          "weight_bytes": 34603008
+        }
+      },
+      "wo_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 766.75,
+          "us_per_call": 56.4121,
+          "weight_bytes": 43253760
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 341.68,
+          "us_per_call": 126.5898,
+          "weight_bytes": 43253760
+        }
+      },
+      "wq_a": {
+        "M1": {
+          "finite": true,
+          "gbps": 293.33,
+          "us_per_call": 23.0404,
+          "weight_bytes": 6758400
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 181.87,
+          "us_per_call": 37.1615,
+          "weight_bytes": 6758400
+        }
+      },
+      "wq_b": {
+        "M1": {
+          "finite": true,
+          "gbps": 806.61,
+          "us_per_call": 53.6243,
+          "weight_bytes": 43253760
+        },
+        "M6": {
+          "finite": true,
+          "gbps": 326.55,
+          "us_per_call": 132.457,
+          "weight_bytes": 43253760
+        }
+      }
+    }
+  },
+  "meta": {
+    "argv": [
+      "--gpu",
+      "--out",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-41b/proj-codec-probe.json"
+    ],
+    "chain": 64,
+    "device": "gpu",
+    "git_sha": "1e1856ea6ef4e16fd73e7a138486f2af8024f1a2",
+    "hypothesis": "H3",
+    "layer_T": 16384,
+    "layer_iters": 40,
+    "layer_modes": [
+      "swa_only",
+      "full"
+    ],
+    "layer_repeats": 3,
+    "layer_warmup": 5,
+    "mlx_version": "0.32.2",
+    "repeats": 5,
+    "seed": 1234,
+    "timestamp_utc": "2026-09-12T13:40:21Z",
+    "tiny": false,
+    "warmup": 3,
+    "window": "W105"
+  },
+  "per_layer": {
+    "affine4g64": {
+      "M1": {
+        "gbps": 578.44,
+        "us_total": 123.1263,
+        "weight_bytes": 71221248
+      },
+      "M6": {
+        "gbps": 247.19,
+        "us_total": 288.1243,
+        "weight_bytes": 71221248
+      }
+    },
+    "affine8g32": {
+      "M1": {
+        "gbps": 756.18,
+        "us_total": 188.3704,
+        "weight_bytes": 142442496
+      },
+      "M6": {
+        "gbps": 452.94,
+        "us_total": 314.4863,
+        "weight_bytes": 142442496
+      }
+    },
+    "affine8g64": {
+      "M1": {
+        "gbps": 742.02,
+        "us_total": 181.3021,
+        "weight_bytes": 134529024
+      },
+      "M6": {
+        "gbps": 398.85,
+        "us_total": 337.2956,
+        "weight_bytes": 134529024
+      }
+    },
+    "bf16": {
+      "M1": {
+        "gbps": 554.38,
+        "us_total": 456.7813,
+        "weight_bytes": 253231104
+      },
+      "M6": {
+        "gbps": 529.18,
+        "us_total": 478.5332,
+        "weight_bytes": 253231104
+      }
+    },
+    "mxfp4": {
+      "M1": {
+        "gbps": 525.51,
+        "us_total": 127.9981,
+        "weight_bytes": 67264512
+      },
+      "M6": {
+        "gbps": 215.47,
+        "us_total": 312.1751,
+        "weight_bytes": 67264512
+      }
+    },
+    "mxfp8": {
+      "M1": {
+        "gbps": 665.28,
+        "us_total": 196.2669,
+        "weight_bytes": 130572288
+      },
+      "M6": {
+        "gbps": 314.95,
+        "us_total": 414.5768,
+        "weight_bytes": 130572288
+      }
+    }
+  },
+  "shapes": {
+    "wkv": {
+      "dense_bytes": 5242880,
+      "in": 5120,
+      "out": 512
+    },
+    "wo_a": {
+      "dense_bytes": 67108864,
+      "in": 4096,
+      "out": 8192
+    },
+    "wo_b": {
+      "dense_bytes": 83886080,
+      "in": 8192,
+      "out": 5120
+    },
+    "wq_a": {
+      "dense_bytes": 13107200,
+      "in": 5120,
+      "out": 1280
+    },
+    "wq_b": {
+      "dense_bytes": 83886080,
+      "in": 1280,
+      "out": 32768
+    }
+  }
+}
