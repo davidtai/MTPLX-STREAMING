@@ -33,6 +33,7 @@ import os
 from pathlib import Path
 
 import mlx.core as mx
+import numpy as np
 
 mx.set_default_device(mx.cpu)
 
@@ -155,15 +156,19 @@ def test_runner_v2_arms_overlap_miss_reads():
 # B/C. runtime arming + exactness (tiny real component-bank runtime)
 # ---------------------------------------------------------------------------
 def _open_runtime(tmp_path, *, runner_v2, expert_count=8, top_k=2,
-                  resident_slots=2, transient=8, prefetch=10):
+                  resident_slots=2, transient=8, prefetch=10, overlap=None):
     """Open a tiny real streamed runtime.  ``runner_v2`` sets the env BEFORE open
-    so ``ExpertStreamingRuntime.open`` reads it for the single-pool gate."""
+    so ``ExpertStreamingRuntime.open`` reads it for the single-pool gate.
+    ``overlap`` (default = ``runner_v2``) sets the config's overlap_miss_reads --
+    the v2 composition is single pool + prefetch ring + overlap_miss_reads."""
     from tests.test_streamed_models import _integrated_hy3_artifact
 
     if runner_v2:
         os.environ["MTPLX_DSV41_RUNNER"] = "v2"
     else:
         os.environ.pop("MTPLX_DSV41_RUNNER", None)
+    if overlap is None:
+        overlap = bool(runner_v2)
     tmp_path = Path(tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
     root, config, spec, manifest_path = _integrated_hy3_artifact(
@@ -179,6 +184,7 @@ def _open_runtime(tmp_path, *, runner_v2, expert_count=8, top_k=2,
         transient_slots=transient,
         slot_layout="component-banks",
         prefetch_slots=prefetch,
+        overlap_miss_reads=overlap,
         resource_telemetry=True,
     )
     plan = sc.memory_plan(spec)
@@ -206,13 +212,27 @@ def _route_once(rt, spec, experts):
     rt.flush_deferred_slot_releases(evaluate=True)
 
 
-def _inputs(rows, top_k, hidden, experts):
-    mx.random.seed(95 + rows)
+def _inputs(rows, top_k, hidden, experts, step=0):
+    mx.random.seed(95 + rows + 1000 * step)
     x = (0.3 * mx.random.normal((rows, 1, hidden))).astype(mx.bfloat16)
     flat = [experts[i % len(experts)] for i in range(rows * top_k)]
     idx = mx.array(flat, dtype=mx.int32).reshape((rows, top_k))
     _REAL_EVAL(x, idx)
     return x, idx
+
+
+def _settle_prefetch(rt):
+    """Wait out every in-flight speculative read, deterministically."""
+    lock = getattr(rt, "_prefetch_lock", None)
+    if lock is None:
+        return
+    with lock:
+        pending = tuple(getattr(rt, "_prefetch_futures", ()) or ())
+    for future in pending:
+        try:
+            future.result()
+        except BaseException:
+            pass
 
 
 def test_runner_v2_open_arms_single_pool(tmp_path):
@@ -262,3 +282,66 @@ def test_runner_v2_switch_byte_identical_to_shipped(tmp_path, rows):
     assert mx.array_equal(out_off, out_v2), (
         f"M={rows}: v2 residency policy changed the gathered value"
     )
+
+
+def _route_seq(n_steps, n_experts, top_k, seed=95):
+    """A deterministic decode-like route sequence: mostly M=1 (AR) with periodic
+    M=4 / M=6 (the DSpark depth-3 / depth-5 verify row batches), over a rotating
+    expert set that churns a small resident pool (misses + evictions + re-hits)."""
+    rng = np.random.RandomState(seed)
+    seq = []
+    for i in range(n_steps):
+        if i % 37 == 36:
+            rows = 6            # DSpark depth-5 verify shape (K+1 = 6 rows)
+        elif i % 17 == 16:
+            rows = 4            # DSpark depth-3 verify shape
+        else:
+            rows = 1            # AR decode
+        experts = sorted(int(e) for e in rng.choice(n_experts, size=top_k, replace=False))
+        seq.append((rows, experts))
+    return seq
+
+
+def test_runner_v2_256_step_byte_identical_streamed(tmp_path):
+    """256 decode-like routes over a REAL streamed runtime: v2 (single pool +
+    prefetch ring + overlap_miss_reads) is byte-identical to the shipped two-tier
+    path at EVERY step, across a churning resident pool (misses / evictions /
+    re-hits) and the M=4 / M=6 DSpark verify shapes -- residency evolution never
+    changes a gathered value.  Also proves v2 actually ENGAGES: the ring serves
+    hits (not a silent no-op)."""
+    n_experts, top_k = 8, 2
+    seq = _route_seq(256, n_experts, top_k)
+
+    rt_off, spec = _open_runtime(
+        tmp_path / "off", runner_v2=False, expert_count=n_experts, top_k=top_k,
+        resident_slots=3, transient=8, prefetch=0,
+    )
+    rt_v2, spec2 = _open_runtime(
+        tmp_path / "v2", runner_v2=True, expert_count=n_experts, top_k=top_k,
+        resident_slots=3, transient=8, prefetch=6,
+    )
+    try:
+        assert rt_v2._single_slot_pool is True
+        assert rt_v2.config.overlap_miss_reads is True
+        assert rt_off._single_slot_pool is False
+        sw_off = _switch(rt_off, spec)
+        sw_v2 = _switch(rt_v2, spec2)
+        for i, (rows, experts) in enumerate(seq):
+            # v2: prefetch this step's experts a beat early so the true route can
+            # consume them as ring hits (the SSD-hiding mechanism engaged).
+            rt_v2.prefetch_experts(spec2.routed_layer_start, experts)
+            _settle_prefetch(rt_v2)
+            x, idx = _inputs(rows, top_k, spec.hidden_size, experts, step=i)
+            o_off = sw_off(x, idx)
+            _REAL_EVAL(o_off)
+            rt_off.flush_deferred_slot_releases(evaluate=True)
+            o_v2 = sw_v2(x, idx)
+            _REAL_EVAL(o_v2)
+            rt_v2.flush_deferred_slot_releases(evaluate=True)
+            assert mx.array_equal(o_off, o_v2), (
+                f"step {i} (rows={rows}, experts={experts}): v2 diverged from shipped"
+            )
+        assert rt_v2.counters.prefetch_hit_on_true_route > 0, "ring never served a hit"
+    finally:
+        rt_off.close()
+        rt_v2.close()
