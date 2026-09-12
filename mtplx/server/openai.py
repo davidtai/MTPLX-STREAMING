@@ -3215,6 +3215,9 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # W91/K35 (appended -- coordinate with any concurrent list extension):
     "MTPLX_DSV41_SMALL_STAGES_FUSED",
     "MTPLX_DSV41_HC_PREMIX_KERNEL",
+    # W87 (appended): single-slot pool lever (MTPLX_DSV41_SINGLE_SLOT_POOL) -- keep
+    # the served-log snapshot a superset of ab_decode_env_levers.ALL_LEVER_ENVS.
+    "MTPLX_DSV41_SINGLE_SLOT_POOL",
 )
 
 
