@@ -1,0 +1,11 @@
+# arm: cell16k_ring
+# stream: ar
+# token_ids_sha256: 39fbfca1f6c354697ea3974d4709c1d7a841e26a1e541510eee7339b6ce918e3
+# decode_tok_s: 1.9663643066995873
+# divergence: none
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, so a `summarize_generation_outputs` helper should slot in near the existing stats/diagnostics helpers and reuse the module's `dict[str, Any]` / `Sequence` typing conventions.
+
+- The module already exposes `GenerationStats`-style dataclasses and `_generation_rate_fields`, so a summary helper should mirror that style (plain `dict[str, Any]`, `Sequence[GenerationOutput]`, no new dataclass) and compute p95 via `numpy.percentile` since `numpy` is already imported.
+- Optional metrics (prefill TPS, decode TPS, peak memory) are frequently absent or zero in this codebase — e.g. `_generation_rate_fields` guards against zero elapsed time — so the helper must skip `None`/non-positive values rather than emit `inf`/`nan`, and must return a stable schema for the empty case.
+- The module's env-gated tracing (`_DecodeTrace`, `_runtime_count`, `_attach_runtime_diagnostics`) shows the established pattern of keeping summaries JSON
