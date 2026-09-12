@@ -201,40 +201,36 @@ cumulative `alloc_bytes` then exceeds the steady formula).
 
 ## §5 — Test evidence (CPU only)
 
-`tests/test_deepseek_v41_w107_kv_growth.py` — 29 tests, `mx.set_default_device(mx.cpu)`,
+`tests/test_deepseek_v41_w107_kv_growth.py` — 34 tests, `mx.set_default_device(mx.cpu)`,
 tiny synthetic dims, run under `nice -n 19`, one file per process (no `-n auto`).
-Original coverage: `test_kv_bytes_formula_matches_preallocation` (`alloc_bytes` ==
-`kv_bytes_at_max_kv` == summed live raw-backing bytes); `..._scales_with_max_kv`;
-`test_append_beyond_max_kv_raises_{grow_buffer,latent_frontier,via_cache}`;
-`test_inplace_stable_no_realloc_flat_memory`; `test_plain_grow_memory_grows_unlike_bounded`;
-`test_model_bounded_bit_identical_vs_legacy_selected_path` and `..._vs_window_ring`;
-`test_bounded_trim_rollback_parity` / `..._trim_parity`; counters/engagement/fallback.
+Original + round-1 coverage: formula==alloc, scaling, append-beyond-cap raises,
+in-place/no-realloc + flat memory (vs a plain-`_grow` control), bit-identity (vs the
+shipped selected path and vs the W80 ring arm), trim/rollback parity, counters,
+engagement, and the round-1 HIGH-1/HIGH-2/MEDIUM-1/MEDIUM-3/LOW-1/LOW-2 regressions.
 
-Review-fix regression tests (one per finding):
-- HIGH-1 `test_dspark_trim_no_realloc_compress_index`, `test_rollback_no_realloc_compress_index`
-  — 8 verify cycles keep `kv_realloc_compress/index` flat, backing capacity + `alloc_bytes` stable.
-- HIGH-2 `test_server_registers_kv_bounded_lever_keys`, `test_server_plumbed_maxkv_bounds_the_cache`,
-  `test_server_setdefault_lets_explicit_cap_win`.
-- MEDIUM-1 `test_window_ring_shrinks_back_after_chunked_prefill`,
-  `test_window_formula_matches_steady_allocation_after_chunked_prefill`.
-- MEDIUM-2 `test_medium2_ratio_gt1_compress_index_are_fp32`.
-- MEDIUM-3 `test_window_ring_deep_rollback_across_compaction_raises`,
-  `test_layer_cache_deep_rollback_across_compaction_raises`, `test_shallow_rollback_over_ring_is_safe`.
-- LOW-1 `test_assert_can_admit_raises_without_mutating`,
-  `test_over_cap_model_forward_raises_and_leaves_cache_clean`.
-- LOW-2 `test_truncate_to_zero_keeps_prealloc`, `test_full_trim_to_zero_no_realloc_via_cache`.
+Round-2 review-fix regression tests (one per finding):
+- HIGH-A `test_session_bank_deep_prefix_restore_misses_cleanly` (prefill 600, deep
+  prefix restore → `_trim_cache_ref_to_prefix` returns False, cache untouched),
+  `test_session_bank_shallow_prefix_restore_hits`, `test_rollback_deep_leaves_engram_untouched`.
+- MEDIUM-A `test_medium_a_formula_matches_alloc_on_bf16_model` (bf16 tiny model,
+  prefill 20 + decode 10 → `alloc_bytes == kv_bytes_at_max_kv` with defaults),
+  `test_medium_a_all_kv_source_compress_index_fp32` (supersedes the round-1 MEDIUM-2 test).
+- MEDIUM-B `test_server_hard_sets_maxkv_over_stale_env` (a stale smaller AND larger
+  env is overridden; supersedes the round-1 setdefault test).
+- LOW-A `test_over_cap_chunk_major_prefill_raises_at_offset_zero` (MAXKV 40, prompt
+  100, chunk 32 → raises at offset 0, no chunk written).
 
-Real pytest tails (post-review):
+Real pytest tails (round 2):
 
 ```
-tests/test_deepseek_v41_w107_kv_growth.py .............................   [100%]
-29 passed, 2 warnings in 8.16s
+tests/test_deepseek_v41_w107_kv_growth.py ..................................  [100%]
+34 passed, 2 warnings in 8.58s
 
-# no regression in the cache/ring suites, the ab-harness suite, or the parity suites:
-tests/models/test_deepseek_v41_chunk_grow.py ...... 13 passed in 1.28s
-tests/models/test_deepseek_v41_window_ring.py ..... 15 passed in 12.86s
-tests/test_deepseek_v41_w93_lane_b_ring.py ........ 8 passed in 1.03s
-tests/test_deepseek_v41_ab_env_levers.py .......... 65 passed in 0.78s
+# no regression in the cache/ring suites or the session-bank suites:
+tests/models/test_deepseek_v41_window_ring.py ..... 15 passed in 12.59s
+tests/models/test_deepseek_v41_chunk_grow.py  ..... 13 passed
+tests/test_session_bank.py                    ..... 18 passed in 0.14s
+tests/test_deepseek_v41_engram_state.py       ..... 6 passed in 1.01s
 ```
 (final consolidated tails are re-captured at the end of this window in the worker report.)
 
@@ -297,6 +293,8 @@ delta, decode tok/s, peak GB, and `byte_identical_vs_ar` (must hold — pure pre
 
 Each fix is its own commit with a regression test in `test_deepseek_v41_w107_kv_growth.py`.
 
+### Round 1 (verdict MERGE WITH FIXES — CLOSED)
+
 - **HIGH-1** — DSpark trim/rollback reallocated the "preallocated" compress/index
   lanes every rejected cycle (`= _truncate(...)` → property setter → `_GrowBuffer.set()`
   = fresh `mx.zeros` + full copy; repro `kv_realloc 1→9`). Fixed with
@@ -323,3 +321,28 @@ Each fix is its own commit with a regression test in `test_deepseek_v41_w107_kv_
   `_forward_layer_major`, failing before any lane is written.
 - **LOW-2** — `_GrowBuffer.truncate_to(0)` dropped the prealloc; it now keeps the
   buffer (length-only).
+
+### Round 2 (re-review; HIGH-1/2, MEDIUM-1/3, LOW-2 confirmed CLOSED)
+
+- **HIGH-A** — the session-bank prefix restore (`_trim_cache_ref_to_prefix` →
+  `entry.trim`) hit MEDIUM-3's window-ring raise whenever the divergence exceeded the
+  ring's recoverable depth, and the single-request lane had no guard — so ordinary
+  regenerate/edited turns FAILED instead of cold-prefilling. `LayerAttentionCache.trim`
+  now returns `0` with **no mutation** when the ring cannot recover
+  (`_WindowRing.can_truncate_to_length`), so the bank's "trim ≠ delta" miss contract
+  fires (NO_SNAPSHOT_COVERAGE → cold prefill); the raise stays for direct
+  `truncate_to_length` callers. `rollback` reorders the ring truncate before the engram
+  trim so a failed deep rollback leaves nothing half-rewound.
+- **MEDIUM-A** — the formula was still ~33% under on a bf16 model. **Measured**: only
+  the layer-0 window store is bf16; every other store is fp32 (layer 0's o-LoRA einsum
+  promotes the residual to fp32). New signature `model_dtype_bytes` (default 2) +
+  `store_dtype_bytes` (default 4); defaults now match a bf16 model exactly. Cell total
+  320.2 → **359.2 MB**. Added the ab receipt gate
+  `kv_bounded.formula_matches_alloc = (alloc_bytes == kv_bytes_at_max_kv)` +
+  `kv_bytes_formula`. Supersedes round-1 MEDIUM-2's ratio-based dtype model.
+- **MEDIUM-B** — the round-1 server plumbing used `setdefault`, letting a stale
+  `MTPLX_DSV41_KV_BOUNDED_MAXKV` override `max_live_kv_tokens`. Now hard-set via
+  `_plumb_kv_bounded_maxkv` (mirrors `MTPLX_CONTEXT_WINDOW_TOKENS`).
+- **LOW-A** — `assert_can_admit` was per-span, so a chunk-major overflow raised at
+  span 2 with a partial prefix. Hoisted to `Model.__call__` (whole prompt) before the
+  chunk dispatch, so it fails at offset 0.
