@@ -1,0 +1,1656 @@
+{
+  "worker": "W116",
+  "script": "scripts/deepseek_v41/verify_attn_rows_census.py",
+  "git_sha": "932c063dc3c9e4f852d27d918b19869b21e29842",
+  "device": "gpu",
+  "cpu_smoke": false,
+  "codec": "mxfp8",
+  "dims": {
+    "T": 16384,
+    "head_dim": 512,
+    "n_heads": 64,
+    "window": 128,
+    "index_topk": 512,
+    "index_n_heads": 32,
+    "index_head_dim": 128,
+    "hidden": 5120,
+    "n_layers": 40
+  },
+  "mode_layer": {
+    "swa_only": 0,
+    "full": 2,
+    "reindex": 24,
+    "reuse": 3
+  },
+  "rows": [
+    1,
+    2,
+    4,
+    6,
+    8
+  ],
+  "modes": [
+    "swa_only",
+    "full",
+    "reindex",
+    "reuse"
+  ],
+  "repeats": 9,
+  "chain": 16,
+  "warmup": 3,
+  "env": {
+    "MTPLX_DSV41_SELECTED_KEYS": "1",
+    "MTPLX_DSV41_ATTN_COMPILE": "1",
+    "MTPLX_DSV41_ATTN_WIN_MEMO": "1",
+    "MTPLX_DSV41_KV_CHUNK_GROW": "1",
+    "MTPLX_DSV41_SELECT_FENCE": "1",
+    "MTPLX_DSV41_ATTN_FUSED_PROJ": "1",
+    "MTPLX_DSV41_ATTN_LEAN_CASTS": "1"
+  },
+  "proj_accounting": {
+    "swa_only": {
+      "proj_bytes": 130572288,
+      "codec": "mxfp8",
+      "quantized": true,
+      "quantized_names": [
+        "wkv",
+        "wo_a",
+        "wo_b",
+        "wq_a",
+        "wq_b"
+      ]
+    },
+    "full": {
+      "proj_bytes": 130572288,
+      "codec": "mxfp8",
+      "quantized": true,
+      "quantized_names": [
+        "wkv",
+        "wo_a",
+        "wo_b",
+        "wq_a",
+        "wq_b"
+      ]
+    },
+    "reindex": {
+      "proj_bytes": 130572288,
+      "codec": "mxfp8",
+      "quantized": true,
+      "quantized_names": [
+        "wkv",
+        "wo_a",
+        "wo_b",
+        "wq_a",
+        "wq_b"
+      ]
+    },
+    "reuse": {
+      "proj_bytes": 130572288,
+      "codec": "mxfp8",
+      "quantized": true,
+      "quantized_names": [
+        "wkv",
+        "wo_a",
+        "wo_b",
+        "wq_a",
+        "wq_b"
+      ]
+    }
+  },
+  "results": {
+    "swa_only": {
+      "1": {
+        "rows": 1,
+        "k": 128,
+        "n_comp": 0,
+        "k_union": {
+          "k_union": 128,
+          "window_union": 128,
+          "compress_union": 0,
+          "rows_times_k": 128,
+          "per_row_k": [
+            128
+          ],
+          "amplification": 1.0
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.29258,
+            "pipelined_ms": 0.08576,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.1905,
+            "pipelined_ms": 0.07556,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.25267,
+            "pipelined_ms": 0.06416,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.23479,
+            "pipelined_ms": 0.05182,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.2125,
+            "pipelined_ms": 0.05021,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.37408,
+            "pipelined_ms": 0.169,
+            "op_count": 0
+          }
+        }
+      },
+      "2": {
+        "rows": 2,
+        "k": 128,
+        "n_comp": 0,
+        "k_union": {
+          "k_union": 129,
+          "window_union": 129,
+          "compress_union": 0,
+          "rows_times_k": 256,
+          "per_row_k": [
+            128,
+            128
+          ],
+          "amplification": 1.9845
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.25842,
+            "pipelined_ms": 0.08998,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.18021,
+            "pipelined_ms": 0.07396,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.25358,
+            "pipelined_ms": 0.07347,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.25408,
+            "pipelined_ms": 0.05847,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.23896,
+            "pipelined_ms": 0.05044,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.50525,
+            "pipelined_ms": 0.14357,
+            "op_count": 0
+          }
+        }
+      },
+      "4": {
+        "rows": 4,
+        "k": 128,
+        "n_comp": 0,
+        "k_union": {
+          "k_union": 131,
+          "window_union": 131,
+          "compress_union": 0,
+          "rows_times_k": 512,
+          "per_row_k": [
+            128,
+            128,
+            128,
+            128
+          ],
+          "amplification": 3.9084
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.30071,
+            "pipelined_ms": 0.1306,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.18421,
+            "pipelined_ms": 0.07549,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.26804,
+            "pipelined_ms": 0.09893,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.24663,
+            "pipelined_ms": 0.06488,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.25017,
+            "pipelined_ms": 0.07063,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.51258,
+            "pipelined_ms": 0.17155,
+            "op_count": 0
+          }
+        }
+      },
+      "6": {
+        "rows": 6,
+        "k": 128,
+        "n_comp": 0,
+        "k_union": {
+          "k_union": 133,
+          "window_union": 133,
+          "compress_union": 0,
+          "rows_times_k": 768,
+          "per_row_k": [
+            128,
+            128,
+            128,
+            128,
+            128,
+            128
+          ],
+          "amplification": 5.7744
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.34779,
+            "pipelined_ms": 0.18155,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.20533,
+            "pipelined_ms": 0.07431,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.29304,
+            "pipelined_ms": 0.12503,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.25038,
+            "pipelined_ms": 0.06883,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.26,
+            "pipelined_ms": 0.09188,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.52179,
+            "pipelined_ms": 0.21562,
+            "op_count": 0
+          }
+        }
+      },
+      "8": {
+        "rows": 8,
+        "k": 128,
+        "n_comp": 0,
+        "k_union": {
+          "k_union": 135,
+          "window_union": 135,
+          "compress_union": 0,
+          "rows_times_k": 1024,
+          "per_row_k": [
+            128,
+            128,
+            128,
+            128,
+            128,
+            128,
+            128,
+            128
+          ],
+          "amplification": 7.5852
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.38821,
+            "pipelined_ms": 0.218,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.2005,
+            "pipelined_ms": 0.07597,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.3495,
+            "pipelined_ms": 0.15684,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.2555,
+            "pipelined_ms": 0.07461,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.29683,
+            "pipelined_ms": 0.11628,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.54667,
+            "pipelined_ms": 0.24784,
+            "op_count": 0
+          }
+        }
+      }
+    },
+    "full": {
+      "1": {
+        "rows": 1,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 640,
+          "window_union": 128,
+          "compress_union": 512,
+          "rows_times_k": 640,
+          "per_row_k": [
+            640
+          ],
+          "amplification": 1.0
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.26867,
+            "pipelined_ms": 0.08499,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.35475,
+            "pipelined_ms": 0.16876,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.22675,
+            "pipelined_ms": 0.1261,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.26308,
+            "pipelined_ms": 0.09735,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.26192,
+            "pipelined_ms": 0.05629,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.22625,
+            "pipelined_ms": 0.05303,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.3695,
+            "pipelined_ms": 0.17511,
+            "op_count": 0
+          }
+        }
+      },
+      "2": {
+        "rows": 2,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 1124,
+          "window_union": 129,
+          "compress_union": 995,
+          "rows_times_k": 1280,
+          "per_row_k": [
+            640,
+            640
+          ],
+          "amplification": 1.1388
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.26704,
+            "pipelined_ms": 0.08927,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.36996,
+            "pipelined_ms": 0.18104,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.21329,
+            "pipelined_ms": 0.13605,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 1.22887,
+            "pipelined_ms": 0.17551,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.24613,
+            "pipelined_ms": 0.06413,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.28437,
+            "pipelined_ms": 0.13083,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.47929,
+            "pipelined_ms": 0.14379,
+            "op_count": 0
+          }
+        }
+      },
+      "4": {
+        "rows": 4,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 1986,
+          "window_union": 131,
+          "compress_union": 1855,
+          "rows_times_k": 2560,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 1.289
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.30212,
+            "pipelined_ms": 0.12859,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.38879,
+            "pipelined_ms": 0.19779,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.24933,
+            "pipelined_ms": 0.15956,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.51758,
+            "pipelined_ms": 0.29776,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.24471,
+            "pipelined_ms": 0.0689,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.40392,
+            "pipelined_ms": 0.2298,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.51175,
+            "pipelined_ms": 0.17058,
+            "op_count": 0
+          }
+        }
+      },
+      "6": {
+        "rows": 6,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 2676,
+          "window_union": 133,
+          "compress_union": 2543,
+          "rows_times_k": 3840,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 1.435
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.34317,
+            "pipelined_ms": 0.18191,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.41675,
+            "pipelined_ms": 0.22626,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.25379,
+            "pipelined_ms": 0.17916,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.66008,
+            "pipelined_ms": 0.43421,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.25404,
+            "pipelined_ms": 0.07617,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.50362,
+            "pipelined_ms": 0.32918,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.53238,
+            "pipelined_ms": 0.21774,
+            "op_count": 0
+          }
+        }
+      },
+      "8": {
+        "rows": 8,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 3478,
+          "window_union": 135,
+          "compress_union": 3343,
+          "rows_times_k": 5120,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640,
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 1.4721
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.41913,
+            "pipelined_ms": 0.21836,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.43533,
+            "pipelined_ms": 0.22516,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.253,
+            "pipelined_ms": 0.20053,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.90038,
+            "pipelined_ms": 0.56452,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.25604,
+            "pipelined_ms": 0.08784,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.61908,
+            "pipelined_ms": 0.42802,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.56104,
+            "pipelined_ms": 0.24776,
+            "op_count": 0
+          }
+        }
+      }
+    },
+    "reindex": {
+      "1": {
+        "rows": 1,
+        "k": 640,
+        "n_comp": 16384,
+        "k_union": {
+          "k_union": 640,
+          "window_union": 128,
+          "compress_union": 512,
+          "rows_times_k": 640,
+          "per_row_k": [
+            640
+          ],
+          "amplification": 1.0
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.25754,
+            "pipelined_ms": 0.08015,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.38708,
+            "pipelined_ms": 0.20617,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.21792,
+            "pipelined_ms": 0.1468,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.2525,
+            "pipelined_ms": 0.12283,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.26079,
+            "pipelined_ms": 0.06167,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.22858,
+            "pipelined_ms": 0.05779,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.396,
+            "pipelined_ms": 0.17503,
+            "op_count": 0
+          }
+        }
+      },
+      "2": {
+        "rows": 2,
+        "k": 640,
+        "n_comp": 16384,
+        "k_union": {
+          "k_union": 1111,
+          "window_union": 129,
+          "compress_union": 982,
+          "rows_times_k": 1280,
+          "per_row_k": [
+            640,
+            640
+          ],
+          "amplification": 1.1521
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.25212,
+            "pipelined_ms": 0.08821,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.40292,
+            "pipelined_ms": 0.22806,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.23021,
+            "pipelined_ms": 0.15323,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.41296,
+            "pipelined_ms": 0.20042,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.25921,
+            "pipelined_ms": 0.07409,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.31917,
+            "pipelined_ms": 0.13589,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.501,
+            "pipelined_ms": 0.15501,
+            "op_count": 0
+          }
+        }
+      },
+      "4": {
+        "rows": 4,
+        "k": 640,
+        "n_comp": 16384,
+        "k_union": {
+          "k_union": 1988,
+          "window_union": 131,
+          "compress_union": 1857,
+          "rows_times_k": 2560,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 1.2877
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.31317,
+            "pipelined_ms": 0.12929,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.42908,
+            "pipelined_ms": 0.25903,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.24921,
+            "pipelined_ms": 0.16352,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.51596,
+            "pipelined_ms": 0.34452,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.26254,
+            "pipelined_ms": 0.10118,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.42683,
+            "pipelined_ms": 0.24852,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.51446,
+            "pipelined_ms": 0.16991,
+            "op_count": 0
+          }
+        }
+      },
+      "6": {
+        "rows": 6,
+        "k": 640,
+        "n_comp": 16384,
+        "k_union": {
+          "k_union": 2763,
+          "window_union": 133,
+          "compress_union": 2630,
+          "rows_times_k": 3840,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 1.3898
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.34975,
+            "pipelined_ms": 0.18281,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.50796,
+            "pipelined_ms": 0.3287,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.25779,
+            "pipelined_ms": 0.16837,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.80117,
+            "pipelined_ms": 0.49194,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.29633,
+            "pipelined_ms": 0.1197,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.52138,
+            "pipelined_ms": 0.35643,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.52292,
+            "pipelined_ms": 0.21633,
+            "op_count": 0
+          }
+        }
+      },
+      "8": {
+        "rows": 8,
+        "k": 640,
+        "n_comp": 16384,
+        "k_union": {
+          "k_union": 3401,
+          "window_union": 135,
+          "compress_union": 3266,
+          "rows_times_k": 5120,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640,
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 1.5054
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.41071,
+            "pipelined_ms": 0.21998,
+            "op_count": 0
+          },
+          "select": {
+            "present": true,
+            "fenced_ms": 0.56454,
+            "pipelined_ms": 0.36872,
+            "op_count": 0
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.23429,
+            "pipelined_ms": 0.1788,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.89525,
+            "pipelined_ms": 0.65625,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.30567,
+            "pipelined_ms": 0.14586,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.63892,
+            "pipelined_ms": 0.46898,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.58046,
+            "pipelined_ms": 0.2495,
+            "op_count": 0
+          }
+        }
+      }
+    },
+    "reuse": {
+      "1": {
+        "rows": 1,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 640,
+          "window_union": 128,
+          "compress_union": 512,
+          "rows_times_k": 640,
+          "per_row_k": [
+            640
+          ],
+          "amplification": 1.0
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.28975,
+            "pipelined_ms": 0.08123,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.22121,
+            "pipelined_ms": 0.12617,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.25467,
+            "pipelined_ms": 0.09778,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.24804,
+            "pipelined_ms": 0.05619,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.22921,
+            "pipelined_ms": 0.05292,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.38692,
+            "pipelined_ms": 0.17231,
+            "op_count": 0
+          }
+        }
+      },
+      "2": {
+        "rows": 2,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 641,
+          "window_union": 129,
+          "compress_union": 512,
+          "rows_times_k": 1280,
+          "per_row_k": [
+            640,
+            640
+          ],
+          "amplification": 1.9969
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.25371,
+            "pipelined_ms": 0.09018,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.22992,
+            "pipelined_ms": 0.13418,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.39825,
+            "pipelined_ms": 0.17741,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.25975,
+            "pipelined_ms": 0.06409,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.30296,
+            "pipelined_ms": 0.13212,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.49521,
+            "pipelined_ms": 0.1443,
+            "op_count": 0
+          }
+        }
+      },
+      "4": {
+        "rows": 4,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 643,
+          "window_union": 131,
+          "compress_union": 512,
+          "rows_times_k": 2560,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 3.9813
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.30504,
+            "pipelined_ms": 0.12938,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.24829,
+            "pipelined_ms": 0.15402,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.51087,
+            "pipelined_ms": 0.29728,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.25788,
+            "pipelined_ms": 0.06858,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.39929,
+            "pipelined_ms": 0.22834,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.51875,
+            "pipelined_ms": 0.16893,
+            "op_count": 0
+          }
+        }
+      },
+      "6": {
+        "rows": 6,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 645,
+          "window_union": 133,
+          "compress_union": 512,
+          "rows_times_k": 3840,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 5.9535
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.35842,
+            "pipelined_ms": 0.18207,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.25746,
+            "pipelined_ms": 0.16849,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.70137,
+            "pipelined_ms": 0.42998,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.26325,
+            "pipelined_ms": 0.0769,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.49829,
+            "pipelined_ms": 0.32998,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.55912,
+            "pipelined_ms": 0.21856,
+            "op_count": 0
+          }
+        }
+      },
+      "8": {
+        "rows": 8,
+        "k": 640,
+        "n_comp": 8192,
+        "k_union": {
+          "k_union": 647,
+          "window_union": 135,
+          "compress_union": 512,
+          "rows_times_k": 5120,
+          "per_row_k": [
+            640,
+            640,
+            640,
+            640,
+            640,
+            640,
+            640,
+            640
+          ],
+          "amplification": 7.9134
+        },
+        "subops": {
+          "qkv_proj": {
+            "present": true,
+            "fenced_ms": 0.436,
+            "pipelined_ms": 0.21834,
+            "op_count": 0
+          },
+          "select": {
+            "present": false,
+            "reason": "not-index-source (reads source selection)"
+          },
+          "gather": {
+            "present": true,
+            "fenced_ms": 0.258,
+            "pipelined_ms": 0.19036,
+            "op_count": 0
+          },
+          "core_k29": {
+            "present": true,
+            "fenced_ms": 0.87962,
+            "pipelined_ms": 0.55784,
+            "op_count": 0
+          },
+          "core_eager": {
+            "present": true,
+            "fenced_ms": 0.27071,
+            "pipelined_ms": 0.0883,
+            "op_count": 0
+          },
+          "core_sdpa": {
+            "present": true,
+            "fenced_ms": 0.60117,
+            "pipelined_ms": 0.42834,
+            "op_count": 0
+          },
+          "out_proj": {
+            "present": true,
+            "fenced_ms": 0.55871,
+            "pipelined_ms": 0.24813,
+            "op_count": 0
+          }
+        }
+      }
+    }
+  },
+  "memory": {
+    "active_end_gib": 1.4901161193847656e-08,
+    "peak_gib": 1.4497167821973562
+  },
+  "derived": {
+    "swa_only": {
+      "scaling": {
+        "qkv_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.883,
+            "4": 1.028,
+            "6": 1.189,
+            "8": 1.327
+          },
+          "fenced_ms_rows1": 0.29258
+        },
+        "select": {
+          "fenced_ratio_vs_rows1": {
+            "1": null,
+            "2": null,
+            "4": null,
+            "6": null,
+            "8": null
+          },
+          "fenced_ms_rows1": null
+        },
+        "gather": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.946,
+            "4": 0.967,
+            "6": 1.078,
+            "8": 1.052
+          },
+          "fenced_ms_rows1": 0.1905
+        },
+        "core_k29": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.004,
+            "4": 1.061,
+            "6": 1.16,
+            "8": 1.383
+          },
+          "fenced_ms_rows1": 0.25267
+        },
+        "core_eager": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.082,
+            "4": 1.05,
+            "6": 1.066,
+            "8": 1.088
+          },
+          "fenced_ms_rows1": 0.23479
+        },
+        "core_sdpa": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.125,
+            "4": 1.177,
+            "6": 1.224,
+            "8": 1.397
+          },
+          "fenced_ms_rows1": 0.2125
+        },
+        "out_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.351,
+            "4": 1.37,
+            "6": 1.395,
+            "8": 1.461
+          },
+          "fenced_ms_rows1": 0.37408
+        }
+      },
+      "implied_ms_per_cycle_rows6_x40": {
+        "core_k29": 54.718,
+        "core_eager": 53.012,
+        "core_sdpa": 53.396
+      }
+    },
+    "full": {
+      "scaling": {
+        "qkv_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.994,
+            "4": 1.125,
+            "6": 1.277,
+            "8": 1.56
+          },
+          "fenced_ms_rows1": 0.26867
+        },
+        "select": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.043,
+            "4": 1.096,
+            "6": 1.175,
+            "8": 1.227
+          },
+          "fenced_ms_rows1": 0.35475
+        },
+        "gather": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.941,
+            "4": 1.1,
+            "6": 1.119,
+            "8": 1.116
+          },
+          "fenced_ms_rows1": 0.22675
+        },
+        "core_k29": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 4.671,
+            "4": 1.967,
+            "6": 2.509,
+            "8": 3.422
+          },
+          "fenced_ms_rows1": 0.26308
+        },
+        "core_eager": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.94,
+            "4": 0.934,
+            "6": 0.97,
+            "8": 0.978
+          },
+          "fenced_ms_rows1": 0.26192
+        },
+        "core_sdpa": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.257,
+            "4": 1.785,
+            "6": 2.226,
+            "8": 2.736
+          },
+          "fenced_ms_rows1": 0.22625
+        },
+        "out_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.297,
+            "4": 1.385,
+            "6": 1.441,
+            "8": 1.518
+          },
+          "fenced_ms_rows1": 0.3695
+        }
+      },
+      "implied_ms_per_cycle_rows6_x40": {
+        "core_k29": 88.247,
+        "core_eager": 72.005,
+        "core_sdpa": 81.988
+      }
+    },
+    "reindex": {
+      "scaling": {
+        "qkv_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.979,
+            "4": 1.216,
+            "6": 1.358,
+            "8": 1.595
+          },
+          "fenced_ms_rows1": 0.25754
+        },
+        "select": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.041,
+            "4": 1.109,
+            "6": 1.312,
+            "8": 1.458
+          },
+          "fenced_ms_rows1": 0.38708
+        },
+        "gather": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.056,
+            "4": 1.144,
+            "6": 1.183,
+            "8": 1.075
+          },
+          "fenced_ms_rows1": 0.21792
+        },
+        "core_k29": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.635,
+            "4": 2.043,
+            "6": 3.173,
+            "8": 3.546
+          },
+          "fenced_ms_rows1": 0.2525
+        },
+        "core_eager": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.994,
+            "4": 1.007,
+            "6": 1.136,
+            "8": 1.172
+          },
+          "fenced_ms_rows1": 0.26079
+        },
+        "core_sdpa": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.396,
+            "4": 1.867,
+            "6": 2.281,
+            "8": 2.795
+          },
+          "fenced_ms_rows1": 0.22858
+        },
+        "out_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.265,
+            "4": 1.299,
+            "6": 1.321,
+            "8": 1.466
+          },
+          "fenced_ms_rows1": 0.396
+        }
+      },
+      "implied_ms_per_cycle_rows6_x40": {
+        "core_k29": 97.584,
+        "core_eager": 77.39,
+        "core_sdpa": 86.392
+      }
+    },
+    "reuse": {
+      "scaling": {
+        "qkv_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 0.876,
+            "4": 1.053,
+            "6": 1.237,
+            "8": 1.505
+          },
+          "fenced_ms_rows1": 0.28975
+        },
+        "select": {
+          "fenced_ratio_vs_rows1": {
+            "1": null,
+            "2": null,
+            "4": null,
+            "6": null,
+            "8": null
+          },
+          "fenced_ms_rows1": null
+        },
+        "gather": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.039,
+            "4": 1.122,
+            "6": 1.164,
+            "8": 1.166
+          },
+          "fenced_ms_rows1": 0.22121
+        },
+        "core_k29": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.564,
+            "4": 2.006,
+            "6": 2.754,
+            "8": 3.454
+          },
+          "fenced_ms_rows1": 0.25467
+        },
+        "core_eager": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.047,
+            "4": 1.04,
+            "6": 1.061,
+            "8": 1.091
+          },
+          "fenced_ms_rows1": 0.24804
+        },
+        "core_sdpa": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.322,
+            "4": 1.742,
+            "6": 2.174,
+            "8": 2.623
+          },
+          "fenced_ms_rows1": 0.22921
+        },
+        "out_proj": {
+          "fenced_ratio_vs_rows1": {
+            "1": 1.0,
+            "2": 1.28,
+            "4": 1.341,
+            "6": 1.445,
+            "8": 1.444
+          },
+          "fenced_ms_rows1": 0.38692
+        }
+      },
+      "implied_ms_per_cycle_rows6_x40": {
+        "core_k29": 75.055,
+        "core_eager": 57.53,
+        "core_sdpa": 66.932
+      }
+    }
+  }
+}
