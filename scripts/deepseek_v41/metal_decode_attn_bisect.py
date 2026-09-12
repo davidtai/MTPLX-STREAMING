@@ -881,6 +881,45 @@ class _TinyOps:
         mx.eval(logits)
 
 
+def _in_model_ab_args(ab, cfg: dict, steps: int, arm: str):
+    """Build the ab_decode_env_levers args namespace for a GPU in-model pass from
+    cfg, exactly as the ab bench path constructs it."""
+    argv = [
+        "--model", str(cfg["model"]),
+        "--context-tokens", str(int(cfg.get("context_tokens", 16384))),
+        "--decode-tokens", str(steps),
+        "--max-kv", str(int(cfg.get("max_kv", 17408))),
+        "--memory-limit-gib", str(float(cfg.get("memory_limit_gib", 60.0))),
+        "--arms", arm,
+        "--out", "/dev/null",  # unused: we write our own receipt
+    ]
+    if cfg.get("prompt_ids_file"):
+        argv += ["--prompt-ids-file", str(cfg["prompt_ids_file"])]
+    if cfg.get("prompt_seed") is not None:
+        argv += ["--prompt-seed", str(int(cfg["prompt_seed"]))]
+    return ab.build_parser().parse_args(argv)
+
+
+def _resolve_in_model_prompt(ab, bench, args):
+    """Resolve the in-model prompt exactly as ab_decode_env_levers.py's bench path:
+    the exported ids when ``--prompt-ids-file`` is given, else the standard
+    1K/16K prefill_bench builder run with the model's tokenizer.
+
+    Window-35 step 1 (no ``--prompt-ids-file``) crashed here because the in-model
+    path passed ``tokenizer=None`` into the builder (``'NoneType' has no attribute
+    'encode'``); loading the tokenizer with ``ab._tokenizer`` -- the same call the
+    ab bench lane makes -- is the fix.  The tokenizer is loaded from ``args.model``
+    (the streaming artifact carries the tokenizer files); no ids file means no
+    tokenizer is needed at all, matching the ab path's guard."""
+    build_prompt = bench._load_build_prompt()
+    tokenizer = (
+        None
+        if getattr(args, "prompt_ids_file", None)
+        else ab._tokenizer(args, bench)
+    )
+    return bench._resolve_prompt(args, tokenizer, build_prompt, args.context_tokens)
+
+
 def run_in_model(cfg: dict) -> dict:
     """The three in-situ passes on the real (or tiny) model.  Reuses the ab loader
     + census pass; applies the expert / attention stubs around passes (2) / (3)."""
@@ -908,20 +947,7 @@ def run_in_model(cfg: dict) -> dict:
     else:
         mx.set_default_device(mx.gpu)
         bench = ab._load_bench_module()
-        argv = [
-            "--model", str(cfg["model"]),
-            "--context-tokens", str(int(cfg.get("context_tokens", 16384))),
-            "--decode-tokens", str(steps),
-            "--max-kv", str(int(cfg.get("max_kv", 17408))),
-            "--memory-limit-gib", str(float(cfg.get("memory_limit_gib", 60.0))),
-            "--arms", arm,
-            "--out", "/dev/null",  # unused: we write our own receipt
-        ]
-        if cfg.get("prompt_ids_file"):
-            argv += ["--prompt-ids-file", str(cfg["prompt_ids_file"])]
-        if cfg.get("prompt_seed") is not None:
-            argv += ["--prompt-seed", str(int(cfg["prompt_seed"]))]
-        args = ab.build_parser().parse_args(argv)
+        args = _in_model_ab_args(ab, cfg, steps, arm)
         ab._apply_arm_env(arm)  # cell16k: exactly the census arm
         # This script imports dsv41 at top (before the arm), so the import-frozen
         # globals must be re-synced from the arm env (the ab script imports dsv41
@@ -933,10 +959,7 @@ def run_in_model(cfg: dict) -> dict:
         dsv41._ATTN_WIN_MEMO = _envon("MTPLX_DSV41_ATTN_WIN_MEMO")
         if hasattr(dsv41, "_HC_COMPILE"):
             dsv41._HC_COMPILE = _envon("MTPLX_DSV41_HC_COMPILE")
-        build_prompt = bench._load_build_prompt()
-        prompt_ids, prompt_meta = bench._resolve_prompt(
-            args, None, build_prompt, args.context_tokens
-        )
+        prompt_ids, prompt_meta = _resolve_in_model_prompt(ab, bench, args)
         resident = ab._load_model(args, bench, mx)
         model = resident.model
         ops = bench._MLXOps(mx)
@@ -1029,7 +1052,9 @@ def print_in_model(receipt: dict) -> None:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def main(argv: Optional[List[str]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The in-model / microbench CLI parser (extracted from ``main`` so tests can
+    parse the exact launcher argv without running a pass)."""
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--gpu", action="store_true",
@@ -1075,6 +1100,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--in-model-steps", type=int, default=None,
                    help="--in-model: decode steps per pass (default 30 gpu / 4 tiny)")
     p.add_argument("--out", type=str, default=None, help="write the JSON receipt here")
+    return p
+
+
+def _in_model_cfg(a) -> dict:
+    """Build the in-model run cfg from parsed args (shared by ``main`` + tests)."""
+    cfg = {
+        "tiny": a.tiny,
+        "arms": a.arms,
+        "model": a.model or os.path.expanduser(
+            "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"),
+        "prompt_ids_file": a.prompt_ids_file,
+        "prompt_seed": a.prompt_seed,
+        "context_tokens": a.context_tokens,
+        "memory_limit_gib": a.memory_limit_gib,
+        "max_kv": a.max_kv,
+    }
+    if a.in_model_steps is not None:
+        cfg["steps"] = a.in_model_steps
+    return cfg
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    p = build_parser()
     a = p.parse_args(argv)
 
     if a.in_model:
@@ -1082,19 +1130,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             p.error("--in-model requires --gpu (real model) or --tiny (CPU fake model)")
         if a.gpu and a.tiny:
             p.error("--in-model: choose --gpu OR --tiny, not both")
-        cfg = {
-            "tiny": a.tiny,
-            "arms": a.arms,
-            "model": a.model or os.path.expanduser(
-                "~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"),
-            "prompt_ids_file": a.prompt_ids_file,
-            "prompt_seed": a.prompt_seed,
-            "context_tokens": a.context_tokens,
-            "memory_limit_gib": a.memory_limit_gib,
-            "max_kv": a.max_kv,
-        }
-        if a.in_model_steps is not None:
-            cfg["steps"] = a.in_model_steps
+        cfg = _in_model_cfg(a)
         receipt = run_in_model(cfg)
         print_in_model(receipt)
         if a.out:

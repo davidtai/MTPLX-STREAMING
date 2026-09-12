@@ -237,3 +237,74 @@ def test_in_model_gpu_argv_parses():
     assert "cell16k" in ab.ARM_PRESETS
     # the ab loader/census pass functions the mode reuses exist
     assert callable(ab._load_model) and callable(ab._stage_timing_pass)
+
+
+def test_in_model_tiny_1k_no_prompt_ids_file(tmp_path):
+    """window-35 step 1 shape on the tiny CPU model: --in-model --context-tokens
+    1024 WITHOUT --prompt-ids-file must run the three passes end to end (the tiny
+    lane never touches the prompt-ids path, so this guards the launcher flag combo
+    + main() wiring)."""
+    import json
+
+    out = tmp_path / "in-model-1k.json"
+    rc = _MOD.main([
+        "--in-model", "--tiny",
+        "--context-tokens", "1024",
+        "--in-model-steps", "3",
+        "--out", str(out),
+    ])
+    assert rc == 0
+    receipt = json.loads(out.read_text())
+    assert receipt["mode"] == "in_model"
+    assert receipt["device"] == "cpu"
+    assert receipt["tiny"] is True
+    assert set(receipt["passes"]) == {"full", "expert_stub", "attn_stub"}
+
+
+def test_launcher_in_model_1k_argv_parses_and_resolves_prompt(monkeypatch, tmp_path):
+    """The exact launch-window-35.sh step-1 in-model argv (T=1024, NO
+    --prompt-ids-file) parses, and the no-ids prompt path resolves a real prompt
+    instead of crashing with ``'NoneType' has no attribute 'encode'``.
+
+    The launcher argv (see .benchmark-artifacts/deepseek-v41/launch-window-35.sh):
+      metal_decode_attn_bisect.py --in-model --gpu --model <M> --arms cell16k
+        --context-tokens 1024 --memory-limit-gib 60 --max-kv 4096
+        --in-model-steps 30 --out <O>
+
+    A fake tokenizer stands in for ``ab._tokenizer(args, model)`` so the no-ids
+    builder path runs on the CPU without the 376 GB artifact -- the regression is
+    that this path used to be handed ``tokenizer=None``.
+    """
+    argv = [
+        "--in-model", "--gpu",
+        "--model", str(tmp_path),
+        "--arms", "cell16k",
+        "--context-tokens", "1024",
+        "--memory-limit-gib", "60",
+        "--max-kv", "4096",
+        "--in-model-steps", "30",
+        "--out", str(tmp_path / "in-model-1k.json"),
+    ]
+    a = _MOD.build_parser().parse_args(argv)
+    assert a.in_model and a.gpu
+    assert a.context_tokens == 1024
+    assert a.max_kv == 4096
+    assert a.prompt_ids_file is None  # the crash precondition
+
+    cfg = _MOD._in_model_cfg(a)
+    assert cfg["prompt_ids_file"] is None
+    assert cfg["context_tokens"] == 1024
+    assert cfg["steps"] == 30
+
+    ab = _MOD._load_ab_module()
+    bench = ab._load_bench_module()
+    args = _MOD._in_model_ab_args(ab, cfg, steps=cfg["steps"], arm=cfg["arms"])
+    assert args.prompt_ids_file is None
+    assert args.context_tokens == 1024
+
+    # No --prompt-ids-file => the builder path, which needs a real tokenizer.
+    # Inject a fake one exactly where run_in_model loads load_tokenizer(args.model).
+    monkeypatch.setattr(ab, "_tokenizer", lambda _a, _b: bench._FakeTokenizer())
+    prompt_ids, prompt_meta = _MOD._resolve_in_model_prompt(ab, bench, args)
+    assert isinstance(prompt_ids, list) and len(prompt_ids) > 0
+    assert isinstance(prompt_meta, dict)
