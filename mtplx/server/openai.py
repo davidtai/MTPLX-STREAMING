@@ -3250,6 +3250,16 @@ def _dsv41_resolved_lever_env(
     return OrderedDict((key, environ.get(key)) for key in _DSV41_LEVER_ENV_KEYS)
 
 
+def _plumb_kv_bounded_maxkv(max_live_kv_tokens: int) -> None:
+    """W107 (review HIGH-2 / MEDIUM-B): HARD-SET the bounded-KV preallocation cap env
+    from the authoritative ``max_live_kv_tokens`` (the streamed runtime's hard live-KV
+    ceiling), so a stale ``MTPLX_DSV41_KV_BOUNDED_MAXKV`` (shell / profile / earlier ab
+    run) never survives -- smaller would fail ``assert_can_admit`` on legit requests,
+    larger would over-preallocate.  Mirrors ``MTPLX_CONTEXT_WINDOW_TOKENS``; env is the
+    plumbing because ``mlx_lm.make_prompt_cache(model)`` has no handle for a parameter."""
+    os.environ["MTPLX_DSV41_KV_BOUNDED_MAXKV"] = str(int(max_live_kv_tokens))
+
+
 def _format_dsv41_lever_env(resolved: Mapping[str, str | None]) -> str:
     """One-line ``NAME=value`` render (``<unset>`` for absent keys) for the log."""
     prefix = "MTPLX_DSV41_"
@@ -3881,17 +3891,18 @@ class ServerState:
             self.context_window = min(
                 int(self.context_window), _max_live_kv_tokens
             )
-            # W107 (review HIGH-2): plumb the bounded-KV preallocation cap from the
-            # streamed runtime's hard live-KV ceiling, so a served MTPLX_DSV41_KV_BOUNDED
-            # run preallocates every KV lane to max_live_kv_tokens (the ab harness
-            # stamps this from --max-kv; the server had no path, so bounded lanes fell
-            # back to geometric growth).  Env is the plumbing for the SAME reason as
-            # MTPLX_CONTEXT_WINDOW_TOKENS below: make_cache reaches the cache through
-            # mlx_lm.make_prompt_cache(model) with no handle to pass a parameter.
-            # setdefault so an explicit operator cap wins.
-            os.environ.setdefault(
-                "MTPLX_DSV41_KV_BOUNDED_MAXKV", str(int(_max_live_kv_tokens))
-            )
+            # W107 (review HIGH-2 / MEDIUM-B): plumb the bounded-KV preallocation cap
+            # from the streamed runtime's hard live-KV ceiling, so a served
+            # MTPLX_DSV41_KV_BOUNDED run preallocates every KV lane to max_live_kv_tokens
+            # (the ab harness stamps this from --max-kv; the server had no path, so
+            # bounded lanes fell back to geometric growth).  Env is the plumbing for the
+            # SAME reason as MTPLX_CONTEXT_WINDOW_TOKENS below: make_cache reaches the
+            # cache through mlx_lm.make_prompt_cache(model) with no handle to pass a
+            # parameter.  HARD-SET (not setdefault): max_live_kv_tokens is authoritative,
+            # so a stale MTPLX_DSV41_KV_BOUNDED_MAXKV from a shell/profile/earlier ab run
+            # must NOT survive (smaller -> legit requests fail assert_can_admit; larger
+            # -> over-preallocation), exactly like MTPLX_CONTEXT_WINDOW_TOKENS.
+            _plumb_kv_bounded_maxkv(_max_live_kv_tokens)
         if (
             scheduler_config.mode == SchedulerMode.MTP_BATCH
             and self.mtp_batch_lane is not None

@@ -3810,10 +3810,31 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 bstats = bounded_stats_fn()
                 bstats["env"] = os.environ.get(KV_BOUNDED_ENV)
                 bstats["maxkv_env"] = os.environ.get(KV_BOUNDED_MAXKV_ENV)
+                # W107 (review MEDIUM-A): receipt gate -- compare the memory-plan
+                # formula W106 will use against the bytes actually allocated, so a
+                # dtype-model drift is caught at runtime.  Exact when the window did
+                # not transiently grow during (chunked) prefill, i.e. kv_realloc_window
+                # == num_layers (one ring init per layer, no compaction realloc); a
+                # chunked prefill grows-then-shrinks the window (MEDIUM-1), so the
+                # cumulative alloc_bytes then exceeds the steady formula (expected).
+                _bmaxkv = os.environ.get(KV_BOUNDED_MAXKV_ENV)
+                _cfg = getattr(model, "args", None)
+                bytes_fn = getattr(_dsv41_cache, "kv_bytes_at_max_kv", None)
+                if _cfg is not None and _bmaxkv and callable(bytes_fn):
+                    try:
+                        _formula = int(bytes_fn(_cfg, int(_bmaxkv)))
+                        bstats["kv_bytes_formula"] = _formula
+                        bstats["formula_matches_alloc"] = bool(
+                            int(bstats.get("alloc_bytes", 0)) == _formula
+                        )
+                    except Exception:  # pragma: no cover - defensive
+                        bstats["kv_bytes_formula"] = None
+                        bstats["formula_matches_alloc"] = None
                 bstats["note"] = (
                     "cumulative over this arm; kv_realloc_<lane> == one-time prealloc "
                     "(>1 growing == not preallocated-bounded); kv_inplace_writes_<lane> "
-                    "== O(new-rows) decode path; alloc_bytes ~= kv_bytes_at_max_kv"
+                    "== O(new-rows) decode path; formula_matches_alloc exact iff "
+                    "kv_realloc_window == num_layers (no transient prefill grow)"
                 )
                 receipt["kv_bounded"] = bstats
         # W106 item 3: merge the budget-total derivation terms into every memory

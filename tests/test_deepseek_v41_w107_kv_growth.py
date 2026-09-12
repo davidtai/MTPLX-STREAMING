@@ -119,10 +119,10 @@ def test_kv_bytes_formula_matches_preallocation(monkeypatch):
     # one prefill append per lane allocates every bounded buffer at its cap
     _prefill_all_lanes(cache, cfg, n=20)  # 20 < window phys_cap (88) => no transient grow
 
-    # the pure formula (all lanes fp32 == 4 bytes here) equals the bytes allocated
+    # this direct-cache prefill feeds fp32 rows through EVERY window (incl. layer 0),
+    # so the whole cache is fp32 -> model_dtype_bytes == store_dtype_bytes == 4.
     expected = C.kv_bytes_at_max_kv(
-        cfg, max_kv, window_dtype_bytes=4, compress_dtype_bytes=4,
-        index_dtype_bytes=4, latent_dtype_bytes=4)
+        cfg, max_kv, model_dtype_bytes=4, store_dtype_bytes=4)
     stats = C.kv_bounded_stats()
     assert stats["alloc_bytes"] == expected, (
         f"alloc_bytes {stats['alloc_bytes']} != kv_bytes_at_max_kv {expected}")
@@ -154,31 +154,31 @@ def test_kv_bytes_breakdown_scales_with_max_kv():
     assert big["window"] == small["window"], "window must not grow with max_kv"
     assert big["total"] == big["window"] + big["compress"] + big["index"] + big["latent"]
     assert C.kv_bytes_at_max_kv(cfg, 4096) == big["total"]
-    # window is bf16 (follows x) -> all-fp32 doubles it; latent is already fp32.
-    f32 = C.kv_bytes_breakdown_at_max_kv(
-        cfg, 4096, window_dtype_bytes=4, compress_dtype_bytes=4, index_dtype_bytes=4,
-        latent_dtype_bytes=4)
-    assert f32["window"] == 2 * big["window"]     # bf16 -> fp32
-    assert f32["latent"] == big["latent"]         # latent already fp32 by default
+    # defaults: layer-0 window bf16 (2), everything else fp32 (4). An all-fp32 run
+    # (model_dtype_bytes=4) only widens layer 0's window (one layer, 2->4).
+    f32 = C.kv_bytes_breakdown_at_max_kv(cfg, 4096, model_dtype_bytes=4)
+    phys = big["phys_cap"]
+    assert f32["window"] - big["window"] == 2 * phys * cfg.head_dim * (4 - 2)
+    assert f32["compress"] == big["compress"]     # already fp32
+    assert f32["latent"] == big["latent"]         # already fp32
 
 
-def test_medium2_ratio_gt1_compress_index_are_fp32():
-    """Review MEDIUM-2: compress/index on ratio>1 source layers are fp32 (the
-    compressor pools in fp32), only ratio==1 follows x's bf16.  _Cfg has kv_source
-    [2, 5] with ratios {2: 2, 5: 1}."""
+def test_medium_a_all_kv_source_compress_index_fp32():
+    """Review MEDIUM-A: compress/index are fp32 on EVERY kv-source layer -- ratio>1
+    pools in fp32, ratio==1 follows the fp32 residual (kv-source layers are all L>0).
+    (This supersedes MEDIUM-2's ratio==1==bf16 model.)  _Cfg kv_source [2, 5]."""
     cfg = _Cfg()
     max_kv = 4096
-    bd = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv)  # defaults: bf16=2, fp32=4
-    cc2 = C._bounded_comp_cap(max_kv, 2)              # layer 2 (ratio 2, fp32)
-    cc1 = C._bounded_comp_cap(max_kv, 1)              # layer 5 (ratio 1, bf16)
+    bd = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv)  # defaults: model 2, store 4
+    cc2 = C._bounded_comp_cap(max_kv, 2)              # layer 2 (ratio 2)
+    cc1 = C._bounded_comp_cap(max_kv, 1)              # layer 5 (ratio 1)
     hd, ihd = cfg.head_dim, cfg.index_head_dim
-    exp_compress = cc2 * hd * 4 + cc1 * hd * 2       # fp32 + bf16
-    exp_index = cc2 * ihd * 4 + cc1 * ihd * 2
-    assert bd["compress"] == exp_compress, (bd["compress"], exp_compress)
-    assert bd["index"] == exp_index, (bd["index"], exp_index)
-    # overriding latent_dtype_bytes moves the ratio>1 stores (they share the fp32 width)
-    bd_bf16 = C.kv_bytes_breakdown_at_max_kv(cfg, max_kv, latent_dtype_bytes=2)
-    assert bd_bf16["compress"] == cc2 * hd * 2 + cc1 * hd * 2
+    assert bd["compress"] == (cc2 + cc1) * hd * 4    # both fp32
+    assert bd["index"] == (cc2 + cc1) * ihd * 4
+    # window: layer 0 is model dtype (bf16=2), layers 1..N-1 fp32 (4)
+    phys = bd["phys_cap"]
+    exp_window = 2 * phys * hd * 2 + (cfg.num_hidden_layers - 1) * 2 * phys * hd * 4
+    assert bd["window"] == exp_window
 
 
 # ---------------------------------------------------------------------------
@@ -705,15 +705,20 @@ def test_server_plumbed_maxkv_bounds_the_cache(monkeypatch):
         C._bounded_latent_cap(served_max_live_kv)
 
 
-def test_server_setdefault_lets_explicit_cap_win(monkeypatch):
-    """The server stamps MAXKV with setdefault, so an explicit operator cap wins --
-    mirrors the ``os.environ.setdefault`` in the server's KV-window setup."""
+def test_server_hard_sets_maxkv_over_stale_env(monkeypatch):
+    """Review MEDIUM-B: the server HARD-SETS MTPLX_DSV41_KV_BOUNDED_MAXKV from the
+    authoritative max_live_kv_tokens, so a stale env (shell / profile / earlier ab run)
+    does NOT survive (setdefault would have let it win, breaking assert_can_admit or
+    over-preallocating)."""
+    from mtplx.server.openai import _plumb_kv_bounded_maxkv
     _clear_kv_envs(monkeypatch)
-    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "999")   # explicit operator cap
-    # the server's stamp is a setdefault, so it does NOT override an explicit value
-    import os as _os
-    _os.environ.setdefault("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(4096))
-    assert C._kv_bounded_maxkv() == 999
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "999")   # stale/smaller value
+    _plumb_kv_bounded_maxkv(4096)                               # server's plumbing
+    assert C._kv_bounded_maxkv() == 4096, "stale env survived the server hard-set"
+    # a larger stale value is also overridden
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "99999")
+    _plumb_kv_bounded_maxkv(4096)
+    assert C._kv_bounded_maxkv() == 4096
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +766,7 @@ def test_window_formula_matches_steady_allocation_after_chunked_prefill(monkeypa
     live_window = sum(int(lc._window._bufs[0].nbytes) + int(lc._window._bufs[1].nbytes)
                       for lc in cache.layers)
     formula_window = C.kv_bytes_breakdown_at_max_kv(
-        cfg, 4096, window_dtype_bytes=4)["window"]
+        cfg, 4096, model_dtype_bytes=4, store_dtype_bytes=4)["window"]
     assert live_window == formula_window, (
         f"steady window bytes {live_window} != formula {formula_window}")
 
@@ -907,3 +912,145 @@ def test_full_trim_to_zero_no_realloc_via_cache(monkeypatch):
     for ln in ("compress", "index", "latent"):
         assert C.kv_bounded_stats()[f"kv_realloc_{ln}"] == reallocs[ln], (
             f"{ln} reallocated on trim-to-0")
+
+
+# ---------------------------------------------------------------------------
+# Review MEDIUM-A: the formula (defaults) matches alloc_bytes on a bf16 model
+# (layer-0 window bf16, everything else fp32) -- and the ab receipt gate.
+# ---------------------------------------------------------------------------
+def _tiny_model_bf16():
+    from mlx.utils import tree_flatten, tree_unflatten
+    model = _tiny_model()
+    new = [(n, a.astype(mx.bfloat16)) for n, a in tree_flatten(model.parameters())]
+    model.update(tree_unflatten(new))
+    mx.eval(model.parameters())
+    return model
+
+
+def test_medium_a_formula_matches_alloc_on_bf16_model(monkeypatch):
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "256")
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    model = _tiny_model_bf16()
+    C.reset_kv_bounded_stats()
+    cache = model.make_cache()
+    logits = model(mx.array([list(range(20))]), cache=cache); mx.eval(logits)
+    tok = int(mx.argmax(logits[0, -1]).item())
+    for _ in range(10):
+        logits = model(mx.array([[tok]]), cache=cache); mx.eval(logits)
+        tok = int(mx.argmax(logits[0, -1]).item())
+
+    alloc = C.kv_bounded_stats()["alloc_bytes"]
+    # DEFAULTS model the bf16 reality: layer-0 window bf16 (2), everything else fp32 (4)
+    formula = C.kv_bytes_at_max_kv(model.args, 256)
+    assert alloc == formula, f"alloc {alloc} != formula {formula} (bf16 model)"
+    # the ab-receipt gate is this equality (exact here: prefill 20 < window phys_cap,
+    # so no transient window grow -> exactly one ring init per layer, no compaction
+    # realloc; the counter is process-global across layers).
+    assert C.kv_bounded_stats()["kv_realloc_window"] == len(cache.layers)
+    # and the layer-0 window really is the only bf16 store
+    assert cache.layers[0]._window.raw_backing().dtype == mx.bfloat16
+    assert cache.layers[1]._window.raw_backing().dtype == mx.float32
+    assert cache.layers[2]._compress_kv.raw_backing().dtype == mx.float32
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH-A: the session-bank prefix restore must MISS cleanly (trim returns
+# != delta, no mutation) when the divergence exceeds the ring's recoverable depth,
+# so the served single-request lane falls back to a cold prefill (not a ValueError).
+# ---------------------------------------------------------------------------
+def _prefill_ring_cache(monkeypatch, tokens, *, maxkv=1024):
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", str(maxkv))
+    cfg = _Cfg()
+    cache = _make_cache(cfg)
+    # decode-style 1-row appends so the ring compacts and the drop frontier advances
+    for _ in range(tokens):
+        for L, lc in enumerate(cache.layers):
+            lc.append_window(_row(1, cfg.head_dim))
+            if L in set(cfg.kv_source_layer_ids):
+                ratio = cfg.compress_ratios[L]
+                if ratio > 1:
+                    p = lc.comp_state.push(_row(1, cfg.head_dim), _row(1, cfg.head_dim))
+                    if p.shape[1] > 0:
+                        lc.append_compress(_row(p.shape[1], cfg.head_dim))
+                        lc.append_index_k(_row(p.shape[1], cfg.index_head_dim))
+                else:
+                    lc.append_compress(_row(1, cfg.head_dim))
+                    lc.append_index_k(_row(1, cfg.index_head_dim))
+        cache.advance(1)
+    return cache
+
+
+def test_session_bank_deep_prefix_restore_misses_cleanly(monkeypatch):
+    from mtplx.session_bank import _trim_cache_ref_to_prefix
+    cache = _prefill_ring_cache(monkeypatch, 600)
+    assert cache.layers[0]._window.drop_offset > 0, "ring must have compacted"
+    offs = [lc.offset for lc in cache.layers]
+    wlens = [lc.window_len() for lc in cache.layers]
+    clens = [_r(lc.compress_kv) for lc in cache.layers]
+
+    # a deep prefix restore (divergence ~300 >> the ~24-row recoverable window) must
+    # MISS -- returns False WITHOUT raising and WITHOUT mutating the cache
+    assert _trim_cache_ref_to_prefix(cache, 300) is False
+    assert [lc.offset for lc in cache.layers] == offs, "cache mutated on a deep miss"
+    assert [lc.window_len() for lc in cache.layers] == wlens
+    assert [_r(lc.compress_kv) for lc in cache.layers] == clens
+
+
+def test_session_bank_shallow_prefix_restore_hits(monkeypatch):
+    """A within-window divergence still restores (trim returns delta) -- the miss
+    guard must not break the common short-tail regenerate case."""
+    from mtplx.session_bank import _trim_cache_ref_to_prefix
+    cache = _prefill_ring_cache(monkeypatch, 600)
+    # prefix 599 -> divergence of 2 tokens, well inside the resident window
+    assert _trim_cache_ref_to_prefix(cache, 599) is True
+    assert all(lc.offset == 598 for lc in cache.layers)  # target_offset = prefix - 1
+
+
+def test_rollback_deep_leaves_engram_untouched(monkeypatch):
+    """Review HIGH-A: a failed deep rollback (window raises) must not have already
+    rewound the engram -- the ring truncate now runs before the engram trim."""
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "1024")
+    monkeypatch.setenv("MTPLX_DSV41_WINDOW_RING_HEADROOM", "2")
+
+    class _EngramSpy:
+        def __init__(self): self.trims = []
+        def trim(self, n): self.trims.append(int(n))
+
+    spy = _EngramSpy()
+    lc = C.LayerAttentionCache(window_size=8, compress_ratio=0, is_kv_source=False,
+                               engram_state=spy)
+    for _ in range(20):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    m = lc.mark()
+    for _ in range(60):
+        lc.append_window(_row(1, 16)); lc.advance(1)
+    assert lc._window.drop_offset > 20
+    with pytest.raises(ValueError, match="below the drop frontier"):
+        lc.rollback(m)
+    assert spy.trims == [], "engram was trimmed before the window raise (half-rewound)"
+
+
+# ---------------------------------------------------------------------------
+# Review LOW-A: the over-cap admission check must be hoisted to __call__ so a
+# chunk-major prefill fails at offset 0, not at span 2 with a partial prefix.
+# ---------------------------------------------------------------------------
+def test_over_cap_chunk_major_prefill_raises_at_offset_zero(monkeypatch):
+    _clear_kv_envs(monkeypatch)
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", "1")
+    monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED_MAXKV", "40")   # tiny cap
+    monkeypatch.setenv("MTPLX_DSV41_SELECTED_KEYS", "1")
+    model = _tiny_model()
+    cache = model.make_cache()
+    prompt = mx.array([list(range(100))])                      # 100 >> 40 + slack
+    # chunk 32 forces the chunk-major driver (multiple _forward_span spans); the
+    # whole-prompt pre-check in __call__ must raise BEFORE span 0 writes anything.
+    with pytest.raises(ValueError, match="cannot admit"):
+        model(prompt, cache=cache, prefill_chunk=32)
+    assert all(lc.offset == 0 for lc in cache.layers), "a chunk was written before the raise"
+    assert all(lc.window_len() == 0 for lc in cache.layers)
