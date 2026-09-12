@@ -2060,6 +2060,13 @@ class ExpertStreamingRuntime:
         # under ``_prefetch_lock`` alongside ``_prefetch_futures``; dropped when the
         # read settles (``_finish_prefetch_load``).
         self._prefetch_inflight_futures: dict[tuple[int, int], Future] = {}
+        # W100: (layer, expert, ticket) of speculative reads issued during a
+        # DSpark VERIFY-phase prefetch, so the async commit path can attribute
+        # ``prefetch_committed_verify`` to the verify without the completion
+        # carrying its issuing phase. Written in ``prefetch_experts`` (verify=True)
+        # and consumed/discarded in ``_apply_prefetch_completions``; guarded by
+        # ``_prefetch_lock`` (same as the completions/futures indices).
+        self._verify_prefetch_tags: set[tuple[int, int, int | None]] = set()
         # Each layer's most recent route-plan misses (updated under the
         # layer lock): their bytes are streaming in on the demand path or
         # freshly transient-resident, so predicting them again would only
@@ -4179,8 +4186,17 @@ class ExpertStreamingRuntime:
         # site. (``fell_back`` is left counted above for readability/future
         # telemetry; it no longer feeds any counter.)
 
-    def prefetch_experts(self, layer: int, expert_ids: Iterable[int]) -> int:
+    def prefetch_experts(
+        self, layer: int, expert_ids: Iterable[int], *, verify: bool = False
+    ) -> int:
         """Speculatively load predicted experts into the layer's ring tier.
+
+        ``verify`` (W100) flags a DSpark verify-phase issue (RoutingPhase.DECODE,
+        2..8-row target forward) so the issued/committed reads also accrue to
+        ``prefetch_issued_verify`` / ``prefetch_committed_verify`` -- the AR (M=1)
+        and verify (M=K+1) prefetch would otherwise be indistinguishable in the
+        merged totals. Pure telemetry: ``verify`` never changes which reads issue
+        or the gathered math.
 
         Returns the number of asynchronous loads issued. Zero when prefetch
         is disabled, the layer is an island or unrouted, or every prediction
@@ -4327,6 +4343,13 @@ class ExpertStreamingRuntime:
                 # W93: index the future by (layer, expert) so a demand route can
                 # await this exact read (see _reconcile_prefetch_for_route).
                 self._prefetch_inflight_futures[(layer, load.expert)] = future
+                # W100: tag verify-phase reads so the async commit path can
+                # attribute prefetch_committed_verify without the completion
+                # carrying its issuing phase.
+                if verify:
+                    self._verify_prefetch_tags.add(
+                        (layer, load.expert, tickets[load.expert])
+                    )
             future.add_done_callback(
                 lambda completed, layer=layer, expert=load.expert, ticket=(
                     tickets[load.expert]
@@ -4339,6 +4362,10 @@ class ExpertStreamingRuntime:
             with self._counter_lock:
                 self.counters.prefetch_issued += issued
                 self._layer_counters[layer].prefetch_issued += issued
+                # W100: the DSpark verify-phase slice of the same issues.
+                if verify and issued:
+                    self.counters.prefetch_issued_verify += issued
+                    self._layer_counters[layer].prefetch_issued_verify += issued
                 self.counters.prefetch_bytes += issued * record_bytes
                 self._layer_counters[layer].prefetch_bytes += issued * record_bytes
                 if wasted_total:
@@ -4435,17 +4462,32 @@ class ExpertStreamingRuntime:
             completions = self._prefetch_completions.pop(layer, None)
         if not completions:
             return
+        # W100: snapshot which of THIS layer's settling reads were verify-tagged
+        # and drop every settled tag (committed or not) so the tag set cannot grow.
+        # Done under _prefetch_lock, without any bank op held under it.
+        keys = [(layer, expert, ticket) for expert, ticket, _ in completions]
+        with self._prefetch_lock:
+            verify_keys = {k for k in keys if k in self._verify_prefetch_tags}
+            self._verify_prefetch_tags.difference_update(keys)
         committed = 0
+        committed_verify = 0
         for expert, ticket, succeeded in completions:
             if succeeded:
                 if bank.commit_prefetch(expert, ticket=ticket):
                     committed += 1
+                    if (layer, expert, ticket) in verify_keys:
+                        committed_verify += 1
             else:
                 bank.invalidate_prefetch(expert, ticket=ticket)
         if committed:
             with self._counter_lock:
                 self.counters.prefetch_committed += committed
                 self._layer_counters[layer].prefetch_committed += committed
+                if committed_verify:
+                    self.counters.prefetch_committed_verify += committed_verify
+                    self._layer_counters[
+                        layer
+                    ].prefetch_committed_verify += committed_verify
 
     def _drain_prefetch_loads(self) -> None:
         """Wait out in-flight speculative loads (bounded single-record reads).
@@ -4468,6 +4510,8 @@ class ExpertStreamingRuntime:
             # W93: the futures have all settled; their (layer, expert) index dies
             # with the bank state along with the completions.
             self._prefetch_inflight_futures.clear()
+            # W100: the verify-attribution tags die with the drained reads.
+            self._verify_prefetch_tags.clear()
 
     def reset(self) -> None:
         # Deferred pin releases must flush (with a covering fence) before the
@@ -4783,6 +4827,13 @@ class ExpertStreamingRuntime:
             "demand_bytes_read": _demand,
             "speculative_bytes_read": _spec,
             "prefetch_issued": int(cache.get("prefetch_issued", 0)),
+            # W100: the DSpark verify-phase slice, so the paired window can prove
+            # the multi-row verify engaged the prefetch independent of the AR total
+            # (prefetch_issued above merges AR M=1 and verify M=K+1).
+            "prefetch_issued_verify": int(cache.get("prefetch_issued_verify", 0)),
+            "prefetch_committed_verify": int(
+                cache.get("prefetch_committed_verify", 0)
+            ),
             "prefetch_hit_on_true_route": _hit,
             "prefetch_wasted": int(cache.get("prefetch_wasted", 0)),
             "prefetch_bytes": int(cache.get("prefetch_bytes", 0)),
