@@ -3232,6 +3232,9 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # Appended at the end.
     "MTPLX_DSV41_RUNNER",
     "MTPLX_DSV41_DRAFT_HEAD_BF16",
+    # W110 (appended): per-record sha256 decode-path lever (drift guard keeps this a
+    # superset of ab_decode_env_levers.ALL_LEVER_ENVS).
+    "MTPLX_DSV41_VERIFY_RECORD_HASHES",
 )
 
 

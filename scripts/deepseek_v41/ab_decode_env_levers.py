@@ -314,6 +314,11 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
+# W110: gate the per-record sha256 re-check on the DECODE/verify streaming path.
+# "0" drops the io-thread hash (~174-226 ms/verify, W109 §1.b); byte-identical
+# (hashing never changes the bytes). Admission/open integrity is untouched (separate
+# config fields). Read at use in build_streaming_config (env-authoritative when set).
+VERIFY_RECORD_HASHES_ENV = "MTPLX_DSV41_VERIFY_RECORD_HASHES"
 
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
@@ -375,6 +380,8 @@ ALL_LEVER_ENVS = (
     # W107 (appended; coordinate with any concurrent list extension):
     KV_BOUNDED_ENV,
     KV_BOUNDED_MAXKV_ENV,
+    # W110 (appended; coordinate with any concurrent list extension):
+    VERIFY_RECORD_HASHES_ENV,
 )
 
 
@@ -399,6 +406,7 @@ def _preset(
     gate_prefetch_min_layer=None,
     runner=None,
     kv_bounded=None, kv_bounded_maxkv=None,
+    verify_record_hashes=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -460,6 +468,7 @@ def _preset(
         RUNNER_ENV: runner,
         KV_BOUNDED_ENV: kv_bounded,
         KV_BOUNDED_MAXKV_ENV: kv_bounded_maxkv,
+        VERIFY_RECORD_HASHES_ENV: verify_record_hashes,
     }
 
 
@@ -879,6 +888,30 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1", kv_bounded="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", draft="1", draft_head_bf16="1",
+    ),
+    # W110: cell16k_ring_v2 + the per-record sha256 lever OFF on the DECODE/verify
+    # path (MTPLX_DSV41_VERIFY_RECORD_HASHES=0).  Exact key set of cell16k_ring_v2
+    # plus the one env; the paired A/B vs cell16k_ring_v2 (RUN CONTROL WITH
+    # --verify-record-hashes so its hashing is ON; the env forces this arm's OFF
+    # regardless) isolates the io-thread hashing cost W109 §1.b measured at
+    # ~174-226 ms/verify.  Byte-identical to control's class by construction:
+    # hashing never changes the bytes read into the slot, so token_ids_sha256 must
+    # match.  Admission/open integrity is untouched (separate config fields).
+    "cell16k_ring_v2_nohash": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", verify_record_hashes="0",
+    ),
+    # W110: cell16k_ring_v2_draft + VERIFY_RECORD_HASHES=0.  The draft-head levers
+    # touch only the DSpark draft head, so they compose with the verify-hash drop;
+    # the direct A/B vs cell16k_ring_v2_draft (control run WITH --verify-record-hashes)
+    # isolates the decode-path hashing cost on the standard draft-head-on cell.
+    "cell16k_ring_v2_draft_nohash": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1", verify_record_hashes="0",
     ),
 }
 
