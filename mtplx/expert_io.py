@@ -120,12 +120,15 @@ class ExpertIOMetrics:
     # W110: per-record sha256 engagement on the DECODE/verify path. ``records_hashed``
     # counts records whose bytes were sha256-verified in the io thread after the read;
     # ``records_unhashed`` counts records read with verify OFF (bytes landed, no
-    # re-check); ``hash_ns_total`` is the cumulative io-thread wall spent hashing.
-    # These make the MTPLX_DSV41_VERIFY_RECORD_HASHES lever's engagement auditable in
-    # the A/B receipt (byte-neutral: hashing never changes the bytes read).
+    # re-check); ``hash_thread_ns_total`` is the SUMMED io-thread time spent hashing,
+    # accumulated across ALL io-pool threads (not wall) -- divide by the io-pool width
+    # (max_inflight_io_bytes // record_bytes) for an upper bound on the exposed wall.
+    # These make the (bench-only, W110) MTPLX_DSV41_VERIFY_RECORD_HASHES diagnostic's
+    # engagement auditable in the A/B receipt (byte-neutral: hashing never changes the
+    # bytes read).
     records_hashed: int = 0
     records_unhashed: int = 0
-    hash_ns_total: int = 0
+    hash_thread_ns_total: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def update(self, **values: int) -> None:
@@ -165,7 +168,7 @@ class ExpertIOMetrics:
                     "io_errors",
                     "records_hashed",
                     "records_unhashed",
-                    "hash_ns_total",
+                    "hash_thread_ns_total",
                 )
             }
         result["read_mib_per_second"] = (
@@ -985,7 +988,7 @@ class PositionalExpertReader:
                 digest = hashlib.sha256(raw_view).hexdigest()
                 self.metrics.update(
                     records_hashed=1,
-                    hash_ns_total=time.perf_counter_ns() - _hash_started,
+                    hash_thread_ns_total=time.perf_counter_ns() - _hash_started,
                 )
             else:
                 self.metrics.update(records_unhashed=1)
@@ -1147,7 +1150,7 @@ class PositionalExpertReader:
                 digest = hasher.hexdigest()
                 self.metrics.update(
                     records_hashed=1,
-                    hash_ns_total=time.perf_counter_ns() - _hash_started,
+                    hash_thread_ns_total=time.perf_counter_ns() - _hash_started,
                 )
             else:
                 # Do not report the manifest hash as if these bytes were
@@ -1280,7 +1283,7 @@ class PositionalExpertReader:
                         digest = hasher.hexdigest()
                         self.metrics.update(
                             records_hashed=1,
-                            hash_ns_total=time.perf_counter_ns() - _hash_started,
+                            hash_thread_ns_total=time.perf_counter_ns() - _hash_started,
                         )
                         if record.sha256 is None:
                             self.metrics.update(integrity_errors=1)

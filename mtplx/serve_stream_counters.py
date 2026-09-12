@@ -148,7 +148,7 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
 
         # W110: pass through the io-thread reader metrics (per-record sha256
         # engagement) so the decode-scoped delta can report records_hashed /
-        # records_unhashed / hash_ns_total per verify/decode window -- the
+        # records_unhashed / hash_thread_ns_total per verify/decode window -- the
         # MTPLX_DSV41_VERIFY_RECORD_HASHES lever's engagement counters.
         io_metrics = snap.get("io")
         if isinstance(io_metrics, dict):
@@ -220,11 +220,13 @@ def stream_counters_delta(
         d["parts_per_token"] = round(d.get("parts", 0) / tok, 4)
         out["incremental_misses"] = d
 
-    # W110: per-record sha256 engagement over THIS decode window (the
-    # MTPLX_DSV41_VERIFY_RECORD_HASHES lever's counters). ``records_hashed`` +
+    # W110: per-record sha256 engagement over THIS decode window (the bench-only
+    # MTPLX_DSV41_VERIFY_RECORD_HASHES diagnostic's counters). ``records_hashed`` +
     # ``records_unhashed`` = records streamed off SSD during decode; with hashing ON
-    # unhashed is 0 and ``hash_ms`` is the io-thread wall the lever removes; with the
-    # lever OFF hashed is 0 and no re-check ran (bytes byte-identical either way).
+    # unhashed is 0 and ``hash_thread_ms`` is the SUMMED io-thread hashing time (across
+    # all io-pool threads, NOT wall -- divide by the io-pool width for an upper bound
+    # on exposed wall); with hashing OFF hashed is 0 and no re-check ran (bytes are
+    # byte-identical either way).
     b_io, a_io = before.get("io"), after.get("io")
     if isinstance(b_io, dict) and isinstance(a_io, dict):
         d = _delta_map(b_io, a_io)
@@ -234,8 +236,8 @@ def stream_counters_delta(
         d["records_hashed_per_token"] = round(hashed / tok, 4)
         d["records_unhashed_per_token"] = round(unhashed / tok, 4)
         d["hash_fraction"] = round(hashed / total, 6) if total else None
-        d["hash_ms"] = round(d.get("hash_ns_total", 0) / 1e6, 3)
-        d["hash_ms_per_token"] = round(d.get("hash_ns_total", 0) / 1e6 / tok, 4)
+        d["hash_thread_ms"] = round(d.get("hash_thread_ns_total", 0) / 1e6, 3)
+        d["hash_thread_ms_per_token"] = round(d.get("hash_thread_ns_total", 0) / 1e6 / tok, 4)
         out["io"] = d
 
     b_er, a_er = before.get("engram_row_cache"), after.get("engram_row_cache")

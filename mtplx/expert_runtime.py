@@ -4698,7 +4698,7 @@ class ExpertStreamingRuntime:
         }
         # W110: the io-thread reader metrics (per-record sha256 engagement +
         # bytes/reads) so the MTPLX_DSV41_VERIFY_RECORD_HASHES lever's counters
-        # (records_hashed / records_unhashed / hash_ns_total) travel on the receipt.
+        # (records_hashed / records_unhashed / hash_thread_ns_total) travel on the receipt.
         # Guarded: a stub reader without metrics just omits the block.
         try:
             snapshot["io"] = self.reader.metrics.as_dict()
@@ -4802,7 +4802,7 @@ class ExpertStreamingRuntime:
         }
         # W110: io-thread reader metrics (per-record sha256 engagement) for the
         # bench sampler's receipt too (records_hashed / records_unhashed /
-        # hash_ns_total). Guarded; a stub reader just omits it.
+        # hash_thread_ns_total). Guarded; a stub reader just omits it.
         try:
             snapshot["io"] = self.reader.metrics.as_dict()
         except Exception:

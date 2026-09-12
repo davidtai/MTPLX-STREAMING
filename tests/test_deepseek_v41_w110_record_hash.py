@@ -9,7 +9,7 @@ Covers ``docs/deepseek-v41/W110_DECODE_RECORD_HASH.md``:
     admission/open integrity fields (``verify_artifact_headers`` /
     ``verify_sidecar_hash_at_open``), so open-time verification stays on;
   * the io-thread engagement counters (``records_hashed`` / ``records_unhashed`` /
-    ``hash_ns_total``) reflect whether the per-record sha256 ran, on both the
+    ``hash_thread_ns_total``) reflect whether the per-record sha256 ran, on both the
     single-record and batched (v2 overlap) sidecar read paths;
   * bytes are byte-identical with hashing ON vs OFF (hashing never mutates bytes);
   * a corrupt record (on-disk bytes disagree with the manifest's trusted hash) is
@@ -169,7 +169,7 @@ def test_batch_hashing_on_counts_records_hashed_and_times(tmp_path):
     assert d0.payload() == b"A" * 8 and d1.payload() == b"B" * 8
     assert m["records_hashed"] == 2
     assert m["records_unhashed"] == 0
-    assert m["hash_ns_total"] > 0
+    assert m["hash_thread_ns_total"] > 0
 
 
 def test_batch_hashing_off_skips_and_counts_unhashed(tmp_path):
@@ -183,7 +183,7 @@ def test_batch_hashing_off_skips_and_counts_unhashed(tmp_path):
     assert digests == ("unverified", "unverified")
     assert m["records_hashed"] == 0
     assert m["records_unhashed"] == 2
-    assert m["hash_ns_total"] == 0
+    assert m["hash_thread_ns_total"] == 0
 
 
 def test_single_record_hashing_on_and_off_counts(tmp_path):
@@ -197,10 +197,10 @@ def test_single_record_hashing_on_and_off_counts(tmp_path):
         m_off = dict(reader.metrics.as_dict())
     assert dig_on == r0.sha256
     assert m_on["records_hashed"] == 1 and m_on["records_unhashed"] == 0
-    assert m_on["hash_ns_total"] > 0
+    assert m_on["hash_thread_ns_total"] > 0
     assert dig_off == "unverified"
     assert m_off["records_hashed"] == 0 and m_off["records_unhashed"] == 1
-    assert m_off["hash_ns_total"] == 0
+    assert m_off["hash_thread_ns_total"] == 0
 
 
 def test_bytes_are_identical_hashing_on_vs_off(tmp_path):
@@ -331,7 +331,7 @@ def test_resolved_plan_explicit_env_armed_but_no_ring_raises(monkeypatch):
 def test_snapshot_stream_counters_passes_io_block_through():
     snap = {
         "cache": {},
-        "io": {"records_hashed": 5, "records_unhashed": 0, "hash_ns_total": 1000},
+        "io": {"records_hashed": 5, "records_unhashed": 0, "hash_thread_ns_total": 1000},
     }
     rt = SimpleNamespace(snapshot=lambda: snap)
     out = serve_stream_counters.snapshot_stream_counters(rt)
@@ -339,25 +339,25 @@ def test_snapshot_stream_counters_passes_io_block_through():
 
 
 def test_stream_counters_delta_reports_decode_scoped_hashing():
-    before = {"io": {"records_hashed": 10, "records_unhashed": 0, "hash_ns_total": 2_000_000}}
-    after = {"io": {"records_hashed": 100, "records_unhashed": 0, "hash_ns_total": 20_000_000}}
+    before = {"io": {"records_hashed": 10, "records_unhashed": 0, "hash_thread_ns_total": 2_000_000}}
+    after = {"io": {"records_hashed": 100, "records_unhashed": 0, "hash_thread_ns_total": 20_000_000}}
     d = serve_stream_counters.stream_counters_delta(before, after, tokens=9, phase="decode")
     io = d["io"]
     assert io["records_hashed"] == 90
     assert io["records_unhashed"] == 0
     assert io["hash_fraction"] == 1.0
-    assert io["hash_ms"] == pytest.approx(18.0, abs=1e-6)  # 18,000,000 ns
+    assert io["hash_thread_ms"] == pytest.approx(18.0, abs=1e-6)  # 18,000,000 ns
 
 
 def test_stream_counters_delta_reports_hashing_off_window():
-    before = {"io": {"records_hashed": 0, "records_unhashed": 10, "hash_ns_total": 0}}
-    after = {"io": {"records_hashed": 0, "records_unhashed": 100, "hash_ns_total": 0}}
+    before = {"io": {"records_hashed": 0, "records_unhashed": 10, "hash_thread_ns_total": 0}}
+    after = {"io": {"records_hashed": 0, "records_unhashed": 100, "hash_thread_ns_total": 0}}
     d = serve_stream_counters.stream_counters_delta(before, after, tokens=9, phase="decode")
     io = d["io"]
     assert io["records_hashed"] == 0
     assert io["records_unhashed"] == 90
     assert io["hash_fraction"] == 0.0
-    assert io["hash_ms"] == 0.0
+    assert io["hash_thread_ms"] == 0.0
 
 
 # ==========================================================================
