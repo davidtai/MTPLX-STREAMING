@@ -62,6 +62,7 @@ markov/confidence heads -- all owned by W23's drafter, which this loop calls.
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence
@@ -384,6 +385,86 @@ DSPARK_BF16_CLASS_DELTA = 1.0e-2
 #: ``ab_decode_env_levers.py --dspark-tie-margin``.
 DSPARK_TIE_MARGIN_DEFAULT = 3.0 * DSPARK_BF16_CLASS_DELTA  # 3e-2
 
+# ---------------------------------------------------------------------------
+# W120: magnitude-aware tie band (bf16-ulp classifier)
+# ---------------------------------------------------------------------------
+# W119 (docs/deepseek-v41/W119_EAGER_VERIFY_PARITY.md) PROVED the K+1-row verify
+# equals the 1-row AR forward BITWISE on CPU fp32; the GPU divergence at window-45
+# index 111 (ar_top2_margin 0.125, dspark_top2_margin 0.0, max|Δlogit| 1.125) is
+# bf16 accumulation-order between the s=K+1 and s=1 eager einsum tiles quantized by
+# the bf16 head -- every delta is an INTEGER number of bf16 ulps.  The old fixed
+# 3e-2 band mislabels that as "divergent" for two reasons: (1) it looks only at the
+# AR margin, while the near-tie here is on the AUTHORITATIVE verify (dspark) side
+# (0.0); (2) at the cell16k operating magnitudes (~16-256) one bf16 ulp is
+# 0.125-2.0 -- 4-66x the 3e-2 constant -- so a legitimately bf16-tied pair is forced
+# to "divergent".  W120 implements W119's recommended rule:
+#   (a) tie_flip when EITHER ar_top2_margin OR dspark_top2_margin < tie_band;
+#   (b) tie_band = max(DSPARK_TIE_MARGIN_DEFAULT, k * ulp_bf16(peak contested
+#       logit)) with ulp_bf16(x) = 2**(floor(log2|x|)) * 2**-7, k default 3;
+#   (c) also record rounding_class_by_delta = min(ar_margin, dspark_margin) <=
+#       |Δ(ar_token)| + |Δ(dspark_token)| and fire tie_flip when it holds too.
+# ``k`` is read from MTPLX_DSV41_DIVERGENCE_TIE_ULPS at USE.  This is a CLASSIFIER
+# setting -- it changes only how a divergence receipt is LABELLED, never the tokens
+# produced -- so it is DELIBERATELY NOT in ab_decode_env_levers.ALL_LEVER_ENVS (a
+# decode-lever registry); it is stamped in the divergence block instead.
+DSPARK_DIVERGENCE_TIE_ULPS_ENV = "MTPLX_DSV41_DIVERGENCE_TIE_ULPS"
+#: Default ``k`` (ulp multiplier) for the magnitude-aware tie band.
+DSPARK_DIVERGENCE_TIE_ULPS_DEFAULT = 3
+
+
+def _ulp_bf16(x: float) -> float:
+    """One unit-in-the-last-place of a bfloat16 value of magnitude ``x``.
+
+    bf16 carries a 7-bit mantissa, so for a logit of magnitude ``|x|`` one ulp is
+    ``2**(floor(log2|x|)) * 2**-7``.  Returns ``0.0`` for a zero / non-finite ``x``
+    (no finite binade) so the caller falls back to the fixed tie-band floor.
+    """
+    ax = abs(float(x))
+    if not (ax > 0.0) or not math.isfinite(ax):
+        return 0.0
+    return float(2.0 ** (math.floor(math.log2(ax)) - 7))
+
+
+def _tie_ulps_from_env(explicit: Optional[int]) -> int:
+    """Multiplier ``k`` for the magnitude-aware tie band.  ``explicit`` wins;
+    otherwise ``MTPLX_DSV41_DIVERGENCE_TIE_ULPS`` is read AT USE (default 3, per
+    [[env-flags-read-at-use-not-import]]).  Invalid values fall back to the default.
+    """
+    if explicit is not None:
+        try:
+            return max(0, int(explicit))
+        except (TypeError, ValueError):
+            return DSPARK_DIVERGENCE_TIE_ULPS_DEFAULT
+    raw = os.environ.get(DSPARK_DIVERGENCE_TIE_ULPS_ENV, "").strip()
+    if not raw:
+        return DSPARK_DIVERGENCE_TIE_ULPS_DEFAULT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DSPARK_DIVERGENCE_TIE_ULPS_DEFAULT
+
+
+def _peak_contested_logit(ar_row, dspark_row, ar_token, dspark_token) -> Optional[float]:
+    """W119 ``peak_contested_logit``: the magnitude of the largest contested logit,
+    ``max(|logit[ar_token]|, |logit[dspark_token]|)`` over whichever of the two rows
+    are available.  Falls back to a row's top-1 magnitude when the contested token
+    indices are out of range for that row.  ``None`` if no row is available."""
+    mags: List[float] = []
+    for row in (ar_row, dspark_row):
+        if row is None:
+            continue
+        flat = np.asarray(row).reshape(-1)
+        if flat.size == 0:
+            continue
+        got = False
+        for tok in (ar_token, dspark_token):
+            if tok is not None and 0 <= int(tok) < flat.size:
+                mags.append(abs(float(flat[int(tok)])))
+                got = True
+        if not got:
+            mags.append(float(np.max(np.abs(flat))))
+    return max(mags) if mags else None
+
 
 def _top2_margin(row) -> Optional[float]:
     """Logit gap between the top-1 and top-2 entries of a 1-D logits row (numpy
@@ -406,9 +487,10 @@ def classify_divergence(
     ar_logits_row=None,
     dspark_logits_row=None,
     tie_margin: float = DSPARK_TIE_MARGIN_DEFAULT,
+    tie_ulps: Optional[int] = None,
 ) -> dict:
     """Classify the FIRST greedy divergence of a DSpark stream from its AR
-    reference at position ``index``.
+    reference at position ``index`` (W77 primitive, W120 magnitude-aware rule).
 
     ``ar_logits_row`` is the AR forward's full logits vector at ``index`` (the
     faithful M=1 replay); ``dspark_logits_row`` is the verify forward's logits row
@@ -416,23 +498,103 @@ def classify_divergence(
     Either row may be ``None`` (unavailable) -- the classifier degrades to the
     signals it has and never raises.
 
-    Returns a receipt-ready dict (all JSON scalars, no arrays):
-      ``divergence_index``, ``ar_token``, ``dspark_token``, ``ar_top2_margin``,
-      ``dspark_top2_margin``, ``max_abs_logit_delta``, ``tie_margin``, ``class``.
-    ``class`` is ``"tie_flip"`` when the AR top-2 margin is known and below
-    ``tie_margin`` (a rounding-class near-tie), else ``"divergent"``.  With no AR
-    margin available the class is ``"divergent"`` (conservative: do not silently
-    absolve an unmeasured flip).
+    W120 rule (see the module block above and W120_DIVERGENCE_TIE_BAND.md).  With
+    the AR reference row present, ``class`` is ``"tie_flip"`` when EITHER:
+
+      * **(a)+(b)** EITHER ``ar_top2_margin`` OR ``dspark_top2_margin`` is below a
+        MAGNITUDE-AWARE band ``tie_band = max(tie_margin, k * ulp_bf16(peak
+        contested logit))`` (the near-tie may be on the authoritative verify side,
+        W119 index 111 where the verify margin is a genuine bf16 tie of 0.0); or
+      * **(c)** the measured per-token deltas at the two contested tokens close the
+        smaller margin (``rounding_class_by_delta``) AND those closing deltas are
+        themselves within the band (``deltas_within_tie_band``) -- the gate keeps a
+        genuine >ulp divergence with clear margins LOUD (W119: a real swap has a
+        contested delta >= its margin, so the ungated (c) alone would absolve
+        everything; the delta must be rounding-SCALE to count).
+
+    Otherwise ``class`` is ``"divergent"``.  With NO AR reference row the class is
+    ``"divergent"`` (conservative: a failed M=1 replay is not silently absolved).
+
+    ``k`` (the ulp multiplier) defaults to :data:`DSPARK_DIVERGENCE_TIE_ULPS_DEFAULT`
+    and is overridable via the ``tie_ulps`` argument or, at USE, the
+    ``MTPLX_DSV41_DIVERGENCE_TIE_ULPS`` env (a CLASSIFIER setting, NOT a decode
+    lever -- kept out of ALL_LEVER_ENVS, stamped here instead).
+
+    Returns a receipt-ready dict (all JSON scalars, no arrays).  W120 ADDS keys
+    (``tie_band_used``, ``tie_ulps``, ``peak_contested_logit``,
+    ``ulp_bf16_at_peak``, ``delta_at_ar_token``, ``delta_at_dspark_token``,
+    ``rounding_class_by_delta``, ``deltas_within_tie_band``); every W77 key
+    (``divergence_index``, ``ar_token``, ``dspark_token``, ``ar_top2_margin``,
+    ``dspark_top2_margin``, ``max_abs_logit_delta``, ``tie_margin``, ``class``) is
+    kept unchanged.
     """
     ar_margin = _top2_margin(ar_logits_row)
     dspark_margin = _top2_margin(dspark_logits_row)
+
+    # Per-token deltas at the two contested tokens + the vocab-wide max delta.
     max_abs_delta: Optional[float] = None
+    delta_at_ar_token: Optional[float] = None
+    delta_at_dspark_token: Optional[float] = None
     if ar_logits_row is not None and dspark_logits_row is not None:
-        a = np.asarray(ar_logits_row).reshape(-1)
-        b = np.asarray(dspark_logits_row).reshape(-1)
+        a = np.asarray(ar_logits_row).reshape(-1).astype(np.float64)
+        b = np.asarray(dspark_logits_row).reshape(-1).astype(np.float64)
         if a.shape == b.shape and a.size:
-            max_abs_delta = float(np.max(np.abs(a.astype(np.float64) - b.astype(np.float64))))
-    cls = "tie_flip" if (ar_margin is not None and ar_margin < float(tie_margin)) else "divergent"
+            max_abs_delta = float(np.max(np.abs(a - b)))
+            if ar_token is not None and 0 <= int(ar_token) < a.size:
+                delta_at_ar_token = float(abs(a[int(ar_token)] - b[int(ar_token)]))
+            if dspark_token is not None and 0 <= int(dspark_token) < a.size:
+                delta_at_dspark_token = float(abs(a[int(dspark_token)] - b[int(dspark_token)]))
+
+    # (b) Magnitude-aware tie band: max(floor, k * ulp_bf16(peak contested logit)).
+    k = _tie_ulps_from_env(tie_ulps)
+    peak = _peak_contested_logit(ar_logits_row, dspark_logits_row, ar_token, dspark_token)
+    ulp_at_peak = _ulp_bf16(peak) if peak is not None else None
+    tie_band = float(tie_margin)
+    if ulp_at_peak is not None:
+        tie_band = max(tie_band, float(k) * float(ulp_at_peak))
+
+    # Absolution requires the AR reference row (conservative on a replay failure:
+    # with no faithful M=1 reference we do not silently absolve a flip).
+    have_reference = ar_logits_row is not None
+
+    # (a) EITHER margin below the band -- the near-tie may be on the authoritative
+    # VERIFY side (dspark), not only the AR side (W119 index 111: dspark margin 0.0).
+    near_tie_by_band = False
+    if have_reference:
+        band_margins = [m for m in (ar_margin, dspark_margin) if m is not None]
+        if band_margins and min(band_margins) < tie_band:
+            near_tie_by_band = True
+
+    # (c) rounding_class_by_delta -- W119 literal rule: the measured per-token deltas
+    # at the two contested tokens can close the smaller margin.
+    rounding_class_by_delta: Optional[bool] = None
+    if (
+        ar_margin is not None
+        and dspark_margin is not None
+        and delta_at_ar_token is not None
+        and delta_at_dspark_token is not None
+    ):
+        rounding_class_by_delta = bool(
+            min(ar_margin, dspark_margin)
+            <= (delta_at_ar_token + delta_at_dspark_token)
+        )
+
+    # Gate on (c): the CLOSING deltas must themselves be rounding-class (within the
+    # band).  A delta larger than the band is NOT rounding -- a genuine >ulp
+    # divergence with clear margins would otherwise be wrongly absolved (W119: "a
+    # genuine >ulp divergence with both margins clear still classes divergent").
+    deltas_within_tie_band: Optional[bool] = None
+    if delta_at_ar_token is not None and delta_at_dspark_token is not None:
+        deltas_within_tie_band = bool(
+            max(delta_at_ar_token, delta_at_dspark_token) <= tie_band
+        )
+    tie_flip_by_delta = bool(rounding_class_by_delta) and bool(deltas_within_tie_band)
+
+    cls = (
+        "tie_flip"
+        if (have_reference and (near_tie_by_band or tie_flip_by_delta))
+        else "divergent"
+    )
     return {
         "divergence_index": int(index),
         "ar_token": None if ar_token is None else int(ar_token),
@@ -441,6 +603,15 @@ def classify_divergence(
         "dspark_top2_margin": dspark_margin,
         "max_abs_logit_delta": max_abs_delta,
         "tie_margin": float(tie_margin),
+        # W120 additive keys (the W77 keys above are unchanged):
+        "tie_band_used": float(tie_band),
+        "tie_ulps": int(k),
+        "peak_contested_logit": None if peak is None else float(peak),
+        "ulp_bf16_at_peak": None if ulp_at_peak is None else float(ulp_at_peak),
+        "delta_at_ar_token": delta_at_ar_token,
+        "delta_at_dspark_token": delta_at_dspark_token,
+        "rounding_class_by_delta": rounding_class_by_delta,
+        "deltas_within_tie_band": deltas_within_tie_band,
         "class": cls,
     }
 
