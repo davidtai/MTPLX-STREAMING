@@ -3226,9 +3226,6 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     # from max_live_kv_tokens below, mirroring MTPLX_CONTEXT_WINDOW_TOKENS).
     "MTPLX_DSV41_KV_BOUNDED",
     "MTPLX_DSV41_KV_BOUNDED_MAXKV",
-    # W107 round-3 (appended): the KV append write primitive (in-place donating vs
-    # slice_update copy).
-    "MTPLX_DSV41_KV_INPLACE_WRITE",
 )
 
 
