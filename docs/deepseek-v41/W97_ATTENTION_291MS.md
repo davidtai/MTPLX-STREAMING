@@ -213,3 +213,84 @@ the memory/precision trade.
 - `mtplx/models/deepseek_v41.py` `Attention` (absorbed MLA), `_o_lora_dense_weight`/`_o_lora_down`.
 - Reference `Attention.forward` L765-789 (bf16 `wo_a` einsum, dequantized once at convert).
 - CPU arithmetic table + `mx.dequantize` dtype/byte probe (this worker; §1).
+
+## 7. Follow-on (window 40): decode-attention dispatch COUNT — the core collapse
+
+Since attention compute is ~0.03 ms/layer and the cost is the host-encode of ~100
+tiny dispatches that cannot pipeline behind the per-layer routing sync (§0), the
+lever is dispatch **count**. Measured with the W91 pattern (`mx.export_to_dot` graph
+primitives = the dispatch proxy; `mx.compile` collapses elementwise chains into
+`Compiled` nodes) on the tiny real-structure model, but at the **real decode
+geometry** for the core (primitive count is shape-independent).
+
+### 7.1 Dispatch table — per decode attention layer (M=1, `ATTN_COMPILE` on, selected-keys)
+
+Whole-layer graph primitives per CSA mode (one decode `_attend`, K22 qkv/out tapes on):
+
+| mode | graph prims | non-view kernels | top kernel ops |
+|---|---:|---:|---|
+| swa_only | 162 | 69 | AsType 15, Matmul 7, Concatenate 6, +core elementwise |
+| reindex  | 162 | 69 | (same shape as swa/reuse at M=1 selected) |
+| reuse    | 162 | 69 | AsType 15, Matmul 7, Concatenate 6 |
+| full     | 283 | 122 | AsType 25, Matmul 10, Concatenate 10, Gather 2, +indexer sort/cumsum |
+
+`mx.compile` cannot fuse Matmul / Concatenate / reductions / the data-dependent
+gather+sort, so the **whole layer stays ~69–122 dispatches even with qkv/out
+compiled** — the ≤15/layer target is NOT reachable by compiling alone. The single
+largest kernel op is **`AsType` (15 simple / 25 full)** — redundant f32 casts
+scattered through score/PV/rmsnorm/o-LoRA (a separate cast-reduction lever).
+
+### 7.2 The compilable/kernelizable chunk — the fixed-shape CORE
+
+The selected-key core (QK^T + mask + per-head value-0 sink + f32 softmax + PV over
+the gathered `[b,s,k,hd]` operand) has FIXED shapes at decode (`k` = 640 for the
+compress modes / 128 for swa_only; `hd` 512; `H` 64). Census (`dispatch_census.py
+--attn-core`):
+
+| core path | graph prims | non-view kernels | dispatches | Δ vs eager |
+|---|---:|---:|---:|---|
+| eager | 26 | 13 (2 matmul + scale/where/max/max/2×sub/2×exp/sum/add/divide) | ~13 | — (exact) |
+| `mx.compile` (`MTPLX_DSV41_ATTN_CORE_COMPILE`) | 16 | 8 (2 matmul + 3 fused `Compiled` + Max + Maximum + Sum) | ~8 | **rounding-class**, max\|Δ\| 9.3e-10 (CPU) |
+| K29 fused kernel (`MTPLX_DSV41_DECODE_ATTN_KERNEL`) | — | — | **1** (score+mask+softmax+PV, one `metal_kernel`) | rounding-class, GPU-only |
+
+**Which is lower: the K29 fused kernel (1 dispatch) beats the `mx.compile` core
+(~8).** K29 wins the early return in `_sparse_attend_selected` before the compile
+path, so the two never both apply; K29 is GPU-only (CPU falls back to eager) and the
+compile core is the portable CPU+GPU fallback / A-B. Both are **rounding-class**
+(neither is byte-identical: the n=1 compile and the K29 tile reduction each
+reassociate the fp32 einsum/reductions — the K35 lesson), gated separately from the
+exact levers (`wo_a_cache` is the only byte-identical W97 attention lever).
+
+The core compile is keyed on geometry (`_ATTN_CORE_COMPILED`), verified bounded: 64
+decode steps build ≤ a handful of tapes (one per distinct `k`), never one per token.
+Combining K29 (core → 1) with the `wo_a` cache (out-proj dequant → 0/token) and the
+existing qkv/out K22 tapes brings a simple (swa/reuse) layer's *substantial-compute*
+dispatches (matmuls + fused blocks + reductions + gather) to ~10–12; the
+index-source layers (full/reindex) still carry the irreducible indexer `Sort`/
+`CumSum`/top-k.
+
+### 7.3 Arms, lever, tests
+
+- Lever `MTPLX_DSV41_ATTN_CORE_COMPILE` (default OFF, rounding-class):
+  `Attention._sparse_attend_selected` routes the fixed-shape core through the
+  geometry-keyed compiled tape at decode/small-M verify; above the small-M cap the
+  eager block runs (byte-for-byte control).
+- Arms: `attn_core_compile` (isolation), `cell16k_ring_attn_core` (= cell16k_ring +
+  core compile), `cell16k_ring_wo_a_core` (= cell16k_ring + `wo_a` cache + core
+  compile — the full W97 attention-dispatch program). All three carry the core
+  compile → **rounding-class**, so the byte-identity summary flags them (token-id
+  sha will differ vs control on a greedy near-tie flip — [[dsv41-inexact-ok-if-tie-flips]]).
+- Census: `nice -n 19 $PY scripts/deepseek_v41/dispatch_census.py --attn-core`
+  (self-contained, CPU). Window-40 GPU A/B (through the flock):
+  ```
+  nice -n 19 $PY scripts/deepseek_v41/metal_decode_attn_bisect.py \
+    --in-model --unfenced --attn-subops --gpu --model $MODEL --arms cell16k_ring_wo_a_core \
+    --context-tokens 16384 --memory-limit-gib 60 --max-kv 17408 \
+    --in-model-steps 64 --warmup-steps 8 --utilization --out $OUT/w40-wo_a_core.json
+  ```
+  and the paired AR receipt at arms `cell16k_ring` / `cell16k_ring_attn_core` /
+  `cell16k_ring_wo_a_core` for tok/s + token-sha (label the rounding-class flip).
+- Tests: `tests/test_deepseek_v41_attn_core_compile_w97.py` — core prims eager>compiled
+  (2 matmuls survive, elementwise fuses); compile-cache bounded over 64 steps (no
+  per-token retrace); greedy-argmax identical + labelled logit max\|Δ\| over 64
+  decode steps on a tiny full model (rounding-class band).

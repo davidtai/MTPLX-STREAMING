@@ -272,6 +272,18 @@ SINGLE_SLOT_POOL_ENV = "MTPLX_DSV41_SINGLE_SLOT_POOL"
 # mxfp4: ~2.7 GB across 40 layers), so it is opt-in under the box memory budget.
 WO_A_CACHE_ENV = "MTPLX_DSV41_ATTN_WO_A_CACHE"
 
+# W97: fixed-shape mx.compile of the decode-attention CORE (QK + mask + sink softmax
+# + PV over the gathered [b,s,k,hd] operand) -- one geometry-keyed tape at decode/
+# small-M verify, the scattered elementwise fused (~13 -> ~8 kernels; the gather
+# stays outside; docs/deepseek-v41/W97_ATTENTION_291MS.md).  ROUNDING-CLASS, NOT
+# byte-identical: the n=1 compile reassociates the fp32 einsum/reductions (the K35
+# lesson; measured max|Δ| ~9e-10 on CPU), so its arms are flagged in the byte-
+# identity summary and gated separately from the exact levers.  The K29 fused decode
+# kernel (DECODE_ATTN_KERNEL) collapses the SAME core to ONE dispatch on the GPU and
+# wins the early return before this path -- it is the lower-dispatch option; this is
+# the portable (CPU+GPU) fallback / A-B.  Read at use (never import-frozen).
+ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
+
 # Every lever env key, in a stable order. Each preset names ALL of them (None =
 # force-unset) so applying an arm fully determines the flags regardless of what a
 # prior arm in the same process left set -- the arms are independent. The eight
@@ -325,6 +337,7 @@ ALL_LEVER_ENVS = (
     SINGLE_SLOT_POOL_ENV,
     # W97 (appended; coordinate with any concurrent list extension):
     WO_A_CACHE_ENV,
+    ATTN_CORE_COMPILE_ENV,
 )
 
 
@@ -343,7 +356,7 @@ def _preset(
     window_ring_headroom=None, window_ring_maxkv=None,
     attn_shape_stable=None,
     pin_working_set=None, pin_refresh=None, device_route_pinned=None,
-    single_slot_pool=None, wo_a_cache=None,
+    single_slot_pool=None, wo_a_cache=None, attn_core_compile=None,
 ) -> dict:
     """A preset that pins EVERY lever key (None = force-unset). ``head`` takes a
     codec value ("bf16"/"mxfp8"/"q8"), ``prefill_dense_matmul_dtype`` takes
@@ -400,6 +413,7 @@ def _preset(
         ATTN_SHAPE_STABLE_ENV: attn_shape_stable,
         SINGLE_SLOT_POOL_ENV: single_slot_pool,
         WO_A_CACHE_ENV: wo_a_cache,
+        ATTN_CORE_COMPILE_ENV: attn_core_compile,
     }
 
 
@@ -745,6 +759,35 @@ ARM_PRESETS = {
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         wo_a_cache="1",
+    ),
+    # W97: fixed-shape mx.compile of the decode-attention core in ISOLATION
+    # (selected_keys on so _sparse_attend_selected -- and thus the core -- is the
+    # path).  ROUNDING-CLASS (n=1 compile reassociates the fp32 einsum/reductions),
+    # so the byte-identity summary MUST flag it (token-id sha differs vs control on a
+    # greedy near-tie flip -- [[dsv41-inexact-ok-if-tie-flips]]); the direct A/B vs
+    # selected_keys isolates the core-tape dispatch collapse (13 -> 8 kernels).
+    "attn_core_compile": _preset(selected_keys="1", attn_core_compile="1"),
+    # W97: cell16k_ring + the core compile ONLY.  Exact key set of cell16k_ring plus
+    # attn_core_compile="1".  ROUNDING-CLASS (adds the n=1 core reassociation on top
+    # of cell16k_ring's head=bf16 loss), so NOT byte-identical -- expected; the A/B vs
+    # cell16k_ring isolates the core collapse.  The K29 fused decode kernel
+    # (decode_attn_kernel) is the lower-dispatch alternative (core -> 1 dispatch) and,
+    # if also armed, wins the early return before this path.
+    "cell16k_ring_attn_core": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        attn_core_compile="1",
+    ),
+    # W97: cell16k_ring + the wo_a-dequant cache (exact) + the core compile (rounding-
+    # class) stacked -- the full W97 attention-dispatch program.  ROUNDING-CLASS via
+    # the core compile; the wo_a cache is byte-identical on its own.  Watch peak
+    # memory (the wo_a cache holds a dense wo_a copy resident per layer, ~5.4/2.7 GB).
+    "cell16k_ring_wo_a_core": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        wo_a_cache="1", attn_core_compile="1",
     ),
     # W92 (switch dispatch census): the minimal AR-decode host-sync-reduction arm in
     # ISOLATION -- the K23 variant-B fast-path (defer + async submit) plus verify

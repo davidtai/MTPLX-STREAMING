@@ -78,6 +78,7 @@ _PWS = "MTPLX_DSV41_PIN_WORKING_SET"     # W64 / R3-pin: post-prefill pinned wor
 _DRP = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"  # W71 / K24 revived: pinned device route
 _SSP = "MTPLX_DSV41_SINGLE_SLOT_POOL"     # W87: merged scan-resistant slot pool
 _WOAC = "MTPLX_DSV41_ATTN_WO_A_CACHE"     # W97: cached dequantized o-LoRA wo_a
+_ACC = "MTPLX_DSV41_ATTN_CORE_COMPILE"    # W97: fixed-shape core compile (rounding-class)
 _KCG = "MTPLX_DSV41_KV_CHUNK_GROW"       # W73 / K32: chunk-grown KV append backing
 _SS = "MTPLX_DSV41_SMALL_STAGES_FUSED"   # W91 / K35: fused per-layer small stages
 _HPK = "MTPLX_DSV41_HC_PREMIX_KERNEL"    # W91 / K35: GPU-only fused HC-premix kernel
@@ -1087,3 +1088,32 @@ def test_cell16k_ring_composite_arms(env_levers):
     )
     # W97 lever is in the master list (receipt arm_env + hermetic clear).
     assert _WOAC in env_levers.ALL_LEVER_ENVS
+
+    # W97 core-compile arms (ROUNDING-CLASS -- not byte-identical; flagged elsewhere).
+    assert _ACC in env_levers.ALL_LEVER_ENVS
+    # isolation arm: ONLY selected_keys + attn_core_compile (hermetic).
+    acc = presets["attn_core_compile"]
+    assert acc[_SEL] == "1" and acc[_ACC] == "1", "attn_core_compile missing its keys"
+    assert all(v is None for k, v in acc.items() if k not in (_SEL, _ACC)), (
+        "attn_core_compile must set ONLY selected_keys + attn_core_compile (hermetic)"
+    )
+    # cell16k_ring_attn_core = cell16k_ring + attn_core_compile ONLY.
+    expected_core = dict(ring)
+    expected_core[_ACC] = "1"
+    assert presets["cell16k_ring_attn_core"] == expected_core, (
+        "cell16k_ring_attn_core must equal cell16k_ring + MTPLX_DSV41_ATTN_CORE_COMPILE=1"
+    )
+    assert {
+        k: v for k, v in presets["cell16k_ring_attn_core"].items() if v != ring.get(k)
+    } == {_ACC: "1"}, "cell16k_ring_attn_core must touch only the core-compile key"
+    # cell16k_ring_wo_a_core = cell16k_ring + wo_a cache + core compile (the two W97
+    # attention-dispatch levers stacked).
+    expected_stack = dict(ring)
+    expected_stack[_WOAC] = "1"
+    expected_stack[_ACC] = "1"
+    assert presets["cell16k_ring_wo_a_core"] == expected_stack, (
+        "cell16k_ring_wo_a_core must equal cell16k_ring + wo_a_cache + attn_core_compile"
+    )
+    assert {
+        k: v for k, v in presets["cell16k_ring_wo_a_core"].items() if v != ring.get(k)
+    } == {_WOAC: "1", _ACC: "1"}, "cell16k_ring_wo_a_core must touch only the two W97 keys"

@@ -1174,6 +1174,17 @@ class Attention(nn.Module):
             )
             return out.reshape(b, s, H, hd)
         scale = self.softmax_scale
+        # W97: fixed-shape mx.compile of the whole core (QK + mask + sink softmax +
+        # PV) at decode / small-M verify -- one geometry-keyed tape, the scattered
+        # elementwise runs fused into ~3 Compiled nodes (~13 -> ~8 kernels).
+        # ROUNDING-CLASS vs the eager block below (n=1 compile reassociates the fp32
+        # einsum/reductions), gated separately; the gather stayed OUTSIDE.  Above the
+        # small-M cap (prefill rows) the eager block runs, byte-for-byte control.
+        if _resolve_attn_core_compile() and q.shape[1] <= _ATTN_CORE_COMPILE_MAX_ROWS:
+            with _stime.stage_attn("attn." + mode + ".score.core_compiled") as _st:
+                o = _attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, self.attn_sink)
+                _st.add(o)
+            return o
         with _stime.stage_attn("attn." + mode + ".score.qk_matmul") as _st:
             scores = mx.einsum(
                 "bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)
@@ -1998,6 +2009,87 @@ def _resolve_wo_a_cache(raw=None) -> bool:
         f"{_ATTN_WO_A_CACHE_ENV}={val!r} is not a boolean "
         "(1/true/on/yes or empty/0/off for the per-token dequantize)"
     )
+
+
+# --- W97: fixed-shape mx.compile of the decode attention CORE -----------------
+#: The selected-key attention core -- QK^T score, CSA/causal mask, per-head value-0
+#: sink, f32 softmax, PV -- over the gathered ``[b,s,k,hd]`` operand.  At decode
+#: (T==1) / small-M verify the shapes are FIXED (k = window + index_topk = 640,
+#: hd 512, H 64), so the whole eager chain (~13 tiny kernels: 2 matmuls + the
+#: scattered scale/where/max/exp/sum/exp/add/divide) is one geometry-keyed
+#: ``mx.compile`` tape whose elementwise runs fuse into ~3 ``Compiled`` nodes ->
+#: ~8 kernels (W97 census: core 13 -> 8; docs/deepseek-v41/W97_ATTENTION_291MS.md).
+#: The gather (data-dependent indices) stays OUTSIDE the tape.
+#:
+#: ROUNDING-CLASS, not byte-identical (like K35): the n=1 compile reassociates the
+#: fp32 einsum/reductions (measured max|Δ| ~9e-10 on CPU vs eager) -- greedy-argmax
+#: identical but the bytes differ, so it is gated SEPARATELY from the exact levers
+#: and its arms are flagged in the byte-identity summary.  The K29 fused decode
+#: kernel (MTPLX_DSV41_DECODE_ATTN_KERNEL) collapses the SAME core to ONE dispatch
+#: and, when armed on a GPU, wins the early return in ``_sparse_attend_selected``
+#: before this path (so the two never both apply; K29 is the lower-dispatch option).
+#: Read at use, never frozen at import ([[env-flags-read-at-use-not-import]]).
+#: Default OFF (the win is a GPU-window measurement).
+_ATTN_CORE_COMPILE_ENV = "MTPLX_DSV41_ATTN_CORE_COMPILE"
+#: Max query rows (b*s) the core tape serves: M=1 decode + the K+1 verify batch,
+#: mirroring the K29 decode-kernel cap; above it the eager core runs (prefill).
+_ATTN_CORE_COMPILE_MAX_ROWS = 8
+#: One compiled core tape per (geometry, dtype, scale) signature.  Module global so
+#: tests can inspect its growth (must stay bounded over 64 decode steps -- no
+#: per-token retrace) and clear it between configs.
+_ATTN_CORE_COMPILED: dict = {}
+
+
+def _resolve_attn_core_compile(raw=None) -> bool:
+    """Resolve ``MTPLX_DSV41_ATTN_CORE_COMPILE`` to a bool (default OFF).
+
+    Truthy: ``1/true/on/yes``.  Off: unset / ``0/false/off/no/none/default``.  An
+    unrecognised non-empty value raises (fail fast), matching the other levers."""
+    val = os.environ.get(_ATTN_CORE_COMPILE_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_CORE_COMPILE_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off for the eager core)"
+    )
+
+
+def _attn_core_impl(q, KVg, valid, sink, scale):
+    """The selected-key attention core (gathered operand -> [b,s,H,hd] output):
+    QK^T, mask, per-head value-0 sink, f32 softmax, PV -- the reference
+    ``_k_sparse_attn`` value-0 sink form (max includes the sink, normalize after
+    PV), all f32.  BYTE-for-byte the eager block in :meth:`Attention._sparse_attend_selected`
+    when run eagerly; under ``mx.compile`` the fp32 einsum/reductions reassociate
+    (rounding-class).  Pure (no ``self``, no env, no stage brackets) so
+    ``mx.compile`` traces one fixed-shape tape."""
+    H = q.shape[2]
+    scores = mx.einsum("bshd,bskd->bshk", q.astype(mx.float32), KVg.astype(mx.float32)) * scale
+    scores = mx.where(valid[:, :, None, :], scores, float("-inf"))
+    sink = sink.astype(mx.float32).reshape(1, 1, H, 1)
+    m = mx.maximum(mx.max(scores, axis=-1, keepdims=True), sink)
+    ex = mx.exp(scores - m)
+    denom = mx.sum(ex, axis=-1, keepdims=True) + mx.exp(sink - m)
+    return mx.einsum("bshk,bskd->bshd", ex, KVg.astype(mx.float32)) / denom
+
+
+def _attn_core_compiled(q, KVg, valid, scale):
+    """The geometry-keyed compiled core tape for these operand shapes/dtypes and
+    ``scale``.  Cached in :data:`_ATTN_CORE_COMPILED` so 64 decode steps at one
+    geometry build ONE tape (no per-token retrace); ``scale`` is baked into the
+    traced closure and is part of the key."""
+    sig = (
+        tuple(int(d) for d in q.shape), tuple(int(d) for d in KVg.shape),
+        tuple(int(d) for d in valid.shape),
+        str(q.dtype), str(KVg.dtype), str(valid.dtype), float(scale),
+    )
+    fn = _ATTN_CORE_COMPILED.get(sig)
+    if fn is None:
+        fn = mx.compile(lambda q, KVg, valid, sink: _attn_core_impl(q, KVg, valid, sink, scale))
+        _ATTN_CORE_COMPILED[sig] = fn
+    return fn
 
 
 def _lin_desc(linear):

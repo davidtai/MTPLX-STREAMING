@@ -692,6 +692,69 @@ def _small_main(args):
     return receipt
 
 
+_VIEW_OPS = {"Reshape", "Flatten", "Unflatten", "ExpandDims", "Broadcast",
+             "Transpose", "Squeeze", "Slice", "StopGradient", "Arange"}
+
+
+def _kern(counter):
+    return sum(v for k, v in counter.items() if k not in _VIEW_OPS)
+
+
+def _attn_core_main(args):
+    """W97 attention-core dispatch census: the selected-key core (QK + mask + sink
+    softmax + PV over the gathered [b,s,k,hd] operand) at the REAL decode geometry,
+    eager vs the fixed-shape ``mx.compile`` tape (MTPLX_DSV41_ATTN_CORE_COMPILE), and
+    the K29-fused-kernel reference count.  Primitive count is shape-independent, so
+    the tiny model's per-op count equals the artifact's -- this uses the real dims
+    directly for clarity."""
+    geoms = {
+        "compress modes (k=window128+topk512=640)": (1, 1, 64, 512, 640),
+        "swa_only (k=window 128)": (1, 1, 64, 512, 128),
+    }
+    print("=" * 82)
+    print("W97 attention-CORE dispatch census -- selected-key core, real decode dims")
+    print("eager vs fixed-shape mx.compile (MTPLX_DSV41_ATTN_CORE_COMPILE); "
+          "K29 kernel = 1 dispatch")
+    print("=" * 82)
+    receipt = {"census": "attn_core", "mlx_version": mx.__version__, "geometries": {}}
+    for label, (b, s, H, hd, k) in geoms.items():
+        mx.random.seed(args.seed)
+        q = mx.random.normal((b, s, H, hd)) * 0.05
+        KVg = mx.random.normal((b, s, k, hd)) * 0.05
+        valid = mx.random.uniform(shape=(b, s, k)) > 0.1
+        sink = mx.random.normal((H,)) * 0.5
+        mx.eval(q, KVg, valid, sink)
+        scale = hd ** -0.5
+        dv41._ATTN_CORE_COMPILED.clear()
+        o_e = dv41._attn_core_impl(q, KVg, valid, sink, scale)
+        ne, ope = count_prims(o_e)
+        o_c = dv41._attn_core_compiled(q, KVg, valid, scale)(q, KVg, valid, sink)
+        nc, opc = count_prims(o_c)
+        mx.eval(o_e, o_c)
+        maxd = float(mx.max(mx.abs(o_e - o_c)).item())
+        print(f"\n-- {label} --")
+        print(f"  eager    : {ne:3d} graph prims, {_kern(ope):2d} non-view kernels  {dict(ope)}")
+        print(f"  compiled : {nc:3d} graph prims, {_kern(opc):2d} non-view kernels  {dict(opc)}")
+        print(f"  K29 fused: 1 dispatch (score+mask+softmax+PV in one metal_kernel; "
+              f"GPU-only, rounding-class)")
+        print(f"  compiled vs eager: prims -{ne - nc}, kernels -{_kern(ope) - _kern(opc)}; "
+              f"max|Δ| {maxd:.2e} (ROUNDING-CLASS, not byte-identical)")
+        receipt["geometries"][label] = {
+            "shape": {"b": b, "s": s, "H": H, "hd": hd, "k": k},
+            "eager": {"prims": ne, "kernels": _kern(ope), "ops": dict(ope)},
+            "compiled": {"prims": nc, "kernels": _kern(opc), "ops": dict(opc)},
+            "k29_fused_dispatches": 1,
+            "max_abs_delta": maxd,
+        }
+    print("\nverdict: the K29 fused kernel (1 dispatch) is the lower-dispatch option; "
+          "the mx.compile core (~8 kernels) is the portable CPU+GPU fallback.")
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(receipt, f, indent=2)
+        print(f"\nreceipt -> {args.out}")
+    return receipt
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -707,12 +770,19 @@ def main():
                     help="census the K35/W91 small-stages fusion: per-layer AR-decode "
                          "dispatch count before/after MTPLX_DSV41_SMALL_STAGES_FUSED "
                          "(+ the GPU K3-Sinkhorn-kernel projection)")
+    ap.add_argument("--attn-core", action="store_true", dest="attn_core",
+                    help="census the W97 attention-CORE compile: selected-key core "
+                         "(QK+mask+sink softmax+PV) primitive count eager vs the "
+                         "fixed-shape mx.compile tape (MTPLX_DSV41_ATTN_CORE_COMPILE), "
+                         "at the real decode geometry, + the K29 fused-kernel reference")
     args = ap.parse_args()
 
     if args.draft:
         return _draft_main(args)
     if args.small_stages:
         return _small_main(args)
+    if args.attn_core:
+        return _attn_core_main(args)
 
     # before = all off (eager); k22 = attention-tape compile only; after = K22 +
     # K24 window-mask memo (the full W45 attention-compile mode).
