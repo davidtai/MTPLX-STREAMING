@@ -35,6 +35,23 @@ Contract
   stage), so a stage-timing pass's tok/s is NOT throughput -- the *ratios* between
   stages are the signal.  Run the clean tok/s pass with the probe OFF.
 
+.. warning::
+
+   **FENCED PER-STAGE ms ARE LATENCY-INFLATED -- USE RATIOS, NOT ABSOLUTES.**
+   Each :func:`stage` bracket's ``mx.eval`` drains and refills the GPU pipeline, so
+   a bracket's wall time is that stage's dispatch **plus a full pipeline stall**, not
+   its compute.  On the DeepSeek-V4.1 16K decode this reads ~8 ms for EVERY attention
+   bracket in every configuration (window 36/37 in-model census) while the same
+   kernels cost ~2 ms isolated, and the fenced frame wall (~700 ms/token) runs well
+   over the unfenced ~460 ms/token the served loop actually pays.  The per-stage
+   ``total_ms`` / ``mean_ms`` are therefore **latency, not compute**: compare stages
+   to each other (which is bigger), never quote a stage's absolute ms as its in-situ
+   cost.  For the true in-situ cost of a component -- attention, the routed switch,
+   the routing barrier -- run the UNFENCED whole-token attribution
+   (``scripts/deepseek_v41/metal_decode_attn_bisect.py --in-model --unfenced``): it
+   measures the frame wall with components stubbed out, so ``full - stubbed`` is the
+   component's real cost including the latency it causes but excluding probe latency.
+
 The probe is a module-level singleton (no threading through every call site).
 """
 
