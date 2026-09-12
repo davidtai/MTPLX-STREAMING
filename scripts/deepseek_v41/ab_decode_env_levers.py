@@ -1572,6 +1572,11 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     classic argmax loop; the AR-reference byte-identity gate (this arm's
     ``token_ids_sha256`` vs the dspark ids) therefore still holds."""
     mem_probe.reset_peak()
+    # W106: sample process RSS + system used memory off the hot path (daemon thread,
+    # 1 Hz, no MLX calls) over the whole generation, so the receipt's memory block
+    # carries the real envelope, not just the MLX allocator peak (peak_gb).
+    _mem_sampler = mem_probe.new_sampler()
+    _mem_sampler.start()
     t0 = time.perf_counter()
     cache = model.make_cache()
     logits = model(ops.input([list(prompt_ids)]), cache=cache)
@@ -1705,11 +1710,15 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             f"eval_indices={switch_dispatch['eval_indices']}",
             flush=True,
         )
+    _mem_sampler.stop()
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
         "decode_wall_s": decode_wall_s,
         "peak_gb": mem_probe.peak_bytes() / GIB,
+        # W106: full memory envelope (mlx_peak_gb == peak_gb, + process RSS peak and
+        # the whole-box used-memory peak the gpu_window.sh guard aborts on).
+        "memory": mem_probe.memory_block(_mem_sampler),
         "extra_forward_steps": int(extra_forward_steps),
         "stream_after_prefill": _sc_after_prefill,
         "stream_end": _sc_end,
@@ -1831,6 +1840,11 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     from mtplx.sampling import SamplerConfig
 
     mem_probe.reset_peak()
+    # W106: 1 Hz off-hot-path RSS + system-used sampler over the headline pass (see
+    # _generate). Stopped right after the headline peak_gb is captured, before the
+    # optional timed stage-timing pass, so the memory block matches that peak_gb.
+    _mem_sampler = mem_probe.new_sampler()
+    _mem_sampler.start()
     stats = DSparkDecodeStats()
     # W77: when an AR reference is supplied, capture (zero extra forwards) the
     # verify logits row of the first committed token that diverges from it.
@@ -1877,6 +1891,8 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         generated_tokens=len(toks),
     )
     peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
+    _mem_sampler.stop()
+    _dspark_memory_block = mem_probe.memory_block(_mem_sampler)
     report = None
     w61 = None
     if stage_timing:
@@ -1976,6 +1992,8 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         "pass_wall_s": _wall_acct["pass_wall_s"],
         "decode_tok_s": _wall_acct["decode_tok_s"],
         "peak_gb": peak_gb,  # W91: headline (untimed) peak, not the timed 2nd pass
+        # W106: full memory envelope for the headline pass (see _generate).
+        "memory": _dspark_memory_block,
         "stats": stats.to_dict(),
         "stream_after_prefill": _sc.get("after_prefill"),
         "stream_end": _sc.get("end"),
@@ -2179,6 +2197,12 @@ def _run_arm(args, arm, bench, mx) -> dict:
             if run["decode_wall_s"] > 0
             else None,
             "peak_gb": run["peak_gb"],
+            # W106: the memory envelope (mlx_peak_gb == the peak_gb above, plus the
+            # process RSS peak and the whole-box used-memory peak/at-start the
+            # gpu_window.sh guard measures). peak_gb alone is the MLX allocator peak
+            # of this process -- it excludes the Python heap, the expert-reader
+            # buffers, other processes, and the OS cache, so it is NOT the box usage.
+            "memory": run.get("memory"),
             # W90: GPU DVFS/utilization over the decode + optional post-prefill
             # cooldown (the discriminator for the mode-independent in-situ floor).
             "utilization": run.get("utilization"),
@@ -2266,6 +2290,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "pass_wall_s": dsp.get("pass_wall_s"),
                 "decode_tok_s": dsp.get("decode_tok_s"),
                 "peak_gb": dsp["peak_gb"],
+                # W106: memory envelope for the dspark headline pass (see AR above).
+                "memory": dsp.get("memory"),
                 "tokens_per_cycle": st["tokens_per_cycle"],
                 "accept_rate": st["accept_rate"],
                 "accept_rate_by_depth": st["accept_rate_by_depth"],
@@ -2760,9 +2786,22 @@ def main(argv=None) -> int:
         receipts.append(receipt)
         with args.out.open("a") as fh:
             fh.write(json.dumps(receipt) + "\n")
+        _mem = receipt.get("memory") or {}
+        _mem_summary = ""
+        if _mem:
+            # W106: peak_gb is the MLX allocator peak only; print the process RSS
+            # peak and the whole-box used-memory peak so the operator sees the real
+            # footprint on the console, not just the MLX figure.
+            _mem_summary = (
+                f" process_rss_gb={_mem.get('process_peak_rss_gb', 0.0):.2f}"
+                f" sys_used_gb={_mem.get('system_used_peak_gb', 0.0):.2f}"
+                f" (start {_mem.get('system_used_at_start_gb', 0.0):.2f})"
+            )
         print(
             f"[ab]   decode_tok_s={receipt['decode_tok_s']} "
-            f"peak_gb={receipt['peak_gb']:.2f} sha={receipt['token_ids_sha256'][:12]}"
+            f"peak_gb={receipt['peak_gb']:.2f}"
+            f" mlx_peak_gb={_mem.get('mlx_peak_gb', receipt['peak_gb']):.2f}"
+            f"{_mem_summary} sha={receipt['token_ids_sha256'][:12]}"
         )
 
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.

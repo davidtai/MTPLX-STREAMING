@@ -57,6 +57,7 @@ import os
 import resource
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -492,6 +493,126 @@ def _process_rss_bytes() -> int:
     return int(maxrss) * 1024  # Linux reports KiB
 
 
+def _vm_stat_count(line: str) -> int:
+    """Parse the trailing page count off one ``vm_stat`` line (``123456.``)."""
+
+    tok = line.split()[-1].rstrip(".") if line.split() else ""
+    return int(tok) if tok.isdigit() else 0
+
+
+def _system_used_bytes() -> int:
+    """System-wide used physical memory in bytes, the SAME signal the
+    ``gpu_window.sh`` phase-4 guard aborts on: ``(wired down + anonymous +
+    occupied-by-compressor) pages * page size`` from ``vm_stat``.  Anonymous (not
+    active) is deliberate -- active includes the file-backed page cache the 269 GiB
+    mmap'd expert bank fills, which the OS reclaims on demand.  Returns 0 off
+    macOS / on any parse failure (the caller treats 0 as "unknown")."""
+
+    if sys.platform != "darwin":
+        return 0
+    try:
+        out = subprocess.run(
+            ["/usr/bin/vm_stat"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    page = 16384
+    wired = anon = comp = 0
+    for line in out.splitlines():
+        if "page size of" in line:
+            for tok in line.replace(")", "").split():
+                if tok.isdigit():
+                    page = int(tok)
+                    break
+        elif line.startswith("Pages wired down"):
+            wired = _vm_stat_count(line)
+        elif line.startswith("Anonymous pages"):
+            anon = _vm_stat_count(line)
+        elif line.startswith("Pages occupied by compressor"):
+            comp = _vm_stat_count(line)
+    return (wired + anon + comp) * page
+
+
+class _MemorySampler:
+    """Off-hot-path background sampler of process RSS and system used memory.
+
+    A daemon thread reads, every ``interval_s`` (default 1 s), this process's RSS
+    (``psutil`` if importable, else ``ps -o rss=``) and the system-wide used-memory
+    figure :func:`_system_used_bytes` computes (the gpu_window.sh guard's formula),
+    keeping the high-water mark of each.  It touches NO MLX API and holds NO lock,
+    so it never perturbs the decode being measured -- the whole point is that
+    ``peak_gb`` (the MLX allocator peak) omits the Python heap, the expert-reader
+    buffers, and everything else resident, and this catches the real envelope.
+
+    ``start()`` records the system-used baseline (``system_used_at_start_bytes``)
+    and launches the thread; read ``peak_rss_bytes`` / ``peak_system_used_bytes``
+    after ``stop()``.
+    """
+
+    def __init__(self, interval_s: float = 1.0):
+        self._interval = max(0.01, float(interval_s))
+        self._stop = threading.Event()
+        self._thread: "threading.Thread | None" = None
+        self._pid = os.getpid()
+        self.peak_rss_bytes = 0
+        self.peak_system_used_bytes = 0
+        self.system_used_at_start_bytes = 0
+        # psutil avoids spawning a `ps` per second; fall back to `ps` when absent.
+        try:
+            import psutil  # noqa: F401
+
+            self._psutil_proc = psutil.Process(self._pid)
+        except Exception:
+            self._psutil_proc = None
+
+    def _read_rss(self) -> int:
+        proc = self._psutil_proc
+        if proc is not None:
+            try:
+                return int(proc.memory_info().rss)
+            except Exception:
+                pass
+        try:
+            out = subprocess.run(
+                ["/bin/ps", "-o", "rss=", "-p", str(self._pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return 0
+        return int(out) * 1024 if out.isdigit() else 0  # ps reports KiB
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            rss = self._read_rss()
+            if rss > self.peak_rss_bytes:
+                self.peak_rss_bytes = rss
+            used = _system_used_bytes()
+            if used > self.peak_system_used_bytes:
+                self.peak_system_used_bytes = used
+            self._stop.wait(self._interval)
+
+    def start(self) -> "_MemorySampler":
+        self.system_used_at_start_bytes = _system_used_bytes()
+        self.peak_system_used_bytes = self.system_used_at_start_bytes
+        self.peak_rss_bytes = self._read_rss()
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop, name="mem-sampler", daemon=True
+        )
+        self._thread.start()
+        return self
+
+    def stop(self) -> "_MemorySampler":
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=self._interval + 2.0)
+            self._thread = None
+        return self
+
+
 class _MLXMemProbe:
     def __init__(self, mx):
         self._mx = mx
@@ -525,6 +646,39 @@ class _MLXMemProbe:
 
     def rss_bytes(self) -> int:
         return _process_rss_bytes()
+
+    def new_sampler(self, interval_s: float = 1.0) -> "_MemorySampler":
+        """A fresh 1 Hz background RSS + system-used sampler (start/stop it around
+        the timed decode; feed it to :meth:`memory_block`)."""
+
+        return _MemorySampler(interval_s=interval_s)
+
+    def memory_block(self, sampler: "_MemorySampler | None" = None) -> dict:
+        """The receipt ``memory`` block. ``mlx_peak_gb`` is exactly the old
+        ``peak_gb`` (the MLX allocator peak of THIS process). ``process_peak_rss_gb``
+        is the process's peak RSS -- ``ru_maxrss`` (a lifetime high-water) unioned
+        with the 1 Hz sampler's peak -- which includes the Python heap and the
+        non-Metal expert-reader buffers the MLX peak omits, so it is always >=
+        ``mlx_peak_gb`` (RSS on Apple Silicon counts unified Metal memory too; the
+        max() also makes the invariant hold unconditionally). ``system_used_*`` are
+        the whole-box used-memory envelope the gpu_window.sh guard aborts on."""
+
+        mlx_peak = int(self.peak_bytes())
+        ru_maxrss = int(_process_rss_bytes())
+        sampled_rss = int(sampler.peak_rss_bytes) if sampler is not None else 0
+        process_peak_rss = max(mlx_peak, ru_maxrss, sampled_rss)
+        system_used_peak = (
+            int(sampler.peak_system_used_bytes) if sampler is not None else 0
+        )
+        system_used_start = (
+            int(sampler.system_used_at_start_bytes) if sampler is not None else 0
+        )
+        return {
+            "mlx_peak_gb": mlx_peak / GIB,
+            "process_peak_rss_gb": process_peak_rss / GIB,
+            "system_used_peak_gb": system_used_peak / GIB,
+            "system_used_at_start_gb": system_used_start / GIB,
+        }
 
 
 class _GatherProbe:
