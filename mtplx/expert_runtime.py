@@ -3920,6 +3920,31 @@ class ExpertStreamingRuntime:
         executor = self._prefetch_executor
         if executor is None:
             return 0
+        # W93 HIGH-2 (self-starving ring): a speculative read that settles AFTER
+        # its own layer's reconcile stays queued as an unapplied completion, and
+        # its ring slot stays inflight (so unrecyclable) until that layer is
+        # visited again — a whole token later. On the shared ring that pins one
+        # of the 2*k slots per stuck read and starves every other layer's
+        # prefetch. So before planning THIS layer, drain the settled completions
+        # of every OTHER layer whose lock we can take without blocking — each
+        # under its own lock, one at a time (never two layer locks held at once,
+        # so this cannot deadlock; all acquisitions are non-blocking) — turning
+        # settled reads into committed, recyclable entries and freeing their
+        # shared slots.
+        with self._prefetch_lock:
+            other_pending = [
+                other for other in self._prefetch_completions if other != layer
+            ]
+        for other in other_pending:
+            other_bank = self._banks.get(other)
+            other_lock = self._layer_locks.get(other)
+            if other_bank is None or other_lock is None:
+                continue
+            if other_lock.acquire(blocking=False):
+                try:
+                    self._apply_prefetch_completions(other, other_bank)
+                finally:
+                    other_lock.release()
         lock = self._layer_locks[layer]
         # Never block the generation thread on a layer transaction: under
         # deferred split-route release the previous token's pending split
@@ -3927,12 +3952,18 @@ class ExpertStreamingRuntime:
         # flush runs on the very thread calling here. Speculation is
         # best-effort — skip the step instead of waiting.
         if not lock.acquire(blocking=False):
+            # ~3827 deferred-split hazard: the predictions never issued. Count
+            # them so the receipt shows the skip instead of silent loss.
+            if self._prefetch_ring is not None:
+                self._prefetch_ring.note_skipped_lock_held(layer)
             return 0
         try:
             self._apply_prefetch_completions(layer, bank)
             with self._prefetch_lock:
                 backlog = len(self._prefetch_futures)
             if backlog >= self._prefetch_backlog_limit:
+                if self._prefetch_ring is not None:
+                    self._prefetch_ring.note_skipped_backlog(layer)
                 return 0
             recent_misses = self._recent_route_misses.get(layer)
             if recent_misses:
@@ -3943,8 +3974,14 @@ class ExpertStreamingRuntime:
                 ]
             loads = bank.plan_prefetch(expert_ids)
             # W93: drain the wasted-read count the plan_prefetch eviction accrued
-            # while we still hold the layer lock (the bank counter is layer-local).
-            wasted = bank.consume_prefetch_wasted()
+            # while we still hold the layer lock. MED-b: the ring attributes each
+            # waste to the VICTIM's layer, so drain the per-layer breakdown (the
+            # victim may be a DIFFERENT layer than this evicting caller).
+            wasted_by_layer = (
+                self._prefetch_ring.consume_wasted_by_layer()
+                if self._prefetch_ring is not None
+                else {}
+            )
             # Assignment tickets bind each load's completion to the exact
             # assignment it filled: the same expert can be recycled and
             # re-assigned while a callback is still queued, and that stale
@@ -3985,14 +4022,21 @@ class ExpertStreamingRuntime:
             )
             issued += 1
         record_bytes = self._record_bytes_for_layer(layer)
-        if issued or wasted:
+        wasted_total = sum(wasted_by_layer.values())
+        if issued or wasted_total:
             with self._counter_lock:
                 self.counters.prefetch_issued += issued
                 self._layer_counters[layer].prefetch_issued += issued
                 self.counters.prefetch_bytes += issued * record_bytes
                 self._layer_counters[layer].prefetch_bytes += issued * record_bytes
-                self.counters.prefetch_wasted += wasted
-                self._layer_counters[layer].prefetch_wasted += wasted
+                if wasted_total:
+                    self.counters.prefetch_wasted += wasted_total
+                    # MED-b: charge each waste to the victim layer that predicted
+                    # it, not to this evicting caller.
+                    for victim_layer, count in wasted_by_layer.items():
+                        victim_counter = self._layer_counters.get(victim_layer)
+                        if victim_counter is not None:
+                            victim_counter.prefetch_wasted += count
         return issued
 
     def _run_speculative_load(
@@ -4347,45 +4391,86 @@ class ExpertStreamingRuntime:
         except (TypeError, ValueError):
             min_layer = 4
         committed = int(cache.get("prefetch_committed", 0))
+        awaited = int(cache.get("prefetch_awaited_inflight", 0))
         hit = int(cache.get("prefetch_hit_on_true_route", 0))
         bytes_prefetched = int(cache.get("prefetch_bytes", 0))
+        # W93 MED-b: an awaited-inflight commit is a ring read that SETTLED and
+        # PUBLISHED — the demand route blocked on the in-flight read and committed
+        # it (``_reconcile_prefetch_for_route``) — which is exactly the meaning of
+        # ``committed``, but it published on the demand-await path rather than the
+        # async-completion path that increments ``prefetch_committed``. It then
+        # counts as a ``hit_on_true_route``, so without folding it in, hit can
+        # exceed committed and hit_rate > 1.0. A settle is counted in committed
+        # XOR awaited (never both), so the sum is the true settled+published total
+        # and hit_rate <= 1.0.
+        committed_settled = committed + awaited
+        # W93 HIGH-2: predictions that never issued, by reason (cumulative, read
+        # from the shared ring; keyed by target layer).
+        skips = (
+            self._prefetch_ring.prefetch_skip_snapshot()
+            if self._prefetch_ring is not None
+            else {
+                "dropped_no_slot": {},
+                "skipped_lock_held": {},
+                "skipped_backlog": {},
+            }
+        )
+        dropped_no_slot = sum(skips["dropped_no_slot"].values())
+        skipped_lock_held = sum(skips["skipped_lock_held"].values())
+        skipped_backlog = sum(skips["skipped_backlog"].values())
         block: dict[str, Any] = {
             "k": int(self.config.prefetch_slots),
             "min_layer": min_layer,
             "predicted": int(cache.get("prefetch_predicted", 0)),
             "issued": int(cache.get("prefetch_issued", 0)),
-            "committed": committed,
+            "committed": committed_settled,
             "hit_on_true_route": hit,
             "wasted": int(cache.get("prefetch_wasted", 0)),
-            "awaited_inflight": int(cache.get("prefetch_awaited_inflight", 0)),
+            "awaited_inflight": awaited,
+            "dropped_no_slot": dropped_no_slot,
+            "skipped_lock_held": skipped_lock_held,
+            "skipped_backlog": skipped_backlog,
             "bytes_prefetched": bytes_prefetched,
-            "hit_rate": (hit / committed) if committed else 0.0,
+            "hit_rate": (hit / committed_settled) if committed_settled else 0.0,
         }
         per_layer: dict[str, Any] = {}
         for layer, lc in cache_by_layer.items():
             lcommitted = int(lc.get("prefetch_committed", 0))
+            lawaited = int(lc.get("prefetch_awaited_inflight", 0))
             lhit = int(lc.get("prefetch_hit_on_true_route", 0))
+            ldropped = int(skips["dropped_no_slot"].get(int(layer), 0))
+            lskip_lock = int(skips["skipped_lock_held"].get(int(layer), 0))
+            lskip_backlog = int(skips["skipped_backlog"].get(int(layer), 0))
             if not (
                 lc.get("prefetch_predicted")
                 or lc.get("prefetch_issued")
                 or lhit
+                or ldropped
+                or lskip_lock
+                or lskip_backlog
             ):
                 continue
+            lcommitted_settled = lcommitted + lawaited
             per_layer[str(layer)] = {
                 "predicted": int(lc.get("prefetch_predicted", 0)),
                 "issued": int(lc.get("prefetch_issued", 0)),
-                "committed": lcommitted,
+                "committed": lcommitted_settled,
                 "hit_on_true_route": lhit,
                 "wasted": int(lc.get("prefetch_wasted", 0)),
-                "awaited_inflight": int(lc.get("prefetch_awaited_inflight", 0)),
-                "hit_rate": (lhit / lcommitted) if lcommitted else 0.0,
+                "awaited_inflight": lawaited,
+                "dropped_no_slot": ldropped,
+                "skipped_lock_held": lskip_lock,
+                "skipped_backlog": lskip_backlog,
+                "hit_rate": (lhit / lcommitted_settled) if lcommitted_settled else 0.0,
             }
         block["per_layer"] = per_layer
         block["census"] = (
             f"gate_prefetch k={block['k']} min_layer={min_layer}: "
             f"predicted={block['predicted']} issued={block['issued']} "
-            f"committed={committed} hit={hit} (rate {block['hit_rate']:.3f}) "
-            f"wasted={block['wasted']} awaited={block['awaited_inflight']} "
+            f"committed={committed_settled} hit={hit} (rate {block['hit_rate']:.3f}) "
+            f"wasted={block['wasted']} awaited={awaited} "
+            f"dropped={dropped_no_slot} skipped_lock={skipped_lock_held} "
+            f"skipped_backlog={skipped_backlog} "
             f"bytes={bytes_prefetched / (1024 * 1024):.1f}MiB"
         )
         return block

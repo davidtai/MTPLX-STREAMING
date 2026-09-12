@@ -247,8 +247,25 @@ class GlobalPrefetchRing:
         self._ticket = 0
         self._evicted: dict[tuple[int, int], int] = {}
         self._used: set[tuple[int, int]] = set()
-        self._wasted = 0
+        # W93 MED-b: wasted (committed-but-never-consumed) reads are counted per
+        # the VICTIM's layer (the layer that predicted the evicted entry), not
+        # the layer whose ``plan_prefetch`` call happened to evict it. Drained by
+        # the runtime after each plan under the layer lock.
+        self._wasted: dict[int, int] = {}
         self._epoch_by_layer: dict[int, int] = {}
+        # W93 HIGH-2 receipt counters, keyed by the TARGET layer (the layer the
+        # prediction was for). Cumulative until :meth:`reset`; read (not drained)
+        # by the runtime's ``gate_prefetch`` snapshot so a self-starving or
+        # pressured ring is visible instead of silently dropping predictions.
+        #   dropped_no_slot   -- a prediction found no free ring slot (every slot
+        #                        inflight, target-1 protected, or pinned);
+        #   skipped_lock_held -- the runtime skipped a prefetch because the layer
+        #                        lock was held (~3827 deferred-split hazard);
+        #   skipped_backlog   -- the runtime skipped because the read backlog was
+        #                        already at its ceiling.
+        self._dropped_no_slot: dict[int, int] = {}
+        self._skipped_lock_held: dict[int, int] = {}
+        self._skipped_backlog: dict[int, int] = {}
 
     def _key(self, layer: int, expert: int) -> tuple[int, int]:
         expert = _integer("expert id", expert, minimum=0)
@@ -264,16 +281,33 @@ class GlobalPrefetchRing:
         self._epoch_by_layer[layer] = self._epoch_by_layer.get(layer, 0) + 1
 
     def plan_prefetch(
-        self, layer: int, expert_ids: Iterable[int], *, resident: Iterable[int] = ()
+        self,
+        layer: int,
+        expert_ids: Iterable[int],
+        *,
+        resident: Iterable[int] = (),
+        is_slot_pinned: Callable[[int], bool] | None = None,
     ) -> tuple[SlotLoad, ...]:
         """Assign ring slots for ``layer``'s predicted experts; return the loads.
 
         Skips experts already resident (persistent) for this layer, already
         committed or inflight in the ring, or under the reeviction embargo.
-        Ring replacement is round-robin over the WHOLE ring (across layers); an
-        inflight slot is never recycled (two fills on one buffer would race). A
-        committed victim recycled without ever being consumed by a true route is
-        priced as a wasted read."""
+        Ring replacement is round-robin over the WHOLE ring (across layers). A
+        candidate slot is skipped as a victim when it is:
+
+        * inflight -- two fills on one buffer would race;
+        * held by layer ``layer - 1`` -- the immediately-next layer's prediction,
+          whose OWN true route has not run yet and is about to consume it. We
+          prefetch for ``layer`` during layer ``layer - 1``'s decode forward, so
+          recycling ``layer - 1``'s entries here would drop a read the very next
+          route needs (the lane-C ring rule);
+        * pinned -- when the caller passes ``is_slot_pinned``, a slot it reports
+          pinned (an earned/committed slot a demand route has claimed) is never a
+          ring victim.
+
+        A committed victim recycled without ever being consumed by a true route
+        is priced as a wasted read against the VICTIM's layer. A prediction that
+        finds no eligible slot is counted as ``dropped_no_slot`` for ``layer``."""
 
         if not self.ring_size:
             return ()
@@ -295,21 +329,36 @@ class GlobalPrefetchRing:
                     continue
                 del self._evicted[key]
             ring_index: int | None = None
+            # Exactly ``ring_size`` probes advance the cursor across every slot
+            # once (round-robin), so if any eligible slot exists it is found.
             for _probe in range(self.ring_size):
                 candidate = self._cursor % self.ring_size
                 self._cursor += 1
                 tenant = self._slot_to_key[candidate]
-                if tenant is not None and tenant in self._inflight:
-                    continue
+                if tenant is not None:
+                    if tenant in self._inflight:
+                        continue
+                    if tenant[0] == layer - 1:
+                        # target-1 protection: never evict the imminent-route
+                        # layer's prediction (lane-C ring rule).
+                        continue
+                    if is_slot_pinned is not None and is_slot_pinned(
+                        self.base + candidate
+                    ):
+                        continue
                 ring_index = candidate
                 break
             if ring_index is None:
+                # Every slot is inflight, target-1 protected, or pinned: the
+                # prediction is dropped for want of a slot.
+                self._dropped_no_slot[layer] = self._dropped_no_slot.get(layer, 0) + 1
                 continue
             victim = self._slot_to_key[ring_index]
             if victim is not None:
                 was_committed = self._key_to_slot.pop(victim, None) is not None
                 if was_committed and victim not in self._used:
-                    self._wasted += 1
+                    # attribute the wasted read to the victim's OWN layer.
+                    self._wasted[victim[0]] = self._wasted.get(victim[0], 0) + 1
                 self._used.discard(victim)
                 # embargo the victim in ITS layer's epoch scale.
                 self._evicted[victim] = self._epoch_by_layer.get(victim[0], 0)
@@ -385,9 +434,52 @@ class GlobalPrefetchRing:
             self._used.add((layer, int(expert)))
 
     def consume_wasted(self) -> int:
-        count = self._wasted
-        self._wasted = 0
+        """Return and zero the TOTAL wasted-read count across all layers.
+
+        Kept for the per-layer-bank wrapper and standalone unit tests; the
+        runtime drains the per-layer breakdown via
+        :meth:`consume_wasted_by_layer` to attribute each waste to its victim
+        layer."""
+
+        count = sum(self._wasted.values())
+        self._wasted = {}
         return count
+
+    def consume_wasted_by_layer(self) -> dict[int, int]:
+        """Return and zero the wasted-read count keyed by the VICTIM's layer.
+
+        A wasted read is a committed ring entry recycled round-robin without a
+        true route ever consuming it; it is charged to the layer that predicted
+        it (the victim), not to the layer whose ``plan_prefetch`` evicted it."""
+
+        drained = self._wasted
+        self._wasted = {}
+        return drained
+
+    def note_skipped_lock_held(self, layer: int) -> None:
+        """Record that a prefetch for ``layer`` was skipped (layer lock held)."""
+
+        layer = int(layer)
+        self._skipped_lock_held[layer] = self._skipped_lock_held.get(layer, 0) + 1
+
+    def note_skipped_backlog(self, layer: int) -> None:
+        """Record that a prefetch for ``layer`` was skipped (read backlog full)."""
+
+        layer = int(layer)
+        self._skipped_backlog[layer] = self._skipped_backlog.get(layer, 0) + 1
+
+    def prefetch_skip_snapshot(self) -> dict[str, dict[int, int]]:
+        """A read-only, cumulative snapshot of the three skip/drop counters.
+
+        Copies so a concurrent telemetry read cannot observe a dict mutating.
+        Not drained -- these accrue until :meth:`reset` (like the runtime's
+        cumulative cache counters)."""
+
+        return {
+            "dropped_no_slot": dict(self._dropped_no_slot),
+            "skipped_lock_held": dict(self._skipped_lock_held),
+            "skipped_backlog": dict(self._skipped_backlog),
+        }
 
     def reset(self) -> None:
         self._slot_to_key = [None] * self.ring_size
@@ -396,8 +488,11 @@ class GlobalPrefetchRing:
         self._cursor = 0
         self._evicted.clear()
         self._used.clear()
-        self._wasted = 0
+        self._wasted = {}
         self._epoch_by_layer.clear()
+        self._dropped_no_slot.clear()
+        self._skipped_lock_held.clear()
+        self._skipped_backlog.clear()
         # ``_ticket`` is deliberately NOT reset (see class docstring).
 
 
