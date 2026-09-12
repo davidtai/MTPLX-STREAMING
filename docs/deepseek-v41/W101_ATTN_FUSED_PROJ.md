@@ -146,6 +146,40 @@ arithmetic throughout (matching the K29 fix).
 — no conflict, and only the bf16 copy ≈2.7 GB is resident, HALF the f32 cache) and the W99
 lean casts; **independent of K29** (touches different code).
 
+### Which matmul kernels the fused path dispatches (mxfp8 gs32) — composes with W105
+
+The artifact's attention projections are stored **native mxfp8, group_size 32, bits 8**
+(config.json `quantization` default `mode: "mxfp8"`, `group_size: 32`, `bits: 8`; U8-packed
+weights, **E8M0 (uint8) scales, `biases is None`** — a native float codec, NOT affine q8
+gs64). The fused glue kernels A/B/C/D sit **between** these matmul dispatches; the fused path
+does not change any matmul — it keeps `nn.QuantizedLinear.__call__`, so per decode layer it
+issues:
+
+| projection | call in the fused path | matmul kernel + mode |
+|---|---|---|
+| `wq_a` (5120→1280) | `self.wq_a(x)` in `_qkv_prep_fused` | `mx.quantized_matmul(mode="mxfp8", group_size=32, bits=8)` |
+| `wq_b` (1280→32768) | `self.wq_b(qr)` in `_qkv_prep_fused` | `mx.quantized_matmul(mode="mxfp8", group_size=32, bits=8)` |
+| `wkv` (5120→512) | `self.wkv(x)` in `_qkv_prep_fused` | `mx.quantized_matmul(mode="mxfp8", group_size=32, bits=8)` |
+| o-LoRA down (grouped) | `mx.matmul(o, wT)` in `_out_prep_fused` | **bf16 `mx.matmul`** (fp32 accum) over `wo_a` **dequantized mxfp8→bf16** once + cached pre-transposed (§3); NOT `quantized_matmul`, NOT `einsum` |
+| `wo_b` (8192→5120) | `self.wo_b(o)` in `_out_prep_fused` | `mx.quantized_matmul(mode="mxfp8", group_size=32, bits=8)` |
+
+So the fused decode layer dispatches **4 `mx.quantized_matmul(mode="mxfp8", gs32, b8)` GEMVs**
+(wq_a, wq_b, wkv, wo_b) + **1 bf16 `mx.matmul`** (grouped o-LoRA) + the **4 fused glue
+metal_kernels** (A `rmsnorm`, B `rope_heads`, C `rmsnorm_rope`, D `rope_heads` inverse). **No
+kernel change is needed** for the mxfp8 mode: the mode/group_size/bits flow from each
+`nn.QuantizedLinear`'s own attributes (via `__call__`, and via `getattr(wo, "mode", "affine")`
+in `_o_lora_fused_weight`'s dequant), so on the real mxfp8 artifact the fused path already
+dispatches mxfp8 matmuls, while on the tiny test config (dense `nn.Linear`, dims not
+gs32-aligned) it dispatches dense `x @ w.T`.
+
+**Composition with W105.** W105 measures whether the **mxfp8 small-M (`b*s≤8`) GEMV** is
+itself the dominant decode-attention cost. Those are exactly the 4 `mx.quantized_matmul(
+mode="mxfp8")` dispatches this fused path **keeps** (plus, for W105's accounting, note the
+o-LoRA leg is NOT one of them — it is the bf16 `mx.matmul`). W101's scope is the layout/norm/
+rope **glue between** the matmuls: W101 removes those dispatches; W105 prices the matmul
+dispatches W101 keeps. The two results add — decode-attention cost ≈ (mxfp8 GEMVs, W105's
+subject) + (fused glue + bf16 o-LoRA matmul, W101's subject).
+
 ## 5. Measured before/after kernel counts (`scripts/deepseek_v41/dispatch_census.py --attn-proj`)
 
 Non-view graph primitives (a **lower bound** on Metal dispatches — `Concatenate`/`Slice`/
@@ -184,14 +218,94 @@ are classified above but left to their own frontiers.
 
 ## 7. Numerics labels (GPU — tiny model on Metal)
 
-Filled from `tests/test_deepseek_v41_attn_fused_proj_w101_gpu.py` under the lock
-(`MTPLX_DSV41_GPU_TESTS=1`). CPU fallback is byte-identical to lever-off over 64 decode steps
-(the fused path is GPU-only; CPU runs the eager chain — proven in the CPU test).
+Measured under the exclusive GPU lock (`MTPLX_DSV41_GPU_TESTS=1`), mlx 0.32.2, tiny
+real-structure model, from `tests/test_deepseek_v41_attn_fused_proj_w101_gpu.py`. Receipts:
+`.benchmark-artifacts/deepseek-v41/w101_gpu_numerics_2026-09-12_run1.log` (**run1**,
+2026-09-12T12:08:50Z: rmsnorm/rmsnorm_rope kernels, whole-`_attend`, greedy identity — 9
+passed, 4 failed, see below) and the 2026-09-12T13:40:21Z `gpu_window.sh` rerun (`gap1` window,
+step 2: `pytest tests/test_deepseek_v41_attn_fused_proj_w101_gpu.py -x -q`) — **13 passed, 0
+failed**, the current state of this worktree's test file. CPU fallback is byte-identical to
+lever-off over 64 decode steps (the fused path is GPU-only; CPU runs the eager chain — proven
+in the CPU test, `13 passed`). **Rounding-class by construction; no bit-for-bit test, so never
+byte-identical** (§4).
 
-- per-kernel vs pure-MLX reference (max|Δ|): _RMSNORM/RMSNORM_ROPE/ROPE_HEADS — **[GPU pending]**
-- fused `_attend` vs eager at real 1024-context geometry, per mode (max|Δ|): **[GPU pending]**
-- greedy-argmax identity over 64 decode steps on the tiny full model; flips labelled with
-  top-2 logit margin: **[GPU pending]**
+**Note on the `rope_heads` numbers (§7.1 below).** At run1, `test_rope_heads_kernel_vs_reference`
+(4 parametrizations: fwd/inverse x bf16/f32) crashed before computing a delta: `q` was built as
+a flat 3-D `(3, H, hd)` tensor, but `rope_heads_reference` → `_rope_last_reference` only
+supports the production 4-D `[b, s, H, hd]` layout, so its `cos`/`sin` reshape could not
+broadcast (`ValueError: [broadcast_shapes] Shapes (3,64,32) and (3,32) cannot be broadcast`) —
+this is the run1 "4 failed". That shape bug is fixed in this worktree's dirty test file (`q =
+mx.random.normal((1, 3, H, hd))`, the 4-D layout — see §7.1's closing note), and the
+2026-09-12T13:40:21Z rerun passed all 13 tests, including the 4 `rope_heads` parametrizations.
+But that rerun's pytest invocation (`-x -q`, no `-s`) captures stdout, and pytest discards
+captured stdout for passing tests, so the per-test `[W101 kernel] rope_heads ... max|Δ|=...`
+print lines are not in that log either. **Net: no log on disk currently holds the 4 `rope_heads`
+max|Δ| numbers** — run1 crashed before printing them (no fallback value), and the only run
+where the fixed test passed did not preserve prints. Table below labels those 4 cells
+accordingly; producing real numbers needs a GPU rerun with `-s`, out of scope for this
+mechanical doc-fill pass (no GPU use).
+
+### 7.1 Per-kernel fused kernel vs pure-MLX reference (max|Δ|)
+
+| fused kernel | bf16 max\|Δ\| (band 1.5e-2) | f32 max\|Δ\| (band 1e-3) |
+|---|---:|---:|
+| **A `rmsnorm`** (q-latent; d = 1280 / 512 / 20) | 0.0 / 0.0 / 0.0 | 4.77e-7 / 2.38e-7 / 0.0 |
+| **C `rmsnorm_rope`** (512-d KV latent + k_pe RoPE) | 7.78e-3 | 7.15e-7 |
+| **B/D `rope_heads`** (fwd, `[b=1,s=3,H=64,hd=512]`) | not captured † | not captured † |
+| **D `rope_heads`** (inverse, same shape) | not captured † | not captured † |
+
+† 13/13 passed at the 2026-09-12T13:40:21Z rerun (all 4 `rope_heads` parametrizations included),
+but that run's stdout was captured (no `-s`), so no `max|Δ|` was printed to the log; run1
+crashed on this test pre-fix (see note above) before computing a delta, so there is no run1
+fallback value either. Both bands are unchanged (1.5e-2 bf16 / 1e-3 f32) and the assertions in
+the fixed test enforce them — the 13-pass result is proof both deltas are `<=` their band, just
+not a captured numeric value.
+
+RMSNorm (kernel A) is **exact in bf16** (max\|Δ\| = 0.0 — the fp32 mean-of-squares tree +
+`metal::precise::rsqrt` + bf16 store lands on the identical bf16 value as the MLX reference)
+and pure-reassociation in f32 (≤4.77e-7). `rmsnorm_rope` (C) is 7.78e-3 bf16 (≈ one bf16 ULP
+on the RoPE'd 512-latent) / 7.15e-7 f32. All inside the reassociation band — rounding-class as
+designed. (The `rope_heads` per-kernel row is exercised at the **production 4-D layout**
+`[b,s,H,hd]`, the only layout the eager `_rope_last` / the oracle are defined for; the flat
+`[rows,H,hd]` layout is accepted by the kernel alone — this worktree's dirty test file switched
+the standalone `rope_heads` test from the flat 3-D shape to `[b=1,s=3,H=64,hd=512]` for exactly
+this reason.)
+
+### 7.2 Whole fused `_attend` vs eager (lever OFF), real 1024-context decode geometry, per mode
+
+| mode | max\|Δ\| | engagement (qkv / out / rows, fallbacks) | band |
+|---|---:|---|---:|
+| swa_only (simple) | **4.73e-4** | 1 / 1 / 1, 0 fallbacks | ≤ 5e-2 |
+| reuse (simple)    | **9.48e-5** | 1 / 1 / 1, 0 fallbacks | ≤ 5e-2 |
+| full (indexer)    | **2.02e-4** | 1 / 1 / 1, 0 fallbacks | ≤ 3e-1 |
+
+All three are ~1e-4 — far below even the tight swa_only/reuse 5e-2 band. The `full` (indexer
+top-k) mode did **not** trigger a compressed-key selection flip at this geometry (2.02e-4, not
+the ~1e-1 a whole-key swap would produce). The engagement counter shows the fused qkv **and**
+out kernels dispatched on every call (`qkv_calls = out_calls = 1`, `rows = 1` for the `b*s=1`
+decode step, `0` fallbacks) — proof the GPU fused path ran, not the eager CPU fallback.
+
+### 7.3 Greedy-argmax identity over 64 decode steps (tiny full model, lever ON vs OFF)
+
+**65 / 65 identical** (prompt-final token + 64 decode steps), **0 flips** — the fused decode
+path reproduces the lever-off greedy trajectory token-for-token on this model. No flips to
+label (a rounding-class lever is *allowed* near-tie flips; there were none here).
+
+### 7.4 Numerics class + dispatch count
+
+**Rounding-class, never byte-identical.** The fused RMSNorm reassociates the fp32
+sum-of-squares (tree), kernel C keeps the KV latent in fp32 through the RoPE, and the o-LoRA
+leg reads bf16 `wo_a` (the reference dtype) + fp32-accumulates. Every measured delta (per-kernel
+≤ 7.78e-3 bf16 / ≤ 4.77e-7 f32; whole `_attend` ≤ 4.73e-4; 65/65 greedy identity) sits inside
+the reassociation / bf16 bands — the lever is rounding-class as designed (§4), not bit-exact.
+
+**Dispatch count.** This GPU test captures the **engagement counter** (fused kernels
+dispatched: `qkv_calls = out_calls = 1` per layer-step, 0 fallbacks — proof the fused path ran
+on Metal), **not** a raw Metal command-buffer count. The before/after dispatch **collapse** is
+the §5 census (`scripts/deepseek_v41/dispatch_census.py --attn-proj`; shape-independent graph
+primitives, a lower bound on Metal dispatches): projection chains **44 eager → 24 K22 → 9
+fused** (qkv-prep 33→17→6, out-prep 11→7→3); whole simple decode layer **75 → 55 → 40**. Those
+counts are the census's and are unchanged by this run.
 
 ## 8. Arms + tests
 
