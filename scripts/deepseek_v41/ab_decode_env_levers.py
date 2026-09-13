@@ -70,7 +70,7 @@ STANDARD_CELL16K_PROMPT_SHA256 = (
 
 # W121: the MLX plan is derived from David's TOTAL box target, not a static forecast.
 # The runtime (mtplx.expert_runtime.apply_mlx_memory_cap) sets the allocator/wired limit
-# = target - baseline - allocator_cache and set_cache_limit(cache); the bench sizes the
+# = target - baseline - host reserve and set_cache_limit(cache); the bench sizes the
 # ENGINE budget (persistent expert slots) = allocator_limit - transient_band so the slots
 # FILL the target while active + transient stays under the allocator limit.  The old
 # budget-total forecast (total - system_used_at_start(vm_stat) - non_metal - kv_growth -
@@ -1858,7 +1858,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="explicit plan ceiling GiB (override); default: derive from "
-        "--box-budget-gib.",
+        "the 110 decimal GB target (legacy --box-budget-gib is explicit).",
     )
     p.add_argument(
         "--box-budget-gib",
@@ -1867,42 +1867,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOTAL box-use budget GiB the plan is derived from (default: "
         "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
     )
-    # W121: the plan derives from David's TOTAL box TARGET (decimal GB), not a static
-    # forecast.  When armed, the runtime sets the allocator/wired limit = target -
-    # baseline - allocator_cache + set_cache_limit(cache), and the bench sizes the
-    # engine budget (persistent expert slots) = allocator_limit - transient_band, so the
-    # slots FILL the target.  target/baseline are DECIMAL GB (match
-    # MTPLX_DSV41_BOX_TARGET_GB / _BASELINE_GB); when armed they OVERRIDE
-    # --memory-limit-gib.
-    p.add_argument(
-        "--box-target-gb",
-        type=float,
-        default=None,
-        metavar="GB",
-        help="TOTAL box-use target in DECIMAL GB the plan fills (default: "
-        "MTPLX_DSV41_BOX_TARGET_GB env; a bare marker uses 100). When set, the "
-        "allocator/wired limit = target - baseline - allocator cache and the engine "
-        "budget (persistent slots) = allocator limit - transient band; OVERRIDES "
-        "--memory-limit-gib.",
-    )
-    p.add_argument(
-        "--box-baseline-gb",
-        type=float,
-        default=None,
-        metavar="GB",
-        help="macOS+agent baseline in DECIMAL GB (measured wired+anon+comp with the "
-        "resident agent booted out), subtracted from the target (default: "
-        "MTPLX_DSV41_BOX_BASELINE_GB env). Required when the target is armed.",
-    )
-    p.add_argument(
-        "--host-overhead-gib",
-        type=float,
-        default=None,
-        metavar="GIB",
-        help="non-MLX process overhead in GiB (process phys_footprint peak - mlx_peak: "
-        "python heap + reader buffers + engram LRU + tokenizer) reserved from the target "
-        "for the allocator/wired limit (default 2.5, MTPLX_DSV41_HOST_OVERHEAD_GIB).",
-    )
+    # Target and baseline are decimal GB; cache/reserve overrides are GiB.
+    p.add_argument("--box-target-gb", type=float, default=None, metavar="GB",
+        help="Total physical RAM target in decimal GB (default 110 or "
+        "MTPLX_DSV41_BOX_TARGET_GB). Reserves system baseline and Python capacity; "
+        "conflicts with --memory-limit-gib.")
+    p.add_argument("--box-baseline-gb", type=float, default=None, metavar="GB",
+        help="Pre-load physical system usage in decimal GB, including file cache. "
+        "The GPU guard's live baseline takes precedence; otherwise measured now.")
+    p.add_argument("--host-overhead-gib", type=float, default=None, metavar="GIB",
+        help="Host allocation reserve in GiB (default at least 2, increased to "
+        "cover full Python cache capacity and index metadata).")
     p.add_argument(
         "--allocator-cache-gib",
         type=float,
@@ -2451,7 +2426,7 @@ def _dry_run_arm(args, arm, bench) -> dict:
 # terrible" / "track the memory usage so we can efficiently use it") replaced the
 # W106 budget-total forecast (total - system_used_at_start(vm_stat) - non_metal
 # - kv_growth - safety - plan_overshoot) with the target model: the runtime sets the
-# allocator/wired limit = target - baseline - allocator_cache and set_cache_limit(cache)
+# allocator/wired limit = target - baseline - host reserve and set_cache_limit(cache)
 # (mtplx.expert_runtime.apply_mlx_memory_cap), and the bench sizes the ENGINE budget
 # (persistent expert slots) = allocator_limit - transient_band so the slots FILL the
 # target while active + transient stays under the allocator limit.  No static forecasts.
@@ -2539,16 +2514,18 @@ def _resolve_mlx_limit_headroom_gib(args) -> float:
 
 
 def _resolve_box_target_gb(args):
-    """The box TARGET in DECIMAL GB (matching MTPLX_DSV41_BOX_TARGET_GB): --box-target-gb
-    flag, else the env (a bare/``default`` marker means the runtime default), else
-    ``None`` when the target path is not armed."""
+    """Explicit flag, environment, or 110 decimal GB; explicit legacy plans opt out."""
 
     v = getattr(args, "box_target_gb", None)
     if v is not None:
         return float(v)
     raw = os.environ.get("MTPLX_DSV41_BOX_TARGET_GB")
     if raw is None:
-        return None
+        if (getattr(args, "memory_limit_gib", None) is not None or
+                getattr(args, "box_budget_gib", None) is not None):
+            return None
+        from mtplx.expert_runtime import DEFAULT_BOX_TARGET_GB
+        return float(DEFAULT_BOX_TARGET_GB)
     s = str(raw).strip()
     if s == "" or s.lower() == "default":
         from mtplx.expert_runtime import DEFAULT_BOX_TARGET_GB
@@ -2557,11 +2534,11 @@ def _resolve_box_target_gb(args):
 
 
 def _resolve_box_baseline_gb(args):
-    """The box BASELINE in DECIMAL GB (macOS+agent, measured wired+anon+comp with the
-    resident agent booted out).  MEDIUM-4: PREFER the env MTPLX_DSV41_BOX_BASELINE_GB,
-    which gpu_window.sh exports from its live in-window USED_START (measured now, agent
-    booted out) -- it is more accurate than a hand-passed --box-baseline-gb, which is the
-    fallback for a standalone run with no guard.  Returns ``None`` when neither is set."""
+    """Pre-load physical system usage, including file cache, in decimal GB.
+
+    Prefer the guard's current baseline, then an explicit flag, otherwise read
+    the OS. Pinned plans separately reject a larger live baseline.
+    """
 
     raw = os.environ.get("MTPLX_DSV41_BOX_BASELINE_GB")
     if raw and str(raw).strip() and str(raw).strip().lower() != "default":
@@ -2576,7 +2553,14 @@ def _resolve_box_baseline_gb(args):
             )
         return env_v
     v = getattr(args, "box_baseline_gb", None)
-    return None if v is None else float(v)
+    if v is not None:
+        return float(v)
+    from mtplx.deepseek_v41_memory_profile import box_memory_snapshot
+    snapshot = box_memory_snapshot()
+    baseline = snapshot.get("used_bytes") if snapshot.get("ok") else None
+    if baseline is None or baseline <= 0:
+        raise SystemExit("cannot measure pre-load memory baseline")
+    return baseline / 1_000_000_000
 
 
 def _target_sidecar_path(args):
@@ -2613,7 +2597,7 @@ def _resolve_target_plan(args):
     """Resolve the W121 target-based plan components, or ``None`` when no target is
     armed.  Stamps MTPLX_DSV41_BOX_TARGET_GB / _BASELINE_GB into ``os.environ`` so the
     runtime (expert_runtime.apply_mlx_memory_cap) derives the SAME allocator/wired limit
-    = target - baseline - allocator_cache and set_cache_limit(cache).  --memory-plan-from
+    = target - baseline - host reserve and set_cache_limit(cache).  --memory-plan-from
     PINS the target + measured components from a sidecar an earlier run wrote, so every
     A/B arm uses the SAME engine budget (reproducible residency)."""
 
@@ -2622,6 +2606,7 @@ def _resolve_target_plan(args):
         BOX_ALLOC_CACHE_ENV,
         BOX_BASELINE_ENV,
         BOX_HOST_OVERHEAD_ENV,
+        BOX_SESSION_BANK_ENV,
         BOX_TARGET_ENV,
         BOX_TRANSIENT_BAND_ENV,
         resolve_box_target_mlx_limit_bytes,
@@ -2645,10 +2630,20 @@ def _resolve_target_plan(args):
     if comps is not None:
         target_gb = comps["box_target_gb"]
         baseline_gb = comps["box_baseline_gb"]
+        live_baseline_gb = _resolve_box_baseline_gb(args)
+        if live_baseline_gb > baseline_gb:
+            raise ValueError(
+                "live baseline exceeds pinned baseline; the pinned allocation "
+                "cannot fit its box target on this run")
         cache_gib = comps.get("allocator_cache_limit_gib")
         band_gib = comps.get("transient_band_gib")
         host_gib = comps.get("host_overhead_gib")
         active_gib = comps.get("active_overshoot_gib")
+        os.environ[BOX_SESSION_BANK_ENV] = str(
+            comps.get("session_bank_capacity_bytes", 0) / GIB)
+        if "python_cache_budget" in comps:
+            os.environ["MTPLX_ENGRAM_CACHE_LIMIT"] = str(
+                comps["python_cache_budget"]["engram_per_layer_bytes"])
     else:
         target_gb = _resolve_box_target_gb(args)
         if target_gb is None:
@@ -2660,17 +2655,17 @@ def _resolve_target_plan(args):
         active_gib = getattr(args, "active_overshoot_gib", None)
 
     # Stamp the env the runtime reads (decimal GB target/baseline; GiB host/cache/band/active).
-    os.environ[BOX_TARGET_ENV] = f"{float(target_gb):g}"
+    os.environ[BOX_TARGET_ENV] = f"{float(target_gb):.17g}"
     if baseline_gb is not None:
-        os.environ[BOX_BASELINE_ENV] = f"{float(baseline_gb):g}"
+        os.environ[BOX_BASELINE_ENV] = f"{float(baseline_gb):.17g}"
     if cache_gib is not None:
-        os.environ[BOX_ALLOC_CACHE_ENV] = f"{float(cache_gib):g}"
+        os.environ[BOX_ALLOC_CACHE_ENV] = f"{float(cache_gib):.17g}"
     if band_gib is not None:
-        os.environ[BOX_TRANSIENT_BAND_ENV] = f"{float(band_gib):g}"
+        os.environ[BOX_TRANSIENT_BAND_ENV] = f"{float(band_gib):.17g}"
     if host_gib is not None:
-        os.environ[BOX_HOST_OVERHEAD_ENV] = f"{float(host_gib):g}"
+        os.environ[BOX_HOST_OVERHEAD_ENV] = f"{float(host_gib):.17g}"
     if active_gib is not None:
-        os.environ[BOX_ACTIVE_OVERSHOOT_ENV] = f"{float(active_gib):g}"
+        os.environ[BOX_ACTIVE_OVERSHOOT_ENV] = f"{float(active_gib):.17g}"
 
     # resolve_box_target_mlx_limit_bytes raises (actionable) if the baseline is missing.
     r = resolve_box_target_mlx_limit_bytes(os.environ)
@@ -2685,6 +2680,9 @@ def _resolve_target_plan(args):
         "allocator_limit_bytes": int(r["mlx_limit_bytes"]),
         "engine_budget_bytes": int(r["engine_budget_bytes"]),
         "engine_budget_gib": r["engine_budget_bytes"] / GIB,
+        "python_cache_budget": r["python_cache_budget"],
+        "session_bank_capacity_bytes": r["session_bank_capacity_bytes"],
+        "session_bank_reserve_bytes": r["session_bank_reserve_bytes"],
     }
     if comps is not None:
         resolved["pinned_from"] = comps.get("pinned_from")
@@ -2698,7 +2696,7 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     Precedence:
       1. The box TARGET (--box-target-gb, else MTPLX_DSV41_BOX_TARGET_GB) -> the ENGINE
-         budget = (target - baseline - allocator_cache) - transient_band sizes the
+         budget = allocator - max(transient, active overshoot + cache) sizes the
          persistent expert slots to FILL the target, and the target env is stamped so
          the runtime sets the allocator/wired limit + set_cache_limit.  --memory-plan-from
          pins the target + measured components so every A/B arm uses the SAME budget.
@@ -2707,7 +2705,7 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     Returns the W62 ``BudgetDerivation`` (memory_limit_bytes / reserve / cache plumb
     into the loader unchanged); the target components are stashed on
-    ``args._dsv41_target_plan`` for the receipt (box_used = baseline + footprint)."""
+    ``args._dsv41_target_plan`` for the receipt (separate from measured physical box usage)."""
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
@@ -2743,9 +2741,16 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
     else:
         override = getattr(args, "memory_limit_gib", None)
 
+    target_fields = {} if target_plan is None else {
+        "macos_floor_gib": target_plan["box_baseline_gb"] * 1e9 / GIB,
+        "host_overhead_gib": target_plan["host_overhead_gib"],
+        "cache_limit_gib": target_plan["allocator_cache_limit_gib"],
+    }
     derivation = derive_plan_from_budget(
-        box_budget_gib=getattr(args, "box_budget_gib", None),
+        box_budget_gib=(getattr(args, "box_budget_gib", None) if target_plan is None
+                        else target_plan["box_target_gb"] * 1e9 / GIB),
         override_memory_limit_gib=override,
+        **target_fields,
     )
     return derivation
 

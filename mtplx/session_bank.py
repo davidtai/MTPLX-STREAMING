@@ -441,6 +441,52 @@ def _snapshot_nbytes(snapshot: CacheSnapshot) -> int:
     return _tree_nbytes(snapshot.states) + _tree_nbytes(snapshot.meta_states)
 
 
+def _compact_snapshot_tree(value: Any) -> Any:
+    """Own and evaluate only the logical bytes of a snapshot before admission.
+
+    A lazy prefix view can retain a whole max-context backing. Copy raw bytes,
+    rather than adding zero, to preserve signed zeros and NaN payloads too.
+    This runs at session-bank admission, never in a token or layer loop.
+    """
+    if isinstance(value, CacheSnapshot):
+        return CacheSnapshot(
+            states=_compact_snapshot_tree(value.states),
+            meta_states=_compact_snapshot_tree(value.meta_states),
+        )
+    if isinstance(value, mx.array):
+        if value.size == 0:
+            return mx.array([], dtype=value.dtype).reshape(value.shape)
+        raw = value.reshape(-1).view(mx.uint8)
+        if mx.default_device().type == mx.cpu:
+            # The copy kernel's CPU fallback is contiguous(), which can alias.
+            # An explicit host copy instead owns exactly these logical bytes.
+            copied = mx.array(np.array(raw, copy=True))
+        else:
+            from .kernels.copy_leaf import metal_copy_leaf
+
+            copied = metal_copy_leaf(raw)
+        owned = copied.view(value.dtype).reshape(value.shape)
+        mx.eval(owned)
+        return owned
+    if isinstance(value, tuple):
+        return tuple(_compact_snapshot_tree(item) for item in value)
+    if isinstance(value, list):
+        return [_compact_snapshot_tree(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _compact_snapshot_tree(item) for key, item in value.items()}
+    return value
+
+
+def _snapshot_owner_for_runtime(runtime: MTPLXRuntime) -> Callable | None:
+    """Select the installed model's storage contract at bank admission."""
+    streaming = getattr(runtime, "expert_streaming", None)
+    config = getattr(streaming, "config", None)
+    key = getattr(config, "model_key", "")
+    if isinstance(key, str) and key.startswith("deepseek-v41"):
+        return _compact_snapshot_tree
+    return None
+
+
 @dataclass
 class SessionBankEntry:
     token_ids: tuple[int, ...]
@@ -821,6 +867,16 @@ class SessionBank:
         tokens = tuple(int(token) for token in token_ids)
         if not tokens:
             raise ValueError("cannot store an empty prefix")
+        snapshot_owner = _snapshot_owner_for_runtime(runtime)
+        clone = snapshot_owner or _clone_tree
+        if snapshot_owner is not None:
+            # Live-reference leases intentionally carry nbytes=0 and cannot
+            # participate in the bounded DeepSeek session-bank contract.
+            keep_live_ref = False
+        admission_limit = (
+            min(self.per_session_max_bytes, self.max_bytes)
+            if snapshot_owner is not None else self.per_session_max_bytes
+        )
         _validate_none_policy_auxiliary_state(
             mtp_history_policy=mtp_history_policy,
             hidden=hidden,
@@ -943,7 +999,7 @@ class SessionBank:
             self._evict_if_needed(protected_tokens=tokens)
             return entry
 
-        if nbytes_override is not None and int(nbytes_override) > self.per_session_max_bytes:
+        if nbytes_override is not None and int(nbytes_override) > admission_limit:
             self.last_put_nbytes = int(nbytes_override)
             self.last_put_skipped_oversized_snapshot = True
             self.warn_oversized_snapshot_skip(
@@ -971,7 +1027,8 @@ class SessionBank:
         trunk_snapshot_started = time.perf_counter()
         try:
             snapshot = (
-                snapshot_cache_lazy_hybrid(cache) if lazy_kv else snapshot_cache(cache)
+                snapshot_cache_lazy_hybrid(cache)
+                if lazy_kv or snapshot_owner is not None else snapshot_cache(cache)
             )
         except RuntimeError as exc:
             if "materialize active K/V arrays" not in str(exc):
@@ -1009,7 +1066,11 @@ class SessionBank:
                 for r in normalized_boundaries
             )
         )
+        if snapshot_owner is not None:
+            computed_nbytes += _tree_nbytes(extra_state)
         entry_nbytes = int(nbytes_override if nbytes_override is not None else computed_nbytes)
+        if snapshot_owner is not None:
+            entry_nbytes = max(entry_nbytes, computed_nbytes)
         if (
             self.shed_gdn_boundaries_to_fit
             and nbytes_override is None
@@ -1040,7 +1101,7 @@ class SessionBank:
                     }
                 )
         self.last_put_nbytes = int(entry_nbytes)
-        if entry_nbytes > self.per_session_max_bytes:
+        if entry_nbytes > admission_limit:
             self.last_put_skipped_oversized_snapshot = True
             live_entry = live_ref_entry(
                 "skipped_oversized_snapshot_live_ref",
@@ -1060,6 +1121,12 @@ class SessionBank:
                 }
             )
             return None
+        if snapshot_owner is not None:
+            snapshot = snapshot_owner(snapshot)
+            normalized_boundaries = snapshot_owner(normalized_boundaries)
+            # This legacy flag also selects view-based restore. The bank owns
+            # compact storage now; restores still take fresh, COW-safe views.
+            lazy_kv = True
         entry = SessionBankEntry(
             token_ids=tokens,
             token_hash=token_prefix_hash(tokens),
@@ -1067,8 +1134,8 @@ class SessionBank:
             mtp_enabled=bool(runtime.mtp_enabled),
             hidden_variant=hidden_variant,
             cache_snapshot=snapshot,
-            logits=_clone_tree(logits),
-            hidden=_clone_tree(hidden),
+            logits=clone(logits),
+            hidden=clone(hidden),
             cache_ref=cache if keep_live_ref else None,
             mtp_history_cache_ref=mtp_history_cache_ref if keep_live_ref else None,
             nbytes=int(entry_nbytes),
@@ -1077,14 +1144,14 @@ class SessionBank:
             mtp_history_policy=mtp_history_policy,
             draft_head_identity=draft_head_identity,
             policy_fingerprint=policy_fingerprint,
-            mtp_history_snapshot=_clone_tree(mtp_history_snapshot),
+            mtp_history_snapshot=clone(mtp_history_snapshot),
             snapshot_epoch=int(snapshot_epoch),
             mtp_snapshot_epoch=(
                 int(mtp_snapshot_epoch)
                 if mtp_snapshot_epoch is not None
                 else (int(snapshot_epoch) if mtp_history_snapshot is not None else None)
             ),
-            extra_state=_clone_tree(extra_state),
+            extra_state=clone(extra_state),
             lazy_kv=lazy_kv,
             has_recurrent=cache_has_recurrent,
             gdn_boundaries=list(normalized_boundaries),
@@ -1095,7 +1162,7 @@ class SessionBank:
         _canonicalize_none_policy_entry(entry)
         if timing_out is not None:
             timing_out["entry_build_s"] = time.perf_counter() - trunk_snapshot_done
-        if lazy_kv:
+        if lazy_kv and snapshot_owner is None:
             self._schedule_snapshot_settle(entry, timing_out=timing_out)
         self._enqueue_cold_entry(entry, timing_out=timing_out)
         self._entries[tokens] = entry
@@ -1127,6 +1194,14 @@ class SessionBank:
         tokens = tuple(int(token) for token in token_ids)
         if not tokens:
             raise ValueError("cannot store an empty prefix")
+        snapshot_owner = _snapshot_owner_for_runtime(runtime)
+        clone = snapshot_owner or _clone_tree
+        if snapshot_owner is not None:
+            keep_live_ref = False
+        admission_limit = (
+            min(self.per_session_max_bytes, self.max_bytes)
+            if snapshot_owner is not None else self.per_session_max_bytes
+        )
         _validate_none_policy_auxiliary_state(
             mtp_history_policy=mtp_history_policy,
             hidden=hidden,
@@ -1146,8 +1221,10 @@ class SessionBank:
             + _tree_nbytes(mtp_history_snapshot)
         )
         entry_nbytes = int(nbytes_override if nbytes_override is not None else computed_nbytes)
+        if snapshot_owner is not None:
+            entry_nbytes = max(entry_nbytes, computed_nbytes)
         self.last_put_nbytes = int(entry_nbytes)
-        if entry_nbytes > self.per_session_max_bytes:
+        if entry_nbytes > admission_limit:
             self.last_put_skipped_oversized_snapshot = True
             self.eviction_log.append(
                 {
@@ -1161,8 +1238,8 @@ class SessionBank:
             )
             return None
         snapshot = CacheSnapshot(
-            states=tuple(_clone_tree(item) for item in cache_snapshot.states),
-            meta_states=tuple(_clone_tree(item) for item in cache_snapshot.meta_states),
+            states=tuple(clone(item) for item in cache_snapshot.states),
+            meta_states=tuple(clone(item) for item in cache_snapshot.meta_states),
         )
         entry = SessionBankEntry(
             token_ids=tokens,
@@ -1171,8 +1248,8 @@ class SessionBank:
             mtp_enabled=bool(runtime.mtp_enabled),
             hidden_variant=hidden_variant,
             cache_snapshot=snapshot,
-            logits=_clone_tree(logits),
-            hidden=_clone_tree(hidden),
+            logits=clone(logits),
+            hidden=clone(hidden),
             cache_ref=cache_ref if keep_live_ref else None,
             nbytes=int(entry_nbytes),
             session_id=session_id,
@@ -1180,7 +1257,8 @@ class SessionBank:
             mtp_history_policy=mtp_history_policy,
             draft_head_identity=draft_head_identity,
             policy_fingerprint=policy_fingerprint,
-            mtp_history_snapshot=_clone_tree(mtp_history_snapshot),
+            mtp_history_snapshot=clone(mtp_history_snapshot),
+            lazy_kv=snapshot_owner is not None,
             snapshot_epoch=int(snapshot_epoch),
             mtp_snapshot_epoch=(
                 int(mtp_snapshot_epoch)

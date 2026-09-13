@@ -93,12 +93,12 @@ def test_allocator_limit_is_target_minus_baseline_minus_host():
     assert r["engine_budget_bytes"] == r["mlx_limit_bytes"] - RESERVE
 
 
-def test_target_default_100_when_marker_present():
+def test_target_default_110_when_marker_present():
     r = resolve_box_target_mlx_limit_bytes(
         env={BOX_TARGET_ENV: "default", BOX_BASELINE_ENV: "10"}
     )
-    assert r["box_target_gb"] == 100.0
-    assert r["mlx_limit_bytes"] == int(round(90 * GB)) - HOST
+    assert r["box_target_gb"] == 110.0
+    assert r["mlx_limit_bytes"] == int(round(100 * GB)) - HOST
 
 
 def test_target_baseline_from_argument():

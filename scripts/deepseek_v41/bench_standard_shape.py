@@ -334,7 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="explicit plan ceiling GiB (override); default: derive from "
-        "--box-budget-gib.",
+        "the 110 decimal GB target (legacy --box-budget-gib is explicit).",
     )
     parser.add_argument(
         "--box-budget-gib",
@@ -343,6 +343,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOTAL box-use budget GiB the plan is derived from (default: "
         "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
     )
+    parser.add_argument("--box-target-gb", type=float, default=None,
+        help="Total physical RAM target in decimal GB (default 110).")
+    parser.add_argument("--box-baseline-gb", type=float, default=None,
+        help="Pre-load system baseline in decimal GB; guard measurement takes precedence.")
+    parser.add_argument("--allocator-cache-gib", type=float, default=None,
+        help="Retained MLX allocator cache in GiB (default 6, inside the Metal budget).")
     parser.add_argument(
         "--memory-profile",
         action="store_true",
@@ -869,6 +875,9 @@ def bench_one_cell(
         decode_tokens = int(steps)
         dspark_metrics = None
         if decode_mode == "dspark" and getattr(model, "mtp", None) is not None:
+            # AR observations are frozen above; release its generation state
+            # before the second lane creates another target and draft cache.
+            del cache, logits
             # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR ids
             # (verify is authoritative); assert byte-identity and record the accept
             # structure.  Skipped for the dry-run double (a _FakeModel has no mtp).
@@ -882,6 +891,11 @@ def bench_one_cell(
             st = DSparkDecodeStats()
             dsp_sampler = _MemorySampler().start()
             dsp_end = None
+            dsp_decode_start = None
+            def prefill_dspark(_info):
+                nonlocal dsp_decode_start
+                dsp_decode_start = time.perf_counter()
+
             def complete_dspark():
                 nonlocal dsp_end
                 dsp_end = time.perf_counter()
@@ -898,6 +912,7 @@ def bench_one_cell(
                     speculative_depth=int(dspark_depth),
                     stats=st,
                     completion_callback=complete_dspark,
+                    prefill_callback=prefill_dspark,
                 )
                 dsp_wall = (dsp_end if dsp_end is not None else time.perf_counter()) - dsp_start
             finally:
@@ -917,8 +932,13 @@ def bench_one_cell(
                 "memory": mem_probe_block(mem_probe, dsp_sampler),
                 "depth": int(dspark_depth),
                 "byte_identical_vs_ar": byte_identical,
-                "decode_wall_s": dsp_wall,
-                "decode_tok_s": (len(dsp_ids) / dsp_wall) if dsp_wall > 0 else None,
+                "pass_wall_s": dsp_wall,
+                "decode_tokens": max(0, len(dsp_ids) - 1),
+                "decode_wall_s": (
+                    None if dsp_decode_start is None else max(0.0, dsp_end - dsp_decode_start)),
+                "decode_tok_s": (
+                    (len(dsp_ids) - 1) / (dsp_end - dsp_decode_start)
+                    if dsp_decode_start is not None and dsp_end > dsp_decode_start else None),
                 "peak_mlx_gb": mem_probe.peak_bytes() / 1_000_000_000,
                 "peak_mlx_gib": mem_probe.peak_bytes() / GIB,
                 "tokens_per_cycle": sd["tokens_per_cycle"],
@@ -1268,6 +1288,15 @@ def _resolved_plan(runtime, args) -> dict | None:
     }
 
 
+def _resolve_memory_derivation(args):
+    """Use the A/B runner's construction-time target and pinned-plan handling."""
+    path = Path(__file__).with_name("ab_decode_env_levers.py")
+    spec = importlib.util.spec_from_file_location("dsv41_ab_memory_plan", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._resolve_derivation(args)
+
+
 def run_real(args) -> int:
     import mlx.core as mx
 
@@ -1281,7 +1310,6 @@ def run_real(args) -> int:
     from mlx_lm.utils import load_tokenizer
     from mtplx.deepseek_v41_memory_profile import (
         apply_allocator_cache_limit,
-        derive_plan_from_budget,
     )
     from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming
 
@@ -1289,10 +1317,7 @@ def run_real(args) -> int:
     if args.admission_receipt is not None:
         admission_receipt = json.loads(Path(args.admission_receipt).read_text())
 
-    derivation = derive_plan_from_budget(
-        box_budget_gib=args.box_budget_gib,
-        override_memory_limit_gib=args.memory_limit_gib,
-    )
+    derivation = _resolve_memory_derivation(args)
     print(f"[bench] memory derivation: {derivation.formula()}", flush=True)
 
     max_kv = resolve_max_kv(args.context_tokens, args.steps, args.max_kv)
@@ -1343,7 +1368,7 @@ def run_real(args) -> int:
     # W62 (2): bound the MLX allocator's freed-buffer cache from the plan so
     # freed prefill/decode transients do not accumulate past the reserve.
     cache_limit_report = None
-    if args.apply_memory_cap:
+    if args.apply_memory_cap and getattr(args, "_dsv41_target_plan", None) is None:
         cache_limit_report = apply_allocator_cache_limit(
             derivation.cache_limit_bytes, mx_module=mx
         )
@@ -1360,6 +1385,8 @@ def run_real(args) -> int:
             "stages). Load a DSpark artifact or drop the flag."
         )
     runtime = getattr(model, "_mtplx_expert_runtime")
+    if getattr(args, "_dsv41_target_plan", None) is not None:
+        cache_limit_report = getattr(runtime, "memory_cap_report", None)
 
     receipt = _base_receipt(args, dry_run=False, worktree=worktree)
     receipt["max_live_kv_tokens"] = int(max_kv)
@@ -1370,6 +1397,7 @@ def run_real(args) -> int:
     receipt["expert_cache_limit_bytes"] = runtime.config.expert_cache_limit_bytes
     receipt["resolved_plan"] = _resolved_plan(runtime, args)
     receipt["memory_derivation"] = derivation.as_dict()
+    receipt["target_plan"] = getattr(args, "_dsv41_target_plan", None)
     receipt["allocator_cache_limit"] = cache_limit_report
     receipt["engram_layer_ids"] = list(
         getattr(model, "_mtplx_engram_layer_ids", ()) or ()

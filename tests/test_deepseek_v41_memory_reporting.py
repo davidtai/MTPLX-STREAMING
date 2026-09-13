@@ -163,6 +163,36 @@ def test_standard_cell_reports_memory_and_decimal_units():
     assert metrics["process_rss_gb"] == metrics["process_rss_bytes"] / 1e9
 
 
+def test_standard_runner_uses_shared_110gb_plan(monkeypatch, tmp_path):
+    bench = load_script("bench_standard_shape")
+    monkeypatch.setattr(bench.os, "environ", {"MTPLX_DSV41_BOX_BASELINE_GB": "12"})
+    args = bench.build_parser().parse_args(["--out", str(tmp_path / "receipt.json")])
+    derivation = bench._resolve_memory_derivation(args)
+    assert args._dsv41_target_plan["box_target_gb"] == 110
+    assert derivation.memory_limit_bytes == args._dsv41_target_plan["engine_budget_bytes"]
+
+
+def test_pinned_plan_restores_python_capacity_and_rejects_larger_live_baseline(monkeypatch, tmp_path):
+    import json
+    ab = load_script("ab_decode_env_levers")
+    monkeypatch.setattr(ab.os, "environ", {"MTPLX_DSV41_BOX_BASELINE_GB": "12"})
+    args = SimpleNamespace(out=tmp_path / "arm.json")
+    ab.os.environ["MTPLX_DSV41_SESSION_BANK_GIB"] = "2"
+    pinned = ab._resolve_target_plan(args)
+    path = tmp_path / "pin.json"
+    path.write_text(json.dumps(pinned))
+    args.memory_plan_from = path
+    ab.os.environ["MTPLX_ENGRAM_CACHE_LIMIT"] = "2GiB"
+    ab.os.environ["MTPLX_DSV41_SESSION_BANK_GIB"] = "4"
+    replay = ab._resolve_target_plan(args)
+    assert replay["engine_budget_bytes"] == pinned["engine_budget_bytes"]
+    assert ab.os.environ["MTPLX_ENGRAM_CACHE_LIMIT"] == str(256 * 1024**2)
+    assert float(ab.os.environ["MTPLX_DSV41_SESSION_BANK_GIB"]) == 2
+    ab.os.environ["MTPLX_DSV41_BOX_BASELINE_GB"] = "15"
+    with pytest.raises(ValueError, match="baseline"):
+        ab._resolve_target_plan(args)
+
+
 def test_standard_cell_keeps_ar_and_dspark_memory_windows_separate(monkeypatch):
     bench = load_script("bench_standard_shape")
     class Probe(bench._DryMemProbe):
@@ -226,3 +256,48 @@ def test_dspark_completion_observes_cache_before_release(monkeypatch, max_tokens
     assert seen == [2]
     assert alive == []
     assert len(result) == max_tokens
+
+
+def test_standard_dspark_releases_ar_state_and_reports_decode_only(monkeypatch):
+    import weakref
+    bench = load_script("bench_standard_shape")
+    clock = [0.0]
+    monkeypatch.setattr(bench.time, "perf_counter", lambda: clock[0])
+    refs = []
+    class Cache(dict):
+        pass
+    class Logits(list):
+        pass
+    class Model(bench._FakeModel):
+        mtp = True
+        def make_cache(self):
+            cache = Cache(offset=0)
+            refs.append(weakref.ref(cache))
+            return cache
+        def __call__(self, *args, **kwargs):
+            clock[0] += 1
+            logits = Logits(super().__call__(*args, **kwargs))
+            refs.append(weakref.ref(logits))
+            return logits
+    def dspark(*args, **kwargs):
+        assert all(ref() is None for ref in refs), "AR state is still resident"
+        clock[0] += 10
+        kwargs["prefill_callback"]({"prompt_eval_time_s": 10.0})
+        clock[0] += 2
+        kwargs["completion_callback"]()
+        return [1, 2, 3]
+    stats = {key: 0 for key in ("tokens_per_cycle", "accept_rate", "accept_rate_by_depth",
+        "drafted_by_depth", "accepted_by_depth", "cycles", "verify_calls",
+        "verify_decode_phase", "per_cycle", "phase_time_s")}
+    monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_dspark_decode", SimpleNamespace(
+        DSparkDecodeStats=lambda: SimpleNamespace(to_dict=lambda: stats), dspark_generate=dspark))
+    monkeypatch.setitem(sys.modules, "mtplx.sampling", SimpleNamespace(SamplerConfig=lambda **k: None))
+    model = Model()
+    result = bench.bench_one_cell(model=model, tokenizer=bench._FakeTokenizer(),
+        ops=bench._FakeOps(), mem_probe=bench._DryMemProbe(), gather_probe=bench._GatherProbe(model),
+        prompt_ids=[0, 2], steps=2, decode_mode="dspark")
+    dsp = result["dspark"]
+    assert dsp["pass_wall_s"] == 12
+    assert dsp["decode_wall_s"] == 2
+    assert dsp["decode_tokens"] == 2
+    assert dsp["decode_tok_s"] == 1

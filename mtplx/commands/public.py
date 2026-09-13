@@ -9907,8 +9907,9 @@ def cmd_serve_public(args: Any) -> int:
         )
     if bool(getattr(args, "experimental_mtp_cohorts", False)):
         cmd.append("--experimental-mtp-cohorts")
-    ssd_session_cache = str(getattr(args, "ssd_session_cache", "on") or "on")
-    cmd.extend(["--ssd-session-cache", ssd_session_cache])
+    ssd_session_cache = _resolved_ssd_session_cache_mode(args)
+    if _forward_ssd_session_cache_mode(args, ssd_session_cache):
+        cmd.extend(["--ssd-session-cache", ssd_session_cache])
     ssd_dir = getattr(args, "ssd_session_cache_dir", None)
     if ssd_dir:
         cmd.extend(["--ssd-session-cache-dir", str(ssd_dir)])
@@ -11856,6 +11857,19 @@ def _public_model_id_for_args(args: Any, model_ref: str | None) -> str:
     )
 
 
+def _resolved_ssd_session_cache_mode(args: Any) -> str:
+    mode = str(getattr(args, "ssd_session_cache", "on") or "on")
+    if mode == "on" and "ssd-session-cache" not in (getattr(args, "_cli_flags", set()) or set()):
+        return os.environ.get("MTPLX_SSD_SESSION_CACHE") or mode
+    return mode
+
+
+def _forward_ssd_session_cache_mode(args: Any, mode: str) -> bool:
+    """Keep explicit modes; let the daemon resolve model-specific defaults."""
+    return (mode != "on" or "ssd-session-cache" in (getattr(args, "_cli_flags", set()) or set())
+            or bool(os.environ.get("MTPLX_SSD_SESSION_CACHE")))
+
+
 def _batching_command_suffix(args: Any) -> str:
     parts: list[str] = []
     scheduler_mode = str(getattr(args, "scheduler_mode", "serial") or "serial")
@@ -11875,12 +11889,10 @@ def _batching_command_suffix(args: Any) -> str:
             parts.extend([flag, shlex.quote(str(value))])
     if bool(getattr(args, "experimental_mtp_cohorts", False)):
         parts.append("--experimental-mtp-cohorts")
-    ssd_session_cache = str(getattr(args, "ssd_session_cache", "on") or "on")
-    # Emit the mode unconditionally, "off" included: these generated
-    # commands are re-parsed by CLIs whose own default is "on"
-    # (kvcache-v2), so omitting an explicit "off" silently re-enables
-    # the cache (issue #140 class).
-    parts.extend(["--ssd-session-cache", shlex.quote(ssd_session_cache)])
+    ssd_session_cache = _resolved_ssd_session_cache_mode(args)
+    # Preserve explicit off, while leaving an implicit on for model resolution.
+    if _forward_ssd_session_cache_mode(args, ssd_session_cache):
+        parts.extend(["--ssd-session-cache", shlex.quote(ssd_session_cache)])
     if ssd_session_cache != "off":
         ssd_dir = getattr(args, "ssd_session_cache_dir", None)
         if ssd_dir:

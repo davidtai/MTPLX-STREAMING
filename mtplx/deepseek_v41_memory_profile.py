@@ -64,6 +64,29 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 GIB = 1024**3
+DEFAULT_ENGRAM_CACHE_BYTES = 256 * 1024**2  # per layer; two layers in this artifact
+
+
+def python_cache_budget(env: Mapping[str, str]) -> dict[str, int]:
+    """Reserve full row arenas and Python indices, not just currently touched pages.
+
+    256 bytes/slot conservatively covers two Python ints, OrderedDict buckets/
+    nodes, and free-list storage. The separate 1 GiB reserve covers tokenizer,
+    host temporary rows, reader bookkeeping and other Python allocations.
+    """
+    from pydantic import ByteSize, TypeAdapter
+
+    per_layer = int(TypeAdapter(ByteSize).validate_python(
+        env.get("MTPLX_ENGRAM_CACHE_LIMIT", DEFAULT_ENGRAM_CACHE_BYTES)))
+    if per_layer < 264:
+        raise ValueError("Engram cache must hold at least one packed row (264 bytes)")
+    slots = per_layer // 264  # smaller of the supported mxfp8/q8 record widths
+    payload = 2 * per_layer
+    metadata = 2 * slots * 256
+    return {"engram_layer_count": 2, "engram_per_layer_bytes": per_layer,
+            "engram_payload_bytes": payload, "engram_metadata_reserve_bytes": metadata,
+            "other_python_reserve_bytes": GIB,
+            "required_host_bytes": payload + metadata + GIB}
 
 # --------------------------------------------------------------------------
 # Derivation constants (documented; a few are env-overridable for tuning).

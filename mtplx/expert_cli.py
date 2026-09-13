@@ -794,6 +794,8 @@ def expert_streaming_load_kwargs(
     model_key = _resolve_model_key(root, manifest)
     values = _load_config_object(getattr(args, "expert_streaming_config", None))
     overrides = _explicit_overrides(args)
+    setattr(args, "_expert_memory_limit_explicit",
+            "memory_limit_bytes" in values or "memory_limit_bytes" in overrides)
     configured_model_key = overrides.pop(
         "model_key", values.pop("model_key", None)
     )

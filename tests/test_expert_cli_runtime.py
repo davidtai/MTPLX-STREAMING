@@ -1176,3 +1176,18 @@ def test_attention_phase_context_overrides_routing_shape_heuristic() -> None:
         RoutingPhase.DECODE,
     ]
     runtime.close()
+
+
+@pytest.mark.parametrize("include_memory", [False, True])
+def test_json_memory_limit_provenance_tracks_presence(tmp_path, monkeypatch, include_memory):
+    root = _model_root(tmp_path)
+    monkeypatch.setattr(expert_cli, "_derive_memory_limit_bytes", lambda: 96 * 1024**3)
+    config = {"max_live_kv_tokens": 8192}
+    if include_memory:
+        config["memory_limit_bytes"] = "96GiB"
+    path = tmp_path / "config-override.json"
+    path.write_text(json.dumps(config))
+    args = _parser().parse_args(["--expert-streaming-config", str(path)])
+    kwargs = expert_streaming_load_kwargs(args, root)
+    assert kwargs["expert_streaming_config"].memory_limit_bytes == 96 * 1024**3
+    assert args._expert_memory_limit_explicit is include_memory

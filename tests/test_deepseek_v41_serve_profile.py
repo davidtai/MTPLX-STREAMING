@@ -146,7 +146,7 @@ def test_resolved_serve_config_no_flags() -> None:
     assert cfg.island_layer_count is None
     assert cfg.mmap_island_layers == ()
     # engram row cache 2 GiB via env in the profile child_env
-    assert profile.child_env.get("MTPLX_ENGRAM_CACHE_LIMIT") == "2GiB"
+    assert profile.child_env.get("MTPLX_ENGRAM_CACHE_LIMIT") == "256MiB"
 
 
 def test_slot_layout_derives_from_codec_without_explicit_flag() -> None:
@@ -263,7 +263,7 @@ def test_session_bank_knobs_no_longer_forced_off_for_mxfp4() -> None:
     child_env = dict(profiles[PROFILE_NAME].child_env)
     assert "MTPLX_SESSION_NEAR_PREFIX_RESTORE" not in child_env
     assert "MTPLX_SESSION_STORE_ON_PREFILL" not in child_env
-    assert child_env.get("MTPLX_ENGRAM_CACHE_LIMIT") == "2GiB"
+    assert child_env.get("MTPLX_ENGRAM_CACHE_LIMIT") == "256MiB"
 
 
 def test_session_bank_features_default_on_under_the_profile_env(monkeypatch) -> None:
@@ -387,8 +387,8 @@ def test_selfcheck_signature_affine_bank_unchanged() -> None:
 # --------------------------------------------------------------------------
 def test_engram_cache_default_is_two_gib(monkeypatch) -> None:
     monkeypatch.delenv("MTPLX_ENGRAM_CACHE_LIMIT", raising=False)
-    assert DEFAULT_ENGRAM_CACHE_BYTES == 2 * GiB
-    assert resolve_engram_cache_bytes() == 2 * GiB
+    assert DEFAULT_ENGRAM_CACHE_BYTES == 256 * 1024**2
+    assert resolve_engram_cache_bytes() == 256 * 1024**2
 
 
 def test_engram_cache_env_override(monkeypatch) -> None:

@@ -114,7 +114,7 @@ DEFAULT_RUNTIME_RESERVE_BYTES = 7 * 1024**3
 # their affine-q8 rows from the 2x101 GB SSD row banks through a byte-budgeted
 # LRU (mtplx.ngram_row_cache); 2 GiB is the serve default here, raising the
 # module's bare 1 GiB env fallback. MTPLX_ENGRAM_CACHE_LIMIT still overrides it.
-DEFAULT_ENGRAM_CACHE_BYTES = 2 * 1024**3
+from ..deepseek_v41_memory_profile import DEFAULT_ENGRAM_CACHE_BYTES
 
 
 def resolve_engram_cache_bytes() -> int:

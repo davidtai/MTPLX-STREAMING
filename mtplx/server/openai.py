@@ -3314,6 +3314,7 @@ class ServerState:
         self.expert_streaming_load_kwargs = expert_streaming_load_kwargs(
             args, args.model
         )
+        self.dsv41_memory_budget = None
         if self.expert_streaming_load_kwargs:
             # The DeepSeek-V4.1 DSpark native MTP head (worker W23) is served when
             # the resolved streamed kwargs carry mtp=True (--generation-mode mtp on
@@ -3325,6 +3326,27 @@ class ServerState:
             stream_config = self.expert_streaming_load_kwargs[
                 "expert_streaming_config"
             ]
+            from mtplx.expert_cli import apply_expert_profile_child_env
+            from mtplx.expert_runtime import prepare_deepseek_v41_memory_config
+
+            if stream_config.model_key.startswith("deepseek-v41"):
+                apply_expert_profile_child_env(args, os.environ)
+            stream_config, self.dsv41_memory_budget = prepare_deepseek_v41_memory_config(
+                stream_config, env=os.environ, args=args,
+                preserve_memory_limit=(
+                    getattr(args, "_expert_memory_limit_explicit", False)
+                    or "memory_limit_bytes" in getattr(
+                        args, "_resolved_expert_profile_customized_fields", ())
+                    or getattr(args, "expert_memory_limit", None) is not None))
+            self.expert_streaming_load_kwargs["expert_streaming_config"] = stream_config
+            if self.dsv41_memory_budget is not None:
+                args._resolved_expert_profile_customized = True
+                args._resolved_expert_profile_customized_fields = tuple(sorted({
+                    *getattr(args, "_resolved_expert_profile_customized_fields", ()),
+                    "memory_limit_bytes"}))
+                args._resolved_expert_effective_config = {
+                    **getattr(args, "_resolved_expert_effective_config", {}),
+                    "memory_limit_bytes": stream_config.memory_limit_bytes}
             from dataclasses import replace as _dc_replace
 
             from mtplx.expert_runtime import reconcile_mlx_memory_cap
@@ -3445,8 +3467,12 @@ class ServerState:
                     resident_floor_label = "Qwen3.8-Flash-Next"
             except OSError:
                 minimum_resident_bytes = None
-        self.metal_memory_caps = _apply_metal_memory_caps(
-            minimum_resident_bytes=minimum_resident_bytes,
+        self.metal_memory_caps = (
+            {"applied": False, "reason": "streaming_runtime_owns_caps",
+             "memory_limit_bytes": self.dsv41_memory_budget["mlx_limit_bytes"],
+             "memory_limit_source": "dsv41_box_target"}
+            if self.dsv41_memory_budget is not None else
+            _apply_metal_memory_caps(minimum_resident_bytes=minimum_resident_bytes)
         )
         if self.metal_memory_caps.get("reason") in {
             "insufficient_ram",
@@ -3525,7 +3551,10 @@ class ServerState:
             self.fast_path_env_status = _fast_path_env_status()
         from mtplx.expert_cli import apply_expert_profile_child_env
 
-        apply_expert_profile_child_env(args, os.environ)
+        # DeepSeek's environment was composed and normalized before budgeting.
+        # Reapplying it here could restore a size alias with different units.
+        if self.dsv41_memory_budget is None:
+            apply_expert_profile_child_env(args, os.environ)
         # Served-path visibility (W46): print the DeepSeek-V4.1 decode levers as
         # resolved INSIDE the daemon, right after the profile child_env is
         # composed onto os.environ. A GPU-window log then shows exactly which
@@ -3561,7 +3590,10 @@ class ServerState:
             # engine_session reads this when sizing the session bank; the
             # CLI flag is the public surface, the env is the plumbing.
             os.environ["MTPLX_MEMORY_BUDGET"] = str(int(self.memory_budget_bytes))
-        self.mlx_cache_limit_status = _configure_mlx_cache_limit(args)
+        self.mlx_cache_limit_status = (
+            {"configured": False, "source": "streaming_runtime_owns_caps"}
+            if self.dsv41_memory_budget is not None else _configure_mlx_cache_limit(args)
+        )
         # The n-gram table pre-read: the CLI flag is the public surface, the
         # env is the plumbing (same contract as MTPLX_MEMORY_BUDGET above).
         # Stamped AFTER apply_profile_env so an explicit --ngram-prewarm /
@@ -3609,6 +3641,14 @@ class ServerState:
         finally:
             load_heartbeat.set()
         self.load_time_s = time.perf_counter() - started
+        if self.dsv41_memory_budget is not None:
+            cap = self.runtime.expert_streaming.memory_cap_report
+            self.metal_memory_caps = {
+                **cap, "memory_limit_bytes": cap["limit"],
+                "memory_limit_source": "dsv41_box_target"}
+            self.mlx_cache_limit_status = {
+                "configured": cap["cache_limit_applied"], "source": "dsv41_box_target",
+                "limit_bytes": cap["cache_limit_bytes"]}
         _startup_line(f"[5/6] Model loaded in {self.load_time_s:.1f}s")
         # The fixed-M4 lane's per-request memory gate measures against the
         # same allocator ceiling the prefill admission shed uses
