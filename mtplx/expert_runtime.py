@@ -1769,34 +1769,38 @@ _GIB = 1024**3
 #  (1) mx.set_memory_limit bounds active + cache JOINTLY (mlx 0.32.2 allocator.cpp:
 #      gc_limit release fires on active+cache+size >= limit), so mlx_peak == the joint
 #      active+cache peak is what the allocator limit caps -- the cache is NOT a separate
-#      band ON TOP of the limit.  Subtracting the cache from the allocator limit would
-#      reserve it twice and cap box_used at target - cache.  So:
+#      band ON TOP of the limit.  So:
 #          allocator_limit (set_memory_limit == set_wired_limit)
 #                          = target - baseline - host_overhead
-#      where host_overhead = process phys_footprint peak - mlx_peak (the python heap,
-#      reader buffers, engram LRU, tokenizer -- the part of the process the MLX allocator
-#      never sees).  W47 measured footprint_peak - mlx_peak ~ 1.1-2.6 GiB; default 2.5,
-#      stamped.  Then process_footprint_peak = mlx_peak(<= allocator_limit) + host_overhead
-#      <= allocator_limit + host_overhead, so box_used = baseline + footprint <= target.
+#      where host_overhead = process phys_footprint peak - mlx_peak (python heap, reader
+#      buffers, engram LRU, tokenizer -- the part of the process the MLX allocator never
+#      sees).  HIGH-A: W48's FOOTPRINT-based receipt gives host = box_used 94.89 -
+#      baseline 10.81 = 84.07 GB = 78.30 GiB vs mlx_peak 78.24 -> ~0.06 GiB (the old 2.5
+#      was RSS-based W47 and over-reserved ~2 GiB).  Default 0.5 GiB, stamped.  Then
+#      process_footprint_peak = mlx_peak(<= allocator_limit) + host_overhead, so box_used
+#      = baseline + footprint <= target.
 #
-#  (2) the quantity unpriced ABOVE the engine budget (== the residency PLAN) is
-#      mlx_peak - PLAN, not mlx_peak - active_at_decode_start.  W46/47: plan 69.18,
-#      active_start 70.62, mlx_peak 74.72 -> peak - plan = 5.54 GiB (the old 4.1 =
-#      peak - active_start left the prefill peak 1.44 GiB OVER the limit, re-clearing the
-#      whole cache during prefill).  The engine budget (config memory_limit_bytes, sizes
-#      the persistent slots) therefore leaves room for BOTH the prefill/peak overshoot
-#      AND the freed-buffer LRU:
-#          engine_budget = allocator_limit - transient_band(peak - plan) - cache_room
-#      so the prefill peak (engine + 5.54) stays under the allocator limit AND the decode
-#      LRU has ~cache_room GiB to hold across misses (W47 hr8 held 5.0).  The LRU is
-#      bounded with set_cache_limit(cache_room) ALONE.  transient_band / cache_room /
+#  (2) HIGH-A: the engine budget (config memory_limit_bytes, sizes the persistent slots ==
+#      the PLAN) must leave headroom under the allocator limit for the WORST of two decode
+#      /prefill regimes -- they are NOT additive (the LRU is already inside mlx_peak):
+#        * prefill peak = engine + transient_band(mlx_peak - plan = 5.54)
+#        * decode peak  = active(engine + active_overshoot(active_start - plan = 1.44))
+#                         + cache_room(the LRU sits on top of the decode working set)
+#      so engine_budget = allocator_limit - max(transient_band, active_overshoot +
+#      cache_room) = allocator - max(5.54, 1.44 + 6 = 7.44) = allocator - 7.44.  The old
+#      allocator - band - cache (= allocator - 11.54) over-reserved ~4 GiB and handed back
+#      ~210 FEWER slots than W48 (which ran cache-less at 2840 slots and beat W47-hr8's
+#      2640 with a held cache: 5.91 vs 5.49).  The LRU is bounded with
+#      set_cache_limit(cache_room) ALONE.  band / active_overshoot / cache_room /
 #      host_overhead are GiB (fixed per-arm bands); target / baseline stay decimal GB.
 BOX_ALLOC_CACHE_ENV = "MTPLX_DSV41_MLX_CACHE_LIMIT_GIB"
 BOX_TRANSIENT_BAND_ENV = "MTPLX_DSV41_TRANSIENT_BAND_GIB"
 BOX_HOST_OVERHEAD_ENV = "MTPLX_DSV41_HOST_OVERHEAD_GIB"
+BOX_ACTIVE_OVERSHOOT_ENV = "MTPLX_DSV41_ACTIVE_OVERSHOOT_GIB"
 DEFAULT_ALLOC_CACHE_GIB = 6.0  # freed-buffer LRU bound (set_cache_limit alone)
 DEFAULT_TRANSIENT_BAND_GIB = 5.54  # mlx_peak - PLAN (windows 46/47: 74.72 - 69.18)
-DEFAULT_HOST_OVERHEAD_GIB = 2.5  # process phys_footprint peak - mlx_peak (W47 ~1.1-2.6)
+DEFAULT_ACTIVE_OVERSHOOT_GIB = 1.45  # active_at_decode_start - PLAN (W47 receipt 1.4416; round up to cover it)
+DEFAULT_HOST_OVERHEAD_GIB = 0.5  # HIGH-A: footprint_peak - mlx_peak (W48 ~0.06; RSS W47 was 2.5)
 
 
 def _env_pos_float(env: Mapping[str, str], key: str) -> float | None:
@@ -1899,9 +1903,13 @@ def resolve_box_target_mlx_limit_bytes(
     host_gib = _env_nonneg_float_or_default(
         source, BOX_HOST_OVERHEAD_ENV, DEFAULT_HOST_OVERHEAD_GIB
     )
+    active_gib = _env_nonneg_float_or_default(
+        source, BOX_ACTIVE_OVERSHOOT_ENV, DEFAULT_ACTIVE_OVERSHOOT_GIB
+    )
     cache_b = int(round(cache_gib * _GIB))
     transient_b = int(round(transient_gib * _GIB))
     host_b = int(round(host_gib * _GIB))
+    active_b = int(round(active_gib * _GIB))
     target_b = int(round(target_gb * _DECIMAL_GB))
     # (HIGH-2 (1)) the allocator/wired limit reserves only the host overhead the MLX
     # allocator can't see; the cache lives WITHIN this joint active+cache limit.
@@ -1912,14 +1920,19 @@ def resolve_box_target_mlx_limit_bytes(
             f"minus host overhead {host_gib:g} GiB leaves no MLX budget "
             f"({mlx_limit} bytes)"
         )
-    # (HIGH-2 (2)) the engine budget (persistent slots == the plan) leaves room under
-    # the allocator limit for the prefill/peak overshoot (peak - plan) AND the LRU.
-    engine_budget_b = mlx_limit - transient_b - cache_b
+    # (HIGH-A) the engine budget (persistent slots == the plan) reserves the WORST of the
+    # two regimes under the allocator limit -- they are NOT additive (the LRU is already
+    # inside mlx_peak): prefill peak = engine + transient_band; decode peak = active
+    # (engine + active_overshoot) + cache_room.  engine = allocator - max(band,
+    # active_overshoot + cache).
+    engine_reserve_b = max(transient_b, active_b + cache_b)
+    engine_budget_b = mlx_limit - engine_reserve_b
     if engine_budget_b <= 0:
         raise ExpertStreamingConfigurationError(
-            f"{BOX_TARGET_ENV} derives allocator limit {mlx_limit} bytes but the "
-            f"transient band {transient_gib:g} GiB + cache room {cache_gib:g} GiB "
-            f"leave no engine budget ({engine_budget_b} bytes); raise {BOX_TARGET_ENV}"
+            f"{BOX_TARGET_ENV} derives allocator limit {mlx_limit} bytes but the engine "
+            f"reserve max(transient band {transient_gib:g}, active overshoot {active_gib:g} "
+            f"+ cache {cache_gib:g}) GiB leaves no engine budget ({engine_budget_b} "
+            f"bytes); raise {BOX_TARGET_ENV}"
         )
     return {
         "mlx_limit_bytes": mlx_limit,
@@ -1932,6 +1945,9 @@ def resolve_box_target_mlx_limit_bytes(
         "allocator_cache_limit_bytes": cache_b,
         "transient_band_gib": transient_gib,
         "transient_band_bytes": transient_b,
+        "active_overshoot_gib": active_gib,
+        "active_overshoot_bytes": active_b,
+        "engine_reserve_bytes": engine_reserve_b,
         "engine_budget_bytes": engine_budget_b,
     }
 
@@ -1957,20 +1973,22 @@ def apply_mlx_memory_cap(
     the miss path clearing the whole cache (window 47: AR 2.99 at-the-plan -> 5.49 with
     room above the peak).  The engine budget (``MTPLX_MEMORY_LIMIT_BYTES``, which sizes
     the persistent expert slots == the residency plan) is sized where the config is built
-    to ``allocator_limit - transient_band(peak - plan) - cache_room`` so the prefill peak
-    stays under the allocator limit AND the decode LRU has room; this function stamps the
+    to ``allocator_limit - max(transient_band(peak-plan), active_overshoot + cache_room)``
+    so BOTH the prefill peak and the decode working set + LRU stay under the allocator
+    limit (HIGH-A: the band and cache are not additive); this function stamps the
     reconciled plan value for the cross-check and RECORDS the slot arithmetic
-    (``memory_cap_report['slot_derivation']``).  ``MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB``
-    (default 0, read at use) remains an explicit add-on override above the allocator
-    limit; unset targets keep the legacy plan-limit path.  ``limit`` in the report is the
+    (``memory_cap_report['slot_derivation']``).  ``MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB`` is
+    REFUSED under an armed target (HIGH-B: it would push box_used above the target);
+    unset targets keep the legacy plan-limit path where headroom is an add-on.  ``limit``
+    in the report is the
     effective value passed to the allocator (and the source of ``mlx_limit_gib_effective``
     -- mlx 0.32.2 has no get_memory_limit readback)."""
 
     target_env = os.environ if env is None else env
     plan_limit = reconcile_mlx_memory_cap(plan, env=target_env)
     # The engine budget env stays the reconciled PLAN value (the config that built the
-    # plan already sized it -- to allocator_limit - transient_band when the target is
-    # armed, see the bench).  reconcile stamps it for the conflict cross-check; this
+    # plan already sized it -- to allocator_limit - max(band, active_overshoot + cache)
+    # when the target is armed, see the bench).  reconcile stamps it for the cross-check; this
     # function never moves it, so bytes/routing follow the config's slot count.
     target_env["MTPLX_MEMORY_LIMIT_BYTES"] = str(plan_limit)
     headroom = resolve_mlx_limit_headroom_bytes(target_env)
@@ -1986,12 +2004,23 @@ def apply_mlx_memory_cap(
     except ExpertStreamingConfigurationError:
         raise
     if box_target is not None:
+        # HIGH-B: an explicit headroom ADDED to the target-derived limit pushes box_used
+        # ABOVE the target (an *_hr8 arm under an armed target -> +8 GiB -> ~108.6 GB box,
+        # 1.4 GB from the panic line, and the receipt/sidecar omit the +8).  The target
+        # IS the box budget, so refuse rather than silently overshoot it.
+        if headroom > 0:
+            raise ExpertStreamingConfigurationError(
+                f"{MLX_LIMIT_HEADROOM_ENV} ({headroom} bytes) cannot be combined with an "
+                f"armed {BOX_TARGET_ENV}: the target already IS the box budget, so adding "
+                "headroom would push box_used above the target. Drop the headroom or the "
+                "target."
+            )
         base_limit = box_target["mlx_limit_bytes"]
         limit_source = "box_target"
         if base_limit < plan_limit:
             raise ExpertStreamingConfigurationError(
                 f"{BOX_TARGET_ENV} derives an MLX allocator limit of {base_limit} "
-                f"bytes (target - baseline - allocator cache), BELOW the engine budget "
+                f"bytes (target - baseline - host overhead), BELOW the engine budget "
                 f"{plan_limit} (residents + KV + expert slots do not fit under the "
                 f"target); raise {BOX_TARGET_ENV} or lower --max-kv / the expert-cache "
                 "budget"
@@ -2120,6 +2149,9 @@ def apply_mlx_memory_cap(
         )
         report["transient_band_bytes"] = int(box_target["transient_band_bytes"])
         report["transient_band_gib"] = round(box_target["transient_band_gib"], 6)
+        report["active_overshoot_bytes"] = int(box_target["active_overshoot_bytes"])
+        report["active_overshoot_gib"] = round(box_target["active_overshoot_gib"], 6)
+        report["engine_reserve_bytes"] = int(box_target["engine_reserve_bytes"])
         report["engine_budget_bytes"] = int(box_target["engine_budget_bytes"])
         report["slot_derivation"] = _slot_derivation_report(plan, box_target)
     return report
@@ -2131,7 +2163,7 @@ def _slot_derivation_report(
     """The W121 persistent-slot arithmetic for the receipt (David: "track the memory
     usage so we can efficiently use it").
 
-        engine_budget = allocator_limit - transient_band(peak - plan) - cache_room
+        engine_budget = allocator_limit - max(transient_band, active_overshoot + cache_room)
         persistent expert slots = (engine_budget - fixed_footprint) / record_bytes
 
     ``fixed_footprint_source`` is ``plan.fixed_bytes`` -- the plan's ESTIMATE (residents
@@ -2142,7 +2174,9 @@ def _slot_derivation_report(
 
     allocator_limit = int(box_target["mlx_limit_bytes"])
     transient_band = int(box_target["transient_band_bytes"])
+    active_overshoot = int(box_target["active_overshoot_bytes"])
     cache_room = int(box_target["allocator_cache_limit_bytes"])
+    engine_reserve = int(box_target["engine_reserve_bytes"])
     engine_budget = int(box_target["engine_budget_bytes"])
     fixed_bytes = int(getattr(plan, "fixed_bytes", 0) or 0)
     persistent_slots_plan = int(getattr(plan, "persistent_slots", 0) or 0)
@@ -2158,12 +2192,14 @@ def _slot_derivation_report(
     )
     return {
         "formula": (
-            "engine_budget = allocator_limit - transient_band - cache_room; "
-            "persistent_slots = (engine_budget - fixed_footprint) / record_bytes"
+            "engine_budget = allocator_limit - max(transient_band, active_overshoot + "
+            "cache_room); persistent_slots = (engine_budget - fixed_footprint) / record_bytes"
         ),
         "allocator_limit_bytes": allocator_limit,
         "transient_band_bytes": transient_band,
+        "active_overshoot_bytes": active_overshoot,
         "cache_room_bytes": cache_room,
+        "engine_reserve_bytes": engine_reserve,
         "engine_budget_bytes": engine_budget,
         # NB: the plan's ESTIMATE of the fixed footprint, not a live measurement.
         "fixed_footprint_bytes_plan_estimate": fixed_bytes,

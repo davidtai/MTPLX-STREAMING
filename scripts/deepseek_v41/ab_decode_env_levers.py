@@ -1841,6 +1841,15 @@ def build_parser() -> argparse.ArgumentParser:
         "MTPLX_DSV41_MLX_CACHE_LIMIT_GIB).",
     )
     p.add_argument(
+        "--active-overshoot-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="active memory at decode start ABOVE the plan (active_start - plan) in GiB; "
+        "with the cache room it bounds the decode-regime reserve max(band, active + cache) "
+        "(default 1.44, MTPLX_DSV41_ACTIVE_OVERSHOOT_GIB).",
+    )
+    p.add_argument(
         "--transient-band-gib",
         type=float,
         default=None,
@@ -2537,6 +2546,7 @@ def _resolve_target_plan(args):
     A/B arm uses the SAME engine budget (reproducible residency)."""
 
     from mtplx.expert_runtime import (
+        BOX_ACTIVE_OVERSHOOT_ENV,
         BOX_ALLOC_CACHE_ENV,
         BOX_BASELINE_ENV,
         BOX_HOST_OVERHEAD_ENV,
@@ -2566,6 +2576,7 @@ def _resolve_target_plan(args):
         cache_gib = comps.get("allocator_cache_limit_gib")
         band_gib = comps.get("transient_band_gib")
         host_gib = comps.get("host_overhead_gib")
+        active_gib = comps.get("active_overshoot_gib")
     else:
         target_gb = _resolve_box_target_gb(args)
         if target_gb is None:
@@ -2574,8 +2585,9 @@ def _resolve_target_plan(args):
         cache_gib = getattr(args, "allocator_cache_gib", None)
         band_gib = getattr(args, "transient_band_gib", None)
         host_gib = getattr(args, "host_overhead_gib", None)
+        active_gib = getattr(args, "active_overshoot_gib", None)
 
-    # Stamp the env the runtime reads (decimal GB target/baseline; GiB host/cache/band).
+    # Stamp the env the runtime reads (decimal GB target/baseline; GiB host/cache/band/active).
     os.environ[BOX_TARGET_ENV] = f"{float(target_gb):g}"
     if baseline_gb is not None:
         os.environ[BOX_BASELINE_ENV] = f"{float(baseline_gb):g}"
@@ -2585,6 +2597,8 @@ def _resolve_target_plan(args):
         os.environ[BOX_TRANSIENT_BAND_ENV] = f"{float(band_gib):g}"
     if host_gib is not None:
         os.environ[BOX_HOST_OVERHEAD_ENV] = f"{float(host_gib):g}"
+    if active_gib is not None:
+        os.environ[BOX_ACTIVE_OVERSHOOT_ENV] = f"{float(active_gib):g}"
 
     # resolve_box_target_mlx_limit_bytes raises (actionable) if the baseline is missing.
     r = resolve_box_target_mlx_limit_bytes(os.environ)
@@ -2595,6 +2609,7 @@ def _resolve_target_plan(args):
         "host_overhead_gib": r["host_overhead_gib"],
         "allocator_cache_limit_gib": r["allocator_cache_limit_gib"],
         "transient_band_gib": r["transient_band_gib"],
+        "active_overshoot_gib": r["active_overshoot_gib"],
         "allocator_limit_bytes": int(r["mlx_limit_bytes"]),
         "engine_budget_bytes": int(r["engine_budget_bytes"]),
         "engine_budget_gib": r["engine_budget_bytes"] / GIB,
@@ -2642,9 +2657,9 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
             f"- baseline {target_plan['box_baseline_gb']:.4g} GB "
             f"- host overhead {target_plan['host_overhead_gib']:g} GiB "
             f"= allocator limit {target_plan['allocator_limit_bytes'] / GIB:.4g} GiB; "
-            f"engine budget = allocator - transient band "
-            f"{target_plan['transient_band_gib']:g} - cache "
-            f"{target_plan['allocator_cache_limit_gib']:g} GiB = {override:.4g} GiB "
+            f"engine budget = allocator - max(band "
+            f"{target_plan['transient_band_gib']:g}, active {target_plan['active_overshoot_gib']:g} "
+            f"+ cache {target_plan['allocator_cache_limit_gib']:g}) GiB = {override:.4g} GiB "
             "(sizes the persistent expert slots)"
             + (
                 f" [PINNED from {target_plan['pinned_from']}]"

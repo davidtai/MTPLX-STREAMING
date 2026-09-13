@@ -123,11 +123,11 @@ def test_box_target_ar_end_to_end(tmp_path, monkeypatch):
     assert tp is not None
     assert tp["box_target_gb"] == 100.0
     assert abs(tp["box_baseline_gb"] - 10.42) < 1e-9
-    # HIGH-2: allocator limit = target - baseline - host(2.5 GiB); engine = allocator
-    # - band(5.54) - cache_room(6).
-    assert tp["allocator_limit_bytes"] == int(round((100 - 10.42) * GB)) - int(round(2.5 * GIB))
+    # HIGH-A: allocator limit = target - baseline - host(0.5 GiB); engine = allocator
+    # - max(band 5.54, active_overshoot 1.45 + cache 6) = allocator - 7.45.
+    assert tp["allocator_limit_bytes"] == int(round((100 - 10.42) * GB)) - int(round(0.5 * GIB))
     assert tp["engine_budget_bytes"] == (
-        tp["allocator_limit_bytes"] - int(round(5.54 * GIB)) - 6 * GIB
+        tp["allocator_limit_bytes"] - max(int(round(5.54 * GIB)), int(round(1.45 * GIB)) + 6 * GIB)
     )
     # the loader is handed the engine budget (grows the persistent slots to the target)
     assert abs(cap["memory_limit_bytes"] - tp["engine_budget_bytes"]) < 4096
@@ -165,9 +165,10 @@ def test_memory_plan_from_pins_components_end_to_end(tmp_path, monkeypatch):
     sidecar.write_text(json.dumps({
         "box_target_gb": 100.0,
         "box_baseline_gb": 10.42,
-        "host_overhead_gib": 2.5,
+        "host_overhead_gib": 0.5,
         "allocator_cache_limit_gib": 6.0,
         "transient_band_gib": 5.54,
+        "active_overshoot_gib": 1.45,
     }))
     args, cap = _drive(
         ab, ["--memory-plan-from", str(sidecar)],
@@ -176,10 +177,10 @@ def test_memory_plan_from_pins_components_end_to_end(tmp_path, monkeypatch):
     tp = args._dsv41_target_plan
     assert tp is not None
     assert tp["pinned_from"] == str(sidecar)
-    # allocator = target - baseline - host(2.5); engine = allocator - band(5.54) - cache(6)
+    # allocator = target - baseline - host(0.5); engine = allocator - max(5.54, 1.45+6)
     assert tp["engine_budget_bytes"] == (
-        int(round((100 - 10.42) * GB)) - int(round(2.5 * GIB))
-        - int(round(5.54 * GIB)) - 6 * GIB
+        int(round((100 - 10.42) * GB)) - int(round(0.5 * GIB))
+        - max(int(round(5.54 * GIB)), int(round(1.45 * GIB)) + 6 * GIB)
     )
     assert abs(cap["memory_limit_bytes"] - tp["engine_budget_bytes"]) < 4096
 
