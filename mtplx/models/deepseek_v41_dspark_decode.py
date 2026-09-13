@@ -428,12 +428,22 @@ DSPARK_DIVERGENCE_TIE_ULPS_MAX = 64
 def _row_to_np(row) -> Optional["np.ndarray"]:
     """1-D float64 view of a logits row, or ``None``.  Casts an ``mx.array`` (incl.
     bf16, which numpy has no native dtype for) through float32 first, so no row
-    dtype makes the classifier raise."""
+    DTYPE and no absent (``None``) row makes the classifier raise.
+
+    A row with ``ndim > 1`` is a CALLER bug (the contested-token indexing assumes a
+    single vocab vector): RAISE ``ValueError`` rather than silently ``reshape(-1)`` a
+    ``[rows, vocab]`` block into one vector, which would index garbage contested
+    logits (LOW).  Both real callers already pass a 1-D ``reshape(-1)`` row."""
     if row is None:
         return None
     if isinstance(row, mx.array):
         row = np.asarray(row.astype(mx.float32))
-    return np.asarray(row).reshape(-1).astype(np.float64)
+    arr = np.asarray(row)
+    if arr.ndim > 1:
+        raise ValueError(
+            f"classify_divergence expects a 1-D logits row, got shape {arr.shape}"
+        )
+    return arr.reshape(-1).astype(np.float64)
 
 
 def _logit_at(row_np: Optional["np.ndarray"], tok: Optional[int]) -> Optional[float]:
@@ -570,7 +580,9 @@ def classify_divergence(
     faithful M=1 replay); ``dspark_logits_row`` is the verify forward's logits row
     that produced the committed DSpark token there (captured, zero extra forwards).
     Either row may be ``None`` (unavailable) -- the classifier degrades to the
-    signals it has and never raises (``mx.array`` rows, incl. bf16, are cast).
+    signals it has and never raises on an absent row or an unusual dtype
+    (``mx.array`` rows, incl. bf16, are cast); a malformed row with ndim > 1 is a
+    caller bug and DOES raise (see :func:`_row_to_np`).
 
     W120 rule (see the module block above and W120_DIVERGENCE_TIE_BAND.md).  The
     flip ``ar_token -> dspark_token`` is ``"tie_flip"`` iff it is absolvable AND
@@ -581,7 +593,16 @@ def classify_divergence(
         both rows) AND both forwards differ at the two contested tokens by no more
         than the band (``deltas_within_tie_band``).  A >band perturbation is NOT
         rounding, so a verify row's own tight top-2 (or a decisive AR top-2 at other
-        tokens) is never on its own a reason to absolve.
+        tokens) is never on its own a reason to absolve.  ADDITIONALLY the rows must
+        be SELF-CONSISTENT with the tokens they are credited with
+        (``rows_consistent``: ``ar_token`` is an argmax of the AR row and
+        ``dspark_token`` is an argmax of the verify row -- ties allowed, since the
+        authoritative verify side is an exact bf16 tie in the very case W120 exists
+        to absolve; a token strictly below its row's max means that row did NOT
+        produce it, so the flip is not rounding), and all four contested logits must
+        be FINITE (a NaN / inf contested logit never absolves -- ``max()`` over a NaN
+        delta is order-dependent, so ``deltas_within_tie_band`` is forced to False,
+        not True, whenever any contested logit is non-finite).
       * **band** ``tie_band = max(tie_margin, k * ulp_bf16(peak))`` with ``peak =
         max(|ar[ar_token]|, |ar[dspark_token]|)`` from the AR REFERENCE row ONLY.
       * **(a) near_tie_by_band** -- ``min(ar_contested_margin,
@@ -603,7 +624,7 @@ def classify_divergence(
     (``tie_band_used``, ``tie_ulps``, ``peak_contested_logit``,
     ``ulp_bf16_at_peak``, ``ar_contested_margin``, ``dspark_contested_margin``,
     ``delta_at_ar_token``, ``delta_at_dspark_token``, ``rounding_class_by_delta``,
-    ``deltas_within_tie_band``, ``ar_logit_at_ar_token``,
+    ``deltas_within_tie_band``, ``rows_consistent``, ``ar_logit_at_ar_token``,
     ``ar_logit_at_dspark_token``, ``dspark_logit_at_ar_token``,
     ``dspark_logit_at_dspark_token`` -- the last four so a serialized receipt is
     self-decidable without the rows); every W77 key (``divergence_index``,
@@ -652,13 +673,26 @@ def classify_divergence(
     if ulp_at_peak is not None:
         tie_band = max(tie_band, float(k) * float(ulp_at_peak))
 
+    # All four contested logits must be FINITE.  A NaN / inf contested logit makes a
+    # contested delta non-finite, and ``max()`` over a NaN is ORDER-DEPENDENT
+    # (``max(0.0, nan)`` is 0.0 but ``max(nan, 0.0)`` is nan), so an unchecked band
+    # test could absolve a NaN row (MEDIUM).
+    contested_logits_finite = all(
+        v is not None and math.isfinite(v)
+        for v in (ar_l_at_ar, ar_l_at_dsp, dsp_l_at_ar, dsp_l_at_dsp)
+    )
+
     # The closing deltas must themselves be rounding-class (both <= band).  A >band
-    # perturbation is not rounding (HIGH-1).
+    # perturbation is not rounding (HIGH-1); a non-finite delta is FORCED to False
+    # (never True), not left to the order-dependent ``max`` comparison (MEDIUM).
     deltas_within_tie_band: Optional[bool] = None
     if delta_at_ar_token is not None and delta_at_dspark_token is not None:
-        deltas_within_tie_band = bool(
-            max(delta_at_ar_token, delta_at_dspark_token) <= tie_band
-        )
+        if not (math.isfinite(delta_at_ar_token) and math.isfinite(delta_at_dspark_token)):
+            deltas_within_tie_band = False
+        else:
+            deltas_within_tie_band = bool(
+                max(delta_at_ar_token, delta_at_dspark_token) <= tie_band
+            )
 
     # (c) rounding_class_by_delta -- W119 literal rule on the CONTESTED margins.
     rounding_class_by_delta: Optional[bool] = None
@@ -673,11 +707,30 @@ def classify_divergence(
             <= (delta_at_ar_token + delta_at_dspark_token)
         )
 
+    # rows_consistent (MEDIUM): each row must actually PRODUCE the token it is
+    # credited with -- ``ar_token`` an argmax of the AR row AND ``dspark_token`` an
+    # argmax of the verify row.  TIES are allowed: the authoritative verify side is
+    # an exact bf16 tie in the very case W120 exists to absolve (dspark_top2_margin
+    # 0.0), and DSpark's tie-break legitimately commits one of the tied maxima, so a
+    # token that TIES for its row's max is consistent; a token STRICTLY BELOW the max
+    # means that row did not produce it (a fabricated / mismatched capture) and the
+    # flip is not rounding.  Non-finite logits fail here too (``== nanmax`` is False).
+    rows_consistent = bool(
+        ar_np is not None and ar_np.size
+        and dsp_np is not None and dsp_np.size
+        and contested_logits_finite
+        and ar_l_at_ar == float(np.max(ar_np))
+        and dsp_l_at_dsp == float(np.max(dsp_np))
+    )
+
     # Absolution eligibility (MEDIUM-2): a real AR reference (a top-2 margin exists,
-    # i.e. >= 2 logits), both contested margins computable, and the deltas gate
+    # i.e. >= 2 logits), both contested margins computable, the rows self-consistent
+    # with their tokens, all four contested logits finite, and the deltas gate
     # computable AND within the band.
     absolvable = bool(
-        ar_margin is not None
+        rows_consistent
+        and contested_logits_finite
+        and ar_margin is not None
         and ar_contested_margin is not None
         and dspark_contested_margin is not None
         and deltas_within_tie_band is not None
@@ -709,6 +762,7 @@ def classify_divergence(
         "delta_at_dspark_token": delta_at_dspark_token,
         "rounding_class_by_delta": rounding_class_by_delta,
         "deltas_within_tie_band": deltas_within_tie_band,
+        "rows_consistent": rows_consistent,
         # raw contested logits so a serialized receipt is self-decidable:
         "ar_logit_at_ar_token": ar_l_at_ar,
         "ar_logit_at_dspark_token": ar_l_at_dsp,

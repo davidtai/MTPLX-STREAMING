@@ -185,6 +185,34 @@ def test_degenerate_ar_row_is_divergent():
         assert out["ar_contested_margin"] is None
 
 
+def test_verify_row_that_did_not_produce_dspark_token_is_divergent():
+    # MEDIUM (rows_consistent): the verify row's argmax is token 0 (197 > 196.5), so
+    # it did NOT produce dspark_token 1 -- the flip is not rounding, class divergent.
+    r = classify_divergence(index=0, ar_token=0, dspark_token=1,
+                            ar_logits_row=np.array([200.0, 193.5, 1.0]),
+                            dspark_logits_row=np.array([197.0, 196.5, 1.0]))
+    assert r["class"] == "divergent"
+    assert r["rows_consistent"] is False
+
+
+def test_nan_contested_logit_never_absolves():
+    # MEDIUM (NaN gate): a non-finite contested logit is never rounding-class; the
+    # order-dependent max() must not slip a NaN row through as tie_flip.
+    for ds in ([10.0, float("nan"), 1.0], [float("nan"), 9.99, 1.0]):
+        r = classify_divergence(index=0, ar_token=0, dspark_token=1,
+                                ar_logits_row=np.array([10.0, 9.99, 1.0]),
+                                dspark_logits_row=np.array(ds))
+        assert r["class"] == "divergent" and r["deltas_within_tie_band"] is not True
+
+
+def test_row_to_np_raises_on_ndim_gt_1():
+    # LOW: a [rows, vocab] block is a caller bug -- raise rather than flatten it into
+    # garbage contested indexing.
+    from mtplx.models.deepseek_v41_dspark_decode import _row_to_np
+    with pytest.raises(ValueError):
+        _row_to_np(np.zeros((2, VOCAB), dtype=np.float32))
+
+
 # ---------------------------------------------------------------------------
 # 4. legitimate tie flips still fire (contested deltas are rounding-scale)
 # ---------------------------------------------------------------------------
@@ -323,6 +351,7 @@ def test_receipt_is_json_scalars_and_keeps_w77_keys():
         "tie_band_used", "tie_ulps", "peak_contested_logit", "ulp_bf16_at_peak",
         "ar_contested_margin", "dspark_contested_margin", "delta_at_ar_token",
         "delta_at_dspark_token", "rounding_class_by_delta", "deltas_within_tie_band",
+        "rows_consistent",
         "ar_logit_at_ar_token", "ar_logit_at_dspark_token",
         "dspark_logit_at_ar_token", "dspark_logit_at_dspark_token",
     }

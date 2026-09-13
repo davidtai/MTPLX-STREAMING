@@ -26,10 +26,25 @@ AND (**near-tie by band (a)** OR **rounding-class by delta (c)**):
 
 * **absolvable** — a REAL AR reference (`ar_top2_margin` exists ⇒ ≥ 2 logits) AND
   both **contested margins** computable (both tokens in range on both rows) AND
+  `rows_consistent` AND all four contested logits **finite** AND
   `deltas_within_tie_band` — `max(|Δ(ar_token)|, |Δ(dspark_token)|) ≤ tie_band`,
   where `Δ(t) = |ar_row[t] − dspark_row[t]|`. **A > band contested delta is not
   rounding** (HIGH-1): a verify row's own tight top-2, or a decisive AR top-2 at
   *other* tokens, never absolves on its own.
+* **rows_consistent** (MEDIUM) — each row must actually PRODUCE the token it is
+  credited with: `ar_token` is an argmax of the AR row AND `dspark_token` is an
+  argmax of the verify row. **Ties are allowed** — the authoritative verify side is
+  an exact bf16 tie (`dspark_top2_margin` 0.0) in the very case W120 exists to
+  absolve, and DSpark's tie-break commits one of the tied maxima; a token *strictly
+  below* its row's max means that row did not produce it (a fabricated/mismatched
+  capture), so the flip is not rounding. Example that used to slip through as
+  tie_flip: AR `[200, 193.5, 1]` vs verify `[197, 196.5, 1]` with `dspark_token = 1`
+  (verify argmax is token 0) → now `divergent`.
+* **finite contested logits** (MEDIUM) — a NaN / inf contested logit is never
+  rounding-class. `max()` over a NaN is order-dependent (`max(0, nan) = 0` but
+  `max(nan, 0) = nan`), so `deltas_within_tie_band` is forced to **False** (never
+  True) whenever any of the four contested logits is non-finite. Example: AR
+  `[10, 9.99, 1]` vs verify `[10, nan, 1]` → `divergent`.
 * **band** — `tie_band = max(tie_margin, k · ulp_bf16(peak))`, `peak =
   max(|ar_row[ar_token]|, |ar_row[dspark_token]|)` from the **AR reference row
   only** (MEDIUM-1: a garbage verify logit must not widen the band). `k` default 3.
@@ -92,12 +107,18 @@ Existing (W77) keys **kept unchanged** (`divergence_index`, `ar_token`,
 | `delta_at_ar_token` | `\|ar[ar_token] − dsp[ar_token]\|` |
 | `delta_at_dspark_token` | `\|ar[dspark_token] − dsp[dspark_token]\|` |
 | `rounding_class_by_delta` | W119 rule (c) signal on the contested margins |
-| `deltas_within_tie_band` | the delta gate (both contested deltas ≤ band) |
+| `deltas_within_tie_band` | the delta gate (both contested deltas ≤ band; **False** when any contested logit is non-finite) |
+| `rows_consistent` | each row's argmax is the token it is credited with (ties allowed) |
 | `ar_logit_at_ar_token`, `ar_logit_at_dspark_token`, `dspark_logit_at_ar_token`, `dspark_logit_at_dspark_token` | the four raw contested logits, so a **serialized receipt is self-decidable without the rows** |
 
 The AB census line (`ab_decode_env_levers._print_dspark_divergence`) now prints
-`tie_band_used`, both contested margins, both contested deltas, and **which rule
-fired** (the old `ar_top2_margin < tie_margin` line was false for a W120 tie_flip).
+`tie_band_used`, both contested margins, both contested deltas, `rows_consistent`,
+and **which rule fired** (the old `ar_top2_margin < tie_margin` line was false for a
+W120 tie_flip; the rule reads "none" when `rows_consistent` is False or a contested
+delta exceeds the band / is non-finite). The AB driver also stamps
+`capture_index_matches_first` in the divergence block and WARNs when the captured
+verify row's index differs from the list-compare first-divergence index (the fed
+rows would then not be the compared position).
 
 ## 5. Test evidence
 
@@ -109,19 +130,21 @@ one file per process:
 ```
 $ PYTHONPATH=$WT nice -n 19 .venv/bin/python3 -m pytest \
       tests/test_deepseek_v41_w120_divergence_tie_band.py -q
-.................. [100%]
-18 passed
+..................... [100%]
+21 passed
 ```
 
 Covers: `ulp_bf16` on the W119 grid; `_peak_contested_logit` AR-row-only; the
 window-45 reconstruction → `tie_flip`; the red-team divergence cases (verify-tie
 large delta, +40-shifted verify row, uncontested near-tie/HIGH-2, garbage +300
-verify logit/MEDIUM-1, degenerate 0-/1-element AR row/MEDIUM-2) → `divergent`;
+verify logit/MEDIUM-1, degenerate 0-/1-element AR row/MEDIUM-2, a verify row whose
+argmax is not `dspark_token`/rows_consistent, a NaN contested logit) → `divergent`;
 legitimate 1-ulp bf16 tie and the low-magnitude fixed-band case → `tie_flip`; a
 real flip whose within-band deltas close the smaller contested margin (rule (c));
-bf16 `mx.array` rows do not raise; `k` default/arg/env-at-use and all the MEDIUM-3
-bounds (rejects `-1`, `1_0`, `3.0`, `nan`, `1e20`, fractional/bool; clamps > 64;
-`0` valid); knob NOT in `ALL_LEVER_ENVS`; receipt is JSON scalars with all keys.
+bf16 `mx.array` rows do not raise and `_row_to_np` raises on ndim > 1; `k`
+default/arg/env-at-use and all the MEDIUM-3 bounds (rejects `-1`, `1_0`, `3.0`,
+`nan`, `1e20`, fractional/bool; clamps > 64; `0` valid); knob NOT in
+`ALL_LEVER_ENVS`; receipt is JSON scalars with all keys.
 
 Regression: `tests/models/test_deepseek_v41_dspark_divergence_classify.py` passes
 **unchanged** (10 tests) — the `absolvable` gate keeps the missing-AR conservative
