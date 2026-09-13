@@ -1,0 +1,19 @@
+{
+  "sampled_records": 12,
+  "raw_bytes": 225607680,
+  "zlib1_bytes": 204963287,
+  "zlib1_ratio": 1.1007223942500493,
+  "zlib1_saved_fraction": 0.09150571913154726,
+  "whole_record_order0_ideal_saved_fraction": 0.0675871205367996,
+  "per_component_order0_ideal_saved_fraction": 0.10752488946774352,
+  "zlib1_median_decode_ms": 31.31479150033556,
+  "all_source_hashes_and_roundtrips_exact": true,
+  "bank_identity_unchanged": true,
+  "sampled_physical_peak_bytes": 10606280704,
+  "sampled_process_footprint_peak_bytes": 428262168,
+  "swapouts_first": 4399765,
+  "swapouts_last": 4399765,
+  "guard_exit_code": 0,
+  "source_commit": "3a8b17284ef3ed6fa06cd130a0a56700e926ba62",
+  "script_sha256": "6534886d776d34ce023a38a1db1e7b7f9adafe0d27e00e6ec243c3b81d91c3cd"
+}

@@ -1,0 +1,960 @@
+{
+  "kind": "read-only sampled entropy/compression screen; no serving speed or full-bank ratio claim",
+  "source_commit": "3a8b17284ef3ed6fa06cd130a0a56700e926ba62",
+  "script_sha256": "6534886d776d34ce023a38a1db1e7b7f9adafe0d27e00e6ec243c3b81d91c3cd",
+  "bound": "one18.8MB raw record,onecompressed+roundtrip record,<=151MB histogram scratch,metadata<512MiB;2GiB child cap; no MLX",
+  "records": [
+    {
+      "layer": 0,
+      "expert": 0,
+      "raw_bytes": 18800640,
+      "sha256": "53891b5541b11c41c8d51aff28b53e19685897474dbf47ea0f4a57f967f95561",
+      "whole_record_entropy_bits_per_byte": 7.459913395911432,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.526326010008095
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9445363541632343
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.526544836077948
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.93790218933542
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.532126675134806
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9429882047403981
+        }
+      ],
+      "zlib1_bytes": 17084524,
+      "zlib1_ratio": 1.100448569711395,
+      "zlib1_compress_s": 0.2842459579987917,
+      "zlib1_decompress_s": 0.031326500000432134,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 0,
+      "expert": 191,
+      "raw_bytes": 18800640,
+      "sha256": "6dfa5e829e81d597fccde03ac5ffde1d1032c8fdc52cc42d3ab3ff5361323f91",
+      "whole_record_entropy_bits_per_byte": 7.462048417799879,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.528114854119677
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9444360666729202
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.528024535396668
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9406104910662391
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.536752153945187
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9168753416637403
+        }
+      ],
+      "zlib1_bytes": 17091819,
+      "zlib1_ratio": 1.0999788846348069,
+      "zlib1_compress_s": 0.2837842089938931,
+      "zlib1_decompress_s": 0.031287958001485094,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 8,
+      "expert": 0,
+      "raw_bytes": 18800640,
+      "sha256": "af67334f3408e3bbd102588a381a88501f9a97c50d2596bfdfd11ebbcb8e3099",
+      "whole_record_entropy_bits_per_byte": 7.463706071053428,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.5285509938951485
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.0099646512187284
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.528744059364341
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9969478476866618
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.528607804697613
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9752485289878124
+        }
+      ],
+      "zlib1_bytes": 17086719,
+      "zlib1_ratio": 1.1003072035070045,
+      "zlib1_compress_s": 0.284500083012972,
+      "zlib1_decompress_s": 0.031166208995273337,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 8,
+      "expert": 191,
+      "raw_bytes": 18800640,
+      "sha256": "05f35d4fb2216a4aa8cdc582e92bd2c6d0e399d166c2c584df5a936a797df981",
+      "whole_record_entropy_bits_per_byte": 7.461845221536137,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.52574554754329
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.001928968272565
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.525192435521248
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.00205407903559
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.527984929651987
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9923804515517306
+        }
+      ],
+      "zlib1_bytes": 17085135,
+      "zlib1_ratio": 1.1004092153793341,
+      "zlib1_compress_s": 0.2821828330052085,
+      "zlib1_decompress_s": 0.03134362498531118,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 16,
+      "expert": 0,
+      "raw_bytes": 18800640,
+      "sha256": "8674c4fa18349b049ad042712bc5726a18be1cda7fd233e154b7bc2539c0bdae",
+      "whole_record_entropy_bits_per_byte": 7.463180275936555,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.531066079197638
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9840914818130968
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.528408910441894
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9959688902324617
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.525097255798087
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9970045664023657
+        }
+      ],
+      "zlib1_bytes": 17088437,
+      "zlib1_ratio": 1.1001965832217422,
+      "zlib1_compress_s": 0.282378083007643,
+      "zlib1_decompress_s": 0.031470167014049366,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 16,
+      "expert": 191,
+      "raw_bytes": 18800640,
+      "sha256": "80c628cce59f17780e0b706919944af07facb1857d04f152d47544c2daa931bb",
+      "whole_record_entropy_bits_per_byte": 7.461949419495547,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.527607309151592
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9982100228526186
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.525755548005791
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.0027789267950051
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.5257872490592685
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9998683043789068
+        }
+      ],
+      "zlib1_bytes": 17085808,
+      "zlib1_ratio": 1.1003658709029154,
+      "zlib1_compress_s": 0.28478016701410525,
+      "zlib1_decompress_s": 0.031063665985129774,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 24,
+      "expert": 0,
+      "raw_bytes": 18800640,
+      "sha256": "11ab6fedffe8c1203ceb455f653e0aa15dd9e25b086757b68f62fef892f4d8d2",
+      "whole_record_entropy_bits_per_byte": 7.465552640371532,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.535770835963227
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9451600808645513
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.5307518947282635
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9872481638270783
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.530820264299484
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9638492260296637
+        }
+      ],
+      "zlib1_bytes": 17096279,
+      "zlib1_ratio": 1.0996919271146663,
+      "zlib1_compress_s": 0.28197820798959583,
+      "zlib1_decompress_s": 0.03155779201188125,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 24,
+      "expert": 191,
+      "raw_bytes": 18800640,
+      "sha256": "67ca3632ff07c39d929eaa9f9f688db6658cfd2052a06f4197799f5ae9744f97",
+      "whole_record_entropy_bits_per_byte": 7.463280180371775,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.5323841591242156
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9791307023880825
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.527251254137074
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.0012144029294312
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.525283935722605
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9934928426796289
+        }
+      ],
+      "zlib1_bytes": 17088556,
+      "zlib1_ratio": 1.100188921755589,
+      "zlib1_compress_s": 0.2817921249952633,
+      "zlib1_decompress_s": 0.03140779200475663,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 32,
+      "expert": 0,
+      "raw_bytes": 18800640,
+      "sha256": "9cd09484e054e5150173ca639c46c862a4e0d4b0be4d31d23e66dbc4c4da6ef6",
+      "whole_record_entropy_bits_per_byte": 7.457866590212958,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.524667286577305
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.0025069267000146
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.519482422477509
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.0005540920851104
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.520845900186249
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.0033811414940272
+        }
+      ],
+      "zlib1_bytes": 17076117,
+      "zlib1_ratio": 1.1009903480984582,
+      "zlib1_compress_s": 0.28234537501703016,
+      "zlib1_decompress_s": 0.0311021669767797,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 32,
+      "expert": 191,
+      "raw_bytes": 18800640,
+      "sha256": "cedea07e5de89c26408d3d4b75cb9d08950f193a64a6ccf8758e8bc3e5fa9a91",
+      "whole_record_entropy_bits_per_byte": 7.462134578896515,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.529436850033223
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9912017549540312
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.524671179281336
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.002190917130732
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.525517285552122
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 1.002004878546207
+        }
+      ],
+      "zlib1_bytes": 17086805,
+      "zlib1_ratio": 1.1003016655249476,
+      "zlib1_compress_s": 0.28230966697447,
+      "zlib1_decompress_s": 0.031303083000238985,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 39,
+      "expert": 0,
+      "raw_bytes": 18800640,
+      "sha256": "eecec4dd5dcc05a9df9e543bf13aef2e19be96b10c2c87c261a9589387580592",
+      "whole_record_entropy_bits_per_byte": 7.447413590060158,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.516404821202713
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9964955307741059
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.5124998575198205
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9839328886423416
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.505375474362287
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9729612609287758
+        }
+      ],
+      "zlib1_bytes": 17051867,
+      "zlib1_ratio": 1.1025561013348275,
+      "zlib1_compress_s": 0.2811057090002578,
+      "zlib1_decompress_s": 0.032229875010671094,
+      "roundtrip_exact": true
+    },
+    {
+      "layer": 39,
+      "expert": 191,
+      "raw_bytes": 18800640,
+      "sha256": "a2bb6098a6e522bef5a05e2f3096d3a8ce6e0d90c18dbbcd95fbec249b32103e",
+      "whole_record_entropy_bits_per_byte": 7.442746046821316,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.511113409532945
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9800079800771476
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.508442452372627
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9696345013914143
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "entropy_bits_per_byte": 7.503308030114157
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "entropy_bits_per_byte": 0.9519465044573707
+        }
+      ],
+      "zlib1_bytes": 17041221,
+      "zlib1_ratio": 1.10324489072702,
+      "zlib1_compress_s": 0.2849469590000808,
+      "zlib1_decompress_s": 0.030917583004338667,
+      "roundtrip_exact": true
+    }
+  ],
+  "snapshots": [
+    {
+      "sample_start_monotonic_ns": 217483649911500,
+      "sample_end_monotonic_ns": 217483653036875,
+      "process": {
+        "peak_maxrss_bytes": 185794560,
+        "resident_bytes": 185876480,
+        "phys_footprint_bytes": 172966464,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 123297824768,
+        "wired_bytes": 3288170496,
+        "active_bytes": 2663956480,
+        "inactive_bytes": 2588573696,
+        "speculative_bytes": 46333952,
+        "anonymous_bytes": 2824978432,
+        "file_backed_bytes": 2473885696,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336479232,
+        "used_bytes": 10347479040,
+        "non_file_used_bytes": 7919927296,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217484026377791,
+      "sample_end_monotonic_ns": 217484029602708,
+      "process": {
+        "peak_maxrss_bytes": 422313984,
+        "resident_bytes": 422313984,
+        "phys_footprint_bytes": 409387776,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 123047985152,
+        "wired_bytes": 3288334336,
+        "active_bytes": 2840248320,
+        "inactive_bytes": 2649587712,
+        "speculative_bytes": 64372736,
+        "anonymous_bytes": 3062153216,
+        "file_backed_bytes": 2492055552,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336446464,
+        "used_bytes": 10584948736,
+        "non_file_used_bytes": 8157265920,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217484399365708,
+      "sample_end_monotonic_ns": 217484402495208,
+      "process": {
+        "peak_maxrss_bytes": 441155584,
+        "resident_bytes": 441155584,
+        "phys_footprint_bytes": 428245784,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 123009728512,
+        "wired_bytes": 3288334336,
+        "active_bytes": 2839969792,
+        "inactive_bytes": 2671198208,
+        "speculative_bytes": 82657280,
+        "anonymous_bytes": 3083255808,
+        "file_backed_bytes": 2510569472,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336446464,
+        "used_bytes": 10606280704,
+        "non_file_used_bytes": 8178368512,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217484772414500,
+      "sample_end_monotonic_ns": 217484775264750,
+      "process": {
+        "peak_maxrss_bytes": 441155584,
+        "resident_bytes": 441155584,
+        "phys_footprint_bytes": 428245784,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122993360896,
+        "wired_bytes": 3287678976,
+        "active_bytes": 2807562240,
+        "inactive_bytes": 2696740864,
+        "speculative_bytes": 100483072,
+        "anonymous_bytes": 3076407296,
+        "file_backed_bytes": 2528378880,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336446464,
+        "used_bytes": 10598760448,
+        "non_file_used_bytes": 8170864640,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217485142911500,
+      "sample_end_monotonic_ns": 217485146356291,
+      "process": {
+        "peak_maxrss_bytes": 441155584,
+        "resident_bytes": 441155584,
+        "phys_footprint_bytes": 428245784,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122974732288,
+        "wired_bytes": 3287678976,
+        "active_bytes": 2807595008,
+        "inactive_bytes": 2696691712,
+        "speculative_bytes": 118243328,
+        "anonymous_bytes": 3076390912,
+        "file_backed_bytes": 2546139136,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336446464,
+        "used_bytes": 10598744064,
+        "non_file_used_bytes": 8170848256,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217485514527500,
+      "sample_end_monotonic_ns": 217485517540750,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122958266368,
+        "wired_bytes": 3287678976,
+        "active_bytes": 2807627776,
+        "inactive_bytes": 2696282112,
+        "speculative_bytes": 136003584,
+        "anonymous_bytes": 3076014080,
+        "file_backed_bytes": 2563899392,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336446464,
+        "used_bytes": 10598367232,
+        "non_file_used_bytes": 8170471424,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217485887330333,
+      "sample_end_monotonic_ns": 217485890180708,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122946633728,
+        "wired_bytes": 3287121920,
+        "active_bytes": 2807644160,
+        "inactive_bytes": 2684190720,
+        "speculative_bytes": 153763840,
+        "anonymous_bytes": 3064070144,
+        "file_backed_bytes": 2581528576,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336413696,
+        "used_bytes": 10585735168,
+        "non_file_used_bytes": 8157970432,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217486258137541,
+      "sample_end_monotonic_ns": 217486260859125,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122930331648,
+        "wired_bytes": 3287121920,
+        "active_bytes": 2807676928,
+        "inactive_bytes": 2684174336,
+        "speculative_bytes": 171524096,
+        "anonymous_bytes": 3064086528,
+        "file_backed_bytes": 2599288832,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336413696,
+        "used_bytes": 10585751552,
+        "non_file_used_bytes": 8157986816,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217486630591166,
+      "sample_end_monotonic_ns": 217486634132416,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122914111488,
+        "wired_bytes": 3287121920,
+        "active_bytes": 2807676928,
+        "inactive_bytes": 2684174336,
+        "speculative_bytes": 189284352,
+        "anonymous_bytes": 3064086528,
+        "file_backed_bytes": 2617049088,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336413696,
+        "used_bytes": 10585751552,
+        "non_file_used_bytes": 8157986816,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217487002637958,
+      "sample_end_monotonic_ns": 217487005500791,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122894008320,
+        "wired_bytes": 3287121920,
+        "active_bytes": 2807644160,
+        "inactive_bytes": 2684108800,
+        "speculative_bytes": 207044608,
+        "anonymous_bytes": 3063988224,
+        "file_backed_bytes": 2634809344,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336413696,
+        "used_bytes": 10585653248,
+        "non_file_used_bytes": 8157888512,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217487373726958,
+      "sample_end_monotonic_ns": 217487377149041,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122875445248,
+        "wired_bytes": 3287121920,
+        "active_bytes": 2807660544,
+        "inactive_bytes": 2684092416,
+        "speculative_bytes": 224804864,
+        "anonymous_bytes": 3063988224,
+        "file_backed_bytes": 2652569600,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336413696,
+        "used_bytes": 10585653248,
+        "non_file_used_bytes": 8157888512,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217487744207333,
+      "sample_end_monotonic_ns": 217487746918791,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122856013824,
+        "wired_bytes": 3287449600,
+        "active_bytes": 2819457024,
+        "inactive_bytes": 2682978304,
+        "speculative_bytes": 242761728,
+        "anonymous_bytes": 3074244608,
+        "file_backed_bytes": 2670952448,
+        "compressor_bytes": 1806778368,
+        "compressed_bytes": 6336413696,
+        "used_bytes": 10596663296,
+        "non_file_used_bytes": 8168472576,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217488120914166,
+      "sample_end_monotonic_ns": 217488123511916,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122826113024,
+        "wired_bytes": 3287121920,
+        "active_bytes": 2820620288,
+        "inactive_bytes": 2688745472,
+        "speculative_bytes": 262078464,
+        "anonymous_bytes": 3075227648,
+        "file_backed_bytes": 2696216576,
+        "compressor_bytes": 1805697024,
+        "compressed_bytes": 6333120512,
+        "used_bytes": 10602184704,
+        "non_file_used_bytes": 8168046592,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 217488123580666,
+      "sample_end_monotonic_ns": 217488125283083,
+      "process": {
+        "peak_maxrss_bytes": 441171968,
+        "resident_bytes": 441171968,
+        "phys_footprint_bytes": 428262168,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 122825261056,
+        "wired_bytes": 3287121920,
+        "active_bytes": 2820702208,
+        "inactive_bytes": 2688843776,
+        "speculative_bytes": 261980160,
+        "anonymous_bytes": 3075309568,
+        "file_backed_bytes": 2696216576,
+        "compressor_bytes": 1805697024,
+        "compressed_bytes": 6333120512,
+        "used_bytes": 10602364928,
+        "non_file_used_bytes": 8168128512,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    }
+  ],
+  "bank_identity_unchanged": true,
+  "ok": true
+}

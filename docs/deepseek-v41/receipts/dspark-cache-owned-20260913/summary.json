@@ -1,0 +1,115 @@
+{
+  "source_commit": "3a8b17284ef3ed6fa06cd130a0a56700e926ba62",
+  "wrapper_sha256": "45bdade325aec5961da2e589f0f3d830979d006032e30bb951baa9b9e791862d",
+  "input_tokens": 16384,
+  "decode_steps": 1023,
+  "output_tokens": 1024,
+  "prompt_ids_sha256": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2",
+  "slots_per_layer": 68,
+  "ar": {
+    "decode_tok_s": 5.790674136249173,
+    "decode_wall_s": 176.6633687079884,
+    "ttft_s": 134.33230587499565,
+    "token_ids_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090",
+    "peak_gb": 85.599755888
+  },
+  "dspark": {
+    "decode_tok_s": 8.556266508077586,
+    "decode_wall_s": 119.56149320901022,
+    "pass_wall_s": 227.9962577499973,
+    "tokens_per_cycle": 4.970873786407767,
+    "accept_rate": 0.9163879598662207,
+    "accept_rate_by_depth": [
+      0.9514563106796117,
+      0.9336734693877551,
+      0.8907103825136612,
+      0.9141104294478528,
+      0.8791946308724832
+    ],
+    "cycles": 206,
+    "per_cycle_ms": {
+      "draft_ms": 11.877091402850267,
+      "verify_ms": 565.1182626847074,
+      "accept_ms": 0.9433080541711409,
+      "commit_ms": 1.74207262029686
+    },
+    "token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "peak_gb": 89.611285956,
+    "divergence": {
+      "divergence_index": 297,
+      "ar_token": 11067,
+      "dspark_token": 62596,
+      "ar_top2_margin": 0.0,
+      "dspark_top2_margin": 0.25,
+      "max_abs_logit_delta": 0.75,
+      "tie_margin": 0.03,
+      "tie_band_used": 0.75,
+      "tie_ulps": 3,
+      "peak_contested_logit": 33.75,
+      "ulp_bf16_at_peak": 0.25,
+      "ar_contested_margin": 0.0,
+      "dspark_contested_margin": 0.25,
+      "delta_at_ar_token": 0.0,
+      "delta_at_dspark_token": 0.25,
+      "rounding_class_by_delta": true,
+      "deltas_within_tie_band": true,
+      "rows_consistent": true,
+      "ar_logit_at_ar_token": 33.75,
+      "ar_logit_at_dspark_token": 33.75,
+      "dspark_logit_at_ar_token": 33.75,
+      "dspark_logit_at_dspark_token": 34.0,
+      "class": "tie_flip",
+      "capture_index": 297,
+      "capture_index_matches_first": true
+    }
+  },
+  "gain_vs_previous_mtp_pct": 1.1165496349635706,
+  "ar_digest_unchanged": true,
+  "mtp_digest_unchanged": true,
+  "phase_memory_250ms": {
+    "ar_reference": {
+      "samples": 1175,
+      "physical_peak_bytes": 97424441344,
+      "process_footprint_peak_bytes": 86835788264
+    },
+    "ar_reference_end": {
+      "samples": 1,
+      "physical_peak_bytes": 86617522176,
+      "process_footprint_peak_bytes": 76015139328
+    },
+    "dspark": {
+      "samples": 857,
+      "physical_peak_bytes": 99105636352,
+      "process_footprint_peak_bytes": 88228952576
+    },
+    "dspark_end": {
+      "samples": 567,
+      "physical_peak_bytes": 99469770752,
+      "process_footprint_peak_bytes": 88283806280
+    },
+    "startup": {
+      "samples": 34,
+      "physical_peak_bytes": 85211283456,
+      "process_footprint_peak_bytes": 74533336936
+    }
+  },
+  "physical_peak_bytes": 99469770752,
+  "process_footprint_peak_bytes": 88283806280,
+  "physical_peak_reduction_bytes": 5441667072,
+  "swapouts_first": 4399765,
+  "swapouts_last": 4399765,
+  "sample_count": 2634,
+  "guard_exit_code": 0,
+  "qwen_restored_healthy_warm": true,
+  "lock_released": true,
+  "mtp_io": {
+    "records_read": 57785,
+    "read_bytes": 1086394982400,
+    "read_wall_ns": 82187482506,
+    "read_realized_qd": 14.601,
+    "read_gb_per_s_window": 13.2185
+  },
+  "prior_whole_workflow_replay_crosscheck_bytes": 106730905248.0,
+  "mtp_active_at_decode_end_bytes": 73579638724,
+  "mtp_allocator_cache_at_decode_end_bytes": 2122337529
+}

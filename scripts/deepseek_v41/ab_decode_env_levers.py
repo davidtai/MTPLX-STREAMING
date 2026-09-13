@@ -3018,7 +3018,7 @@ def _load_model(args, bench, mx):
         print(
             f"[ab] additional backbone reserve: SWA {_swa_bytes / GIB:.3f} GiB"
             + (
-                f" + wo_a f32 cache {_wo_a_reserve / GIB:.3f} GiB"
+                f" + wo_a cache {_wo_a_reserve / GIB:.3f} GiB"
                 if _wo_a_reserve
                 else ""
             )

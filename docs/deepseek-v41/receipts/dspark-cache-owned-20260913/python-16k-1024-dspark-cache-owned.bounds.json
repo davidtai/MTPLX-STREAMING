@@ -1,0 +1,16 @@
+{
+  "source_commit": "3a8b17284ef3ed6fa06cd130a0a56700e926ba62",
+  "wrapper_sha256": "45bdade325aec5961da2e589f0f3d830979d006032e30bb951baa9b9e791862d",
+  "baseline_bytes": 10367600000.0,
+  "engine_budget_bytes": 83526272640,
+  "expected_slots_per_layer": 68,
+  "active_bound_bytes": 93370366952,
+  "physical_bound_bytes": 108032934248.0,
+  "wired_before_bytes": 3290873856,
+  "graph_workspace_margin_bytes": 1073741824,
+  "prior_measured_mtp_peak_bytes": 91544599528,
+  "prior_slots_per_layer": 67,
+  "prior_source_commit": "4b1e5d369c2d5be35927e09caa3d7d11c3357406",
+  "projection_peak_saving_credited_bytes": 0,
+  "scope": "exact native artifact,16K prompt,1023 steps,depth5,pf0,eager target attention,compiled draft,bf16 heads; 13GiB band,2GiB cache,2GiB Python"
+}
