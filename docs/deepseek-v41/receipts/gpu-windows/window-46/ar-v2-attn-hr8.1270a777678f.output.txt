@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_attn_hr8
+# stream: ar
+# token_ids_sha256: 1270a777678fb172b286b210dcd19a64110b04ca2614226b989222152e1a09ca
+# decode_tok_s: 4.985070496772082
+# divergence: none
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, so a `summarize_generation_outputs` helper should slot in near the existing stats/diagnostics helpers and reuse the module's `_env_int`/`_env_truthy` style.
+
+- The module already exposes `GenerationStats` and `_generation_rate_fields`, which compute `tok_s`, `decode_tok_s`, and `end_to_end_tok_s` — a summarizer should consume those fields rather than recompute TPS from raw timings.
+- Optional metrics like peak memory are surfaced via `_mlx_memory_stats()` (bytes) and `_tree_nbytes`, so the helper should treat missing/zero memory as "unavailable" and skip it rather than emit `0.0` GiB.
+- The file uses `from __future__ import annotations`, `Literal`/`Sequence` typing, and dataclasses heavily, so the new helper should be typed as `Sequence[GenerationOutput] -> dict[str, Any]` and return only JSON-serializable primitives (floats/ints/None), matching the trace-row
