@@ -1310,8 +1310,8 @@ ARM_PRESETS = {
     # projection glue.  The K29 fused decode core (decode_attn_kernel) is DELIBERATELY
     # NOT armed -- the eager core stays -- so the direct A/B vs cell16k_ring_v2 isolates
     # the v2 SSD-hiding runner combined with the attention-dispatch reductions (lean
-    # stack + fused proj) without the fused core.  Watch peak memory (wo_a cache + the
-    # fused path each hold a per-layer wo_a copy resident at the 16K cell).
+    # stack + fused proj) without the fused core. Projection caches replace one
+    # another by route; the plan reserves the larger fp32 prefill representation.
     "cell16k_ring_v2_attn": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",

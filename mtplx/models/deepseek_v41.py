@@ -1564,6 +1564,7 @@ class Attention(nn.Module):
         every token (docs/deepseek-v41/W97_ATTENTION_291MS.md)."""
         wo = self.wo_a
         if not isinstance(wo, nn.QuantizedLinear):
+            self._wo_a_bf16T_cache = None
             return wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)
         use_cache = _resolve_wo_a_cache()
         if use_cache:
@@ -1580,6 +1581,11 @@ class Attention(nn.Module):
                 and cached[2] is wo.biases
             ):
                 return cached[3]
+        # A later prefill may follow fused decode on the same model. Own only
+        # the representation this route needs; consumers of an earlier lazy
+        # graph retain their own references until execution completes. Cache
+        # hits above add no phase check or allocation to steady-state decode.
+        self._wo_a_bf16T_cache = None
         # Mode-aware: affine q8 carries biases; the native float codecs
         # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
         # the mode and a ``None`` bias directly.
@@ -1667,18 +1673,21 @@ class Attention(nn.Module):
         weight (tiny-config).
 
         The ``[g, r, in] -> [g, in, r]`` transpose + dequant is done ONCE, cached per
-        layer keyed on the packed-weight identity (a re-quantize / reload rebuilds
+        layer keyed on all packed-array identities (a re-quantize / reload rebuilds
         it) and materialised via ``mx.eval`` so later tokens reference the buffer.
         DISTINCT from :meth:`_o_lora_dense_weight` (the eager/K22 f32 path, owned by
-        the W97 wo_a cache): the fused path never calls that, so only this bf16 copy
-        (67 MB/layer, ~2.7 GB over 40 layers -- HALF the f32 cache) is resident under
-        the fused arm.  Reading bf16 + fp32-accumulating is ROUNDING-CLASS vs the
+        the W97 wo_a cache): building either representation releases the other
+        module-owned cache. After prefill, fused decode therefore retains only
+        this bf16 copy (67 MB/layer, ~2.7 GB over 40 layers -- HALF the f32 cache).
+        Reading bf16 + fp32-accumulating is ROUNDING-CLASS vs the
         port's f32 einsum and bit-identical to the reference bf16 einsum."""
         wo = self.wo_a
         cached = getattr(self, "_wo_a_bf16T_cache", None)
-        key = wo.weight
-        if cached is not None and cached[0] is key:
-            return cached[1]
+        if (cached is not None and cached[0] is wo.weight
+                and cached[1] is wo.get("scales")
+                and cached[2] is wo.get("biases")):
+            return cached[3]
+        self._wo_a_dense_cache = None
         if not isinstance(wo, nn.QuantizedLinear):
             w = wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)   # [g, r, in]
         else:
@@ -1688,7 +1697,7 @@ class Attention(nn.Module):
             ).astype(mx.bfloat16).reshape(self.n_groups, self.o_lora_rank, -1)
         wT = mx.contiguous(mx.swapaxes(w, 1, 2))                 # [g, in_per_group, r]
         mx.eval(wT)
-        self._wo_a_bf16T_cache = (key, wT)
+        self._wo_a_bf16T_cache = (wo.weight, wo.get("scales"), wo.get("biases"), wT)
         return wT
 
 

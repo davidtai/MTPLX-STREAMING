@@ -1,0 +1,124 @@
+diff --git a/mtplx/models/deepseek_v41.py b/mtplx/models/deepseek_v41.py
+index ced0acc0b..c6f9080ed 100644
+--- a/mtplx/models/deepseek_v41.py
++++ b/mtplx/models/deepseek_v41.py
+@@ -1564,6 +1564,7 @@ class Attention(nn.Module):
+         every token (docs/deepseek-v41/W97_ATTENTION_291MS.md)."""
+         wo = self.wo_a
+         if not isinstance(wo, nn.QuantizedLinear):
++            self._wo_a_bf16T_cache = None
+             return wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)
+         use_cache = _resolve_wo_a_cache()
+         if use_cache:
+@@ -1580,6 +1581,11 @@ class Attention(nn.Module):
+                 and cached[2] is wo.biases
+             ):
+                 return cached[3]
++        # A later prefill may follow fused decode on the same model. Own only
++        # the representation this route needs; consumers of an earlier lazy
++        # graph retain their own references until execution completes. Cache
++        # hits above add no phase check or allocation to steady-state decode.
++        self._wo_a_bf16T_cache = None
+         # Mode-aware: affine q8 carries biases; the native float codecs
+         # (mxfp8/mxfp4/nvfp4) have ``biases is None`` -- mx.dequantize takes
+         # the mode and a ``None`` bias directly.
+@@ -1667,18 +1673,21 @@ class Attention(nn.Module):
+         weight (tiny-config).
+ 
+         The ``[g, r, in] -> [g, in, r]`` transpose + dequant is done ONCE, cached per
+-        layer keyed on the packed-weight identity (a re-quantize / reload rebuilds
++        layer keyed on all packed-array identities (a re-quantize / reload rebuilds
+         it) and materialised via ``mx.eval`` so later tokens reference the buffer.
+         DISTINCT from :meth:`_o_lora_dense_weight` (the eager/K22 f32 path, owned by
+-        the W97 wo_a cache): the fused path never calls that, so only this bf16 copy
+-        (67 MB/layer, ~2.7 GB over 40 layers -- HALF the f32 cache) is resident under
+-        the fused arm.  Reading bf16 + fp32-accumulating is ROUNDING-CLASS vs the
++        the W97 wo_a cache): building either representation releases the other
++        module-owned cache. After prefill, fused decode therefore retains only
++        this bf16 copy (67 MB/layer, ~2.7 GB over 40 layers -- HALF the f32 cache).
++        Reading bf16 + fp32-accumulating is ROUNDING-CLASS vs the
+         port's f32 einsum and bit-identical to the reference bf16 einsum."""
+         wo = self.wo_a
+         cached = getattr(self, "_wo_a_bf16T_cache", None)
+-        key = wo.weight
+-        if cached is not None and cached[0] is key:
+-            return cached[1]
++        if (cached is not None and cached[0] is wo.weight
++                and cached[1] is wo.get("scales")
++                and cached[2] is wo.get("biases")):
++            return cached[3]
++        self._wo_a_dense_cache = None
+         if not isinstance(wo, nn.QuantizedLinear):
+             w = wo.weight.reshape(self.n_groups, self.o_lora_rank, -1)   # [g, r, in]
+         else:
+@@ -1688,7 +1697,7 @@ class Attention(nn.Module):
+             ).astype(mx.bfloat16).reshape(self.n_groups, self.o_lora_rank, -1)
+         wT = mx.contiguous(mx.swapaxes(w, 1, 2))                 # [g, in_per_group, r]
+         mx.eval(wT)
+-        self._wo_a_bf16T_cache = (key, wT)
++        self._wo_a_bf16T_cache = (wo.weight, wo.get("scales"), wo.get("biases"), wT)
+         return wT
+ 
+ 
+diff --git a/mtplx/models/deepseek_v41_loader.py b/mtplx/models/deepseek_v41_loader.py
+index eb60df648..7602bee9c 100644
+--- a/mtplx/models/deepseek_v41_loader.py
++++ b/mtplx/models/deepseek_v41_loader.py
+@@ -86,12 +86,16 @@ SWA_WINDOW_BYTES = NUM_TEXT_LAYERS * SLIDING_WINDOW * (KV_LATENT_DIM * 2)
+ WO_A_DENSE_ROWS = 8192          # o_groups (8) * o_lora_rank (1024), released dims
+ WO_A_DENSE_COLS = 4096          # n_heads (64) * head_dim (512) // o_groups (8)
+ WO_A_DENSE_F32_BYTES = WO_A_DENSE_ROWS * WO_A_DENSE_COLS * 4   # 134.2 MB / layer
++WO_A_DENSE_BF16_BYTES = WO_A_DENSE_ROWS * WO_A_DENSE_COLS * 2
+ WO_A_CACHE_RESIDENT_BYTES = NUM_TEXT_LAYERS * WO_A_DENSE_F32_BYTES  # ~5.4 GB
+ 
+ 
+ def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
+     """Fixed resident reserve priced into the memory plan: the SWA window plus, when
+     ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense caches.
++    Fused projection caches bf16 transposes even with the f32 cache disabled.
++    The target owns one representation per layer, so reserve the larger enabled
++    representation, including prefill on later requests. MTP uses only f32.
+     ``mtp_layers`` adds each loaded DSpark stage's fp32 window and wo_a cache.
+ 
+     ``derived_expert_cache_allowance_bytes`` subtracts ``plan.fixed_bytes`` (which is
+@@ -101,10 +105,11 @@ def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
+     unless it is reserved here the expert cache keeps its full allowance and the
+     process runs ~5.4 GB over plan.  Read at use so the arm's env is honoured at
+     open() time (the ab bench arms the lever before load)."""
+-    from .deepseek_v41 import _resolve_wo_a_cache
++    from .deepseek_v41 import _resolve_attn_fused_proj, _resolve_wo_a_cache
+ 
+-    extra = ((NUM_TEXT_LAYERS + mtp_layers) * WO_A_DENSE_F32_BYTES
+-             if _resolve_wo_a_cache() else 0)
++    dense_bytes = WO_A_DENSE_F32_BYTES if _resolve_wo_a_cache() else 0
++    fused_bytes = WO_A_DENSE_BF16_BYTES if _resolve_attn_fused_proj() else 0
++    extra = NUM_TEXT_LAYERS * max(dense_bytes, fused_bytes) + mtp_layers * dense_bytes
+     # DSpark windows store post-RoPE fp32 rows, in addition to their manifest
+     # weights. Each stage also inherits the lazy fp32 wo_a cache above.
+     mtp_windows = mtp_layers * SLIDING_WINDOW * KV_LATENT_DIM * 4
+diff --git a/tests/test_deepseek_v41_mtp_budget.py b/tests/test_deepseek_v41_mtp_budget.py
+index fcbb28a17..abbd7468d 100644
+--- a/tests/test_deepseek_v41_mtp_budget.py
++++ b/tests/test_deepseek_v41_mtp_budget.py
+@@ -24,7 +24,8 @@ def test_mtp_is_priced_before_allocation(monkeypatch, tmp_path, explicit, env, i
+     monkeypatch.setattr(loader, "resolve_gate_prefetch_ring_slots", lambda current: current)
+     monkeypatch.setitem(sys.modules, "mlx_lm.utils", SimpleNamespace(load_config=lambda root: config))
+     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41",
+-                        SimpleNamespace(_resolve_wo_a_cache=lambda: True))
++                        SimpleNamespace(_resolve_wo_a_cache=lambda: True,
++                                        _resolve_attn_fused_proj=lambda: False))
+ 
+     def open_runtime(root, path, runtime_config, **kwargs):
+         opened.update(kwargs)
+diff --git a/tests/test_deepseek_v41_wo_a_cache_pricing_w97.py b/tests/test_deepseek_v41_wo_a_cache_pricing_w97.py
+index 8e61ad778..25520a70f 100644
+--- a/tests/test_deepseek_v41_wo_a_cache_pricing_w97.py
++++ b/tests/test_deepseek_v41_wo_a_cache_pricing_w97.py
+@@ -27,6 +27,7 @@ from mtplx.models import deepseek_v41_loader as loader
+ @pytest.fixture(autouse=True)
+ def _clean_env(monkeypatch):
+     monkeypatch.delenv(dsv41._ATTN_WO_A_CACHE_ENV, raising=False)
++    monkeypatch.delenv(dsv41._ATTN_FUSED_PROJ_ENV, raising=False)
+     yield
+ 
+ 

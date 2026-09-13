@@ -267,3 +267,23 @@ raises, verified with a fake device and no MLX import.
 - Artifact remains
   `/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4`.
   Do not substitute other quantizations or the separate MiaAI artifact.
+# Projection cache ownership, 2026-09-13 12:47 UTC
+
+- Best full workload remains 8.461786462 TPS; 20 TPS unmet.
+- Uncached real-record I/O probe: fanout 1/4/8 all about 13.1 GB/s, so keep 4.
+  Eight records per batch, interleaved controls, final-batch hashes exact;
+  no MLX/model load. Physical peak 13.197 GB, process 0.388 GB, no new swapouts.
+  Receipt: `receipts/verify-io-uncached-20260913/`.
+- Fixed target wo_a duplicate ownership: cold cache builders release the other
+  representation, including later prefills. Fused reload keys include scales and
+  biases. Existing cache-hit paths remain direct; no added phase/env checks.
+- Keep full 5 GiB target prefill reserve when fp32 caching is on; price 2.5 GiB
+  in fused-only configurations. Native MTP fp32 reserves unchanged.
+- Nine focused CPU cases plus five related MTP budget checks pass with real MLX
+  blocked. One native real-shape Metal projection confirms exact weights and
+  active bytes 168,820,752 (fp32) -> 101,711,888 (bf16T), repeated twice. Peak
+  403,701,908 B including comparisons. Receipt includes source diff/SHA.
+- Both guards exited 0; exact Qwen restored healthy/warm, lock free, no new swap.
+- Next full-run bound must use the prior measured MTP peak plus exact slot delta
+  and graph margin. Do not yet credit the full 5 GiB decode-storage saving to
+  full-workload peak: prefill can still own the larger fp32 representation.

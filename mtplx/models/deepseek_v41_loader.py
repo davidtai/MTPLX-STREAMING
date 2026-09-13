@@ -86,12 +86,16 @@ SWA_WINDOW_BYTES = NUM_TEXT_LAYERS * SLIDING_WINDOW * (KV_LATENT_DIM * 2)
 WO_A_DENSE_ROWS = 8192          # o_groups (8) * o_lora_rank (1024), released dims
 WO_A_DENSE_COLS = 4096          # n_heads (64) * head_dim (512) // o_groups (8)
 WO_A_DENSE_F32_BYTES = WO_A_DENSE_ROWS * WO_A_DENSE_COLS * 4   # 134.2 MB / layer
+WO_A_DENSE_BF16_BYTES = WO_A_DENSE_ROWS * WO_A_DENSE_COLS * 2
 WO_A_CACHE_RESIDENT_BYTES = NUM_TEXT_LAYERS * WO_A_DENSE_F32_BYTES  # ~5.4 GB
 
 
 def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
     """Fixed resident reserve priced into the memory plan: the SWA window plus, when
     ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense caches.
+    Fused projection caches bf16 transposes even with the f32 cache disabled.
+    The target owns one representation per layer, so reserve the larger enabled
+    representation, including prefill on later requests. MTP uses only f32.
     ``mtp_layers`` adds each loaded DSpark stage's fp32 window and wo_a cache.
 
     ``derived_expert_cache_allowance_bytes`` subtracts ``plan.fixed_bytes`` (which is
@@ -101,10 +105,11 @@ def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
     unless it is reserved here the expert cache keeps its full allowance and the
     process runs ~5.4 GB over plan.  Read at use so the arm's env is honoured at
     open() time (the ab bench arms the lever before load)."""
-    from .deepseek_v41 import _resolve_wo_a_cache
+    from .deepseek_v41 import _resolve_attn_fused_proj, _resolve_wo_a_cache
 
-    extra = ((NUM_TEXT_LAYERS + mtp_layers) * WO_A_DENSE_F32_BYTES
-             if _resolve_wo_a_cache() else 0)
+    dense_bytes = WO_A_DENSE_F32_BYTES if _resolve_wo_a_cache() else 0
+    fused_bytes = WO_A_DENSE_BF16_BYTES if _resolve_attn_fused_proj() else 0
+    extra = NUM_TEXT_LAYERS * max(dense_bytes, fused_bytes) + mtp_layers * dense_bytes
     # DSpark windows store post-RoPE fp32 rows, in addition to their manifest
     # weights. Each stage also inherits the lazy fp32 wo_a cache above.
     mtp_windows = mtp_layers * SLIDING_WINDOW * KV_LATENT_DIM * 4

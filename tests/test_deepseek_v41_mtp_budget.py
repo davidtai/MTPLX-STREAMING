@@ -24,7 +24,8 @@ def test_mtp_is_priced_before_allocation(monkeypatch, tmp_path, explicit, env, i
     monkeypatch.setattr(loader, "resolve_gate_prefetch_ring_slots", lambda current: current)
     monkeypatch.setitem(sys.modules, "mlx_lm.utils", SimpleNamespace(load_config=lambda root: config))
     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41",
-                        SimpleNamespace(_resolve_wo_a_cache=lambda: True))
+                        SimpleNamespace(_resolve_wo_a_cache=lambda: True,
+                                        _resolve_attn_fused_proj=lambda: False))
 
     def open_runtime(root, path, runtime_config, **kwargs):
         opened.update(kwargs)

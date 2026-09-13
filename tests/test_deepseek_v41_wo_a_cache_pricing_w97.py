@@ -27,6 +27,7 @@ from mtplx.models import deepseek_v41_loader as loader
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     monkeypatch.delenv(dsv41._ATTN_WO_A_CACHE_ENV, raising=False)
+    monkeypatch.delenv(dsv41._ATTN_FUSED_PROJ_ENV, raising=False)
     yield
 
 
