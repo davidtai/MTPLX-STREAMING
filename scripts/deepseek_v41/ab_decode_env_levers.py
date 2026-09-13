@@ -2408,15 +2408,25 @@ def _resolve_box_target_gb(args):
 
 def _resolve_box_baseline_gb(args):
     """The box BASELINE in DECIMAL GB (macOS+agent, measured wired+anon+comp with the
-    resident agent booted out): --box-baseline-gb flag, else the env, else ``None``."""
+    resident agent booted out).  MEDIUM-4: PREFER the env MTPLX_DSV41_BOX_BASELINE_GB,
+    which gpu_window.sh exports from its live in-window USED_START (measured now, agent
+    booted out) -- it is more accurate than a hand-passed --box-baseline-gb, which is the
+    fallback for a standalone run with no guard.  Returns ``None`` when neither is set."""
 
-    v = getattr(args, "box_baseline_gb", None)
-    if v is not None:
-        return float(v)
     raw = os.environ.get("MTPLX_DSV41_BOX_BASELINE_GB")
     if raw and str(raw).strip() and str(raw).strip().lower() != "default":
-        return float(str(raw).strip())
-    return None
+        env_v = float(str(raw).strip())
+        flag_v = getattr(args, "box_baseline_gb", None)
+        if flag_v is not None and abs(float(flag_v) - env_v) > 1e-6:
+            print(
+                f"[ab] MEDIUM-4: using the in-window baseline "
+                f"MTPLX_DSV41_BOX_BASELINE_GB={env_v:g} GB (gpu_window measured) over "
+                f"--box-baseline-gb {float(flag_v):g} GB",
+                flush=True,
+            )
+        return env_v
+    v = getattr(args, "box_baseline_gb", None)
+    return None if v is None else float(v)
 
 
 def _target_sidecar_path(args):

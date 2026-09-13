@@ -160,7 +160,7 @@ COMPRESSOR_TRIP_BYTES=$(( COMPRESSOR_TRIP_GB * 1024 * 1024 * 1024 ))
 # 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
 # HIGH-3: REFUSE on an invalid ceiling (a fractional 95.5 must NOT silently become
 # the 102 default and raise the ceiling over the operator's intent).
-TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}"  # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
+TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-100}"  # HIGH-3: 100 GiB ~= 107 GB (102 -> 109.5 GB was too near the 110 GB panic line)
 _require_int GPU_WINDOW_TOTAL_MEM_CEILING_GB "${TOTAL_MEM_CEILING_GB}" 1 || exit 2
 TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
 FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
@@ -231,12 +231,27 @@ compressor_bytes_used() {
 # IOAccelerator/Metal (wired or not) but EXCLUDING the shared file page cache --
 # exactly the step's contribution to box pressure.  Overridable for the unit test.
 FOOTPRINT_READER_CMD="${GPU_WINDOW_FOOTPRINT_READER:-/usr/bin/env python3 $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tree_footprint.py}"
+# HIGH-3: expose reader success/failure so the phase-4 guard can FAIL CLOSED instead of
+# continuing at box_used == baseline when the reader breaks.  Still prints '0' on failure
+# (backward-compatible for the box-used-* subcommands' arithmetic), but ALSO sets the
+# globals TREE_FOOTPRINT_READ_OK / TREE_FOOTPRINT_BYTES -- the guard reads those by
+# calling this function DIRECTLY (not under $(...), which would run it in a subshell and
+# discard the globals).
+TREE_FOOTPRINT_READ_OK=1
+TREE_FOOTPRINT_BYTES=0
 tree_footprint_bytes() {
   local root="${1:-}"
-  [[ -z "${root}" ]] && { printf '0'; return; }
-  local v
-  v="$(${FOOTPRINT_READER_CMD} "${root}" 2>/dev/null | tr -d '[:space:]')"
-  [[ "${v}" =~ ^[0-9]+$ ]] && printf '%s' "${v}" || printf '0'
+  TREE_FOOTPRINT_READ_OK=1
+  TREE_FOOTPRINT_BYTES=0
+  [[ -z "${root}" ]] && { TREE_FOOTPRINT_READ_OK=0; printf '0'; return; }
+  local raw rc v
+  raw="$(${FOOTPRINT_READER_CMD} "${root}" 2>/dev/null)"; rc=$?
+  v="$(printf '%s' "${raw}" | tr -d '[:space:]')"
+  if (( rc != 0 )) || ! [[ "${v}" =~ ^[0-9]+$ ]]; then
+    TREE_FOOTPRINT_READ_OK=0; printf '0'; return
+  fi
+  TREE_FOOTPRINT_BYTES="${v}"
+  printf '%s' "${v}"
 }
 
 # Print "<pid> <rssGiB> <command>" for every python/mtplx/mlx process whose RSS
@@ -805,7 +820,15 @@ fi
 USED_START="$(used_mem_bytes)"
 COMPRESSOR_START="$(compressor_bytes_used)"
 log "phase 4: box used at start (baseline wired+anon+comp): $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB); compressor at start $(gib "${COMPRESSOR_START}") GiB"
-log "phase 4: W121 guard -- box_used = baseline + Σ phys_footprint(step tree); compressor tripwire ${COMPRESSOR_TRIP_GB} GiB over start (file page cache excluded from both -- it is reclaimable)"
+log "phase 4: W121 guard -- box_used = max(baseline + Σ phys_footprint(step tree), live system used); compressor tripwire ${COMPRESSOR_TRIP_GB} GiB over start (file page cache excluded from all -- it is reclaimable)"
+# MEDIUM-4: hand the measured baseline (decimal GB) to the step env so the DSV4.1 bench's
+# box target derives from the SAME wired+anon+comp baseline the guard uses -- measured now
+# with the resident agent booted out -- rather than a hand-passed --box-baseline-gb (which
+# the bench now treats as a fallback only).  Both units logged.
+if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
+  export MTPLX_DSV41_BOX_BASELINE_GB="$(awk -v b="${USED_START}" 'BEGIN{printf "%.4f", b/1e9}')"
+  log "phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=${MTPLX_DSV41_BOX_BASELINE_GB} (decimal GB) == $(gib "${USED_START}") GiB baseline to the step env"
+fi
 
 # W106 MEDIUM-B: relate the child-tree cap to the measured baseline.  If the step
 # grew to the full CHILD_RSS_CAP on top of what is ALREADY used, the box would
@@ -854,18 +877,40 @@ while :; do
   # = the one-time baseline + this footprint -- the plain sum David asked for, and
   # the quantity that does NOT false-abort on the 269 GiB expert bank's reclaimable
   # file cache.
-  tree_bytes="$(tree_footprint_bytes "${STEP_PID}")"
+  # Call DIRECTLY (not under $(...)) so TREE_FOOTPRINT_READ_OK / _BYTES set inside the
+  # function reach this shell -- a command substitution would run it in a subshell and
+  # discard the flag, defeating the HIGH-3 fail-closed check.
+  tree_footprint_bytes "${STEP_PID}" >/dev/null
+  tree_ok=${TREE_FOOTPRINT_READ_OK}
+  tree_bytes=${TREE_FOOTPRINT_BYTES}
+  # HIGH-3: fold in a LIVE system-used term (wired+anon+comp, file cache excluded) so the
+  # guard is not blind to OTHER processes growing (a build, a pytest sweep, a worker):
+  #   box_used = max(baseline + step footprint, live system used).
+  live_used="$(used_mem_bytes)"
+  live_ok=0; [[ "${live_used}" =~ ^[0-9]+$ ]] && live_ok=1
+  if (( ! tree_ok )); then
+    # HIGH-3: FAIL CLOSED.  The footprint reader broke (subprocess error / 15 s timeout)
+    # and returned '0' -- do NOT continue at box_used == baseline (fail-open, blind to
+    # the whole step).  A broken primary guard is not something to run a GPU step under,
+    # so ABORT.
+    err "phase 4: step-footprint reader UNREADABLE (returned no valid footprint); the box guard cannot see the step -- killing child and restoring"
+    _kill_step_child
+    exit 8
+  fi
   box_used=$(( USED_START + tree_bytes ))
+  if (( live_ok )) && (( live_used > box_used )); then
+    box_used=${live_used}
+  fi
   if (( tree_bytes > PEAK_TREE_RSS_BYTES )); then
     PEAK_TREE_RSS_BYTES=${tree_bytes}
   fi
   if (( box_used > PEAK_SYSTEM_USED_BYTES )); then
     PEAK_SYSTEM_USED_BYTES=${box_used}
   fi
-  # Authoritative box guard (checked FIRST): baseline + step footprint over the
-  # ceiling.  This is David's plain sum and the box-pressure signal that matters.
+  # Authoritative box guard (checked FIRST): max(baseline + step footprint, live system
+  # used) over the ceiling -- David's plain sum, hardened against other-process growth.
   if (( box_used > TOTAL_MEM_CEILING_BYTES )); then
-    err "phase 4: BOX used memory $(gib "${box_used}") GiB (baseline $(gib "${USED_START}") + step footprint $(gib "${tree_bytes}")) exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB; killing child and restoring"
+    err "phase 4: BOX used memory $(gib "${box_used}") GiB (max of baseline $(gib "${USED_START}") + step footprint $(gib "${tree_bytes}"), live system used $( ((live_ok)) && gib "${live_used}" || printf 'n/a' ) GiB) exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB; killing child and restoring"
     _kill_step_child
     exit 8
   fi
@@ -894,7 +939,7 @@ while :; do
   # numbers David asked for (baseline start, step tree footprint, compressor delta).
   _now_epoch="$(date +%s)"
   if (( _now_epoch - _last_mem_sample >= 30 )); then
-    log "phase 4: mem sample -- baseline $(gib "${USED_START}") GiB + step footprint $(gib "${tree_bytes}") GiB = box used $(gib "${box_used}") GiB; compressor +$(gib "${comp_delta}") GiB (trip ${COMPRESSOR_TRIP_GB} GiB)"
+    log "phase 4: mem sample -- baseline $(gib "${USED_START}") GiB + step footprint $(gib "${tree_bytes}") GiB, live system used $( ((live_ok)) && gib "${live_used}" || printf 'n/a' ) GiB => box used $(gib "${box_used}") GiB; compressor +$(gib "${comp_delta}") GiB (trip ${COMPRESSOR_TRIP_GB} GiB)"
     _last_mem_sample=${_now_epoch}
   fi
   sleep "${RSS_POLL_SECONDS}"
