@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_draft_attn
+# stream: ar-reference
+# token_ids_sha256: 6153fd9236327e01abb382fe2e5c0e7e7debf6540759a9f24e1afbe3251b1708
+# decode_tok_s: 5.3470346361518954
+# divergence: {"divergence_index": 33, "ar_token": 790, "dspark_token": 305, "ar_top2_margin": 0.0, "dspark_top2_margin": 0.0, "max_abs_logit_delta": 0.8828125, "tie_margin": 0.03, "tie_band_used": 0.75, "tie_ulps": 3, "peak_contested_logit": 32.25, "ulp_bf16_at_peak": 0.25, "ar_contested_margin": 0.25, "dspark_contested_margin": 0.0, "delta_at_ar_token": 0.0, "delta_at_dspark_token": 0.25, "rounding_class_by_delta": true, "deltas_within_tie_band": true, "rows_consistent": true, "ar_logit_at_ar_token": 32.25, "ar_logit_at_dspark_token": 32.0, "dspark_logit_at_ar_token": 32.25, "dspark_logit_at_dspark_token": 32.25, "class": "tie_flip", "capture_index": 33, "capture_index_matches_first": true}
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, but it currently lacks any aggregate summary helper over `GenerationOutput` sequences.
+
+- The module already exposes rich per-request telemetry (`GenerationStats`, `_DecodeTrace`, runtime counters) but no cross-request rollup, so a `summarize_generation_outputs` helper would slot in naturally alongside `_generation_rate_fields` and `_attach_runtime_diagnostics`.
+- Type style is consistent: `from __future__ import annotations`, `Sequence`/`Mapping` from `collections.abc`, `dict[str, Any]` returns, and dataclasses — a new helper should mirror that (e.g., `Sequence[GenerationOutput] -> dict[str, Any]`) and reuse `_generation_rate_fields`-style TPS math rather than re-deriving it.
+- Optional metrics (prefill TPS, decode TPS, peak memory) are frequently absent or zero in this codebase (see `_mlx_memory_stats`, `_generation_rate_fields` zero-guards), so the helper must skip `None`/missing fields and
