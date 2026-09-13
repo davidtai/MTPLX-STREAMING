@@ -1257,7 +1257,7 @@ ARM_PRESETS = {
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2",
+        runner="v2", kv_bounded="1",  # W121: bounded KV is the v2 default (explicit)
     ),
     # W104: cell16k_ring_v2 + BOTH DSpark draft-head levers (K33 draft-block tape
     # collapse + the W103 draft-head fp32-cast fix).  Exact key set of cell16k_ring_v2
@@ -1272,7 +1272,7 @@ ARM_PRESETS = {
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2", draft="1", draft_head_bf16="1",
+        runner="v2", draft="1", draft_head_bf16="1", kv_bounded="1",  # W121 bounded KV
     ),
     # W97F composite: cell16k_ring_v2 + the byte-identical W97/W99 lean attention
     # stack (wo_a f32 cache + leaned casts) + the W101/K36 fused projection-chain glue.
@@ -1293,7 +1293,7 @@ ARM_PRESETS = {
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2",
+        runner="v2", kv_bounded="1",  # W121: bounded KV is the v2 default (explicit)
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
     # W97F composite (DSpark): cell16k_ring_v2_draft + the SAME three attention keys as
@@ -1310,7 +1310,7 @@ ARM_PRESETS = {
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2", draft="1", draft_head_bf16="1",
+        runner="v2", draft="1", draft_head_bf16="1", kv_bounded="1",  # W121 bounded KV
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
     # W118 pair for window 46: cell16k_ring_v2_attn + the MLX allocator-limit headroom
@@ -1326,7 +1326,7 @@ ARM_PRESETS = {
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2",
+        runner="v2", kv_bounded="1",  # W121: matches cell16k_ring_v2_attn's bounded default
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
         mlx_limit_headroom="8",
     ),
@@ -1339,18 +1339,18 @@ ARM_PRESETS = {
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
-        runner="v2", draft="1", draft_head_bf16="1",
+        runner="v2", draft="1", draft_head_bf16="1", kv_bounded="1",  # W121 bounded default
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
         mlx_limit_headroom="8",
     ),
-    # W107F pair for window 44: cell16k_ring_v2_attn + kv_bounded="1" (the
-    # dedicated bounded variant, per the W107 round-3 policy that composites do
-    # NOT carry kv_bounded -- it lives only in *_bounded arms).  EXACT KEY SET =
-    # cell16k_ring_v2_attn (layer_major, prefill_dense, score_path=lean,
-    # selected_keys, window_ring, layout_fix, head=bf16, sinkhorn, attn, win_memo,
-    # runner=v2, wo_a_cache, attn_lean_casts, attn_fused_proj) PLUS kv_bounded="1".
-    # Pairs A/B against cell16k_ring_v2_attn to isolate the bounded-KV lever on
-    # top of the full attention stack.
+    # W107F pair for window 44: cell16k_ring_v2_attn + kv_bounded="1".  W121 made
+    # bounded/preallocated KV the DEFAULT for every cell16k_ring_v2_* arm, so this
+    # explicit-bounded alias is now IDENTICAL to cell16k_ring_v2_attn (its A/B delta
+    # is nil) -- kept only as a named handle for the pre-W121 window-44 receipts.
+    # EXACT KEY SET = cell16k_ring_v2_attn (layer_major, prefill_dense,
+    # score_path=lean, selected_keys, window_ring, layout_fix, head=bf16, sinkhorn,
+    # attn, win_memo, runner=v2, wo_a_cache, attn_lean_casts, attn_fused_proj) PLUS
+    # kv_bounded="1".
     "cell16k_ring_v2_attn_bounded": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
@@ -1359,9 +1359,11 @@ ARM_PRESETS = {
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
     # W107F pair for window 44 (DSpark): cell16k_ring_v2_draft_attn + kv_bounded="1".
-    # EXACT KEY SET = cell16k_ring_v2_draft_attn (its 16 keys incl. runner=v2,
-    # draft, draft_head_bf16, wo_a_cache, attn_lean_casts, attn_fused_proj) PLUS
-    # kv_bounded="1".  Pairs A/B against cell16k_ring_v2_draft_attn under DSpark.
+    # W121 made bounded KV the v2 default, so this alias is now IDENTICAL to
+    # cell16k_ring_v2_draft_attn (nil A/B delta); kept as a named handle for the
+    # pre-W121 window-44 receipts.  EXACT KEY SET = cell16k_ring_v2_draft_attn (its
+    # 16 keys incl. runner=v2, draft, draft_head_bf16, wo_a_cache, attn_lean_casts,
+    # attn_fused_proj) PLUS kv_bounded="1".
     "cell16k_ring_v2_draft_attn_bounded": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1", kv_bounded="1",
@@ -1411,7 +1413,7 @@ ARM_PRESETS = {
     # resolved_plan.verify_record_hashes stamp proves the two arms actually differ.
     "cell16k_ring_v2_hash": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
-        window_ring="1", layout_fix="1",
+        window_ring="1", layout_fix="1", kv_bounded="1",  # W121: match the v2 default
         head="bf16", sinkhorn="1", attn="1", win_memo="1",
         runner="v2", verify_record_hashes="1",
     ),

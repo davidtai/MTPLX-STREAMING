@@ -374,6 +374,22 @@ def _clear_kv_envs(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
 
+def test_kv_bounded_env_gate(monkeypatch):
+    """W121: bounded KV is armed by MTPLX_DSV41_KV_BOUNDED.  The low-level default is
+    OFF (unset -> off) so the frozen growing control + its A/B family stay
+    byte-comparable without an explicit pin; the runtime DEFAULT is turned on by the
+    DSV4.1 serving profile's child_env and the v2 arms (see
+    test_deepseek_v41_serve_profile / the bench arm presets)."""
+    monkeypatch.delenv("MTPLX_DSV41_KV_BOUNDED", raising=False)
+    assert C._kv_bounded_enabled() is False
+    for off in ("0", "false", "off", "no"):
+        monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", off)
+        assert C._kv_bounded_enabled() is False, off
+    for on in ("1", "true", "on", "yes"):
+        monkeypatch.setenv("MTPLX_DSV41_KV_BOUNDED", on)
+        assert C._kv_bounded_enabled() is True, on
+
+
 def test_model_bounded_bit_identical_vs_legacy_selected_path(monkeypatch):
     model = _tiny_model()
     prompt = list(range(20)); steps = 180   # T ~ 200 -> the ring drops, latent grows
@@ -1093,7 +1109,9 @@ def test_control_arm_frozen_matches_window39():
         f"  missing: {sorted(set(frozen) - set(live_set))}\n"
         f"  changed: {[k for k in live_set if k in frozen and live_set[k] != frozen[k]]}"
     )
-    # the control must NOT carry the bounded lever (it is a candidate)
+    # W121: the frozen GROWING control carries NO kv_bounded key -- the low-level
+    # default is off, so unset == growing (byte-comparable to window 39).  Bounded KV
+    # is the runtime default via the serving profile + the v2 arms, NOT the control.
     assert preset.get(ab.KV_BOUNDED_ENV) is None
     assert preset.get(ab.KV_BOUNDED_MAXKV_ENV) is None
 
