@@ -30,6 +30,41 @@ input tokens and 1,023 decode steps plus the first token emitted by prefill.
 
 # Plan Status
 
+## Block-6 screen, 2026-09-13 22:44 UTC
+
+- **Best full workload remains 8.938810168 TPS; 20 TPS remains unmet.**
+  Source `8a8803ad86108c3448331a8e880fe2a0b891e809` contains only the prior
+  full-run receipt commit above the measured source. No production block-6 lane
+  was installed. Paired short diagnostic receipt:
+  `docs/deepseek-v41/receipts/dspark-block6-short-pair-20260913/`.
+- Same pinned16K Python input/65-output prefix, pf0/fanout4,71 target slots/layer,
+  48 shared transients, native MTP head. Block5/6 took14 cycles each, averaging
+  4.642857 outputs/cycle; both streams equal each other and the archived AR
+  prefix. Decode wall9.242825s vs10.111764s, 6.924290 vs6.329262 TPS:
+  **block6 loses8.593351% on this slice.** Decode SSD bytes83,850,854,400 vs
+  94,210,007,040 (+12.354260%); 551 more records (4,460 vs 5,011).
+  Acceptance87.9310% vs87.5000%. Reject block6 for this prompt slice;
+  do not spend a full1,024-token GPU run on it without a new signal.
+- Native real-head T6 probe loaded the exact10,597,621,640B head/embed/output
+  payload, with15,415,845,136B MLX load peak inside25,249,119,226B bound;
+  eager/compiled draft IDs matched, first-five proposals changed versusT5.
+  Tiny CPU-pinned target M1/4/6/7 logits+KV were exact with matched prefill
+  routes. Real-dimension one-layer M6/M7 attention peak1,132,996,826B under
+  8GiB; no new swapouts. Receipt: `receipts/dspark-block6-probes-20260913/`.
+  The first exploratory tiny check had a mismatched compiled prefill; fixed
+  route setup made it exact. The attention wrapper's raw `complete:false`
+  reflects its mishandling of a normal CLI `SystemExit(0)`; a separate
+  validation record proves complete output/guard/restoration. Raw saved.
+- Block5/6 static physical bounds105,169,989,004/105,494,689,004B against
+  110e9; measured250ms peaks99,251,191,808/98,581,299,200B. No added swaps.
+  Both guard0, exact Qwen restored/warm, GPU lock free, independently rechecked
+  after the final guard. No GPU child remains.
+- Next speed work: screen ordered native MTP expert-route locality before
+  selective MTP residency; no stream lane from topology alone. Alternatively
+  use current measured peak to reprice target expert slots with explicit
+  physical/wired headroom, then benchmark the exact full workload. Keep full
+  default MTP block5 as the control. Do not infer20TPS from short diagnostics.
+
 ## Current full measurement, 2026-09-13 13:22 UTC
 
 - **Best full workload: 8.938810168 TPS; 20 TPS remains unmet.** Source
@@ -64,19 +99,15 @@ input tokens and 1,023 decode steps plus the first token emitted by prefill.
   MTP routes are unmeasured; capture diagnostic-only existing index arrays and
   serialize after normal fences before selecting a capacity. No streaming lane
   was implemented or promoted.
-- **Prefer a bounded block6/M7 draft extension screen next**, before block7/M8.
-  No block-length weights exist, but every head/stage must receive the explicit
-  construction override; bidirectional draft attention changes earlier proposals
-  too. M7 is within the documented <=7 projection band and42 target assignments
-  fit pool48. Native M7 parity/rollback and compile peak still need focused proof,
-  then actual-context acceptance. M8 crosses a documented arithmetic boundary.
-  Preserve native weight bytes, target verification and fixed KV admission.
+- The then-next block6/M7 screen completed and lost on the actual-context short
+  pair above. M8 crosses a documented numerical boundary and has no workload
+  acceptance or peak proof. Keep the native block5 control.
 - Full benchmark wrapper from this run still performs AR, MTP and divergence
-  replay. A diagnostic MTP-only window can reuse its validated loader/guard and
-  intercept `_generate` to run native `_generate_dspark`, write explicitly scoped
-  diagnostics and exit through `_run_arm`'s existing finally. Do not fabricate AR
-  results or call diagnostic throughput a promotion receipt. No such driver was
-  written. Recompute all new bounds from measured87.384896GB at72slots plus exact
+  replay. The separate diagnostic MTP-only window now reuses its loader/guard,
+  intercepts `_generate` to run native `_generate_dspark`, writes scoped results
+  and exits through `_run_arm`'s existing finally. It did not fabricate AR
+  results or promote diagnostic throughput. Recompute all new bounds from
+  measured87.384896GB at72slots plus exact
   storage/shape deltas and the whole-workflow crosscheck. Do not run a new full
   model geometry before its peak is bounded.
 

@@ -1,0 +1,18 @@
+{
+  "probe_completed_and_receipt_valid": true,
+  "observed_wrapper_complete_field": false,
+  "observed_wrapper_field_explanation": "The probe CLI raised SystemExit(0) after writing the receipt; the wrapper's finally block ran before post-run validation. Raw field preserved.",
+  "source_commit": "8a8803ad86108c3448331a8e880fe2a0b891e809",
+  "rows": [
+    6,
+    7
+  ],
+  "mode_count": 4,
+  "mlx_peak_bytes": 1132996826,
+  "sampled_physical_peak_bytes": 11335811072,
+  "swapouts_unchanged": true,
+  "guard_exit_code": 0,
+  "exact_qwen_healthy_and_warm": true,
+  "gpu_lock_free": true,
+  "verified_at_utc": "2026-09-13T22:34:22.932054+00:00"
+}
