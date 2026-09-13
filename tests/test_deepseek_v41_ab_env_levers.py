@@ -458,8 +458,13 @@ def test_profile_child_env_equals_cell16k_preset(env_levers):
     child_env = dict(load_expert_profiles()["deepseek-v41-mxfp4-75"].child_env)
     child_levers = {k: v for k, v in child_env.items() if k in lever_keys}
 
-    # The drift guard: profile lever env == cell16k preset armed env, exactly.
+    # The drift guard: profile lever env == cell16k preset armed env, exactly.  W121
+    # HIGH-4 reverted the bounded-KV runtime default -- bounded KV is NOT byte-identical
+    # on Metal (rounding-class GEMM-layout reassociation), so the served profile does
+    # NOT arm MTPLX_DSV41_KV_BOUNDED (the growing lane stays the default); bounded KV
+    # lives only on the explicit *_bounded A/B arms.
     assert child_levers == preset_armed
+    assert env_levers.KV_BOUNDED_ENV not in child_env
     # Pin the preset itself to the known-good contract so it, too, cannot silently
     # change: the prefill lane (W30/W51/W50/W59/W73/W56) + the decode lane (W40/
     # W32/W41/W45).  Changing cell16k requires changing this and the profile JSON
