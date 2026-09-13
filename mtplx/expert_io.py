@@ -1498,6 +1498,7 @@ class PositionalExpertReader:
         self.metrics.update(
             record_requests=len(prepared),
             sidecar_record_requests=len(prepared),
+            records_read=len(prepared),  # W123: once-per-record denominator
         )
         digests = [""] * len(prepared)
         try:
