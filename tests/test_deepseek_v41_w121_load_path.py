@@ -123,9 +123,12 @@ def test_box_target_ar_end_to_end(tmp_path, monkeypatch):
     assert tp is not None
     assert tp["box_target_gb"] == 100.0
     assert abs(tp["box_baseline_gb"] - 10.42) < 1e-9
-    # allocator limit = target - baseline - cache(6 GiB); engine = allocator - band(4.1)
-    assert tp["allocator_limit_bytes"] == int(round((100 - 10.42) * GB)) - 6 * GIB
-    assert tp["engine_budget_bytes"] == tp["allocator_limit_bytes"] - int(round(4.1 * GIB))
+    # HIGH-2: allocator limit = target - baseline - host(2.5 GiB); engine = allocator
+    # - band(5.54) - cache_room(6).
+    assert tp["allocator_limit_bytes"] == int(round((100 - 10.42) * GB)) - int(round(2.5 * GIB))
+    assert tp["engine_budget_bytes"] == (
+        tp["allocator_limit_bytes"] - int(round(5.54 * GIB)) - 6 * GIB
+    )
     # the loader is handed the engine budget (grows the persistent slots to the target)
     assert abs(cap["memory_limit_bytes"] - tp["engine_budget_bytes"]) < 4096
     assert cap["max_live_kv_tokens"] == 2048
@@ -162,8 +165,9 @@ def test_memory_plan_from_pins_components_end_to_end(tmp_path, monkeypatch):
     sidecar.write_text(json.dumps({
         "box_target_gb": 100.0,
         "box_baseline_gb": 10.42,
+        "host_overhead_gib": 2.5,
         "allocator_cache_limit_gib": 6.0,
-        "transient_band_gib": 4.1,
+        "transient_band_gib": 5.54,
     }))
     args, cap = _drive(
         ab, ["--memory-plan-from", str(sidecar)],
@@ -172,7 +176,25 @@ def test_memory_plan_from_pins_components_end_to_end(tmp_path, monkeypatch):
     tp = args._dsv41_target_plan
     assert tp is not None
     assert tp["pinned_from"] == str(sidecar)
+    # allocator = target - baseline - host(2.5); engine = allocator - band(5.54) - cache(6)
     assert tp["engine_budget_bytes"] == (
-        int(round((100 - 10.42) * GB)) - 6 * GIB - int(round(4.1 * GIB))
+        int(round((100 - 10.42) * GB)) - int(round(2.5 * GIB))
+        - int(round(5.54 * GIB)) - 6 * GIB
     )
     assert abs(cap["memory_limit_bytes"] - tp["engine_budget_bytes"]) < 4096
+
+
+def test_memory_plan_from_missing_raises(tmp_path, monkeypatch):
+    ab = _ab()
+    # MEDIUM-5: a --memory-plan-from that does not exist must RAISE, not fall through.
+    import mtplx.models.deepseek_v41_loader as loader
+    monkeypatch.setattr(loader, "load_deepseek_v41_streaming",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not load")))
+    args = ab.build_parser().parse_args(
+        ["--memory-plan-from", str(tmp_path / "nope.json"),
+         "--eos-id", "0", "--out", str(tmp_path / "r.json")]
+    )
+    import types as _t
+    bench = _t.SimpleNamespace(resolve_max_kv=lambda c, d, m: int(m or 2048))
+    with pytest.raises(FileNotFoundError):
+        ab._resolve_derivation(args, bench=bench, max_kv=2048)

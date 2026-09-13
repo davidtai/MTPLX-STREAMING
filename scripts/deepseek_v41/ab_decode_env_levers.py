@@ -1754,12 +1754,21 @@ def build_parser() -> argparse.ArgumentParser:
         "MTPLX_DSV41_BOX_BASELINE_GB env). Required when the target is armed.",
     )
     p.add_argument(
+        "--host-overhead-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="non-MLX process overhead in GiB (process phys_footprint peak - mlx_peak: "
+        "python heap + reader buffers + engram LRU + tokenizer) reserved from the target "
+        "for the allocator/wired limit (default 2.5, MTPLX_DSV41_HOST_OVERHEAD_GIB).",
+    )
+    p.add_argument(
         "--allocator-cache-gib",
         type=float,
         default=None,
         metavar="GIB",
         help="MLX freed-buffer cache bound in GiB (set_cache_limit); reserved out of "
-        "the target so the LRU holds across misses (default 6, "
+        "the engine budget so the LRU holds across misses (default 6, "
         "MTPLX_DSV41_MLX_CACHE_LIMIT_GIB).",
     )
     p.add_argument(
@@ -2411,10 +2420,18 @@ def _resolve_box_baseline_gb(args):
 
 
 def _target_sidecar_path(args):
+    # MEDIUM-5: per-ARM sidecar name (keyed off the arm's --out stem) so a multi-arm
+    # invocation does not overwrite one shared derived-target-plan.json.
     out = getattr(args, "out", None)
     if out is None:
         return None
-    return Path(out).parent / "derived-target-plan.json"
+    out = Path(out)
+    stem = out.name
+    for suf in (".jsonl", ".json"):
+        if stem.endswith(suf):
+            stem = stem[: -len(suf)]
+            break
+    return out.parent / f"{stem}.target-plan.json"
 
 
 def _write_target_plan_sidecar(args, resolved) -> None:
@@ -2443,6 +2460,7 @@ def _resolve_target_plan(args):
     from mtplx.expert_runtime import (
         BOX_ALLOC_CACHE_ENV,
         BOX_BASELINE_ENV,
+        BOX_HOST_OVERHEAD_ENV,
         BOX_TARGET_ENV,
         BOX_TRANSIENT_BAND_ENV,
         resolve_box_target_mlx_limit_bytes,
@@ -2450,8 +2468,17 @@ def _resolve_target_plan(args):
 
     pin_path = getattr(args, "memory_plan_from", None)
     comps = None
-    if pin_path and Path(pin_path).exists():
-        comps = json.loads(Path(pin_path).read_text())
+    if pin_path:
+        # MEDIUM-5: a --memory-plan-from that does not exist must RAISE, never silently
+        # fall through to a live derivation (that would run a DIFFERENT plan than the
+        # operator asked to pin).
+        pp = Path(pin_path)
+        if not pp.exists():
+            raise FileNotFoundError(
+                f"--memory-plan-from {pin_path} does not exist (refusing to fall back "
+                "to a live derivation)"
+            )
+        comps = json.loads(pp.read_text())
         comps["pinned_from"] = str(pin_path)
 
     if comps is not None:
@@ -2459,6 +2486,7 @@ def _resolve_target_plan(args):
         baseline_gb = comps["box_baseline_gb"]
         cache_gib = comps.get("allocator_cache_limit_gib")
         band_gib = comps.get("transient_band_gib")
+        host_gib = comps.get("host_overhead_gib")
     else:
         target_gb = _resolve_box_target_gb(args)
         if target_gb is None:
@@ -2466,8 +2494,9 @@ def _resolve_target_plan(args):
         baseline_gb = _resolve_box_baseline_gb(args)
         cache_gib = getattr(args, "allocator_cache_gib", None)
         band_gib = getattr(args, "transient_band_gib", None)
+        host_gib = getattr(args, "host_overhead_gib", None)
 
-    # Stamp the env the runtime reads (decimal GB target/baseline; GiB cache/band).
+    # Stamp the env the runtime reads (decimal GB target/baseline; GiB host/cache/band).
     os.environ[BOX_TARGET_ENV] = f"{float(target_gb):g}"
     if baseline_gb is not None:
         os.environ[BOX_BASELINE_ENV] = f"{float(baseline_gb):g}"
@@ -2475,6 +2504,8 @@ def _resolve_target_plan(args):
         os.environ[BOX_ALLOC_CACHE_ENV] = f"{float(cache_gib):g}"
     if band_gib is not None:
         os.environ[BOX_TRANSIENT_BAND_ENV] = f"{float(band_gib):g}"
+    if host_gib is not None:
+        os.environ[BOX_HOST_OVERHEAD_ENV] = f"{float(host_gib):g}"
 
     # resolve_box_target_mlx_limit_bytes raises (actionable) if the baseline is missing.
     r = resolve_box_target_mlx_limit_bytes(os.environ)
@@ -2482,6 +2513,7 @@ def _resolve_target_plan(args):
         "memory_plan_source": "box_target",
         "box_target_gb": r["box_target_gb"],
         "box_baseline_gb": r["box_baseline_gb"],
+        "host_overhead_gib": r["host_overhead_gib"],
         "allocator_cache_limit_gib": r["allocator_cache_limit_gib"],
         "transient_band_gib": r["transient_band_gib"],
         "allocator_limit_bytes": int(r["mlx_limit_bytes"]),
@@ -2516,15 +2548,24 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
     target_plan = _resolve_target_plan(args)
     args._dsv41_target_plan = target_plan
     if target_plan is not None:
+        # MEDIUM-5: the target OVERRIDES --memory-limit-gib; a conflicting explicit
+        # engine budget is ambiguous, so REFUSE rather than silently pick one.
+        if getattr(args, "memory_limit_gib", None) is not None:
+            raise SystemExit(
+                "[ab] --memory-limit-gib conflicts with the armed box target "
+                "(--box-target-gb / MTPLX_DSV41_BOX_TARGET_GB): the target derives the "
+                "engine budget. Pass only one."
+            )
         override = target_plan["engine_budget_gib"]
         print(
             "[ab] memory plan from box target: "
             f"target {target_plan['box_target_gb']:g} GB "
             f"- baseline {target_plan['box_baseline_gb']:.4g} GB "
-            f"- allocator cache {target_plan['allocator_cache_limit_gib']:g} GiB "
+            f"- host overhead {target_plan['host_overhead_gib']:g} GiB "
             f"= allocator limit {target_plan['allocator_limit_bytes'] / GIB:.4g} GiB; "
-            f"engine budget = allocator limit - transient band "
-            f"{target_plan['transient_band_gib']:g} GiB = {override:.4g} GiB "
+            f"engine budget = allocator - transient band "
+            f"{target_plan['transient_band_gib']:g} - cache "
+            f"{target_plan['allocator_cache_limit_gib']:g} GiB = {override:.4g} GiB "
             "(sizes the persistent expert slots)"
             + (
                 f" [PINNED from {target_plan['pinned_from']}]"
