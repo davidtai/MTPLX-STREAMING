@@ -152,11 +152,12 @@ def _ab():
     return _load("ab_decode_env_levers")
 
 
-def test_peak_process_gb_reads_process_peak_rss_from_run():
+def test_peak_process_gb_reads_process_footprint_from_run():
     ab = _ab()
-    run = {"memory": {"mlx_peak_gb": 40.0, "process_peak_rss_gb": 52.5,
-                      "system_used_peak_gb": 90.0, "system_used_at_decode_start_gb": 20.0}}
-    # peak_process_gb is the whole-process RSS peak, NOT the MLX allocator peak.
+    # W121: the receipt memory block carries process_footprint_peak_gb (decimal GB).
+    run = {"memory": {"mlx_peak_gb": 40.0, "process_footprint_peak_gb": 52.5,
+                      "box_used_gb": 63.5, "box_baseline_gb": 11.0}}
+    # peak_process_gb is the whole-process phys_footprint peak, NOT the MLX peak.
     assert ab._peak_process_gb(run) == 52.5
 
 
@@ -166,24 +167,24 @@ def test_peak_process_gb_none_when_no_memory_block():
     assert ab._peak_process_gb({"memory": {}}) is None
 
 
-def test_memory_headline_prints_non_metal_keys():
+def test_memory_headline_prints_footprint_and_box_used():
     ab = _ab()
     receipt = {
         "peak_gb": 40.0,
         "memory": {
             "mlx_peak_gb": 40.0,
-            "process_peak_rss_gb": 52.5,
-            "system_used_peak_gb": 90.0,
-            "system_used_at_decode_start_gb": 20.0,
+            "process_footprint_peak_gb": 52.5,
+            "box_used_gb": 63.5,
+            "box_baseline_gb": 11.0,
         },
     }
     line = ab._memory_headline(receipt)
-    # legacy MLX-only figure stays; the non-Metal figures are named explicitly.
+    # legacy MLX-only figure stays; the W121 footprint + box_used are named explicitly.
     assert "peak_gb=40.00" in line
     assert "mlx_peak_gb=40.00" in line
-    assert "process_peak_rss_gb=52.50" in line
-    assert "system_used_peak_gb=90.00" in line
-    assert "sys at decode start 20.00" in line
+    assert "process_footprint_peak_gb=52.50" in line
+    assert "box_used_gb=63.50" in line
+    assert "baseline 11.00" in line
 
 
 def test_memory_headline_handles_missing_memory_block():
@@ -191,7 +192,8 @@ def test_memory_headline_handles_missing_memory_block():
     # No memory block (e.g. a defensive None): the headline still renders.
     line = ab._memory_headline({"peak_gb": 12.0})
     assert "peak_gb=12.00" in line
-    assert "process_peak_rss_gb=0.00" in line
+    assert "process_footprint_peak_gb=0.00" in line
+    assert "box_used_gb=0.00" in line
 
 
 def test_sampler_peak_rss_is_high_water_not_exit_value():

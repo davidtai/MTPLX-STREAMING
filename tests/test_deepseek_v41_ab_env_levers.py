@@ -458,8 +458,13 @@ def test_profile_child_env_equals_cell16k_preset(env_levers):
     child_env = dict(load_expert_profiles()["deepseek-v41-mxfp4-75"].child_env)
     child_levers = {k: v for k, v in child_env.items() if k in lever_keys}
 
-    # The drift guard: profile lever env == cell16k preset armed env, exactly.
+    # The drift guard: profile lever env == cell16k preset armed env, exactly.  W121
+    # HIGH-4 reverted the bounded-KV runtime default -- bounded KV is NOT byte-identical
+    # on Metal (rounding-class GEMM-layout reassociation), so the served profile does
+    # NOT arm MTPLX_DSV41_KV_BOUNDED (the growing lane stays the default); bounded KV
+    # lives only on the explicit *_bounded A/B arms.
     assert child_levers == preset_armed
+    assert env_levers.KV_BOUNDED_ENV not in child_env
     # Pin the preset itself to the known-good contract so it, too, cannot silently
     # change: the prefill lane (W30/W51/W50/W59/W73/W56) + the decode lane (W40/
     # W32/W41/W45).  Changing cell16k requires changing this and the profile JSON
@@ -1314,6 +1319,88 @@ def test_cell16k_ring_composite_arms(env_levers):
         k: v for k, v in presets["cell16k_ring_fused"].items() if v != ring.get(k)
     } == {_WOAC: "1", _ALC: "1", _DAK: "1", _AFP: "1"}, (
         "cell16k_ring_fused must touch only wo_a + lean-casts + K29 + fused-proj keys"
+    )
+
+
+# --------------------------------------------------------------------------
+# W122 gate-prefetch-width pair: cell16k_ring_v2_attn_pf0 / _pf8 must each be an
+# EXACT copy of cell16k_ring_v2_attn plus a single pinned MTPLX_DSV41_GATE_PREFETCH,
+# so an edit to the base arm propagates and no stray key drifts into the pair.  The
+# width is a receipt-attributable A/B (off vs wide vs the k=6 v2 auto-arm), NOT a
+# rounding-class lever (prefetch only warms the cache on the true route).
+# --------------------------------------------------------------------------
+_GP = "MTPLX_DSV41_GATE_PREFETCH"
+
+
+def test_gate_prefetch_width_arms_w122(env_levers):
+    presets = env_levers.ARM_PRESETS
+    base = presets["cell16k_ring_v2_attn"]
+    for name in ("cell16k_ring_v2_attn_pf0", "cell16k_ring_v2_attn_pf8"):
+        assert name in presets, f"{name} arm missing from ARM_PRESETS"
+    # pf0 = base + gate_prefetch="0" (explicit off, wins over the v2 auto-arm ->
+    # _resolve_gate_prefetch_k == 0, byte-identical routing, no speculative traffic).
+    assert {
+        k: v for k, v in presets["cell16k_ring_v2_attn_pf0"].items()
+        if v != base.get(k)
+    } == {_GP: "0"}, "pf0 must be cell16k_ring_v2_attn + ONLY gate_prefetch=0"
+    # pf8 = base + gate_prefetch="8" (explicit wider predict width).
+    assert {
+        k: v for k, v in presets["cell16k_ring_v2_attn_pf8"].items()
+        if v != base.get(k)
+    } == {_GP: "8"}, "pf8 must be cell16k_ring_v2_attn + ONLY gate_prefetch=8"
+    # The base arm leaves the width UNPINNED (None) so the v2 runner auto-arms it;
+    # the pair pins it explicitly.  gate_prefetch is not a rounding-class key, so the
+    # pair inherits the base arm's rounding-class status UNCHANGED (both carry
+    # attn_fused_proj -> rounding-class; adding the width does not alter the class).
+    assert base.get(_GP) is None, "base arm must leave gate_prefetch unpinned (v2 auto-arm)"
+    assert _GP not in env_levers.ROUNDING_CLASS_ENVS, "gate_prefetch must not be rounding-class"
+    for name in ("cell16k_ring_v2_attn_pf0", "cell16k_ring_v2_attn_pf8"):
+        assert env_levers._rounding_class_keys(name) == \
+            env_levers._rounding_class_keys("cell16k_ring_v2_attn"), (
+            f"{name} rounding-class keys must match cell16k_ring_v2_attn (prefetch adds none)"
+        )
+
+
+# --------------------------------------------------------------------------
+# W123 routing-barrier pair: cell16k_ring_v2_attn_ovl / _dr / _ovl_dr must each be an
+# EXACT copy of cell16k_ring_v2_attn plus only the shared-overlap and/or device-route
+# key, so an edit to the base propagates and no stray key drifts in.  Both levers are
+# byte-identical barrier attacks (a pure reorder / a barrier-free all-hit route with
+# byte-identical cold recovery) and NEITHER is a rounding-class key, so the pair keeps
+# the base arm's rounding-class status unchanged.
+# --------------------------------------------------------------------------
+def test_routing_barrier_arms_w123(env_levers):
+    presets = env_levers.ARM_PRESETS
+    base = presets["cell16k_ring_v2_attn"]
+    for name in ("cell16k_ring_v2_attn_ovl", "cell16k_ring_v2_attn_dr",
+                 "cell16k_ring_v2_attn_ovl_dr"):
+        assert name in presets, f"{name} arm missing from ARM_PRESETS"
+    # _ovl = base + ONLY shared_overlap=1
+    assert {
+        k: v for k, v in presets["cell16k_ring_v2_attn_ovl"].items() if v != base.get(k)
+    } == {_OV: "1"}, "cell16k_ring_v2_attn_ovl must be base + ONLY shared_overlap=1"
+    # _dr = base + ONLY device_route=1 (NOT the pinned variant)
+    assert {
+        k: v for k, v in presets["cell16k_ring_v2_attn_dr"].items() if v != base.get(k)
+    } == {_DR: "1"}, "cell16k_ring_v2_attn_dr must be base + ONLY device_route=1"
+    # _ovl_dr = base + BOTH
+    assert {
+        k: v for k, v in presets["cell16k_ring_v2_attn_ovl_dr"].items() if v != base.get(k)
+    } == {_OV: "1", _DR: "1"}, "cell16k_ring_v2_attn_ovl_dr must be base + shared_overlap + device_route"
+    # The base arm leaves both unpinned (None) so an ambient export is force-unset.
+    assert base.get(_OV) is None and base.get(_DR) is None, "base must leave OVL/DR unpinned"
+    # NEITHER lever is rounding-class -> pair inherits the base's rounding-class keys.
+    assert _OV not in env_levers.ROUNDING_CLASS_ENVS, "shared_overlap must not be rounding-class"
+    assert _DR not in env_levers.ROUNDING_CLASS_ENVS, "device_route must not be rounding-class"
+    for name in ("cell16k_ring_v2_attn_ovl", "cell16k_ring_v2_attn_dr",
+                 "cell16k_ring_v2_attn_ovl_dr"):
+        assert env_levers._rounding_class_keys(name) == \
+            env_levers._rounding_class_keys("cell16k_ring_v2_attn"), (
+            f"{name} rounding-class keys must match cell16k_ring_v2_attn (barrier levers add none)"
+        )
+    # device_route (W44) is the barrier-free path, NOT the pinned variant (W71).
+    assert presets["cell16k_ring_v2_attn_dr"].get("MTPLX_DSV41_DEVICE_ROUTE_PINNED") is None, (
+        "cell16k_ring_v2_attn_dr must NOT arm the pinned device-route variant"
     )
 
 

@@ -139,6 +139,16 @@ _require_int GPU_WINDOW_RSS_POLL_SECONDS "${RSS_POLL_SECONDS}" 1 || exit 2
 # footprint; set 0 to disable the correction.  The SYSTEM ceiling remains the
 # authoritative guard (vm_stat counts wired + compressed Metal).
 RSS_METAL_UNDERCOUNT_GIB="$(_int_or_default "${GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB:-18}" 18 GPU_WINDOW_RSS_METAL_UNDERCOUNT_GIB)"
+# W121: phase 4 measures the step tree's phys_footprint directly (proc_pid_rusage
+# ri_phys_footprint, which INCLUDES Metal/IOAccelerator, wired or not), so the ps-RSS
+# undercount fudge above is no longer applied to the cap.  RSS_METAL_UNDERCOUNT_GIB is
+# retained only for the legacy ps-tree telemetry line.
+# W121 compressor tripwire: abort if vm.compressor_bytes_used grows more than this many
+# GiB over its at-start value during the step.  A healthy run keeps the compressor
+# flat; non-wired Metal spilling into it is the swap-collapse signature (window 46: the
+# compressor jumped to ~33 GB).  Set 0 to disable.
+COMPRESSOR_TRIP_GB="$(_int_or_default "${GPU_WINDOW_COMPRESSOR_TRIP_GB:-8}" 8 GPU_WINDOW_COMPRESSOR_TRIP_GB)"
+COMPRESSOR_TRIP_BYTES=$(( COMPRESSOR_TRIP_GB * 1024 * 1024 * 1024 ))
 
 # System-wide phase-4 guard (2026-09-10 panic hardening): the box kernel-panicked
 # and rebooted when TOTAL used memory crossed the box limit, even though no single
@@ -150,7 +160,12 @@ RSS_METAL_UNDERCOUNT_GIB="$(_int_or_default "${GPU_WINDOW_RSS_METAL_UNDERCOUNT_G
 # 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
 # HIGH-3: REFUSE on an invalid ceiling (a fractional 95.5 must NOT silently become
 # the 102 default and raise the ceiling over the operator's intent).
-TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-102}"  # 102 GiB ~= 109.5 GB, under the 110 GB hard limit
+# MEDIUM-1: 96 GiB ~= 103 GB.  The box guard polls at ~1 s effective, so at an 8 GB/s
+# ramp it cannot catch the box before 110 GB from a 107 GB ceiling (100 GiB) -- 96 GiB
+# leaves ~7 GB of catch-up.  The REAL bound is the wired limit: apply_mlx_memory_cap /
+# the served path call set_wired_limit (and iogpu.wired_limit_mb caps the box), so Metal
+# cannot exceed it regardless of the poll; this ceiling is the belt to that suspenders.
+TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-96}"
 _require_int GPU_WINDOW_TOTAL_MEM_CEILING_GB "${TOTAL_MEM_CEILING_GB}" 1 || exit 2
 TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
 FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
@@ -179,14 +194,18 @@ log() { printf '%s [gpu_window] %s\n' "$(ts)" "$*"; }
 err() { printf '%s [gpu_window] ERROR: %s\n' "$(ts)" "$*" >&2; }
 gib() { awk -v b="${1:-0}" 'BEGIN{printf "%.1f", b/1073741824}'; }
 
-# Total *used* physical memory in bytes = (wired down + anonymous + occupied-by-
-# compressor) pages * page size, parsed from vm_stat.  Anonymous (not active):
-# active includes file-backed page cache, which a 269 GiB mmap'd expert bank
-# fills within seconds and macOS reclaims on demand (false abort 2026-09-11).  This is the system-wide
-# pressure signal the phase-4 guard aborts on: a runaway allocation ANYWHERE on
-# the box (not only the step child) is what panicked the machine on 2026-09-10.
-# "occupied by compressor" is the physical compressed footprint (NOT "stored in
-# compressor", which is the larger pre-compression logical count).
+# One-time BASELINE of used physical memory in bytes = (wired down + anonymous +
+# occupied-by-compressor) pages * page size, from vm_stat.  Sampled ONCE before the
+# step (with the resident agent already booted out), NOT polled during the step.
+#
+# W121: this is deliberately the ANONYMOUS (internal_page_count) term, NOT
+# active+inactive.  The 269 GiB expert bank is mmap'd/read during load and fills
+# the FILE page cache, which lands in active/inactive (external), NOT in the
+# anonymous bucket -- so an active+inactive formula false-aborts on reclaimable
+# cache (the 2026-09-11 incident, reproduced when window 47 aborted 10 s into load).
+# The step's OWN growing memory (weights + KV + Metal/IOAccelerator, wired or not)
+# is charged instead to its per-process phys_footprint and added on top in phase 4
+# (see box_used).  "occupied by compressor" is the physical compressed footprint.
 used_mem_bytes() {
   "${VM_STAT_CMD}" 2>/dev/null | awk '
     /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
@@ -198,6 +217,46 @@ used_mem_bytes() {
       printf "%.0f", (wired + anon + comp) * ps
     }
   '
+}
+
+# Physical bytes the compressor holds right now (sysctl vm.compressor_bytes_used).
+# The phase-4 tripwire aborts if this grows > COMPRESSOR_TRIP_GB over its start
+# value during the step: a healthy run keeps it flat, but non-wired Metal spilling
+# to the compressor (window 46: 33 GB) is the swap-collapse signature.  Overridable
+# for the unit test.
+COMPRESSOR_SYSCTL_CMD="${GPU_WINDOW_COMPRESSOR_CMD:-/usr/sbin/sysctl}"
+compressor_bytes_used() {
+  local v
+  v="$("${COMPRESSOR_SYSCTL_CMD}" -n vm.compressor_bytes_used 2>/dev/null)"
+  [[ "${v}" =~ ^[0-9]+$ ]] && printf '%s' "${v}" || printf '0'
+}
+
+# Sum of phys_footprint (mach proc_pid_rusage ri_phys_footprint) over the step's
+# whole process tree.  phys_footprint is the real per-process total INCLUDING
+# IOAccelerator/Metal (wired or not) but EXCLUDING the shared file page cache --
+# exactly the step's contribution to box pressure.  Overridable for the unit test.
+FOOTPRINT_READER_CMD="${GPU_WINDOW_FOOTPRINT_READER:-/usr/bin/env python3 $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tree_footprint.py}"
+# HIGH-3: expose reader success/failure so the phase-4 guard can FAIL CLOSED instead of
+# continuing at box_used == baseline when the reader breaks.  Still prints '0' on failure
+# (backward-compatible for the box-used-* subcommands' arithmetic), but ALSO sets the
+# globals TREE_FOOTPRINT_READ_OK / TREE_FOOTPRINT_BYTES -- the guard reads those by
+# calling this function DIRECTLY (not under $(...), which would run it in a subshell and
+# discard the globals).
+TREE_FOOTPRINT_READ_OK=1
+TREE_FOOTPRINT_BYTES=0
+tree_footprint_bytes() {
+  local root="${1:-}"
+  TREE_FOOTPRINT_READ_OK=1
+  TREE_FOOTPRINT_BYTES=0
+  [[ -z "${root}" ]] && { TREE_FOOTPRINT_READ_OK=0; printf '0'; return; }
+  local raw rc v
+  raw="$(${FOOTPRINT_READER_CMD} "${root}" 2>/dev/null)"; rc=$?
+  v="$(printf '%s' "${raw}" | tr -d '[:space:]')"
+  if (( rc != 0 )) || ! [[ "${v}" =~ ^[0-9]+$ ]]; then
+    TREE_FOOTPRINT_READ_OK=0; printf '0'; return
+  fi
+  TREE_FOOTPRINT_BYTES="${v}"
+  printf '%s' "${v}"
 }
 
 # Print "<pid> <rssGiB> <command>" for every python/mtplx/mlx process whose RSS
@@ -363,8 +422,21 @@ SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SO
 if [[ "${1:-}" == "--selftest" ]]; then
   shift
   case "${1:-}" in
-    used-mem-bytes) used_mem_bytes; echo ;;
+    used-mem-bytes) used_mem_bytes; echo ;;         # one-time baseline (wired+anon+comp)
     used-mem-gib)   gib "$(used_mem_bytes)"; echo ;;
+    compressor-bytes) compressor_bytes_used; echo ;;
+    tree-footprint) tree_footprint_bytes "${2:-}"; echo ;;
+    box-used-bytes)
+      # W121: box_used = one-time baseline (used_mem_bytes) + step-tree phys_footprint.
+      # Inject GPU_WINDOW_VM_STAT_CMD (baseline) + GPU_WINDOW_FOOTPRINT_READER (tree)
+      # for a deterministic unit test.  $2 = the step root pid handed to the reader.
+      _base="$(used_mem_bytes)"; _fp="$(tree_footprint_bytes "${2:-}")"
+      printf '%s\n' "$(( _base + _fp ))"
+      ;;
+    box-used-gib)
+      _base="$(used_mem_bytes)"; _fp="$(tree_footprint_bytes "${2:-}")"
+      gib "$(( _base + _fp ))"; echo
+      ;;
     over-ceiling)
       _u="$(used_mem_bytes)"
       if [[ "${_u}" =~ ^[0-9]+$ ]] && (( _u > TOTAL_MEM_CEILING_BYTES )); then
@@ -585,9 +657,10 @@ WAS_LOADED=0
 RESTORED=0
 STEP_PID=""
 _STEP_TAG=""                # W106 (b): unique env tag on the step, to find reparented descendants
-PEAK_TREE_RSS_BYTES=0       # running peak of the SUM of RSS across the step process tree
-PEAK_MAX_PROC_RSS_BYTES=0   # running peak of the MAX single-process RSS in that tree
-PEAK_SYSTEM_USED_BYTES=0    # running peak of system used memory (NOT the value at exit)
+PEAK_TREE_RSS_BYTES=0       # W121: running peak of the step tree's Σ phys_footprint
+PEAK_MAX_PROC_RSS_BYTES=0   # (retained; legacy ps-tree telemetry, no longer polled)
+PEAK_SYSTEM_USED_BYTES=0    # running peak of box used (baseline + step footprint)
+PEAK_COMPRESSOR_DELTA_BYTES=0  # running peak of compressor growth over its at-start value
 PLIST=""
 QWEN_PID=""
 
@@ -750,36 +823,37 @@ if [[ -n "${HEAVY_WORKERS}" ]]; then
   exit 7
 fi
 USED_START="$(used_mem_bytes)"
-log "phase 4: system used memory at start: $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB)"
+COMPRESSOR_START="$(compressor_bytes_used)"
+log "phase 4: box used at start (baseline wired+anon+comp): $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB); compressor at start $(gib "${COMPRESSOR_START}") GiB"
+log "phase 4: W121 guard -- box_used = max(baseline + Σ phys_footprint(step tree), live system used); compressor tripwire ${COMPRESSOR_TRIP_GB} GiB over start (file page cache excluded from all -- it is reclaimable)"
+# MEDIUM-4: hand the measured baseline (decimal GB) to the step env so the DSV4.1 bench's
+# box target derives from the SAME wired+anon+comp baseline the guard uses -- measured now
+# with the resident agent booted out -- rather than a hand-passed --box-baseline-gb (which
+# the bench now treats as a fallback only).  Both units logged.
+if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
+  export MTPLX_DSV41_BOX_BASELINE_GB="$(awk -v b="${USED_START}" 'BEGIN{printf "%.4f", b/1e9}')"
+  log "phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=${MTPLX_DSV41_BOX_BASELINE_GB} (decimal GB) == $(gib "${USED_START}") GiB baseline to the step env"
+fi
 
 # W106 MEDIUM-B: relate the child-tree cap to the measured baseline.  If the step
 # grew to the full CHILD_RSS_CAP on top of what is ALREADY used, the box would
 # cross the system ceiling before the per-child cap ever fired.  So the EFFECTIVE
 # child-tree cap is min(CHILD_RSS_CAP, ceiling - used_start): the most the step can
-# add without crossing the ceiling.  We LOWER (never raise) it, and never refuse.
+# add (as phys_footprint) without crossing the ceiling.  We LOWER (never raise) it.
+# W121: the cap is compared against the tree phys_footprint DIRECTLY -- footprint is
+# the process total incl. Metal, so the old ps-RSS undercount fudge is gone.
 EFFECTIVE_CHILD_CAP_BYTES="${CHILD_RSS_CAP_BYTES}"
 if [[ "${USED_START:-}" =~ ^[0-9]+$ ]] && \
    (( USED_START + CHILD_RSS_CAP_BYTES > TOTAL_MEM_CEILING_BYTES )); then
   _headroom=$(( TOTAL_MEM_CEILING_BYTES - USED_START ))
   (( _headroom < 0 )) && _headroom=0
   EFFECTIVE_CHILD_CAP_BYTES="${_headroom}"
-  log "phase 4: effective child-tree cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (lowered from $(gib "${CHILD_RSS_CAP_BYTES}") GiB: used_start $(gib "${USED_START}") + cap would cross the ${TOTAL_MEM_CEILING_GB} GiB ceiling)"
-fi
-# W106 MEDIUM-1: `ps` RSS undercounts unified Metal by ~RSS_METAL_UNDERCOUNT_GIB, so
-# lower the cap it is compared against by that amount (the real footprint is ~this
-# much higher than the polled tree RSS).  Clamp at >= 1 GiB so a large undercount
-# cannot zero the cap and abort instantly.
-_UNDERCOUNT_BYTES=$(( RSS_METAL_UNDERCOUNT_GIB * 1024 * 1024 * 1024 ))
-if (( _UNDERCOUNT_BYTES > 0 )); then
-  _capped=$(( EFFECTIVE_CHILD_CAP_BYTES - _UNDERCOUNT_BYTES ))
-  (( _capped < 1024 * 1024 * 1024 )) && _capped=$(( 1024 * 1024 * 1024 ))
-  log "phase 4: effective child-tree cap $(gib "${_capped}") GiB (lowered from $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB by the ${RSS_METAL_UNDERCOUNT_GIB} GiB ps-vs-Metal RSS undercount; the vm_stat system ceiling ${TOTAL_MEM_CEILING_GB} GiB is the authoritative guard)"
-  EFFECTIVE_CHILD_CAP_BYTES="${_capped}"
+  log "phase 4: effective child-tree footprint cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (lowered from $(gib "${CHILD_RSS_CAP_BYTES}") GiB: used_start $(gib "${USED_START}") + cap would cross the ${TOTAL_MEM_CEILING_GB} GiB ceiling)"
 fi
 
 # W106 HIGH-2: state BOTH caps explicitly (GiB + the ~GB equivalent) at step start
 # so the operator sees the guard envelope next to the step it is about to run.
-log "phase 4: guard caps -- child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (~$(awk -v b="${EFFECTIVE_CHILD_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); system used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
+log "phase 4: guard caps -- child-tree footprint cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (~$(awk -v b="${EFFECTIVE_CHILD_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); box-used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
 # W106 (b): tag the step's environment with a unique marker, inherited by EVERY
 # descendant and unchanged by reparenting, so _pids_with_tag can find (and kill) a
 # python that was reparented to launchd after its `bash -c` chain died.  Set inline
@@ -797,46 +871,93 @@ fi
 _last_mem_sample=0  # 0 => the first poll logs an envelope sample immediately
 while :; do
   _check_abort   # W106 (a): abort promptly on a queued INT/TERM (not deferred)
-  # Loop terminates when STEP_PID is gone or a zombie (same condition as before);
-  # RSS is now measured over its whole tree, not this one (near-empty) pid.
+  # Loop terminates when STEP_PID is gone or a zombie.
   step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"
   if [[ -z "${step_state}" || "${step_state}" == Z* ]]; then
     break
   fi
-  # Walk STEP_PID + all descendants: SUM RSS across the tree (the python benchmark
-  # under the bash-c chain) and the MAX single process.  The cap applies to the SUM.
-  read -r tree_kb max_kb < <(_step_tree_rss "${STEP_PID}")
-  tree_bytes=$(( ${tree_kb:-0} * 1024 ))
-  max_bytes=$(( ${max_kb:-0} * 1024 ))
+  # W121: the step's contribution to box pressure = Σ phys_footprint over its whole
+  # tree (proc_pid_rusage ri_phys_footprint, which INCLUDES Metal/IOAccelerator
+  # whether or not it is wired, but EXCLUDES the shared file page cache).  box_used
+  # = the one-time baseline + this footprint -- the plain sum David asked for, and
+  # the quantity that does NOT false-abort on the 269 GiB expert bank's reclaimable
+  # file cache.
+  # Call DIRECTLY (not under $(...)) so TREE_FOOTPRINT_READ_OK / _BYTES set inside the
+  # function reach this shell -- a command substitution would run it in a subshell and
+  # discard the flag, defeating the HIGH-3 fail-closed check.
+  tree_footprint_bytes "${STEP_PID}" >/dev/null
+  tree_ok=${TREE_FOOTPRINT_READ_OK}
+  tree_bytes=${TREE_FOOTPRINT_BYTES}
+  # HIGH-3: fold in a LIVE system-used term (wired+anon+comp, file cache excluded) so the
+  # guard is not blind to OTHER processes growing (a build, a pytest sweep, a worker):
+  #   box_used = max(baseline + step footprint, live system used).
+  live_used="$(used_mem_bytes)"
+  live_ok=0; [[ "${live_used}" =~ ^[0-9]+$ ]] && live_ok=1
+  # MEDIUM-4: never silently drop the live system term -- a missing vm_stat means the
+  # guard is blind to OTHER processes growing this tick.  WARN (loudly) so the operator
+  # sees the coverage gap; the baseline+footprint term still bounds the STEP itself.
+  if (( ! live_ok )); then
+    log "phase 4: WARN vm_stat unreadable this tick (live system-used term dropped); guarding on baseline + step footprint only -- box pressure from OTHER processes is NOT visible until vm_stat recovers"
+  fi
+  if (( ! tree_ok )); then
+    # A gone/zombie ROOT is a BENIGN step exit, not a reader failure: the step raced us
+    # between the step_state check above and this read (e.g. `bash -c true` exiting fast),
+    # and tree_footprint exits non-zero on an unreadable root (MEDIUM-2).  Re-check
+    # liveness; if the step is gone, break and let the normal post-loop reap run.
+    step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"
+    if [[ -z "${step_state}" || "${step_state}" == Z* ]]; then
+      break
+    fi
+    # HIGH-3: FAIL CLOSED.  The reader broke (subprocess error / 15 s timeout) while the
+    # step is STILL ALIVE -- do NOT continue at box_used == baseline (fail-open, blind to
+    # the whole step); a broken primary guard is not something to run a GPU step under.
+    err "phase 4: step-footprint reader UNREADABLE for LIVE step ${STEP_PID} (returned no valid footprint); the box guard cannot see the step -- killing child and restoring"
+    _kill_step_child
+    exit 8
+  fi
+  box_used=$(( USED_START + tree_bytes ))
+  if (( live_ok )) && (( live_used > box_used )); then
+    box_used=${live_used}
+  fi
   if (( tree_bytes > PEAK_TREE_RSS_BYTES )); then
     PEAK_TREE_RSS_BYTES=${tree_bytes}
   fi
-  if (( max_bytes > PEAK_MAX_PROC_RSS_BYTES )); then
-    PEAK_MAX_PROC_RSS_BYTES=${max_bytes}
+  if (( box_used > PEAK_SYSTEM_USED_BYTES )); then
+    PEAK_SYSTEM_USED_BYTES=${box_used}
   fi
+  # Authoritative box guard (checked FIRST): max(baseline + step footprint, live system
+  # used) over the ceiling -- David's plain sum, hardened against other-process growth.
+  if (( box_used > TOTAL_MEM_CEILING_BYTES )); then
+    err "phase 4: BOX used memory $(gib "${box_used}") GiB (max of baseline $(gib "${USED_START}") + step footprint $(gib "${tree_bytes}"), live system used $( ((live_ok)) && gib "${live_used}" || printf 'n/a' ) GiB) exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB; killing child and restoring"
+    _kill_step_child
+    exit 8
+  fi
+  # Secondary per-step footprint cap: fires only when an operator sets a TIGHTER
+  # CHILD_RSS_CAP than the box headroom (otherwise EFFECTIVE_CHILD_CAP == the box
+  # headroom and the box guard above already caught it).
   if (( tree_bytes > EFFECTIVE_CHILD_CAP_BYTES )); then
-    err "phase 4: step tree RSS $(gib "${tree_bytes}") GiB (max single process $(gib "${max_bytes}") GiB) exceeded cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB; killing child and restoring"
+    err "phase 4: step tree phys_footprint $(gib "${tree_bytes}") GiB exceeded cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB; killing child and restoring"
     _kill_step_child
     exit 6
   fi
-  # System-wide guard: a runaway allocation anywhere on the box (not only this
-  # child) that crosses the ceiling aborts the step and restores the agent.
-  used_now="$(used_mem_bytes)"
-  if [[ "${used_now:-}" =~ ^[0-9]+$ ]]; then
-    if (( used_now > PEAK_SYSTEM_USED_BYTES )); then
-      PEAK_SYSTEM_USED_BYTES=${used_now}
-    fi
-    if (( used_now > TOTAL_MEM_CEILING_BYTES )); then
-      err "phase 4: SYSTEM used memory $(gib "${used_now}") GiB exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB (step tree RSS $(gib "${PEAK_TREE_RSS_BYTES}") GiB); killing child and restoring"
-      _kill_step_child
-      exit 8
-    fi
+  # Compressor tripwire: a healthy run keeps the compressor flat; a jump is the
+  # swap-collapse signature (non-wired Metal spilling to the compressor).
+  comp_now="$(compressor_bytes_used)"
+  comp_delta=$(( comp_now - COMPRESSOR_START ))
+  (( comp_delta < 0 )) && comp_delta=0
+  if (( comp_delta > PEAK_COMPRESSOR_DELTA_BYTES )); then
+    PEAK_COMPRESSOR_DELTA_BYTES=${comp_delta}
   fi
-  # One memory-envelope sample every 30 s (and once on the first poll) so the log
-  # shows the real footprint of the step as it runs, not just the exit summary.
+  if (( COMPRESSOR_TRIP_BYTES > 0 && comp_delta > COMPRESSOR_TRIP_BYTES )); then
+    err "phase 4: COMPRESSOR grew $(gib "${comp_delta}") GiB over start (> ${COMPRESSOR_TRIP_GB} GiB tripwire) -- swap/compression collapse; killing child and restoring"
+    _kill_step_child
+    exit 8
+  fi
+  # One memory-envelope sample every 30 s (and once on the first poll): the three
+  # numbers David asked for (baseline start, step tree footprint, compressor delta).
   _now_epoch="$(date +%s)"
   if (( _now_epoch - _last_mem_sample >= 30 )); then
-    log "phase 4: mem sample -- step tree RSS $(gib "${tree_bytes}") GiB (max single process $(gib "${max_bytes}") GiB), system used $(gib "${used_now:-0}") GiB"
+    log "phase 4: mem sample -- baseline $(gib "${USED_START}") GiB + step footprint $(gib "${tree_bytes}") GiB, live system used $( ((live_ok)) && gib "${live_used}" || printf 'n/a' ) GiB => box used $(gib "${box_used}") GiB; compressor +$(gib "${comp_delta}") GiB (trip ${COMPRESSOR_TRIP_GB} GiB)"
     _last_mem_sample=${_now_epoch}
   fi
   sleep "${RSS_POLL_SECONDS}"
@@ -844,7 +965,7 @@ done
 wait "${STEP_PID}"
 step_rc=$?
 STEP_PID=""
-log "phase 4: GPU step exited with code ${step_rc}; peak step tree RSS $(gib "${PEAK_TREE_RSS_BYTES}") GiB (max single process $(gib "${PEAK_MAX_PROC_RSS_BYTES}") GiB), peak system used $(gib "${PEAK_SYSTEM_USED_BYTES}") GiB"
+log "phase 4: GPU step exited with code ${step_rc}; peak step footprint $(gib "${PEAK_TREE_RSS_BYTES}") GiB, peak box used $(gib "${PEAK_SYSTEM_USED_BYTES}") GiB, peak compressor delta $(gib "${PEAK_COMPRESSOR_DELTA_BYTES}") GiB"
 
 # phase 5 (restore + lock release) runs in the teardown trap on this exit.
 exit "${step_rc}"
