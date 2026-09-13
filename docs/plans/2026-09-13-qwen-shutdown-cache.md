@@ -18,6 +18,6 @@ files, malformed paths and uninspectable process state before reclamation.
   failures, then wire `gpu_window.sh`; captured descendants must also be gone.
 - [x] Run both CPU files and the existing shell guard regressions. Review the
   helper and lifecycle diff. Commit the verified source before GPU measurement.
-- [ ] Run the exact 16K Python workload under the normal guard, fanout 4 and
+- [x] Run the exact 16K Python workload under the normal guard, fanout 4 and
   110 GB. Use the reviewed larger-residency bound and 16 GiB transient reserve;
   compare all output IDs, retain memory samples and verify exact service restore.

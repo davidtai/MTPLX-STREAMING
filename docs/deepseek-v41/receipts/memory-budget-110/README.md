@@ -200,7 +200,9 @@ measurements or deployable future-aware policies. The frequency candidate
 disables the single-pool policy only for replay and does not reproduce a new
 whole-run prefill. It has not been promoted. The clean run observed 12.657 GB/s
 over its I/O windows; that is a measurement, not a hardware bandwidth ceiling.
-The evidence does not support reaching 20 TPS through eviction tuning alone.
+At that 35-slot capacity, the evidence does not support reaching 20 TPS through
+eviction tuning alone. The larger capacities below change the cache bounds and
+need their own analysis.
 MTP/verify scheduling needs separate arithmetic, peak-memory and performance
 gates before any full-model run.
 
@@ -208,3 +210,43 @@ Runner verification logs include the initial test-device contamination and
 the final **313-test guarded pass**. A final three-case installed-fanout fix
 passed with the 35 reporting/admission cases and three offline cache cases
 (38 CPU tests total), with real MLX imports blocked. No test tolerance changed.
+
+## Automatic reclamation and larger resident caches
+
+Source `995522859` integrates clean file-cache reclamation into normal guarded
+Qwen shutdown, using its reported model directory. Both following runs use the
+same exact 16,384-input Python prompt, 1,023 decode steps and 1,024 output tokens,
+pf0, fanout 4, 110 decimal GB, 2 GiB Python capacity and 2 GiB allocator cache.
+
+| Receipt | Baseline GB | Transient GiB | Slots/layer | Decode TPS | Physical sampled peak GB |
+|---|---:|---:|---:|---:|---:|
+| `python-16k-1024-defaults` | 47.1807 | 10 | 35 | 4.201765 | 106.349838 |
+| `python-16k-1024-reclaimed` | 12.9284 | 16 | 72 | 5.834646 | 100.216291 |
+| `python-16k-1024-reclaimed-defaults-v2` | 10.2463 | 10 | 84 | **6.281322** | **106.591666** |
+
+The normal default reserve therefore runs **49.49% faster** than the earlier
+35-slot allocation on this workload. All 1,024 output IDs match, with digest
+`2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090`.
+These are measured allocation outcomes with changing live baselines, not a
+controlled attribution of every improvement to the transient-band setting.
+
+The 84-slot pass took 134.470 s prefill and 162.864 s decode. MLX active peak was
+93,693,612,196 B; the external 250 ms sampler recorded 1,153 samples and a
+95,845,554,032 B process-footprint peak. The higher external physical peak is
+retained alongside the runner's 1 s observation. Swapouts did not increase.
+The guard exited 0, restored the exact healthy Qwen service with warmup complete,
+and released the lock; health and lock were independently checked afterward.
+The vanished tool session handle after continuation was not an OOM or crash.
+
+At 84 slots, decode streamed 44,848 records, or 43.840 misses/token, down from
+86.644 at 35 slots. I/O-window throughput was 12.201 GB/s, with 67.554 ms of read
+windows per token. That is not an additive critical-path breakdown. **20 TPS
+remains unmet**; cache allocation alone has not established the target.
+
+The first default-reserve wrapper rejected an 11.8336 GB baseline before model
+load because its diagnostic interval had an unnecessary 12 GB lower bound.
+The retained failed guard log shows exit 1 and successful restoration. The v2
+wrapper accepts lower baselines while retaining slot, physical-peak and wired
+bounds. No production budget guard was weakened. The 72- and 84-slot active peaks
+were about 1 MB below the exact persistent-storage-delta projection from 35 slots,
+supporting the bounded capacity adjustment.

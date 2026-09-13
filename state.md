@@ -8,6 +8,9 @@ input tokens and 1,023 decode steps plus the first token emitted by prefill.
 
 # Decisions
 
+- User permits parity differences caused by tie breakers (2026-09-13).
+  Record and diagnose divergences; this does not authorize larger numerical
+  errors or changes to the 110 GB memory limit.
 - Never execute MLX without the parent-held `/tmp/mtplx-gpu-exclusive.lock`.
   Use the guarded runner, restore the exact service, verify health/warmup and
   lock release. A free lock alone does not prove memory headroom.
@@ -47,6 +50,14 @@ raises, verified with a fake device and no MLX import.
 - Default run: 35 expert slots/layer, **4.201764739 TPS**, 135.005 s prefill,
   243.469 s decode, **106,349,838,336 B** sampled physical peak (250 ms),
   **56,845,381,092 B** true MLX active peak. No added swapouts.
+- Automatic reclamation, current default reserve, source `995522859`: **84
+  slots/layer, 6.281322159 TPS**, 134.470 s prefill, 162.864 s decode. All 1,024
+  IDs equal the prior controls; **106,591,666,176 B** sampled physical peak,
+  **93,693,612,196 B** MLX active peak, no added swapouts. This is a 49.49%
+  throughput gain over 35 slots, still below 20 TPS. Guard completed at 11:09:18
+  UTC; after the session handle vanished across continuation, OS/log checks
+  confirmed normal exit 0, no remaining child, restored healthy Qwen and free
+  lock at 11:15 UTC. No OOM/crash occurred.
 - All 1,024 output IDs match the 27-slot control:
   `2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090`.
   The output is a capped Python diff, not validated generated code.
@@ -109,14 +120,30 @@ raises, verified with a fake device and no MLX import.
   surviving service descendant; a new targeted red/green regression fixes this
   with a post-bootout survivor check before restore. Do not repeat broad tests
   without a concrete new concern.
-- Next exact-workload run uses 16 GiB transient reserve, 2 GiB retained Metal
+- Completed first larger-cache run used 16 GiB transient reserve, 2 GiB retained Metal
   cache, 2 GiB Python capacity and the new lower measured baseline. Reviewed
   same-graph bound adds exact persistent-storage delta plus two complete bank
   images beyond the measured 35-slot active peak. At baseline 13.127 GB it
-  admits 71 slots/layer with a 104.010 GB conservative physical envelope.
+  admitted 72 slots/layer at actual baseline 12.9284 GB; 5.834645856 TPS and
+  100.216 GB sampled physical peak, all output IDs equal.
   Temporary wrapper: /tmp/dsv41-110-preflight/run_python_16k_1024_reclaimed.py.
-  Use normal guard, explicit MTPLX_DSV41_IO_READ_FANOUT=4 and no other inherited
-  MTPLX knobs. This run is pending, not evidence of throughput improvement.
+  The normal 10 GiB reserve then admitted 84 slots at baseline 10.2463 GB and
+  reached the result above. One intermediate diagnostic wrapper rejected an
+  11.8336 GB baseline before model load due to an unnecessary 12 GB lower bound;
+  it restored normally, and the v2 wrapper corrected that diagnostic interval.
+  All raw receipts/scripts/logs are in receipts/memory-budget-110, with prefixes
+  python-16k-1024-reclaimed and python-16k-1024-reclaimed-defaults-v2.
+- Current decode at 84 slots: 43.840 misses/token, 0.824 GB/token, I/O windows
+  67.554 ms/token at 12.201 GB/s. Those windows are not an additive critical-path
+  split. Next priority is a short existing decode-timeline profile on the same
+  16K Python input, plus capturing initial warm bank state at the boundary for
+  causal policy screening at the larger capacity. No new hot-path counters or
+  broad test runs. Use explicit fanout 4 and retain parity/memory gates.
+- Historical work already checked: window-16 switch_fastpath_b was only
+  4.1339 vs 4.0191 TPS on its older 1K prompt; W127b saw <=2.5% at16K.
+  Window-17 native mxfp4 full-MLP microbench was 417.083 us at M1, convention
+  variant395.167 us. Do not rebuild these as presumed large wins or rerun merely
+  because old prose still calls their GPU measurements pending.
 - `scripts/deepseek_v41/analyze_route_cache.py` computes a tested clairvoyant
   per-layer lower bound with optional admission and temporary service storage.
   It is diagnostic, not a deployable policy or promotion throughput.
