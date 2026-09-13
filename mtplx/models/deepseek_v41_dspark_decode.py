@@ -1306,6 +1306,7 @@ def dspark_generate(
     forward: Optional[Callable[[mx.array, Any], tuple]] = None,
     token_callback: Optional[Callable[[List[int]], None]] = None,
     prefill_callback: Optional[Callable[[dict], None]] = None,
+    completion_callback: Optional[Callable[[], None]] = None,
     abort_check: Optional[Callable[[], bool]] = None,
     divergence_capture: Optional["DivergenceCapture"] = None,
 ) -> List[int]:
@@ -1323,13 +1324,24 @@ def dspark_generate(
     "prompt_eval_time_s"}`` -- the same payload the served :func:`generate_dspark`
     lane emits, so the ab harness's prefill->decode boundary snapshot works on
     either lane.
+
+    ``completion_callback`` runs once before a successful return, while target
+    and draft caches are still alive. Benchmark observers freeze their clock
+    before reading memory here. Callback errors propagate so an invalid
+    measurement cannot silently produce a successful receipt.
     """
     import time
 
     if getattr(model, "mtp", None) is None:
         raise RuntimeError("dspark_generate requires a model with a DSpark MTP head")
+
+    def complete(ids):
+        if completion_callback is not None:
+            completion_callback()
+        return ids
+
     if max_tokens <= 0:
-        return []
+        return complete([])
     stats = stats if stats is not None else DSparkDecodeStats()
     block_size = int(getattr(model.mtp, "block_size", 0) or 0)
     k_request = block_size if speculative_depth is None else int(speculative_depth)
@@ -1362,7 +1374,7 @@ def dspark_generate(
         token_callback([primary])
     stats.generated_tokens = 1
     if _is_stop(primary, stop_ids) or max_tokens <= 1:
-        return tokens[:max_tokens]
+        return complete(tokens[:max_tokens])
 
     rest, _finish = _decode_cycles(
         model=model,
@@ -1389,7 +1401,7 @@ def dspark_generate(
     )
     tokens.extend(rest)
     stats.generated_tokens = len(tokens)
-    return tokens
+    return complete(tokens)
 
 
 # ---------------------------------------------------------------------------

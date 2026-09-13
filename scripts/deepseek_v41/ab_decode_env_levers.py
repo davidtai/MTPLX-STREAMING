@@ -168,47 +168,22 @@ def _mlx_headroom_readback_keys(
 
 
 def _ab_memory_block(block: dict, readback: dict) -> dict:
-    """W121: the receipt ``memory`` block -- David: "all you need to do is track the
-    memory usage so we can efficiently use it".  The honest, minimal accounting; no
-    plan_overshoot / safety / non_metal / vm_stat-baseline forecast (W121 dropped
-    those static forecasts):
-
-      * ``process_footprint_peak_gb`` / ``_gib`` -- the process phys_footprint peak
-        bracketed over prefill+decode (the gpu_window.sh guard's per-process figure:
-        Metal + host, NOT the shared file cache).  Decimal GB (David reads "GB used")
-        plus a GiB twin.  Sourced from the sampler's ``process_peak_rss_gb`` (mach
-        phys_footprint), which is already GiB.
-      * ``mlx_peak_gb`` / ``mlx_active_gb_at_decode_start`` / ``_end`` /
-        ``mlx_cache_gb_at_decode_end`` -- the allocator's own peak, working set at the
-        decode bracket, and retained freed-buffer cache.
-      * ``mlx_limit_gib_effective`` -- the limit ACTUALLY passed to set_memory_limit,
-        filled later by :func:`_apply_effective_limit` from the apply_mlx_memory_cap
-        report.  ``mlx_gc_limit_gib_readback`` is the value get_memory_limit reports back
-        (the gc_limit the allocator ENFORCES = min(passed, 0.95 * maxWorkingSet)); it can
-        be LOWER than the passed value when the OS clamps it (window 49: passed 77.18,
-        readback 70.18), so it is a diagnostic, not the effective limit.
-
-    ``box_baseline_gb`` / ``box_used_gb`` (= baseline + footprint) are injected later by
-    :func:`_inject_box_used`; ``mlx_limit_gib_effective`` by :func:`_apply_effective_limit`."""
-
-    footprint_gib = block.get("process_peak_rss_gb")  # bracketed phys_footprint (GiB)
-    footprint_gb = (
-        None if footprint_gib is None else footprint_gib * GIB / 1_000_000_000
-    )
-    return {
-        "process_footprint_peak_gb": footprint_gb,
-        "process_footprint_peak_gib": footprint_gib,
-        "mlx_peak_gb": block.get("mlx_peak_gb"),
-        "mlx_active_gb_at_decode_start": readback.get("mlx_active_gb_at_decode_start"),
-        "mlx_active_gb_at_decode_end": readback.get("mlx_active_gb_at_decode_end"),
-        "mlx_cache_gb_at_decode_end": readback.get("mlx_cache_gb_at_decode_end"),
-        # the OS-clamped gc_limit the allocator enforces (get_memory_limit readback);
-        # diagnostic only -- the effective limit is the PASSED value (below).
-        "mlx_gc_limit_gib_readback": readback.get("mlx_limit_gib_readback"),
-        # filled from the apply_mlx_memory_cap report (the value passed to
-        # set_memory_limit); None only if no cap report is available.
-        "mlx_limit_gib_effective": None,
-    }
+    """Preserve sampled OS observations and explicit units in schema-v2 receipts."""
+    out = dict(block)
+    for name in ("process_footprint_peak", "system_used_peak", "mlx_peak"):
+        value = block.get(name + "_bytes")
+        out[name + "_gb"] = None if value is None else value / 1_000_000_000
+        out[name + "_gib"] = None if value is None else value / GIB
+    # The readback helper predates schema v2; its *_gb values were binary GiB.
+    for name in ("mlx_active_gb_at_decode_start", "mlx_active_gb_at_decode_end",
+                 "mlx_cache_gb_at_decode_end"):
+        gib = readback.get(name)
+        out[name.replace("_gb_", "_bytes_")] = None if gib is None else round(gib * GIB)
+        out[name.replace("_gb_", "_gib_")] = gib
+        out[name] = None if gib is None else gib * GIB / 1_000_000_000
+    out["mlx_gc_limit_gib_readback"] = readback.get("mlx_limit_gib_readback")
+    out["mlx_limit_gib_effective"] = None
+    return out
 
 
 def _memory_cap_block(runtime):
@@ -271,20 +246,17 @@ def _resolve_receipt_baseline_gb(args):
 
 
 def _inject_box_used(mem, args) -> None:
-    """Add ``box_baseline_gb`` + ``box_used_gb`` (= baseline + process footprint peak,
-    decimal GB) to a receipt ``memory`` block.  The baseline comes from the target plan,
-    the gpu_window-exported MTPLX_DSV41_BOX_BASELINE_GB env, or --box-baseline-gb (in that
-    order), so box_used is right on the explicit --memory-limit-gib path too, not only
-    when the box target is armed."""
-
+    """Keep measured whole-machine usage separate from baseline+process estimate."""
     if not isinstance(mem, dict):
         return
     baseline_gb = _resolve_receipt_baseline_gb(args)
     fp = mem.get("process_footprint_peak_gb")
-    mem["box_baseline_gb"] = None if baseline_gb is None else round(baseline_gb, 4)
-    mem["box_used_gb"] = (
-        None if (baseline_gb is None or fp is None) else round(baseline_gb + fp, 4)
+    mem["box_baseline_gb"] = baseline_gb
+    mem["baseline_plus_process_peak_estimate_gb"] = (
+        None if baseline_gb is None or fp is None else round(baseline_gb + fp, 4)
     )
+    mem["box_used_gb"] = mem.get("system_used_peak_gb")
+    mem["box_used_source"] = "sampled_vm_stat_including_file_cache"
 
 
 # W77: AR top-1/top-2 logit gap (logit units) below which a greedy DSpark
@@ -3436,7 +3408,7 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
         "decode_wall_s": decode_wall_s,
-        "peak_gb": mem_probe.peak_bytes() / GIB,
+        "peak_gb": mem_probe.peak_bytes() / 1_000_000_000,
         # W106: full memory envelope (mlx_peak_gb == peak_gb, + process RSS peak and
         # the whole-box used-memory peak the gpu_window.sh guard aborts on).  W118
         # review MEDIUM-2: merge the allocator readback proof keys (limit readback,
@@ -3686,6 +3658,15 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             # re-prefill (this callback fires after prefill, before the decode cycles).
             _sc["decode_start"] = time.perf_counter()
 
+        def _stream_complete_cb():
+            nonlocal _active_end_bytes, _cache_end_bytes
+            # Freeze generation timing before any diagnostic work, while the
+            # DSpark-owned target/draft caches are still live.
+            _sc["pass_end"] = time.perf_counter()
+            _active_end_bytes = _mlx_call_int(mx, "get_active_memory")
+            _cache_end_bytes = _mlx_call_int(mx, "get_cache_memory")
+            _mem_sampler.stop()
+
         # W91: HEADLINE pass is UNTIMED (no W37 recording armed) so fused decode levers
         # (K35 small-stages) are ACTIVE for the tok/s the receipt reports.  Arming
         # ``_stime`` forces ``_small_stages_use`` eager (the recording guard), so a timed
@@ -3715,27 +3696,26 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             stats=stats,
             divergence_capture=capture,
             prefill_callback=_stream_prefill_cb,
+            completion_callback=_stream_complete_cb,
             stop_ids=stop_ids,  # W113: served-parity early stop (--stop-on-eos)
         )
         _sc["end"] = _stream_counters_snapshot(model)
         # W115: capture the verify-scoped engagement from the headline pass.
         _dspark_engagement = _capture_dspark_engagement(_eng_reset)
         # W118 review MEDIUM-2: active/cache at decode end (timed pass complete).
-        _active_end_bytes = _mlx_call_int(mx, "get_active_memory")
-        _cache_end_bytes = _mlx_call_int(mx, "get_cache_memory")
         # W100: exclude the re-prefill from decode_wall_s (the decode loop only, from
         # the prefill->decode boundary). Keep the whole-call wall as pass_wall_s.
         _wall_acct = _dspark_decode_wall_accounting(
             pass_start=t0,
             decode_start=_sc.get("decode_start"),
-            pass_end=time.perf_counter(),
+            pass_end=_sc.get("pass_end", time.perf_counter()),
             # W113 LOW-b: DECODE-only token count (exclude the prefill/first token)
             # so dspark decode_tok_s uses the SAME denominator as the AR lane
             # (decode_steps_run), instead of steps+1.  Also correct under
             # --stop-on-eos, where len(toks) is the truncated stream.
             generated_tokens=max(0, len(toks) - 1),
         )
-        peak_gb = mem_probe.peak_bytes() / GIB  # headline peak, captured before the timed pass
+        peak_gb = mem_probe.peak_bytes() / 1_000_000_000  # headline peak, captured before the timed pass
     finally:
         _mem_sampler.stop()
     # W118 review MEDIUM-2: merge the allocator readback proof keys into the block.
@@ -3951,22 +3931,16 @@ def _peak_process_gb(run) -> float | None:
 
 
 def _memory_headline(receipt) -> str:
-    """The ``[ab]`` console peak-memory fragment (W121).  Prints the legacy MLX peak,
-    the process phys_footprint peak (decimal GB), and box_used = baseline + footprint
-    against the target -- the honest whole-box figure the gpu_window.sh guard aborts on.
-    ``peak_gb`` stays MLX-only for old-receipt comparability."""
-
+    """Print measured peaks in decimal GB, with unavailable readings explicit."""
     mem = receipt.get("memory") or {}
-    peak_gb = receipt.get("peak_gb", 0.0) or 0.0
-    fp = mem.get("process_footprint_peak_gb")
-    box_used = mem.get("box_used_gb")
-    baseline = mem.get("box_baseline_gb")
+    def fmt(key):
+        value = mem.get(key)
+        return "n/a" if value is None else f"{value:.2f}"
     return (
-        f"peak_gb={peak_gb:.2f}"
-        f" mlx_peak_gb={mem.get('mlx_peak_gb', peak_gb) or 0.0:.2f}"
-        f" process_footprint_peak_gb={0.0 if fp is None else fp:.2f}"
-        f" box_used_gb={0.0 if box_used is None else box_used:.2f}"
-        f" (baseline {0.0 if baseline is None else baseline:.2f})"
+        f"mlx_peak_gb={fmt('mlx_peak_gb')}"
+        f" process_footprint_peak_gb={fmt('process_footprint_peak_gb')}"
+        f" box_used_gb={fmt('box_used_gb')} (includes file cache)"
+        f" baseline_plus_process_estimate_gb={fmt('baseline_plus_process_peak_estimate_gb')}"
     )
 
 
@@ -4465,8 +4439,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "decode_tok_s": (_decode_generated / run["decode_wall_s"])
             if (run["decode_wall_s"] > 0 and _decode_generated > 0)
             else None,
-            # peak_gb is the MLX allocator peak ONLY (kept as-is for old receipts'
-            # comparability); peak_process_gb is the whole-PROCESS peak RSS incl.
+            # Schema v2: peak_gb is the MLX peak in decimal GB;
+            # peak_process_gb is the whole-PROCESS footprint incl.
             # the non-Metal footprint (David's fix). Both come off run["memory"].
             "peak_gb": run["peak_gb"],
             "peak_process_gb": _peak_process_gb(run),

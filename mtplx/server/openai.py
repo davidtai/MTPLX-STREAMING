@@ -1171,6 +1171,15 @@ def _served_model_type_is_deepseek_v41(args: argparse.Namespace) -> bool:
     return bool({"deepseek_v41", "deepseek_v41_text"} & {mt, tmt})
 
 
+def _deepseek_v41_memory_health(args):
+    """OS observations on health requests only; no per-token sampling or MLX calls."""
+    if not _served_model_type_is_deepseek_v41(args):
+        return None
+    from mtplx.deepseek_v41_memory_profile import host_memory_snapshot
+
+    return host_memory_snapshot()
+
+
 def _dspark_direct_env_enabled() -> bool:
     """``MTPLX_DSV41_DSPARK_DIRECT`` truthy: route this model family's ``mtp``
     requests through the DSpark-DIRECT lane instead of the generic native-MTP
@@ -30042,6 +30051,7 @@ def create_app(state: ServerState) -> FastAPI:
                 and getattr(runtime, "expert_streaming", None) is not None
                 else None
             ),
+            "memory_usage": _deepseek_v41_memory_health(state.args),
             "expert_profile": expert_profile_health_payload(
                 resolved_expert_profile,
                 backend=_expert_runtime_io_backend(runtime),

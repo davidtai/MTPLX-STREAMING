@@ -242,7 +242,7 @@ def test_inject_box_used_reads_exported_baseline_on_explicit_path(monkeypatch):
     mem = {"process_footprint_peak_gb": 84.07}
     ab._inject_box_used(mem, args)
     assert mem["box_baseline_gb"] == 10.81
-    assert mem["box_used_gb"] == round(10.81 + 84.07, 4)  # was 0.00 before the fix
+    assert mem["baseline_plus_process_peak_estimate_gb"] == round(10.81 + 84.07, 4)  # was 0.00 before the fix
 
 
 def test_inject_box_used_target_plan_wins_over_env(monkeypatch):
@@ -253,7 +253,7 @@ def test_inject_box_used_target_plan_wins_over_env(monkeypatch):
     mem = {"process_footprint_peak_gb": 80.0}
     ab._inject_box_used(mem, args)
     assert mem["box_baseline_gb"] == 11.0  # target plan preferred
-    assert mem["box_used_gb"] == 91.0
+    assert mem["baseline_plus_process_peak_estimate_gb"] == 91.0
 
 
 def test_inject_box_used_none_when_no_baseline_anywhere(monkeypatch):

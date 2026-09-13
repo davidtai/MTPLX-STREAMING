@@ -495,131 +495,81 @@ def _process_rss_bytes() -> int:
     return int(maxrss) * 1024  # Linux reports KiB
 
 
-def _phys_footprint_bytes() -> int:
-    """The CURRENT process footprint in bytes (W106 MEDIUM-2): ``phys_footprint``
-    (falling back to ``resident_size``) from mach ``task_info`` via
-    ``mtplx.deepseek_v41_memory_profile.process_rss_snapshot`` -- a point-in-time
-    figure the 1 Hz sampler can bracket over prefill+decode, unlike the lifetime
-    ``ru_maxrss``. Off darwin / on any failure, falls back to ``ps`` RSS."""
+def _phys_footprint_bytes() -> int | None:
+    """Current Metal-inclusive footprint, unknown when the kernel read fails."""
+    from mtplx.deepseek_v41_memory_profile import process_rss_snapshot
 
-    try:
-        from mtplx.deepseek_v41_memory_profile import process_rss_snapshot
-
-        snap = process_rss_snapshot()
-        fp = snap.get("phys_footprint_bytes") or snap.get("resident_bytes")
-        if fp:
-            return int(fp)
-    except Exception:
-        pass
-    # Fallback: `ps -o rss=` for the current process (KiB -> bytes).
-    try:
-        out = subprocess.run(
-            ["/bin/ps", "-o", "rss=", "-p", str(os.getpid())],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return 0
-    return int(out) * 1024 if out.isdigit() else 0
+    return process_rss_snapshot().get("phys_footprint_bytes")
 
 
-def _vm_stat_count(line: str) -> int:
-    """Parse the trailing page count off one ``vm_stat`` line (``123456.``)."""
+def _system_used_bytes() -> int | None:
+    """Physical system used, including file cache (top's PhysMem definition)."""
+    from mtplx.deepseek_v41_memory_profile import box_memory_snapshot
 
-    tok = line.split()[-1].rstrip(".") if line.split() else ""
-    return int(tok) if tok.isdigit() else 0
-
-
-def _system_used_bytes() -> int:
-    """System-wide used physical memory in bytes, the SAME signal the
-    ``gpu_window.sh`` phase-4 guard aborts on: ``(wired down + anonymous +
-    occupied-by-compressor) pages * page size`` from ``vm_stat``.  Anonymous (not
-    active) is deliberate -- active includes the file-backed page cache the 269 GiB
-    mmap'd expert bank fills, which the OS reclaims on demand.  Returns 0 off
-    macOS / on any parse failure (the caller treats 0 as "unknown")."""
-
-    if sys.platform != "darwin":
-        return 0
-    try:
-        out = subprocess.run(
-            ["/usr/bin/vm_stat"], capture_output=True, text=True, timeout=5
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return 0
-    page = 16384
-    wired = anon = comp = 0
-    for line in out.splitlines():
-        if "page size of" in line:
-            for tok in line.replace(")", "").split():
-                if tok.isdigit():
-                    page = int(tok)
-                    break
-        elif line.startswith("Pages wired down"):
-            wired = _vm_stat_count(line)
-        elif line.startswith("Anonymous pages"):
-            anon = _vm_stat_count(line)
-        elif line.startswith("Pages occupied by compressor"):
-            comp = _vm_stat_count(line)
-    return (wired + anon + comp) * page
+    return box_memory_snapshot().get("used_bytes")
 
 
 class _MemorySampler:
-    """Off-hot-path background sampler of process RSS and system used memory.
+    """OS-only, bounded 1 Hz samples. No allocator reads on the sampler thread.
 
-    A daemon thread reads, every ``interval_s`` (default 1 s), this process's RSS
-    (``psutil`` if importable, else ``ps -o rss=``) and the system-wide used-memory
-    figure :func:`_system_used_bytes` computes (the gpu_window.sh guard's formula),
-    keeping the high-water mark of each.  It touches NO MLX API and holds NO lock,
-    so it never perturbs the decode being measured -- the whole point is that
-    ``peak_gb`` (the MLX allocator peak) omits the Python heap, the expert-reader
-    buffers, and everything else resident, and this catches the real envelope.
-
-    ``start()`` records the system-used baseline (``system_used_at_start_bytes``)
-    and launches the thread; read ``peak_rss_bytes`` / ``peak_system_used_bytes``
-    after ``stop()``.
+    Peaks are sampled, not guaranteed instantaneous maxima. Start/end reads are
+    mandatory even for sub-second runs. Each observation carries its own clock
+    interval and the process/system counters observed together.
     """
 
     def __init__(self, interval_s: float = 1.0):
+        from collections import deque
+
         self._interval = max(0.01, float(interval_s))
         self._stop = threading.Event()
-        self._thread: "threading.Thread | None" = None
-        self._pid = os.getpid()
-        self.peak_rss_bytes = 0
-        self.peak_system_used_bytes = 0
-        self.system_used_at_start_bytes = 0
+        self._thread = None
+        self.samples = deque(maxlen=4096)
+        self.sample_count = 0
+        self.read_failures = 0
+        self.peak_rss_bytes = None  # compatibility: sampled phys_footprint, not RSS
+        self.peak_system_used_bytes = None
+        self.system_used_at_start_bytes = None
+        self.peak_process_sample = None
+        self.peak_system_sample = None
 
-    def _read_rss(self) -> int:
-        # W106 MEDIUM-2: sample the CURRENT footprint (phys_footprint via mach
-        # task_info) so the peak is a genuine over-the-window high-water, not the
-        # lifetime ru_maxrss. Falls back to ps inside _phys_footprint_bytes.
-        return _phys_footprint_bytes()
+    def _sample(self):
+        from mtplx.deepseek_v41_memory_profile import host_memory_snapshot
 
-    def _loop(self) -> None:
-        while not self._stop.is_set():
-            rss = self._read_rss()
-            if rss > self.peak_rss_bytes:
-                self.peak_rss_bytes = rss
-            used = _system_used_bytes()
-            if used > self.peak_system_used_bytes:
-                self.peak_system_used_bytes = used
-            self._stop.wait(self._interval)
+        sample = host_memory_snapshot()
+        self.samples.append(sample)
+        self.sample_count += 1
+        footprint = sample["process"].get("phys_footprint_bytes")
+        used = sample["box"].get("used_bytes")
+        if footprint is None or used is None:
+            self.read_failures += 1
+        if footprint is not None and (self.peak_rss_bytes is None or footprint > self.peak_rss_bytes):
+            self.peak_rss_bytes = footprint
+            self.peak_process_sample = sample
+        if used is not None and (self.peak_system_used_bytes is None or used > self.peak_system_used_bytes):
+            self.peak_system_used_bytes = used
+            self.peak_system_sample = sample
+        return sample
 
-    def start(self) -> "_MemorySampler":
-        self.system_used_at_start_bytes = _system_used_bytes()
-        self.peak_system_used_bytes = self.system_used_at_start_bytes
-        self.peak_rss_bytes = self._read_rss()
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._loop, name="mem-sampler", daemon=True
-        )
+    def _loop(self):
+        while not self._stop.wait(self._interval):
+            self._sample()
+
+    def start(self):
+        if self._thread is not None or self.sample_count:
+            raise RuntimeError("memory sampler is single-use")
+        self.system_used_at_start_bytes = self._sample()["box"].get("used_bytes")
+        self._thread = threading.Thread(target=self._loop, name="mem-sampler", daemon=True)
         self._thread.start()
         return self
 
-    def stop(self) -> "_MemorySampler":
+    def stop(self):
         self._stop.set()
-        thread = self._thread
-        if thread is not None:
-            thread.join(timeout=self._interval + 2.0)
+        if self._thread is not None:
+            # Readers have bounded timeouts. Do not leave a live sampling thread
+            # behind or race it when collecting the final receipt.
+            self._thread.join()
             self._thread = None
+            self._sample()
         return self
 
 
@@ -664,48 +614,36 @@ class _MLXMemProbe:
         return _MemorySampler(interval_s=interval_s)
 
     def memory_block(self, sampler: "_MemorySampler | None" = None) -> dict:
-        """The receipt ``memory`` block. W106 MEDIUM-2 decomposes the process figures
-        into three DISTINCT, single-meaning keys (no undecomposable ``max()``):
+        """Schema v2: bytes are authoritative; GB decimal, GiB binary.
 
-          * ``mlx_peak_gb`` -- the MLX allocator peak of THIS process
-            (``mx.get_peak_memory``), the legacy ``peak_gb``.
-          * ``sampler_peak_rss_gb`` -- the 1 Hz sampler's peak CURRENT footprint
-            (``phys_footprint``, mach) BRACKETED over prefill+decode; None when no
-            sampler ran.
-          * ``ru_maxrss_gb`` -- the process LIFETIME peak RSS (``ru_maxrss``), which
-            also spans model load and earlier arms.
-          * ``process_peak_rss_gb`` -- the process peak over the RUN: the sampler
-            peak when a sampler ran, else ``ru_maxrss`` (documented fallback).
-          * ``system_used_*`` -- the whole-box used-memory envelope the gpu_window.sh
-            guard aborts on.
-        All values are GiB (bytes / 2**30)."""
-
-        mlx_peak = int(self.peak_bytes())
-        ru_maxrss = int(_process_rss_bytes())
-        sampled_rss = int(sampler.peak_rss_bytes) if sampler is not None else None
-        # W106 LOW: fall back to ru_maxrss when the sampler produced NO peak (None,
-        # or 0 because it never got a reading), so process_peak_rss_gb is never a
-        # misleading 0.0.  sampler_peak_rss_gb still reports the sampler's own value.
-        process_peak_rss = sampled_rss if sampled_rss else ru_maxrss
-        system_used_peak = (
-            int(sampler.peak_system_used_bytes) if sampler is not None else 0
-        )
-        system_used_start = (
-            int(sampler.system_used_at_start_bytes) if sampler is not None else 0
-        )
-        return {
-            "mlx_peak_gb": mlx_peak / GIB,
-            "sampler_peak_rss_gb": (
-                None if sampled_rss is None else sampled_rss / GIB
-            ),
-            "ru_maxrss_gb": ru_maxrss / GIB,
-            "process_peak_rss_gb": process_peak_rss / GIB,
-            "system_used_peak_gb": system_used_peak / GIB,
-            # W106 LOW: renamed from system_used_at_start_gb -- this is the box used
-            # baseline at DECODE start (post-load, when the sampler starts), distinct
-            # from the budget derivation's pre-load budget_system_used_at_start_gb.
-            "system_used_at_decode_start_gb": system_used_start / GIB,
+        Process footprint, lifetime RSS, and MLX active-allocation peak are
+        separate measurements. Missing measurements stay null.
+        """
+        out = {
+            "schema_version": 2,
+            "units": {"bytes": "bytes", "gb": "10^9 bytes", "gib": "2^30 bytes"},
+            "peak_method": "sampled at boundaries and interval",
+            "sample_interval_s": sampler._interval if sampler else None,
+            "sample_count": sampler.sample_count if sampler else 0,
+            "read_failures": sampler.read_failures if sampler else 0,
+            "samples": list(sampler.samples) if sampler else [],
+            "process_peak_sample": sampler.peak_process_sample if sampler else None,
+            "system_peak_sample": sampler.peak_system_sample if sampler else None,
+            "measurement_window": "prefill_and_decode",
+            "system_used_includes_file_cache": True,
         }
+        values = {
+            "mlx_peak": self.peak_bytes(),
+            "ru_maxrss": _process_rss_bytes(),
+            "process_footprint_peak": sampler.peak_rss_bytes if sampler else None,
+            "system_used_peak": sampler.peak_system_used_bytes if sampler else None,
+            "system_used_at_run_start": sampler.system_used_at_start_bytes if sampler else None,
+        }
+        for name, value in values.items():
+            out[name + "_bytes"] = value
+            out[name + "_gb"] = None if value is None else value / 1_000_000_000
+            out[name + "_gib"] = None if value is None else value / GIB
+        return out
 
 
 class _GatherProbe:
@@ -801,6 +739,13 @@ class _FakeOps:
 # --------------------------------------------------------------------------
 
 
+def mem_probe_block(probe, sampler):
+    """Adapt both the real and dry-run peak accessors without importing MLX."""
+    from types import SimpleNamespace
+
+    return _MLXMemProbe(SimpleNamespace(get_peak_memory=probe.peak_bytes)).memory_block(sampler)
+
+
 def bench_one_cell(
     *,
     model,
@@ -835,165 +780,189 @@ def bench_one_cell(
     of the run. Only the real-MLX AR path uses it (the dry-run ``_FakeOps`` double
     keeps the classic loop)."""
 
-    prompt_len = len(prompt_ids)
-    mem_probe.reset_peak()
-    baseline = gather_probe.baseline()
-
-    runtime = getattr(model, "_mtplx_expert_runtime", None)
-    profile_snaps: list = [] if memory_profile else None
-
-    def _profile(phase, token=None):
-        if profile_snaps is None:
-            return
-        from mtplx.deepseek_v41_memory_profile import memory_profile_snapshot
-
-        profile_snaps.append(
-            memory_profile_snapshot(
-                phase=phase,
-                token=token,
-                plan=getattr(runtime, "plan", None),
-                runtime=runtime,
-                mx_module=mx,
-            )
-        )
-
-    cell_start = time.perf_counter()
-
-    # -- prefill (produces the first / TTFT token) -----------------------------
-    t0 = time.perf_counter()
-    cache = model.make_cache()
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
-    ops.sync(logits)
-    ttft_s = time.perf_counter() - t0
-    token = ops.argmax_last(logits)
-    generated = [token]
-    _profile("after_prefill")
-
-    # W63 / K32: the real-MLX AR path may run the device-sample one-step-lag
-    # pipeline instead of the per-token host round trip. The dry-run _FakeOps
-    # double (no _mx) always keeps the classic loop.
-    _mx = getattr(ops, "_mx", None)
-    use_device_sample = bool(device_sample) and _mx is not None and decode_mode == "ar"
-    extra_forward_steps = 0
-
-    # -- decode (steps autoregressive forwards) --------------------------------
-    every = max(1, int(memory_profile_every))
-    decode_start = time.perf_counter()
-    if use_device_sample:
-        from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
-
-        def _forward_row(ids):
-            # ids is a device-side [1, 1] token-id array; the model's embedding
-            # lookup consumes it directly (mx.take) -- no host round trip.
-            return model(ids, cache=cache)[0, -1]
-
-        more, _finish, extra_forward_steps = run_device_sample_decode(
-            forward_row=_forward_row,
-            first_token=int(token),
-            n_more=int(steps),
-            sampler=None,  # greedy (matches the classic argmax loop byte-for-byte)
-            stop_ids=set(),
-        )
-        generated.extend(int(t) for t in more)
-    else:
-        for step in range(int(steps)):
-            logits = model(ops.input([[token]]), cache=cache)
-            ops.sync(logits)
-            token = ops.argmax_last(logits)
-            generated.append(token)
-            if profile_snaps is not None and (step + 1) % every == 0:
-                _profile("decode", token=step + 1)
-    decode_wall_s = time.perf_counter() - decode_start
-    if profile_snaps is not None and int(steps) % every != 0:
-        _profile("decode", token=int(steps))
-
-    wall_s = time.perf_counter() - cell_start
-
-    gathered = gather_probe.delta(baseline)
+    sampler = _MemorySampler().start()
     try:
-        text = tokenizer.decode(generated)
-    except Exception:  # pragma: no cover - detok guard
-        text = ""
-
-    decode_tokens = int(steps)
-    dspark_metrics = None
-    if decode_mode == "dspark" and getattr(model, "mtp", None) is not None:
-        # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR ids
-        # (verify is authoritative); assert byte-identity and record the accept
-        # structure.  Skipped for the dry-run double (a _FakeModel has no mtp).
-        from mtplx.models.deepseek_v41_dspark_decode import (
-            DSparkDecodeStats,
-            dspark_generate,
-        )
-        from mtplx.sampling import SamplerConfig
-
+        prompt_len = len(prompt_ids)
         mem_probe.reset_peak()
-        st = DSparkDecodeStats()
-        dsp_start = time.perf_counter()
-        dsp_ids = dspark_generate(
-            model,
-            [int(t) for t in prompt_ids],
-            max_tokens=decode_tokens + 1,
-            sampler=SamplerConfig(temperature=0.0),
-            seed=0,
-            speculative_depth=int(dspark_depth),
-            stats=st,
-        )
-        dsp_wall = time.perf_counter() - dsp_start
-        byte_identical = list(dsp_ids) == list(generated)
-        if not byte_identical:
-            first = next(
-                (i for i, (a, b) in enumerate(zip(dsp_ids, generated)) if a != b),
-                min(len(dsp_ids), len(generated)),
+        baseline = gather_probe.baseline()
+
+        runtime = getattr(model, "_mtplx_expert_runtime", None)
+        profile_snaps: list = [] if memory_profile else None
+
+        def _profile(phase, token=None):
+            if profile_snaps is None:
+                return
+            from mtplx.deepseek_v41_memory_profile import memory_profile_snapshot
+
+            profile_snaps.append(
+                memory_profile_snapshot(
+                    phase=phase,
+                    token=token,
+                    plan=getattr(runtime, "plan", None),
+                    runtime=runtime,
+                    mx_module=mx,
+                )
             )
-            raise AssertionError(
-                "DSpark-DIRECT greedy decode diverged from AR at index "
-                f"{first}; speculative lane is not lossless"
+
+        cell_start = time.perf_counter()
+
+        # -- prefill (produces the first / TTFT token) -----------------------------
+        t0 = time.perf_counter()
+        cache = model.make_cache()
+        logits = model(ops.input([list(prompt_ids)]), cache=cache)
+        ops.sync(logits)
+        ttft_s = time.perf_counter() - t0
+        token = ops.argmax_last(logits)
+        generated = [token]
+        _profile("after_prefill")
+
+        # W63 / K32: the real-MLX AR path may run the device-sample one-step-lag
+        # pipeline instead of the per-token host round trip. The dry-run _FakeOps
+        # double (no _mx) always keeps the classic loop.
+        _mx = getattr(ops, "_mx", None)
+        use_device_sample = bool(device_sample) and _mx is not None and decode_mode == "ar"
+        extra_forward_steps = 0
+
+        # -- decode (steps autoregressive forwards) --------------------------------
+        every = max(1, int(memory_profile_every))
+        decode_start = time.perf_counter()
+        if use_device_sample:
+            from mtplx.models.deepseek_v41_dspark_decode import run_device_sample_decode
+
+            def _forward_row(ids):
+                # ids is a device-side [1, 1] token-id array; the model's embedding
+                # lookup consumes it directly (mx.take) -- no host round trip.
+                return model(ids, cache=cache)[0, -1]
+
+            more, _finish, extra_forward_steps = run_device_sample_decode(
+                forward_row=_forward_row,
+                first_token=int(token),
+                n_more=int(steps),
+                sampler=None,  # greedy (matches the classic argmax loop byte-for-byte)
+                stop_ids=set(),
             )
-        sd = st.to_dict()
-        dspark_metrics = {
-            "depth": int(dspark_depth),
-            "byte_identical_vs_ar": byte_identical,
-            "decode_wall_s": dsp_wall,
-            "decode_tok_s": (len(dsp_ids) / dsp_wall) if dsp_wall > 0 else None,
-            "peak_mlx_gb": mem_probe.peak_bytes() / GIB,
-            "tokens_per_cycle": sd["tokens_per_cycle"],
-            "accept_rate": sd["accept_rate"],
-            "accept_rate_by_depth": sd["accept_rate_by_depth"],
-            "drafted_by_depth": sd["drafted_by_depth"],
-            "accepted_by_depth": sd["accepted_by_depth"],
-            "cycles": sd["cycles"],
-            "verify_calls": sd["verify_calls"],
-            "verify_decode_phase": sd["verify_decode_phase"],
-            "per_cycle_ms": sd["per_cycle"],
-            "phase_time_s": sd["phase_time_s"],
+            generated.extend(int(t) for t in more)
+        else:
+            for step in range(int(steps)):
+                logits = model(ops.input([[token]]), cache=cache)
+                ops.sync(logits)
+                token = ops.argmax_last(logits)
+                generated.append(token)
+                if profile_snaps is not None and (step + 1) % every == 0:
+                    _profile("decode", token=step + 1)
+        decode_wall_s = time.perf_counter() - decode_start
+        if profile_snaps is not None and int(steps) % every != 0:
+            _profile("decode", token=int(steps))
+
+        wall_s = time.perf_counter() - cell_start
+
+        gathered = gather_probe.delta(baseline)
+        try:
+            text = tokenizer.decode(generated)
+        except Exception:  # pragma: no cover - detok guard
+            text = ""
+
+        sampler.stop()
+        ar_peak = mem_probe.peak_bytes()
+        ar_rss = mem_probe.rss_bytes()
+        ar_memory = mem_probe_block(mem_probe, sampler)
+        decode_tokens = int(steps)
+        dspark_metrics = None
+        if decode_mode == "dspark" and getattr(model, "mtp", None) is not None:
+            # DSpark-DIRECT lane: greedy speculative decode MUST reproduce the AR ids
+            # (verify is authoritative); assert byte-identity and record the accept
+            # structure.  Skipped for the dry-run double (a _FakeModel has no mtp).
+            from mtplx.models.deepseek_v41_dspark_decode import (
+                DSparkDecodeStats,
+                dspark_generate,
+            )
+            from mtplx.sampling import SamplerConfig
+
+            mem_probe.reset_peak()
+            st = DSparkDecodeStats()
+            dsp_sampler = _MemorySampler().start()
+            dsp_end = None
+            def complete_dspark():
+                nonlocal dsp_end
+                dsp_end = time.perf_counter()
+                dsp_sampler.stop()
+
+            try:
+                dsp_start = time.perf_counter()
+                dsp_ids = dspark_generate(
+                    model,
+                    [int(t) for t in prompt_ids],
+                    max_tokens=decode_tokens + 1,
+                    sampler=SamplerConfig(temperature=0.0),
+                    seed=0,
+                    speculative_depth=int(dspark_depth),
+                    stats=st,
+                    completion_callback=complete_dspark,
+                )
+                dsp_wall = (dsp_end if dsp_end is not None else time.perf_counter()) - dsp_start
+            finally:
+                dsp_sampler.stop()
+            byte_identical = list(dsp_ids) == list(generated)
+            if not byte_identical:
+                first = next(
+                    (i for i, (a, b) in enumerate(zip(dsp_ids, generated)) if a != b),
+                    min(len(dsp_ids), len(generated)),
+                )
+                raise AssertionError(
+                    "DSpark-DIRECT greedy decode diverged from AR at index "
+                    f"{first}; speculative lane is not lossless"
+                )
+            sd = st.to_dict()
+            dspark_metrics = {
+                "memory": mem_probe_block(mem_probe, dsp_sampler),
+                "depth": int(dspark_depth),
+                "byte_identical_vs_ar": byte_identical,
+                "decode_wall_s": dsp_wall,
+                "decode_tok_s": (len(dsp_ids) / dsp_wall) if dsp_wall > 0 else None,
+                "peak_mlx_gb": mem_probe.peak_bytes() / 1_000_000_000,
+                "peak_mlx_gib": mem_probe.peak_bytes() / GIB,
+                "tokens_per_cycle": sd["tokens_per_cycle"],
+                "accept_rate": sd["accept_rate"],
+                "accept_rate_by_depth": sd["accept_rate_by_depth"],
+                "drafted_by_depth": sd["drafted_by_depth"],
+                "accepted_by_depth": sd["accepted_by_depth"],
+                "cycles": sd["cycles"],
+                "verify_calls": sd["verify_calls"],
+                "verify_decode_phase": sd["verify_decode_phase"],
+                "per_cycle_ms": sd["per_cycle"],
+                "phase_time_s": sd["phase_time_s"],
+            }
+        return {
+            "prompt_tokens": prompt_len,
+            "ttft_s": ttft_s,
+            "dspark": dspark_metrics,
+            "prefill_tok_s": (prompt_len / ttft_s) if ttft_s > 0 else None,
+            "decode_tokens": decode_tokens,
+            "decode_wall_s": decode_wall_s,
+            "decode_tok_s": (decode_tokens / decode_wall_s)
+            if decode_wall_s > 0
+            else None,
+            "wall_s": wall_s,
+            "memory": ar_memory,
+            "peak_mlx_bytes": ar_peak,
+            "peak_mlx_gb": ar_peak / 1_000_000_000,
+            "peak_mlx_gib": ar_peak / GIB,
+            "process_rss_bytes": ar_rss,
+            "process_rss_gb": ar_rss / 1_000_000_000,
+            "process_rss_gib": ar_rss / GIB,
+            "expert_records_gathered": gathered.get("expert_records_gathered"),
+            "engram_rows_gathered": gathered.get("engram_rows_gathered"),
+            "generated_token_count": len(generated),
+            "device_sample": bool(use_device_sample),
+            # W63 / K32: forwards computed but discarded (the classic loop breaks
+            # before forwarding its final token; the lag pipeline computes exactly
+            # one extra step it never emits). 0 on the classic path.
+            "device_sample_extra_forwards": int(extra_forward_steps),
+            "text_preview": text[:_TEXT_PREVIEW_CHARS],
+            "memory_profile": profile_snaps,
         }
-    return {
-        "prompt_tokens": prompt_len,
-        "ttft_s": ttft_s,
-        "dspark": dspark_metrics,
-        "prefill_tok_s": (prompt_len / ttft_s) if ttft_s > 0 else None,
-        "decode_tokens": decode_tokens,
-        "decode_wall_s": decode_wall_s,
-        "decode_tok_s": (decode_tokens / decode_wall_s)
-        if decode_wall_s > 0
-        else None,
-        "wall_s": wall_s,
-        "peak_mlx_bytes": mem_probe.peak_bytes(),
-        "peak_mlx_gb": mem_probe.peak_bytes() / GIB,
-        "process_rss_bytes": mem_probe.rss_bytes(),
-        "process_rss_gb": mem_probe.rss_bytes() / GIB,
-        "expert_records_gathered": gathered.get("expert_records_gathered"),
-        "engram_rows_gathered": gathered.get("engram_rows_gathered"),
-        "generated_token_count": len(generated),
-        "device_sample": bool(use_device_sample),
-        # W63 / K32: forwards computed but discarded (the classic loop breaks
-        # before forwarding its final token; the lag pipeline computes exactly
-        # one extra step it never emits). 0 on the classic path.
-        "device_sample_extra_forwards": int(extra_forward_steps),
-        "text_preview": text[:_TEXT_PREVIEW_CHARS],
-        "memory_profile": profile_snaps,
-    }
+    finally:
+        sampler.stop()
 
 
 def fastest_of(repeats: list[dict]) -> dict | None:

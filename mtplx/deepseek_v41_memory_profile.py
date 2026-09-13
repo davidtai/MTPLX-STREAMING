@@ -59,6 +59,7 @@ import os
 import resource
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -454,7 +455,7 @@ def process_rss_snapshot() -> dict[str, Any]:
 def _parse_vm_stat(text: str) -> dict[str, int]:
     """Parse ``vm_stat`` output into byte counters."""
 
-    page_size = 4096
+    page_size = None
     header = text.splitlines()[0] if text else ""
     # "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
     for token in header.replace("(", " ").replace(")", " ").split():
@@ -471,6 +472,12 @@ def _parse_vm_stat(text: str) -> dict[str, int]:
             continue
         pages[key.strip().lower()] = int(value)
 
+    required = {"pages free", "pages wired down", "pages active", "pages inactive",
+                "pages speculative", "pages occupied by compressor", "anonymous pages",
+                "file-backed pages"}
+    if not page_size or not required.issubset(pages):
+        raise ValueError("incomplete vm_stat snapshot")
+
     def _bytes(*names: str) -> int:
         for name in names:
             if name in pages:
@@ -483,27 +490,60 @@ def _parse_vm_stat(text: str) -> dict[str, int]:
         "wired_bytes": _bytes("pages wired down"),
         "active_bytes": _bytes("pages active"),
         "inactive_bytes": _bytes("pages inactive"),
+        "speculative_bytes": _bytes("pages speculative"),
+        "anonymous_bytes": _bytes("anonymous pages"),
+        "file_backed_bytes": _bytes("file-backed pages"),
         "compressor_bytes": _bytes("pages occupied by compressor"),
         "compressed_bytes": _bytes("pages stored in compressor"),
+        # Matches top's PhysMem used; includes reclaimable file cache. Do not add
+        # process footprint or MLX allocations: those pages are already included.
+        "used_bytes": sum(_bytes(k) for k in (
+            "pages wired down", "pages active", "pages inactive",
+            "pages occupied by compressor")),
+        # Diagnostic only; this excludes file cache but can also miss unwired
+        # driver allocations. It is not a complete whole-machine measurement.
+        "non_file_used_bytes": sum(_bytes(k) for k in (
+            "pages wired down", "anonymous pages", "pages occupied by compressor")),
+        "swapins_pages": pages.get("swapins"),
+        "swapouts_pages": pages.get("swapouts"),
     }
 
 
 def box_memory_snapshot() -> dict[str, Any]:
-    """Box totals from ``vm_stat``: wired / anon-active / compressor / free."""
+    """Physical page counters; used includes file cache, compressor is physical."""
 
     if sys.platform != "darwin":
         return {"ok": False, "reason": "not_darwin"}
     try:
         proc = subprocess.run(
-            ["vm_stat"], capture_output=True, text=True, timeout=10
+            ["/usr/bin/vm_stat"], capture_output=True, text=True, timeout=2
         )
     except Exception as exc:  # pragma: no cover - env guard
         return {"ok": False, "error": repr(exc)}
     if proc.returncode != 0:
         return {"ok": False, "error": proc.stderr.strip() or "vm_stat failed"}
-    out = _parse_vm_stat(proc.stdout)
+    try:
+        out = _parse_vm_stat(proc.stdout)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
     out["ok"] = True
+    out["source"] = "vm_stat"
+    out["used_includes_file_cache"] = True
     return out
+
+
+def host_memory_snapshot() -> dict[str, Any]:
+    """OS-only observation shared by health and benchmark sampling, in bytes.
+
+    The start/end timestamps bound sequential kernel reads, not an atomic sample.
+    Process footprint includes Metal and must never be added to system used.
+    """
+    started = time.monotonic_ns()
+    process = process_rss_snapshot()
+    box = box_memory_snapshot()
+    return {"sample_start_monotonic_ns": started,
+            "sample_end_monotonic_ns": time.monotonic_ns(),
+            "process": process, "box": box}
 
 
 def plan_breakdown(
@@ -582,11 +622,10 @@ def memory_profile_snapshot(
     """
 
     snap: dict[str, Any] = {
+        **host_memory_snapshot(),
         "phase": str(phase),
         "token": int(token) if token is not None else None,
         "mlx": mlx_memory_snapshot(mx_module),
-        "process": process_rss_snapshot(),
-        "box": box_memory_snapshot(),
     }
     if plan is not None:
         snap["plan"] = plan_breakdown(plan, runtime=runtime, mx_module=mx_module)
