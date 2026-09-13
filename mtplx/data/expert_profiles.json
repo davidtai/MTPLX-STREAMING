@@ -126,7 +126,6 @@
         "MTPLX_DSV41_PREFILL_SCORE_PATH": "lean",
         "MTPLX_DSV41_SELECTED_KEYS": "1",
         "MTPLX_DSV41_KV_CHUNK_GROW": "1",
-        "MTPLX_DSV41_KV_BOUNDED": "1",
         "MTPLX_DSV41_LAYOUT_FIX": "1"
       }
     }

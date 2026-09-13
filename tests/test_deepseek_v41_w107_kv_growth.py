@@ -376,10 +376,9 @@ def _clear_kv_envs(monkeypatch):
 
 def test_kv_bounded_env_gate(monkeypatch):
     """W121: bounded KV is armed by MTPLX_DSV41_KV_BOUNDED.  The low-level default is
-    OFF (unset -> off) so the frozen growing control + its A/B family stay
-    byte-comparable without an explicit pin; the runtime DEFAULT is turned on by the
-    DSV4.1 serving profile's child_env and the v2 arms (see
-    test_deepseek_v41_serve_profile / the bench arm presets)."""
+    OFF (unset -> off).  W121 HIGH-4: it is NOT the runtime default -- bounded KV is
+    byte-identical on CPU but rounding-class on Metal, so the serving profile and the v2
+    base arms stay GROWING; only the explicit *_bounded A/B arms turn it on."""
     monkeypatch.delenv("MTPLX_DSV41_KV_BOUNDED", raising=False)
     assert C._kv_bounded_enabled() is False
     for off in ("0", "false", "off", "no"):

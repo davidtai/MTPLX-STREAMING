@@ -424,17 +424,22 @@ _BOUNDED_LATENT_SLACK = 8
 def _kv_bounded_enabled() -> bool:
     """Whether ``MTPLX_DSV41_KV_BOUNDED`` arms the bounded/preallocated lanes.
 
-    W121 (David: "rebalance it so kv isnt terrible" / "controlling kv growth is
-    crucial for everything"): bounded/preallocated KV is now the DEFAULT for the
-    DSV4.1 RUNTIME, stamped by the serving profile's child_env
-    (``mtplx/data/expert_profiles.json`` -> deepseek-v41-mxfp4-75) and by the v2 A/B
-    arms, so KV is a FIXED part of the footprint measured before the expert slots
-    fill.  The low-level default here stays OFF (unset -> off) so the frozen
-    cell16k_ring GROWING control and its A/B family stay byte-comparable to their
-    receipts WITHOUT an explicit pin -- only the profile/arm env turns it on.  Set to
-    ``0``/``false``/``off``/``no`` disables it even when a profile stamped it.
-    Byte-identical either way (W107: pure prealloc + in-place reorder; the logical
-    view equals the concatenated store).
+    W121 HIGH-4 (RED-TEAM CORRECTION): bounded/preallocated KV is NOT the default and
+    is NOT byte-identical to the growing lane on Metal.  It IS bit-identical on CPU --
+    proven across index_topk / candidate-block / sliding-window / prompt-length /
+    chunked-prefill / huge-cap configs, each lane in its own process
+    (tests/test_deepseek_v41_w121_kv_parity_cpu.py) -- because the logical ``view()``
+    equals the concatenated store and CPU reductions are layout-independent.  On Metal
+    the preallocated sliced-view buffers give the attention GEMM a different reduction
+    LAYOUT than the growing lane's freshly-concatenated contiguous arrays, so the fp
+    reduction reassociates and a greedy near-tie can flip (real receipts: windows
+    43/45/48 = bounded token sha, 44/46/47 = growing sha, first diff ~decode token 33).
+    That is ROUNDING-CLASS ([[dsv41-inexact-ok-if-tie-flips]]), NOT a beyond-len read
+    (a huge cap with ~1860 garbage rows is still bit-exact on CPU), but it DOES change
+    greedy tokens, so it stays OFF by default until a Metal A/B proves greedy parity.
+    The low-level default here is OFF (unset -> off); only an explicit
+    ``MTPLX_DSV41_KV_BOUNDED`` / an explicit ``*_bounded`` A/B arm turns it on.  Set to
+    ``0``/``false``/``off``/``no`` disables it even when something stamped it.
 
     Read at call time (never frozen at import): the serving harness stamps the key
     after importing this module, and each request builds a fresh cache."""
