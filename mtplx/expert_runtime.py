@@ -2924,6 +2924,42 @@ class ExpertStreamingRuntime:
             admission_kwargs["expert_admission_receipt"] = (
                 expert_admission_receipt
             )
+        # W123: io read-fanout arm/kill-switch. The reader's ``io_read_fanout``
+        # (default 1 == OFF, byte-identical single scatter) splits a record's
+        # contiguous read into N concurrent sub-reads to raise SSD queue depth
+        # off the QD1 floor. An inline env override lets a window arm or kill the
+        # lever without a code change (like MTPLX_DSV41_SINGLE_SLOT_POOL above):
+        # set MTPLX_DSV41_IO_READ_FANOUT to an int >= 1 (1 disables the fanout).
+        # Unset -> config.io_read_fanout (default 1), so the shipped path is
+        # unchanged. Gated to DeepSeek-V4.1 configs so the DSV4.1-named env never
+        # reshapes another model's reader (red-team MEDIUM); config.io_read_fanout
+        # still applies to any model.
+        _io_read_fanout = config.io_read_fanout
+        _fanout_env = (
+            os.environ.get("MTPLX_DSV41_IO_READ_FANOUT")
+            if str(config.model_key).startswith("deepseek-v41")
+            else None
+        )
+        if _fanout_env is not None:
+            try:
+                _parsed_fanout = int(_fanout_env)
+            except ValueError:
+                _LOGGER.warning(
+                    "MTPLX_DSV41_IO_READ_FANOUT=%r is not an integer; using "
+                    "config io_read_fanout=%d",
+                    _fanout_env,
+                    config.io_read_fanout,
+                )
+            else:
+                if _parsed_fanout >= 1:
+                    _io_read_fanout = _parsed_fanout
+                else:
+                    _LOGGER.warning(
+                        "MTPLX_DSV41_IO_READ_FANOUT=%d must be >= 1; using "
+                        "config io_read_fanout=%d",
+                        _parsed_fanout,
+                        config.io_read_fanout,
+                    )
         try:
             reader = PositionalExpertReader(
                 artifact_root,
@@ -2932,7 +2968,7 @@ class ExpertStreamingRuntime:
                 bypass_page_cache=config.bypass_page_cache,
                 codec_sidecar=codec_sidecar,
                 codec_verify=config.streamed_codec_verify,
-                io_read_fanout=config.io_read_fanout,
+                io_read_fanout=_io_read_fanout,
                 **pipeline_kwargs,
                 **admission_kwargs,
             )
@@ -5398,6 +5434,13 @@ class ExpertStreamingRuntime:
             "single_pool": bool(getattr(self, "_single_slot_pool", False)),
             "overlap_miss_reads": bool(
                 getattr(self.config, "overlap_miss_reads", False)
+            ),
+            # W123: resolved io read-fanout (1 == OFF; the reader holds the
+            # env-override-applied value). Pairs with io.read_inflight_max and
+            # io.read_ns/decode_wall_s to price the realized read-pool queue
+            # depth in the receipt.
+            "io_read_fanout": int(
+                getattr(getattr(self, "reader", None), "io_read_fanout", 1)
             ),
             # the retuned prefetch knobs (W95): AR predict width, confidence
             # margin, global ring size, and the demand-priority byte budget.

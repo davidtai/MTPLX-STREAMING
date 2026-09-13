@@ -29,6 +29,21 @@ except (ValueError, OSError, AttributeError):
 if _IOV_MAX <= 0:
     _IOV_MAX = 512
 
+# W123 io read-fanout tuning. Interior fanout cuts are rounded to
+# ``_FANOUT_ALIGN`` bytes so every sub-read offset/length stays block-aligned
+# (component edges in the mxfp4/affine banks are 4 KiB-aligned) -- keeps
+# F_NOCACHE reads happy. The fanout pool must hold the TAIL sub-reads (fanout-1,
+# the caller reads range 0 itself) of every record that can be reading at once:
+# one demand miss plus up to ``_ASSUMED_PREFETCH_INFLIGHT`` speculative records
+# (matches expert_runtime's ``_spec_inflight_cap`` default). Sizing it below
+# that (the old ``fanout × 8`` capped at 32) let a demand tail FIFO-queue behind
+# prefetch tails at fanout >= 8 (MEDIUM-4). Capped at ``_FANOUT_POOL_MAX`` so a
+# pathological fanout does not spawn a thread storm; fanout 4 is the recommended
+# cell arm (captures the QD headroom without hitting the cap).
+_FANOUT_ALIGN = 4096
+_ASSUMED_PREFETCH_INFLIGHT = 4
+_FANOUT_POOL_MAX = 64
+
 
 class ExpertIOError(RuntimeError):
     """Base error for a record that did not reach a complete verified state."""
@@ -129,6 +144,29 @@ class ExpertIOMetrics:
     records_hashed: int = 0
     records_unhashed: int = 0
     hash_thread_ns_total: int = 0
+    # W123: read-pool queue-depth gauge. Every positional/scatter range read
+    # increments ``read_inflight_current`` while its ``preadv`` loop runs and
+    # decrements it after; ``read_inflight_max`` is the peak concurrency (the
+    # realized SSD queue depth as issued by this process), and
+    # ``read_inflight_depth_sum``/``read_inflight_samples`` give the mean depth
+    # at read-issue time. At effective QD1 (reads serialized) max==1 and the
+    # mean is ~1; a working io fanout drives both above 1. Byte-neutral: purely
+    # observational, so it makes the ``read_ns/wall`` serialization visible in
+    # the receipt without changing any bytes read.
+    read_inflight_current: int = 0
+    read_inflight_max: int = 0
+    read_inflight_depth_sum: int = 0
+    read_inflight_samples: int = 0
+    # W123: union of the wall intervals during which >=1 read was in flight (the
+    # drive-busy wall, NOT thread-time). ``read_bytes / read_wall_ns`` is the
+    # realized aggregate SSD bandwidth; ``read_ns / read_wall_ns`` is the mean
+    # realized queue depth over the window. ``records_read`` counts record-level
+    # read_record_into calls (one per record), the honest denominator once a
+    # record fans into N sub-reads (read_operations/preadv counts are per
+    # sub-read).
+    read_wall_ns: int = 0
+    records_read: int = 0
+    _inflight_since_ns: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def update(self, **values: int) -> None:
@@ -139,6 +177,38 @@ class ExpertIOMetrics:
     def observe_open_count(self, count: int) -> None:
         with self._lock:
             self.open_files_peak = max(self.open_files_peak, int(count))
+
+    def enter_read(self) -> None:
+        """W123: mark one positional/scatter read as entering its ``preadv``
+        loop. Records the depth at issue, tracks the running peak, and opens the
+        drive-busy interval when the pool goes idle->busy so the receipt can
+        report the realized read-pool queue depth and union wall."""
+
+        with self._lock:
+            if self.read_inflight_current == 0:
+                self._inflight_since_ns = time.monotonic_ns()
+            self.read_inflight_current += 1
+            depth = self.read_inflight_current
+            if depth > self.read_inflight_max:
+                self.read_inflight_max = depth
+            self.read_inflight_depth_sum += depth
+            self.read_inflight_samples += 1
+
+    def exit_read(self) -> None:
+        """W123: mark one positional/scatter read as leaving its ``preadv``
+        loop (paired with :meth:`enter_read`; call from a ``finally``). Closes
+        the drive-busy interval into ``read_wall_ns`` when the last in-flight
+        read completes -- so ``read_wall_ns`` is the UNION of read intervals
+        (overlapping reads counted once), unlike ``read_ns`` (their sum)."""
+
+        with self._lock:
+            if self.read_inflight_current > 0:
+                self.read_inflight_current -= 1
+                if self.read_inflight_current == 0 and self._inflight_since_ns:
+                    self.read_wall_ns += (
+                        time.monotonic_ns() - self._inflight_since_ns
+                    )
+                    self._inflight_since_ns = 0
 
     def as_dict(self) -> dict[str, int | float]:
         with self._lock:
@@ -169,11 +239,50 @@ class ExpertIOMetrics:
                     "records_hashed",
                     "records_unhashed",
                     "hash_thread_ns_total",
+                    "read_inflight_max",
+                    "read_inflight_depth_sum",
+                    "read_inflight_samples",
+                    "read_wall_ns",
+                    "records_read",
                 )
             }
+            # W123 (MEDIUM-1): fold in the currently-open in-flight interval so a
+            # read still in flight at snapshot time -- or a decode window whose
+            # pool never fully idles -- reports a nonzero union wall. Without this
+            # the exported read_wall_ns only advances on idle transitions, so a
+            # busy window deltas to 0 and read_gb_per_s_window / read_realized_qd
+            # (the numbers the lever is judged by) come back None. Adjusts the
+            # exported value only; the stored counter is untouched (exit_read
+            # still closes the interval exactly once).
+            if self.read_inflight_current > 0 and self._inflight_since_ns:
+                result["read_wall_ns"] += (
+                    time.monotonic_ns() - self._inflight_since_ns
+                )
         result["read_mib_per_second"] = (
             result["read_bytes"] / 1024**2 / (result["read_ns"] / 1e9)
             if result["read_ns"]
+            else 0.0
+        )
+        # W123: mean read-pool depth at issue time (1.0 == every read was
+        # serialized). Pairs with ``read_inflight_max`` and the union-wall
+        # realized queue depth below.
+        result["read_inflight_depth_mean"] = (
+            result["read_inflight_depth_sum"] / result["read_inflight_samples"]
+            if result["read_inflight_samples"]
+            else 0.0
+        )
+        # W123: realized aggregate BW from the UNION wall (drive-busy time), not
+        # thread-time -- this is the honest GB/s. ``read_realized_qd`` is the
+        # mean number of reads outstanding while the drive was busy
+        # (read_ns thread-time / read_wall_ns union); ~1 == serialized (QD1).
+        result["read_realized_gb_per_s"] = (
+            result["read_bytes"] / result["read_wall_ns"]
+            if result["read_wall_ns"]
+            else 0.0
+        )
+        result["read_realized_qd"] = (
+            result["read_ns"] / result["read_wall_ns"]
+            if result["read_wall_ns"]
             else 0.0
         )
         return result
@@ -301,9 +410,26 @@ class PositionalExpertReader:
         if io_read_fanout < 1:
             raise ValueError("io_read_fanout must be >= 1")
         self.io_read_fanout = io_read_fanout
+        # W123 (red-team HIGH-2 + MEDIUM-4): size the fanout pool to hold the TAIL
+        # sub-reads (fanout-1; the caller reads range 0 itself) of every record
+        # that can be in flight at once -- one demand miss plus up to
+        # ``_ASSUMED_PREFETCH_INFLIGHT`` speculative records -- so a demand tail is
+        # never FIFO-queued behind prefetch tails. Capped at ``_FANOUT_POOL_MAX``.
+        self._fanout_pool_workers = (
+            min(
+                _FANOUT_POOL_MAX,
+                max(
+                    io_read_fanout,
+                    (1 + _ASSUMED_PREFETCH_INFLIGHT) * (io_read_fanout - 1),
+                ),
+            )
+            if io_read_fanout > 1
+            else 0
+        )
         self._fanout_executor = (
             ThreadPoolExecutor(
-                max_workers=io_read_fanout, thread_name_prefix="mtplx-io-fanout"
+                max_workers=self._fanout_pool_workers,
+                thread_name_prefix="mtplx-io-fanout",
             )
             if io_read_fanout > 1
             else None
@@ -517,6 +643,26 @@ class PositionalExpertReader:
         if deadline_ns is not None and time.monotonic_ns() >= deadline_ns:
             raise ExpertIODeadlineExceeded("expert read deadline exceeded")
 
+    def _check_cancelled_at_issue(
+        self,
+        cancel_event: threading.Event | None,
+        deadline_ns: int | None,
+    ) -> None:
+        """W123 (MEDIUM-3): the issue-time (pre-``try``) cancel/deadline check.
+        The in-loop checks raise inside the range reader's ``try`` whose except
+        clauses count ``cancellations``/``deadline_errors``; the pre-``try``
+        check ran before that ``try``, so an issue-time rejection raised
+        UNCOUNTED. Count it here so the receipt sees every reject."""
+
+        try:
+            self._check_cancelled(cancel_event, deadline_ns)
+        except ExpertIOCancelled:
+            self.metrics.update(cancellations=1)
+            raise
+        except ExpertIODeadlineExceeded:
+            self.metrics.update(deadline_errors=1)
+            raise
+
     @staticmethod
     def _writable_bytes(destination: Any) -> memoryview:
         try:
@@ -598,6 +744,151 @@ class PositionalExpertReader:
                 start += length
         return out
 
+    @staticmethod
+    def _fanout_byte_ranges(
+        total: int, parts: int, align: int = _FANOUT_ALIGN
+    ) -> list[tuple[int, int]]:
+        """W123 (red-team HIGH-1): split ``[0, total)`` into up to ``parts``
+        contiguous ``[start, stop)`` byte ranges, byte-balanced, with every
+        interior cut rounded to a multiple of ``align``.
+
+        Unlike a split that only cuts between component views (which caps the
+        record at ~#big-components groups regardless of fanout), this cuts the
+        record's flat extent, so fanout 4/8/16 genuinely give 4/8/16 near-equal
+        ranges (max ≤ mean + one alignment quantum). The final range takes the
+        remainder."""
+
+        if parts <= 1 or total <= 0:
+            return [(0, total)] if total > 0 else []
+        ranges: list[tuple[int, int]] = []
+        start = 0
+        for index in range(1, parts):
+            cut = (total * index) // parts
+            cut = (cut // align) * align  # keep sub-reads block-aligned
+            if cut <= start or cut >= total:
+                continue
+            ranges.append((start, cut))
+            start = cut
+        ranges.append((start, total))
+        return ranges
+
+    @staticmethod
+    def _slices_for_byte_range(
+        destinations: tuple[memoryview, ...],
+        cum_starts: list[int],
+        lo: int,
+        hi: int,
+    ) -> tuple[memoryview, ...]:
+        """The ordered ``destinations`` sub-slices covering the concatenated byte
+        range ``[lo, hi)``. ``cum_starts[i]`` is destination ``i``'s start offset
+        in the record; ``cum_starts[-1] == total``. A sub-range that falls
+        entirely inside one component yields one slice; one that straddles a
+        component edge yields a scatter over the crossed components -- either way
+        the exact same bytes into the exact same buffers."""
+
+        out: list[memoryview] = []
+        for index in range(len(destinations)):
+            seg_lo = cum_starts[index]
+            seg_hi = cum_starts[index + 1]
+            a = max(lo, seg_lo)
+            b = min(hi, seg_hi)
+            if b <= a:
+                continue
+            out.append(destinations[index][a - seg_lo : b - seg_lo])
+        return tuple(out)
+
+    def _scatter_record_fanned(
+        self,
+        relative_name: str,
+        base_offset: int,
+        destinations: tuple[memoryview, ...],
+        *,
+        cancel_event: threading.Event | None,
+        deadline_ns: int | None,
+        pipeline_phase: str | None = None,
+    ) -> None:
+        """W123: read one record's contiguous extent into its component views,
+        issuing up to ``io_read_fanout`` byte-balanced sub-reads CONCURRENTLY.
+
+        Default (``fanout==1``) or a record too small to split takes the exact
+        prior single-``preadv`` scatter path -- shipped behavior unchanged and
+        byte-identical. With fanout>1 the flat extent is cut into ``fanout``
+        near-equal block-aligned ranges (red-team HIGH-1: cuts the bytes, not the
+        component boundaries, so fanout actually scales). The CALLER thread reads
+        the first range itself and offloads the rest to the fanout pool (red-team
+        HIGH-2), so a demand miss always issues its own first sub-read
+        immediately instead of queueing behind a prefetch backlog, and the
+        submitting thread is never left idle-blocking. Byte-identical: the
+        sub-ranges tile the same extent into the same buffers."""
+
+        executor = self._fanout_executor
+        nonempty = tuple(view for view in destinations if len(view))
+        total = sum(len(view) for view in nonempty)
+        if executor is None or self.io_read_fanout <= 1 or total == 0:
+            self._readv_range_into(
+                relative_name,
+                base_offset,
+                tuple(destinations),
+                cancel_event=cancel_event,
+                deadline_ns=deadline_ns,
+                pipeline_phase=pipeline_phase,
+            )
+            return
+        ranges = self._fanout_byte_ranges(total, self.io_read_fanout)
+        cum_starts = [0]
+        for view in nonempty:
+            cum_starts.append(cum_starts[-1] + len(view))
+        jobs: list[tuple[int, tuple[memoryview, ...]]] = []
+        for lo, hi in ranges:
+            slices = self._slices_for_byte_range(nonempty, cum_starts, lo, hi)
+            if slices:
+                jobs.append((base_offset + lo, slices))
+        if len(jobs) <= 1:
+            self._readv_range_into(
+                relative_name,
+                base_offset,
+                tuple(destinations),
+                cancel_event=cancel_event,
+                deadline_ns=deadline_ns,
+                pipeline_phase=pipeline_phase,
+            )
+            return
+        # Offload every range but the first to the pool, then read the first on
+        # THIS thread so its preadv is in flight without waiting on the pool.
+        futures = [
+            executor.submit(
+                self._readv_range_into,
+                relative_name,
+                offset,
+                slices,
+                cancel_event=cancel_event,
+                deadline_ns=deadline_ns,
+                pipeline_phase=pipeline_phase,
+            )
+            for offset, slices in jobs[1:]
+        ]
+        error: BaseException | None = None
+        try:
+            first_offset, first_slices = jobs[0]
+            self._readv_range_into(
+                relative_name,
+                first_offset,
+                first_slices,
+                cancel_event=cancel_event,
+                deadline_ns=deadline_ns,
+                pipeline_phase=pipeline_phase,
+            )
+        except BaseException as exc:  # noqa: BLE001 -- record, still drain pool
+            error = exc
+        for future in futures:  # always drain: no read left running into buffers
+            try:
+                future.result()
+            except BaseException as exc:  # drain all, re-raise the first
+                if error is None:
+                    error = exc
+        if error is not None:
+            raise error
+
     def _read_range_into(
         self,
         relative_name: str,
@@ -661,9 +952,10 @@ class PositionalExpertReader:
         deadline_ns: int | None,
         pipeline_phase: str | None = None,
     ) -> None:
-        self._check_cancelled(cancel_event, deadline_ns)
+        self._check_cancelled_at_issue(cancel_event, deadline_ns)
         requested = len(destination)
         started = time.monotonic_ns()
+        self.metrics.enter_read()  # W123: read-pool depth gauge
         read_total = 0
         python_preadv_invocations = 0
         preadv_bytes_returned = 0
@@ -741,6 +1033,7 @@ class PositionalExpertReader:
                     range_token,
                     pipeline_phase,
                 )
+            self.metrics.exit_read()  # W123: read-pool depth gauge
             self.metrics.update(
                 read_operations=1,
                 python_preadv_invocations=python_preadv_invocations,
@@ -764,9 +1057,10 @@ class PositionalExpertReader:
     ) -> None:
         """Scatter one contiguous file range into component-bank rows."""
 
-        self._check_cancelled(cancel_event, deadline_ns)
+        self._check_cancelled_at_issue(cancel_event, deadline_ns)
         requested = sum(len(destination) for destination in destinations)
         started = time.monotonic_ns()
+        self.metrics.enter_read()  # W123: read-pool depth gauge
         read_total = 0
         python_preadv_invocations = 0
         preadv_bytes_returned = 0
@@ -835,6 +1129,7 @@ class PositionalExpertReader:
                     range_token,
                     pipeline_phase,
                 )
+            self.metrics.exit_read()  # W123: read-pool depth gauge
             self.metrics.update(
                 read_operations=1,
                 python_preadv_invocations=python_preadv_invocations,
@@ -1053,7 +1348,9 @@ class PositionalExpertReader:
                 raise ValueError(
                     f"slot buffer has {len(view)} bytes; record needs {record.logical_bytes}"
                 )
-        self.metrics.update(record_requests=1)
+        # W123: ``records_read`` is the once-per-record denominator; sub-read
+        # fanout multiplies read_operations / preadv counts but not this.
+        self.metrics.update(record_requests=1, records_read=1)
         try:
             if prefer_sidecar and manifest.sidecar is not None:
                 if record.sidecar_offset is None or record.sidecar_length is None:
@@ -1075,7 +1372,11 @@ class PositionalExpertReader:
                         pipeline_phase=pipeline_phase,
                     )
                 else:
-                    self._readv_range_into(
+                    # W123: fan the record's contiguous sidecar extent across up
+                    # to ``io_read_fanout`` concurrent sub-reads (default==1 keeps
+                    # the single scatter, byte-identical). This is the DSV4.1
+                    # component-banks decode-miss / prefetch read path.
+                    self._scatter_record_fanned(
                         part_file,
                         sidecar_offset,
                         component_views,
@@ -1238,6 +1539,7 @@ class PositionalExpertReader:
         self.metrics.update(
             record_requests=len(prepared),
             sidecar_record_requests=len(prepared),
+            records_read=len(prepared),  # W123: once-per-record denominator
         )
         digests = [""] * len(prepared)
         try:

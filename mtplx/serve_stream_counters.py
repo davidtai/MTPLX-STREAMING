@@ -234,7 +234,23 @@ def stream_counters_delta(
         # differencing it yields a garbage "delta". Drop the non-counter (derived
         # float) keys before the delta and derive the decode-WINDOW read rate from the
         # ``read_bytes`` / ``read_ns`` counter deltas instead.
-        _NON_COUNTER_IO = ("read_mib_per_second",)
+        # W123: DERIVED FLOAT keys (not monotonic counters) must be dropped
+        # before the delta -- differencing a cumulative-since-open rate/mean, or a
+        # running PEAK, yields garbage (window 50 showed read_inflight_max=1 from
+        # peak-differencing and read_inflight_depth_mean=-2 from float-
+        # differencing). ``read_inflight_max`` is a CUMULATIVE-since-open peak, so
+        # for a decode window it just reports prefill's 48-slot burst and cannot
+        # evidence the decode lever -- it is dropped from the window block
+        # entirely (MEDIUM-2); the window's realized concurrency is
+        # ``read_realized_qd`` (from monotonic counter deltas) instead. The mean /
+        # realized-BW / realized-QD are recomputed below from the counter deltas.
+        _NON_COUNTER_IO = (
+            "read_mib_per_second",
+            "read_inflight_depth_mean",
+            "read_realized_gb_per_s",
+            "read_realized_qd",
+            "read_inflight_max",
+        )
         b_c = {k: v for k, v in b_io.items() if k not in _NON_COUNTER_IO}
         a_c = {k: v for k, v in a_io.items() if k not in _NON_COUNTER_IO}
         d = _delta_map(b_c, a_c)
@@ -246,12 +262,33 @@ def stream_counters_delta(
         d["hash_fraction"] = round(hashed / total, 6) if total else None
         d["hash_thread_ms"] = round(d.get("hash_thread_ns_total", 0) / 1e6, 3)
         d["hash_thread_ms_per_token"] = round(d.get("hash_thread_ns_total", 0) / 1e6 / tok, 4)
-        # Decode-window realized read rate from the counter deltas: bytes / ns == GB/s
-        # (1e9 bytes / 1e9 ns). ``read_ns`` is SUMMED io-thread read time, so this is
-        # the aggregate io-thread read throughput WHILE reading (not wall) -- the
-        # per-window SSD read rate W109 wanted in the receipt. None when no reads.
+        # W123 read-pool depth over THIS window, from monotonic-counter deltas:
+        #   read_wall_ns = UNION of in-flight intervals (drive-busy wall);
+        #   read_ns      = SUM of per-sub-read durations (io-thread time).
+        # realized GB/s uses the UNION wall (the honest aggregate SSD throughput,
+        # unlike the old bytes/read_ns which sub-read fanout makes meaningless);
+        # realized QD = thread-time / union = mean reads outstanding while busy
+        # (~1 == serialized QD1). read_gb_per_s_window keeps its name but now uses
+        # the union wall. read_inflight_max is intentionally NOT re-emitted here
+        # (cumulative peak; see MEDIUM-2 above) -- read_realized_qd is the window
+        # evidence.
         _read_ns = d.get("read_ns", 0)
+        _read_wall_ns = d.get("read_wall_ns", 0)
+        _samples = d.get("read_inflight_samples", 0)
+        d["read_inflight_depth_mean"] = (
+            round(d.get("read_inflight_depth_sum", 0) / _samples, 4)
+            if _samples
+            else None
+        )
+        d["read_realized_qd"] = (
+            round(_read_ns / _read_wall_ns, 4) if _read_wall_ns else None
+        )
         d["read_gb_per_s_window"] = (
+            round(d.get("read_bytes", 0) / _read_wall_ns, 4) if _read_wall_ns else None
+        )
+        # Keep the old io-thread-time throughput under an explicit name for
+        # continuity with pre-W123 receipts (sum-of-durations, not wall).
+        d["read_thread_gb_per_s_window"] = (
             round(d.get("read_bytes", 0) / _read_ns, 4) if _read_ns else None
         )
         out["io"] = d
