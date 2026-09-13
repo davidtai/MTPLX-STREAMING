@@ -2543,6 +2543,13 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
     return derivation
 
 
+# Plan fields the served profile sets that the loader would otherwise default
+# (the W81 finding: transient_slots defaulted to spec.top_k=6, not the profile's
+# 48).  Seeded into the in-process runtime so a bench A/B is on the production
+# plan.  ``transient_slots`` also takes the explicit ``--transient-slots`` flag.
+_PROFILE_PLAN_FIELDS = ("transient_slots", "split_route_release", "prefetch_slots")
+
+
 def _resolve_plan_overrides(args) -> dict:
     """ExpertStreamingConfig plan overrides from the profile / explicit flags.
 
