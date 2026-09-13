@@ -32,13 +32,17 @@ if _IOV_MAX <= 0:
 # W123 io read-fanout tuning. Interior fanout cuts are rounded to
 # ``_FANOUT_ALIGN`` bytes so every sub-read offset/length stays block-aligned
 # (component edges in the mxfp4/affine banks are 4 KiB-aligned) -- keeps
-# F_NOCACHE reads happy. The fanout pool is sized to hold several concurrent
-# fanned records without the sub-reads of one record queueing behind another
-# (``_FANOUT_POOL_RECORDS`` × fanout), capped at ``_FANOUT_POOL_MAX`` (~ the
-# drive's QD32 saturation point) so a large fanout does not spawn a thread storm.
+# F_NOCACHE reads happy. The fanout pool must hold the TAIL sub-reads (fanout-1,
+# the caller reads range 0 itself) of every record that can be reading at once:
+# one demand miss plus up to ``_ASSUMED_PREFETCH_INFLIGHT`` speculative records
+# (matches expert_runtime's ``_spec_inflight_cap`` default). Sizing it below
+# that (the old ``fanout × 8`` capped at 32) let a demand tail FIFO-queue behind
+# prefetch tails at fanout >= 8 (MEDIUM-4). Capped at ``_FANOUT_POOL_MAX`` so a
+# pathological fanout does not spawn a thread storm; fanout 4 is the recommended
+# cell arm (captures the QD headroom without hitting the cap).
 _FANOUT_ALIGN = 4096
-_FANOUT_POOL_RECORDS = 8
-_FANOUT_POOL_MAX = 32
+_ASSUMED_PREFETCH_INFLIGHT = 4
+_FANOUT_POOL_MAX = 64
 
 
 class ExpertIOError(RuntimeError):
@@ -242,6 +246,18 @@ class ExpertIOMetrics:
                     "records_read",
                 )
             }
+            # W123 (MEDIUM-1): fold in the currently-open in-flight interval so a
+            # read still in flight at snapshot time -- or a decode window whose
+            # pool never fully idles -- reports a nonzero union wall. Without this
+            # the exported read_wall_ns only advances on idle transitions, so a
+            # busy window deltas to 0 and read_gb_per_s_window / read_realized_qd
+            # (the numbers the lever is judged by) come back None. Adjusts the
+            # exported value only; the stored counter is untouched (exit_read
+            # still closes the interval exactly once).
+            if self.read_inflight_current > 0 and self._inflight_since_ns:
+                result["read_wall_ns"] += (
+                    time.monotonic_ns() - self._inflight_since_ns
+                )
         result["read_mib_per_second"] = (
             result["read_bytes"] / 1024**2 / (result["read_ns"] / 1e9)
             if result["read_ns"]
@@ -394,14 +410,19 @@ class PositionalExpertReader:
         if io_read_fanout < 1:
             raise ValueError("io_read_fanout must be >= 1")
         self.io_read_fanout = io_read_fanout
-        # W123 (red-team HIGH-2): size the fanout pool for SEVERAL concurrent
-        # fanned records so one record's sub-reads never queue behind another's
-        # (and, with caller-thread participation in ``_scatter_record_fanned``, a
-        # demand miss always issues its own first sub-read immediately rather than
-        # behind a prefetch backlog). Capped at ``_FANOUT_POOL_MAX`` ~ the drive's
-        # QD32 saturation point.
+        # W123 (red-team HIGH-2 + MEDIUM-4): size the fanout pool to hold the TAIL
+        # sub-reads (fanout-1; the caller reads range 0 itself) of every record
+        # that can be in flight at once -- one demand miss plus up to
+        # ``_ASSUMED_PREFETCH_INFLIGHT`` speculative records -- so a demand tail is
+        # never FIFO-queued behind prefetch tails. Capped at ``_FANOUT_POOL_MAX``.
         self._fanout_pool_workers = (
-            min(_FANOUT_POOL_MAX, max(io_read_fanout, io_read_fanout * _FANOUT_POOL_RECORDS))
+            min(
+                _FANOUT_POOL_MAX,
+                max(
+                    io_read_fanout,
+                    (1 + _ASSUMED_PREFETCH_INFLIGHT) * (io_read_fanout - 1),
+                ),
+            )
             if io_read_fanout > 1
             else 0
         )
@@ -621,6 +642,26 @@ class PositionalExpertReader:
             raise ExpertIOCancelled("expert read was cancelled")
         if deadline_ns is not None and time.monotonic_ns() >= deadline_ns:
             raise ExpertIODeadlineExceeded("expert read deadline exceeded")
+
+    def _check_cancelled_at_issue(
+        self,
+        cancel_event: threading.Event | None,
+        deadline_ns: int | None,
+    ) -> None:
+        """W123 (MEDIUM-3): the issue-time (pre-``try``) cancel/deadline check.
+        The in-loop checks raise inside the range reader's ``try`` whose except
+        clauses count ``cancellations``/``deadline_errors``; the pre-``try``
+        check ran before that ``try``, so an issue-time rejection raised
+        UNCOUNTED. Count it here so the receipt sees every reject."""
+
+        try:
+            self._check_cancelled(cancel_event, deadline_ns)
+        except ExpertIOCancelled:
+            self.metrics.update(cancellations=1)
+            raise
+        except ExpertIODeadlineExceeded:
+            self.metrics.update(deadline_errors=1)
+            raise
 
     @staticmethod
     def _writable_bytes(destination: Any) -> memoryview:
@@ -911,7 +952,7 @@ class PositionalExpertReader:
         deadline_ns: int | None,
         pipeline_phase: str | None = None,
     ) -> None:
-        self._check_cancelled(cancel_event, deadline_ns)
+        self._check_cancelled_at_issue(cancel_event, deadline_ns)
         requested = len(destination)
         started = time.monotonic_ns()
         self.metrics.enter_read()  # W123: read-pool depth gauge
@@ -1016,7 +1057,7 @@ class PositionalExpertReader:
     ) -> None:
         """Scatter one contiguous file range into component-bank rows."""
 
-        self._check_cancelled(cancel_event, deadline_ns)
+        self._check_cancelled_at_issue(cancel_event, deadline_ns)
         requested = sum(len(destination) for destination in destinations)
         started = time.monotonic_ns()
         self.metrics.enter_read()  # W123: read-pool depth gauge

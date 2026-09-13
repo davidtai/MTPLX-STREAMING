@@ -355,9 +355,69 @@ def test_stream_counters_delta_fixes_gauge_window_metrics() -> None:
         }
     }
     out = stream_counters_delta(before, after, tokens=256)["io"]
-    assert out["read_inflight_max"] == 4               # from AFTER, not delta
+    # MEDIUM-2: read_inflight_max is a cumulative peak (prefill pollution) and is
+    # intentionally NOT emitted in the window block; read_realized_qd is the
+    # window evidence.
+    assert "read_inflight_max" not in out
     assert out["read_inflight_depth_mean"] == pytest.approx(4.0)  # 3600/900
     assert out["read_realized_qd"] == pytest.approx(2.45)  # 2450/1000
     assert out["read_gb_per_s_window"] == pytest.approx(365.0)  # bytes/union-ns
     assert out["read_thread_gb_per_s_window"] == pytest.approx(149.0, rel=1e-3)
     assert out["records_read"] == 900
+
+
+# --------------------------------------------------------------------------- #
+# MEDIUM fixes: open-interval wall, issue-time reject counting, pool sizing
+# --------------------------------------------------------------------------- #
+
+
+def test_read_wall_ns_includes_open_interval(tmp_path: Path) -> None:
+    # MEDIUM-1: a read still in flight at snapshot time (pool never idled) must
+    # still report a nonzero union wall -- otherwise read_gb_per_s_window /
+    # read_realized_qd delta to None, the very numbers the lever is judged by.
+    import time
+
+    with PositionalExpertReader(tmp_path, use_native=False) as reader:
+        reader.metrics.enter_read()
+        try:
+            time.sleep(0.01)
+            snap = reader.metrics.as_dict()
+        finally:
+            reader.metrics.exit_read()
+    assert snap["read_wall_ns"] > 0
+    # and the stored counter is not corrupted: after exit it closed exactly once
+    assert reader.metrics.read_inflight_current == 0
+
+
+def test_issue_time_deadline_and_cancel_are_counted(tmp_path: Path) -> None:
+    # MEDIUM-3: a pre-`try` (issue-time) deadline/cancel rejection used to raise
+    # without incrementing the counter.
+    from mtplx.expert_io import ExpertIOCancelled, ExpertIODeadlineExceeded
+
+    relative_name = "d.bin"
+    (tmp_path / relative_name).write_bytes(b"0123456789")
+    with PositionalExpertReader(tmp_path, use_native=False) as reader:
+        with pytest.raises(ExpertIODeadlineExceeded):
+            reader._read_range_into(
+                relative_name, 0, memoryview(bytearray(10)),
+                cancel_event=None, deadline_ns=1,  # already past
+            )
+        assert reader.metrics.as_dict()["deadline_errors"] == 1
+        cancel = threading.Event()
+        cancel.set()
+        with pytest.raises(ExpertIOCancelled):
+            reader._readv_range_into(
+                relative_name, 0, (memoryview(bytearray(10)),),
+                cancel_event=cancel, deadline_ns=None,
+            )
+        assert reader.metrics.as_dict()["cancellations"] == 1
+
+
+def test_fanout_pool_sized_for_concurrent_records(tmp_path: Path) -> None:
+    # MEDIUM-4: pool >= (1 + prefetch_inflight_cap) x (fanout - 1) so a demand
+    # tail never queues behind prefetch tails.
+    for fanout, expected in ((4, 15), (8, 35)):
+        with PositionalExpertReader(
+            tmp_path, use_native=False, io_read_fanout=fanout
+        ) as reader:
+            assert reader._fanout_pool_workers == expected

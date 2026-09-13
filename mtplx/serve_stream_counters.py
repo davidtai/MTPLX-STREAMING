@@ -238,8 +238,11 @@ def stream_counters_delta(
         # before the delta -- differencing a cumulative-since-open rate/mean, or a
         # running PEAK, yields garbage (window 50 showed read_inflight_max=1 from
         # peak-differencing and read_inflight_depth_mean=-2 from float-
-        # differencing). ``read_inflight_max`` is a peak: take the AFTER snapshot
-        # directly (the deepest concurrency observed by window end). The mean /
+        # differencing). ``read_inflight_max`` is a CUMULATIVE-since-open peak, so
+        # for a decode window it just reports prefill's 48-slot burst and cannot
+        # evidence the decode lever -- it is dropped from the window block
+        # entirely (MEDIUM-2); the window's realized concurrency is
+        # ``read_realized_qd`` (from monotonic counter deltas) instead. The mean /
         # realized-BW / realized-QD are recomputed below from the counter deltas.
         _NON_COUNTER_IO = (
             "read_mib_per_second",
@@ -266,11 +269,12 @@ def stream_counters_delta(
         # unlike the old bytes/read_ns which sub-read fanout makes meaningless);
         # realized QD = thread-time / union = mean reads outstanding while busy
         # (~1 == serialized QD1). read_gb_per_s_window keeps its name but now uses
-        # the union wall. read_inflight_max is the peak from the AFTER snapshot.
+        # the union wall. read_inflight_max is intentionally NOT re-emitted here
+        # (cumulative peak; see MEDIUM-2 above) -- read_realized_qd is the window
+        # evidence.
         _read_ns = d.get("read_ns", 0)
         _read_wall_ns = d.get("read_wall_ns", 0)
         _samples = d.get("read_inflight_samples", 0)
-        d["read_inflight_max"] = int(a_io.get("read_inflight_max", 0))
         d["read_inflight_depth_mean"] = (
             round(d.get("read_inflight_depth_sum", 0) / _samples, 4)
             if _samples
