@@ -4171,18 +4171,52 @@ def _fmt(v) -> str:
     return "n/a" if v is None else f"{v:.4g}"
 
 
+def _dspark_divergence_rule(d: dict) -> str:
+    """Which W120 rule fired for a tie_flip (or why one did not), from the receipt
+    scalars.  Uses the CONTESTED margins + the magnitude-aware ``tie_band_used`` --
+    NOT the legacy ``ar_top2_margin < tie_margin`` (false for a W120 tie_flip)."""
+    band = d.get("tie_band_used", d.get("tie_margin"))
+    arc = d.get("ar_contested_margin")
+    dsc = d.get("dspark_contested_margin")
+    within = d.get("deltas_within_tie_band")
+    # rows_consistent gates absolution: a row whose argmax is not its credited token
+    # did not PRODUCE that token, so no rule fires regardless of the margins.
+    if d.get("rows_consistent") is False:
+        return "none (row argmax != credited token -> row did not produce it)"
+    # A rule only "fires" if the delta gate passed (mirrors the class logic): a
+    # small contested margin does NOT absolve when a contested delta exceeds the band
+    # (or is non-finite, which forces deltas_within_tie_band to False).
+    if within is False:
+        return "none (contested delta > band / non-finite -> not rounding)"
+    fired = []
+    if within and band is not None and arc is not None and dsc is not None and min(arc, dsc) < band:
+        fired.append("near_tie_by_band(a)")
+    if within and d.get("rounding_class_by_delta"):
+        fired.append("rounding_class_by_delta(c)")
+    return "+".join(fired) if fired else "none"
+
+
 def _print_dspark_divergence(arm: str, d: dict) -> None:
-    """W77 census line for a classified DSpark divergence.  ``tie_flip`` is a
+    """W120 census line for a classified DSpark divergence.  ``tie_flip`` is a
     one-line note (acceptable, rounding-class); ``divergent`` is LOUD (the flip is
     larger than the bf16 rounding envelope -- a real lane bug or a non-rounding
     lever), so the operator sees it in the arm log even though the arm no longer
-    aborts."""
+    aborts.  Prints the magnitude-aware ``tie_band_used``, BOTH contested margins,
+    and which rule fired (the old ``ar_top2_margin < tie_margin`` line was false for
+    W120 tie_flips)."""
     i = d["divergence_index"]
+    margins = (
+        f"ar_contested={_fmt(d.get('ar_contested_margin'))} "
+        f"dsp_contested={_fmt(d.get('dspark_contested_margin'))} "
+        f"tie_band_used={_fmt(d.get('tie_band_used'))} "
+        f"(ar_top2={_fmt(d['ar_top2_margin'])} dsp_top2={_fmt(d['dspark_top2_margin'])}) "
+        f"Δ@ar_tok={_fmt(d.get('delta_at_ar_token'))} Δ@dsp_tok={_fmt(d.get('delta_at_dspark_token'))} "
+        f"max|Δlogit|={_fmt(d['max_abs_logit_delta'])} rows_consistent={d.get('rows_consistent')}"
+    )
     if d["class"] == "tie_flip":
         print(
             f"[ab] dspark divergence @ {i} class=tie_flip (acceptable) "
-            f"ar_top2_margin={_fmt(d['ar_top2_margin'])} < tie_margin={_fmt(d['tie_margin'])} "
-            f"max|Δlogit|={_fmt(d['max_abs_logit_delta'])} "
+            f"rule={_dspark_divergence_rule(d)} {margins} "
             f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']} (arm {arm!r})",
             flush=True,
         )
@@ -4190,9 +4224,7 @@ def _print_dspark_divergence(arm: str, d: dict) -> None:
         print(
             "[ab] " + "!" * 8 + " DIVERGENT " + "!" * 8 + "\n"
             f"[ab] DSpark greedy stream != AR @ {i} class=DIVERGENT (arm {arm!r}): "
-            f"NOT a tie-break flip -- ar_top2_margin={_fmt(d['ar_top2_margin'])} "
-            f">= tie_margin={_fmt(d['tie_margin'])}, max|Δlogit|={_fmt(d['max_abs_logit_delta'])}, "
-            f"dspark_top2_margin={_fmt(d['dspark_top2_margin'])}; "
+            f"NOT a tie-break flip -- rule={_dspark_divergence_rule(d)} {margins}; "
             f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']}. "
             "Investigate the lane (or run --dspark-require-lossless to gate).",
             flush=True,
@@ -5347,9 +5379,22 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 )
                 # Reconcile the capture's index (from the pass) with the list
                 # compare; they agree for a decode-position divergence, but record
-                # the capture index too so a mismatch is visible.
+                # the capture index AND an explicit mismatch flag so a divergence
+                # whose captured verify row is NOT the flip's row is loud (the rows
+                # fed to classify_divergence would then not be the compared position).
                 if cap is not None:
-                    divergence["capture_index"] = cap.get("index")
+                    cap_idx = cap.get("index")
+                    divergence["capture_index"] = cap_idx
+                    mismatch = cap_idx is not None and int(cap_idx) != int(first)
+                    divergence["capture_index_matches_first"] = not mismatch
+                    if mismatch:
+                        print(
+                            f"[ab] WARN: dspark capture index {cap_idx} != list-compare "
+                            f"first-divergence index {first} (arm {arm!r}); the captured "
+                            "verify row may not be the flip's row -- classification "
+                            "rows are suspect.",
+                            flush=True,
+                        )
                 receipt["dspark"]["divergence"] = divergence
                 _print_dspark_divergence(arm, divergence)
                 if getattr(args, "dspark_require_lossless", False):
