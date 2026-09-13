@@ -201,6 +201,26 @@ def _ab_memory_block(block: dict, readback: dict) -> dict:
     }
 
 
+def _memory_cap_block(runtime):
+    """W121 MEDIUM-6: the ``apply_mlx_memory_cap`` report from the runtime, lifted into
+    the receipt -- the applied limit, wired_limit_applied / cache_limit_applied,
+    slot_derivation, and the box-target components.  ``None`` when the runtime carries
+    no report (a stub runtime, or apply_memory_cap disabled)."""
+
+    rep = getattr(runtime, "memory_cap_report", None)
+    return rep if isinstance(rep, dict) else None
+
+
+def _apply_effective_limit(mem, cap) -> None:
+    """Set ``mlx_limit_gib_effective`` from apply_mlx_memory_cap's APPLIED limit (MEDIUM-6).
+    mlx 0.32.2 has no ``get_memory_limit`` readback, so the readback-derived value in
+    the block is ``None``; the authoritative effective limit is what the cap actually
+    handed ``set_memory_limit`` (report['limit'])."""
+
+    if isinstance(mem, dict) and isinstance(cap, dict) and cap.get("limit") is not None:
+        mem["mlx_limit_gib_effective"] = int(cap["limit"]) / GIB
+
+
 def _inject_box_used(mem, args) -> None:
     """Add ``box_baseline_gb`` + ``box_used_gb`` (= baseline + process footprint,
     decimal GB) to a receipt ``memory`` block, from the target baseline stashed on
@@ -4075,6 +4095,20 @@ def _run_arm(args, arm, bench, mx) -> dict:
 
         for _k, _v in dspark_decode_kernel_env_defaults().items():
             os.environ.setdefault(_k, _v)
+        # MEDIUM-7: a bounded-KV DSpark run verifies K+1 rows against the compressor
+        # frontier, which the bounded latent lane preallocates with only
+        # _BOUNDED_LATENT_SLACK rows of verify margin.  depth + 1 > that slack would
+        # overrun the preallocated cap mid-verify -- refuse with a clean error.
+        if (os.environ.get(KV_BOUNDED_ENV) or "").strip().lower() in ("1", "true", "yes", "on"):
+            from mtplx.models.deepseek_v41_cache import _BOUNDED_LATENT_SLACK
+            _depth = int(getattr(args, "dspark_depth", 0) or 0)
+            if _depth + 1 > _BOUNDED_LATENT_SLACK:
+                raise SystemExit(
+                    f"[ab] --dspark-depth {_depth} with bounded KV needs depth + 1 "
+                    f"({_depth + 1}) <= the bounded latent verify slack "
+                    f"{_BOUNDED_LATENT_SLACK}; lower --dspark-depth or unset "
+                    f"MTPLX_DSV41_KV_BOUNDED."
+                )
     if getattr(args, "dry_run", False):
         return _dry_run_arm(args, arm, bench)
     build_prompt = bench._load_build_prompt()
@@ -4668,11 +4702,22 @@ def _run_arm(args, arm, bench, mx) -> dict:
         # memory block from the target baseline armed for this run.  No budget-total
         # forecast keys (plan_overshoot / safety / non_metal / vm_stat baseline) --
         # W121 dropped those static forecasts.
+        # MEDIUM-6: lift the apply_mlx_memory_cap report (applied limit, wired/cache
+        # applied, slot_derivation, target components) into the receipt, and take
+        # mlx_limit_gib_effective from ITS applied limit -- mlx 0.32.2 has no
+        # get_memory_limit readback, so the readback-derived value was None.
+        _cap = _memory_cap_block(runtime)
+        if _cap is not None:
+            receipt["memory_cap"] = _cap
         if isinstance(receipt.get("memory"), dict):
             _inject_box_used(receipt["memory"], args)
+            _apply_effective_limit(receipt["memory"], _cap)
         _dsp = receipt.get("dspark")
         if isinstance(_dsp, dict) and isinstance(_dsp.get("memory"), dict):
             _inject_box_used(_dsp["memory"], args)
+            _apply_effective_limit(_dsp["memory"], _cap)
+            if _cap is not None:
+                _dsp["memory_cap"] = _cap
         return receipt
     finally:
         if runtime is not None:

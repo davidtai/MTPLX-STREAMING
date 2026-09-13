@@ -15,7 +15,9 @@ CPU-only: pure helper + a fake mx; no Metal, no model.
 """
 from __future__ import annotations
 
+import json
 import types
+from pathlib import Path
 
 import pytest
 
@@ -159,6 +161,38 @@ def test_w47_numbers_peak_fits_and_cache_room_ge_5gib():
     # and box_used at the peak stays <= target: baseline + mlx_peak(<=limit) + host.
     baseline_b = int(round(10.6 * GB))
     assert baseline_b + limit + HOST <= int(round(100 * GB)) + GIB  # within rounding
+
+
+# ---- MEDIUM-8: assert the derivation against the REAL window-47 receipt ----------
+_W47 = (
+    Path(__file__).resolve().parents[1]
+    / "docs/deepseek-v41/receipts/gpu-windows/window-47/ar-v2-attn.json"
+)
+
+
+@pytest.mark.skipif(not _W47.exists(), reason="window-47 receipt not present")
+def test_derivation_holds_against_window47_receipt():
+    m = json.loads(_W47.read_text())["memory"]
+    peak = float(m["mlx_peak_gb"])            # 74.565 GiB
+    active_start = float(m["mlx_active_gb_at_decode_start"])  # 70.620 GiB
+    plan = float(m["plan_limit_gib_derived"])  # 69.178 GiB
+    band_measured = peak - plan               # ~5.39 GiB (the unpriced-above-plan band)
+    active_overshoot = active_start - plan     # ~1.44 GiB (active at decode start over plan)
+    # (ii) the default transient band must COVER the measured peak-plan overshoot, so a
+    # prefill peak of engine + band_measured stays under the allocator limit.
+    assert DEFAULT_TRANSIENT_BAND_GIB >= band_measured, (
+        f"transient band {DEFAULT_TRANSIENT_BAND_GIB} < measured peak-plan {band_measured:.3f}"
+    )
+    # with the target armed at the same box the window ran, the engine budget derived
+    # from the RECEIPT numbers keeps the prefill peak under the limit AND leaves >= 5 GiB
+    # of decode cache room (W47 hr8 held 5.0).
+    r = resolve_box_target_mlx_limit_bytes(
+        env={BOX_TARGET_ENV: "100", BOX_BASELINE_ENV: "10.6"}
+    )
+    limit = r["mlx_limit_bytes"]
+    engine = r["engine_budget_bytes"]
+    assert engine + int(round(band_measured * GIB)) <= limit
+    assert limit - (engine + int(round(active_overshoot * GIB))) >= 5 * GIB
 
 
 # ---- apply_mlx_memory_cap ----------------------------------------------------

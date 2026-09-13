@@ -184,6 +184,33 @@ def test_memory_plan_from_pins_components_end_to_end(tmp_path, monkeypatch):
     assert abs(cap["memory_limit_bytes"] - tp["engine_budget_bytes"]) < 4096
 
 
+def test_dspark_depth_over_latent_slack_raises(tmp_path, monkeypatch):
+    ab = _ab()
+    # MEDIUM-7: bounded-KV DSpark with depth + 1 > the bounded latent verify slack (8)
+    # must refuse with a clean error (the *_bounded arm arms KV_BOUNDED).
+    import os
+    snapshot = dict(os.environ)
+    monkeypatch.setattr(ab, "_tokenizer",
+                        lambda a, b: (_ for _ in ()).throw(RuntimeError("no tok")))
+    (tmp_path / "ids.json").write_text(json.dumps([1, 2, 3]))
+    args = ab.build_parser().parse_args(
+        ["--decode-mode", "dspark", "--dspark-depth", "8", "--eos-id", "0",
+         "--prompt-ids-file", str(tmp_path / "ids.json"),
+         "--out", str(tmp_path / "r.json")]
+    )
+    bench = types.SimpleNamespace(
+        resolve_max_kv=lambda c, d, m: int(m or 2048),
+        _load_build_prompt=lambda: (lambda *a, **k: [1, 2, 3]),
+        _resolve_prompt=lambda a, t, b, c: ([1, 2, 3], {}),
+    )
+    try:
+        with pytest.raises(SystemExit, match="latent verify slack"):
+            ab._run_arm(args, "cell16k_ring_v2_draft_attn_bounded", bench, mx=object())
+    finally:
+        os.environ.clear()
+        os.environ.update(snapshot)
+
+
 def test_memory_plan_from_missing_raises(tmp_path, monkeypatch):
     ab = _ab()
     # MEDIUM-5: a --memory-plan-from that does not exist must RAISE, not fall through.

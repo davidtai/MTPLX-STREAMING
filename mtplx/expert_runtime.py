@@ -1749,11 +1749,13 @@ def resolve_mlx_limit_headroom_bytes(env: Mapping[str, str] | None = None) -> in
 #   mlx_limit = box_target - baseline
 # and box_used = baseline + process(active + cache) <= baseline + mlx_limit = box_target.
 # Units: box_target and baseline are DECIMAL GB (David reads "100 GB used"); the MLX
-# limit is bytes.  Activated by MTPLX_DSV41_BOX_TARGET_GB (the bench/profile stamps it,
-# default 100); unset keeps the legacy plan_limit(+headroom) path so non-DSV41 callers
-# are unchanged.  MTPLX_MEMORY_LIMIT_BYTES / --memory-limit-gib remain an explicit
-# override of the engine budget; MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB stays as an
-# explicit override added on top but is no longer needed for correctness.
+# limit is bytes.  Activated by MTPLX_DSV41_BOX_TARGET_GB (default 100) -- the BENCH
+# stamps it (from --box-target-gb + the gpu_window-exported baseline); the SERVED profile
+# does NOT (LOW: the served path runs on its own residency plan / MTPLX_MEMORY_LIMIT_BYTES,
+# not the box target -- the target machinery is the GPU-window bench lane).  Unset keeps
+# the legacy plan_limit(+headroom) path so non-DSV41 callers are unchanged.
+# MTPLX_MEMORY_LIMIT_BYTES / --memory-limit-gib remain an explicit override of the engine
+# budget; MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB stays as an explicit add-on override.
 BOX_TARGET_ENV = "MTPLX_DSV41_BOX_TARGET_GB"
 BOX_BASELINE_ENV = "MTPLX_DSV41_BOX_BASELINE_GB"
 DEFAULT_BOX_TARGET_GB = 100.0  # decimal GB; box hard-panics ~110, 100 keeps the margin
