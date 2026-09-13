@@ -1773,11 +1773,9 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "When the DSpark head is loaded, reprice its ~7.4 GiB residents out of "
-            "the memory budget (default). --no-reprice loads the head at the FULL "
-            "budget so window 26 can separate the budget/slots effect from a "
-            "head-load code-path effect: the streamed slot plan is identical at the "
-            "same budget, so a --no-reprice slowdown is a code path, not slots."
+            "Legacy compatibility flag. The loader always prices the selected "
+            "MTP weights and caches before allocating expert slots; neither "
+            "--reprice nor --no-reprice changes the total memory envelope."
         ),
     )
     p.add_argument(
@@ -3008,13 +3006,13 @@ def _load_model(args, bench, mx):
         _addl = _addl_resident()
         _wo_a_reserve = _addl - _swa_bytes
         print(
-            f"[ab] additional resident reserve: SWA {_swa_bytes / GIB:.3f} GiB"
+            f"[ab] additional backbone reserve: SWA {_swa_bytes / GIB:.3f} GiB"
             + (
                 f" + wo_a f32 cache {_wo_a_reserve / GIB:.3f} GiB"
                 if _wo_a_reserve
                 else ""
             )
-            + f" = {_addl / GIB:.3f} GiB (priced into the plan)",
+            + f" = {_addl / GIB:.3f} GiB (MTP weights/caches priced separately by loader)",
             flush=True,
         )
     except Exception:  # pragma: no cover - display only, never fail the run

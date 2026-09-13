@@ -30,6 +30,45 @@ input tokens and 1,023 decode steps plus the first token emitted by prefill.
 
 # Plan Status
 
+## DSpark memory batch, 2026-09-13 11:55 UTC
+
+- Full-workload best remains **6.535995651 TPS**; no new full-model MTP run.
+- Fixed direct DSpark prefill's all-row vocabulary head (8.472 GB at 16K) and
+  full-prompt tensor lifetime in direct/served paths. `mx.take` gathers small
+  independent last-hidden/window buffers; verify rows and custom forward API
+  are unchanged. `deepcopy` was experimentally shallow on installed MLX.
+- Final bounded memory checks: 17,920 bytes retained in all three routes,
+  versus original ~34-51 MB on synthetic <64 MiB prompt arrays. Four guarded
+  checks (three memory cases + tiny actual-model accept/reject parity) passed;
+  two pure completion-cache lifetime cases passed. Synchronize/GC only in the
+  measurement, not production decode. Receipts: `memory-budget-110/DSPARK_MEMORY.md`.
+- Standalone loader now resolves with_mtp/config before expert allocation,
+  sets spec.mtp_included, and reserves actual stage-count fp32 wo_a + windows.
+  Component allocator and runtime share one additional-resident value.
+  Canonical serving now charges the same SWA/wo_a/stage caches (its MTP raw
+  manifest pricing already existed). Separate construction rejects an unpriced
+  MTP head. Explicit flags beat env; custom manifest_path preserved.
+- Removed benchmark approximate 7.4 GiB double deduction. Legacy reprice flags
+  cannot disable loader accounting. Five focused CPU admission/selection cases
+  passed after red evidence, plus five guarded existing compatibility cases.
+- Real-artifact static plan at last full run's 86,369,798,112-byte engine budget:
+  AR 83 slots/layer, MTP 72; additional MTP fixed bytes **8,353,408,392**.
+  AR resident/fixed = 15,103,104,448 / 23,578,252,736; MTP = 23,456,512,840 /
+  31,931,661,128. Component and runtime plans equal; allocation backend mocked,
+  all MLX imports blocked. This proves planning, **not MTP peak safety**.
+- Last GPU guard exited 0 and restored/warmed exact Qwen at 11:52:49 UTC;
+  independent health/warmup/lock-free check followed. No GPU process remains.
+  Swapouts unchanged (4,399,765). First expected-failure window additionally
+  returned 8 (`live step state unreadable` during child exit); service restored.
+  Root cause not yet reproduced; do not label that an OOM or weaken guard.
+- Independent scoped review found no remaining source correctness issues.
+- **Next:** establish bounded draft + verify temporary peak with small/real-shape
+  accounting before full MTP. Candidate starts from pf0 + existing draft compile
+  / bf16 draft head; preserve native artifact, user allows ties only. Historical
+  window48 DSpark 3.56 TPS used pf24 + unvalidated bounded KV, so is not current
+  110 GB evidence. Its ~2.95 accepted output/cycle motivates current batching.
+  Keep unvalidated bounded-KV disabled. No per-token eligibility/proof counters.
+
 Continuing the runner program in `docs/deepseek-v41/W95_RUNNER_DESIGN.md`.
 Memory reporting and the revised default allocation have full-model evidence.
 The current batch fixes fixed-slot KV admission, cross-request frequency state,

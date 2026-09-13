@@ -212,13 +212,8 @@ def _verify_routing_context(enabled: bool):
     return _combined()
 
 
-#: DSpark MTP residents actually materialized on the ``with_mtp=True`` load path
-#: (dense mxfp8 + 3x128 mxfp4 experts + heads ~= 6.7-7.4 GiB, W18 /
-#: OPTIMIZATION_LEDGER §1.1). The streaming loader's planner applies
-#: ``text_only_resident_discount`` unconditionally (it frees the MTP+vision
-#: residents for expert slots), so a ``with_mtp`` load over-reserves slots by
-#: exactly the MTP residents it then loads. The bench harness reserves this out of
-#: the memory budget so the slot pool (expert cache) shrinks and the plan fits.
+# Historical benchmark estimate; retained for old receipt/script imports.
+# Current loader pricing uses the manifest and the selected head's cache sizes.
 DSPARK_MTP_RESIDENT_BYTES = int(7.4 * (1024 ** 3))
 
 
@@ -230,32 +225,14 @@ def dspark_bench_loader_overrides(
     mtp_resident_bytes: int = DSPARK_MTP_RESIDENT_BYTES,
     reprice: bool = True,
 ) -> tuple[Optional[bool], int, Optional[int]]:
-    """Loader kwargs for a DSpark-DIRECT (or ``--with-mtp``) bench load (W57).
+    """Select the head without changing the caller's total memory envelope.
 
-    Returns ``(with_mtp, memory_limit_bytes, expert_cache_limit_bytes)``. When the
-    head is wanted: ``with_mtp=True`` and, if ``reprice``, both budgets reduced by
-    the MTP residents so the planner's default text-only discount does not
-    over-commit expert slots.  ``reprice=False`` (the ``--no-reprice`` A/B arm)
-    loads the head at the FULL budget so window 26 can separate the budget effect
-    (slots) from any head-load code-path effect: at the same budget the streamed
-    slot plan is identical (the head's 128 experts stay resident, the streamed
-    runtime keeps its 40 backbone layers -- deepseek_v41_loader.
-    construct_deepseek_v41_resident_model), so a no-reprice slowdown is a code path,
-    not slots.  For a non-head run: ``with_mtp=None`` and budgets unchanged.  Pure
-    function, unit-tested on CPU with no model.
+    The loader now prices MTP manifest weights and stage caches before expert
+    slots. Subtracting the old approximate reserve here would charge twice.
+    ``reprice`` and ``mtp_resident_bytes`` are legacy compatibility arguments;
+    neither can disable residency accounting at the allocation boundary.
     """
-    if not want_dspark:
-        return None, int(memory_limit_bytes), expert_cache_limit_bytes
-    if not reprice:
-        return True, int(memory_limit_bytes), expert_cache_limit_bytes
-    gib = 1024 ** 3
-    reserved_memory = max(gib, int(memory_limit_bytes) - int(mtp_resident_bytes))
-    reserved_cache = (
-        None
-        if expert_cache_limit_bytes is None
-        else max(0, int(expert_cache_limit_bytes) - int(mtp_resident_bytes))
-    )
-    return True, reserved_memory, reserved_cache
+    return (True if want_dspark else None), int(memory_limit_bytes), expert_cache_limit_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +1025,23 @@ def _target_forward(model):
     return _fwd
 
 
+def _seed_prefill_state(model, main_hidden, mtp_caches):
+    """Keep independent final-row/window buffers at the prefill boundary.
+
+    MLX slices can retain the entire prompt allocation. Materialize copies of
+    the small live state before the caller drops its prompt tensors; otherwise
+    both Python locals and array views keep multi-GB buffers alive during decode.
+    """
+    model.mtp.seed_main(main_hidden, mtp_caches)
+    main_h = mx.take(main_hidden, mx.array([main_hidden.shape[1] - 1]), axis=1)
+    for cache in mtp_caches:
+        # Gather into independent storage; deepcopy/contiguous can share an
+        # already contiguous view's full parent allocation on MLX.
+        cache.window = mx.take(cache.window, mx.arange(cache.window.shape[1]), axis=1)
+    mx.eval(main_h, [cache.window for cache in mtp_caches])
+    return main_h
+
+
 # ---------------------------------------------------------------------------
 # core loop
 # ---------------------------------------------------------------------------
@@ -1354,20 +1348,24 @@ def dspark_generate(
 
     prompt_arr = mx.array([[int(t) for t in prompt_ids]])
     _prefill_started = time.perf_counter()
-    logits, main_hidden = fwd(prompt_arr, cache)
+    # Only the final prompt position seeds generation. Verify still uses fwd
+    # with every row; custom forward callables retain their two-argument API.
+    if forward is None:
+        logits, main_hidden = model(
+            prompt_arr, cache=cache, return_hidden=True, logits_keep=1
+        )
+    else:
+        logits, main_hidden = fwd(prompt_arr, cache)
     mx.eval(logits, main_hidden)
     _fire_prefill_callback(
         prefill_callback, prompt_ids, time.perf_counter() - _prefill_started
     )
-    # seed the DSpark windows with the whole prompt's main hiddens (ring keeps
-    # the last window_size), exactly as the reference forward_spec start_pos==0.
-    model.mtp.seed_main(main_hidden, mtp_caches)
-
     from mtplx.generation import _sample_from_logits
 
     primary, _ = _sample_from_logits(logits[0, -1], sampler, rng)
     primary = int(primary)
-    main_h = main_hidden[:, -1:, :]
+    main_h = _seed_prefill_state(model, main_hidden, mtp_caches)
+    del logits, main_hidden, prompt_arr
 
     tokens: List[int] = [primary]
     if token_callback is not None:
@@ -1474,14 +1472,14 @@ def generate_dspark(
     mx.eval(logits, main_hidden)
     prompt_eval_time = time.perf_counter() - prefill_started
     _fire_prefill_callback(prefill_callback, prompt_ids, prompt_eval_time)
-    model.mtp.seed_main(main_hidden, mtp_caches)
 
     def _fwd(ids: mx.array, c) -> tuple:
         return rt.forward_ar(ids, cache=c, return_hidden=True)
 
     primary, _ = _sample_from_logits(logits[0, -1], sampler, rng)
     primary = int(primary)
-    main_h = main_hidden[:, -1:, :]
+    main_h = _seed_prefill_state(model, main_hidden, mtp_caches)
+    del logits, main_hidden
     tokens: List[int] = [primary]
     if token_callback is not None:
         token_callback([primary])

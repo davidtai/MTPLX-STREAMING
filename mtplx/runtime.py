@@ -966,6 +966,15 @@ def _load_impl(
             additional_resident_bytes = (
                 streamed_mtp_resident_bytes + hy3_router_incremental_bytes
             )
+            if streaming_spec.key.startswith("deepseek-v41-"):
+                from .models.deepseek_v41_loader import (
+                    deepseek_v41_additional_resident_bytes,
+                    deepseek_v41_mtp_layers,
+                )
+
+                additional_resident_bytes += deepseek_v41_additional_resident_bytes(
+                    mtp_layers=deepseek_v41_mtp_layers(config) if native_streamed_mtp else 0
+                )
             plan_kwargs = (
                 {"additional_resident_bytes": additional_resident_bytes}
                 if additional_resident_bytes

@@ -241,6 +241,7 @@ def test_dspark_completion_observes_cache_before_release(monkeypatch, max_tokens
         "np": SimpleNamespace(random=SimpleNamespace(default_rng=lambda seed: None)),
         "_confidence_threshold_from_env": lambda value: value,
         "_target_forward": lambda model: lambda *x: (tensor, tensor),
+        "_seed_prefill_state": lambda model, hidden, caches: hidden,
         "_fire_prefill_callback": lambda *x: None, "_is_stop": lambda *x: False,
         "_verify_decode_phase_enabled": lambda: False,
         "_decode_cycles": lambda **k: ([2, 3], "length"),
@@ -249,8 +250,11 @@ def test_dspark_completion_observes_cache_before_release(monkeypatch, max_tokens
     exec(compile(ast.fix_missing_locations(code), str(path), "exec"), scope)
     monkeypatch.setitem(sys.modules, "mtplx.generation", SimpleNamespace(_sample_from_logits=lambda *a: (1, None)))
     seen = []
-    model = SimpleNamespace(mtp=SimpleNamespace(block_size=3, seed_main=lambda *a: None),
-                            make_cache=Cache, make_mtp_cache=Cache)
+    class Model(SimpleNamespace):
+        def __call__(self, *args, **kwargs):
+            return tensor, tensor
+    model = Model(mtp=SimpleNamespace(block_size=3, seed_main=lambda *a: None),
+                  make_cache=Cache, make_mtp_cache=Cache)
     result = scope["dspark_generate"](model, [0], max_tokens=max_tokens, sampler=None,
         stats=SimpleNamespace(), completion_callback=lambda: seen.append(len(alive)))
     assert seen == [2]

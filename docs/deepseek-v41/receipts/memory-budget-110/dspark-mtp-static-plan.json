@@ -1,0 +1,24 @@
+{
+  "kind": "static planning only; not an MTP peak bound",
+  "reference_engine_budget_bytes": 86369798112,
+  "mtp_stages": 3,
+  "plans": {
+    "ar": {
+      "resident_bytes": 15103104448,
+      "fixed_bytes": 23578252736,
+      "slots_per_layer": 83,
+      "persistent_slots": 3320,
+      "runtime_reserve_bytes": 7516192768
+    },
+    "mtp": {
+      "resident_bytes": 23456512840,
+      "fixed_bytes": 31931661128,
+      "slots_per_layer": 72,
+      "persistent_slots": 2880,
+      "runtime_reserve_bytes": 7516192768
+    }
+  },
+  "additional_mtp_fixed_bytes": 8353408392,
+  "component_allocator_and_runtime_plans_equal": true,
+  "mlx_imports_blocked": true
+}

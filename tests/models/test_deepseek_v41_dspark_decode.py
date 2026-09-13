@@ -490,7 +490,6 @@ def test_server_dspark_direct_selected_gate(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_dspark_bench_loader_overrides():
     from mtplx.models.deepseek_v41_dspark_decode import (
-        DSPARK_MTP_RESIDENT_BYTES,
         dspark_bench_loader_overrides,
     )
 
@@ -501,23 +500,22 @@ def test_dspark_bench_loader_overrides():
     )
     assert with_mtp is None and mem == base_mem and cache is None
 
-    # DSpark: with_mtp=True and the MTP residents repriced out of the budget so
-    # the plan still fits (the loader planner discounts MTP residents by default).
+    # DSpark residency is priced inside the loader; do not charge it twice.
     with_mtp, mem, cache = dspark_bench_loader_overrides(
         want_dspark=True, memory_limit_bytes=base_mem, expert_cache_limit_bytes=None
     )
     assert with_mtp is True
-    assert mem == base_mem - DSPARK_MTP_RESIDENT_BYTES
+    assert mem == base_mem
     assert cache is None  # a derived (None) expert cache stays derived
 
-    # an explicit expert cache limit is also reduced by the reservation
+    # An explicit expert-cache ceiling remains a ceiling within the total plan.
     cap = 60 * (1024 ** 3)
     with_mtp, mem, cache = dspark_bench_loader_overrides(
         want_dspark=True, memory_limit_bytes=base_mem, expert_cache_limit_bytes=cap
     )
-    assert with_mtp is True and cache == cap - DSPARK_MTP_RESIDENT_BYTES
+    assert with_mtp is True and cache == cap
 
-    # --no-reprice: load the head at the FULL budget (window-26 budget-vs-codepath A/B)
+    # The legacy flag cannot disable the loader's residency accounting.
     with_mtp, mem, cache = dspark_bench_loader_overrides(
         want_dspark=True, memory_limit_bytes=base_mem, expert_cache_limit_bytes=cap,
         reprice=False,
@@ -553,14 +551,12 @@ def test_arm_dspark_decode_kernels_sets_and_restores(monkeypatch):
 
 
 def test_ab_decode_load_model_passes_with_mtp_for_dspark(monkeypatch, tmp_path):
-    """The ab_decode harness's _load_model must pass with_mtp=True + a reduced
-    budget to the streaming loader when --decode-mode dspark, and assert the head."""
+    """The harness passes the head choice and original budget to the loader."""
     import argparse
     import importlib.util
     import types
 
     import mtplx.models.deepseek_v41_loader as loader_mod
-    from mtplx.models.deepseek_v41_dspark_decode import DSPARK_MTP_RESIDENT_BYTES
 
     GIB = 1024 ** 3
     captured: dict = {}
@@ -596,20 +592,20 @@ def test_ab_decode_load_model_passes_with_mtp_for_dspark(monkeypatch, tmp_path):
     assert captured["with_mtp"] is None
     assert captured["memory_limit_bytes"] == int(82.0 * GIB)
 
-    # dspark: with_mtp True, budget reduced by the MTP residents, head asserted
+    # DSpark: with_mtp True, original budget, head asserted.
     args.decode_mode = "dspark"
     resident = mod._load_model(args, bench, mx=None)
     assert captured["with_mtp"] is True
-    assert captured["memory_limit_bytes"] == int(82.0 * GIB) - DSPARK_MTP_RESIDENT_BYTES
+    assert captured["memory_limit_bytes"] == int(82.0 * GIB)
     assert resident.model.mtp is not None
 
     # AR + --with-mtp: the window-25 "AR + head loaded" A/B arm also loads the
-    # head and reprices, so the plain forward can be measured against plain AR.
+    # head within the original envelope.
     args.decode_mode = "ar"
     args.with_mtp = True
     resident = mod._load_model(args, bench, mx=None)
     assert captured["with_mtp"] is True
-    assert captured["memory_limit_bytes"] == int(82.0 * GIB) - DSPARK_MTP_RESIDENT_BYTES
+    assert captured["memory_limit_bytes"] == int(82.0 * GIB)
 
     # AR + --with-mtp --no-reprice: head loaded at the FULL budget (window-26 A/B)
     args.reprice = False

@@ -89,10 +89,10 @@ WO_A_DENSE_F32_BYTES = WO_A_DENSE_ROWS * WO_A_DENSE_COLS * 4   # 134.2 MB / laye
 WO_A_CACHE_RESIDENT_BYTES = NUM_TEXT_LAYERS * WO_A_DENSE_F32_BYTES  # ~5.4 GB
 
 
-def deepseek_v41_additional_resident_bytes() -> int:
+def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
     """Fixed resident reserve priced into the memory plan: the SWA window plus, when
-    ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense cache
-    (``WO_A_CACHE_RESIDENT_BYTES``).
+    ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense caches.
+    ``mtp_layers`` adds each loaded DSpark stage's fp32 window and wo_a cache.
 
     ``derived_expert_cache_allowance_bytes`` subtracts ``plan.fixed_bytes`` (which is
     spec-derived from ``additional_resident_bytes``) to size the streamed expert
@@ -103,8 +103,12 @@ def deepseek_v41_additional_resident_bytes() -> int:
     open() time (the ab bench arms the lever before load)."""
     from .deepseek_v41 import _resolve_wo_a_cache
 
-    extra = WO_A_CACHE_RESIDENT_BYTES if _resolve_wo_a_cache() else 0
-    return SWA_WINDOW_BYTES + extra
+    extra = ((NUM_TEXT_LAYERS + mtp_layers) * WO_A_DENSE_F32_BYTES
+             if _resolve_wo_a_cache() else 0)
+    # DSpark windows store post-RoPE fp32 rows, in addition to their manifest
+    # weights. Each stage also inherits the lazy fp32 wo_a cache above.
+    mtp_windows = mtp_layers * SLIDING_WINDOW * KV_LATENT_DIM * 4
+    return SWA_WINDOW_BYTES + mtp_windows + extra
 
 # Default runtime reserve: the promoted streaming profiles reserve exactly
 # 7 GiB (docs/advanced/ssd-streamed-moe.md); the ExpertStreamingConfig default
@@ -174,12 +178,16 @@ def manifest_has_mtp_residents(manifest: ExpertManifest) -> bool:
     return any(t.tensor.startswith("mtp.") for t in manifest.resident_tensors)
 
 
-def _config_declares_mtp(config: dict[str, Any]) -> bool:
+def deepseek_v41_mtp_layers(config: Mapping[str, Any]) -> int:
     def _stages(d):
         d = d or {}
         return int(d.get("n_mtp_layers") or d.get("num_nextn_predict_layers") or 0)
 
-    return max(_stages(config), _stages((config or {}).get("text_config"))) > 0
+    return max(_stages(config), _stages((config or {}).get("text_config")))
+
+
+def _config_declares_mtp(config: dict[str, Any]) -> bool:
+    return deepseek_v41_mtp_layers(config) > 0
 
 
 def resolve_with_mtp(
@@ -440,6 +448,7 @@ def open_deepseek_v41_runtime(
     apply_memory_cap: bool = True,
     mx_module: Any | None = None,
     config: ExpertStreamingConfig | None = None,
+    model_config: Mapping[str, Any] | None = None,
     **config_overrides: Any,
 ) -> ExpertStreamingRuntime:
     """Construct the ExpertStreamingRuntime from ``expert-manifest.json``.
@@ -463,6 +472,19 @@ def open_deepseek_v41_runtime(
     if spec is None:
         loaded_manifest = load_expert_manifest(resolved_manifest)
         spec = get_model_spec(loaded_manifest.model_key)
+    mtp_layers = 0
+    if spec.mtp_included:
+        if model_config is None:
+            from mlx_lm.utils import load_config
+
+            model_config = load_config(artifact_root)
+        if loaded_manifest is None:
+            loaded_manifest = load_expert_manifest(resolved_manifest)
+        resolve_with_mtp(dict(model_config), loaded_manifest, True)
+        mtp_layers = deepseek_v41_mtp_layers(model_config)
+    additional_resident_bytes = deepseek_v41_additional_resident_bytes(
+        mtp_layers=mtp_layers
+    )
     if config is None:
         config = build_streaming_config(
             spec,
@@ -484,7 +506,8 @@ def open_deepseek_v41_runtime(
             _ring * spec.expert_record_bytes / (1024 ** 3),
         )
     buffer_allocator = _component_bank_allocator_for(
-        config, spec, artifact_root, resolved_manifest, loaded_manifest
+        config, spec, artifact_root, resolved_manifest, loaded_manifest,
+        additional_resident_bytes=additional_resident_bytes,
     )
     return ExpertStreamingRuntime.open(
         artifact_root,
@@ -492,7 +515,7 @@ def open_deepseek_v41_runtime(
         config,
         spec=spec,
         buffer_allocator=buffer_allocator,
-        additional_resident_bytes=deepseek_v41_additional_resident_bytes(),
+        additional_resident_bytes=additional_resident_bytes,
         apply_memory_cap=apply_memory_cap,
         mx_module=mx_module,
         expert_admission_receipt=admission_receipt,
@@ -505,6 +528,8 @@ def _component_bank_allocator_for(
     artifact_root: Path,
     manifest_path: Path,
     manifest: ExpertManifest | None = None,
+    *,
+    additional_resident_bytes: int | None = None,
 ) -> Callable[[int, str], Any] | None:
     """The component-major slot allocator for a ``component-banks`` layout.
 
@@ -551,7 +576,10 @@ def _component_bank_allocator_for(
     resolved_config = resolve_island_placement(config, artifact_root, spec=spec)
     plan = resolved_config.memory_plan(
         spec,
-        additional_resident_bytes=deepseek_v41_additional_resident_bytes(),
+        additional_resident_bytes=(
+            deepseek_v41_additional_resident_bytes()
+            if additional_resident_bytes is None else additional_resident_bytes
+        ),
         # This allocator sizes the component-bank per-layer capacities; its
         # resident discount MUST equal the one ``ExpertStreamingRuntime.open``
         # applies to its own pool plan (proj_quant + proj_requant + the
@@ -667,12 +695,10 @@ def construct_deepseek_v41_resident_model(
     residents are materialized.  ``mtplx/resident_loader.py`` delegates here for
     ``model_type == "deepseek_v41"``.
 
-    ``with_mtp`` (worker W23) selects the opt-in DSpark head build: ``None`` auto-
-    detects (:func:`resolve_with_mtp` -- config declares MTP stages and the
-    manifest ships ``mtp.*`` residents, ``MTPLX_DSV41_MTP`` overriding), so the MTP
-    artifact loads its head (mtp.* residents kept + mapped, backbone experts still
-    streamed) ready for ``--generation-mode mtp``, while phase-1 AR artifacts are
-    unchanged.  The backbone switch binder (``bind_streamed_switches``) walks only
+    ``with_mtp`` selects the opt-in DSpark head build: explicit True/False wins,
+    otherwise ``MTPLX_DSV41_MTP`` selects it (default off). The runtime plan must
+    already include the selected head's weights and caches before construction.
+    The backbone switch binder (``bind_streamed_switches``) walks only
     ``model.model.layers``, so the DSpark head's 128 resident mxfp4 experts stay
     resident."""
 
@@ -691,11 +717,16 @@ def construct_deepseek_v41_resident_model(
             f"deepseek_v41 loader received model_type={model_type!r}; "
             f"expected {MODEL_TYPE!r}"
         )
+    resolved_with_mtp = resolve_with_mtp(config, runtime.manifest, with_mtp)
+    if resolved_with_mtp and not runtime.spec.mtp_included:
+        raise ResidentLoadError(
+            "MTP requested but the runtime memory plan excludes its residents; "
+            "reopen with mtp_included=True or use load_deepseek_v41_streaming"
+        )
     resolver = model_class_resolver or deepseek_v41_model_classes
     model_class, args_class = resolver()
     if engram_bank_path is None:
         engram_bank_path = engram_bank_path_for(artifact_root)
-    resolved_with_mtp = resolve_with_mtp(config, runtime.manifest, with_mtp)
     try:
         model_args = args_class.from_dict(config)
         # The artifact's config ``quantization`` block selects the resident codec
@@ -828,6 +859,7 @@ def load_deepseek_v41_streaming(
     max_live_kv_tokens: int,
     runtime_reserve_bytes: int = DEFAULT_RUNTIME_RESERVE_BYTES,
     receipt_root: Path | str | None = None,
+    manifest_path: Path | str | None = None,
     admit: bool = True,
     admission_receipt: Mapping[str, Any] | None = None,
     spec: ExpertStreamingModelSpec | None = None,
@@ -856,6 +888,20 @@ def load_deepseek_v41_streaming(
 
     artifact_root = Path(root).resolve()
     receipt: Mapping[str, Any] | None = admission_receipt
+    # Resolve head ownership before any expert-bank allocation. Passing with_mtp
+    # only to construction leaves the planner pricing an AR-only model.
+    try:
+        from mlx_lm.utils import load_config
+
+        model_config = load_config(artifact_root)
+    except Exception as exc:
+        raise ResidentLoadError(f"could not load model config: {exc}") from exc
+    resolved_manifest = (Path(manifest_path) if manifest_path is not None else
+                         resolve_artifact_member(artifact_root, "expert-manifest.json"))
+    manifest = load_expert_manifest(resolved_manifest)
+    resolved_with_mtp = resolve_with_mtp(model_config, manifest, with_mtp)
+    spec = replace(spec or get_model_spec(manifest.model_key),
+                   mtp_included=resolved_with_mtp)
     if admit and receipt is None:
         from ..expert_admission import ensure_expert_admitted
 
@@ -865,7 +911,9 @@ def load_deepseek_v41_streaming(
         memory_limit_bytes=memory_limit_bytes,
         max_live_kv_tokens=max_live_kv_tokens,
         runtime_reserve_bytes=runtime_reserve_bytes,
+        manifest_path=resolved_manifest,
         spec=spec,
+        model_config=model_config,
         expert_cache_limit_bytes=expert_cache_limit_bytes,
         admission_receipt=receipt,
         apply_memory_cap=apply_memory_cap,
@@ -876,9 +924,10 @@ def load_deepseek_v41_streaming(
         return construct_deepseek_v41_resident_model(
             artifact_root,
             runtime,
+            config=model_config,
             mx_module=mx_module,
             strict=strict,
-            with_mtp=with_mtp,
+            with_mtp=resolved_with_mtp,
         )
     except Exception:
         runtime.close()
