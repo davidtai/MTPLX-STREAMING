@@ -3291,9 +3291,11 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
 
             if _decode_tl.env_armed():
                 # MEDIUM (red-team): size to the actual decode length so a
-                # 1024-token run is not truncated at the 512 default.
+                # 1024-token run is not truncated at the 512 default. --device-sample
+                # runs steps+1 forwards (one-step-lag), so add one there.
+                _tl_maxtok = int(steps) + (1 if device_sample else 0)
                 _decode_tl.configure(
-                    len(model.layers), max_tokens=max(1, int(steps))
+                    len(model.layers), max_tokens=max(1, _tl_maxtok)
                 )
                 _decode_tl.reset()
             else:

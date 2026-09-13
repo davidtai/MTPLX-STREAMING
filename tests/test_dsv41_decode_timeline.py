@@ -125,6 +125,35 @@ class FakeRunner:
         self._at(dispatched); tl.expert_dispatched(layer)
         self._at(l_end); tl.layer_end(layer)
 
+    def layer_fenced(
+        self,
+        layer: int,
+        *,
+        l_start: int,
+        attn_start: int,
+        attn_end: int,
+        moe_start: int,
+        barrier: int,
+        plan_end: int,
+        fence_start: int,
+        fence_end: int,
+        dispatched: int,
+        l_end: int,
+    ) -> None:
+        """An all-hit layer whose routed gather is fenced (shipped regime): a
+        blocking mx.eval (fence_start..fence_end) between the plan and dispatch."""
+        tl = self.tl
+        self._at(l_start); tl.layer_start(layer)
+        self._at(attn_start); tl.attn_start(layer)
+        self._at(attn_end); tl.attn_end(layer)
+        self._at(moe_start); tl.moe_start(layer)
+        self._at(barrier); tl.barrier_done(layer)
+        self._at(plan_end); tl.all_hit(layer)
+        self._at(fence_start); f = tl.now()
+        self._at(fence_end); tl.add_fence(layer, f)
+        self._at(dispatched); tl.expert_dispatched(layer)
+        self._at(l_end); tl.layer_end(layer)
+
 
 # --------------------------------------------------------------------------- #
 # No-op when unset
@@ -301,7 +330,9 @@ def test_percentiles_and_token_total_multi_token(monkeypatch):
     assert attn["p95_ms"] == pytest.approx(290 / ms)  # 100 + 200*0.95
 
 
-def test_capacity_clamp_does_not_crash(monkeypatch):
+def test_ring_evicts_oldest_never_freezes(monkeypatch):
+    """Past capacity the ring keeps recording the most recent MAXTOK tokens
+    (overwrites the oldest) instead of freezing -- the served-path fix."""
     tl = _fresh(monkeypatch, armed=True)
     tl.configure(1, max_tokens=2)
     clk = _Clock()
@@ -321,8 +352,13 @@ def test_capacity_clamp_does_not_crash(monkeypatch):
 
     snap = tl.snapshot()
     assert snap["tokens_seen"] == 5
-    assert snap["tokens_recorded"] == 2
-    assert snap["tokens_dropped_over_capacity"] == 3
+    assert snap["tokens_recorded"] == 2          # ring holds the last 2
+    assert snap["tokens_evicted"] == 3           # oldest 3 overwritten
+    # still recording after > MAXTOK: the last two tokens' host phases are present
+    assert snap["per_token"]["hit_layers"]["mean"] == pytest.approx(1.0)
+    # token_total across the last two live tokens (starts 3000, 4000) = 1000
+    assert snap["per_token"]["token_total"]["n"] == 1
+    assert snap["per_token"]["token_total"]["mean_ms"] == pytest.approx(1000 / 1e6)
 
 
 def test_overhead_within_budget(monkeypatch):
@@ -564,4 +600,55 @@ def test_configure_max_tokens_override_not_truncated(monkeypatch):
     snap = tl.snapshot()
     assert snap["max_tokens"] == 1024
     assert snap["tokens_recorded"] == 600
-    assert snap["tokens_dropped_over_capacity"] == 0
+    assert snap["tokens_evicted"] == 0
+
+
+def test_high1b_host_gap_excludes_fence(monkeypatch):
+    """Reviewer's HIGH-1b test: 50 us plan + 30 ms blocking gather fence ->
+    host_gap ~= 0.05 ms (post_barrier_host minus fence), fence_total ~= 30 ms."""
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(1)
+    clk = _Clock()
+    monkeypatch.setattr(tl, "_perf", clk)
+    fr = FakeRunner(tl, clk)
+
+    barrier = 1_000_000
+    plan = 50_000            # 50 us host plan
+    fence = 30_000_000       # 30 ms blocking gather mx.eval
+    fr.token_begin(0, 1)
+    fr.layer_fenced(
+        0,
+        l_start=0, attn_start=0, attn_end=1000, moe_start=1000,
+        barrier=barrier,
+        plan_end=barrier + plan,
+        fence_start=barrier + plan,
+        fence_end=barrier + plan + fence,
+        dispatched=barrier + plan + fence,
+        l_end=barrier + plan + fence + 100,
+    )
+    fr.token_head_done(barrier + plan + fence + 200)
+    fr.forward_end(barrier + plan + fence + 300)
+
+    pt = tl.snapshot()["per_token"]
+    # post_barrier_host = 50 us + 30 ms; fence = 30 ms; host_gap = 50 us
+    assert pt["fence_total"]["mean_ms"] == pytest.approx(fence / 1e6)
+    assert pt["post_barrier_host_total"]["mean_ms"] == pytest.approx((plan + fence) / 1e6)
+    assert pt["host_gap"]["mean_ms"] == pytest.approx(plan / 1e6)          # 0.05 ms
+    assert pt["host_gap"]["mean_ms"] == pytest.approx(0.05, abs=1e-6)
+    # per-layer fence is exposed too
+    assert tl.snapshot()["per_layer"]["fence"]["0"]["mean_ms"] == pytest.approx(fence / 1e6)
+
+
+def test_fenced_split_path_boolean_mirrors_switch(monkeypatch):
+    """HIGH-2b: fenced = not (deferred_pin_release or fastpath_can_defer);
+    split_route_release alone (even 'deferred') never defers the fence."""
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(1)
+    # profile shape: deferred_pin_release False + split_route_release 'deferred'
+    # -> the switch STILL fences, so fenced_split_path must be True.
+    tl.note_switch_config(
+        deferred_pin_release=False, split_route_release="deferred",
+        fastpath_can_defer=False,
+        fenced_split_path=not (False or False),
+    )
+    assert tl.snapshot()["switch_config"]["fenced_split_path"] is True

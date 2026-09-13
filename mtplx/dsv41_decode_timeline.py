@@ -83,7 +83,8 @@ _FIRST_WRITE = frozenset({L_START, ATTN_START, MOE_START, MISS_ISSUE, ALL_HIT})
 # Per-(token, layer) accumulated durations (ns), summed across repeats.
 ACC_RECONCILE = 0      # time inside _reconcile_prefetch_for_route
 ACC_MISS_WAIT = 1      # exposed wait in iter_ready_misses (host blocked on SSD)
-_NA = 2
+ACC_FENCE = 2          # blocking gather mx.eval in synchronous_fence (GPU exec, not host)
+_NA = 3
 
 # Per-token timestamp events.
 T_START = 0            # decode forward entry (Model.__call__, s == 1)
@@ -111,8 +112,7 @@ _TTS: list[float] = []          # (MAXTOK * NTE) per-token timestamps
 _CUR = -1                       # current decode-token index (-1 == none open)
 _REC = False                    # True only inside a single-row decode forward
 _NTOK = 0                       # decode tokens seen (may exceed MAXTOK -> clamped)
-_DROPPED = 0                    # decode tokens past MAXTOK (not recorded)
-_MARKS = 0                      # total layer/acc mark writes (for overhead stamp)
+_MARKS = 0                      # total mark writes / memo version (overhead stamp)
 _NOW_CALLS = 0                  # now() calls while recording (overhead stamp)
 _MARK_COST_NS = 0.0             # calibrated cost of one full mark call
 _NOW_COST_NS = 0.0             # calibrated cost of one now() call
@@ -145,8 +145,10 @@ def note_switch_config(**flags: Any) -> None:
     runtime; carried verbatim into the snapshot's ``switch_config`` so a reader can
     tell whether ``ready_to_dispatch``/``miss_issue_to_ready`` include a blocking
     GPU gather fence (see the phase semantics)."""
+    global _MARKS
     if _ON:
         _CONFIG_FLAGS.update(flags)
+        _MARKS += 1  # memo version: switch_config changed -> invalidate a cached snap
 
 
 def _calibrate() -> tuple[float, float]:
@@ -179,7 +181,7 @@ def configure(n_layers: int, *, max_tokens: int | None = None) -> None:
     """Arm and size the probe. Idempotent: a second call with a compatible layer
     count is a no-op, so the model may call it every forward without cost. Does
     nothing unless the env flag is set."""
-    global _ON, _MAXTOK, _NL, _TS, _ACC, _TTS, _MARK_COST_NS, _NOW_COST_NS
+    global _ON, _MAXTOK, _NL, _TS, _ACC, _TTS, _MARK_COST_NS, _NOW_COST_NS, _MARKS
     if not env_armed():
         return
     n_layers = int(n_layers)
@@ -201,12 +203,27 @@ def configure(n_layers: int, *, max_tokens: int | None = None) -> None:
     _TTS = [0.0] * (_MAXTOK * _NTE)
     _ON = True
     _MARK_COST_NS, _NOW_COST_NS = _calibrate()
+    _MARKS += 1  # bump the memo version: the buffers changed (cache invalidation)
+
+
+def _clear_slot(s: int) -> None:
+    """Zero one ring slot's cells before it is reused (so stale data from MAXTOK
+    tokens ago never leaks into the aggregate)."""
+    b = s * _NL * _NE
+    for i in range(b, b + _NL * _NE):
+        _TS[i] = 0.0
+    b = s * _NL * _NA
+    for i in range(b, b + _NL * _NA):
+        _ACC[i] = 0.0
+    b = s * _NTE
+    for i in range(b, b + _NTE):
+        _TTS[i] = 0.0
 
 
 def reset() -> None:
     """Zero the buffers and token cursor without re-sizing (a fresh measurement
-    over the same arming). Cheap; safe to call between bench arms."""
-    global _CUR, _REC, _NTOK, _DROPPED, _MARKS, _NOW_CALLS
+    over the same arming). Cheap; safe to call between bench arms / per request."""
+    global _CUR, _REC, _NTOK, _MARKS, _NOW_CALLS
     global _SNAP_CACHE, _SNAP_CACHE_KEY
     if not _ON:
         return
@@ -219,7 +236,6 @@ def reset() -> None:
     _CUR = -1
     _REC = False
     _NTOK = 0
-    _DROPPED = 0
     _MARKS = 0
     _NOW_CALLS = 0
     _CONFIG_FLAGS.clear()
@@ -233,8 +249,13 @@ def reset() -> None:
 def token_begin(n_layers: int | None = None) -> None:
     """Open a new decode token. Call once per single-row decode forward, at the top
     of ``Model.__call__``. Sizing happens lazily on the first call so callers need
-    not know the layer count up front."""
-    global _CUR, _REC, _NTOK, _DROPPED
+    not know the layer count up front.
+
+    MEDIUM (red-team): the storage is a RING of ``_MAXTOK`` slots. Past capacity it
+    overwrites the oldest token instead of freezing -- so the served path (which
+    never calls reset() per request) keeps recording the most recent ``_MAXTOK``
+    decode tokens process-wide, rather than going dark forever after 512 tokens."""
+    global _CUR, _REC, _NTOK, _MARKS
     if not env_armed():
         return
     if not _ON:
@@ -244,33 +265,32 @@ def token_begin(n_layers: int | None = None) -> None:
         if not _ON:
             return
     _NTOK += 1
-    nxt = _CUR + 1
-    if nxt >= _MAXTOK:
-        # Past capacity: keep timing enabled for the head mark but stop recording
-        # per-layer cells (the cursor stays clamped at the last valid token).
-        _DROPPED += 1
-        _REC = False
-        return
-    _CUR = nxt
+    _MARKS += 1  # memo version + a real per-token mark
+    _CUR = (_CUR + 1) % _MAXTOK  # ring advance
+    if _NTOK > _MAXTOK:
+        _clear_slot(_CUR)  # reusing a slot: drop the evicted token's stale cells
     _REC = True
     _TTS[_CUR * _NTE + T_START] = _perf()
 
 
 def token_head_done() -> None:
     """Stamp the lm_head dispatch for the current token (after the head matmul)."""
+    global _MARKS
     if not _REC:
         return
     _TTS[_CUR * _NTE + T_HEAD_DONE] = _perf()
+    _MARKS += 1  # memo version: a T_HEAD_DONE write must invalidate a cached snapshot
 
 
 def forward_end() -> None:
     """Close the current decode forward. Stamps a fallback per-token end and stops
     recording, so a subsequent multi-row (prefill / DSpark verify) forward -- which
     never calls ``token_begin`` -- is not attributed to this token."""
-    global _REC
+    global _REC, _MARKS
     if not _REC:
         return
     _TTS[_CUR * _NTE + T_END] = _perf()
+    _MARKS += 1  # memo version: a T_END write must invalidate a cached snapshot
     _REC = False
 
 
@@ -384,6 +404,14 @@ def add_miss_wait(layer: int, start_ns: int) -> None:
         _add_acc(ACC_MISS_WAIT, layer, start_ns)
 
 
+def add_fence(layer: int, start_ns: int) -> None:
+    """Blocking gather ``mx.eval`` in the switch's ``synchronous_fence`` (all-hit
+    fence + fenced split path). This is GPU execution the host blocks on, NOT host
+    idle, so it is subtracted from host_gap (HIGH-1b)."""
+    if _REC:
+        _add_acc(ACC_FENCE, layer, start_ns)
+
+
 # --------------------------------------------------------------------------- #
 # Aggregation (OFF the hot path)
 # --------------------------------------------------------------------------- #
@@ -463,8 +491,11 @@ _PHASE_SEMANTICS = {
                            "pure host SSD wait (see switch_config.fenced_split_path)",
     "ready_to_dispatch": "ready->switch-returned; on the FENCED split path this "
                          "includes the blocking mx.eval of the routed gather",
-    "post_barrier_host": "pure host after the barrier sync (route plan + gather "
-                         "graph-build); this is the host_gap component",
+    "post_barrier_host": "expert_dispatched - barrier_done: host after the sync, BUT "
+                         "on the fenced regime this still contains the blocking gather "
+                         "mx.eval -- subtract fence_total for pure host (== host_gap)",
+    "fence": "blocking gather mx.eval in synchronous_fence (all-hit fence + fenced "
+             "split path): GPU execution the host blocks on, NOT host idle",
     "combine": "graph-build us (HC combine is lazy)",
     "moe_total": "moe_start->layer_end (spans the barrier, so GPU-inclusive)",
     "layer_total": "layer_start->layer_end (GPU-inclusive)",
@@ -472,7 +503,20 @@ _PHASE_SEMANTICS = {
 
 
 def _ntok_recorded() -> int:
-    return 0 if _CUR < 0 else min(_CUR + 1, _MAXTOK)
+    """Live tokens in the ring."""
+    return min(_NTOK, _MAXTOK)
+
+
+def _write_order() -> list[int]:
+    """Ring slots in write order (oldest live token first, newest == _CUR). Before
+    the ring wraps this is just range(live); after wrapping the oldest is at
+    (_CUR + 1) % MAXTOK."""
+    live = _ntok_recorded()
+    if live <= 0:
+        return []
+    if _NTOK <= _MAXTOK:
+        return list(range(live))
+    return [(_CUR + 1 + i) % _MAXTOK for i in range(_MAXTOK)]
 
 
 def snapshot() -> dict[str, Any]:
@@ -503,10 +547,12 @@ def snapshot() -> dict[str, Any]:
     # host-gap components, per token
     tok_miss_wait: list[float] = []
     tok_reconcile: list[float] = []
+    tok_fence: list[float] = []
     tok_barrier: list[float] = []
     tok_attn: list[float] = []
     tok_dispatch: list[float] = []
-    tok_host_gap: list[float] = []      # attn_end -> expert_dispatched (GPU-idle host span)
+    tok_post_barrier: list[float] = []  # raw expert_dispatched - barrier_done (pre-fence)
+    tok_host_gap: list[float] = []      # post_barrier_host - fence (pure host)
     tok_interlayer_gap: list[float] = []  # layer_end -> next layer_start
     tok_moe: list[float] = []
     tok_layer_sum: list[float] = []
@@ -519,12 +565,14 @@ def snapshot() -> dict[str, Any]:
     layer_phase_vals: dict[str, dict[int, list[float]]] = {
         name: {} for name in _PHASES
     }
+    layer_fence_vals: dict[int, list[float]] = {}
 
     unrouted_per_tok: list[float] = []
 
-    for t in range(ntok):
+    order = _write_order()  # ring slots in write order (oldest live -> newest)
+    for oi, t in enumerate(order):
         sums = {name: 0.0 for name in _PHASES}
-        mw = rc = bar = at = dsp = hg = ilg = moe = lyr = 0.0
+        mw = rc = fn = bar = at = dsp = hg = ilg = moe = lyr = 0.0
         n_miss = n_hit = n_unrouted = 0
         prev_layer_end = 0.0
         for l in range(_NL):
@@ -541,12 +589,16 @@ def snapshot() -> dict[str, Any]:
             a_end = cell(t, l, ATTN_END)
             disp = cell(t, l, EXPERT_DISPATCHED)
             b_done = cell(t, l, BARRIER_DONE)
-            # host_gap (HIGH-1): the PURE host span after the routing-barrier sync,
-            # barrier_done -> expert_dispatched (route plan + gather graph-build). The
-            # older attn_end->dispatch span wrongly swallowed all the GPU compute the
-            # barrier eval forces, so it is NOT used for host_gap.
+            _fence = acc(t, l, ACC_FENCE)
+            fn += _fence
+            layer_fence_vals.setdefault(l, []).append(_fence)
+            # host_gap (HIGH-1/1b): the PURE host span after the routing-barrier sync
+            # MINUS the blocking gather fence. post_barrier_host = expert_dispatched -
+            # barrier_done still contains synchronous_fence's mx.eval on the shipped
+            # (fenced) regime, so subtract fence (ACC_FENCE) to isolate host idle.
             if b_done > 0.0 and disp > b_done:
-                hg += disp - b_done
+                _pbh = disp - b_done
+                hg += max(0.0, _pbh - _fence)
             if prev_layer_end > 0.0 and l_start > prev_layer_end:
                 ilg += l_start - prev_layer_end
             le = cell(t, l, L_END)
@@ -581,10 +633,12 @@ def snapshot() -> dict[str, Any]:
                 per_token_phase[name].append(sums[name])
         tok_miss_wait.append(mw)
         tok_reconcile.append(rc)
+        tok_fence.append(fn)
         tok_barrier.append(bar)
         tok_attn.append(at)
         tok_dispatch.append(dsp)
-        tok_host_gap.append(hg)
+        tok_post_barrier.append(hg + fn)  # raw post_barrier_host (host + fence)
+        tok_host_gap.append(hg)           # host only (fence subtracted)
         unrouted_per_tok.append(float(n_unrouted))
         tok_interlayer_gap.append(ilg)
         tok_moe.append(moe)
@@ -595,8 +649,11 @@ def snapshot() -> dict[str, Any]:
         tstart = cell_head(t, T_START)
         if head > 0.0 and tstart > 0.0 and head > tstart:
             tok_head.append(head - tstart)
-        # per-token total from consecutive starts (true inter-token wall)
-        nxt_start = cell_head(t + 1, T_START) if t + 1 < ntok else 0.0
+        # per-token total from consecutive starts in WRITE order (true inter-token
+        # wall). The next token is the next ring slot in write order, not t+1 (they
+        # differ across the ring wrap), so a wrapped served window still measures it.
+        nxt_slot = order[oi + 1] if oi + 1 < len(order) else None
+        nxt_start = cell_head(nxt_slot, T_START) if nxt_slot is not None else 0.0
         if nxt_start > 0.0 and tstart > 0.0 and nxt_start > tstart:
             tok_total.append(nxt_start - tstart)
             if head > 0.0 and nxt_start > head:
@@ -605,6 +662,10 @@ def snapshot() -> dict[str, Any]:
     for name in _PHASES:
         for l, vals in layer_phase_vals[name].items():
             per_layer[name][str(l)] = _stats(vals)
+    # per-layer blocking gather fence (ACC), so a reader sees which layers fence
+    per_layer["fence"] = {
+        str(l): _stats(vals) for l, vals in layer_fence_vals.items()
+    }
 
     # ---- overhead stamp (full mark path + now() calls) -----------------------
     overhead_ns_total = _MARKS * _MARK_COST_NS + _NOW_CALLS * _NOW_COST_NS
@@ -616,9 +677,9 @@ def snapshot() -> dict[str, Any]:
         "enabled": True,
         "env_armed": env_armed(),
         "schema": "w125.decode_timeline.v2",
-        "tokens_recorded": ntok,
-        "tokens_seen": _NTOK,
-        "tokens_dropped_over_capacity": _DROPPED,
+        "tokens_recorded": ntok,          # live tokens in the ring (<= max_tokens)
+        "tokens_seen": _NTOK,             # total decode tokens since the last reset
+        "tokens_evicted": max(0, _NTOK - _MAXTOK),  # ring overwrote this many oldest
         "n_layers": _NL,
         "max_tokens": _MAXTOK,
         # Which switch path ran (stamped by the runtime once). fenced_split_path
@@ -633,9 +694,11 @@ def snapshot() -> dict[str, Any]:
             "routing_barrier_total": _stats(tok_barrier),
             "reconcile_total": _stats(tok_reconcile),
             "miss_wait_total": _stats(tok_miss_wait),
+            "fence_total": _stats(tok_fence),
             "ready_to_dispatch_total": _stats(tok_dispatch),
             "moe_total_sum": _stats(tok_moe),
             "layer_total_sum": _stats(tok_layer_sum),
+            "post_barrier_host_total": _stats(tok_post_barrier),
             "host_gap": _stats(tok_host_gap),
             "interlayer_gap": _stats(tok_interlayer_gap),
             "head_dispatch": _stats(tok_head),
@@ -659,12 +722,16 @@ def snapshot() -> dict[str, Any]:
             "Compare like with like."
         ),
         "host_gap_definition": (
-            "per token: sum over layers of (expert_dispatched - barrier_done) == "
-            "post_barrier_host: the PURE host span after the mx.eval(indices) sync "
-            "(route .tolist + plan + gather graph-build) during which no GPU work is "
-            "in flight. NOT attn_end->dispatch (that swallows the GPU compute the "
-            "barrier eval forces). The barrier round-trip itself (GPU-inclusive) is "
-            "routing_barrier_total; the pure exposed SSD read wait is miss_wait_total."
+            "per token: sum over layers of (expert_dispatched - barrier_done) MINUS "
+            "the blocking gather fence == post_barrier_host_total - fence_total. "
+            "post_barrier_host is the span after the mx.eval(indices) sync, but on "
+            "the shipped fenced regime it still contains synchronous_fence's blocking "
+            "mx.eval of the routed gather (GPU exec), so fence_total (ACC, bracketed "
+            "in synchronous_fence) is subtracted to leave the pure host idle (route "
+            ".tolist + plan + gather graph-build). NOT attn_end->dispatch (that also "
+            "swallows the GPU compute the barrier eval forces). The barrier "
+            "round-trip (GPU-inclusive) is routing_barrier_total; the pure exposed "
+            "SSD read wait is miss_wait_total."
         ),
         "overhead": {
             "mark_cost_ns_calibrated": _MARK_COST_NS,

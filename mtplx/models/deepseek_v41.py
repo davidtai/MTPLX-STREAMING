@@ -4720,11 +4720,17 @@ class Model(nn.Module):
         _stime_probe = _stime.active()
         if _stime_probe is not None:
             _stime_probe.enter_forward(int(input_ids.shape[1]))
-        # W125 decode timeline: a single-row forward is an AR decode step; open a
-        # token so the per-layer marks below (and the runtime marks) land in this
-        # token's cells. A no-op unless MTPLX_DSV41_DECODE_TIMELINE=1; multi-row
-        # (prefill / DSpark verify) forwards never call this, so they never record.
-        if int(input_ids.shape[1]) == 1:
+        # W125 decode timeline: a single-row forward with a non-empty cache is an AR
+        # decode step; open a token so the per-layer marks below (and the runtime
+        # marks) land in this token's cells. A no-op unless
+        # MTPLX_DSV41_DECODE_TIMELINE=1. Multi-row (prefill / DSpark verify) forwards
+        # never call this; the cache.offset > 0 guard also excludes a 1-token PROMPT
+        # prefill (offset 0) so it is not mistaken for decode (red-team MEDIUM).
+        if (
+            int(input_ids.shape[1]) == 1
+            and cache is not None
+            and int(getattr(cache, "offset", 0) or 0) > 0
+        ):
             _tl.token_begin(len(self.model.layers))
         # W125 (red-team LOW): forward_end() runs in a finally so a raising forward
         # never leaves _REC latched -- a later multi-row (prefill/verify) forward

@@ -29,25 +29,38 @@ materializes the **previous** layer's routed gather **+ this** layer's attention
 - **`attn`**, **`combine`**, **`head_dispatch`**, **`interlayer_gap`** are lazy
   **graph-build microseconds**, not the attention/combine/head compute (that runs
   at the next `gate_to_barrier` eval).
-- **`host_gap`** is defined as **`post_barrier_host` = `expert_dispatched −
-  routing_barrier_done`**, summed over layers: the pure host span **after** the
-  barrier sync (route `.tolist` + plan/pin + gather graph-build), during which no
-  GPU work is in flight. It deliberately **excludes** the big GPU chunk the barrier
-  eval forces. (The pre-fix definition — `expert_dispatched − attn_end` — swallowed
-  that GPU compute and read as ~150 ms/tok; see window 52 below.)
+- **`post_barrier_host`** = `expert_dispatched − routing_barrier_done`, summed over
+  layers: the span **after** the barrier sync. On the shipped **fenced** regime it
+  **still contains the blocking gather `mx.eval`** (`synchronous_fence`), which is
+  GPU execution — so it is **not** pure host on its own.
+- **`host_gap`** = `post_barrier_host − fence_total`, i.e. `Σ(expert_dispatched −
+  routing_barrier_done) − Σ fence`, where `fence` (ACC `fence_total`) is bracketed
+  around the blocking `mx.eval` inside `synchronous_fence`. This isolates the pure
+  host idle (route `.tolist` + plan/pin + gather graph-build) and excludes **both**
+  the big GPU chunk the barrier forces (that is `routing_barrier_total`) **and** the
+  routed-gather fence (that is `fence_total`). (The pre-fix definitions —
+  `expert_dispatched − attn_end`, then the fence-inclusive `post_barrier_host` —
+  read ~150 ms/tok and ~100 ms/tok respectively; see window 52 below.)
 
 ### Fenced split path caveat (`switch_config.fenced_split_path`)
 
-DSV4.1's `build_streaming_config` leaves `deferred_pin_release` **False** and
-`split_route_release` **"fenced"** (neither is in `_PROFILE_PLAN_FIELDS`), and with
-`MTPLX_DSV41_SWITCH_FASTPATH` off the split path runs `evaluate_bindings(
-force_sync=True, defer=False)` — a **blocking** `mx.eval` of the routed gather.
-So when `switch_config.fenced_split_path == true`:
+DSV4.1's `build_streaming_config` leaves `deferred_pin_release` **False** and (per
+the profile) seeds `split_route_release` **"deferred"** — but neither is in
+`_PROFILE_PLAN_FIELDS`, and **`split_route_release` alone never defers the fence**:
+the switch fences unless `deferred_pin_release` **or** `fastpath_can_defer`
+(`MTPLX_DSV41_SWITCH_FASTPATH` armed on a runtime with the defer/flush seam) is set.
+So `fenced_split_path = not (deferred_pin_release or fastpath_can_defer)` — which is
+**True** on the shipped default. On the all-hit path the `synchronous_fence(ready,
+wave_output)` blocks; on the miss path `evaluate_bindings(force_sync=True,
+defer=False)` blocks (both via `synchronous_fence`'s `mx.eval`). So when
+`switch_config.fenced_split_path == true`:
 
 - the **`ready_to_dispatch`** phase and the **`miss_issue_to_ready`** PHASE
-  (timestamp delta) can include the **GPU gather execution**;
+  (timestamp delta) include the **GPU gather execution** — read the `fence_total`
+  ACC and `per_layer.fence` to see it;
 - only **`miss_wait_total`** (the ACC accumulator, measured inside
-  `iter_ready_misses`) is the **pure host SSD read wait**.
+  `iter_ready_misses`) is the **pure host SSD read wait**, and `host_gap` already
+  subtracts `fence_total`.
 
 The runtime stamps `switch_config` (fenced_split_path, deferred_pin_release,
 split_route_release, switch_fastpath, overlap_miss_reads, device_route) once, so a

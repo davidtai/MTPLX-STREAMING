@@ -4122,16 +4122,26 @@ class ExpertStreamingRuntime:
             _dpr = bool(getattr(_cfg, "deferred_pin_release", False))
             _srr = str(getattr(_cfg, "split_route_release", "fenced"))
             _fastpath = os.environ.get("MTPLX_DSV41_SWITCH_FASTPATH") == "1"
+            # HIGH-2b: mirror the switch's _deferred_pin_active exactly. The route
+            # fences unless deferred_pin_release OR fastpath_can_defer is set;
+            # split_route_release alone (even "deferred") does NOT stop the fence.
+            # fastpath_can_defer = SWITCH_FASTPATH armed AND this runtime has the
+            # defer/flush seam (the real ExpertStreamingRuntime does).
+            _can_defer = callable(getattr(self, "defer_slot_release", None)) and callable(
+                getattr(self, "flush_deferred_slot_releases", None)
+            )
+            _fastpath_can_defer = _fastpath and _can_defer
             _tl.note_switch_config(
                 deferred_pin_release=_dpr,
                 split_route_release=_srr,
                 switch_fastpath=_fastpath,
+                fastpath_can_defer=_fastpath_can_defer,
                 overlap_miss_reads=bool(getattr(_cfg, "overlap_miss_reads", False)),
                 device_route=(
                     os.environ.get("MTPLX_DSV41_DEVICE_ROUTE") == "1"
                     or os.environ.get("MTPLX_DSV41_DEVICE_ROUTE_PINNED") == "1"
                 ),
-                fenced_split_path=(not _dpr and _srr == "fenced" and not _fastpath),
+                fenced_split_path=not (_dpr or _fastpath_can_defer),
             )
         census = self._route_census
         if (
