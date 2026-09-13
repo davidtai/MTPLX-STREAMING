@@ -2504,9 +2504,15 @@ class ExpertStreamingRuntime:
         # lever without a code change (like MTPLX_DSV41_SINGLE_SLOT_POOL above):
         # set MTPLX_DSV41_IO_READ_FANOUT to an int >= 1 (1 disables the fanout).
         # Unset -> config.io_read_fanout (default 1), so the shipped path is
-        # unchanged.
+        # unchanged. Gated to DeepSeek-V4.1 configs so the DSV4.1-named env never
+        # reshapes another model's reader (red-team MEDIUM); config.io_read_fanout
+        # still applies to any model.
         _io_read_fanout = config.io_read_fanout
-        _fanout_env = os.environ.get("MTPLX_DSV41_IO_READ_FANOUT")
+        _fanout_env = (
+            os.environ.get("MTPLX_DSV41_IO_READ_FANOUT")
+            if str(config.model_key).startswith("deepseek-v41")
+            else None
+        )
         if _fanout_env is not None:
             try:
                 _parsed_fanout = int(_fanout_env)
