@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from .expert_io import ExpertIOError, PositionalExpertReader
+# W125 host-side decode timeline probe (env MTPLX_DSV41_DECODE_TIMELINE=1). No-op
+# import when unset; the marks below self-gate on the single-row decode window.
+from . import dsv41_decode_timeline as _tl
 from .expert_manifest import (
     ExpertManifest,
     ExpertManifestError,
@@ -1097,6 +1100,11 @@ class PendingSplitRoute:
             if self._pipeline_route is None
             else self._iter_pipeline_miss_completions(snapshot)
         )
+        # W125: from here to each yield the generation thread is blocked on the miss
+        # futures (as_completed / future.result) -- the EXPOSED SSD read wait the
+        # overlap could not hide, and the biggest suspected host gap. Reset after
+        # every yield so a multi-part route accumulates only its own blocks.
+        _tl_w = _tl.now()
         for future in completion_order:
             with self._state_lock:
                 if future not in self._miss_futures:
@@ -1160,7 +1168,10 @@ class PendingSplitRoute:
                 self.abort(failure)
                 self._finish_failure_if_ready()
                 raise failure
+            _tl.add_miss_wait(self.layer, _tl_w)  # W125: exposed miss wait for this part
+            _tl.miss_ready(self.layer)  # W125: a miss part's slots are ready
             yield ready
+            _tl_w = _tl.now()  # W125: start timing the next part's wait
         if not self._policy_observed:
             try:
                 self.runtime.slots.raise_if_unhealthy()
@@ -3480,6 +3491,7 @@ class ExpertStreamingRuntime:
                     self._record_cleanup_error(rollback_error)
                 raise
             assert ready is not None
+            _tl.all_hit(layer)  # W125: fully resident route, no miss I/O this layer
             return ready
 
     def _observe_plan(self, layer: int, plan: RoutePlan) -> None:
@@ -3886,7 +3898,10 @@ class ExpertStreamingRuntime:
             # publish settled ring reads and await a needed in-flight one before
             # planning, so a gate-predicted expert resolves as a hit rather than a
             # duplicate demand read. Under the layer lock already held here.
+            _tl_rc = _tl.now()  # W125: time the reconcile await (host gap component)
             self._reconcile_prefetch_for_route(layer, expert_ids)
+            _tl.add_reconcile(layer, _tl_rc)
+            _tl.reconcile_done(layer)
             plan, policy_txn = self._plan_route_transaction(
                 layer,
                 expert_ids,
@@ -4021,6 +4036,10 @@ class ExpertStreamingRuntime:
                     )
             else:
                 pending._commit_policy()
+            # W125: the demand miss set is planned and its reads submitted to the
+            # split executor (the miss futures above); this is the "miss set
+            # computed + reads issued" host event for this layer/token.
+            _tl.miss_issue(layer)
             return pending
         except BaseException as setup_error:
             # Mirror the sync-path rollback: without it, a failed hit pin or
@@ -4088,6 +4107,10 @@ class ExpertStreamingRuntime:
         *,
         token_count: int,
     ) -> None:
+        # W125: this call fires immediately after the switch's mx.eval(indices)
+        # routing barrier (the device->host sync / device-LUT resolve), so it is
+        # the "routing indices barrier done" host event for this layer.
+        _tl.barrier_done(layer)
         census = self._route_census
         if (
             census is None
@@ -5294,6 +5317,9 @@ class ExpertStreamingRuntime:
             )
         if os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
             snapshot["runner"] = self._runner_snapshot(cache, cold_start)
+        # W125: served-path host decode timeline (additive; only when armed).
+        if _tl.enabled():
+            snapshot["decode_timeline"] = _tl.snapshot()
         self._raise_if_unhealthy()
         return snapshot
 
@@ -5343,6 +5369,11 @@ class ExpertStreamingRuntime:
             snapshot["io"] = self.reader.metrics.as_dict()
         except Exception:
             pass
+        # W125: per-token/per-layer host decode timeline (only when the probe is
+        # armed via MTPLX_DSV41_DECODE_TIMELINE=1, so the shipped snapshot is
+        # byte-unchanged off). Additive key.
+        if _tl.enabled():
+            snapshot["decode_timeline"] = _tl.snapshot()
         if self._pipeline_ledger is not None:
             snapshot["expert_pipeline"] = self._pipeline_ledger.snapshot()
         # W93: the gate-oracle prefetch receipt block (only when the ring is armed,

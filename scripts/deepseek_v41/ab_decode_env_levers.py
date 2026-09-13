@@ -3281,6 +3281,22 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             except Exception:
                 _route_probe = None
 
+        # W125: arm + size + clear the host decode timeline for THIS decode pass, so
+        # a multi-arm process never accumulates across arms. Model.__call__ drives the
+        # per-token/per-layer marks; the harness only configures and snapshots. A
+        # no-op unless MTPLX_DSV41_DECODE_TIMELINE=1.
+        _decode_tl = None
+        try:
+            from mtplx import dsv41_decode_timeline as _decode_tl
+
+            if _decode_tl.env_armed():
+                _decode_tl.configure(len(model.layers))
+                _decode_tl.reset()
+            else:
+                _decode_tl = None
+        except Exception:
+            _decode_tl = None
+
         # W81: bracket the DECODE loop for the serve_stream_counters block (prefill
         # excluded so the hit rate is the decode hit rate).  Taken AFTER the route-probe
         # clear above, so its route_probe_* baseline is zero and the decode delta is exact.
@@ -3343,6 +3359,14 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             _active_end_bytes = _mlx_call_int(getattr(mem_probe, "_mx", None), "get_active_memory")
             _cache_end_bytes = _mlx_call_int(getattr(mem_probe, "_mx", None), "get_cache_memory")
         _sc_end = _stream_counters_snapshot(model)
+        # W125: snapshot the host decode timeline (per-token/per-layer phase
+        # percentiles + host-gap accounting + stamped probe overhead). None unless
+        # the probe was armed for this pass.
+        _decode_timeline_block = (
+            _decode_tl.snapshot()
+            if (_decode_tl is not None and _decode_tl.enabled())
+            else None
+        )
         switch_dispatch = None
         if _route_probe is not None:
             _snap = _route_probe.snapshot()
@@ -3433,6 +3457,9 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             util_sampler.summarize() if util_sampler is not None else None
         ),
         "switch_dispatch": switch_dispatch,
+        # W125: host-side decode timeline telemetry (additive; None unless
+        # MTPLX_DSV41_DECODE_TIMELINE=1). See docs W125 for phase definitions.
+        "decode_timeline": _decode_timeline_block,
     }
 
 
@@ -4502,6 +4529,13 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # W92 switch-dispatch census (present only with --stage-timing): per-layer
             # host syncs + all-hit fences deferred vs synced + gather_qmm/switch-call.
             "switch_dispatch": run.get("switch_dispatch"),
+            # W125 host-side decode timeline (present only with
+            # MTPLX_DSV41_DECODE_TIMELINE=1): per-token/per-layer phase mean/p50/p95
+            # + host-gap accounting (barrier round-trip + reconcile await + exposed
+            # miss wait) + the stamped probe overhead. Runs on the REAL compiled v2
+            # path (unlike --stage-timing, which forces eager) so the ratios apply
+            # to the headline tok/s.
+            "decode_timeline": run.get("decode_timeline"),
             # W113 EOS surfacing (AR top level): first_token_eos / eos_index /
             # tokens_before_eos / answer_valid / eos_id / n_generated (see
             # _eos_surfacing).  A first_token_eos=True means a served path returns

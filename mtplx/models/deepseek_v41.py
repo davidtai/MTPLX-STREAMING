@@ -88,6 +88,9 @@ from mtplx.models import deepseek_v41_stage_timing as _stime
 # env-lever census (scripts/deepseek_v41/ab_decode_env_levers.py) reads its
 # snapshot to confirm the Sinkhorn kernel actually engaged per arm (W38/K3).
 from mtplx import expert_route_probe as _route_probe
+# W125 host-side decode timeline probe (env MTPLX_DSV41_DECODE_TIMELINE=1). A no-op
+# import when the flag is unset; every mark below is one module-global bool test.
+from mtplx import dsv41_decode_timeline as _tl
 
 # ---------------------------------------------------------------------------
 # Hyper-Connection Sinkhorn normalisation (kernel-ledger K3, W32)
@@ -1404,9 +1407,11 @@ class Attention(nn.Module):
         # brackets are no-ops, so ``_attend`` runs inside this single bracket.
         if _stime.is_prefill():
             return self._attend(x, positions, layer_cache, shared)
+        _tl.attn_start(self.layer_id)  # W125 (no-op unless timeline armed + decode)
         with _stime.stage("attn." + self.mode) as _st:
             out = self._attend(x, positions, layer_cache, shared)
             _st.add(out)
+        _tl.attn_end(self.layer_id)
         return out
 
     def _attend(self, x, positions, layer_cache, shared):
@@ -3381,7 +3386,9 @@ class DecoderLayer(nn.Module):
             self.hc_ffn_fn, self.hc_ffn_base, self.hc_ffn_scale, self.ffn_norm_weight,
             self.mlp.gate.weight, self.mlp.gate.e_score_correction_bias, *warrs,
         )
+        _tl.moe_start(self.layer_id)  # W125: routed switch begins (fused decode)
         routed = self.mlp.switch_mlp(xf, indices)
+        _tl.expert_dispatched(self.layer_id)  # W125: switch returned (gather submitted)
         h = _small_compiled("seg3", self)(
             routed, weights, shared_out, residual, ffn_post, ffn_comb
         )
@@ -3475,9 +3482,12 @@ class DecoderLayer(nn.Module):
 
     def __call__(self, h, pre_mix, positions, layer_cache, shared):
         global _SMALL_STAGES_FUSED_CALLS, _SMALL_STAGES_EAGER_CALLS
+        _tl.layer_start(self.layer_id)  # W125 (no-op unless timeline armed + decode)
         if _small_stages_use(h):
             _SMALL_STAGES_FUSED_CALLS += 1
-            return self._fused_small_decode(h, pre_mix, positions, layer_cache, shared)
+            out = self._fused_small_decode(h, pre_mix, positions, layer_cache, shared)
+            _tl.layer_end(self.layer_id)
+            return out
         _SMALL_STAGES_EAGER_CALLS += 1
         # W93 gate-oracle prefetch: predict the next layer's route from the
         # pre-attention residual, before attention consumes it. No-op unless armed.
@@ -3485,8 +3495,11 @@ class DecoderLayer(nn.Module):
         moe_input, carry, ffn_pre = self.attn_and_moe_input(
             h, pre_mix, positions, layer_cache, shared
         )
+        _tl.moe_start(self.layer_id)  # W125: routed switch begins (post attention)
         x = self.mlp(moe_input)
+        _tl.expert_dispatched(self.layer_id)  # W125: switch returned (gather submitted)
         h = self.moe_combine(x, carry)
+        _tl.layer_end(self.layer_id)
         return h, ffn_pre
 
 
@@ -4707,6 +4720,12 @@ class Model(nn.Module):
         _stime_probe = _stime.active()
         if _stime_probe is not None:
             _stime_probe.enter_forward(int(input_ids.shape[1]))
+        # W125 decode timeline: a single-row forward is an AR decode step; open a
+        # token so the per-layer marks below (and the runtime marks) land in this
+        # token's cells. A no-op unless MTPLX_DSV41_DECODE_TIMELINE=1; multi-row
+        # (prefill / DSpark verify) forwards never call this, so they never record.
+        if int(input_ids.shape[1]) == 1:
+            _tl.token_begin(len(self.model.layers))
         keep_last = _resolve_logits_keep(logits_keep, logits_rows)
         h, main_hidden = self.model(
             input_ids, cache, prefill_chunk=prefill_chunk,
@@ -4720,6 +4739,12 @@ class Model(nn.Module):
                 source = h if keep_last is None else h[:, -keep_last:, :]
                 logits = self._apply_head(source)
                 _st.add(logits)
+        # W125: the head matmul is dispatched; the remaining tail (head eval + the
+        # caller's argmax + the token sync) is captured as sample_sync in the next
+        # token_begin. forward_end closes recording so a following multi-row forward
+        # is not attributed to this token.
+        _tl.token_head_done()
+        _tl.forward_end()
         if not return_hidden:
             return logits
         return logits, main_hidden
