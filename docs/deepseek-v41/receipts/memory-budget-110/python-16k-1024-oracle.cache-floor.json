@@ -1,0 +1,63 @@
+{
+  "semantics": "clairvoyant per-layer eviction with temporary service and bypass; no speed claim",
+  "decode_steps": 1023,
+  "layers": 40,
+  "actual_slots_per_layer": 35,
+  "actual_initial_cache_lower_bound": {
+    "record_reads": 52930,
+    "misses_per_decode_token": 51.73998044965787,
+    "bytes_per_decode_token": 972744746.0410557,
+    "required_ssd_gb_s_at_20_tps": 19.454894920821115
+  },
+  "cold_start_capacity_curve": {
+    "0": {
+      "persistent_bytes": 0,
+      "record_reads": 245520,
+      "misses_per_decode_token": 240.0,
+      "bytes_per_decode_token": 4512153600.0,
+      "required_ssd_gb_s_at_20_tps": 90.243072
+    },
+    "16": {
+      "persistent_bytes": 12032409600,
+      "record_reads": 89543,
+      "misses_per_decode_token": 87.52981427174976,
+      "bytes_per_decode_token": 1645616527.3900294,
+      "required_ssd_gb_s_at_20_tps": 32.91233054780059
+    },
+    "27": {
+      "persistent_bytes": 20304691200,
+      "record_reads": 64891,
+      "misses_per_decode_token": 63.43206256109482,
+      "bytes_per_decode_token": 1192563372.6686218,
+      "required_ssd_gb_s_at_20_tps": 23.851267453372436
+    },
+    "35": {
+      "persistent_bytes": 26320896000,
+      "record_reads": 53645,
+      "misses_per_decode_token": 52.43890518084066,
+      "bytes_per_decode_token": 985884978.2991202,
+      "required_ssd_gb_s_at_20_tps": 19.717699565982404
+    },
+    "48": {
+      "persistent_bytes": 36097228800,
+      "record_reads": 41412,
+      "misses_per_decode_token": 40.48093841642229,
+      "bytes_per_decode_token": 761067550.0293255,
+      "required_ssd_gb_s_at_20_tps": 15.221351000586509
+    },
+    "64": {
+      "persistent_bytes": 48129638400,
+      "record_reads": 31829,
+      "misses_per_decode_token": 31.113391984359726,
+      "bytes_per_decode_token": 584951681.8768328,
+      "required_ssd_gb_s_at_20_tps": 11.699033637536658
+    },
+    "96": {
+      "persistent_bytes": 72194457600,
+      "record_reads": 20905,
+      "misses_per_decode_token": 20.434995112414466,
+      "bytes_per_decode_token": 384190986.5102639,
+      "required_ssd_gb_s_at_20_tps": 7.683819730205278
+    }
+  }
+}

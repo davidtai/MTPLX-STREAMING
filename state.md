@@ -39,7 +39,8 @@ raises, verified with a fake device and no MLX import.
 # Evidence
 
 - Integration branch: `feat/deepseek-v41-streaming`; current committed head
-  `f2bae46cb`. Source `1fbe425ca` produced the default-budget run.
+  `f743d1bdc` produced the corrected-run diagnostic. Source `1fbe425ca`
+  produced the clean default-budget run; see git log for later receipt commits.
 - `docs/deepseek-v41/receipts/memory-budget-110/` contains raw receipts, OS
   traces, guard logs, target plans and summaries. JSONL files require explicit
   `git add -f`; do not edit historical raw observations.
@@ -56,17 +57,35 @@ raises, verified with a fake device and no MLX import.
   rechecked. Construction/parity reporting: 32 focused regressions; combined integration
   bundle: 313 passed. An initial mixed-bank failure came from CPU device
   contamination; test-scoped Metal selection fixes it without tolerance changes.
-- Last completed GPU window restored `mtplx-flash-next-optimized-speed` on
-  port 8080 with warmup done and released the lock; independently verified
-  after the final 313-test window at 07:08 UTC.
+- Corrected-run diagnostic: 106,163,322,880 B sampled physical peak,
+  56,845,378,900 B MLX active peak, all 1,024 output IDs equal, no new swapouts.
+  Admitted 17,407 KV tokens and verified release. Guard exited 0; exact service
+  healthy with warmup done and lock free, independently verified after 07:16 UTC.
+- Diagnostic launch mistakenly set unused MTPLX_EXPERT_IO_FANOUT=4; actual
+  MTPLX_DSV41_IO_READ_FANOUT was unset (fanout 1). Its 3.783595 TPS is not
+  comparable to clean fanout-4 performance. New reports stamp installed fanout.
+  Three red/green fanout regressions plus prior reporting/cache cases: 38 CPU
+  tests pass with actual MLX blocked; independent reviewer has no findings.
 
 # Open Issues
 
 - **20 TPS is not met.** Do not mark the active goal complete.
-- Next diagnostic: `run_python_16k_1024_oracle.py` in the receipt directory
-  captures one exact AR pass, actual warm bank state, and passive ordered routes;
-  it also exercises KV admission/release. It has not run yet. Commit all source
-  first; the wrapper refuses dirty tracked files and records revision/hash.
+- Completed `run_python_16k_1024_oracle.py` capture is archived with raw routes,
+  OS trace, token output, memory plan and guard log in the receipt directory.
+  Offline replay must use try_plan_all_hits before plan to reproduce the exact
+  88,637 misses; the direct-plan-only replay differed by four. Twelve synthetic
+  warm-state checks match complete plans and final slots.
+- Offline screen: best existing frequency decay 0.97 gives 84.282 misses/token
+  versus 86.644 control (2.7% reduction), with the same captured warm contents.
+  Not a full prefill comparison and not promoted. Clairvoyant bypass floor:
+  51.740 misses/token per layer, 49.091 with a global 1,400-slot relaxation.
+  At 20 TPS those still need 19.455/18.459 GB/s; observed clean I/O-window
+  bandwidth is 12.657 GB/s, not a hardware ceiling. Eviction tuning alone does
+  not support the target. Next investigate MTP/verify scheduling only after
+  deriving its separate resident, KV, compile/graph peak bound on small shapes.
+- Use MTPLX_DSV41_IO_READ_FANOUT=4 explicitly for the next controlled run.
+  Keep unchanged controls and exact workload/token receipts; do not promote
+  W126 or bounded KV without their missing validation.
 - `scripts/deepseek_v41/analyze_route_cache.py` computes a tested clairvoyant
   per-layer lower bound with optional admission and temporary service storage.
   It is diagnostic, not a deployable policy or promotion throughput.

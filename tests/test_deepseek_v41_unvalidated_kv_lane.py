@@ -167,6 +167,19 @@ def test_resolved_plan_stamps_actual_budget(ab, monkeypatch):
     assert report.get("memory_limit_bytes") == 49_934_398_112
 
 
+@pytest.mark.parametrize("actual", [1, 4, None])
+def test_resolved_plan_stamps_installed_io_fanout(ab, monkeypatch, actual):
+    monkeypatch.setenv("MTPLX_DSV41_IO_READ_FANOUT", "8")
+    engine = types.SimpleNamespace(
+        plan=types.SimpleNamespace(), config=types.SimpleNamespace(io_read_fanout=2),
+        spec=types.SimpleNamespace(),
+        reader=types.SimpleNamespace(**({"io_read_fanout": actual} if actual else {})),
+    )
+    report = ab._resolved_plan(engine, types.SimpleNamespace())
+    assert "io_read_fanout" in report
+    assert report["io_read_fanout"] == actual
+
+
 @pytest.mark.parametrize("field", ["resolved_plan", "memory_cap"])
 def test_unequal_modern_budgets_do_not_report_reproducible_plan(
     ab, monkeypatch, tmp_path, capsys, field,

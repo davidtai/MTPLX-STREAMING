@@ -1,0 +1,63 @@
+{
+  "purpose": "full corrected-run memory and token validation; passive cache diagnostic, not promotion throughput",
+  "source_commit": "f743d1bdc9af78c7f69045eb446924884c926cba",
+  "wrapper_sha256": "d52df4b408f37c71edef5dd13dcf88a027c23fa17d117fa543df7ac02497eaaf",
+  "launch": {
+    "io_read_fanout": 1,
+    "belady_oracle": true,
+    "box_target_bytes": 110000000000,
+    "arm": "cell16k_ring_v2_attn_pf0",
+    "note": "Launch mistakenly set unused MTPLX_EXPERT_IO_FANOUT=4; MTPLX_DSV41_IO_READ_FANOUT was unset. Fanout defaults to1. Preserve raw data and do not compare timing to the clean fanout4 baseline."
+  },
+  "workload": {
+    "input_tokens": 16384,
+    "output_tokens": 1024,
+    "decode_steps": 1023,
+    "prompt_sha256": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2",
+    "output_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090",
+    "all_output_ids_equal_clean_control": true
+  },
+  "memory": {
+    "python_capacity_bytes": 2147483648,
+    "metal_limit_bytes": 60937616352,
+    "engine_budget_bytes": 50200198112,
+    "allocator_cache_limit_bytes": 2147483648,
+    "slots_per_layer": 35,
+    "fixed_plan_bytes": 23578252736,
+    "sample_interval_s": 0.25,
+    "sample_count": 1553,
+    "sampled_physical_peak_bytes": 106163322880,
+    "sampled_process_peak_bytes": 58709717072,
+    "mlx_active_peak_bytes": 56845378900,
+    "swapouts_delta": 0,
+    "budget_baseline_bytes": 46914900000
+  },
+  "kv_admission": {
+    "tokens": 17407,
+    "released": true
+  },
+  "timing_diagnostic_only": {
+    "prefill_s": 134.9836073750048,
+    "decode_s": 270.3777497909905,
+    "decode_tps": 3.783595361640547
+  },
+  "replay": {
+    "observed_misses": 88637,
+    "control_misses": 88637,
+    "exact": true,
+    "note": "Must probe try_plan_all_hits before plan; hit touch order is part of installed recency behavior. Direct plan-only replay differed by4 misses."
+  },
+  "service": {
+    "guard_exit_code": 0,
+    "restored_model": "mtplx-flash-next-optimized-speed",
+    "healthy": true,
+    "warmup_done": true,
+    "lock_free_verified": true
+  },
+  "limitations": [
+    "Sampled peaks are not instantaneous upper bounds.",
+    "16K AR geometry only; native MTP and larger shapes require separate peak gates.",
+    "Policy comparisons keep the captured warm cache fixed and are offline screens, not whole-run speed measurements.",
+    "20 TPS is not met."
+  ]
+}

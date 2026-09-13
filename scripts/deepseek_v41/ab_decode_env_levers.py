@@ -2953,6 +2953,7 @@ def _resolved_plan(runtime, args) -> dict | None:
         # silently (parent stamps False, cell16k_ring_v2_hash stamps True).
         "verify_record_hashes": bool(getattr(config, "verify_record_hashes", False)),
         "io_cache_mode": getattr(getattr(runtime, "reader", None), "cache_mode", None),
+        "io_read_fanout": getattr(getattr(runtime, "reader", None), "io_read_fanout", None),
         "source": (
             "explicit" if getattr(args, "transient_slots", None) is not None
             else f"profile:{getattr(args, 'expert_profile', 'none')}"

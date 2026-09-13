@@ -163,3 +163,48 @@ raw traces are retained; do not replace one observation with the other or claim
 an instantaneous OS peak. Swapouts remained unchanged. The guard ran 332 tests
 plus seven subtests before the model and restored the exact service with
 background warmup complete afterward.
+
+## Corrected runner and cache diagnostic
+
+`python-16k-1024-oracle.*` uses source `f743d1bdc` and the same exact Python
+workload. It exercises the corrected static KV reservation by admitting 17,407
+live tokens around generation and verifies release afterward. All 1,024 output
+IDs match both earlier Python runs. The 250 ms trace records 1,553 samples,
+**106,163,322,880 bytes** peak physical use, **58,709,717,072 bytes** peak process
+footprint, and **56,845,378,900 bytes** MLX active peak. Swapouts are unchanged.
+The exact service returned healthy, warmup completed, and the lock was released.
+
+This pass enabled the passive route observer. Its launch also mistakenly set
+the unused `MTPLX_EXPERT_IO_FANOUT=4`; the actual
+`MTPLX_DSV41_IO_READ_FANOUT` was unset, so the reader used fanout 1. Its 3.783595
+TPS is diagnostic timing, not a regression comparison with the clean fanout-4
+4.201765 TPS result. Raw receipts remain unchanged. New runner reports include
+the installed reader's `io_read_fanout`, independently of config or environment.
+
+`replay_route_policies.py` reconstructs the captured warm cache and reproduces
+all **88,637** observed misses exactly. It must probe the resident-only path
+before the regular planner: their hit-touch ordering affects later recency.
+Using only the regular planner differed by four misses. Twelve synthetic
+warm-state cases also matched complete plans and final slot identities. Actual
+MLX imports are blocked in this offline replay.
+
+| Offline result at 35 slots/layer | Misses/token | SSD GB/s needed at 20 TPS |
+| --- | ---: | ---: |
+| Installed single-pool policy | 86.644 | 32.579 |
+| Best screened existing frequency policy, decay 0.97 | 84.282 | 31.691 |
+| Clairvoyant per-layer policy with bypass | 51.740 | 19.455 |
+| Clairvoyant global 1,400-slot policy with bypass | 49.091 | 18.459 |
+
+These are cache screens with the same captured initial contents, not speed
+measurements or deployable future-aware policies. The frequency candidate
+disables the single-pool policy only for replay and does not reproduce a new
+whole-run prefill. It has not been promoted. The clean run observed 12.657 GB/s
+over its I/O windows; that is a measurement, not a hardware bandwidth ceiling.
+The evidence does not support reaching 20 TPS through eviction tuning alone.
+MTP/verify scheduling needs separate arithmetic, peak-memory and performance
+gates before any full-model run.
+
+Runner verification logs include the initial test-device contamination and
+the final **313-test guarded pass**. A final three-case installed-fanout fix
+passed with the 35 reporting/admission cases and three offline cache cases
+(38 CPU tests total), with real MLX imports blocked. No test tolerance changed.

@@ -1,0 +1,48 @@
+2026-09-13T07:09:18Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-13T07:09:18Z [gpu_window] abort: to abort this window cleanly, kill -TERM 95639 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-13T07:09:18Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-13T07:09:18Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-13T07:09:18Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-13T07:09:18Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-13T07:09:18Z [gpu_window] phase 2: com.tea.qwen loaded (pid=95117); plist=/Users/davidtai/.mtplx-qwen-guard-1ul0m5ub/com.tea.qwen.plist
+2026-09-13T07:09:18Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-13T07:09:18Z [gpu_window] phase 3: available memory before bootout: 33.9 GiB
+2026-09-13T07:09:18Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-13T07:09:19Z [gpu_window] phase 3: com.tea.qwen pid 95117 is gone
+2026-09-13T07:09:19Z [gpu_window] phase 3: stop confirmed -- pid gone, 79.7 GiB freed, 113.7 GiB available (>= 100 GiB)
+2026-09-13T07:09:19Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-13T07:09:19Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 43.7 GiB (ceiling 102.445483 GiB); compressor at start 1.3 GiB
+2026-09-13T07:09:19Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-13T07:09:19Z [gpu_window] phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=46.9149 (decimal GB) == 43.7 GiB baseline to the step env
+2026-09-13T07:09:19Z [gpu_window] phase 4: effective child-tree footprint cap 58.8 GiB (lowered from 93.0 GiB: used_start 43.7 + cap would cross the 102.445483 GiB ceiling)
+2026-09-13T07:09:19Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 58.8 GiB (~63 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-13T07:09:19Z [gpu_window] phase 4: starting GPU step (tag gpuwin-95639-1789283359-1982415291) under child-tree footprint cap 58.8 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-110-preflight/run_python_16k_1024_oracle.py --model /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4 --arms cell16k_ring_v2_attn_pf0 --context-tokens 16384 --decode-tokens 1023 --max-kv 17664 --box-target-gb 110 --stop-on-eos --prompt-ids-file docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json --prompt-seed 20260829 --out /tmp/dsv41-110-preflight/python-16k-1024-oracle.jsonl
+2026-09-13T07:09:19Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 0.0 GiB, live physical used 43.7 GiB => guard accounted 43.7 GiB; compressor +0.0 GiB (trip 8 GiB)
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[ab] arm=cell16k_ring_v2_attn_pf0 ctx=16384 decode=1023
+[ab] memory plan from box target: target 110 GB - baseline 46.91 GB - host overhead 2 GiB = allocator limit 56.75 GiB; engine budget = allocator - max(band 10, active 1.45 + cache 2) GiB = 46.75 GiB (sizes the persistent expert slots)
+[ab] memory derivation: plan=46.75 GiB (explicit --memory-limit-gib override); cache_limit=2 GiB
+[ab] additional resident reserve: SWA 0.005 GiB + wo_a f32 cache 5.000 GiB = 5.005 GiB (priced into the plan)
+[ab] plan overrides from profile 'deepseek-v41-mxfp4-75': {"transient_slots": 48, "split_route_release": "deferred", "prefetch_slots": 0, "bypass_page_cache": true}
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+STORAGE_POLICY {"expert": "f-nocache", "engram": {"1": "f-nocache", "14": "f-nocache"}}
+2026-09-13T07:09:49Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 43.6 GiB, live physical used 87.5 GiB => guard accounted 87.5 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:10:20Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 41.7 GiB, live physical used 85.7 GiB => guard accounted 85.7 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:10:50Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 46.9 GiB, live physical used 90.5 GiB => guard accounted 90.6 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:11:20Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 46.5 GiB, live physical used 90.5 GiB => guard accounted 90.5 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:11:50Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 44.6 GiB, live physical used 88.5 GiB => guard accounted 88.5 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:12:20Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.2 GiB, live physical used 89.2 GiB => guard accounted 89.2 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:12:50Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.3 GiB, live physical used 89.3 GiB => guard accounted 89.3 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:13:20Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.2 GiB, live physical used 89.2 GiB => guard accounted 89.2 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:13:50Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.2 GiB, live physical used 89.2 GiB => guard accounted 89.2 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:14:20Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.3 GiB, live physical used 89.3 GiB => guard accounted 89.3 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:14:50Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.2 GiB, live physical used 89.2 GiB => guard accounted 89.2 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:15:20Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.3 GiB, live physical used 89.3 GiB => guard accounted 89.3 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T07:15:50Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 45.2 GiB, live physical used 89.3 GiB => guard accounted 89.3 GiB; compressor +0.0 GiB (trip 8 GiB)
+[ab] output sidecar: /tmp/dsv41-110-preflight/python-16k-1024-oracle.2bd0ad017b95.output.txt
+[ab]   decode_tok_s=3.783595361640547 mlx_peak_gb=56.85 process_footprint_peak_gb=56.62 box_used_gb=103.81 (includes file cache) baseline_plus_process_estimate_gb=103.54 sha=2bd0ad017b95
+2026-09-13T07:16:12Z [gpu_window] phase 4: GPU step exited with code 0; peak step footprint 52.9 GiB, peak guard accounted 96.9 GiB, peak physical used 96.9 GiB, peak compressor delta 0.0 GiB
+2026-09-13T07:16:12Z [gpu_window] restore: discovered plist '/Users/davidtai/.mtplx-qwen-guard-1ul0m5ub/com.tea.qwen.plist' is gone; falling back to '/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist'
+2026-09-13T07:16:12Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T07:16:29Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-13T07:16:29Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
