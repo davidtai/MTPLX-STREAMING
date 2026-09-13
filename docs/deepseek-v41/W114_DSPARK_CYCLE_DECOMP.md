@@ -1,5 +1,14 @@
 # W114 — DSpark cycle decomposition on the valid window-43 receipt
 
+**2026-09-13 correction:** the receipt below remains historical evidence, but its
+barrier timings do not establish an attention-only cost or a model-math throughput
+ceiling. `eval_indices` fences a lazy graph and can include preceding layer work.
+The new [real-shape census](receipts/attention-census-20260913/README.md) does not
+reproduce a sixfold M=6 attention penalty. Scheduling and exact-arithmetic kernel
+improvements remain open; a changed model or shorter context is not justified by
+this decomposition. Its original prompt and memory budget also differ from the
+current 110 GB Python acceptance workload.
+
 Worker `w114/dspark-cycle-decomp`, Opus 4.8, **read-only receipt analysis + code
 audit** (no production code changed). Base `7ca25d61a` (`int/w97f-lanes`, the W110
 merge). Authored CPU-only, MLX pinned to CPU, no model loaded, no Metal touched (a
@@ -32,13 +41,11 @@ the verify — sha256 + prefetch-window, reads already concurrent per record).
 
 ## 0. Headline
 
-> **The verify is 826 ms/cycle; ~408 ms of it is GPU compute inside the 40 routing
-> barriers (M=6 attention over 16K KV + gate), and that alone caps the cell.** Removing
-> **every** SSD wait (the 361 ms read floor) leaves a compute-only cycle of ~500 ms →
-> **≈5.9 tok/s**. **20 tok/s (148 ms/cycle) is not reachable at this codec/model-math**
-> — `eval_indices` (the M=6 attention over 16K) is 408 ms/cycle by itself, 2.8× the
-> entire 20-tok/s cycle budget. I/O levers are real but cap at ~6 tok/s; 20 needs the
-> attention math cut (context/KV reduction or fewer verify rows).
+> **The historical verify takes 826 ms/cycle, with ~408 ms charged to routing
+> barriers.** The boundaries identify waits in this implementation, not the
+> individual kernels that cause them. The ~5.9 tok/s projection assumes all other
+> costs remain unchanged when SSD waits disappear; it is not an architectural
+> ceiling or evidence that reaching 20 tok/s requires changing model math.
 >
 > **Depth 5 is not the optimal depth.** The acceptance chain (p = 0.75, 0.68, 0.64,
 > 0.64, 0.78) reproduces the measured 2.94 tok/cycle at K=5, and a cost model anchored
@@ -61,11 +68,11 @@ Source: `dspark` block — `per_cycle_ms`, `phase_time_s`, `cycles=87`,
 | term | ms/cycle | source | what it is |
 |---|---:|---|---|
 | **verify (total)** | **826.5** | `per_cycle_ms.verify_ms` | one target forward, M=K+1=6 rows, 40 layers |
-| — in-barrier compute (`hot.eval_indices`) | **407.9** | `route_probe_sums_ns.hot.eval_indices` 35.486 s ÷ 87 | M=6 attention over 16K KV + gate + 40 routing-barrier drains |
+| — covering routing-fence time (`hot.eval_indices`) | **407.9** | `route_probe_sums_ns.hot.eval_indices` 35.486 s ÷ 87 | fence over current indices and unresolved graph ancestors; kernel attribution unavailable |
 | — route planning (`begin_split_route`) | **19.3** | `route_probe_sums_ns.hot.begin_split_route` 1.683 s ÷ 87 | W81 split-route union planning (positive & sane here; it was a negative counter artifact in the AR pass) |
-| — **residual** | **399.2** | verify − eval_indices − begin_split | SSD read wait + `gather_qmm` expert compute + per-record sha256 + head + argmax + epilogue |
-| &nbsp;&nbsp;· SSD read floor | 360.7 | 4.833 GB/cyc ÷ 13.4 GB/s | lower bound if reads ran at the drive ceiling |
-| &nbsp;&nbsp;· non-SSD residual | ~38.6 | residual − SSD floor | `gather_qmm` tail + head + argmax (+ any exposed sha256) |
+| — **residual** | **399.2** | verify − eval_indices − begin_split | wall time outside the two instrumented scopes; individual work and overlap unresolved |
+| &nbsp;&nbsp;· conditional SSD duration | 360.7 | 4.833 GB/cyc ÷ 13.4 GB/s | assumes the quoted bandwidth; not a measured overlap or hardware bound |
+| &nbsp;&nbsp;· conditional remainder | ~38.6 | residual − conditional SSD duration | arithmetic estimate, not measured kernel attribution |
 | accept | 0.40 | `per_cycle_ms.accept_ms` | greedy compare (argmax already read) |
 | commit | 2.43 | `per_cycle_ms.commit_ms` | trim to `accepted+1`, seed MTP windows (no full-KV copy) |
 | draft | 32.3 | `per_cycle_ms.draft_ms` | 3 MTP stages + rollout, 100% resident (0 SSD) |
@@ -80,13 +87,13 @@ barrier per layer per cycle). `w61_engagement`: `verify_engaged_pct=100`,
 union fit one wave under the 48-slot transient capacity → **no extra multi-wave
 fences**), `all_hit=13`, `allhit_fence_eval=0`.
 
-**Realized bandwidth.** 4.833 GB / 826 ms = **5.85 GB/s over the whole verify** (44%
-of the drive) but **12.1 GB/s over the 399 ms residual**. Reading that: **the reads
-run near the drive ceiling while they run, but they run in the residual, essentially
-NOT overlapped with the 408 ms of in-barrier compute.** The drive idles through the
-compute; the compute waits through the reads. The residual (399) ≈ SSD floor (361) +
-~38 ms — i.e. the SSD is ~fully exposed. This is the recoverable budget for the I/O
-levers (§4), bounded above by the 408 ms of compute that *could* hide it.
+**Bandwidth arithmetic and its limits.** 4.833 GB / 826 ms is **5.85 GB/s over
+the whole verify**. Dividing the same bytes by the 399 ms residual gives **12.1
+GB/s**, but that denominator is not a measured read-active interval. The original
+claim that reads occupy only the residual and leave the drive idle throughout
+the routing fences was an inference, not established overlap evidence. Neither
+the 361 ms conditional SSD duration nor the 408 ms covering-fence time supplies
+a measured recoverable I/O budget. Timestamped I/O and GPU intervals are needed.
 
 **What the receipt cannot separate, and the counter that would.** Inside the 399 ms
 residual it cannot split **exposed SSD wait** from **`gather_qmm` compute** from
@@ -203,33 +210,27 @@ not change verify cost, only tokens/cycle):
 | 0.80 | 3.69 | **4.28** (+26%) |
 | 0.90 | 4.69 | **5.44** (+60%) |
 
-Acceptance is a genuine lever (a better draft head), but even accept 0.90 lands at
-~5.4 tok/s — it runs into the same compute wall as everything else (§4).
+Under this unchanged-cost model, acceptance 0.90 projects ~5.4 tok/s. That
+projection does not bound implementations with different scheduling or kernels.
 
 ---
 
-## 4. Ranked levers to 20 tok/s — with the ceiling stated first
+## 4. Historical lever estimates and their limits
 
-### The compute-only ceiling (the honest bottom line)
+### Conditional unchanged-cost projection
 
-If **every SSD wait vanished** (infinite bandwidth, perfect overlap), the verify
-falls to its GPU-compute floor. Two independent estimates agree:
+If SSD waits vanished while all remaining measured costs stayed unchanged, two
+calculations from the same receipt give:
 
 - verify − SSD floor = 826.5 − 360.7 = **465.8 ms** → cycle 501 ms → **5.90 tok/s**
 - verify × (1 − exposed-wait share 0.428, from `overlap_telemetry`) = **473 ms** →
   cycle 508 ms → **5.81 tok/s**
 
-Per-depth, the compute-only ceiling peaks at **K=3 ≈ 6.0 tok/s**. So:
-
-> **20 tok/s is NOT reachable on this box at this codec without changing the model
-> math.** 20 tok/s = 148 ms/cycle at 2.94 tok/cycle. `eval_indices` alone — M=6
-> attention over 16K KV + gate across 40 layers — is **408 ms/cycle**, 2.8× the entire
-> budget. No amount of prefetch, fanout, barrier removal, sha256 dropping or hit-rate
-> lifting touches that number; those are all inside the ~360 ms of SSD wait, whose
-> removal tops out at ~6 tok/s. **The only path to 20 is cutting the attention/KV math**
-> (context compression, a cheaper 16K-attention kernel, or fewer verify rows), which
-> changes what the model computes — out of runner scope, and the required next
-> direction if 20 is the goal.
+The per-depth projection peaks at **K=3 ≈ 6.0 tok/s**. These are conditional
+estimates, not independent hardware bounds. The 408 ms fence includes its graph
+ancestors; changing scheduling or exact-arithmetic kernels can change that cost.
+At 2.94 tokens/cycle, 20 tok/s allows 148 ms/cycle. No result here demonstrates
+that target, or proves it impossible with the original model math.
 
 ### Ranked levers (ms/cycle saved on the verify path)
 
@@ -237,17 +238,17 @@ Per-depth, the compute-only ceiling peaks at **K=3 ≈ 6.0 tok/s**. So:
 |---|---|---|---:|---|---|
 | 1 | **Lower max depth 5 → 2/3** | fewer verify rows + narrower union; marginal accept doesn't pay past depth 2–3 (§3) | **~230–270** (826→575–659) | byte-identical (greedy verify authoritative; output = AR) | zero — `--dspark-depth` arm exists |
 | 2 | **Drop per-record sha256 on decode** (`verify_record_hashes=False`) | integrity is covered by the admission receipt at open; removes 4.83 GB/cyc of io-thread hashing (W109 lever 1) | ~100–200 (exposed fraction TBD) | byte-identical (bytes/outputs unchanged) | one flag / small arm |
-| 3 | **Overlap the per-layer read burst under compute + deepen the gate oracle** | reads run at 12 GB/s in the residual, **not** hidden under the 408 ms compute; 2–3-layer lookahead (W108 I2, W109 lever 3) issues L+2/L+3 reads during L's compute | ~100–250 (bounded by min(SSD 361, compute 408)) | byte-identical (prefetch warms cache; gather uses true indices) | medium |
+| 3 | **Overlap the per-layer read burst under compute + deepen the gate oracle** | historical lookahead hypothesis; actual read/GPU overlap and graph ancestry need measurement | unmeasured (old 100–250 estimate was conditional) | byte-identical only after cache ownership and token/state parity gates | medium |
 | 4 | **Prefetch the verify union during the draft + fix `skipped_lock_held`** | SSD idles the whole draft; seed from draft routes + last cycle's union (W108 I2/I5, W109 lever 2) | ~30–80 (**now small** — the attention stack cut draft 251→32 ms, shrinking the idle window) | byte-identical | medium |
 | 5 | **Raise verify hit rate / residency** | 306 misses/cyc at hit 0.788 is the bytes lever; fewer misses = fewer reads AND less hash (W109 lever 5) | scales SSD floor (each +0.05 hit ≈ −25 ms) | byte-identical (cache policy) | separate residency lane |
 | 6 | **Device-LUT verify — drop the 40 routing barriers** (W95 phase 2 / W108 I6) | removes the per-layer drain so the host issues reads earlier; **enabler** for #3, not a standalone win | ~50–150 (enabler) | byte-identical by epoch construction | large |
 | 7 | **Draft head bf16 + settle draft compile** (W108 I3/I4) | draft is now only 32 ms (attention stack already collapsed it), so the fp32-head trap is a small share | ~10–20 | rounding-class (draft only) | zero/near-zero |
-| 8 | **Cut the attention/KV math** (context/KV compression, cheaper 16K attn, or fewer verify rows) | the **only** lever that breaks the ~6 tok/s compute ceiling toward 20 | up to ~250 (the eval_indices floor) | **changes model math** — new eval program | large, out of runner scope |
+| 8 | **Reprofile attention and preceding graph work** | isolate the kernels behind the routing fence before selecting an optimization | unmeasured | preserve arithmetic and exact workload; parity required | diagnostic first |
 
 **Top 3:** (1) depth 5→2/3 — biggest, free, byte-identical, dispatch first;
 (2) drop verify sha256 — cheap, byte-identical; (3) overlap reads under compute /
-draft-window prefetch. **All of #1–#7 together still land under the ~6 tok/s ceiling**
-— they are worth doing (they roughly double today's 3.4 toward ~6), but 20 needs #8.
+draft-window prefetch. These historical estimates need fresh measurements under
+the current workload and budget; they do not establish a combined throughput cap.
 
 ---
 
@@ -288,9 +289,10 @@ draft-window prefetch. **All of #1–#7 together still land under the ~6 tok/s c
 ## Reported numbers (for the orchestrator)
 
 **§1 verify table (window-43 step 5, per cycle):** verify **826.5 ms** =
-eval_indices/compute **407.9** + begin_split **19.3** + residual **399.2** (SSD floor
-**360.7** + non-SSD **~38.6**); bytes **4.833 GB/cyc**, union **22.9/layer**, realized
-BW 5.85 GB/s (12.1 over the residual). Cross-check 826.5 × 87 = 71.903 s =
+covering routing fence **407.9** + begin_split **19.3** + residual **399.2**;
+the old 360.7/38.6 residual split was conditional, not measured. Bytes
+**4.833 GB/cyc**, union **22.9/layer**, whole-verify bandwidth 5.85 GB/s.
+Cross-check 826.5 × 87 = 71.903 s =
 phase_time_s.verify ✓.
 
 **§3 optimal depth:** **K = 2–3** (~3.79 tok/s modeled, +11% over K=5); K=5 is
@@ -301,11 +303,9 @@ via T-A.
 (2) drop verify sha256 (~100–200 ms/cyc, byte-identical); (3) overlap reads under
 compute / draft-window prefetch (~100–250 ms/cyc, byte-identical).
 
-**Compute-only ceiling:** **≈5.8–5.9 tok/s** (two independent estimates), peaking
-~6.0 at K=3. **20 tok/s is not reachable at this codec/model-math** — `eval_indices`
-(M=6 attention over 16K) is 408 ms/cycle, 2.8× the 148 ms/cycle 20-tok/s budget; only
-cutting the attention/KV math (lever #8, out of runner scope) can break the ~6 tok/s
-wall.
+**Conditional projection:** ≈5.8–5.9 tok/s with non-I/O costs held fixed, peaking
+~6.0 at K=3. The original claim of a model-math ceiling is withdrawn: the barrier
+attribution and these historical projections do not establish one.
 
 ---
 

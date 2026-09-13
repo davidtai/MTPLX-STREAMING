@@ -86,6 +86,20 @@ raises, verified with a fake device and no MLX import.
 - Use MTPLX_DSV41_IO_READ_FANOUT=4 explicitly for the next controlled run.
   Keep unchanged controls and exact workload/token receipts; do not promote
   W126 or bounded KV without their missing validation.
+- New real-shape attention census (receipts/attention-census-20260913): isolated
+  eager pipeline proxy M1=24.355 ms, M6=33.664 ms. No sixfold premium reproduced;
+  full-mode layer 20 is not covered and op counts are unavailable. W114/W116's
+  model-math ceiling and attention-only barrier attribution are withdrawn.
+- Historical window-48 DSpark receipt: nested DSpark TPS is 3.560338615;
+  top-level 5.347034636 is AR. Old prompt, 61 slots, no current 110 GB proof;
+  output differs from AR. Do not cite it as a 5.347 TPS DSpark result.
+- Guarded clean-file-cache experiment: DeepSeek cached pages were zero. Stopped
+  Qwen service artifacts held 33.771 GB cached pages; read-only msync invalidation
+  reduced actual physical used from 46.877 to 13.127 GB. File identities/sizes/
+  mtimes unchanged, no added swapouts; service restored and lock release checked.
+  Receipts and scripts: receipts/file-cache-reclaim-20260913. Reclaim before a
+  fresh guard baseline, never subtract an estimated cache count. Larger expert
+  residency still requires a bounded peak and an exact-workload parity run.
 - `scripts/deepseek_v41/analyze_route_cache.py` computes a tested clairvoyant
   per-layer lower bound with optional admission and temporary service storage.
   It is diagnostic, not a deployable policy or promotion throughput.

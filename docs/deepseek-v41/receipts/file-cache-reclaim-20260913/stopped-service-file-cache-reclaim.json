@@ -1,0 +1,222 @@
+{
+  "root": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+  "invalidate": true,
+  "semantics": "mincore counts cached physical pages, including speculative pages; only vm_stat used_bytes measures physical-used reduction",
+  "before": {
+    "sample_start_monotonic_ns": 197979986692500,
+    "sample_end_monotonic_ns": 197979989731500,
+    "process": {
+      "peak_maxrss_bytes": 23330816,
+      "resident_bytes": 23527424,
+      "phys_footprint_bytes": 13517280,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 87474323456,
+      "wired_bytes": 3280519168,
+      "active_bytes": 7592411136,
+      "inactive_bytes": 34486091776,
+      "speculative_bytes": 76906496,
+      "anonymous_bytes": 5259673600,
+      "file_backed_bytes": 36895735808,
+      "compressor_bytes": 1517830144,
+      "compressed_bytes": 5574983680,
+      "used_bytes": 46876852224,
+      "non_file_used_bytes": 10058022912,
+      "swapins_pages": 778410,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "files": [
+    {
+      "file": "model-00001-of-00019.safetensors",
+      "file_bytes": 4613737928,
+      "cached_page_bytes_before": 4576542720,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00002-of-00019.safetensors",
+      "file_bytes": 4299165294,
+      "cached_page_bytes_before": 1920598016,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00003-of-00019.safetensors",
+      "file_bytes": 4613737948,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00004-of-00019.safetensors",
+      "file_bytes": 4299165288,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00005-of-00019.safetensors",
+      "file_bytes": 4613737941,
+      "cached_page_bytes_before": 1560117248,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00006-of-00019.safetensors",
+      "file_bytes": 4299165282,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00007-of-00019.safetensors",
+      "file_bytes": 4613737956,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00008-of-00019.safetensors",
+      "file_bytes": 4299165288,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00009-of-00019.safetensors",
+      "file_bytes": 4613737939,
+      "cached_page_bytes_before": 1501642752,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00010-of-00019.safetensors",
+      "file_bytes": 4299165286,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00011-of-00019.safetensors",
+      "file_bytes": 4613737944,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00012-of-00019.safetensors",
+      "file_bytes": 4299165286,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00013-of-00019.safetensors",
+      "file_bytes": 4613737945,
+      "cached_page_bytes_before": 1250279424,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00014-of-00019.safetensors",
+      "file_bytes": 4299165290,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00015-of-00019.safetensors",
+      "file_bytes": 4613737952,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00016-of-00019.safetensors",
+      "file_bytes": 4299165265,
+      "cached_page_bytes_before": 3640475648,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00017-of-00019.safetensors",
+      "file_bytes": 4830006690,
+      "cached_page_bytes_before": 4158881792,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00018-of-00019.safetensors",
+      "file_bytes": 4307505704,
+      "cached_page_bytes_before": 1574240256,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00019-of-00019.safetensors",
+      "file_bytes": 20813169,
+      "cached_page_bytes_before": 18300928,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-vision.safetensors",
+      "file_bytes": 897899145,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "mtp.safetensors",
+      "file_bytes": 1678147375,
+      "cached_page_bytes_before": 1678147584,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "ngram-table.safetensors",
+      "file_bytes": 32000154008,
+      "cached_page_bytes_before": 11891638272,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    }
+  ],
+  "after": {
+    "sample_start_monotonic_ns": 197983044460708,
+    "sample_end_monotonic_ns": 197983047198375,
+    "process": {
+      "peak_maxrss_bytes": 23592960,
+      "resident_bytes": 23592960,
+      "phys_footprint_bytes": 13566432,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 121239896064,
+      "wired_bytes": 3280142336,
+      "active_bytes": 4196564992,
+      "inactive_bytes": 4132159488,
+      "speculative_bytes": 57540608,
+      "anonymous_bytes": 5260443648,
+      "file_backed_bytes": 3125821440,
+      "compressor_bytes": 1517830144,
+      "compressed_bytes": 5574950912,
+      "used_bytes": 13126696960,
+      "non_file_used_bytes": 10058416128,
+      "swapins_pages": 778410,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "elapsed_s": 3.057465833000606
+}

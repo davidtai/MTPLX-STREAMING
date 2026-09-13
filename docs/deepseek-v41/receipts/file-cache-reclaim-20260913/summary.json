@@ -1,0 +1,12 @@
+{
+  "physical_used_before_bytes": 46876852224,
+  "physical_used_after_bytes": 13126696960,
+  "physical_used_reduction_bytes": 33750155264,
+  "cached_before_bytes": 33770864640,
+  "cached_after_bytes": 0,
+  "all_file_identities_sizes_mtimes_unchanged": true,
+  "swapouts_before": 4399765,
+  "swapouts_after": 4399765,
+  "service_restored_and_independently_health_checked": true,
+  "lock_release_independently_checked": true
+}

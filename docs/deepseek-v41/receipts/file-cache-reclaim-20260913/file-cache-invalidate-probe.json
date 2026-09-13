@@ -1,0 +1,68 @@
+{
+  "scope": "new owned64 MiB scratch file; read-only mapping, no model/artifact",
+  "bytes": 67108864,
+  "resident_before_bytes": 67108864,
+  "resident_after_bytes": 0,
+  "content_sha256_unchanged": true,
+  "msync_seconds": 0.0003159170155413449,
+  "os_before": {
+    "sample_start_monotonic_ns": 197508806187916,
+    "sample_end_monotonic_ns": 197508811041083,
+    "process": {
+      "peak_maxrss_bytes": 92651520,
+      "resident_bytes": 92717056,
+      "phys_footprint_bytes": 81642000,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 87398694912,
+      "wired_bytes": 3299442688,
+      "active_bytes": 7774175232,
+      "inactive_bytes": 34339897344,
+      "speculative_bytes": 136298496,
+      "anonymous_bytes": 5433786368,
+      "file_backed_bytes": 36816584704,
+      "compressor_bytes": 1518370816,
+      "compressed_bytes": 5577801728,
+      "used_bytes": 46931886080,
+      "non_file_used_bytes": 10251599872,
+      "swapins_pages": 778410,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "os_after": {
+    "sample_start_monotonic_ns": 197508812361041,
+    "sample_end_monotonic_ns": 197508814085750,
+    "process": {
+      "peak_maxrss_bytes": 92733440,
+      "resident_bytes": 92733440,
+      "phys_footprint_bytes": 81658384,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 87464132608,
+      "wired_bytes": 3299508224,
+      "active_bytes": 7774928896,
+      "inactive_bytes": 34339897344,
+      "speculative_bytes": 69238784,
+      "anonymous_bytes": 5434540032,
+      "file_backed_bytes": 36749524992,
+      "compressor_bytes": 1518370816,
+      "compressed_bytes": 5577801728,
+      "used_bytes": 46932705280,
+      "non_file_used_bytes": 10252419072,
+      "swapins_pages": 778410,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  }
+}

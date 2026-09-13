@@ -1,0 +1,78 @@
+2026-09-13T07:24:18Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-13T07:24:18Z [gpu_window] abort: to abort this window cleanly, kill -TERM 6956 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-13T07:24:18Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-13T07:24:18Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-13T07:24:18Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-13T07:24:18Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-13T07:24:18Z [gpu_window] phase 2: com.tea.qwen loaded (pid=5867); plist=/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T07:24:18Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-13T07:24:18Z [gpu_window] phase 3: available memory before bootout: 33.9 GiB
+2026-09-13T07:24:18Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-13T07:24:19Z [gpu_window] phase 3: com.tea.qwen pid 5867 is gone
+2026-09-13T07:24:19Z [gpu_window] phase 3: stop confirmed -- pid gone, 79.7 GiB freed, 113.6 GiB available (>= 100 GiB)
+2026-09-13T07:24:19Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-13T07:24:19Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 43.6 GiB (ceiling 102.445483 GiB); compressor at start 1.3 GiB
+2026-09-13T07:24:19Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-13T07:24:19Z [gpu_window] phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=46.8566 (decimal GB) == 43.6 GiB baseline to the step env
+2026-09-13T07:24:19Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 12.0 GiB (~13 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-13T07:24:19Z [gpu_window] phase 4: starting GPU step (tag gpuwin-6956-1789284259-172224761) under child-tree footprint cap 12.0 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-110-preflight/run_verify_census_bounded.py --gpu --rows 1 2 4 6 --codec mxfp8 --T 16384 --repeats 9 --chain 4 --warmup 3 --out /tmp/dsv41-110-preflight/verify-attn-real-shapes.json
+2026-09-13T07:24:19Z [gpu_window] phase 4: mem sample -- baseline 43.6 GiB + step footprint 0.0 GiB, live physical used 43.7 GiB => guard accounted 43.7 GiB; compressor +0.0 GiB (trip 8 GiB)
+
+=== W116 verify-attention ROWS census [gpu, codec=mxfp8, T=16384, heads=64x512, window=128, index_topk=512] ===
+rows=[1, 2, 4, 6] repeats=9 chain=4 warmup=3   peak=1.0307712219655514 GiB
+
+-- swa_only (layer 0)  k=128 n_comp=0 --  fenced ms / (pipelined ms) / ops
+sub-op                      rows=1                rows=2                rows=4                rows=6
+----------------------------------------------------------------------------------------------------
+qkv_proj           0.2934/0.1274/0       0.2833/0.1299/0       0.3287/0.1670/0       0.3711/0.2184/0
+gather             0.2050/0.0750/0       0.1980/0.0737/0       0.2127/0.0751/0       0.2099/0.0799/0
+core_k29           0.2572/0.0853/0       0.2552/0.1052/0       0.2633/0.1320/0       0.3090/0.1663/0
+core_eager         0.2213/0.0780/0       0.2564/0.0755/0       0.2535/0.0870/0       0.2611/0.0875/0
+core_sdpa          0.2205/0.0768/0       0.2225/0.0872/0       0.2526/0.1062/0       0.2585/0.1256/0
+out_proj           0.3605/0.2418/0       0.4984/0.2205/0       0.5093/0.2529/0       0.5308/0.2783/0
+k_union               128/128 x1.0       129/256 x1.9845       131/512 x3.9084       133/768 x5.7744
+implied ms/cycle @rows6 x40 layers: core_k29=56.832, core_eager=54.918, core_sdpa=54.812
+
+-- full (layer 2)  k=640 n_comp=8192 --  fenced ms / (pipelined ms) / ops
+sub-op                      rows=1                rows=2                rows=4                rows=6
+----------------------------------------------------------------------------------------------------
+qkv_proj           0.2668/0.1268/0       0.2686/0.1291/0       0.3061/0.1663/0       0.3659/0.2433/0
+select             0.3731/0.1667/0       0.3659/0.1787/0       0.3802/0.2092/0       0.4224/0.2385/0
+gather             0.2206/0.1195/0       0.2182/0.1273/0       0.2580/0.1450/0       0.2553/0.1632/0
+core_k29           0.2527/0.1485/0       0.4329/0.2433/0       0.5252/0.3936/0       0.7021/0.4942/0
+core_eager         0.2563/0.0795/0       0.2435/0.0873/0       0.2615/0.0919/0       0.2572/0.1010/0
+core_sdpa          0.2287/0.0921/0       0.2891/0.1683/0       0.4317/0.2800/0       0.5060/0.3785/0
+out_proj           0.3723/0.2343/0       0.5108/0.2180/0       0.5108/0.2511/0       0.5318/0.2992/0
+k_union               640/640 x1.0     1130/1280 x1.1327      2011/2560 x1.273     2764/3840 x1.3893
+implied ms/cycle @rows6 x40 layers: core_k29=91.103, core_eager=73.308, core_sdpa=83.258
+
+-- reindex (layer 24)  k=640 n_comp=16384 --  fenced ms / (pipelined ms) / ops
+sub-op                      rows=1                rows=2                rows=4                rows=6
+----------------------------------------------------------------------------------------------------
+qkv_proj           0.2561/0.1318/0       0.2868/0.1301/0       0.3237/0.1738/0       0.3511/0.2459/0
+select             0.3826/0.2181/0       0.4073/0.2510/0       0.4452/0.3215/0       0.5099/0.3492/0
+gather             0.2244/0.1141/0       0.2280/0.1204/0       0.2260/0.1279/0       0.2442/0.1345/0
+core_k29           0.2745/0.1507/0       0.4651/0.2618/0       0.5335/0.4461/0       0.8038/0.5678/0
+core_eager         0.2544/0.0808/0       0.2609/0.0888/0       0.2871/0.1097/0       0.2767/0.1326/0
+core_sdpa          0.2389/0.0921/0       0.3159/0.1692/0       0.4295/0.2773/0       0.5289/0.3889/0
+out_proj           0.3785/0.2290/0       0.4998/0.2273/0       0.5235/0.2459/0       0.5366/0.2886/0
+k_union               640/640 x1.0     1132/1280 x1.1307     2023/2560 x1.2654     2732/3840 x1.4056
+implied ms/cycle @rows6 x40 layers: core_k29=97.823, core_eager=76.742, core_sdpa=86.826
+
+-- reuse (layer 3)  k=640 n_comp=8192 --  fenced ms / (pipelined ms) / ops
+sub-op                      rows=1                rows=2                rows=4                rows=6
+----------------------------------------------------------------------------------------------------
+qkv_proj           0.2714/0.1333/0       0.2837/0.1290/0       0.3272/0.1880/0       0.3815/0.2379/0
+gather             0.2043/0.1243/0       0.2266/0.1292/0       0.2629/0.1431/0       0.2495/0.1587/0
+core_k29           0.2858/0.1443/0       0.4040/0.2566/0       0.5501/0.3972/0       0.6974/0.4928/0
+core_eager         0.2562/0.0812/0       0.2511/0.0855/0       0.2649/0.0927/0       0.2670/0.1011/0
+core_sdpa          0.2202/0.0890/0       0.2983/0.1663/0       0.3972/0.2732/0       0.5098/0.3776/0
+out_proj           0.3574/0.2381/0       0.4968/0.2199/0       0.4811/0.2424/0       0.5148/0.2873/0
+k_union               640/640 x1.0      641/1280 x1.9969      643/2560 x3.9813      645/3840 x5.9535
+implied ms/cycle @rows6 x40 layers: core_k29=73.725, core_eager=56.51, core_sdpa=66.22
+
+receipt -> /tmp/dsv41-110-preflight/verify-attn-real-shapes.json
+2026-09-13T07:24:22Z [gpu_window] phase 4: GPU step exited with code 0; peak step footprint 0.9 GiB, peak guard accounted 44.6 GiB, peak physical used 44.6 GiB, peak compressor delta 0.0 GiB
+2026-09-13T07:24:22Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T07:24:39Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-13T07:24:39Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

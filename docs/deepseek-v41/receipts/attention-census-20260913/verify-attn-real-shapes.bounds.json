@@ -1,0 +1,400 @@
+{
+  "source_commit": "f37d3ea074d0f1aa323b5323e162e1140984c9ca",
+  "wrapper_sha256": "d7dfd8bcb7ee31514d5870ebd9039509ab22046a888025524e6bf8182583693b",
+  "memory_limit_bytes": 8589934592,
+  "cache_limit_bytes": 536870912,
+  "mlx_active_peak_bytes": 1106782172,
+  "static_scope": "one attention layer, no experts/model: <=6 query rows, <=4 queued copies, 16K KV; construction and bounded temporary arrays budgeted below8 GiB",
+  "os_samples": [
+    {
+      "sample_start_monotonic_ns": 197364105094208,
+      "sample_end_monotonic_ns": 197364109275083,
+      "process": {
+        "peak_maxrss_bytes": 34996224,
+        "resident_bytes": 35897344,
+        "phys_footprint_bytes": 20087312,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 87426285568,
+        "wired_bytes": 3300933632,
+        "active_bytes": 7624556544,
+        "inactive_bytes": 34443427840,
+        "speculative_bytes": 124780544,
+        "anonymous_bytes": 5263622144,
+        "file_backed_bytes": 36929142784,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 46886486016,
+        "non_file_used_bytes": 10082123776,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197364362281666,
+      "sample_end_monotonic_ns": 197364365233333,
+      "process": {
+        "peak_maxrss_bytes": 78610432,
+        "resident_bytes": 78610432,
+        "phys_footprint_bytes": 59818608,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 87370235904,
+        "wired_bytes": 3301097472,
+        "active_bytes": 7683309568,
+        "inactive_bytes": 34444591104,
+        "speculative_bytes": 146538496,
+        "anonymous_bytes": 5321359360,
+        "file_backed_bytes": 36953079808,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 46946566144,
+        "non_file_used_bytes": 10140024832,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197364625296666,
+      "sample_end_monotonic_ns": 197364628558083,
+      "process": {
+        "peak_maxrss_bytes": 81461248,
+        "resident_bytes": 81461248,
+        "phys_footprint_bytes": 62669424,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 87293165568,
+        "wired_bytes": 3301163008,
+        "active_bytes": 7726022656,
+        "inactive_bytes": 34454028288,
+        "speculative_bytes": 173621248,
+        "anonymous_bytes": 5364072448,
+        "file_backed_bytes": 36989599744,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 46998781952,
+        "non_file_used_bytes": 10182803456,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197364888596416,
+      "sample_end_monotonic_ns": 197364892509833,
+      "process": {
+        "peak_maxrss_bytes": 107380736,
+        "resident_bytes": 107380736,
+        "phys_footprint_bytes": 673350448,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86661677056,
+        "wired_bytes": 3912122368,
+        "active_bytes": 7749025792,
+        "inactive_bytes": 34487730176,
+        "speculative_bytes": 144785408,
+        "anonymous_bytes": 5383143424,
+        "file_backed_bytes": 36998397952,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47666446336,
+        "non_file_used_bytes": 10812833792,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197365143259166,
+      "sample_end_monotonic_ns": 197365146550125,
+      "process": {
+        "peak_maxrss_bytes": 108216320,
+        "resident_bytes": 108216320,
+        "phys_footprint_bytes": 786907976,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86539255808,
+        "wired_bytes": 4025843712,
+        "active_bytes": 7761018880,
+        "inactive_bytes": 34487926784,
+        "speculative_bytes": 144834560,
+        "anonymous_bytes": 5394579456,
+        "file_backed_bytes": 36999200768,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47792357376,
+        "non_file_used_bytes": 10937991168,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197365406579750,
+      "sample_end_monotonic_ns": 197365409991208,
+      "process": {
+        "peak_maxrss_bytes": 110297088,
+        "resident_bytes": 110297088,
+        "phys_footprint_bytes": 1029178208,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86308077568,
+        "wired_bytes": 4266704896,
+        "active_bytes": 7750942720,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 144785408,
+        "anonymous_bytes": 5384830976,
+        "file_backed_bytes": 36998873088,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 48023191552,
+        "non_file_used_bytes": 11169103872,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197365670017791,
+      "sample_end_monotonic_ns": 197365673795083,
+      "process": {
+        "peak_maxrss_bytes": 110821376,
+        "resident_bytes": 110821376,
+        "phys_footprint_bytes": 1014891384,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86181003264,
+        "wired_bytes": 4442521600,
+        "active_bytes": 7700430848,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 145031168,
+        "anonymous_bytes": 5334237184,
+        "file_backed_bytes": 36999200768,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 48148496384,
+        "non_file_used_bytes": 11294326784,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197365933819666,
+      "sample_end_monotonic_ns": 197365937073416,
+      "process": {
+        "peak_maxrss_bytes": 111034368,
+        "resident_bytes": 111050752,
+        "phys_footprint_bytes": 653755280,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86732603392,
+        "wired_bytes": 3890511872,
+        "active_bytes": 7700955136,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 145031168,
+        "anonymous_bytes": 5334761472,
+        "file_backed_bytes": 36999200768,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47597010944,
+        "non_file_used_bytes": 10742841344,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197366197107916,
+      "sample_end_monotonic_ns": 197366200457333,
+      "process": {
+        "peak_maxrss_bytes": 111443968,
+        "resident_bytes": 111443968,
+        "phys_footprint_bytes": 889373584,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86487678976,
+        "wired_bytes": 4126457856,
+        "active_bytes": 7711047680,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 145195008,
+        "anonymous_bytes": 5344428032,
+        "file_backed_bytes": 36999790592,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47843049472,
+        "non_file_used_bytes": 10988453888,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197366460500625,
+      "sample_end_monotonic_ns": 197366463707458,
+      "process": {
+        "peak_maxrss_bytes": 111460352,
+        "resident_bytes": 111460352,
+        "phys_footprint_bytes": 971490192,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86415409152,
+        "wired_bytes": 4208263168,
+        "active_bytes": 7701004288,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 145031168,
+        "anonymous_bytes": 5334810624,
+        "file_backed_bytes": 36999200768,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47914811392,
+        "non_file_used_bytes": 11060641792,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197366723789208,
+      "sample_end_monotonic_ns": 197366727254416,
+      "process": {
+        "peak_maxrss_bytes": 111460352,
+        "resident_bytes": 111460352,
+        "phys_footprint_bytes": 820986768,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86563504128,
+        "wired_bytes": 4057661440,
+        "active_bytes": 7701594112,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 145031168,
+        "anonymous_bytes": 5335400448,
+        "file_backed_bytes": 36999200768,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47764799488,
+        "non_file_used_bytes": 10910629888,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197366986803333,
+      "sample_end_monotonic_ns": 197366989873750,
+      "process": {
+        "peak_maxrss_bytes": 111493120,
+        "resident_bytes": 111476736,
+        "phys_footprint_bytes": 887423888,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86501965824,
+        "wired_bytes": 4124114944,
+        "active_bytes": 7701020672,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 145031168,
+        "anonymous_bytes": 5334827008,
+        "file_backed_bytes": 36999200768,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47830679552,
+        "non_file_used_bytes": 10976509952,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 197367034824416,
+      "sample_end_monotonic_ns": 197367036969375,
+      "process": {
+        "peak_maxrss_bytes": 111509504,
+        "resident_bytes": 111460352,
+        "phys_footprint_bytes": 836895632,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 86550986752,
+        "wired_bytes": 4073603072,
+        "active_bytes": 7700365312,
+        "inactive_bytes": 34487975936,
+        "speculative_bytes": 145080320,
+        "anonymous_bytes": 5334171648,
+        "file_backed_bytes": 36999249920,
+        "compressor_bytes": 1517568000,
+        "compressed_bytes": 5575950336,
+        "used_bytes": 47779512320,
+        "non_file_used_bytes": 10925342720,
+        "swapins_pages": 778410,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    }
+  ]
+}

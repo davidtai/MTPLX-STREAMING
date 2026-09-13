@@ -1,0 +1,57 @@
+{
+  "semantics": "weighted sum of isolated sub-op medians with mode counts2/4/4/30; NOT a full-model cycle or bound. Full mode uses layer2, so it does not reproduce every layer20-specific candidate-source operation.",
+  "mode_counts": {
+    "swa_only": 2,
+    "full": 4,
+    "reindex": 4,
+    "reuse": 30
+  },
+  "ms_proxy": {
+    "fenced_ms": {
+      "1": {
+        "core_eager": 46.78094,
+        "core_k29": 47.8073,
+        "core_sdpa": 45.527919999999995
+      },
+      "2": {
+        "core_eager": 53.37742,
+        "core_k29": 59.535880000000006,
+        "core_sdpa": 55.12812
+      },
+      "4": {
+        "core_eager": 56.781040000000004,
+        "core_k29": 67.39722,
+        "core_sdpa": 61.999379999999995
+      },
+      "6": {
+        "core_eager": 60.1334,
+        "core_k29": 77.02782,
+        "core_sdpa": 69.41406
+      }
+    },
+    "pipelined_ms": {
+      "1": {
+        "core_eager": 24.355120000000003,
+        "core_k29": 26.81606,
+        "core_sdpa": 24.68054
+      },
+      "2": {
+        "core_eager": 24.14024,
+        "core_k29": 30.64828,
+        "core_sdpa": 27.23158
+      },
+      "4": {
+        "core_eager": 28.520319999999998,
+        "core_k29": 40.29792,
+        "core_sdpa": 35.39608
+      },
+      "6": {
+        "core_eager": 33.66396,
+        "core_k29": 48.88454,
+        "core_sdpa": 44.169039999999995
+      }
+    }
+  },
+  "op_count_limitation": "exporter returned0 for all sub-ops; graph counts are unavailable, not evidence of zero work.",
+  "memory_scope": "one random-weight attention layer at real artifact dimensions/codec; no full model/expert/MTP load"
+}

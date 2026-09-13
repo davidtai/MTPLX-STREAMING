@@ -1,12 +1,20 @@
 # W116 — DSpark verify-attention ROWS census (per-row → shared-tile)
 
+**2026-09-13 result:** the guarded [real-shape census](receipts/attention-census-20260913/README.md)
+does not reproduce the hypothesized sixfold attention premium. Its isolated eager
+pipeline proxy grows from 24.355 ms at M=1 to 33.664 ms at M=6 across the layer-type
+counts. Those sums are not an end-to-end model measurement. The original W117
+kernel proposal below remains an unvalidated hypothesis, not an approved next
+implementation. Graph-op counts are unavailable because the export parser returned
+zero for every case; they cannot prove engagement or absence of work.
+
 Branch `w116/verify-attn-rows-census` off `int/w97f-lanes` (ec9ff2979). Builds the
 census that names WHICH sub-op of the K+1 verify attention scales with the row count,
 so W117 can replace it with one launch per layer handling all rows with the gathers
 inside. **No A/B, no kernel yet** — this window lands the instrument and its CPU-smoke
 proof; the GPU cell runs in the orchestrator's lock gap.
 
-## 0. The finding W116 explains
+## 0. Historical hypothesis, superseded by the census above
 
 Window 43, step 5 (16K cell, DSpark depth 5 = verify batch `rows = K+1 = 6`, plus the
 attention stack):
@@ -21,16 +29,18 @@ attention stack):
 
 The selected bytes are tiny — `k = sliding_window 128 + index_topk 512 = 640` keys ×
 `hd 512` × 2 B × 6 rows × 40 layers ≈ **157 MB/cycle ≈ 0.3 ms** at 500 GB/s
-([[test-machines-bandwidth-file]]). So the 6× is **not** bandwidth. It is per-row
-gather / dispatch / core work in the small-M gathered core
+([[test-machines-bandwidth-file]]). This byte estimate originally motivated a
+per-row gather / dispatch / core hypothesis in the small-M gathered core
 (`_sparse_attend_selected`, `mtplx/models/deepseek_v41.py` ~L1130-1270): each of the
 K+1 rows is handed its **own** gathered `[k, hd]` operand — the K29 kernel maps
 `row → its own [rows*k, hd]` slice (`q.reshape(b*s,1,H,hd)`, `KVg.reshape(b*s,k,hd)`),
 so the core reads `rows × k` keys even though the rows' windows overlap by `W − 1` and
 their compressed selections are nearly identical (they share the accepted prefix's
 index selection). W101 already made the five **projections** row-generic (fused, rows
-≤ 8; W105 priced them at ≈ 415 µs/layer mxfp8), so the ~M× is the **gathered core**,
-and it is structural: K29 makes it one *launch*, not one *read*.
+≤ 8; W105 priced them at ≈ 415 µs/layer mxfp8). However, the 372 ms attribution was
+inferred from a covering barrier, not measured as isolated attention. Per-row
+operand growth does not establish a sixfold latency increase or its critical-path
+share. K29's isolated M=6 core is slower than eager in the new census.
 
 ## 1. Hypotheses
 
@@ -191,5 +201,6 @@ rows against it**:
   the softmax reassociates. Verify stays greedy-authoritative; the review gate is
   mechanism proof + real-path engagement counter + the census baseline this window lands.
 
-Target: verify attention ≈ 372 → ≈ 85–110 ms/cycle (≈ 1.3× the M=1 read), the ≈ 6× →
-≈ 1.3× the task set for W116.
+Original speculative target: 372 → 85–110 ms/cycle. The new census invalidates
+using 372 ms as an established attention baseline. Reprofile full-model graph
+ancestry and scheduling before assigning a savings target or building this kernel.
