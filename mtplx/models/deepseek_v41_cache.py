@@ -429,14 +429,14 @@ def _kv_bounded_enabled() -> bool:
     proven across index_topk / candidate-block / sliding-window / prompt-length /
     chunked-prefill / huge-cap configs, each lane in its own process
     (tests/test_deepseek_v41_w121_kv_parity_cpu.py) -- because the logical ``view()``
-    equals the concatenated store and CPU reductions are layout-independent.  On Metal
-    the preallocated sliced-view buffers give the attention GEMM a different reduction
-    LAYOUT than the growing lane's freshly-concatenated contiguous arrays, so the fp
-    reduction reassociates and a greedy near-tie can flip (real receipts: windows
-    43/45/48 = bounded token sha, 44/46/47 = growing sha, first diff ~decode token 33).
-    That is ROUNDING-CLASS ([[dsv41-inexact-ok-if-tie-flips]]), NOT a beyond-len read
-    (a huge cap with ~1860 garbage rows is still bit-exact on CPU), but it DOES change
-    greedy tokens, so it stays OFF by default until a Metal A/B proves greedy parity.
+    equals the concatenated store and CPU reductions are layout-independent.  On Metal it
+    DIVERGES (real receipts: windows 43/45/48 = bounded token sha, 44/46/47 = growing sha,
+    first diff ~decode token 33) -- the leading hypothesis is a layout-dependent GEMM
+    reduction reassociation (the preallocated sliced-view buffers vs the growing lane's
+    contiguous arrays), which would be rounding-class; that is NOT a beyond-len read (a
+    huge cap with ~1860 garbage rows is still bit-exact on CPU), but the Metal MAGNITUDE
+    is UNMEASURED (needs an fp32 probe on a window).  It changes greedy tokens, so it
+    stays OFF by default until a Metal A/B proves greedy parity.
     The low-level default here is OFF (unset -> off); only an explicit
     ``MTPLX_DSV41_KV_BOUNDED`` / an explicit ``*_bounded`` A/B arm turns it on.  Set to
     ``0``/``false``/``off``/``no`` disables it even when something stamped it.

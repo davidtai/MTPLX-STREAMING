@@ -10,11 +10,12 @@ METAL.  This test pins down what is and isn't a bug:
     chunked prefill, and a huge cap with ~1900 garbage rows beyond the logical length).
     So there is NO "reads the cap-length buffer beyond len" correctness bug: the logical
     ``view()`` == the concatenated store and CPU reductions are layout-independent.
-  * The Metal divergence is therefore ROUNDING-CLASS: the preallocated sliced-view
-    buffers give the attention GEMM a different reduction LAYOUT than the growing lane's
-    freshly-concatenated contiguous arrays, so the fp reduction reassociates and a greedy
-    near-tie flips ([[dsv41-inexact-ok-if-tie-flips]]) -- but it changes greedy tokens,
-    so bounded KV is NOT the default (reverted W121 HIGH-4) until a Metal A/B proves it.
+  * The Metal divergence is UNMEASURED as to magnitude: the leading hypothesis is a
+    layout-dependent GEMM reduction reassociation (the preallocated sliced-view buffers
+    vs the growing lane's freshly-concatenated contiguous arrays), which would be
+    rounding-class -- but confirming that needs a Metal fp32 magnitude probe on a real
+    window (not run here).  Until then the finding is only "CPU bit-identical; Metal
+    divergence unmeasured", and bounded KV is NOT the default (reverted W121 HIGH-4).
 
 If this CPU test ever FAILS, a real beyond-len / layout bug HAS been introduced on the
 selected path -- fix it before shipping.
@@ -101,10 +102,26 @@ def _worker(mode: str, cfg: dict, out: str) -> None:
     C.reset_kv_bounded_stats()
     rows = [np.array(logits[0, -1].astype(mx.float32))]
     tok = int(mx.argmax(logits[0, -1]).item()); toks = [tok]
+    verify_depth = int(cfg.get("verify_depth", 0))
     for _ in range(steps):
-        logits = model(mx.array([[tok]]), cache=cache); mx.eval(logits)
-        rows.append(np.array(logits[0, -1].astype(mx.float32)))
-        tok = int(mx.argmax(logits[0, -1]).item()); toks.append(tok)
+        if verify_depth > 0:
+            # MEDIUM-3: exercise the DSpark verify -> trim/rollback path -- feed a K+1
+            # draft block, then cache.trim(K) to accept exactly 1 (mirrors
+            # generation._rollback_mtp_cache: trim = current_offset - accepted_offset).
+            # This drives the bounded compressor lanes' truncate_to vs the growing lanes'
+            # _truncate; both lanes get the IDENTICAL feed+trim so they must match.
+            block = [tok] + [((tok + j + 1) % 48) for j in range(verify_depth)]  # K+1 tokens
+            before = int(cache.offset)
+            logits = model(mx.array([block]), cache=cache); mx.eval(logits)
+            rows.append(np.array(logits[0, -1].astype(mx.float32)))
+            accept_tok = int(mx.argmax(logits[0, 0]).item())  # accept 1 (the first row)
+            cache.trim(int(cache.offset) - (before + 1))      # drop the K rejected tokens
+            tok = accept_tok
+        else:
+            logits = model(mx.array([[tok]]), cache=cache); mx.eval(logits)
+            rows.append(np.array(logits[0, -1].astype(mx.float32)))
+            tok = int(mx.argmax(logits[0, -1]).item())
+        toks.append(tok)
     np.save(out, np.stack(rows))
     Path(out + ".toks.json").write_text(json.dumps(toks))
 
@@ -132,6 +149,11 @@ def _run_lane(cfg, mode, tmp_path):
          "large itk/blocks sld16 p200"),
         ({"itk": 40, "cb": 64, "cbs": 8, "sld": 8, "plen": 120, "steps": 20, "cap": 2000, "chunk": 8},
          "huge cap (garbage rows)"),
+        # MEDIUM-3: the DSpark verify -> trim/rollback path (feed K+1, trim(K) per cycle)
+        # drives the bounded compressor lanes' truncate_to vs the growing lanes' _truncate.
+        ({"itk": 40, "cb": 64, "cbs": 8, "sld": 8, "plen": 120, "steps": 12, "cap": 200,
+          "chunk": 8, "verify_depth": 4},
+         "verify+trim depth 4"),
     ],
 )
 def test_bounded_bit_identical_to_growing_on_cpu(cfg, label, tmp_path):
