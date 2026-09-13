@@ -1,0 +1,106 @@
+{
+  "source_commit": "4b1e5d369c2d5be35927e09caa3d7d11c3357406",
+  "wrapper_sha256": "d265a87e7871b07cec3ad32d24cd28b1a4eea14c4fe86daae0d010e426259cd4",
+  "input_tokens": 16384,
+  "decode_steps": 1023,
+  "output_tokens": 1024,
+  "prompt_ids_sha256": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2",
+  "slots_per_layer": 67,
+  "ar": {
+    "decode_tok_s": 5.764060597785748,
+    "ttft_s": 135.09164833300747,
+    "token_ids_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090",
+    "peak_gb": 88.860239212
+  },
+  "dspark": {
+    "decode_tok_s": 8.461786462222246,
+    "decode_wall_s": 120.89645662499242,
+    "pass_wall_s": 229.80419045800227,
+    "tokens_per_cycle": 4.970873786407767,
+    "accept_rate": 0.9163879598662207,
+    "accept_rate_by_depth": [
+      0.9514563106796117,
+      0.9336734693877551,
+      0.8907103825136612,
+      0.9141104294478528,
+      0.8791946308724832
+    ],
+    "cycles": 206,
+    "per_cycle_ms": {
+      "draft_ms": 12.303673354959685,
+      "verify_ms": 571.1489126226951,
+      "accept_ms": 0.9217380423966831,
+      "commit_ms": 1.728512131008862
+    },
+    "token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "peak_gb": 91.544599528,
+    "divergence": {
+      "divergence_index": 297,
+      "ar_token": 11067,
+      "dspark_token": 62596,
+      "ar_top2_margin": 0.0,
+      "dspark_top2_margin": 0.25,
+      "max_abs_logit_delta": 0.75,
+      "tie_margin": 0.03,
+      "tie_band_used": 0.75,
+      "tie_ulps": 3,
+      "peak_contested_logit": 33.75,
+      "ulp_bf16_at_peak": 0.25,
+      "ar_contested_margin": 0.0,
+      "dspark_contested_margin": 0.25,
+      "delta_at_ar_token": 0.0,
+      "delta_at_dspark_token": 0.25,
+      "rounding_class_by_delta": true,
+      "deltas_within_tie_band": true,
+      "rows_consistent": true,
+      "ar_logit_at_ar_token": 33.75,
+      "ar_logit_at_dspark_token": 33.75,
+      "dspark_logit_at_ar_token": 33.75,
+      "dspark_logit_at_dspark_token": 34.0,
+      "class": "tie_flip",
+      "capture_index": 297,
+      "capture_index_matches_first": true
+    }
+  },
+  "gain_vs_previous_best_ar_pct": 29.464383299107165,
+  "gain_vs_equal_capacity_ar_pct": 46.80252434321777,
+  "phase_memory_250ms": {
+    "startup": {
+      "samples": 32,
+      "physical_peak_bytes": 84211941376,
+      "process_footprint_peak_bytes": 73779378048
+    },
+    "ar_reference": {
+      "samples": 1180,
+      "physical_peak_bytes": 102048481280,
+      "process_footprint_peak_bytes": 91099428776
+    },
+    "ar_reference_end": {
+      "samples": 1,
+      "physical_peak_bytes": 91477049344,
+      "process_footprint_peak_bytes": 80626055080
+    },
+    "dspark": {
+      "samples": 862,
+      "physical_peak_bytes": 102210043904,
+      "process_footprint_peak_bytes": 91060336576
+    },
+    "dspark_end": {
+      "samples": 573,
+      "physical_peak_bytes": 104911437824,
+      "process_footprint_peak_bytes": 94498371568
+    }
+  },
+  "physical_peak_bytes": 104911437824,
+  "process_footprint_peak_bytes": 94498371568,
+  "swapouts_first": 4399765,
+  "swapouts_last": 4399765,
+  "sample_count": 2648,
+  "guard_exit_code": 8,
+  "benchmark_receipt_complete": true,
+  "guard_issue": "Completed receipt before live step state unreadable during process exit. Later64MiB CPU reproduction observed Darwin ps ?E; fix follows this source.",
+  "service_restored_utc": "2026-09-13T12:24:06Z",
+  "health_warmup_and_lock_release_independently_verified": true,
+  "target_20_tps_met": false,
+  "phase_note": "dspark_end also contains the AR divergence replay; whole-workflow peak includes it."
+}

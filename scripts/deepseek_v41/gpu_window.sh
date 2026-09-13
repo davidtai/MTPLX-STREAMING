@@ -299,7 +299,15 @@ _step_finished() {
     kill -0 "${STEP_PID}" 2>/dev/null && return 2
     return 0
   fi
-  [[ "${state}" =~ ^[RSDTZWIXU][[:alnum:]\<\>+]*$ ]] || return 2
+  # Darwin can lose Mach thread information before the process becomes a
+  # zombie: ps prints ? plus its P_WEXIT flag (for example ?E or ?NEs).
+  # This is still a LIVE step: keep footprint/box monitoring and reap only
+  # after the normal gone/zombie transition. A bare ? remains unreadable.
+  # Apple adv_cmds/ps/{tasks,print}.c define the Mach state and suffix order.
+  if ! [[ "${state}" =~ ^[RSDTZWIXUH][[:alnum:]\<\>+]*$ ]] &&
+     ! [[ "${state}" =~ ^\?[\<N]?X?EV?L?s?[+]?$ ]]; then
+    return 2
+  fi
   [[ "${state}" == Z* ]] && return 0
   return 1
 }

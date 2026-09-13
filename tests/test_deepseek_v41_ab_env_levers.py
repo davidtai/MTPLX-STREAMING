@@ -1063,7 +1063,8 @@ class _RouteBumpModel:
     def make_cache(self):
         return {}
 
-    def __call__(self, ids, cache=None):
+    def __call__(self, ids, cache=None, *, logits_keep=None):
+        assert logits_keep == (None if self._did_prefill else 1)
         n = int(ids.shape[-1])
         bump = self._prefill_bump if not self._did_prefill else self._per_step
         # exercise both counter kinds: count()-only stage + a sums-bearing barrier.
@@ -1071,7 +1072,7 @@ class _RouteBumpModel:
         self._rp._COUNTS[self._barrier] += bump
         self._rp._SUMS[self._barrier] += bump * 1000
         self._did_prefill = True
-        return mx.zeros((1, n, 8))
+        return mx.zeros((1, min(n, logits_keep or n), 8))
 
 
 class _ZeroSampler:

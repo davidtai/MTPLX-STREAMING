@@ -524,7 +524,8 @@ class _FakeModel:
     def make_cache(self):
         return object()
 
-    def __call__(self, x, cache=None):
+    def __call__(self, x, cache=None, *, logits_keep=None):
+        assert logits_keep == (1 if self._i == 0 else None)
         tok = self._script[self._i]
         self._i += 1
         return tok

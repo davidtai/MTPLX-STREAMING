@@ -3291,7 +3291,9 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     try:
         t0 = time.perf_counter()
         cache = model.make_cache()
-        logits = model(ops.input([list(prompt_ids)]), cache=cache)
+        # AR consumes only the final prompt row. Do not allocate a full
+        # prompt-by-vocabulary output before the timed decode.
+        logits = model(ops.input([list(prompt_ids)]), cache=cache, logits_keep=1)
         ops.sync(logits)
         ttft_s = time.perf_counter() - t0
         token = ops.argmax_last(logits)
@@ -3600,7 +3602,7 @@ def _ar_logits_row_at_index(*, model, ops, mx, prompt_ids, ar_tokens, index):
     decode_tokens`` M=1 forwards + one prefill; only ever run once, on divergence.
     """
     cache = model.make_cache()
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    logits = model(ops.input([list(prompt_ids)]), cache=cache, logits_keep=1)
     ops.sync(logits)
     for j in range(int(index)):
         logits = model(ops.input([[int(ar_tokens[j])]]), cache=cache)
@@ -5138,7 +5140,7 @@ def _stage_timing_pass(*, model, ops, prompt_ids, steps, cooldown_s=0.0,
     from mtplx.models import deepseek_v41_stage_timing as stime
 
     cache = model.make_cache()
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    logits = model(ops.input([list(prompt_ids)]), cache=cache, logits_keep=1)
     ops.sync(logits)
     token = ops.argmax_last(logits)
     # W90: idle after prefill, before the fenced decode loop.
@@ -5202,7 +5204,7 @@ def _prefill_stage_timing_pass(*, model, ops, prompt_ids) -> dict:
     except Exception:
         pass
     stime.begin(kind="prefill")
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    logits = model(ops.input([list(prompt_ids)]), cache=cache, logits_keep=1)
     ops.sync(logits)
     report = model.stage_timing_report()
     stime.end()
@@ -5218,7 +5220,7 @@ def _sync_census(*, model, ops, mem_probe, prompt_ids, steps) -> dict:
         return {"enabled": False, "note": f"set {PROBE_ENV}=1 before launch"}
     # prefill first (routes every layer once), then snapshot and decode.
     cache = model.make_cache()
-    logits = model(ops.input([list(prompt_ids)]), cache=cache)
+    logits = model(ops.input([list(prompt_ids)]), cache=cache, logits_keep=1)
     ops.sync(logits)
     token = ops.argmax_last(logits)
     before = int(probe._COUNTS.get(BARRIER_STAGE, 0))

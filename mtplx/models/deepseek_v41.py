@@ -4737,14 +4737,20 @@ class Model(nn.Module):
         # would otherwise be misattributed to this token.
         try:
             keep_last = _resolve_logits_keep(logits_keep, logits_rows)
-            h, main_hidden = self.model(
+            backbone = self.model(
                 input_ids, cache, prefill_chunk=prefill_chunk,
-                prefill_layer_major=prefill_layer_major, return_main_hidden=True
+                prefill_layer_major=prefill_layer_major,
+                return_main_hidden=return_hidden,
             )
+            if return_hidden:
+                h, main_hidden = backbone
+            else:
+                h = backbone
             logits = None
             if emit_logits:
-                # Row-independent GEMM: head(h)[:, -k:] == head(h[:, -k:]) exactly,
-                # so narrowing the head input never changes the surviving logits.
+                # Positions use the same projection independently. Narrow before
+                # the matmul to avoid unused logits; Metal's changed M geometry
+                # can change rounding, so numerical gates still compare ties.
                 with _stime.stage("head") as _st:
                     source = h if keep_last is None else h[:, -keep_last:, :]
                     logits = self._apply_head(source)

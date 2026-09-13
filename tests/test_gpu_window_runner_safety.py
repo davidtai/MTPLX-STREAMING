@@ -271,6 +271,38 @@ esac
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertFalse(marker.exists(), "step completed after its live state became unreadable")
 
+    def exiting_state_reader(self):
+        # Darwin ps can report ?E while task-thread inspection is unavailable
+        # during exit. Keep the real zombie/gone transition for the final reap.
+        self.env["GPU_WINDOW_PS_CMD"] = self.command("exiting_state", '''
+if [[ "$*" == "-o state="* ]]; then
+    state="$(/bin/ps "$@")"; rc=$?
+    if (( rc == 0 )) && [[ -n "$state" && "$state" != *Z* ]]; then
+        echo '?E'
+    else
+        printf '%s\n' "$state"
+    fi
+    exit "$rc"
+fi
+exec /bin/ps "$@"
+''')
+
+    def test_darwin_exiting_state_preserves_child_exit_code(self):
+        self.exiting_state_reader()
+        result = self.run_guard("/bin/bash", "-c", "sleep .15; exit 7")
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("GPU step exited with code 7", result.stdout + result.stderr)
+
+    def test_darwin_exiting_state_still_checks_memory(self):
+        self.exiting_state_reader()
+        self.env["GPU_WINDOW_CHILD_RSS_CAP_BYTES"] = str(1024**3)
+        self.env["GPU_WINDOW_FOOTPRINT_READER"] = self.command("over_cap", "echo 2147483648\n")
+        self.env["GPU_WINDOW_KILL_GRACE_SECONDS"] = "0"
+        marker = self.path / "over_cap.finished"
+        result = self.run_guard("/bin/bash", "-c", 'sleep 3; touch "$1"', "guard-child", str(marker))
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_baseline_at_or_over_ceiling_refuses_to_start_step(self):
         baseline = (10 + 100 + 200 + 30) * 16384
         for ceiling in (baseline, baseline - 1):

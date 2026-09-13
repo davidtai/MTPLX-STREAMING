@@ -30,6 +30,51 @@ input tokens and 1,023 decode steps plus the first token emitted by prefill.
 
 # Plan Status
 
+## Current MTP measurement and next allocation fixes, 2026-09-13 12:30 UTC
+
+- New best full workload: **8.461786462 TPS**, source `4b1e5d369`, native
+  DSpark depth 5, pinned 16K Python input, all 1024 output IDs. 120.896457 s decode,
+  108.907734 s prefill, 67 slots/layer, 14 GiB band, 2 GiB retained allocator cache,
+  2 GiB Python, fanout 4, pf0. **20 TPS remains open.**
+- Equal-capacity AR reference 5.764061 TPS still matches all prior AR IDs.
+  MTP is 29.46% above the previous 6.535996 TPS 83-slot AR best, 46.80% above this
+  reference. First difference at 297 is an actual AR tie: both tokens 33.75,
+  DSpark 33.75/34.0, classified tie_flip. No broader parity relaxation.
+- Full workflow physical peak 104,911,437,824B (includes divergence replay),
+  DSpark-pass physical peak 102,210,043,904B, true MTP active peak 91,544,599,528B.
+  2648 external 250 ms samples, swapouts 4399765 unchanged. Measured baseline
+  10.3739 GB after automatic reclamation freed 36.233 GB. Reviewed bound 108.031 GB.
+- Benchmark receipt completed, but guard exited 8 on an exit-state classification
+  error. Exact Qwen/health/warmup/lock release verified after 12:24:06 UTC restore.
+  No OOM. No GPU child remains. Raw receipt/OS/bounds/wrapper/output/summary:
+  `receipts/dspark-python-16k-20260913/`. Its `dspark_end` phase includes replay.
+- Draft real-weight isolated probe before the full run: compiled 9.357708 ms,
+  eager 10.304375 ms, identical draft IDs; 16K seeding 154.706 ms. Stage-only resident
+  plus embed/head 10,597,621,640B; load peak 15,415,845,136B. Committed under
+  `receipts/dspark-head-peak-20260913/`; not a target throughput result.
+- Full MTP 206 cycles, 4.97 outputs/cycle; draft 12.30 ms, verify 571.15 ms,
+  accept 0.92 ms, commit 1.73 ms. Decode SSD 1.101 TB, 1.076 GB/output, 57.25 records/output,
+  measured I/O-window 13.2378 GB/s. This is not a hardware ceiling or additive
+  critical-path split; verification/SSD traffic dominate the next optimization.
+- Subsequent source fixes: all five AR benchmark/profiling/replay prefills now
+  use logits_keep=1 (8.472 GB output becomes 517 KB). Model.__call__ skips discarded
+  target hidden captures for return_hidden=False, with correct conditional
+  unpacking. DSpark return_hidden=True and hc_hidden retain their contracts.
+  Five focused CPU allocation checks plus eight selected EOS/warm cases pass
+  with real MLX imports blocked. No new full peak/TPS claim for these fixes yet.
+- Guard bug reproduced with a 64 MiB CPU process: Darwin ps returned `?E`, rc 0,
+  kill0 still alive. Guard now accepts its exact exiting-state grammar as LIVE,
+  keeps all memory checks, and waits for gone/zombie normally. Bare ? and reader
+  failures still fail closed. Two new red/green mocked-service cases plus the
+  existing unreadable-live case pass (3 total). Scoped review found no issues.
+  Receipts: `receipts/ar-prefill-and-guard-exit-20260913/`.
+- **Next:** measure actual I/O improvements or reduce verify traffic before
+  another large run. Memory increments must use the measured MTP peak plus
+  exact storage delta and graph margin. A newly lower AR peak no longer includes
+  retained target HC inputs: add those separately if deriving MTP from AR.
+  Keep bounded-KV and unvalidated W126 disabled. Do not infer 20 TPS from the
+  draft-only probe or top-level AR receipt field.
+
 ## DSpark memory batch, 2026-09-13 11:55 UTC
 
 - Full-workload best remains **6.535995651 TPS**; no new full-model MTP run.
