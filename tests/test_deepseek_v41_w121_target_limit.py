@@ -37,10 +37,10 @@ from mtplx.expert_runtime import (
 GB = 1_000_000_000
 GIB = 1024**3
 CACHE = int(round(DEFAULT_ALLOC_CACHE_GIB * GIB))    # 6 GiB
-BAND = int(round(DEFAULT_TRANSIENT_BAND_GIB * GIB))  # 5.54 GiB (peak - plan)
+BAND = int(round(DEFAULT_TRANSIENT_BAND_GIB * GIB))  # measured prefill reserve
 ACTIVE = int(round(DEFAULT_ACTIVE_OVERSHOOT_GIB * GIB))  # 1.44 GiB (active_start - plan)
 HOST = int(round(DEFAULT_HOST_OVERHEAD_GIB * GIB))   # 0.5 GiB (footprint - mlx_peak)
-RESERVE = max(BAND, ACTIVE + CACHE)                  # max(5.54, 7.44) = 7.44 GiB
+RESERVE = max(BAND, ACTIVE + CACHE)
 
 
 def _plan(*, total=100_000, reserve=10_000, io=5_000, fixed=None,
@@ -154,8 +154,12 @@ def test_reserve_over_allocator_raises_no_engine_budget():
 # ---- HIGH-A: the reviewer's W48-plan invariant + fill --------------------------
 def test_w48_plan_fits_and_fills_target():
     # W48 (target 100, baseline 10.8138): engine 72.961, peak 78.242, active 74.141.
+    # Preserve that receipt's explicit bands; current defaults cover the newer
+    # uncached 16K active peak plus allocator-cache capacity.
     r = resolve_box_target_mlx_limit_bytes(
-        env={BOX_TARGET_ENV: "100", BOX_BASELINE_ENV: "10.8138"}
+        env={BOX_TARGET_ENV: "100", BOX_BASELINE_ENV: "10.8138",
+             "MTPLX_DSV41_TRANSIENT_BAND_GIB": "5.54",
+             "MTPLX_DSV41_MLX_CACHE_LIMIT_GIB": "6"}
     )
     limit = r["mlx_limit_bytes"]
     engine = r["engine_budget_bytes"]

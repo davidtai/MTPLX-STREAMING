@@ -75,8 +75,8 @@ STANDARD_CELL16K_PROMPT_SHA256 = (
 # FILL the target while active + transient stays under the allocator limit.  The old
 # budget-total forecast (total - system_used_at_start(vm_stat) - non_metal - kv_growth -
 # safety - plan_overshoot) and its constants/flags were removed (W121); the cache limit
-# and transient band default in the runtime (MTPLX_DSV41_MLX_CACHE_LIMIT_GIB=6,
-# MTPLX_DSV41_TRANSIENT_BAND_GIB=4.1).
+# and transient band default in the runtime (MTPLX_DSV41_MLX_CACHE_LIMIT_GIB=2,
+# MTPLX_DSV41_TRANSIENT_BAND_GIB=10).
 
 
 # --------------------------------------------------------------------------

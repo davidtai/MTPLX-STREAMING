@@ -64,6 +64,26 @@ instead of waiting for the first forward. Swapouts did not increase. The exact
 previous service returned healthy with background warmup done and the lock
 released. `resident-load-comparison.json` contains the calculations.
 
+The subsequent `calibration-resident-uncached-*` run uses committed source
+`607995471` with the same 16K input, 32 decode steps, 520 persistent slots,
+100 GB target, 16 GiB transient band and 2 GiB allocator cache. It produces the
+identical token digest and reaches **89,416,974,336 bytes** of sampled physical
+usage, down 9,771,335,680 bytes from the earlier full calibration. Its 134.590 s
+prefill and 3.066 TPS decode are single-run measurements, not a speed claim.
+The typed Engram report and corrected shared transient-pool total are present
+in this new raw receipt. All 18 focused resident I/O tests passed under the same
+guard before the benchmark process started. Service restoration and unchanged
+swapouts were verified afterward.
+
+The larger-cache Python measurement starts from that bound, adds about 10 GB
+to the allocation target, and retains the conservative 16 GiB transient band
+and 2 GiB allocator cache. At the calibration baseline, the 110 GB split is
+46.748 GB baseline + 2.147 GB Python + 61.105 GB Metal. Of Metal, 17.180 GB remains
+outside the 43.925 GB engine plan for transients; the freed allocator cache is
+inside this allocation. The real guard remeasures the baseline and derives the
+actual plan again before load. `coding-budget-preflight.json` is the prospective
+calculation, not a usage receipt or a pinned plan.
+
 ## Receipt provenance and corrections
 
 `calibration-fixed.jsonl` and its OS trace and guard log are unchanged raw
@@ -85,7 +105,8 @@ The historical prompt ends with a markdown-report instruction that says
 "No code." The new pinned fixtures retain the repository's naturalistic Python
 patch request, including its helper and pytest requirements, and omit that
 contradictory suffix. They use the artifact's tokenizer and exact chat template
-with thinking disabled. No generation has yet been measured on these fixtures.
+with thinking disabled. The first complete measurement on the 16K fixture is
+recorded below.
 
 | Input tokens | SHA-256 of JSON token IDs |
 | --- | --- |
@@ -104,3 +125,25 @@ Full-model measurements still require the exclusive GPU guard, a bounded load
 and compile peak, service restoration, and an explicit prompt IDs file. Report
 actual tokens through EOS and distinguish decode steps from the first token
 produced by prefill.
+
+## Full Python workload and revised default reserve
+
+`python-16k-1024-band16-*` records source `607995471` on the 16,384-token
+Python fixture, with 1,023 timed decode steps plus the first token from prefill.
+The 110 GB target, 16 GiB transient reserve, and 2 GiB allocator cache admitted
+27 expert slots per layer. Decode was **3.778795 TPS** over 270.721 s; prefill
+was 134.578 s. Sampled physical usage peaked at **100,142,891,008 bytes**.
+The summary contains the exact sampled peak and counter deltas. Swapouts did
+not increase, and the exact service returned healthy with warmup done.
+The output is a Python unified diff, truncated at the 1,024-token cap; its code
+was not applied or tested. This is throughput evidence, not code-quality proof.
+
+These receipts exposed an unsafe default projection: the previous 5.54 GiB
+transient reserve and 6 GiB allocator cache would admit enough extra expert
+slots to require about 115.21 GB when the measured active peak and full cache
+capacities are included. The revised defaults reserve 10 GiB for transients
+and bound the allocator cache to 2 GiB. At the same baseline, they admit 35
+slots per layer and project a 107.91 GB envelope. CPU regressions cover both
+benchmark and serving session-bank reservations. A guarded run at these new
+defaults is still required; the projection only covers the measured 16K AR
+geometry and does not establish safety for arbitrary contexts or MTP.

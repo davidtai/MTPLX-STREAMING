@@ -54,12 +54,12 @@ the DeepSeek serving constructor resolve the following allocation before load:
 | Engram payload within Python reserve | Two 256 MiB row arenas; index/free-list storage priced separately at 256 bytes per slot |
 | Other Python within reserve | 1 GiB for tokenizer, temporary rows and reader bookkeeping |
 | Metal allocator and wired policy | 110 GB minus measured baseline minus Python reserve |
-| Freed Metal allocator cache | 6 GiB, **inside** the Metal allocation |
-| Metal prefill/decode reserve | `max(5.54, 1.45 + 6)` GiB; sizes the engine below the allocator limit |
+| Freed Metal allocator cache | 2 GiB, **inside** the Metal allocation |
+| Metal prefill/decode reserve | `max(10, 1.45 + 2)` GiB; sizes the engine below the allocator limit |
 | Serving session bank | 2 GiB retained compact owners, 2 GiB admitted copy candidate and 2 GiB scratch allowance for strided copies, additionally reserved inside Metal |
 
 For example, a 12 GB baseline leaves 95.85 GB for Metal and 2.15 GB for Python.
-The engine receives 87.85 GB for benchmarks or 81.41 GB for serving with the
+The engine receives 85.12 GB for benchmarks or 78.67 GB for serving with the
 default session bank. These engine totals include their existing runtime/KV
 reserves; the expert slot planner derives the remaining cache capacity.
 
@@ -158,3 +158,14 @@ and non-macOS APIs retain their prior lazy path loading. These are construction
 routes; no eligibility checks or fallback branches were added to generation.
 Tiny guarded tests preserve BF16/F32 signed zero and NaN payloads, U8/U32 data,
 shape and dtype after the uncached file handle closes.
+
+The uncached 16K measurements also exposed an underpriced default transient
+reserve. The active allocation peak exceeds fixed storage plus actual expert
+slots by about 6.53 GiB; the allocator's full retained cache must be added to
+that amount. The old 5.54 GiB prefill band and 6 GiB cache admit a projected
+115.21 GB envelope for the measured Python workload. The revised defaults are
+a 10 GiB transient band and 2 GiB cache, with a projected 107.91 GB envelope
+after actual slot rounding. This regression uses the true MLX active peak,
+full cache capacity, full Python reserve and measured baseline, not a sampled
+OS peak alone. These are workload-specific bounds; other shapes, MTP and larger
+explicit cache overrides still require their own headroom checks.

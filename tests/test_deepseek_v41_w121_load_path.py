@@ -123,12 +123,13 @@ def test_box_target_ar_end_to_end(tmp_path, monkeypatch):
     assert tp is not None
     assert tp["box_target_gb"] == 100.0
     assert abs(tp["box_baseline_gb"] - 10.42) < 1e-9
-    # HIGH-A: allocator limit = target - baseline - host(0.5 GiB); engine = allocator
-    # - max(band 5.54, active_overshoot 1.45 + cache 6) = allocator - 7.45.
+    # Current defaults: allocator = target - baseline - host(2 GiB);
+    # engine leaves the 10 GiB measured prefill reserve, including the 2 GiB cache.
     assert tp["allocator_limit_bytes"] == int(round((100 - 10.42) * GB)) - int(round(2.0 * GIB))
     assert tp["engine_budget_bytes"] == (
-        tp["allocator_limit_bytes"] - max(int(round(5.54 * GIB)), int(round(1.45 * GIB)) + 6 * GIB)
+        tp["allocator_limit_bytes"] - 10 * GIB
     )
+    assert tp["allocator_cache_limit_gib"] == 2.0
     # the loader is handed the engine budget (grows the persistent slots to the target)
     assert abs(cap["memory_limit_bytes"] - tp["engine_budget_bytes"]) < 4096
     assert cap["max_live_kv_tokens"] == 2048
@@ -178,7 +179,7 @@ def test_memory_plan_from_pins_components_end_to_end(tmp_path, monkeypatch):
     tp = args._dsv41_target_plan
     assert tp is not None
     assert tp["pinned_from"] == str(sidecar)
-    # allocator = target - baseline - host(0.5); engine = allocator - max(5.54, 1.45+6)
+    # Historical pinned components override defaults: host(2), max(5.54, 1.45+6).
     assert tp["engine_budget_bytes"] == (
         int(round((100 - 10.42) * GB)) - int(round(2.0 * GIB))
         - max(int(round(5.54 * GIB)), int(round(1.45 * GIB)) + 6 * GIB)

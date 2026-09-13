@@ -1777,8 +1777,10 @@ BOX_TRANSIENT_BAND_ENV = "MTPLX_DSV41_TRANSIENT_BAND_GIB"
 BOX_HOST_OVERHEAD_ENV = "MTPLX_DSV41_HOST_OVERHEAD_GIB"
 BOX_ACTIVE_OVERSHOOT_ENV = "MTPLX_DSV41_ACTIVE_OVERSHOOT_GIB"
 BOX_SESSION_BANK_ENV = "MTPLX_DSV41_SESSION_BANK_GIB"
-DEFAULT_ALLOC_CACHE_GIB = 6.0  # freed-buffer LRU bound (set_cache_limit alone)
-DEFAULT_TRANSIENT_BAND_GIB = 5.54  # mlx_peak - PLAN (windows 46/47: 74.72 - 69.18)
+# Uncached 16K receipts show ~6.53 GiB active overhang above allocated plan
+# storage. The prefill band includes the full 2 GiB freed cache plus headroom.
+DEFAULT_ALLOC_CACHE_GIB = 2.0
+DEFAULT_TRANSIENT_BAND_GIB = 10.0
 DEFAULT_ACTIVE_OVERSHOOT_GIB = 1.45  # active_at_decode_start - PLAN (W47 receipt 1.4416; round up to cover it)
 DEFAULT_HOST_OVERHEAD_GIB = 2.0  # full default Engram arenas, indices, and other Python
 
@@ -4757,9 +4759,10 @@ class ExpertStreamingRuntime:
         demand path is byte-identical with the flag off.
 
         MED-a: the await is BOUNDED (``_prefetch_reconcile_timeout_s``, default
-        2.0 s). On timeout -- or on a failed read -- the ticket is invalidated and
-        the route falls back to a demand load, so a stuck speculative read never
-        parks the generation thread under the layer lock for the whole route."""
+        2.0 s). On timeout the route can use a demand load while the ring retains
+        the unfinished writer's assignment. Only a terminal failed/cancelled
+        read can release its ticket; a running read must keep its physical slot
+        until completion, even after the demand route stops waiting."""
 
         if self.config.prefetch_slots <= 0:
             return
@@ -4784,13 +4787,10 @@ class ExpertStreamingRuntime:
             # MED-a: bound the wait held under the layer lock. An unbounded
             # ``future.result()`` parked the generation thread on a stuck
             # speculative read for the whole route. With a timeout, ``result``
-            # raises on timeout OR read failure; either way ``ok`` is False and we
-            # fall back to a DEMAND load -- invalidate the ring ticket so the
-            # route's own planner (``_plan_route_transaction``, next, still under
-            # this layer lock) sees the expert as a normal miss and streams it on
-            # the demand path. A speculative read still running after a timeout is
-            # later ticket-refused (a wasted read, never corruption: ring and
-            # transient slots are physically disjoint).
+            # raises on timeout OR read failure. An unpublished ring assignment
+            # is already invisible to demand planning, so a timeout need not
+            # release it. Retaining it prevents a stale physical writer from
+            # overwriting a newer expert in the same ring slot.
             try:
                 future.result(timeout=self._prefetch_reconcile_timeout_s)
                 ok = True
@@ -4803,10 +4803,11 @@ class ExpertStreamingRuntime:
                 if bank.commit_prefetch(expert, ticket=ticket):
                     awaited += 1
             elif not ok:
-                # Timed out or failed: drop the speculative ticket and let the
-                # demand planner stream it. Account those bytes on the DEMAND side
-                # of the demand/speculative split (this expert is read on demand).
-                bank.invalidate_prefetch(expert, ticket=ticket)
+                # A finished read cannot write again. An unfinished read still
+                # owns its ring slot; its completion callback will publish or
+                # invalidate it once recycling is safe.
+                if future.done():
+                    bank.invalidate_prefetch(expert, ticket=ticket)
                 fell_back += 1
         # Catch any reads that settled while we awaited above.
         self._apply_prefetch_completions(layer, bank)
@@ -4814,8 +4815,7 @@ class ExpertStreamingRuntime:
             with self._counter_lock:
                 self.counters.prefetch_awaited_inflight += awaited
                 self._layer_counters[layer].prefetch_awaited_inflight += awaited
-        # W95f: the fell-back experts were invalidated above (``invalidate_prefetch``)
-        # and are re-planned as demand misses by ``_plan_route_transaction``
+        # W95f: unpublished experts are re-planned as demand misses by ``_plan_route_transaction``
         # (begin_split_route), where their bytes are now accounted via
         # ``miss_plan.loads``. Adding them here as well double-counted the demand
         # denominator -- and, being fallback-only, this was the sole demand writer,
@@ -5033,8 +5033,9 @@ class ExpertStreamingRuntime:
         A load can sit in the executor queue while later plan_prefetch
         calls recycle its ring assignment; performing the read anyway
         would waste SSD bandwidth on bytes whose ticketed commit is
-        guaranteed to be refused. The check is advisory — recycling after
-        it is still caught by the ticket at commit time.
+        guaranteed to be refused. The check is advisory; physical assignment
+        ownership lasts until this worker's Future is terminal. A stale commit
+        check alone cannot prevent a late writer from overwriting recycled bytes.
         """
 
         bank = self._banks.get(layer)
@@ -5042,8 +5043,8 @@ class ExpertStreamingRuntime:
         if bank is None or lock is None:
             return
         # Advisory only, so never block a worker on a route-held layer
-        # lock: when the lock is contended just perform the read — a
-        # recycled assignment's bytes are refused at commit time anyway.
+        # lock: when the lock is contended the still-owned assignment permits
+        # the read to proceed without waiting for generation.
         if lock.acquire(blocking=False):
             try:
                 live = bank.prefetch_ticket(load.expert) == ticket
