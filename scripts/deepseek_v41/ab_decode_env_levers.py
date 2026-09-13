@@ -179,12 +179,17 @@ def _ab_memory_block(block: dict, readback: dict) -> dict:
         plus a GiB twin.  Sourced from the sampler's ``process_peak_rss_gb`` (mach
         phys_footprint), which is already GiB.
       * ``mlx_peak_gb`` / ``mlx_active_gb_at_decode_start`` / ``_end`` /
-        ``mlx_cache_gb_at_decode_end`` / ``mlx_limit_gib_effective`` -- the allocator's
-        own peak, working set at the decode bracket, retained freed-buffer cache, and
-        the soft limit it was capped at.
+        ``mlx_cache_gb_at_decode_end`` -- the allocator's own peak, working set at the
+        decode bracket, and retained freed-buffer cache.
+      * ``mlx_limit_gib_effective`` -- the limit ACTUALLY passed to set_memory_limit,
+        filled later by :func:`_apply_effective_limit` from the apply_mlx_memory_cap
+        report.  ``mlx_gc_limit_gib_readback`` is the value get_memory_limit reports back
+        (the gc_limit the allocator ENFORCES = min(passed, 0.95 * maxWorkingSet)); it can
+        be LOWER than the passed value when the OS clamps it (window 49: passed 77.18,
+        readback 70.18), so it is a diagnostic, not the effective limit.
 
-    ``box_baseline_gb`` / ``box_used_gb`` (= baseline + footprint) are injected later
-    by :func:`_inject_box_used`, where the target baseline (on ``args``) is in scope."""
+    ``box_baseline_gb`` / ``box_used_gb`` (= baseline + footprint) are injected later by
+    :func:`_inject_box_used`; ``mlx_limit_gib_effective`` by :func:`_apply_effective_limit`."""
 
     footprint_gib = block.get("process_peak_rss_gb")  # bracketed phys_footprint (GiB)
     footprint_gb = (
@@ -197,40 +202,84 @@ def _ab_memory_block(block: dict, readback: dict) -> dict:
         "mlx_active_gb_at_decode_start": readback.get("mlx_active_gb_at_decode_start"),
         "mlx_active_gb_at_decode_end": readback.get("mlx_active_gb_at_decode_end"),
         "mlx_cache_gb_at_decode_end": readback.get("mlx_cache_gb_at_decode_end"),
-        "mlx_limit_gib_effective": readback.get("mlx_limit_gib_readback"),
+        # the OS-clamped gc_limit the allocator enforces (get_memory_limit readback);
+        # diagnostic only -- the effective limit is the PASSED value (below).
+        "mlx_gc_limit_gib_readback": readback.get("mlx_limit_gib_readback"),
+        # filled from the apply_mlx_memory_cap report (the value passed to
+        # set_memory_limit); None only if no cap report is available.
+        "mlx_limit_gib_effective": None,
     }
 
 
 def _memory_cap_block(runtime):
-    """W121 MEDIUM-6: the ``apply_mlx_memory_cap`` report from the runtime, lifted into
-    the receipt -- the applied limit, wired_limit_applied / cache_limit_applied,
-    slot_derivation, and the box-target components.  ``None`` when the runtime carries
-    no report (a stub runtime, or apply_memory_cap disabled)."""
+    """W121 MEDIUM-6: the ``apply_mlx_memory_cap`` report, lifted into the receipt on
+    EVERY path (explicit --memory-limit-gib as well as the box target) -- applied limit,
+    wired_limit_applied / cache_limit_applied, slot_derivation, box-target components.
+    Reads ``runtime.memory_cap_report``, else falls back to
+    ``runtime.resource_telemetry_snapshot()['memory_cap']`` (same object).  ``None`` only
+    when the runtime has neither (a stub runtime, or apply_memory_cap disabled)."""
 
     rep = getattr(runtime, "memory_cap_report", None)
-    return rep if isinstance(rep, dict) else None
+    if isinstance(rep, dict):
+        return rep
+    snap = getattr(runtime, "resource_telemetry_snapshot", None)
+    if callable(snap):
+        try:
+            mc = snap().get("memory_cap")
+        except Exception:  # pragma: no cover - defensive
+            mc = None
+        if isinstance(mc, dict):
+            return mc
+    return None
 
 
 def _apply_effective_limit(mem, cap) -> None:
-    """Set ``mlx_limit_gib_effective`` from apply_mlx_memory_cap's APPLIED limit (MEDIUM-6).
-    mlx 0.32.2 has no ``get_memory_limit`` readback, so the readback-derived value in
-    the block is ``None``; the authoritative effective limit is what the cap actually
-    handed ``set_memory_limit`` (report['limit'])."""
-
-    if isinstance(mem, dict) and isinstance(cap, dict) and cap.get("limit") is not None:
-        mem["mlx_limit_gib_effective"] = int(cap["limit"]) / GIB
-
-
-def _inject_box_used(mem, args) -> None:
-    """Add ``box_baseline_gb`` + ``box_used_gb`` (= baseline + process footprint,
-    decimal GB) to a receipt ``memory`` block, from the target baseline stashed on
-    ``args._dsv41_target_plan``.  Both ``None`` on the legacy (no-target) path -- the
-    box figure is only knowable once the baseline is armed."""
+    """Set ``mlx_limit_gib_effective`` to the limit ACTUALLY passed to set_memory_limit
+    (MEDIUM-6 / window-49): the apply_mlx_memory_cap report's ``limit`` -- NOT the
+    get_memory_limit readback, which the OS clamps to 0.95 * maxWorkingSet (window 49:
+    passed 77.18, readback 70.18).  Falls back to the clamped readback only when no cap
+    report is available at all, so the field is never silently wrong on any path."""
 
     if not isinstance(mem, dict):
         return
+    if isinstance(cap, dict) and cap.get("limit") is not None:
+        mem["mlx_limit_gib_effective"] = int(cap["limit"]) / GIB
+    elif mem.get("mlx_limit_gib_effective") is None:
+        # last-resort: the clamped readback (better than None when no cap report).
+        mem["mlx_limit_gib_effective"] = mem.get("mlx_gc_limit_gib_readback")
+
+
+def _resolve_receipt_baseline_gb(args):
+    """The macOS+agent baseline (decimal GB) for the receipt's box_used, on EVERY path.
+    Window-49 fix: box_used was 0 on the explicit --memory-limit-gib path because the
+    baseline was read ONLY from the target plan.  Prefer the target plan (when armed),
+    else the env MTPLX_DSV41_BOX_BASELINE_GB that gpu_window.sh exports from its in-window
+    USED_START, else --box-baseline-gb -- so box_used = baseline + footprint is correct
+    independent of the target derivation."""
+
     tp = getattr(args, "_dsv41_target_plan", None)
-    baseline_gb = tp.get("box_baseline_gb") if tp else None
+    if tp and tp.get("box_baseline_gb") is not None:
+        return float(tp["box_baseline_gb"])
+    raw = os.environ.get("MTPLX_DSV41_BOX_BASELINE_GB")
+    if raw and str(raw).strip() and str(raw).strip().lower() != "default":
+        try:
+            return float(str(raw).strip())
+        except ValueError:
+            pass
+    v = getattr(args, "box_baseline_gb", None)
+    return None if v is None else float(v)
+
+
+def _inject_box_used(mem, args) -> None:
+    """Add ``box_baseline_gb`` + ``box_used_gb`` (= baseline + process footprint peak,
+    decimal GB) to a receipt ``memory`` block.  The baseline comes from the target plan,
+    the gpu_window-exported MTPLX_DSV41_BOX_BASELINE_GB env, or --box-baseline-gb (in that
+    order), so box_used is right on the explicit --memory-limit-gib path too, not only
+    when the box target is armed."""
+
+    if not isinstance(mem, dict):
+        return
+    baseline_gb = _resolve_receipt_baseline_gb(args)
     fp = mem.get("process_footprint_peak_gb")
     mem["box_baseline_gb"] = None if baseline_gb is None else round(baseline_gb, 4)
     mem["box_used_gb"] = (

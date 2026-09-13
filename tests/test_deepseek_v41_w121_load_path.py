@@ -225,3 +225,75 @@ def test_memory_plan_from_missing_raises(tmp_path, monkeypatch):
     bench = _t.SimpleNamespace(resolve_max_kv=lambda c, d, m: int(m or 2048))
     with pytest.raises(FileNotFoundError):
         ab._resolve_derivation(args, bench=bench, max_kv=2048)
+
+
+# --------------------------------------------------------------------------
+# Window-49 fixes: receipt box_used / mlx_limit_gib_effective / memory_cap on the
+# EXPLICIT --memory-limit-gib path (no box target armed).
+# --------------------------------------------------------------------------
+
+
+def test_inject_box_used_reads_exported_baseline_on_explicit_path(monkeypatch):
+    ab = _ab()
+    # explicit path: no target plan on args, but gpu_window exported the baseline env.
+    monkeypatch.setenv("MTPLX_DSV41_BOX_BASELINE_GB", "10.81")
+    args = types.SimpleNamespace(_dsv41_target_plan=None, box_baseline_gb=None)
+    mem = {"process_footprint_peak_gb": 84.07}
+    ab._inject_box_used(mem, args)
+    assert mem["box_baseline_gb"] == 10.81
+    assert mem["box_used_gb"] == round(10.81 + 84.07, 4)  # was 0.00 before the fix
+
+
+def test_inject_box_used_target_plan_wins_over_env(monkeypatch):
+    ab = _ab()
+    monkeypatch.setenv("MTPLX_DSV41_BOX_BASELINE_GB", "10.81")
+    args = types.SimpleNamespace(_dsv41_target_plan={"box_baseline_gb": 11.0},
+                                 box_baseline_gb=None)
+    mem = {"process_footprint_peak_gb": 80.0}
+    ab._inject_box_used(mem, args)
+    assert mem["box_baseline_gb"] == 11.0  # target plan preferred
+    assert mem["box_used_gb"] == 91.0
+
+
+def test_inject_box_used_none_when_no_baseline_anywhere(monkeypatch):
+    ab = _ab()
+    monkeypatch.delenv("MTPLX_DSV41_BOX_BASELINE_GB", raising=False)
+    args = types.SimpleNamespace(_dsv41_target_plan=None, box_baseline_gb=None)
+    mem = {"process_footprint_peak_gb": 80.0}
+    ab._inject_box_used(mem, args)
+    assert mem["box_baseline_gb"] is None
+    assert mem["box_used_gb"] is None
+
+
+def test_effective_limit_is_the_passed_value_not_the_clamped_readback():
+    ab = _ab()
+    # window-49: set_memory_limit passed 77.18 GiB but get_memory_limit reads back the
+    # OS-clamped 70.18; mlx_limit_gib_effective must be the PASSED value.
+    mem = {"mlx_limit_gib_effective": None, "mlx_gc_limit_gib_readback": 70.18}
+    cap = {"limit": int(round(77.18 * GIB))}
+    ab._apply_effective_limit(mem, cap)
+    assert abs(mem["mlx_limit_gib_effective"] - 77.18) < 1e-6
+
+
+def test_effective_limit_falls_back_to_readback_without_cap():
+    ab = _ab()
+    mem = {"mlx_limit_gib_effective": None, "mlx_gc_limit_gib_readback": 70.18}
+    ab._apply_effective_limit(mem, None)
+    assert mem["mlx_limit_gib_effective"] == 70.18
+
+
+def test_memory_cap_block_reads_report_and_snapshot_fallback():
+    ab = _ab()
+    rep = {"applied": True, "limit": 123, "wired_limit_applied": True,
+           "cache_limit_applied": True}
+    # primary: runtime.memory_cap_report
+    rt = types.SimpleNamespace(memory_cap_report=rep)
+    assert ab._memory_cap_block(rt) is rep
+    # fallback: resource_telemetry_snapshot()['memory_cap'] when the attr is missing
+    rt2 = types.SimpleNamespace(
+        memory_cap_report=None,
+        resource_telemetry_snapshot=lambda: {"memory_cap": rep},
+    )
+    assert ab._memory_cap_block(rt2) is rep
+    # neither -> None
+    assert ab._memory_cap_block(types.SimpleNamespace()) is None
