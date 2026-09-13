@@ -4086,6 +4086,10 @@ class DeepseekV41Backbone(nn.Module):
                     engram_currents.append(None)
 
         row_cap = _derive_moe_row_cap(self.args, _prefill_moe_row_target_bytes())
+        # Small verification calls can select this schedule with an explicit
+        # tiny chunk. Keep their decode caches; large prefills need each dense
+        # projection only until that layer's final chunk has completed.
+        release_dense_projection = b * s > _DECODE_ATTN_KERNEL_MAX_ROWS
 
         for layer in self.layers:
             lc = cache.layers[layer.layer_id]
@@ -4124,6 +4128,11 @@ class DeepseekV41Backbone(nn.Module):
             for c in range(n_chunks):
                 hs[c] = layer.moe_combine(moe_outputs[c], carries[c])
             mx.eval(hs)
+            if release_dense_projection:
+                # This existing fence has consumed the attention and FFN
+                # carries. Preserve reuse across chunks, then release before
+                # the next layer instead of retaining 40 fp32 weight copies.
+                layer.attn._wo_a_dense_cache = None
 
         cache.advance(s)
 
