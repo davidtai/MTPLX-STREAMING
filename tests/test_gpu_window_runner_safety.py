@@ -94,6 +94,42 @@ class GuardSafetyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(int(result.stdout), (10 + 100 + 200 + 30) * 16384)
 
+    def test_capture_actual_model_directory(self):
+        Path(self.env['FAKE_HEALTH']).write_text(json.dumps({'model_path': str(self.path)}))
+        result = self.run_guard('--selftest', 'model-path')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(self.path.resolve()))
+
+    def test_reject_missing_or_ambiguous_model_directory(self):
+        for value in (None, '', 'relative/model', '/tmp/model\nwrong'):
+            Path(self.env['FAKE_HEALTH']).write_text(json.dumps({'model_path': value}))
+            result = self.run_guard('--selftest', 'model-path')
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_automatic_reclamation_precedes_fresh_baseline(self):
+        source = GUARD.read_text()
+        start = source.index('# ---------------- phase 3:')
+        call = source.index('if ! _reclaim_qwen_file_cache;', start)
+        baseline = source.index('if ! USED_START=', start)
+        self.assertLess(start, call)
+        self.assertLess(call, baseline)
+        self.assertIn('QWEN_PROCESS_IDS', source[start:call])
+
+    def test_failed_reclamation_refuses_workload(self):
+        source = GUARD.read_text()
+        start = source.index('_reclaim_qwen_file_cache() {')
+        end = source.index('\n_restored_api_ready()', start)
+        helper = self.path / 'reclaim_file_cache.py'
+        helper.write_text('raise SystemExit(17)\n')
+        script = 'SCRIPT_PATH="$FAKE_SCRIPT"; QWEN_MODEL_PATH=/tmp/model; TOTAL_MEM_CEILING_BYTES=110000000000\n'
+        script += 'used_mem_bytes() { echo 1000; }; log() { :; }; err() { :; }; _check_abort() { :; };\n'
+        script += source[start:end]
+        script += '\nif ! _reclaim_qwen_file_cache; then exit 8; fi\nprintf WORKLOAD_STARTED\n'
+        env = dict(self.env, FAKE_SCRIPT=str(self.path / 'guard.sh'))
+        result = subprocess.run(['/bin/bash', '-c', script], env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 8, result.stderr)
+        self.assertNotIn('WORKLOAD_STARTED', result.stdout)
+
     def test_registered_but_unhealthy_service_does_not_restore(self):
         Path(self.env["FAKE_HEALTH"]).write_text('{"ok": false}')
         result = self.run_guard("--selftest", "restore-run", "1", "")
@@ -135,6 +171,19 @@ esac
         result = subprocess.run(["/bin/bash", "-c", script], env=self.env,
                                 capture_output=True, text=True, timeout=3)
         self.assertNotEqual(result.returncode, 0)
+
+    def test_teardown_does_not_restore_over_surviving_qwen_descendant(self):
+        source = GUARD.read_text()
+        start = source.index('teardown() {')
+        end = source.index('\n# W106 abort item (a)', start)
+        script = "STEP_PID=''; _STEP_TAG=''; QWEN_STOP_REQUESTED=1; QWEN_PROCESS_IDS=$$;\n"
+        script += 'restore_qwen() { printf UNSAFE_BOOTSTRAP; }; err() { printf "%s\\n" "$*"; }; _step_children_exited() { return 0; };\n'
+        script += source[start:end] + '\ntrap teardown EXIT\nexit 5\n'
+        result = subprocess.run(['/bin/bash', '-c', script], env=self.env,
+                                capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 10)
+        self.assertIn('RESTORE_FAILED', result.stdout)
+        self.assertNotIn('UNSAFE_BOOTSTRAP', result.stdout)
 
     def test_healthy_wrong_model_does_not_restore(self):
         result = self.run_guard("--selftest", "restore-run", "1", "", '["expected"]')

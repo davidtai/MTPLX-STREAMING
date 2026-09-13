@@ -23,6 +23,8 @@
 #      races the port yield and leaves it down; memory/guarded-window-launch-
 #      protocol.md).  Poll until its pid is gone AND free memory rises by the
 #      expected resident-agent release, or fail loudly (no hidden retries).
+#      Capture its model directory before bootout, wait for captured descendants,
+#      then reclaim clean model-file cache before measuring the workload baseline.
 #   4. Run the step (argv) under a SYSTEM-WIDE memory guard.  Before starting it
 #      refuses to open if other mtplx/python workers above the foreign cap
 #      (default 2 GiB RSS) are resident (prints them).  While it runs, aborts +
@@ -122,6 +124,9 @@ CURL_CMD="${GPU_WINDOW_CURL_CMD:-/usr/bin/curl}"
 HEALTH_URL="${GPU_WINDOW_HEALTH_URL:-http://127.0.0.1:8080/health}"
 MODELS_URL="${GPU_WINDOW_MODELS_URL:-http://127.0.0.1:8080/v1/models}"
 EXPECTED_MODEL_IDS=""  # captured before bootout, never inferred from the replacement service
+QWEN_MODEL_PATH=""     # actual service artifact, captured before bootout
+QWEN_PROCESS_IDS=""    # descendants must exit before file-cache reclamation
+QWEN_STOP_REQUESTED=0  # set only after bootout succeeds
 # HIGH-3: safety caps REFUSE (exit 2) on an invalid value (never silently fall back).
 MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"  # GiB the step needs available after the stop
 _require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
@@ -387,6 +392,38 @@ except (KeyError, TypeError, ValueError):
 '
 }
 
+_read_model_path() {
+  local raw
+  raw="$("${CURL_CMD}" --fail --silent --connect-timeout 2 --max-time 2 "${HEALTH_URL}")" || return 1
+  printf '%s' "${raw}" | /usr/bin/env python3 -c '
+import json, pathlib, sys
+try:
+    value = json.load(sys.stdin)["model_path"]
+    if not isinstance(value, str) or not value.startswith("/") or any(c in value for c in "\n\r\0"):
+        raise ValueError("missing absolute model directory")
+    path = pathlib.Path(value).resolve(strict=True)
+    if not path.is_dir():
+        raise ValueError("model path is not a directory")
+    print(path)
+except (OSError, KeyError, TypeError, ValueError):
+    sys.exit(1)
+'
+}
+
+_reclaim_qwen_file_cache() {
+  local before
+  before="$(used_mem_bytes)" || return 1
+  if (( before + 1073741824 >= TOTAL_MEM_CEILING_BYTES )); then
+    err "cache reclamation lacks its bounded 1 GiB host headroom"
+    return 1
+  fi
+  log "phase 3: reclaiming stopped-service clean file cache from ${QWEN_MODEL_PATH}"
+  # Helper is stdlib-only, read-only, bounded to 30 seconds. The shell waits for
+  # it before any restore or model load; its exit precedes the fresh baseline.
+  /usr/bin/env python3 "$(dirname "${SCRIPT_PATH}")/reclaim_file_cache.py" "${QWEN_MODEL_PATH}" || return 1
+  _check_abort
+}
+
 _restored_api_ready() {
   local raw ids
   raw="$("${CURL_CMD}" --fail --silent --connect-timeout 2 --max-time 2 "${HEALTH_URL}")" || return 1
@@ -506,6 +543,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
       fi
       ;;
     heavy-workers)  list_heavy_foreign_workers ;;
+    model-path)    _read_model_path || exit 8 ;;
     tree-pids)      _step_tree_pids "${2:-}" || exit 8; echo ;;   # W106 item 4: tree walk
     restore-plist)  _resolve_restore_plist "${2:-}" "${3:-}" ; echo ;;  # discovered, canonical
     restore-run)
@@ -786,6 +824,14 @@ teardown() {
     err "RESTORE_FAILED: owned step processes remain alive or cannot be inspected; refusing to bootstrap over them. Manual recovery required before more GPU work."
     exit 10
   fi
+  if (( ${QWEN_STOP_REQUESTED:-0} == 1 )); then
+    for _old_qwen_pid in ${QWEN_PROCESS_IDS}; do
+      if kill -0 "${_old_qwen_pid}" 2>/dev/null; then
+        err "RESTORE_FAILED: captured Qwen process ${_old_qwen_pid} survived shutdown; refusing to bootstrap over it. Manual recovery required before more GPU work."
+        exit 10
+      fi
+    done
+  fi
   if ! restore_qwen; then
     err "RESTORE_FAILED: service readiness/identity not verified; manual recovery required before more GPU work (step exit ${ec})."
     exit 10
@@ -857,6 +903,14 @@ else
     exit 5
   fi
   log "phase 2: captured model identity ${EXPECTED_MODEL_IDS}"
+  if ! QWEN_MODEL_PATH="$(_read_model_path)"; then
+    err "phase 2: cannot capture the service model directory; refusing to boot out the service"
+    exit 5
+  fi
+  if ! QWEN_PROCESS_IDS="$(_step_tree_pids "${QWEN_PID}")" || [[ -z "${QWEN_PROCESS_IDS}" ]]; then
+    err "phase 2: cannot capture the service process tree; refusing to boot out the service"
+    exit 5
+  fi
 fi
 fi  # end phases 1-2 (skipped whole in GPU_WINDOW_TEST_MODE=1; phase 3 below is
     # then auto-skipped because WAS_LOADED stays 0, as is restore_qwen)
@@ -874,16 +928,18 @@ if (( WAS_LOADED == 1 )); then
     fi
   fi
   MIN_AVAIL_BYTES=$(( MIN_AVAIL_GB * 1024 * 1024 * 1024 ))
+  QWEN_STOP_REQUESTED=1
   deadline=$(( $(date +%s) + STOP_TIMEOUT ))
   pid_gone=0
   freed=0
   while (( $(date +%s) < deadline )); do
     _check_abort   # W106 (a): abort promptly even during the bootout wait
     if (( pid_gone == 0 )); then
-      if [[ -z "${QWEN_PID}" ]] || ! kill -0 "${QWEN_PID}" 2>/dev/null; then
-        pid_gone=1
-        log "phase 3: ${QWEN_LABEL} pid ${QWEN_PID:-<none>} is gone"
-      fi
+      pid_gone=1
+      for _qwen_pid in ${QWEN_PROCESS_IDS}; do
+        if kill -0 "${_qwen_pid}" 2>/dev/null; then pid_gone=0; fi
+      done
+      if (( pid_gone == 1 )); then log "phase 3: ${QWEN_LABEL} captured process tree is gone"; fi
     fi
     AVAIL_NOW="$(avail_bytes)"
     freed=$(( AVAIL_NOW - AVAIL_BEFORE ))
@@ -894,7 +950,7 @@ if (( WAS_LOADED == 1 )); then
     sleep 1
   done
   if (( pid_gone == 0 )); then
-    err "phase 3: ${QWEN_LABEL} pid ${QWEN_PID} still alive after ${STOP_TIMEOUT}s; aborting (no hidden retries)"
+    err "phase 3: ${QWEN_LABEL} process tree still alive after ${STOP_TIMEOUT}s; aborting (no hidden retries)"
     exit 5
   fi
   AVAIL_NOW="$(avail_bytes)"
@@ -920,6 +976,12 @@ if [[ -n "${HEAVY_WORKERS}" ]]; then
     err "    ${_hw_line}"
   done
   exit 7
+fi
+if [[ -n "${QWEN_MODEL_PATH}" ]]; then
+  if ! _reclaim_qwen_file_cache; then
+    err "phase 3: file-cache reclamation failed; refusing workload and restoring service"
+    exit 8
+  fi
 fi
 if ! USED_START="$(used_mem_bytes)"; then
   err "phase 4: baseline vm_stat unreadable or incomplete; refusing to start the step"

@@ -100,6 +100,23 @@ raises, verified with a fake device and no MLX import.
   Receipts and scripts: receipts/file-cache-reclaim-20260913. Reclaim before a
   fresh guard baseline, never subtract an estimated cache count. Larger expert
   residency still requires a bounded peak and an exact-workload parity run.
+- User requested automatic reclamation on Qwen shutdown, then minimum testing
+  and focus on optimizations. Normal gpu_window.sh now captures the actual model
+  path/process tree before stop, waits for descendants, reclaims read-only model
+  cache before the new baseline, and refuses workload on helper failure. Scope is
+  this runner's guarded shutdown. Six helper and 29 guard CPU tests plus existing
+  shell guard suites (51 cases) passed. Review found restoration could overlap a
+  surviving service descendant; a new targeted red/green regression fixes this
+  with a post-bootout survivor check before restore. Do not repeat broad tests
+  without a concrete new concern.
+- Next exact-workload run uses 16 GiB transient reserve, 2 GiB retained Metal
+  cache, 2 GiB Python capacity and the new lower measured baseline. Reviewed
+  same-graph bound adds exact persistent-storage delta plus two complete bank
+  images beyond the measured 35-slot active peak. At baseline 13.127 GB it
+  admits 71 slots/layer with a 104.010 GB conservative physical envelope.
+  Temporary wrapper: /tmp/dsv41-110-preflight/run_python_16k_1024_reclaimed.py.
+  Use normal guard, explicit MTPLX_DSV41_IO_READ_FANOUT=4 and no other inherited
+  MTPLX knobs. This run is pending, not evidence of throughput improvement.
 - `scripts/deepseek_v41/analyze_route_cache.py` computes a tested clairvoyant
   per-layer lower bound with optional admission and temporary service storage.
   It is diagnostic, not a deployable policy or promotion throughput.

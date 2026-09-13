@@ -23,6 +23,21 @@ File cache is reclaimable but remains visible in the physical total; excluding i
 must be labeled explicitly. Neither process footprint nor MLX bytes should be
 added to this system total: unified-memory pages are already included.
 
+The normal `scripts/deepseek_v41/gpu_window.sh` shutdown now automatically
+captures Qwen's actual model directory, waits for its captured process tree to
+exit, and reclaims clean safetensors file cache using read-only mappings. It then
+samples a fresh physical-used baseline for the DeepSeek allocation. Reclamation
+failure prevents the workload and runs the normal service restore. The parent
+holds the exclusive lock throughout; no cleanup command or opt-in flag is needed.
+This applies to this guard's shutdown, not unrelated direct launchctl commands.
+
+The helper reports cached-page counts separately from actual physical-used
+reduction, because speculative cached pages are already free. The
+[measured experiment](receipts/file-cache-reclaim-20260913/README.md) recovered
+33.750 GB of physical-used memory from the stopped service. That value is an
+observation, never a fixed subtraction or a promise for future runs. The 110 GB
+budget, Python capacities and transient/compile peak checks still apply.
+
 The benchmark takes OS observations at the generation boundaries and every
 second on a background thread that does not call MLX. Each observation has start
 and end monotonic timestamps around sequential kernel reads. Receipts keep up
