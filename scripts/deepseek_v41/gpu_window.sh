@@ -900,11 +900,18 @@ while :; do
     log "phase 4: WARN vm_stat unreadable this tick (live system-used term dropped); guarding on baseline + step footprint only -- box pressure from OTHER processes is NOT visible until vm_stat recovers"
   fi
   if (( ! tree_ok )); then
-    # HIGH-3: FAIL CLOSED.  The footprint reader broke (subprocess error / 15 s timeout)
-    # and returned '0' -- do NOT continue at box_used == baseline (fail-open, blind to
-    # the whole step).  A broken primary guard is not something to run a GPU step under,
-    # so ABORT.
-    err "phase 4: step-footprint reader UNREADABLE (returned no valid footprint); the box guard cannot see the step -- killing child and restoring"
+    # A gone/zombie ROOT is a BENIGN step exit, not a reader failure: the step raced us
+    # between the step_state check above and this read (e.g. `bash -c true` exiting fast),
+    # and tree_footprint exits non-zero on an unreadable root (MEDIUM-2).  Re-check
+    # liveness; if the step is gone, break and let the normal post-loop reap run.
+    step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"
+    if [[ -z "${step_state}" || "${step_state}" == Z* ]]; then
+      break
+    fi
+    # HIGH-3: FAIL CLOSED.  The reader broke (subprocess error / 15 s timeout) while the
+    # step is STILL ALIVE -- do NOT continue at box_used == baseline (fail-open, blind to
+    # the whole step); a broken primary guard is not something to run a GPU step under.
+    err "phase 4: step-footprint reader UNREADABLE for LIVE step ${STEP_PID} (returned no valid footprint); the box guard cannot see the step -- killing child and restoring"
     _kill_step_child
     exit 8
   fi
