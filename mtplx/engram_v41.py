@@ -45,6 +45,7 @@ __all__ = [
     "EngramV41",
     "EngramResidents",
     "load_engram_residents",
+    "load_engram_resident_tensors",
     "open_engram_row_cache",
     "n_hash_cols",
 ]
@@ -550,11 +551,30 @@ class EngramResidents:
         )
 
 
+def load_engram_resident_tensors(
+    sidecar: str | Path, *, layer_ids: Sequence[int], mode: str = "affine"
+) -> dict[str, mx.array]:
+    """Load the complete projection sidecar once for all attached Engram layers."""
+    from .resident_io import ResidentShardReader
+
+    # Snapshot sidecars may be symlinks to a content-addressed blob. Resolve
+    # once, then keep the no-follow descriptor open for admission and loading.
+    path = Path(sidecar).resolve(strict=True)
+    suffixes = ("wkv.weight", "wkv.scales", "q_weight", "k_weight")
+    if mode == "affine":
+        suffixes += ("wkv.biases",)
+    retained = {f"layers.{layer}.engram.{suffix}" for layer in layer_ids for suffix in suffixes}
+    with ResidentShardReader({path.name: path}, retained_names={path.name: retained}) as reader:
+        tensors = reader.load(path.name, mx)
+    return {name: value for name, value in tensors.items() if name in retained}
+
+
 def load_engram_residents(
     artifact_dir: str | Path,
     layer_id: int,
     *,
     sidecar_name: str = "engram-residents.safetensors",
+    preloaded: dict[str, mx.array] | None = None,
 ) -> EngramResidents:
     """Load one engram layer's resident projections from ``engram-residents.safetensors``.
 
@@ -565,6 +585,10 @@ def load_engram_residents(
     mxfp8 uses ``wkv.{weight,scales}`` (no bias).  ``q_weight``/``k_weight`` are returned as the
     exact F32 arrays.  ``dim`` and ``hc_mult`` are read off ``q_weight``'s ``[hc_mult, dim]`` shape
     and cross-checked against the wkv output width (``dim*(hc_mult+1)``).
+
+    Production attachment supplies one admitted, uncached ``preloaded`` dictionary
+    shared by all Engram layers. Standalone one-layer callers retain lazy path
+    loading so they do not eagerly allocate the sidecar's unused sibling layers.
     """
     directory = Path(artifact_dir)
     manifest_path = directory / "engram-manifest.json"
@@ -584,7 +608,7 @@ def load_engram_residents(
             group = int(wkv_q.get("group_size", group))
             mode = str(wkv_q.get("mode", mode))
 
-    tensors = mx.load(str(sidecar))
+    tensors = preloaded if preloaded is not None else mx.load(str(sidecar))
     base = f"layers.{layer_id}.engram"
     try:
         packed = tensors[f"{base}.wkv.weight"]

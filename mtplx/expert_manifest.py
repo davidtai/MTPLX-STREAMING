@@ -1453,10 +1453,13 @@ def save_expert_manifest(manifest: ExpertManifest, path: Path | str) -> ExpertMa
 
 
 def _read_safetensors_header(
-    path: Path, *, relative_name: str
+    path: Path, *, relative_name: str, fd: int | None = None
 ) -> tuple[ShardInfo, tuple[_TensorInfo, ...]]:
+    """Inspect a shard; a supplied descriptor is borrowed and never repositioned."""
+    owns_fd = fd is None
     try:
-        fd = os.open(path, _readonly_flags())
+        if owns_fd:
+            fd = os.open(path, _readonly_flags())
         try:
             metadata = os.fstat(fd)
             if not stat.S_ISREG(metadata.st_mode):
@@ -1472,7 +1475,8 @@ def _read_safetensors_header(
                 )
             header_raw = _pread_exact(fd, 8, header_length)
         finally:
-            os.close(fd)
+            if owns_fd:
+                os.close(fd)
     except OSError as exc:
         raise ExpertManifestError(f"could not inspect {relative_name}: {exc}") from exc
     header = _expect_object(

@@ -1,0 +1,95 @@
+            return_hidden=False,
+            emit_logits=not _final_logits_prefill_enabled(),
+            input_embeddings=input_embeddings,
+        )
+    _runtime_count(rt, "prefill_external_cache_only_calls")
+    if _prefill_stock_cache_only_enabled():
+        _runtime_count(rt, "prefill_stock_cache_only_calls")
+    if _prefill_omlx_external_enabled():
+        _runtime_count(rt, "prefill_omlx_external_calls")
+    if not _prefill_external_emit_logits_enabled():
+        return rt.forward_ar(
+            token_array,
+            cache=cache,
+            return_hidden=False,
+            emit_logits=False,
+            input_embeddings=input_embeddings,
+        )
+    if input_embeddings is not None:
+        unused_logits = rt.model(
+            token_array, cache=cache, input_embeddings=input_embeddings
+        )
+    else:
+        unused_logits = rt.model(token_array, cache=cache)
+    del unused_logits
+    return None
+
+
+def _forward_ar_optional_hidden(
+    rt: MTPLXRuntime,
+    token_array: Any,
+    *,
+    cache: Any,
+    hidden_variant: str | None,
+    emit_logits: bool = True,
+    logits_keep: int | None = None,
+    input_embeddings: Any | None = None,
+) -> tuple[Any, Any]:
+    """`forward_ar` as (logits, hidden), with hidden None on target-only runtimes.
+
+    Only request hidden states from a runtime that can produce them. Target-only
+    AR runtimes (laguna_ar) have no draft head: their forward_ar returns logits
+    alone, so an ungated ``return_hidden=True`` unpacks a lone logits array as
+    ``(logits, hidden)`` and raises "not enough values to unpack (expected 2,
+    got 1)" — the live serving crash in the warm session-restore suffix prefill.
+    `hidden_variant` travels only on the hidden branch for the same reason: the
+    generic runtime forwards it to the model as a kwarg a stock target does not
+    accept. This mirrors the cold prefill path and generate_ar, which both gate
+    return_hidden on rt.mtp_enabled. Callers must treat hidden as optional.
+    """
+
+    if not rt.mtp_enabled:
+        logits = rt.forward_ar(
+            token_array,
+            cache=cache,
+            return_hidden=False,
+            emit_logits=emit_logits,
+            logits_keep=logits_keep,
+            input_embeddings=input_embeddings,
+        )
+        return logits, None
+    return rt.forward_ar(
+        token_array,
+        cache=cache,
+        return_hidden=True,
+        hidden_variant=hidden_variant,
+        emit_logits=emit_logits,
+        logits_keep=logits_keep,
+        input_embeddings=input_embeddings,
+    )
+
+
+def _prefill_chunk_size() -> int:
+    override = _PREFILL_CHUNK_SIZE_OVERRIDE.get()
+    if override is not None:
+        return max(1, int(override))
+    raw = (os.environ.get("MTPLX_PREFILL_CHUNK_SIZE") or "2048").strip().lower()
+    if raw == "auto":
+        layout = _sustained_prefill_layout()
+        if layout == "contiguous_dense_decode":
+            return max(1, _env_int("MTPLX_PREFILL_CHUNK_SIZE_DENSE", 2048))
+        return max(1, _env_int("MTPLX_PREFILL_CHUNK_SIZE_REPAGE", 2048))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 2048
+
+
+@contextmanager
+def prefill_chunk_size_override(chunk_size: int | None):
+    """Apply a request-local prefill chunk override.
+
+    The legacy env knob remains supported for profiles and CLI diagnostics, but
+    the native app needs a live
+
+Please update the generation module above with a reusable `summarize_generation_outputs(outputs: Sequence[GenerationOutput]) -> dict[str, Any]` helper. Return a JSON-serializable summary containing request count, total generated tokens, mean and p95 prefill TPS, mean and p95 decode TPS, mean wall time, and peak memory in GiB. Handle an empty sequence without raising and ignore unavailable optional metrics. Preserve the module's existing type style and add focused pytest tests for an empty input and several representative outputs. Return only a unified diff against the existing code.

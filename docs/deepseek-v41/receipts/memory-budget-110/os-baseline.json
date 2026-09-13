@@ -1,0 +1,72 @@
+{
+  "schema": "dsv41-110-os-preflight-v1",
+  "time_ns": 1789278605729096000,
+  "host": {
+    "sample_start_monotonic_ns": 191710155167958,
+    "sample_end_monotonic_ns": 191710158267416,
+    "process": {
+      "peak_maxrss_bytes": 36831232,
+      "resident_bytes": 36913152,
+      "phys_footprint_bytes": 23953888,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 86164783104,
+      "wired_bytes": 3325624320,
+      "active_bytes": 6803636224,
+      "inactive_bytes": 35941646336,
+      "speculative_bytes": 396328960,
+      "anonymous_bytes": 4857479168,
+      "file_backed_bytes": 38284132352,
+      "compressor_bytes": 1571504128,
+      "compressed_bytes": 5767479296,
+      "used_bytes": 47642411008,
+      "non_file_used_bytes": 9754607616,
+      "swapins_pages": 778374,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "guard_baseline_gb": "47.6166",
+  "python_budget": {
+    "engram_layer_count": 2,
+    "engram_per_layer_bytes": 268435456,
+    "engram_payload_bytes": 536870912,
+    "engram_metadata_reserve_bytes": 520601600,
+    "other_python_reserve_bytes": 1073741824,
+    "required_host_bytes": 2131214336
+  },
+  "plan": {
+    "mlx_limit_bytes": 60235916352,
+    "box_target_gb": 110.0,
+    "box_baseline_gb": 47.6166,
+    "box_baseline_bytes": 47616600000,
+    "host_overhead_gib": 2.0,
+    "host_overhead_bytes": 2147483648,
+    "allocator_cache_limit_gib": 6.0,
+    "allocator_cache_limit_bytes": 6442450944,
+    "transient_band_gib": 5.54,
+    "transient_band_bytes": 5948529705,
+    "active_overshoot_gib": 1.45,
+    "active_overshoot_bytes": 1556925645,
+    "engine_reserve_bytes": 7999376589,
+    "session_bank_capacity_bytes": 0,
+    "session_bank_reserve_bytes": 0,
+    "engine_budget_bytes": 52236539763,
+    "python_cache_budget": {
+      "engram_layer_count": 2,
+      "engram_per_layer_bytes": 268435456,
+      "engram_payload_bytes": 536870912,
+      "engram_metadata_reserve_bytes": 520601600,
+      "other_python_reserve_bytes": 1073741824,
+      "required_host_bytes": 2131214336
+    },
+    "physical_ram_bytes": 137438953472,
+    "wired_hard_limit_bytes": 107374182400
+  },
+  "hardware": "hw.memsize: 137438953472\niogpu.wired_limit_mb: 102400\nvm.swapusage: total = 2048.00M  used = 1026.25M  free = 1021.75M  (encrypted)\n"
+}

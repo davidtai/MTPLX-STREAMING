@@ -27,6 +27,7 @@ the cache (rows are copied out as their run is read, then may be evicted), and a
 from __future__ import annotations
 
 import os
+import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Iterable, Protocol, Sequence
@@ -158,6 +159,11 @@ class FileRowReader:
     ``data_offset`` lets a bank sit at a byte offset inside a larger file (e.g. a safetensors
     tensor payload); for the engram ``.bin`` it is 0.  The preadv loop is lifted from
     ``_DescriptorReader.read_into`` (qwen4_ngram.py:2690) / ``EngramBank._read_record``.
+
+    macOS defaults to ``F_NOCACHE`` so random misses in the bounded row LRU do not
+    accumulate a second, unbounded copy in the OS file cache. Other platforms keep
+    buffered reads by default. Explicit ``bypass_page_cache=False`` permits a
+    buffered control; requested bypass must succeed before this reader is usable.
     """
 
     def __init__(
@@ -167,21 +173,34 @@ class FileRowReader:
         row_bytes: int,
         num_rows: int,
         data_offset: int = 0,
+        bypass_page_cache: bool | None = None,
     ) -> None:
         self.path = str(path)
         self.row_bytes = int(row_bytes)
         self.num_rows = int(num_rows)
         self.data_offset = int(data_offset)
+        self.bypass_page_cache = (
+            sys.platform == "darwin" if bypass_page_cache is None else bool(bypass_page_cache)
+        )
         self._fd = os.open(self.path, os.O_RDONLY)
         try:
             size = os.fstat(self._fd).st_size
-        except Exception:
-            os.close(self._fd)
+            need = self.data_offset + self.num_rows * self.row_bytes
+            if size < need:
+                raise ValueError(f"{self.path}: size {size} < required {need}")
+            if self.bypass_page_cache:
+                if sys.platform != "darwin":
+                    raise RuntimeError(f"{self.path}: required F_NOCACHE is only supported on macOS")
+                try:
+                    import fcntl
+
+                    fcntl.fcntl(self._fd, fcntl.F_NOCACHE, 1)
+                except (ImportError, AttributeError, OSError) as exc:
+                    raise RuntimeError(f"{self.path}: required F_NOCACHE could not be applied") from exc
+            self.io_cache_mode = "f-nocache" if self.bypass_page_cache else "buffered"
+        except BaseException:
+            self.close()
             raise
-        need = self.data_offset + self.num_rows * self.row_bytes
-        if size < need:
-            os.close(self._fd)
-            raise ValueError(f"{self.path}: size {size} < required {need}")
 
     def read_run(self, start_row: int, count: int) -> bytes:
         if count <= 0:
@@ -208,8 +227,8 @@ class FileRowReader:
     def close(self) -> None:
         fd = getattr(self, "_fd", None)
         if fd is not None:
-            os.close(fd)
             self._fd = None
+            os.close(fd)
 
     def __enter__(self) -> "FileRowReader":
         return self
@@ -264,6 +283,8 @@ class NGramRowCache:
         cache_rows: int | None = None,
     ) -> None:
         self.reader = reader
+        # Construction metadata, kept separate from resettable numeric counters.
+        self.io_cache_mode = getattr(reader, "io_cache_mode", "unknown")
         self.geometry = geometry
         self.row_bytes = geometry.row_bytes
         if int(getattr(reader, "row_bytes")) != self.row_bytes:

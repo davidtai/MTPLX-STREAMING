@@ -1,0 +1,176 @@
+{
+  "schema": "dsv41-row-file-cache-probe-v1",
+  "bank": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/engram/engram-L1.bin",
+  "row_bytes": 264,
+  "rows": [
+    {
+      "nocache": false,
+      "records": 16384,
+      "read_payload_bytes": 4325376,
+      "wall_s": 1.3354910839989316,
+      "before": {
+        "sample_start_monotonic_ns": 192107290122291,
+        "sample_end_monotonic_ns": 192107294995541,
+        "process": {
+          "peak_maxrss_bytes": 24199168,
+          "resident_bytes": 25051136,
+          "phys_footprint_bytes": 14057952,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 87454384128,
+          "wired_bytes": 3333079040,
+          "active_bytes": 7200227328,
+          "inactive_bytes": 34479308800,
+          "speculative_bytes": 61308928,
+          "anonymous_bytes": 4551442432,
+          "file_backed_bytes": 37189402624,
+          "compressor_bytes": 1660960768,
+          "compressed_bytes": 6056083456,
+          "used_bytes": 46673575936,
+          "non_file_used_bytes": 9545482240,
+          "swapins_pages": 778398,
+          "swapouts_pages": 4399765,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "after": {
+        "sample_start_monotonic_ns": 192108630509458,
+        "sample_end_monotonic_ns": 192108633467041,
+        "process": {
+          "peak_maxrss_bytes": 25182208,
+          "resident_bytes": 25182208,
+          "phys_footprint_bytes": 14107104,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 87144448000,
+          "wired_bytes": 3332702208,
+          "active_bytes": 7239467008,
+          "inactive_bytes": 34479587328,
+          "speculative_bytes": 334495744,
+          "anonymous_bytes": 4591108096,
+          "file_backed_bytes": 37462441984,
+          "compressor_bytes": 1660960768,
+          "compressed_bytes": 6056083456,
+          "used_bytes": 46712717312,
+          "non_file_used_bytes": 9584771072,
+          "swapins_pages": 778398,
+          "swapouts_pages": 4399765,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "sha256": "5f3a0fe18ff8a8703ca1074f531e3fea967144d7248352713b7e4b49c54cda08"
+    },
+    {
+      "nocache": true,
+      "records": 16384,
+      "read_payload_bytes": 4325376,
+      "wall_s": 1.3162710840115324,
+      "before": {
+        "sample_start_monotonic_ns": 192108635469833,
+        "sample_end_monotonic_ns": 192108637206500,
+        "process": {
+          "peak_maxrss_bytes": 25968640,
+          "resident_bytes": 25968640,
+          "phys_footprint_bytes": 14877152,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 87141515264,
+          "wired_bytes": 3332702208,
+          "active_bytes": 7240155136,
+          "inactive_bytes": 34479587328,
+          "speculative_bytes": 334495744,
+          "anonymous_bytes": 4591796224,
+          "file_backed_bytes": 37462441984,
+          "compressor_bytes": 1660960768,
+          "compressed_bytes": 6056083456,
+          "used_bytes": 46713405440,
+          "non_file_used_bytes": 9585459200,
+          "swapins_pages": 778398,
+          "swapouts_pages": 4399765,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "after": {
+        "sample_start_monotonic_ns": 192109953485208,
+        "sample_end_monotonic_ns": 192109956208666,
+        "process": {
+          "peak_maxrss_bytes": 26001408,
+          "resident_bytes": 26001408,
+          "phys_footprint_bytes": 14909920,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 87195222016,
+          "wired_bytes": 3332669440,
+          "active_bytes": 7189463040,
+          "inactive_bytes": 34479587328,
+          "speculative_bytes": 334495744,
+          "anonymous_bytes": 4541104128,
+          "file_backed_bytes": 37462441984,
+          "compressor_bytes": 1660960768,
+          "compressed_bytes": 6056050688,
+          "used_bytes": 46662680576,
+          "non_file_used_bytes": 9534734336,
+          "swapins_pages": 778398,
+          "swapouts_pages": 4399765,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "sha256": "e244a718521ccfa0df6100563a2923b012c493a052302a463b2d84776498fcf4"
+    }
+  ],
+  "purge": {
+    "returncode": 1,
+    "stdout": "",
+    "stderr": "Unable to purge disk buffers: Operation not permitted\n",
+    "after": {
+      "sample_start_monotonic_ns": 192109959088041,
+      "sample_end_monotonic_ns": 192109960755791,
+      "process": {
+        "peak_maxrss_bytes": 26017792,
+        "resident_bytes": 26017792,
+        "phys_footprint_bytes": 14926304,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 87194632192,
+        "wired_bytes": 3332669440,
+        "active_bytes": 7189561344,
+        "inactive_bytes": 34479603712,
+        "speculative_bytes": 334708736,
+        "anonymous_bytes": 4541136896,
+        "file_backed_bytes": 37462736896,
+        "compressor_bytes": 1660960768,
+        "compressed_bytes": 6056050688,
+        "used_bytes": 46662795264,
+        "non_file_used_bytes": 9534767104,
+        "swapins_pages": 778398,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    }
+  }
+}

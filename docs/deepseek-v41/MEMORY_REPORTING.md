@@ -116,3 +116,45 @@ The previous Qwen model identity returned healthy with warmup complete and
 the exclusive GPU lock released. No full DeepSeek model or 110 GB benchmark
 was executed as part of this validation. The snapshot bit checks cover bank
 admission copies, not every existing auxiliary/MTP restore path.
+
+## File-cache accounting follow-up
+
+The subsequent full-model calibration found two sources of unbounded file-cache
+growth: the benchmark omitted the expert profile's cache-bypass setting, and
+Engram row readers used buffered I/O alongside their Python LRUs. DeepSeek expert
+readers now default to `F_NOCACHE` on macOS, both benchmark runners preserve the
+profile's explicit setting, and Engram row readers install required cache bypass
+once at construction. An explicit buffered expert control remains available.
+Missing or refused required cache bypass fails before reading payloads.
+
+New receipts stamp the actual expert `resolved_plan.io_cache_mode` and the typed
+`resident_load_report.engram_io_cache_modes`. The transient pool is shared across
+layers: 48 slots of 18,800,640 bytes occupy 902,430,720 bytes, not 40 times that
+amount. Decode I/O counters and the final memory-profile token label use actual
+generated decode tokens when EOS stops a pass early.
+
+With expert and Engram row bypass installed, a guarded 16K/32-step calibration
+at a reduced 100 GB allocation target, 16 GiB transient band and 2 GiB allocator
+cache reached a sampled physical peak of 99.188 GB. All 33 output token IDs
+matched the corresponding historical control prefix. This establishes that
+specific calibration, not the default 110 GB plan or a 1,024-token performance
+result. The original path-based resident loader still added about 9.737 GB of
+file cache during load and is measured separately. See
+[`receipts/memory-budget-110/README.md`](receipts/memory-budget-110/README.md) for
+raw evidence, provenance, and explicit corrections to the older receipt fields.
+
+The macOS resident path now opens uncached file handles. MLX eagerly evaluates
+all tensors when passed a file object, so each load group admits every touched
+header before its first `mx.load`: shards are at most 3 GiB, headers at most
+1 MiB, individual tensors below the signed 2 GiB read limit, and discarded
+payload at most 64 MiB in aggregate. Text shard metadata must match the manifest.
+These checks cover the AR and MTP partitions without materializing excluded
+expert banks or unrelated large tensors.
+
+Engram attachment separately admits its sidecar and loads it once for both
+declared layers. An explicit name allowlist prices discarded tensors and retains
+only the projection fields used by those layers. Existing standalone single-layer
+and non-macOS APIs retain their prior lazy path loading. These are construction
+routes; no eligibility checks or fallback branches were added to generation.
+Tiny guarded tests preserve BF16/F32 signed zero and NaN payloads, U8/U32 data,
+shape and dtype after the uncached file handle closes.

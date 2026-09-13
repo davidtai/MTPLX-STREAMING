@@ -104,10 +104,12 @@ MACOS_FLOOR_GIB = 6.0
 
 #: Process RSS *above* the MLX allocator's own accounting -- the python heap,
 #: the positional-expert bank read buffers, the engram host-side row LRU
-#: (``DEFAULT_ENGRAM_CACHE_BYTES`` = 2 GiB), and the tokenizer.  David measured
+#: (historically 2 GiB per bank), and the tokenizer. David measured
 #: 8-12 GB of process memory outside the plan; 10 GiB is the midpoint and is the
 #: profile constant the derivation subtracts.  ``mx.get_peak_memory`` never sees
-#: any of this, so it must come off the box budget explicitly.
+#: any of this, so it must come off the box budget explicitly. This is the
+#: legacy allowance; the current target planner prices 256 MiB per Engram bank
+#: plus metadata and other Python capacity separately.
 HOST_OVERHEAD_GIB = 10.0
 
 #: Bound on the MLX allocator's freed-buffer cache (``mx.set_cache_limit``).

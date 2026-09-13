@@ -2759,7 +2759,9 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 # (the W81 finding: transient_slots defaulted to spec.top_k=6, not the profile's
 # 48).  Seeded into the in-process runtime so a bench A/B is on the production
 # plan.  ``transient_slots`` also takes the explicit ``--transient-slots`` flag.
-_PROFILE_PLAN_FIELDS = ("transient_slots", "split_route_release", "prefetch_slots")
+_PROFILE_PLAN_FIELDS = (
+    "transient_slots", "split_route_release", "prefetch_slots", "bypass_page_cache",
+)
 
 
 def _resolve_plan_overrides(args) -> dict:
@@ -2890,7 +2892,8 @@ def _resolved_plan(runtime, args) -> dict | None:
         "slots_per_layer_no_ring": slots_per_layer_no_ring,
         "expert_record_bytes": record_bytes,
         "transient_bytes_per_layer": transient_slots * record_bytes,
-        "transient_bytes_total": transient_slots * record_bytes * routed_layers,
+        "transient_bytes_total": transient_slots * record_bytes,
+        "transient_bytes_scope": "shared_across_layers",
         "split_route_release": getattr(config, "split_route_release", None),
         # GLOBAL ring: prefetch_slots records TOTAL (shared); k = predict width.
         "prefetch_slots": prefetch_slots,
@@ -2905,6 +2908,7 @@ def _resolved_plan(runtime, args) -> dict | None:
         # runtime ran, so a hash-vs-parent A/B can never be control-vs-control
         # silently (parent stamps False, cell16k_ring_v2_hash stamps True).
         "verify_record_hashes": bool(getattr(config, "verify_record_hashes", False)),
+        "io_cache_mode": getattr(getattr(runtime, "reader", None), "cache_mode", None),
         "source": (
             "explicit" if getattr(args, "transient_slots", None) is not None
             else f"profile:{getattr(args, 'expert_profile', 'none')}"
@@ -3141,6 +3145,11 @@ def _stream_counters_block(run, decode_tokens, resolved_plan):
         after = run.get("stream_end")
         if not before or not after:
             return None
+        # Both AR and DSpark include the first, prefill-produced token. Early
+        # EOS can shorten either pass; normalize decode I/O by actual output.
+        generated = run.get("generated")
+        if generated is not None:
+            decode_tokens = max(0, len(generated) - 1)
         block = stream_counters_delta(
             before, after, tokens=int(decode_tokens), phase="decode"
         )
@@ -4505,6 +4514,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # counts + bytes + source), so an A/B is attributable to a capacity and
             # the in-process bench is comparable to the served profile plan.
             "resolved_plan": _resolved_plan(runtime, args),
+            "resident_load_report": resident.report.as_dict(),
             # W81: DECODE-scoped expert-streaming counters for the AR reference
             # decode (hit rate + streamed bytes/token), matching the served
             # daemon's serve_stream_counters. David: hit rate + bandwidth/token.
@@ -4538,7 +4548,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 format_memory_profile_table,
             )
 
-            mem_profile_cb("decode", token=int(args.decode_tokens))
+            mem_profile_cb("decode", token=_decode_generated)
             _deriv = getattr(args, "_dsv41_derivation", None)
             receipt["memory_profile"] = {
                 "cache_limit_report": getattr(args, "_dsv41_cache_report", None),

@@ -4945,6 +4945,7 @@ class Model(nn.Module):
         from ..engram_bank import EngramBank
         from ..engram_v41 import (
             NgramHashState,
+            load_engram_resident_tensors,
             load_engram_residents,
             load_engram_tokenizer,
         )
@@ -4965,10 +4966,18 @@ class Model(nn.Module):
 
         # keep the banks alive on the model: EngramBank.__del__ would close the
         # NGramRowCache the hooks hold, so we must not let them be collected
+        resident_meta = manifest.get("residents") or {}
+        sidecar_name = resident_meta.get(
+            "file", "engram-residents.safetensors"
+        )
+        mode = resident_meta.get("quant", {}).get("wkv", {}).get("mode", "affine")
+        engram_tensors = load_engram_resident_tensors(
+            engram_dir / sidecar_name, layer_ids=layer_ids, mode=mode
+        )
         self._engram_banks = []
         for layer_id in layer_ids:
             bank = EngramBank.open(engram_dir, layer_id, cache_bytes=cache_bytes)
-            residents = load_engram_residents(engram_dir, layer_id)
+            residents = load_engram_residents(engram_dir, layer_id, preloaded=engram_tensors)
             hook = residents.build_module(
                 row_cache=bank.cache,
                 layer_hash_index=layer_ids.index(layer_id),

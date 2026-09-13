@@ -1231,7 +1231,9 @@ def run_dry(args) -> int:
     return 0
 
 
-_PROFILE_PLAN_FIELDS = ("transient_slots", "split_route_release", "prefetch_slots")
+_PROFILE_PLAN_FIELDS = (
+    "transient_slots", "split_route_release", "prefetch_slots", "bypass_page_cache",
+)
 
 
 def _resolve_plan_overrides(args) -> dict:
@@ -1278,6 +1280,7 @@ def _resolved_plan(runtime, args) -> dict | None:
         "persistent_slots": int(getattr(plan, "persistent_slots", 0) or 0),
         "expert_record_bytes": record_bytes,
         "transient_bytes_total": transient_slots * record_bytes,
+        "io_cache_mode": getattr(getattr(runtime, "reader", None), "cache_mode", None),
         "split_route_release": getattr(
             getattr(runtime, "config", None), "split_route_release", None
         ),
@@ -1396,6 +1399,7 @@ def run_real(args) -> int:
     receipt["memory_limit_bytes"] = runtime.config.memory_limit_bytes
     receipt["expert_cache_limit_bytes"] = runtime.config.expert_cache_limit_bytes
     receipt["resolved_plan"] = _resolved_plan(runtime, args)
+    receipt["resident_load_report"] = resident.report.as_dict()
     receipt["memory_derivation"] = derivation.as_dict()
     receipt["target_plan"] = getattr(args, "_dsv41_target_plan", None)
     receipt["allocator_cache_limit"] = cache_limit_report

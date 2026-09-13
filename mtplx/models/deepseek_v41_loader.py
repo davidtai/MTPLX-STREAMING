@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -112,8 +113,8 @@ DEFAULT_RUNTIME_RESERVE_BYTES = 7 * 1024**3
 
 # Engram resident-row LRU budget. The engram banks (layers 1 and 14) stream
 # their affine-q8 rows from the 2x101 GB SSD row banks through a byte-budgeted
-# LRU (mtplx.ngram_row_cache); 2 GiB is the serve default here, raising the
-# module's bare 1 GiB env fallback. MTPLX_ENGRAM_CACHE_LIMIT still overrides it.
+# LRU (mtplx.ngram_row_cache); the serve default is 256 MiB per bank, 512 MiB
+# total. MTPLX_ENGRAM_CACHE_LIMIT still overrides the per-bank limit.
 from ..deepseek_v41_memory_profile import DEFAULT_ENGRAM_CACHE_BYTES
 
 
@@ -121,7 +122,7 @@ def resolve_engram_cache_bytes() -> int:
     """Resident-row LRU byte budget for the engram banks.
 
     Reads ``MTPLX_ENGRAM_CACHE_LIMIT`` (Pydantic ByteSize: "2GiB", raw bytes,
-    ...) when set, otherwise the 2 GiB serve default. The loader passes the
+    ...) when set, otherwise the 256 MiB per-bank serve default. The loader passes the
     resolved value to :meth:`Model.attach_engram` so the engram row cache is a
     resolved config value rather than the module's implicit 1 GiB fallback.
     """
@@ -364,6 +365,11 @@ def build_streaming_config(
     :class:`ExpertStreamingConfig` for callers that need to tune it.
     """
 
+    # The bank is larger than RAM. Its explicit resident slot cache owns reuse;
+    # a second, unbounded macOS file cache can exhaust the physical budget during
+    # prefill even when the Metal allocator stays below its limit.
+    overrides.setdefault("bypass_page_cache", sys.platform == "darwin")
+
     # W93: size the GLOBAL gate-oracle prefetch ring from MTPLX_DSV41_GATE_PREFETCH.
     # The env is AUTHORITATIVE (max(existing, 2*k), review CRITICAL): the ab bench
     # and the served profile BOTH seed an explicit ``prefetch_slots`` (0 for the
@@ -576,12 +582,10 @@ def load_text_only_resident_arrays(
     mx_module: Any | None = None,
     partition: TextResidentPartition | None = None,
 ) -> dict[str, Any]:
-    """Lazily load ONLY the text-only resident tensors from the q8 shards.
+    """Load the selected resident tensors with bounded uncached I/O on macOS.
 
-    Mirrors :func:`mtplx.resident_loader.load_resident_arrays` but iterates the
-    text-only subset (vision/aligner/image and ``mtp.*`` skipped) and asserts
-    coverage of that subset, not of the full manifest.  Routed expert arrays
-    returned by ``mx.load`` stay lazy and are dropped unmaterialized.
+    macOS admits every touched shard before eager file-object loading, including
+    the bounded discarded payload. Other platforms keep lazy path loading.
     """
 
     if mx_module is None:
@@ -599,42 +603,45 @@ def load_text_only_resident_arrays(
     by_shard: dict[str, list[ResidentTensor]] = {}
     for tensor in partition.kept:
         by_shard.setdefault(tensor.shard, []).append(tensor)
+    from ..resident_io import ResidentShardReader
+
+    paths = {name: resolve_artifact_member(artifact_root, name) for name in by_shard}
     selected: dict[str, Any] = {}
-    for shard_name, expected_tensors in sorted(by_shard.items()):
-        shard_path = resolve_artifact_member(artifact_root, shard_name)
-        try:
-            loaded = mx.load(str(shard_path), format="safetensors")
-        except Exception as exc:
-            raise ResidentLoadError(
-                f"could not lazily load {shard_name}: {exc}"
-            ) from exc
-        if not isinstance(loaded, dict):
-            raise ResidentLoadError(f"MLX returned a non-dictionary for {shard_name}")
-        for expected in expected_tensors:
+    with ResidentShardReader(paths, selected=by_shard, shards=manifest.shards) as reader:
+        for shard_name, expected_tensors in sorted(by_shard.items()):
             try:
-                value = loaded[expected.tensor]
-            except KeyError as exc:
+                loaded = reader.load(shard_name, mx)
+            except Exception as exc:
                 raise ResidentLoadError(
-                    f"resident tensor {expected.tensor} is missing from {shard_name}"
+                    f"could not load {shard_name}: {exc}"
                 ) from exc
-            shape = tuple(int(dimension) for dimension in value.shape)
-            if shape != expected.shape:
-                raise ResidentLoadError(
-                    f"resident tensor {expected.tensor} shape {shape} != {expected.shape}"
-                )
-            dtype = _dtype_name(value)
-            if dtype != expected.dtype:
-                raise ResidentLoadError(
-                    f"resident tensor {expected.tensor} dtype {dtype} != {expected.dtype}"
-                )
-            if int(value.nbytes) != expected.length:
-                raise ResidentLoadError(
-                    f"resident tensor {expected.tensor} bytes {value.nbytes} != {expected.length}"
-                )
-            if expected.tensor in selected:
-                raise ResidentLoadError(f"duplicate resident tensor {expected.tensor}")
-            selected[expected.tensor] = value
-        del loaded
+            if not isinstance(loaded, dict):
+                raise ResidentLoadError(f"MLX returned a non-dictionary for {shard_name}")
+            for expected in expected_tensors:
+                try:
+                    value = loaded[expected.tensor]
+                except KeyError as exc:
+                    raise ResidentLoadError(
+                        f"resident tensor {expected.tensor} is missing from {shard_name}"
+                    ) from exc
+                shape = tuple(int(dimension) for dimension in value.shape)
+                if shape != expected.shape:
+                    raise ResidentLoadError(
+                        f"resident tensor {expected.tensor} shape {shape} != {expected.shape}"
+                    )
+                dtype = _dtype_name(value)
+                if dtype != expected.dtype:
+                    raise ResidentLoadError(
+                        f"resident tensor {expected.tensor} dtype {dtype} != {expected.dtype}"
+                    )
+                if int(value.nbytes) != expected.length:
+                    raise ResidentLoadError(
+                        f"resident tensor {expected.tensor} bytes {value.nbytes} != {expected.length}"
+                    )
+                if expected.tensor in selected:
+                    raise ResidentLoadError(f"duplicate resident tensor {expected.tensor}")
+                selected[expected.tensor] = value
+            del loaded
     if len(selected) != partition.kept_count:
         raise ResidentLoadError("text-only resident allowlist was not loaded completely")
     return selected
@@ -785,6 +792,10 @@ def construct_deepseek_v41_resident_model(
                     f"could not attach engram from {engram_dir}: {exc}"
                 ) from exc
 
+    report = replace(report, engram_io_cache_modes={
+        str(bank.layer_id): bank.cache.io_cache_mode
+        for bank in getattr(model, "_engram_banks", ())
+    })
     resident_report = report.as_dict()
     if head_mode_pricing is not None:
         # Note the head codec's reduced resident footprint in the load report so

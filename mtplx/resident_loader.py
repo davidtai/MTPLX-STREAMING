@@ -31,9 +31,10 @@ class ResidentLoadReport:
     proj_quantized_modules: int = 0
     proj_requant: str | None = None
     proj_requantized_modules: int = 0
+    engram_io_cache_modes: dict[str, str] | None = None
 
-    def as_dict(self) -> dict[str, int | bool | str | None]:
-        return {
+    def as_dict(self) -> dict[str, Any]:
+        report: dict[str, Any] = {
             "shard_count": self.shard_count,
             "tensor_count": self.tensor_count,
             "raw_tensor_bytes": self.raw_tensor_bytes,
@@ -45,6 +46,9 @@ class ResidentLoadReport:
             "proj_requant": self.proj_requant,
             "proj_requantized_modules": self.proj_requantized_modules,
         }
+        if self.engram_io_cache_modes is not None:
+            report["engram_io_cache_modes"] = dict(self.engram_io_cache_modes)
+        return report
 
 
 @dataclass(frozen=True)

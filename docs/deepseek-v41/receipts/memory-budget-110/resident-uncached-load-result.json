@@ -1,0 +1,56 @@
+{
+  "sample_start_monotonic_ns": 193445057730375,
+  "sample_end_monotonic_ns": 193445060838583,
+  "process": {
+    "peak_maxrss_bytes": 10527555584,
+    "resident_bytes": 10527555584,
+    "phys_footprint_bytes": 21129191584,
+    "compressed_bytes": 0,
+    "source": "mach_task_vm_info"
+  },
+  "box": {
+    "page_size": 16384,
+    "free_bytes": 56553537536,
+    "wired_bytes": 24005066752,
+    "active_bytes": 8227618816,
+    "inactive_bytes": 34530033664,
+    "speculative_bytes": 9482911744,
+    "anonymous_bytes": 5771034624,
+    "file_backed_bytes": 46469529600,
+    "compressor_bytes": 1598226432,
+    "compressed_bytes": 5812584448,
+    "used_bytes": 68360945664,
+    "non_file_used_bytes": 31374327808,
+    "swapins_pages": 778402,
+    "swapouts_pages": 4399765,
+    "ok": true,
+    "source": "vm_stat",
+    "used_includes_file_cache": true
+  },
+  "phase": "load_end",
+  "token": null,
+  "mlx": {
+    "ok": true,
+    "active_bytes": 20734884424,
+    "cache_bytes": 71005,
+    "peak_bytes": 20734884424
+  },
+  "plan": {
+    "total_limit_bytes": 33975147168,
+    "resident_bytes": 15103104448,
+    "engram_host_lru_bytes": 268435456,
+    "kv_planned_bytes": 0,
+    "runtime_reserve_bytes": 7516192768,
+    "io_staging_bytes": 0,
+    "transient_bytes": 902430720,
+    "island_bytes": 0,
+    "fixed_bytes": 23521727936,
+    "expert_cache_planned_bytes": 9776332800,
+    "slots_per_layer": 13,
+    "unallocated_bytes": 677086432,
+    "fits_fixed": true,
+    "context_tokens": 0,
+    "expert_cache_allocated_bytes": 0,
+    "expert_cache_allowance_bytes": 10453419232
+  }
+}
