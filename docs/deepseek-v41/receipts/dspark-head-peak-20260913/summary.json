@@ -1,0 +1,32 @@
+{
+  "source_commit": "b64ef4966b1c02a429928826bcdf466ade204d09",
+  "kind": "real MTP head plus shared embedding/head only; no target layers or expert bank",
+  "parameter_bytes": 10597621640,
+  "load_active_peak_bytes": 15415845136,
+  "seed_peak_delta_bytes": 2473893804,
+  "draft_eager": {
+    "cold_s": 0.04308862501056865,
+    "warm_s": [
+      0.010355915990658104,
+      0.010265207994962111,
+      0.010304374998668209
+    ],
+    "baseline_active_bytes": 10598572316,
+    "peak_delta_bytes": 469763987
+  },
+  "draft_compiled": {
+    "cold_s": 0.2922632919799071,
+    "warm_s": [
+      0.009766875009518117,
+      0.009357708011521026,
+      0.009312291978858411
+    ],
+    "baseline_active_bytes": 11001225508,
+    "peak_delta_bytes": 18638211
+  },
+  "draft_ids_equal": true,
+  "sampled_physical_peak_bytes": 23646502912,
+  "swapouts_pages": 4399765,
+  "guard_exit_code": 0,
+  "exact_service_warmup_restored_utc": "2026-09-13 12:03:47"
+}

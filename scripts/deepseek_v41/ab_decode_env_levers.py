@@ -1525,6 +1525,16 @@ ARM_PRESETS = {
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
         decode_attn_kernel="0", dspark_verify_k29="0",
     ),
+    # Current memory-bounded DSpark candidate: the measured pf0 target route,
+    # compiled draft chains and bf16 draft head, with K29 explicitly off.
+    "cell16k_ring_v2_draft_attn_pf0": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        decode_attn_kernel="0", dspark_verify_k29="0", gate_prefetch="0",
+    ),
     # W110 (BENCH-ONLY DIAGNOSTIC): cell16k_ring_v2 + decode-path per-record sha256
     # turned ON (MTPLX_DSV41_VERIFY_RECORD_HASHES=1, env-authoritative over the ab
     # harness's --verify-record-hashes default False).  This is NOT a perf lever:
