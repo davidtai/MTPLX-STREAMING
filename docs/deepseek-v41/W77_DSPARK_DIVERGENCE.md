@@ -46,8 +46,13 @@ both streams to full length.**
   decision gap). `ar_top2_margin` is the AR row's; `dspark_top2_margin` the verify
   row's.
 - **max_abs_logit_delta** — `max_v |ar_logits[v] − dspark_logits[v]|` at `i`.
-- **class** — `"tie_flip"` iff `ar_top2_margin < tie_margin` (a rounding-class
-  near-tie), else `"divergent"`.
+- **class** — `"tie_flip"` iff the flip is rounding-class, else `"divergent"`.
+  W120 (docs/deepseek-v41/W120_DIVERGENCE_TIE_BAND.md) superseded the original
+  `ar_top2_margin < tie_margin` rule: the decision now uses the CONTESTED margins
+  (`|row[ar_token] − row[dspark_token]|`, not the row top-2 gap), a magnitude-aware
+  band `tie_band = max(tie_margin, k·ulp_bf16(peak))`, and REQUIRES the measured
+  contested deltas to be within the band (`deltas_within_tie_band`). The top-2
+  margins remain as diagnostic receipt keys.
 
 ### How the two rows are obtained cheaply (at the first mismatch only)
 
@@ -184,9 +189,11 @@ block arrives as one 4-row append (verify) or four 1-row appends (decode).
   top-2 margin at the flip is within `3e-2`; the receipt makes it a measured fact,
   not an assumption) and full tokens/cycle, accept-by-depth, decode tok/s, and
   both stream shas — while `--dspark-require-lossless` still gates exact arms.
-- If a future arm ever reports `class: "divergent"` (AR margin ≥ `tie_margin`), the
-  loud census line flags it and the fp32 probe is the tool to localize the lever;
-  by the table above it would be a *new* regression, not one of these ten levers.
+- If a future arm ever reports `class: "divergent"` (a contested delta exceeds the
+  W120 `tie_band_used`, or the contested margins are decisive — see
+  W120_DIVERGENCE_TIE_BAND.md), the loud census line flags it and the fp32 probe is
+  the tool to localize the lever; by the table above it would be a *new* regression,
+  not one of these ten levers.
 
 ## 4. Files, tests, reproduction
 

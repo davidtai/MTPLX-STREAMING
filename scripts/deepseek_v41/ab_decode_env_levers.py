@@ -3742,18 +3742,47 @@ def _fmt(v) -> str:
     return "n/a" if v is None else f"{v:.4g}"
 
 
+def _dspark_divergence_rule(d: dict) -> str:
+    """Which W120 rule fired for a tie_flip (or why one did not), from the receipt
+    scalars.  Uses the CONTESTED margins + the magnitude-aware ``tie_band_used`` --
+    NOT the legacy ``ar_top2_margin < tie_margin`` (false for a W120 tie_flip)."""
+    band = d.get("tie_band_used", d.get("tie_margin"))
+    arc = d.get("ar_contested_margin")
+    dsc = d.get("dspark_contested_margin")
+    within = d.get("deltas_within_tie_band")
+    # A rule only "fires" if the delta gate passed (mirrors the class logic): a
+    # small contested margin does NOT absolve when a contested delta exceeds the band.
+    if within is False:
+        return "none (contested delta > band -> not rounding)"
+    fired = []
+    if within and band is not None and arc is not None and dsc is not None and min(arc, dsc) < band:
+        fired.append("near_tie_by_band(a)")
+    if within and d.get("rounding_class_by_delta"):
+        fired.append("rounding_class_by_delta(c)")
+    return "+".join(fired) if fired else "none"
+
+
 def _print_dspark_divergence(arm: str, d: dict) -> None:
-    """W77 census line for a classified DSpark divergence.  ``tie_flip`` is a
+    """W120 census line for a classified DSpark divergence.  ``tie_flip`` is a
     one-line note (acceptable, rounding-class); ``divergent`` is LOUD (the flip is
     larger than the bf16 rounding envelope -- a real lane bug or a non-rounding
     lever), so the operator sees it in the arm log even though the arm no longer
-    aborts."""
+    aborts.  Prints the magnitude-aware ``tie_band_used``, BOTH contested margins,
+    and which rule fired (the old ``ar_top2_margin < tie_margin`` line was false for
+    W120 tie_flips)."""
     i = d["divergence_index"]
+    margins = (
+        f"ar_contested={_fmt(d.get('ar_contested_margin'))} "
+        f"dsp_contested={_fmt(d.get('dspark_contested_margin'))} "
+        f"tie_band_used={_fmt(d.get('tie_band_used'))} "
+        f"(ar_top2={_fmt(d['ar_top2_margin'])} dsp_top2={_fmt(d['dspark_top2_margin'])}) "
+        f"Δ@ar_tok={_fmt(d.get('delta_at_ar_token'))} Δ@dsp_tok={_fmt(d.get('delta_at_dspark_token'))} "
+        f"max|Δlogit|={_fmt(d['max_abs_logit_delta'])}"
+    )
     if d["class"] == "tie_flip":
         print(
             f"[ab] dspark divergence @ {i} class=tie_flip (acceptable) "
-            f"ar_top2_margin={_fmt(d['ar_top2_margin'])} < tie_margin={_fmt(d['tie_margin'])} "
-            f"max|Δlogit|={_fmt(d['max_abs_logit_delta'])} "
+            f"rule={_dspark_divergence_rule(d)} {margins} "
             f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']} (arm {arm!r})",
             flush=True,
         )
@@ -3761,9 +3790,7 @@ def _print_dspark_divergence(arm: str, d: dict) -> None:
         print(
             "[ab] " + "!" * 8 + " DIVERGENT " + "!" * 8 + "\n"
             f"[ab] DSpark greedy stream != AR @ {i} class=DIVERGENT (arm {arm!r}): "
-            f"NOT a tie-break flip -- ar_top2_margin={_fmt(d['ar_top2_margin'])} "
-            f">= tie_margin={_fmt(d['tie_margin'])}, max|Δlogit|={_fmt(d['max_abs_logit_delta'])}, "
-            f"dspark_top2_margin={_fmt(d['dspark_top2_margin'])}; "
+            f"NOT a tie-break flip -- rule={_dspark_divergence_rule(d)} {margins}; "
             f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']}. "
             "Investigate the lane (or run --dspark-require-lossless to gate).",
             flush=True,
