@@ -1348,6 +1348,54 @@ ARM_PRESETS = {
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
         gate_prefetch="8",
     ),
+    # W123 routing-barrier pair for the critical-path audit: cell16k_ring_v2_attn with
+    # the two EXISTING byte-identical barrier levers that are OFF in the cell arms.
+    # MOTIVATION (W123 critical-path census): per routed MoE layer the token pays
+    # ~1 ms mx.eval(indices) routing barrier + ~2 ms host (tolist / prefetch-reconcile
+    # await / planning) + ~1.15 ms GPU; x40 routed layers = ~169 ms, the whole token.
+    # Two shipped levers attack the ~1 ms eval(indices) barrier and neither is armed by
+    # cell16k_ring_v2_attn:
+    #   * MTPLX_DSV41_SHARED_OVERLAP (=overlap kwarg -> OVERLAP_ENV): a PURE per-forward
+    #     execution reorder (expert_mlx.py run_with_shared_overlap): the resident shared
+    #     expert depends only on x, not on the routed indices, so it is dispatched INTO
+    #     the eval(indices) sync's GPU-idle bubble (async_eval) instead of after the
+    #     split route. Same shared_mlp(x), same combine -> BITWISE-IDENTICAL output.
+    #   * MTPLX_DSV41_DEVICE_ROUTE (=device_route kwarg -> DEVICE_ROUTE_ENV): the K24/W44
+    #     barrier-free all-hit path (NOT the pinned variant). It gathers lut[indices] on
+    #     the DEVICE with no mx.eval(indices) and defers verification to ONE batched
+    #     token-boundary flush; a cold miss reads a void row and that layer is recomputed
+    #     on the fenced path, so the emitted token stays byte-identical (a cold-token
+    #     RECOVERY cost, not a numeric divergence -- see the OVERLAP/DEVICE_ROUTE notes
+    #     at ~L306 / ~L556). NET barrier removal banks only on all-hit layers.
+    # NEITHER env is a rounding-class key (ROUNDING_CLASS_ENVS), so these arms keep
+    # cell16k_ring_v2_attn's rounding-class status (attn_fused_proj) UNCHANGED. As with
+    # every arm, _apply_arm_env force-unsets the key the preset leaves None, so the base
+    # arm CLEARS an ambient MTPLX_DSV41_SHARED_OVERLAP / _DEVICE_ROUTE -- the levers can
+    # only be pinned by a preset carrying the key.
+    "cell16k_ring_v2_attn_ovl": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        overlap="1",
+    ),
+    "cell16k_ring_v2_attn_dr": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        device_route="1",
+    ),
+    "cell16k_ring_v2_attn_ovl_dr": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        overlap="1", device_route="1",
+    ),
     # W97F composite (DSpark): cell16k_ring_v2_draft + the SAME three attention keys as
     # cell16k_ring_v2_attn.  EXACT KEY SET (15 keys) = cell16k_ring_v2_draft's twelve
     #   layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
