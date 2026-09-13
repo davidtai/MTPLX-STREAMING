@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-09-13T13:16:04.364930+00:00",
+  "scope": "Read-only config/index and six safetensors headers; no tensor payload, MLX import, model or GPU execution.",
+  "units": "bytes; GB means decimal 1e9; GiB means 2**30",
+  "source": {
+    "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41",
+    "commit": "1f3b9bca7ae5aab6a4bf30eb969b1f6dd0368711",
+    "reviewed_source_sha256": {
+      "mtplx/models/deepseek_v41.py": "4be3c33306b830ef936bf213420095223a57bdeb7d80f8cf2bc87579e7812475",
+      "mtplx/models/deepseek_v41_dspark.py": "aeb4835506bafdabfc51b34f2cfae6b107c267e0d25a2f7058b5ed5a6fec8950",
+      "mtplx/models/deepseek_v41_moe.py": "a51f1f5bfe2e74ba3a91e2896d1d600f4a0c51295e6df1ac4d1e42b734dbd0aa",
+      "mtplx/models/deepseek_v41_loader.py": "c2661118ca9094ba4db314a120aa6ab90279f0bc80b94167b57de5b8ec1108bc",
+      "mtplx/models/deepseek_v41_dspark_decode.py": "0eeb91e4bc4d35f478b19e62c341d3a7889610235c5ac9569ee4487bdd94262d",
+      "mtplx/models/expert_mlx.py": "f3082c817e8767f72eae27ab9f84d4555bd84fbadc7d74a38f70bd76914bb040",
+      "mtplx/expert_io.py": "da538370fc4dba626c559f9112339812158ffd63860eacf5b9e3f8e6a81c5b77",
+      "mtplx/expert_runtime.py": "dcaa4b53ea4196d4be24ee937879ae97cad19be750b3357f0a0fa31ed072fb65",
+      "mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9"
+    },
+    "installed_switch_layers_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/mlx_lm/models/switch_layers.py",
+    "installed_switch_layers_sha256": "073a6a808d5c90bb699a2ecca0e559b06727ae96dbc1f0253e4c7e77e4ee1ef2"
+  },
+  "artifact": {
+    "root": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "config_sha256": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d",
+    "index_sha256": "c0ead8ce7960b2c715366373da35626f3ccaef1837094bf9215cded0bfefdabb",
+    "payload_integrity_verified_by_this_census": false,
+    "identity_note": "Header digests, index/config digests and stat identities identify inspected metadata; no weight payload hash was computed."
+  },
+  "headers_read_bytes": 252637,
+  "totals": {
+    "all_mtp_tensor_bytes_in_six_shards": 7949968776,
+    "selected_text_mtp_bytes": 7949967240,
+    "selected_text_mtp_key_count": 2398,
+    "routed_expert_bytes": 7219445760,
+    "routed_expert_key_count": 2304,
+    "nonexpert_mtp_bytes": 730521480,
+    "nonexpert_mtp_key_count": 94,
+    "dropped_vl_bytes": 1536,
+    "dropped_vl_key_count": 3,
+    "stages": 3,
+    "experts_per_stage": 128,
+    "bytes_per_expert": 18800640,
+    "bytes_per_stage_experts": {
+      "0": 2406481920,
+      "1": 2406481920,
+      "2": 2406481920
+    },
+    "routed_fraction_of_selected_mtp": 0.9081101270047498
+  },
+  "layout": {
+    "codec": "mxfp4",
+    "group_size": 32,
+    "bits": 4,
+    "scale_encoding": "E8M0 in U8",
+    "hidden_size": 5120,
+    "intermediate_size": 2304,
+    "top_k": 3,
+    "draft_rows_at_batch_1": 5,
+    "components_per_expert": [
+      {
+        "source_suffix": "w1.weight",
+        "switch_component": "gate_proj.weight",
+        "dtype": "U32",
+        "shape": [
+          2304,
+          640
+        ],
+        "bytes": 5898240
+      },
+      {
+        "source_suffix": "w1.scales",
+        "switch_component": "gate_proj.scales",
+        "dtype": "U8",
+        "shape": [
+          2304,
+          160
+        ],
+        "bytes": 368640
+      },
+      {
+        "source_suffix": "w3.weight",
+        "switch_component": "up_proj.weight",
+        "dtype": "U32",
+        "shape": [
+          2304,
+          640
+        ],
+        "bytes": 5898240
+      },
+      {
+        "source_suffix": "w3.scales",
+        "switch_component": "up_proj.scales",
+        "dtype": "U8",
+        "shape": [
+          2304,
+          160
+        ],
+        "bytes": 368640
+      },
+      {
+        "source_suffix": "w2.weight",
+        "switch_component": "down_proj.weight",
+        "dtype": "U32",
+        "shape": [
+          5120,
+          288
+        ],
+        "bytes": 5898240
+      },
+      {
+        "source_suffix": "w2.scales",
+        "switch_component": "down_proj.scales",
+        "dtype": "U8",
+        "shape": [
+          5120,
+          72
+        ],
+        "bytes": 368640
+      }
+    ]
+  },
+  "shards": [
+    {
+      "shard": "model-00044.safetensors",
+      "file_size_bytes": 253450320,
+      "device": 16777233,
+      "inode": 256799953,
+      "mtime_ns": 1789090309536984800,
+      "header_json_bytes": 3184,
+      "header_json_sha256": "b473329fb58fb3d6832055eab90ec0435daf5c9597f535beb36a482556ecaa57",
+      "tensor_key_count": 33,
+      "selected_mtp_key_count": 32,
+      "selected_mtp_bytes": 253446616,
+      "routed_expert_key_count": 0,
+      "routed_expert_bytes": 0,
+      "nonexpert_mtp_key_count": 32,
+      "nonexpert_mtp_bytes": 253446616,
+      "dropped_vl_key_count": 1,
+      "dropped_vl_bytes": 512,
+      "other_tensor_bytes": 0,
+      "tensor_payload_bytes": 253447128
+    },
+    {
+      "shard": "model-00045.safetensors",
+      "file_size_bytes": 172338964,
+      "device": 16777233,
+      "inode": 256799955,
+      "mtime_ns": 1789090310181424161,
+      "header_json_bytes": 2868,
+      "header_json_sha256": "3cc0ae6b7d8dba4591a64239d45f140068de3c5572ebed7c3f3c09b802c6b30a",
+      "tensor_key_count": 30,
+      "selected_mtp_key_count": 29,
+      "selected_mtp_bytes": 172335576,
+      "routed_expert_key_count": 0,
+      "routed_expert_bytes": 0,
+      "nonexpert_mtp_key_count": 29,
+      "nonexpert_mtp_bytes": 172335576,
+      "dropped_vl_key_count": 1,
+      "dropped_vl_bytes": 512,
+      "other_tensor_bytes": 0,
+      "tensor_payload_bytes": 172336088
+    },
+    {
+      "shard": "model-00046.safetensors",
+      "file_size_bytes": 304743093,
+      "device": 16777233,
+      "inode": 256799957,
+      "mtime_ns": 1789090310858491743,
+      "header_json_bytes": 3285,
+      "header_json_sha256": "250c522c7f160c1ead4bd84725df0c449c70a5f86c7e2b16fd2df79a5d0391fd",
+      "tensor_key_count": 34,
+      "selected_mtp_key_count": 33,
+      "selected_mtp_bytes": 304739288,
+      "routed_expert_key_count": 0,
+      "routed_expert_bytes": 0,
+      "nonexpert_mtp_key_count": 33,
+      "nonexpert_mtp_bytes": 304739288,
+      "dropped_vl_key_count": 1,
+      "dropped_vl_bytes": 512,
+      "other_tensor_bytes": 0,
+      "tensor_payload_bytes": 304739800
+    },
+    {
+      "shard": "model-00047.safetensors",
+      "file_size_bytes": 2406562980,
+      "device": 16777233,
+      "inode": 256800607,
+      "mtime_ns": 1789090392385993269,
+      "header_json_bytes": 81052,
+      "header_json_sha256": "e54c73547a7c4c81421b0c0ce254d7d84c7f81a2dccba4891ec300e25732bbd7",
+      "tensor_key_count": 768,
+      "selected_mtp_key_count": 768,
+      "selected_mtp_bytes": 2406481920,
+      "routed_expert_key_count": 768,
+      "routed_expert_bytes": 2406481920,
+      "nonexpert_mtp_key_count": 0,
+      "nonexpert_mtp_bytes": 0,
+      "dropped_vl_key_count": 0,
+      "dropped_vl_bytes": 0,
+      "other_tensor_bytes": 0,
+      "tensor_payload_bytes": 2406481920
+    },
+    {
+      "shard": "model-00048.safetensors",
+      "file_size_bytes": 2406563006,
+      "device": 16777233,
+      "inode": 256800833,
+      "mtime_ns": 1789090474085549453,
+      "header_json_bytes": 81078,
+      "header_json_sha256": "8638e71c553dc35368950c32c8be42452c08b9951a89011631af5598f5182200",
+      "tensor_key_count": 768,
+      "selected_mtp_key_count": 768,
+      "selected_mtp_bytes": 2406481920,
+      "routed_expert_key_count": 768,
+      "routed_expert_bytes": 2406481920,
+      "nonexpert_mtp_key_count": 0,
+      "nonexpert_mtp_bytes": 0,
+      "dropped_vl_key_count": 0,
+      "dropped_vl_bytes": 0,
+      "other_tensor_bytes": 0,
+      "tensor_payload_bytes": 2406481920
+    },
+    {
+      "shard": "model-00049.safetensors",
+      "file_size_bytes": 2406563050,
+      "device": 16777233,
+      "inode": 256800873,
+      "mtime_ns": 1789090555454824922,
+      "header_json_bytes": 81122,
+      "header_json_sha256": "5dc44a4054dc7f9162b756a8f522d3fb7511a5443f9d66260a12f7fb3faf43d2",
+      "tensor_key_count": 768,
+      "selected_mtp_key_count": 768,
+      "selected_mtp_bytes": 2406481920,
+      "routed_expert_key_count": 768,
+      "routed_expert_bytes": 2406481920,
+      "nonexpert_mtp_key_count": 0,
+      "nonexpert_mtp_bytes": 0,
+      "dropped_vl_key_count": 0,
+      "dropped_vl_bytes": 0,
+      "other_tensor_bytes": 0,
+      "tensor_payload_bytes": 2406481920
+    }
+  ],
+  "capacity_example": {
+    "total_slots_per_stage": 32,
+    "expert_storage_bytes": 1804861440,
+    "gross_bytes_released": 5414584320,
+    "one_more_target_slot_in_each_of_40_layers_bytes": 752025600,
+    "gross_extra_target_slots_per_layer": 7,
+    "note": "Arithmetic only: capacity includes every retained expert slot; excludes new I/O, graph and metadata overhead. No locality or performance claim."
+  },
+  "route_locality_measured": false,
+  "streaming_speed_benefit_measured": false
+}

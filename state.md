@@ -30,7 +30,57 @@ input tokens and 1,023 decode steps plus the first token emitted by prefill.
 
 # Plan Status
 
-## Current full measurement, 2026-09-13 13:03 UTC
+## Current full measurement, 2026-09-13 13:22 UTC
+
+- **Best full workload: 8.938810168 TPS; 20 TPS remains unmet.** Source
+  `1f3b9bca7ae5aab6a4bf30eb969b1f6dd0368711`, native MTP depth5, pf0, fanout4,
+  72 expert slots/layer, 48 shared transient slots. Full receipt:
+  `docs/deepseek-v41/receipts/dspark-layer-prefill-20260913/`.
+- Layer-major prefill releases each layer's fp32 wo_a cache after its existing
+  `mx.eval(hs)` fence. Reuses the weight across that layer's chunks; preserves
+  <=8-row custom-chunk verification, MTP stage caches and nonfused decode rebuild.
+  Generic fixed reserve remains unchanged. Two guarded quantized tiny-model
+  checks passed after meaningful red evidence, with exact logits/hidden/KV,
+  within-layer reuse and two requests. Receipt:
+  `receipts/layer-major-projection-lifetime-20260913/`.
+- Exact pinned 16K/1,024-output workload. Both complete AR/MTP ID streams equal
+  the prior run; the full AR/MTP tie_flip record at297 is unchanged. AR6.055910
+  TPS, MTP114.444762s decode/108.412733s prefill,206 cycles,91.6388% acceptance.
+  Gain4.470918% versus8.556267; combined release and four-slot capacity change,
+  not isolated speed attribution. Current MTP I/O54,694 records/1,028,282,204,160B,
+  down5.349139%;77.737013s active I/O window,13.2277GB/s.
+- MTP MLX peak **87,384,896,236 B**, down2,226,389,720 B despite3,008,102,400 B
+  additional expert storage. Decode-end active76,587,741,124 B/cache2,121,803,959 B.
+  Whole-workflow physical peak **98,520,252,416 B** (250ms,2,575 samples), including
+  replay; process footprint peak88,413,815,240 B overlaps it. Swapouts unchanged.
+- Baseline9.4325GB, engine86,608,856,288 B,11GiB transient band,2GiB Python and
+  2GiB allocator cache. Admission credited zero release savings; physical bound
+  107,420,597,476 B, active bound93,693,130,180 B. Prior replay crosscheck
+  102,616,514,976 B. Guard0, exact Qwen healthy/warm and lock free at13:22:16 UTC.
+  Session75934 is terminal0; no GPU child remains. No run needs restarting.
+- Static next-lead notes: `receipts/mtp-expert-residency-20260913/`. All three
+  MTP expert banks occupy7,219,445,760 B; partial residency needs bounded direct
+  source reads and separate exact-layout/pricing/ownership work. Actual ordered
+  MTP routes are unmeasured; capture diagnostic-only existing index arrays and
+  serialize after normal fences before selecting a capacity. No streaming lane
+  was implemented or promoted.
+- **Prefer a bounded block6/M7 draft extension screen next**, before block7/M8.
+  No block-length weights exist, but every head/stage must receive the explicit
+  construction override; bidirectional draft attention changes earlier proposals
+  too. M7 is within the documented <=7 projection band and42 target assignments
+  fit pool48. Native M7 parity/rollback and compile peak still need focused proof,
+  then actual-context acceptance. M8 crosses a documented arithmetic boundary.
+  Preserve native weight bytes, target verification and fixed KV admission.
+- Full benchmark wrapper from this run still performs AR, MTP and divergence
+  replay. A diagnostic MTP-only window can reuse its validated loader/guard and
+  intercept `_generate` to run native `_generate_dspark`, write explicitly scoped
+  diagnostics and exit through `_run_arm`'s existing finally. Do not fabricate AR
+  results or call diagnostic throughput a promotion receipt. No such driver was
+  written. Recompute all new bounds from measured87.384896GB at72slots plus exact
+  storage/shape deltas and the whole-workflow crosscheck. Do not run a new full
+  model geometry before its peak is bounded.
+
+## Prior full measurement, 2026-09-13 13:03 UTC
 
 - **Best full workload: 8.556266508 TPS; 20 TPS remains unmet.** Source
   `3a8b17284ef3ed6fa06cd130a0a56700e926ba62`, native MTP depth5, pf0, fanout4,

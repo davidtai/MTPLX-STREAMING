@@ -1,0 +1,117 @@
+{
+  "source_commit": "1f3b9bca7ae5aab6a4bf30eb969b1f6dd0368711",
+  "wrapper_sha256": "4501f79a5a0fc2858ab526eabe1098f9fab26e26036964511a79de32aa5573bb",
+  "input_tokens": 16384,
+  "decode_steps": 1023,
+  "output_tokens": 1024,
+  "prompt_ids_sha256": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2",
+  "slots_per_layer": 72,
+  "ar": {
+    "decode_tok_s": 6.055909761693963,
+    "decode_wall_s": 168.92589887499344,
+    "ttft_s": 134.8799294999917,
+    "token_ids_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090",
+    "peak_gb": 83.793523324
+  },
+  "dspark": {
+    "decode_tok_s": 8.938810167954449,
+    "decode_wall_s": 114.44476174999727,
+    "pass_wall_s": 222.85749450000003,
+    "tokens_per_cycle": 4.970873786407767,
+    "accept_rate": 0.9163879598662207,
+    "accept_rate_by_depth": [
+      0.9514563106796117,
+      0.9336734693877551,
+      0.8907103825136612,
+      0.9141104294478528,
+      0.8791946308724832
+    ],
+    "cycles": 206,
+    "per_cycle_ms": {
+      "draft_ms": 11.817563131753383,
+      "verify_ms": 540.178644989936,
+      "accept_ms": 1.0031824756314236,
+      "commit_ms": 1.74450057584711
+    },
+    "token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "peak_gb": 87.384896236,
+    "divergence": {
+      "divergence_index": 297,
+      "ar_token": 11067,
+      "dspark_token": 62596,
+      "ar_top2_margin": 0.0,
+      "dspark_top2_margin": 0.25,
+      "max_abs_logit_delta": 0.75,
+      "tie_margin": 0.03,
+      "tie_band_used": 0.75,
+      "tie_ulps": 3,
+      "peak_contested_logit": 33.75,
+      "ulp_bf16_at_peak": 0.25,
+      "ar_contested_margin": 0.0,
+      "dspark_contested_margin": 0.25,
+      "delta_at_ar_token": 0.0,
+      "delta_at_dspark_token": 0.25,
+      "rounding_class_by_delta": true,
+      "deltas_within_tie_band": true,
+      "rows_consistent": true,
+      "ar_logit_at_ar_token": 33.75,
+      "ar_logit_at_dspark_token": 33.75,
+      "dspark_logit_at_ar_token": 33.75,
+      "dspark_logit_at_dspark_token": 34.0,
+      "class": "tie_flip",
+      "capture_index": 297,
+      "capture_index_matches_first": true
+    }
+  },
+  "gain_vs_previous_mtp_pct": 4.470918005133662,
+  "ar_digest_unchanged": true,
+  "mtp_digest_unchanged": true,
+  "phase_memory_250ms": {
+    "startup": {
+      "samples": 34,
+      "physical_peak_bytes": 87172235264,
+      "process_footprint_peak_bytes": 77541980056
+    },
+    "ar_reference": {
+      "samples": 1146,
+      "physical_peak_bytes": 95918342144,
+      "process_footprint_peak_bytes": 86247976664
+    },
+    "ar_reference_end": {
+      "samples": 1,
+      "physical_peak_bytes": 89091047424,
+      "process_footprint_peak_bytes": 79026487752
+    },
+    "dspark": {
+      "samples": 837,
+      "physical_peak_bytes": 97529036800,
+      "process_footprint_peak_bytes": 88413815240
+    },
+    "dspark_end": {
+      "samples": 557,
+      "physical_peak_bytes": 98520252416,
+      "process_footprint_peak_bytes": 88169742864
+    }
+  },
+  "physical_peak_bytes": 98520252416,
+  "process_footprint_peak_bytes": 88413815240,
+  "physical_peak_reduction_bytes": 949518336,
+  "swapouts_first": 4399765,
+  "swapouts_last": 4399765,
+  "sample_count": 2575,
+  "guard_exit_code": 0,
+  "qwen_restored_healthy_warm": true,
+  "lock_released": true,
+  "mtp_io": {
+    "records_read": 54694,
+    "read_bytes": 1028282204160,
+    "read_wall_ns": 77737012941,
+    "read_realized_qd": 14.3031,
+    "read_gb_per_s_window": 13.2277
+  },
+  "prior_whole_workflow_replay_crosscheck_bytes": 102616514976.0,
+  "mtp_active_at_decode_end_bytes": 76587741124,
+  "mtp_allocator_cache_at_decode_end_bytes": 2121803959,
+  "restoration_verified_at_utc": "2026-09-13T13:22:16.230194+00:00",
+  "comparison_caveat": "One full run with per-layer projection release and four additional slots/layer; not isolated speed attribution. Physical peaks sampled every 250 ms."
+}
