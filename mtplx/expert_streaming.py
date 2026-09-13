@@ -1225,6 +1225,21 @@ class LayerExpertSlotBank:
             self._prefill_route_freq = Counter()
             self._saw_decode_since_prefill = False
 
+    def _begin_pool_decode(self) -> None:
+        """Restore the decode segment sizes after the prefill seed's protection."""
+
+        # Prefill protects its whole frequency seed against scanning. Decode
+        # needs a probation segment immediately, including when its first route
+        # is all-hit. Demote only policy membership; keep every resident slot,
+        # reader pin and recency stamp. Sort once at this phase transition.
+        if len(self._protected) > self._protected_cap:
+            self._protected = set(sorted(
+                self._protected,
+                key=lambda expert: self._pool_recency[expert],
+                reverse=True,
+            )[:self._protected_cap])
+        self._saw_decode_since_prefill = True
+
     def plan(
         self,
         expert_ids: Iterable[int],
@@ -1239,8 +1254,8 @@ class LayerExpertSlotBank:
 
         if phase is RoutingPhase.DECODE:
             self._decode_epoch += 1
-            if self.single_pool:
-                self._saw_decode_since_prefill = True
+            if self.single_pool and not self._saw_decode_since_prefill:
+                self._begin_pool_decode()
             for expert in experts:
                 self._touch_decode(expert)
             # W93: advance this layer's epoch in the shared ring so its reeviction
@@ -1514,8 +1529,8 @@ class LayerExpertSlotBank:
 
         if phase is RoutingPhase.DECODE:
             self._decode_epoch += 1
-            if self.single_pool:
-                self._saw_decode_since_prefill = True
+            if self.single_pool and not self._saw_decode_since_prefill:
+                self._begin_pool_decode()
             for expert in experts:
                 self._touch_decode(expert)
             for expert in unique_experts:

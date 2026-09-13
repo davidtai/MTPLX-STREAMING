@@ -139,6 +139,22 @@ raises, verified with a fake device and no MLX import.
   16K Python input, plus capturing initial warm bank state at the boundary for
   causal policy screening at the larger capacity. No new hot-path counters or
   broad test runs. Use explicit fanout 4 and retain parity/memory gates.
+- Short timeline completed on source 0e57cc0ff: 82 slots, 128 decode steps,
+  all 129 IDs and ordered routes equal the controls' prefix. 105.513 GB physical
+  peak, no added swapouts, guard exit 0 and Qwen/warmup/lock verified at 11:25 UTC.
+  SSD wait 75.060 ms/token; routing barriers 46.162; gather fences 36.153. Barrier
+  and fence durations include GPU and sync. Estimated probe overhead 0.057 ms.
+  Full receipts are python-16k-128-timeline-largecache.* in memory-budget-110.
+- The larger-cache replay exposed a prefill-to-decode policy defect: all seeded
+  experts remain protected beyond the 80% decode cap. Boundary-only demotion
+  gives 6281 vs 7012 misses in the measured prefix; all slots, pins and recency
+  remain intact. Other fractions are worse. Hypothetical full-route continuation
+  projects 42926 vs 45883, not a full measured throughput claim.
+  _begin_pool_decode now trims once on the first decode route (normal/all-hit);
+  transaction rollback and next-request reopening preserve prior semantics.
+  Five targeted regressions plus 37 existing CPU policy tests pass with real
+  MLX imports blocked. Independent scoped review found no issues. A clean full
+  run is next; do not claim a throughput gain for this transition yet.
 - Historical work already checked: window-16 switch_fastpath_b was only
   4.1339 vs 4.0191 TPS on its older 1K prompt; W127b saw <=2.5% at16K.
   Window-17 native mxfp4 full-MLP microbench was 417.083 us at M1, convention

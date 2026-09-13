@@ -250,3 +250,38 @@ wrapper accepts lower baselines while retaining slot, physical-peak and wired
 bounds. No production budget guard was weakened. The 72- and 84-slot active peaks
 were about 1 MB below the exact persistent-storage-delta projection from 35 slots,
 supporting the bounded capacity adjustment.
+
+## Short profile and decode protection transition
+
+`python-16k-128-timeline-largecache` uses source `0e57cc0ff`, the same 16K
+Python input and 128 decode steps, with 82 slots/layer from the live baseline.
+The profile and passive route capture are enabled, so its 5.627879 TPS is a
+short diagnostic, not a replacement for the full-length performance receipt.
+All 129 output IDs and every captured route match the prior control's prefix.
+Its 250 ms physical peak was 105,513,058,304 B, with no added swapouts; the guard
+exited 0 and restored healthy Qwen/warmup and the free lock.
+
+The existing timeline recorded 128 tokens with estimated overhead 0.057 ms/token.
+Mean exposed SSD wait was 75.060 ms/token, routing barriers 46.162 ms/token,
+and gather fences 36.153 ms/token. The latter two include GPU work and sync;
+they are not isolated GPU execution times. Post-barrier host time excluding
+fences was 83.849 ms/token, including that SSD wait. These are short-prefix
+measurements; they do not establish an immutable model compute ceiling.
+
+Warm-state replay reproduces all 7,012 observed misses. The seed protects the
+entire resident pool during prefill, and previously decode inherited that set
+without enforcing its intended 80% protected-segment cap. Trimming only policy
+membership at the phase boundary reduced this prefix replay to 6,281 misses
+(10.43% fewer), without changing residency, pins or recency stamps. Alternative
+segment fractions were less effective. A hypothetical continuation using the
+previous complete route trace projects 45,883 to 42,926 misses; routes after
+the captured prefix were not observed in this larger-cache run, so this is a
+screening estimate, not a measured full-run gain.
+
+The implementation now performs that trim on the first successful decode route
+in both the normal and all-hit planners. Subsequent prefill chunks remain fully
+protected, and a new request can seed its whole pool again. The existing
+transaction snapshots restore the phase and protection on rollback. Five focused
+CPU regression cases reproduced the missing transition before the fix; those
+and 37 existing policy cases pass with MLX imports blocked. Full-run performance
+validation of the transition is pending.
