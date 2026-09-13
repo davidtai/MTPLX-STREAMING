@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # W121 HIGH-3 hermetic test for gpu_window.sh's hardened phase-4 box guard:
-#   * a LIVE system-used term (wired+anon+comp) is folded in so the guard is not blind
+#   * a LIVE physical-used term (wired+active+inactive+compressor) catches all resident pages
 #     to OTHER processes growing (box_used = max(baseline + step footprint, live used));
 #   * the step-footprint reader FAILING (exit != 0 / no valid footprint) ABORTS instead
 #     of continuing at box_used == baseline (the old fail-open at '0').
@@ -57,13 +57,15 @@ exit 2
 EOF
 chmod +x "${FAKE_FP_BAD}"
 
-# a static low vm_stat (~11.5 GiB): wired 640000 + anon 40000 + comp 74000.
+# a static low vm_stat (~11.5 GiB): wired 640000 + active 40000 + comp 74000.
 FAKE_VMS_LOW="${TMP}/vms_low"
 cat > "${FAKE_VMS_LOW}" <<'EOF'
 #!/bin/bash
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
+Pages active:                                 40000.
+Pages inactive:                                   0.
 Anonymous pages:                              40000.
 Pages wired down:                            640000.
 Pages occupied by compressor:                 74000.
@@ -72,7 +74,7 @@ EOF
 chmod +x "${FAKE_VMS_LOW}"
 
 # a STATEFUL vm_stat: first call (baseline) ~11.5 GiB, every later call (mid-step)
-# anon +30 GiB (1966080 pages) -> ~41.5 GiB used, to simulate ANOTHER process growing.
+# active +30 GiB (1966080 pages) -> ~41.5 GiB used, to simulate ANOTHER process growing.
 FAKE_VMS_JUMP="${TMP}/vms_jump"
 cat > "${FAKE_VMS_JUMP}" <<EOF
 #!/bin/bash
@@ -83,6 +85,8 @@ if [ "\${n}" -eq 0 ]; then anon=40000; else anon=2006080; fi   # +1966080 pages 
 cat <<V
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
+Pages active:                                 \${anon}.
+Pages inactive:                                   0.
 Anonymous pages:                              \${anon}.
 Pages wired down:                            640000.
 Pages occupied by compressor:                 74000.
@@ -124,7 +128,7 @@ GPU_WINDOW_VM_STAT_CMD="${FAKE_VMS_JUMP}" \
 GPU_WINDOW_FOOTPRINT_READER="${FAKE_FP_OK}" \
   bash "${SCRIPT}" sleep 30 >"${TMP}/out3.log" 2>&1
 rc=$?
-if [[ "${rc}" -ne 0 ]] && grep -qi "BOX used memory" "${TMP}/out3.log"; then
+if [[ "${rc}" -ne 0 ]] && grep -qi "GUARD accounted memory" "${TMP}/out3.log"; then
   ok "vm_stat anon +30 GiB mid-step -> live term trips the box guard (rc ${rc} != 0)"
 else
   bad "live term catches other-process growth" "rc=${rc}; log:$(tail -3 "${TMP}/out3.log" | tr '\n' '|')"

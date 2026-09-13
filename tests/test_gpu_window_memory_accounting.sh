@@ -7,9 +7,9 @@
 # never fire.  This test runs the REAL wrapper in GPU_WINDOW_TEST_MODE=1 (which
 # skips phases 1-3 + restore and uses a temp lock -- NO sysctl, NO launchctl, NO
 # real GPU lock, NO Metal) against a FAKE step: a `bash -c` chain that launches a
-# python child which allocates ~500 MB and sleeps.  It asserts the exit summary
-# reports the whole-tree RSS (the ~0.5 GiB python child), not the few-MB bash
-# parent, plus the 30s-cadence memory sample line.
+# tiny sleeping python child with an injected footprint reader. It asserts the
+# exit summary and periodic samples preserve the reader values and that abort
+# cleanup terminates the process tree, without allocating a large test buffer.
 #
 #   nice -n 19 bash tests/test_gpu_window_memory_accounting.sh
 #
@@ -38,20 +38,15 @@ FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n     %s\n' "$1" "$2"; }
 
-# --- a fake vm_stat whose BASELINE (wired + anonymous + occupied-by-compressor) =
-# 50 GiB, with DELIBERATELY HUGE active/inactive (file page cache) to prove the
-# W121 baseline IGNORES them (an active+inactive formula false-aborts on the 269 GiB
-# expert bank's reclaimable file cache -- the window-47 abort).  The step's own
-# growing memory is added on top as phys_footprint, not read from vm_stat.
-#   baseline: wired 2000000 + anon 1000000 + comp 276800 = 3276800 pages * 16384 = 50 GiB
-#   active 4000000 + inactive 300000 (~67 GiB file cache) are NOT counted.
+# Physical baseline: wired 2000000 + active 700000 + inactive 300000 + compressor
+# 276800 = 3276800 pages * 16384 = 50 GiB, including file-backed resident pages.
 FAKE_VMSTAT="${TMP}/vm_stat_50gib"
 cat > "${FAKE_VMSTAT}" <<'EOF'
 #!/bin/bash
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
-Pages active:                               4000000.
+Pages active:                                700000.
 Pages inactive:                              300000.
 Pages speculative:                                0.
 Anonymous pages:                            1000000.
@@ -71,17 +66,11 @@ FAKE_COMP="${TMP}/comp_flat"
 printf '#!/bin/bash\necho 1073741824\n' > "${FAKE_COMP}"
 chmod +x "${FAKE_COMP}"
 
-# --- the python child the fake step launches (~500 MB resident, then sleeps) ----
+# --- a tiny child; the fake footprint reader supplies all memory observations ---
 CHILD_PY="${TMP}/mem_child.py"
 cat > "${CHILD_PY}" <<'EOF'
 import sys, time
-n = 500 * 1024 * 1024
-buf = bytearray(n)
-# Touch one byte per 4 KiB page so the pages are actually resident (RSS reflects
-# the whole allocation, not a lazily-committed mapping).
-for i in range(0, n, 4096):
-    buf[i] = 1
-sys.stderr.write("child resident ~500MB, sleeping\n")
+sys.stderr.write("fake footprint child sleeping\n")
 sys.stderr.flush()
 time.sleep(6)
 EOF
@@ -140,12 +129,17 @@ else
   bad "peak step footprint == 3.0 GiB" "parsed '${PEAK_GIB}' GiB"
 fi
 
-# 4. peak box used = baseline 50 + footprint 3 = 53 GiB (the plain sum)
-BOX_GIB="$(printf '%s\n' "${PEAK_LINE}" | sed -n 's/.*peak box used \([0-9.]*\) GiB.*/\1/p')"
+# 4. conservative guard estimate and measured physical peak remain distinct.
+BOX_GIB="$(printf '%s\n' "${PEAK_LINE}" | sed -n 's/.*peak guard accounted \([0-9.]*\) GiB.*/\1/p')"
 if [[ -n "${BOX_GIB}" ]] && awk -v v="${BOX_GIB}" 'BEGIN{exit !(v+0 >= 52.9 && v+0 <= 53.1)}'; then
-  ok "peak box used = baseline + footprint (${BOX_GIB} GiB = 50 + 3)"
+  ok "peak guard accounted = baseline + footprint (${BOX_GIB} GiB = 50 + 3)"
 else
-  bad "peak box used = 53 GiB" "parsed '${BOX_GIB}' GiB"
+  bad "peak guard accounted = 53 GiB" "parsed '${BOX_GIB}' GiB"
+fi
+if [[ "${PEAK_LINE}" == *"peak physical used 50.0 GiB"* ]]; then
+  ok "measured physical peak stays 50 GiB while the conservative estimate is 53 GiB"
+else
+  bad "measured physical peak stays 50 GiB" "${PEAK_LINE}"
 fi
 
 # 5. peak compressor delta is reported (flat here -> 0.0)
@@ -156,9 +150,9 @@ else
 fi
 
 # 6. a periodic memory-envelope sample line was logged during the step (baseline +
-# step footprint = box used; compressor delta)
-if grep -q "phase 4: mem sample -- baseline .* step footprint .* box used" "${LOG}"; then
-  ok "logged a periodic 'mem sample' envelope line (baseline + footprint = box used)"
+# step footprint = guard accounted; compressor delta)
+if grep -q "phase 4: mem sample -- baseline .* step footprint .* guard accounted" "${LOG}"; then
+  ok "logged a periodic 'mem sample' envelope line (baseline + footprint = guard accounted)"
 else
   bad "logged a periodic 'mem sample' envelope line during the step" "no sample line"
 fi
@@ -172,13 +166,13 @@ fi
 
 # 7b. W106 HIGH-2 + MEDIUM-B: the step-start log states BOTH guard caps, and since
 #     this scenario's baseline is 50 GiB used with the DEFAULT 93 GiB child cap and the
-#     EXPLICIT 100 GiB ceiling this run sets (the default is now 96, HIGH-3/MEDIUM-1),
+#     EXPLICIT 100 GiB ceiling this run sets (the default is 110 decimal GB),
 #     50 + 93 > 100, so MEDIUM-B LOWERS the effective
 #     child cap to ceiling - used_start = 50 GiB. Assert the lowering line (naming the
 #     original 93 GiB default) + the guard-caps line showing the 50 GiB effective cap.
 if grep -q "phase 4: effective child-tree footprint cap 50.0 GiB (lowered from 93.0 GiB" "${LOG}" \
    && grep -q "phase 4: guard caps -- child-tree footprint cap 50.0 GiB" "${LOG}" \
-   && grep -q "box-used ceiling 100 GiB" "${LOG}"; then
+   && grep -q "physical-used ceiling 107374182400 bytes" "${LOG}"; then
   ok "MEDIUM-B: effective child cap lowered to ceiling-used_start (50 GiB); box-used ceiling 100 GiB (HIGH-3 default)"
 else
   bad "MEDIUM-B effective child cap 50 GiB + 100 GiB ceiling" \
@@ -203,12 +197,7 @@ with open(os.environ["TK_PIDFILE"], "w") as fh:
     fh.write("%d %d\n" % (os.getpid(), sleeper.pid))
     fh.flush()
     os.fsync(fh.fileno())
-# ~500 MB resident so the whole-tree RSS trips the low child cap and aborts.
-n = 500 * 1024 * 1024
-buf = bytearray(n)
-for i in range(0, n, 4096):
-    buf[i] = 1
-sys.stderr.write("treekill child resident ~500MB, sleeping\n")
+sys.stderr.write("treekill child with injected footprint, sleeping\n")
 sys.stderr.flush()
 time.sleep(600)
 EOF
@@ -296,7 +285,7 @@ else
 fi
 
 # 12. the log shows the box-ceiling abort path (baseline + step footprint)
-if grep -q "BOX used memory .* exceeded ceiling" "${TK_LOG}"; then
+if grep -q "GUARD accounted memory .* exceeded ceiling" "${TK_LOG}"; then
   ok "abort log names the box-ceiling breach (baseline + step footprint)"
 else
   bad "abort log names the box-ceiling breach" "ceiling line not found"

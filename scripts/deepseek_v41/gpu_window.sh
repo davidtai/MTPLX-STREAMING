@@ -2,8 +2,11 @@
 # Guarded GPU window for the first real-model DeepSeek-V4.1-Flash q2 runs.
 #
 # Runs ONE step (its argv) inside a serialized exclusive-GPU window and restores
-# the resident agent (com.tea.qwen on :8080) exactly on exit -- including on
-# failure, timeout, memory-guard kill, or Ctrl-C.
+# the resident agent (com.tea.qwen on :8080) on exit, including on failure,
+# memory-guard kill, or Ctrl-C. Restoration verifies model IDs and health.
+# If cleanup or restoration fails, exit 10 / RESTORE_FAILED requires manual
+# recovery. The holder releases its lock after that failure; no later GPU work
+# is safe until the operator has recovered and verified the service.
 #
 # Phases (each prints a UTC-timestamped line):
 #   0. Acquire the exclusive GPU lock (fcntl advisory lock on
@@ -23,14 +26,13 @@
 #   4. Run the step (argv) under a SYSTEM-WIDE memory guard.  Before starting it
 #      refuses to open if other mtplx/python workers above the foreign cap
 #      (default 2 GiB RSS) are resident (prints them).  While it runs, aborts +
-#      restores if EITHER the step child's RSS exceeds its cap (default 90 GiB)
-#      OR total system used memory (wired+active+compressed) exceeds the ceiling
-#      (default 105 GiB) -- the box panicked on 2026-09-10 when the aggregate
-#      crossed the box limit while no single child had.
+#      restores if EITHER the step tree footprint exceeds its cap (default 93 GiB)
+#      OR total physical used memory (wired+active+inactive+physical compressor)
+#      exceeds the ceiling (default 110 decimal GB, including file cache).
 #   5. EXIT/INT/TERM trap: `launchctl bootstrap gui/<uid> <plist>` to restore the
 #      resident agent, then the lock is released by the fcntl holder (phase 0).
-#      Qwen is restored BEFORE the lock is released, so a queued window never
-#      acquires while the reload races.
+#      Successful windows release only after model identity and health/warmup
+#      verification. Failed restoration has the explicit recovery boundary above.
 #
 # Launch rules (memory/guarded-window-launch-protocol.md): launch as the DIRECT
 # command of a run_in_background:true Bash call -- NEVER a shell `&` one-liner,
@@ -116,6 +118,10 @@ RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm resto
 CANONICAL_PLIST="${GPU_WINDOW_QWEN_PLIST:-${HOME}/Library/LaunchAgents/${QWEN_LABEL}.plist}"
 RESTORE_QWEN_ALWAYS="${GPU_WINDOW_RESTORE_QWEN_ALWAYS:-1}"   # default ON on this box
 LAUNCHCTL_CMD="${GPU_WINDOW_LAUNCHCTL_CMD:-/bin/launchctl}"  # overridable for tests
+CURL_CMD="${GPU_WINDOW_CURL_CMD:-/usr/bin/curl}"
+HEALTH_URL="${GPU_WINDOW_HEALTH_URL:-http://127.0.0.1:8080/health}"
+MODELS_URL="${GPU_WINDOW_MODELS_URL:-http://127.0.0.1:8080/v1/models}"
+EXPECTED_MODEL_IDS=""  # captured before bootout, never inferred from the replacement service
 # HIGH-3: safety caps REFUSE (exit 2) on an invalid value (never silently fall back).
 MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"  # GiB the step needs available after the stop
 _require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
@@ -150,24 +156,21 @@ RSS_METAL_UNDERCOUNT_GIB="$(_int_or_default "${GPU_WINDOW_RSS_METAL_UNDERCOUNT_G
 COMPRESSOR_TRIP_GB="$(_int_or_default "${GPU_WINDOW_COMPRESSOR_TRIP_GB:-8}" 8 GPU_WINDOW_COMPRESSOR_TRIP_GB)"
 COMPRESSOR_TRIP_BYTES=$(( COMPRESSOR_TRIP_GB * 1024 * 1024 * 1024 ))
 
-# System-wide phase-4 guard (2026-09-10 panic hardening): the box kernel-panicked
-# and rebooted when TOTAL used memory crossed the box limit, even though no single
-# child breached its own RSS cap.  So phase 4 also polls SYSTEM used memory (wired
-# + active + compressed, from vm_stat) and aborts+restores over this ceiling, and
-# it REFUSES to open the window while other mtplx/python workers above the foreign
-# cap are resident (their footprint co-resides with the step's).
-# W106 HIGH-2: GiB. Default system ceiling = 102 GiB ~= 109.5 GB, just under the
-# 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
-# HIGH-3: REFUSE on an invalid ceiling (a fractional 95.5 must NOT silently become
-# the 102 default and raise the ceiling over the operator's intent).
-# MEDIUM-1: 96 GiB ~= 103 GB.  The box guard polls at ~1 s effective, so at an 8 GB/s
-# ramp it cannot catch the box before 110 GB from a 107 GB ceiling (100 GiB) -- 96 GiB
-# leaves ~7 GB of catch-up.  The REAL bound is the wired limit: apply_mlx_memory_cap /
-# the served path call set_wired_limit (and iogpu.wired_limit_mb caps the box), so Metal
-# cannot exceed it regardless of the poll; this ceiling is the belt to that suspenders.
-TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-96}"
-_require_int GPU_WINDOW_TOTAL_MEM_CEILING_GB "${TOTAL_MEM_CEILING_GB}" 1 || exit 2
-TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
+# Exact default: 110 decimal GB. Explicit historical _GB values retain their
+# GiB meaning. The byte override avoids unit ambiguity; specifying both refuses.
+# Polling detects breaches, but cannot bound an allocation between samples.
+if [[ -n "${GPU_WINDOW_TOTAL_MEM_CEILING_BYTES:-}" && -n "${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-}" ]]; then
+  printf 'ERROR: specify only GPU_WINDOW_TOTAL_MEM_CEILING_BYTES or the legacy GiB GPU_WINDOW_TOTAL_MEM_CEILING_GB\n' >&2
+  exit 2
+elif [[ -n "${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-}" ]]; then
+  _require_int GPU_WINDOW_TOTAL_MEM_CEILING_GB "${GPU_WINDOW_TOTAL_MEM_CEILING_GB}" 1 || exit 2
+  TOTAL_MEM_CEILING_BYTES=$(( GPU_WINDOW_TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
+else
+  TOTAL_MEM_CEILING_BYTES="${GPU_WINDOW_TOTAL_MEM_CEILING_BYTES:-110000000000}"
+  _require_int GPU_WINDOW_TOTAL_MEM_CEILING_BYTES "${TOTAL_MEM_CEILING_BYTES}" 1 || exit 2
+fi
+# Display only. All comparisons use the authoritative integer byte value.
+TOTAL_MEM_CEILING_GB="$(awk -v b="${TOTAL_MEM_CEILING_BYTES}" 'BEGIN {printf "%.9g", b/1073741824}')"
 FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
 _require_int GPU_WINDOW_FOREIGN_WORKER_RSS_GB "${FOREIGN_WORKER_RSS_GB}" || exit 2
 VM_STAT_CMD="${GPU_WINDOW_VM_STAT_CMD:-/usr/bin/vm_stat}"        # overridable so the guard math is unit-testable
@@ -194,27 +197,22 @@ log() { printf '%s [gpu_window] %s\n' "$(ts)" "$*"; }
 err() { printf '%s [gpu_window] ERROR: %s\n' "$(ts)" "$*" >&2; }
 gib() { awk -v b="${1:-0}" 'BEGIN{printf "%.1f", b/1073741824}'; }
 
-# One-time BASELINE of used physical memory in bytes = (wired down + anonymous +
-# occupied-by-compressor) pages * page size, from vm_stat.  Sampled ONCE before the
-# step (with the resident agent already booted out), NOT polled during the step.
-#
-# W121: this is deliberately the ANONYMOUS (internal_page_count) term, NOT
-# active+inactive.  The 269 GiB expert bank is mmap'd/read during load and fills
-# the FILE page cache, which lands in active/inactive (external), NOT in the
-# anonymous bucket -- so an active+inactive formula false-aborts on reclaimable
-# cache (the 2026-09-11 incident, reproduced when window 47 aborted 10 s into load).
-# The step's OWN growing memory (weights + KV + Metal/IOAccelerator, wired or not)
-# is charged instead to its per-process phys_footprint and added on top in phase 4
-# (see box_used).  "occupied by compressor" is the physical compressed footprint.
+# Physical used bytes, matching top: wired + active + inactive + physical
+# compressor. Includes file cache and unwired pages; speculative pages are free.
+# Used for both the post-unload baseline and the live guard observation.
 used_mem_bytes() {
-  "${VM_STAT_CMD}" 2>/dev/null | awk '
+  local raw
+  raw="$("${VM_STAT_CMD}" 2>/dev/null)" || return 1
+  printf '%s\n' "${raw}" | awk '
     /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
-    /^Pages wired down/             { gsub(/\./, "", $NF); wired = $NF }
-    /^Anonymous pages/              { gsub(/\./, "", $NF); anon = $NF }
-    /^Pages occupied by compressor/ { gsub(/\./, "", $NF); comp = $NF }
+    /^Pages wired down:/             { sub(/\.$/, "", $NF); wired = $NF; w = 1 }
+    /^Pages active:/                 { sub(/\.$/, "", $NF); active = $NF; a = 1 }
+    /^Pages inactive:/               { sub(/\.$/, "", $NF); inactive = $NF; inactive_seen = 1 }
+    /^Pages occupied by compressor:/ { sub(/\.$/, "", $NF); comp = $NF; c = 1 }
     END {
-      if (ps == "") ps = 16384
-      printf "%.0f", (wired + anon + comp) * ps
+      if (ps !~ /^[0-9]+$/ || ps <= 0 || !w || !a || !inactive_seen || !c ||
+          wired !~ /^[0-9]+$/ || active !~ /^[0-9]+$/ || inactive !~ /^[0-9]+$/ || comp !~ /^[0-9]+$/) exit 1
+      printf "%.0f", (wired + active + inactive + comp) * ps
     }
   '
 }
@@ -227,14 +225,16 @@ used_mem_bytes() {
 COMPRESSOR_SYSCTL_CMD="${GPU_WINDOW_COMPRESSOR_CMD:-/usr/sbin/sysctl}"
 compressor_bytes_used() {
   local v
-  v="$("${COMPRESSOR_SYSCTL_CMD}" -n vm.compressor_bytes_used 2>/dev/null)"
-  [[ "${v}" =~ ^[0-9]+$ ]] && printf '%s' "${v}" || printf '0'
+  v="$("${COMPRESSOR_SYSCTL_CMD}" -n vm.compressor_bytes_used 2>/dev/null)" || return 1
+  [[ "${v}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${v}"
 }
 
 # Sum of phys_footprint (mach proc_pid_rusage ri_phys_footprint) over the step's
-# whole process tree.  phys_footprint is the real per-process total INCLUDING
+# whole process tree. phys_footprint is a per-process accounting total INCLUDING
 # IOAccelerator/Metal (wired or not) but EXCLUDING the shared file page cache --
-# exactly the step's contribution to box pressure.  Overridable for the unit test.
+# added to the baseline as a conservative guard estimate, separate from measured
+# live physical used. Overridable for the unit test.
 FOOTPRINT_READER_CMD="${GPU_WINDOW_FOOTPRINT_READER:-/usr/bin/env python3 $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tree_footprint.py}"
 # HIGH-3: expose reader success/failure so the phase-4 guard can FAIL CLOSED instead of
 # continuing at box_used == baseline when the reader breaks.  Still prints '0' on failure
@@ -265,12 +265,15 @@ tree_footprint_bytes() {
 # while another worker session holds gigabytes that would co-reside with the
 # step and push the box over the ceiling.
 list_heavy_foreign_workers() {
-  local self_pids
+  local self_pids raw
   self_pids=" $$ ${PPID:-} ${_GPU_WINDOW_HOLDER_PID:-} "
-  "${PS_CMD}" -axo pid=,rss=,comm= 2>/dev/null | awk \
+  raw="$("${PS_CMD}" -axo pid=,rss=,comm= 2>/dev/null)" || return 1
+  [[ -n "${raw}" ]] || return 1
+  printf '%s\n' "${raw}" | awk \
     -v cap_kb="$(( FOREIGN_WORKER_RSS_GB * 1024 * 1024 ))" \
     -v self="${self_pids}" '
     {
+      if (NF < 3 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/) exit 1;
       pid = $1; rss = $2 + 0;
       cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i;
       if (rss <= cap_kb) next;
@@ -279,6 +282,21 @@ list_heavy_foreign_workers() {
       if (lc ~ /python|mtplx|mlx/) printf "%s %.1fGiB %s\n", pid, rss / 1048576, cmd;
     }
   '
+}
+
+# 0 = gone/zombie, 1 = running, 2 = unreadable. A failed ps read while the owned
+# root is alive must never turn the polling loop into an unmonitored wait.
+_step_finished() {
+  local state rc
+  state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null)"; rc=$?
+  state="${state//[[:space:]]/}"
+  if (( rc != 0 )) || [[ -z "${state}" ]]; then
+    kill -0 "${STEP_PID}" 2>/dev/null && return 2
+    return 0
+  fi
+  [[ "${state}" =~ ^[RSDTZWIXU][[:alnum:]\<\>+]*$ ]] || return 2
+  [[ "${state}" == Z* ]] && return 0
+  return 1
 }
 
 # Walk the process tree rooted at $1 (that pid AND every descendant) from a SINGLE
@@ -324,9 +342,16 @@ _step_tree_pids() {
   # root unconditionally, so `--selftest tree-pids 999999` (or an already-dead
   # STEP_PID) printed a bogus pid -> the abort rescan logged false "ORPHAN survived"
   # ERRORs and KILLed a dead pid.
-  "${PS_CMD}" -axo pid=,ppid= 2>/dev/null | awk -v root="${root}" '
-    { pid = $1 + 0; ppid = $2 + 0; present[pid] = 1; kids[ppid] = kids[ppid] " " pid }
+  local raw
+  raw="$("${PS_CMD}" -axo pid=,ppid= 2>/dev/null)" || return 1
+  [[ -n "${raw}" ]] || return 1
+  printf '%s\n' "${raw}" | awk -v root="${root}" '
+    {
+      if (NF != 2 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/) { bad = 1; exit 1 }
+      pid = $1 + 0; ppid = $2 + 0; present[pid] = 1; kids[ppid] = kids[ppid] " " pid
+    }
     END {
+      if (bad) exit 1;
       head = 1; tail = 0; wl[++tail] = root + 0; out = "";
       while (head <= tail) {
         p = wl[head]; head++;
@@ -342,6 +367,44 @@ _step_tree_pids() {
       print out;
     }
   '
+}
+
+# API observations are bounded and have no model/MLX imports. The canonical
+# model tuple is captured before unload, then compared on every restore probe.
+_read_model_ids() {
+  local raw
+  raw="$("${CURL_CMD}" --fail --silent --connect-timeout 2 --max-time 2 "${MODELS_URL}")" || return 1
+  printf '%s' "${raw}" | /usr/bin/env python3 -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin)["data"]
+    ids = [row["id"] for row in rows]
+    if not ids or not all(isinstance(i, str) and i for i in ids):
+        raise ValueError("missing model IDs")
+    print(json.dumps(sorted(ids), separators=(",", ":")))
+except (KeyError, TypeError, ValueError):
+    sys.exit(1)
+'
+}
+
+_restored_api_ready() {
+  local raw ids
+  raw="$("${CURL_CMD}" --fail --silent --connect-timeout 2 --max-time 2 "${HEALTH_URL}")" || return 1
+  printf '%s' "${raw}" | /usr/bin/env python3 -c '
+import json, sys
+try:
+    health = json.load(sys.stdin)
+    if health.get("ok") is not True:
+        raise ValueError("service unhealthy")
+    warmup = (health.get("startup") or {}).get("warmup", health.get("warmup")) or {}
+    background = warmup.get("background")
+    if background is not None and background.get("state") not in ("done", "disabled", "skipped"):
+        raise ValueError("background warmup unfinished")
+except (AttributeError, TypeError, ValueError):
+    sys.exit(1)
+' || return 1
+  ids="$(_read_model_ids)" || return 1
+  [[ -z "${EXPECTED_MODEL_IDS}" || "${ids}" == "${EXPECTED_MODEL_IDS}" ]]
 }
 
 # W106 restore hardening: choose a plist that EXISTS at restore time.  Prefer the
@@ -367,21 +430,13 @@ _resolve_restore_plist() {
 # is already loaded now.  On failure it prints the exact manual command.
 _do_restore() {
   local was_loaded="${1:-0}" discovered="${2:-}"
-  # LOW (round 4): if the service is ALREADY loaded now, there is nothing to
-  # restore -- for BOTH branches (a bootout that failed and never stopped it, or a
-  # retry).  Short-circuit so a spurious "service already loaded" bootstrap failure
-  # never prints a false "may be DOWN".
-  if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
-    log "restore: ${QWEN_LABEL} already loaded; nothing to do"
-    return 0
-  fi
-  local want=0
-  if (( was_loaded == 1 )); then
-    want=1
-  elif [[ "${RESTORE_QWEN_ALWAYS}" == "1" ]]; then
-    want=1
+  local loaded=0
+  "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1 && loaded=1
+  if (( loaded == 1 )); then
+    log "restore: ${QWEN_LABEL} already loaded; verifying API readiness and model identity"
+  elif (( was_loaded == 0 )) && [[ "${RESTORE_QWEN_ALWAYS}" == "1" ]]; then
     log "restore: ${QWEN_LABEL} was NOT loaded at entry, but GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 -> bootstrapping anyway (guards against a cascaded prior failure)"
-  else
+  elif (( was_loaded == 0 )); then
     log "restore: ${QWEN_LABEL} was not loaded at entry; leaving it stopped (as found)"
     return 0
   fi
@@ -391,26 +446,31 @@ _do_restore() {
   if [[ -n "${discovered}" && "${discovered}" != "${plist}" ]]; then
     log "restore: discovered plist '${discovered}' is gone; falling back to '${plist:-<none>}'"
   fi
-  if [[ -z "${plist}" ]]; then
+  if (( loaded == 0 )) && [[ -z "${plist}" ]]; then
     err "restore: NO plist file exists to bootstrap (discovered '${discovered}' gone, canonical '${CANONICAL_PLIST}' missing); ${QWEN_LABEL} may be DOWN -- manual recovery: ${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST}"
     return 1
   fi
 
-  log "restore: launchctl bootstrap ${DOMAIN} ${plist}"
-  if ! "${LAUNCHCTL_CMD}" bootstrap "${DOMAIN}" "${plist}"; then
-    err "restore: 'launchctl bootstrap ${DOMAIN} ${plist}' FAILED; ${QWEN_LABEL} may be DOWN on :8080 -- manual recovery: ${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST}"
-    return 1
-  fi
   local deadline
   deadline=$(( $(date +%s) + RESTORE_TIMEOUT ))
   while (( $(date +%s) < deadline )); do
-    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
-      log "restore: ${QWEN_LABEL} is loaded again (launchctl service present); /health may still be warming"
+    if ! "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1; then
+      if [[ -n "${plist}" ]]; then
+        log "restore: launchctl bootstrap ${DOMAIN} ${plist}"
+        "${LAUNCHCTL_CMD}" bootstrap "${DOMAIN}" "${plist}" || true
+      fi
+    fi
+    if "${LAUNCHCTL_CMD}" print "${DOMAIN}/${QWEN_LABEL}" >/dev/null 2>&1 && _restored_api_ready; then
+      if [[ -n "${EXPECTED_MODEL_IDS}" ]]; then
+        log "restore: ${QWEN_LABEL} healthy, model identity ${EXPECTED_MODEL_IDS} verified, background warmup ready"
+      else
+        log "restore: ${QWEN_LABEL} healthy with model IDs available, background warmup ready (no entry model tuple was available to compare)"
+      fi
       return 0
     fi
     sleep 1
   done
-  err "restore: ${QWEN_LABEL} did not reappear within ${RESTORE_TIMEOUT}s; verify :8080 manually (${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST})"
+  err "restore: ${QWEN_LABEL} did not become healthy with the expected model within ${RESTORE_TIMEOUT}s; verify ${HEALTH_URL} and ${MODELS_URL}; manual recovery: ${LAUNCHCTL_CMD} bootstrap ${DOMAIN} ${CANONICAL_PLIST}"
   return 1
 }
 
@@ -422,23 +482,23 @@ SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SO
 if [[ "${1:-}" == "--selftest" ]]; then
   shift
   case "${1:-}" in
-    used-mem-bytes) used_mem_bytes; echo ;;         # one-time baseline (wired+anon+comp)
-    used-mem-gib)   gib "$(used_mem_bytes)"; echo ;;
-    compressor-bytes) compressor_bytes_used; echo ;;
+    used-mem-bytes) used_mem_bytes || exit 8; echo ;;
+    used-mem-gib)   _u="$(used_mem_bytes)" || exit 8; gib "${_u}"; echo ;;
+    compressor-bytes) compressor_bytes_used || exit 8; echo ;;
     tree-footprint) tree_footprint_bytes "${2:-}"; echo ;;
     box-used-bytes)
       # W121: box_used = one-time baseline (used_mem_bytes) + step-tree phys_footprint.
       # Inject GPU_WINDOW_VM_STAT_CMD (baseline) + GPU_WINDOW_FOOTPRINT_READER (tree)
       # for a deterministic unit test.  $2 = the step root pid handed to the reader.
-      _base="$(used_mem_bytes)"; _fp="$(tree_footprint_bytes "${2:-}")"
+      _base="$(used_mem_bytes)" || exit 8; _fp="$(tree_footprint_bytes "${2:-}")"
       printf '%s\n' "$(( _base + _fp ))"
       ;;
     box-used-gib)
-      _base="$(used_mem_bytes)"; _fp="$(tree_footprint_bytes "${2:-}")"
+      _base="$(used_mem_bytes)" || exit 8; _fp="$(tree_footprint_bytes "${2:-}")"
       gib "$(( _base + _fp ))"; echo
       ;;
     over-ceiling)
-      _u="$(used_mem_bytes)"
+      _u="$(used_mem_bytes)" || exit 8
       if [[ "${_u}" =~ ^[0-9]+$ ]] && (( _u > TOTAL_MEM_CEILING_BYTES )); then
         echo yes
       else
@@ -446,12 +506,13 @@ if [[ "${1:-}" == "--selftest" ]]; then
       fi
       ;;
     heavy-workers)  list_heavy_foreign_workers ;;
-    tree-pids)      _step_tree_pids "${2:-}" ; echo ;;   # W106 item 4: tree walk
+    tree-pids)      _step_tree_pids "${2:-}" || exit 8; echo ;;   # W106 item 4: tree walk
     restore-plist)  _resolve_restore_plist "${2:-}" "${3:-}" ; echo ;;  # discovered, canonical
     restore-run)
       # W106 restore test: run _do_restore against a fake ${LAUNCHCTL_CMD} with
       # env-injected inputs, then exit with its status.  $2 = was_loaded (1/0),
       # $3 = discovered plist path (may be a vanished guard-dir copy).
+      EXPECTED_MODEL_IDS="${4:-}"
       _do_restore "${2:-0}" "${3:-}"
       exit $?
       ;;
@@ -468,7 +529,8 @@ fi
 # ---------------- phase 0: acquire the exclusive GPU lock, then re-exec --------
 # macOS has no flock(1); hold the same fcntl advisory lock mtplx.qwen_guard uses.
 # The Python holder keeps the lock fd open for the whole window and releases it
-# only after this wrapper (its child) has restored the resident agent and exited.
+# after this wrapper (its child) exits. Exit 10 indicates failed cleanup/restore
+# and requires operator recovery before any later GPU work.
 if [[ -z "${_GPU_WINDOW_LOCKED:-}" ]]; then
   exec /usr/bin/env python3 - "$LOCK_PATH" "$LOCK_TIMEOUT" "$SCRIPT_PATH" "$@" <<'PYHOLDER'
 import errno, fcntl, os, signal, subprocess, sys, time
@@ -593,19 +655,37 @@ fi
 _pids_with_tag() {
   [[ -n "${_STEP_TAG:-}" ]] || return 0
   local pat="_GPU_WINDOW_STEP_TAG=[${_STEP_TAG:0:1}]${_STEP_TAG:1}"
-  "${PS_CMD}" -axEo pid=,command= 2>/dev/null \
-    | grep -E "${pat}" 2>/dev/null \
-    | awk -v self=" $$ ${PPID:-} ${_GPU_WINDOW_HOLDER_PID:-} " \
-        '{ if (index(self, " " $1 " ") == 0) print $1 }'
+  local raw
+  raw="$("${PS_CMD}" -axEo pid=,command= 2>/dev/null)" || return 1
+  [[ -n "${raw}" ]] || return 1
+  printf '%s\n' "${raw}" | awk -v pat="${pat}" -v self=" $$ ${PPID:-} ${_GPU_WINDOW_HOLDER_PID:-} " \
+    '{ if (NF < 2 || $1 !~ /^[0-9]+$/) exit 1 }
+     $0 ~ pat { if (index(self, " " $1 " ") == 0) print $1 }'
 }
 
 # The FULL set of step pids: the ppid tree rooted at STEP_PID UNION the env-tagged
 # processes (which survive reparenting), one pid per line, deduped.
 _collect_step_pids() {
-  {
-    [[ -n "${STEP_PID:-}" ]] && _step_tree_pids "${STEP_PID}" | tr ' ' '\n'
-    _pids_with_tag
-  } 2>/dev/null | grep -E '^[0-9]+$' | sort -un
+  local tree="" tagged
+  if [[ -n "${STEP_PID:-}" ]]; then
+    tree="$(_step_tree_pids "${STEP_PID}")" || return 1
+  fi
+  tagged="$(_pids_with_tag)" || return 1
+  printf '%s\n%s\n' "${tree}" "${tagged}" | tr ' ' '\n' | awk '/^[0-9]+$/' | sort -un
+}
+
+_step_children_exited() {
+  local pids p state
+  pids="$(_collect_step_pids)" || return 1
+  # Retain the last owned set: a surviving platform binary may have reparented
+  # after TERM and no longer expose its environment tag through ps.
+  for p in ${pids} ${LAST_STEP_PIDS:-}; do
+    if kill -0 "${p}" 2>/dev/null; then
+      state="$("${PS_CMD}" -o state= -p "${p}" 2>/dev/null)" || return 1
+      state="${state//[[:space:]]/}"
+      [[ "${state}" == Z* ]] || return 1
+    fi
+  done
 }
 
 _kill_step_tree() {
@@ -617,6 +697,7 @@ _kill_step_tree() {
   local pids _p _i _alive _r
   pids="$(_collect_step_pids)"
   [[ -z "${pids}" && -n "${STEP_PID:-}" ]] && pids="${STEP_PID}"
+  LAST_STEP_PIDS="${LAST_STEP_PIDS:-} ${pids}"
   if [[ -n "${pids}" ]]; then
     for _p in ${pids}; do kill -TERM "${_p}" 2>/dev/null || true; done
     for (( _i = 0; _i < KILL_GRACE_SECONDS * 4; _i++ )); do
@@ -636,6 +717,7 @@ _kill_step_tree() {
   for _r in 1 2 3; do
     local survivors; survivors="$(_collect_step_pids)"
     [[ -z "${survivors}" ]] && break
+    LAST_STEP_PIDS="${LAST_STEP_PIDS:-} ${survivors}"
     local _any=0
     for _p in ${survivors}; do
       kill -0 "${_p}" 2>/dev/null || continue
@@ -657,9 +739,11 @@ WAS_LOADED=0
 RESTORED=0
 STEP_PID=""
 _STEP_TAG=""                # W106 (b): unique env tag on the step, to find reparented descendants
+LAST_STEP_PIDS=""           # retained until the final pre-bootstrap liveness check
 PEAK_TREE_RSS_BYTES=0       # W121: running peak of the step tree's Σ phys_footprint
 PEAK_MAX_PROC_RSS_BYTES=0   # (retained; legacy ps-tree telemetry, no longer polled)
-PEAK_SYSTEM_USED_BYTES=0    # running peak of box used (baseline + step footprint)
+PEAK_GUARD_ACCOUNTED_BYTES=0  # peak of max(baseline + footprint estimate, physical used)
+PEAK_SYSTEM_USED_BYTES=0      # sampled physical-used peak, including baseline
 PEAK_COMPRESSOR_DELTA_BYTES=0  # running peak of compressor growth over its at-start value
 PLIST=""
 QWEN_PID=""
@@ -698,7 +782,14 @@ teardown() {
     # so nothing keeps loading the model outside the exclusive window.
     _kill_step_tree
   fi
-  restore_qwen
+  if ! _step_children_exited; then
+    err "RESTORE_FAILED: owned step processes remain alive or cannot be inspected; refusing to bootstrap over them. Manual recovery required before more GPU work."
+    exit 10
+  fi
+  if ! restore_qwen; then
+    err "RESTORE_FAILED: service readiness/identity not verified; manual recovery required before more GPU work (step exit ${ec})."
+    exit 10
+  fi
   exit "${ec}"
 }
 
@@ -758,9 +849,14 @@ if [[ -n "${PRINT_OUT}" ]]; then
 fi
 PLIST="${GPU_WINDOW_QWEN_PLIST:-${PLIST:-${HOME}/Library/LaunchAgents/${QWEN_LABEL}.plist}}"
 if (( WAS_LOADED == 0 )); then
-  log "phase 2: ${QWEN_LABEL} is NOT loaded at entry; nothing to boot out; it will be left stopped on exit"
+  log "phase 2: ${QWEN_LABEL} is NOT loaded at entry; nothing to boot out; restore-on-exit policy ${RESTORE_QWEN_ALWAYS}"
 else
   log "phase 2: ${QWEN_LABEL} loaded (pid=${QWEN_PID:-unknown}); plist=${PLIST}"
+  if ! EXPECTED_MODEL_IDS="$(_read_model_ids)"; then
+    err "phase 2: cannot capture the served model identity; refusing to boot out the service"
+    exit 5
+  fi
+  log "phase 2: captured model identity ${EXPECTED_MODEL_IDS}"
 fi
 fi  # end phases 1-2 (skipped whole in GPU_WINDOW_TEST_MODE=1; phase 3 below is
     # then auto-skipped because WAS_LOADED stays 0, as is restore_qwen)
@@ -814,7 +910,10 @@ fi
 # holding more than the foreign cap.  Its footprint co-resides with the step, so
 # starting here risks pushing the box over the ceiling (2026-09-10 panic).
 log "phase 4: scanning for other heavy mtplx/python workers (> ${FOREIGN_WORKER_RSS_GB} GiB RSS) before opening the window"
-HEAVY_WORKERS="$(list_heavy_foreign_workers)"
+if ! HEAVY_WORKERS="$(list_heavy_foreign_workers)"; then
+  err "phase 4: foreign-worker ps snapshot unreadable or malformed; refusing to start the step"
+  exit 8
+fi
 if [[ -n "${HEAVY_WORKERS}" ]]; then
   err "phase 4: REFUSING to start -- other mtplx/python workers above ${FOREIGN_WORKER_RSS_GB} GiB RSS are resident (they co-reside with the step and could panic the box):"
   printf '%s\n' "${HEAVY_WORKERS}" | while IFS= read -r _hw_line; do
@@ -822,12 +921,22 @@ if [[ -n "${HEAVY_WORKERS}" ]]; then
   done
   exit 7
 fi
-USED_START="$(used_mem_bytes)"
-COMPRESSOR_START="$(compressor_bytes_used)"
-log "phase 4: box used at start (baseline wired+anon+comp): $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB); compressor at start $(gib "${COMPRESSOR_START}") GiB"
-log "phase 4: W121 guard -- box_used = max(baseline + Σ phys_footprint(step tree), live system used); compressor tripwire ${COMPRESSOR_TRIP_GB} GiB over start (file page cache excluded from all -- it is reclaimable)"
+if ! USED_START="$(used_mem_bytes)"; then
+  err "phase 4: baseline vm_stat unreadable or incomplete; refusing to start the step"
+  exit 8
+fi
+if (( USED_START >= TOTAL_MEM_CEILING_BYTES )); then
+  err "phase 4: physical used baseline ${USED_START} bytes leaves no headroom below ceiling ${TOTAL_MEM_CEILING_BYTES} bytes; refusing to start the step"
+  exit 8
+fi
+if ! COMPRESSOR_START="$(compressor_bytes_used)"; then
+  err "phase 4: compressor baseline unreadable; refusing to start the step"
+  exit 8
+fi
+log "phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): $(gib "${USED_START}") GiB (ceiling ${TOTAL_MEM_CEILING_GB} GiB); compressor at start $(gib "${COMPRESSOR_START}") GiB"
+log "phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire ${COMPRESSOR_TRIP_GB} GiB over start; physical used includes file cache"
 # MEDIUM-4: hand the measured baseline (decimal GB) to the step env so the DSV4.1 bench's
-# box target derives from the SAME wired+anon+comp baseline the guard uses -- measured now
+# box target derives from the SAME physical-used baseline the guard uses -- measured now
 # with the resident agent booted out -- rather than a hand-passed --box-baseline-gb (which
 # the bench now treats as a fallback only).  Both units logged.
 if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
@@ -853,59 +962,58 @@ fi
 
 # W106 HIGH-2: state BOTH caps explicitly (GiB + the ~GB equivalent) at step start
 # so the operator sees the guard envelope next to the step it is about to run.
-log "phase 4: guard caps -- child-tree footprint cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (~$(awk -v b="${EFFECTIVE_CHILD_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); box-used ceiling ${TOTAL_MEM_CEILING_GB} GiB (~$(awk -v g="${TOTAL_MEM_CEILING_GB}" 'BEGIN{printf "%.1f", g*1073741824/1e9}') GB, under the 110 GB hard limit)"
+log "phase 4: guard caps -- child-tree footprint cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB (~$(awk -v b="${EFFECTIVE_CHILD_CAP_BYTES}" 'BEGIN{printf "%.0f", b/1e9}') GB); physical-used ceiling ${TOTAL_MEM_CEILING_BYTES} bytes ($(awk -v b="${TOTAL_MEM_CEILING_BYTES}" 'BEGIN{printf "%.3f", b/1e9}') decimal GB, ${TOTAL_MEM_CEILING_GB} GiB)"
 # W106 (b): tag the step's environment with a unique marker, inherited by EVERY
 # descendant and unchanged by reparenting, so _pids_with_tag can find (and kill) a
 # python that was reparented to launchd after its `bash -c` chain died.  Set inline
 # on the step only (NOT exported in the wrapper), so it never matches the wrapper.
 _STEP_TAG="gpuwin-$$-$(date +%s)-${RANDOM}${RANDOM}"
-log "phase 4: starting GPU step (tag ${_STEP_TAG}) under child-tree RSS cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
+log "phase 4: starting GPU step (tag ${_STEP_TAG}) under child-tree footprint cap $(gib "${EFFECTIVE_CHILD_CAP_BYTES}") GiB + system ceiling ${TOTAL_MEM_CEILING_GB} GiB: $*"
 _GPU_WINDOW_STEP_TAG="${_STEP_TAG}" "$@" &
 STEP_PID=$!
-# Seed the system-used running peak with the at-start reading so PEAK_SYSTEM_USED
-# is a true max over the window (the pre-W106 exit line re-read used_mem_bytes and
-# reported the value AT EXIT, not the peak).
+# Seed both sampled peaks with the pre-step baseline.
 if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
   PEAK_SYSTEM_USED_BYTES="${USED_START}"
+  PEAK_GUARD_ACCOUNTED_BYTES="${USED_START}"
 fi
 _last_mem_sample=0  # 0 => the first poll logs an envelope sample immediately
 while :; do
   _check_abort   # W106 (a): abort promptly on a queued INT/TERM (not deferred)
   # Loop terminates when STEP_PID is gone or a zombie.
-  step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"
-  if [[ -z "${step_state}" || "${step_state}" == Z* ]]; then
+  _step_finished; step_status=$?
+  if (( step_status == 0 )); then
     break
+  elif (( step_status == 2 )); then
+    err "phase 4: live step state unreadable; killing child and restoring"
+    _kill_step_child
+    exit 8
   fi
   # W121: the step's contribution to box pressure = Σ phys_footprint over its whole
   # tree (proc_pid_rusage ri_phys_footprint, which INCLUDES Metal/IOAccelerator
-  # whether or not it is wired, but EXCLUDES the shared file page cache).  box_used
-  # = the one-time baseline + this footprint -- the plain sum David asked for, and
-  # the quantity that does NOT false-abort on the 269 GiB expert bank's reclaimable
-  # file cache.
+  # whether or not it is wired, but EXCLUDES the shared file page cache). This
+  # footprint plus the baseline is a conservative estimate, separate from the live
+  # physical-used observation, which includes the expert bank file cache.
   # Call DIRECTLY (not under $(...)) so TREE_FOOTPRINT_READ_OK / _BYTES set inside the
   # function reach this shell -- a command substitution would run it in a subshell and
   # discard the flag, defeating the HIGH-3 fail-closed check.
   tree_footprint_bytes "${STEP_PID}" >/dev/null
   tree_ok=${TREE_FOOTPRINT_READ_OK}
   tree_bytes=${TREE_FOOTPRINT_BYTES}
-  # HIGH-3: fold in a LIVE system-used term (wired+anon+comp, file cache excluded) so the
+  # Fold in LIVE physical used (including file cache) so the
   # guard is not blind to OTHER processes growing (a build, a pytest sweep, a worker):
   #   box_used = max(baseline + step footprint, live system used).
-  live_used="$(used_mem_bytes)"
-  live_ok=0; [[ "${live_used}" =~ ^[0-9]+$ ]] && live_ok=1
-  # MEDIUM-4: never silently drop the live system term -- a missing vm_stat means the
-  # guard is blind to OTHER processes growing this tick.  WARN (loudly) so the operator
-  # sees the coverage gap; the baseline+footprint term still bounds the STEP itself.
-  if (( ! live_ok )); then
-    log "phase 4: WARN vm_stat unreadable this tick (live system-used term dropped); guarding on baseline + step footprint only -- box pressure from OTHER processes is NOT visible until vm_stat recovers"
+  if ! live_used="$(used_mem_bytes)"; then
+    err "phase 4: live vm_stat unreadable or incomplete; killing child and restoring"
+    _kill_step_child
+    exit 8
   fi
   if (( ! tree_ok )); then
     # A gone/zombie ROOT is a BENIGN step exit, not a reader failure: the step raced us
     # between the step_state check above and this read (e.g. `bash -c true` exiting fast),
     # and tree_footprint exits non-zero on an unreadable root (MEDIUM-2).  Re-check
     # liveness; if the step is gone, break and let the normal post-loop reap run.
-    step_state="$("${PS_CMD}" -o state= -p "${STEP_PID}" 2>/dev/null | tr -d ' \t\n')"
-    if [[ -z "${step_state}" || "${step_state}" == Z* ]]; then
+    _step_finished; step_status=$?
+    if (( step_status == 0 )); then
       break
     fi
     # HIGH-3: FAIL CLOSED.  The reader broke (subprocess error / 15 s timeout) while the
@@ -916,19 +1024,22 @@ while :; do
     exit 8
   fi
   box_used=$(( USED_START + tree_bytes ))
-  if (( live_ok )) && (( live_used > box_used )); then
+  if (( live_used > box_used )); then
     box_used=${live_used}
   fi
   if (( tree_bytes > PEAK_TREE_RSS_BYTES )); then
     PEAK_TREE_RSS_BYTES=${tree_bytes}
   fi
-  if (( box_used > PEAK_SYSTEM_USED_BYTES )); then
-    PEAK_SYSTEM_USED_BYTES=${box_used}
+  if (( box_used > PEAK_GUARD_ACCOUNTED_BYTES )); then
+    PEAK_GUARD_ACCOUNTED_BYTES=${box_used}
+  fi
+  if (( live_used > PEAK_SYSTEM_USED_BYTES )); then
+    PEAK_SYSTEM_USED_BYTES=${live_used}
   fi
   # Authoritative box guard (checked FIRST): max(baseline + step footprint, live system
   # used) over the ceiling -- David's plain sum, hardened against other-process growth.
   if (( box_used > TOTAL_MEM_CEILING_BYTES )); then
-    err "phase 4: BOX used memory $(gib "${box_used}") GiB (max of baseline $(gib "${USED_START}") + step footprint $(gib "${tree_bytes}"), live system used $( ((live_ok)) && gib "${live_used}" || printf 'n/a' ) GiB) exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB; killing child and restoring"
+    err "phase 4: GUARD accounted memory $(gib "${box_used}") GiB (max of baseline $(gib "${USED_START}") + step footprint estimate $(gib "${tree_bytes}"), live physical used $(gib "${live_used}") GiB) exceeded ceiling $(gib "${TOTAL_MEM_CEILING_BYTES}") GiB; killing child and restoring"
     _kill_step_child
     exit 8
   fi
@@ -942,7 +1053,11 @@ while :; do
   fi
   # Compressor tripwire: a healthy run keeps the compressor flat; a jump is the
   # swap-collapse signature (non-wired Metal spilling to the compressor).
-  comp_now="$(compressor_bytes_used)"
+  if ! comp_now="$(compressor_bytes_used)"; then
+    err "phase 4: compressor reader unreadable; killing child and restoring"
+    _kill_step_child
+    exit 8
+  fi
   comp_delta=$(( comp_now - COMPRESSOR_START ))
   (( comp_delta < 0 )) && comp_delta=0
   if (( comp_delta > PEAK_COMPRESSOR_DELTA_BYTES )); then
@@ -957,7 +1072,7 @@ while :; do
   # numbers David asked for (baseline start, step tree footprint, compressor delta).
   _now_epoch="$(date +%s)"
   if (( _now_epoch - _last_mem_sample >= 30 )); then
-    log "phase 4: mem sample -- baseline $(gib "${USED_START}") GiB + step footprint $(gib "${tree_bytes}") GiB, live system used $( ((live_ok)) && gib "${live_used}" || printf 'n/a' ) GiB => box used $(gib "${box_used}") GiB; compressor +$(gib "${comp_delta}") GiB (trip ${COMPRESSOR_TRIP_GB} GiB)"
+    log "phase 4: mem sample -- baseline $(gib "${USED_START}") GiB + step footprint $(gib "${tree_bytes}") GiB, live physical used $(gib "${live_used}") GiB => guard accounted $(gib "${box_used}") GiB; compressor +$(gib "${comp_delta}") GiB (trip ${COMPRESSOR_TRIP_GB} GiB)"
     _last_mem_sample=${_now_epoch}
   fi
   sleep "${RSS_POLL_SECONDS}"
@@ -965,7 +1080,7 @@ done
 wait "${STEP_PID}"
 step_rc=$?
 STEP_PID=""
-log "phase 4: GPU step exited with code ${step_rc}; peak step footprint $(gib "${PEAK_TREE_RSS_BYTES}") GiB, peak box used $(gib "${PEAK_SYSTEM_USED_BYTES}") GiB, peak compressor delta $(gib "${PEAK_COMPRESSOR_DELTA_BYTES}") GiB"
+log "phase 4: GPU step exited with code ${step_rc}; peak step footprint $(gib "${PEAK_TREE_RSS_BYTES}") GiB, peak guard accounted $(gib "${PEAK_GUARD_ACCOUNTED_BYTES}") GiB, peak physical used $(gib "${PEAK_SYSTEM_USED_BYTES}") GiB, peak compressor delta $(gib "${PEAK_COMPRESSOR_DELTA_BYTES}") GiB"
 
 # phase 5 (restore + lock release) runs in the teardown trap on this exit.
 exit "${step_rc}"

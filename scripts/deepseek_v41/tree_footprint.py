@@ -4,10 +4,10 @@
 phys_footprint (mach ``proc_pid_rusage`` RUSAGE_INFO_V4 ``ri_phys_footprint``) is
 the kernel's real per-process memory total: it INCLUDES IOAccelerator/Metal (GPU)
 pages -- wired OR not -- and the process's dirty anonymous pages, but NOT the
-shared file page cache.  That is exactly the quantity the gpu_window guard needs:
-the box's used memory during a step = a one-time baseline + the sum of the step
-tree's phys_footprint, WITHOUT the 269 GiB expert bank's reclaimable file cache
-(which no vm_stat bucket separates from GPU memory -- the 2026-09-11 false abort).
+shared file page cache. The guard adds this process accounting value to its
+baseline as a conservative estimate. It separately measures live physical used
+memory, including file cache, and compares both against its ceiling. A process
+tree footprint is not a measurement of system physical used memory.
 
 Verified on the idle box (2026-09-12): Qwen pid phys_footprint 79.73 GiB from this
 API == "79 GB IOAccelerator" from ``footprint -p``.  No sudo, cross-process (same
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import os
 import subprocess
 import sys
 
@@ -85,15 +86,19 @@ def _child_map() -> dict[int, list[int]]:
     """ppid -> [pids] from a single `ps` snapshot."""
     out = subprocess.run(["/bin/ps", "-axo", "pid=,ppid="],
                          capture_output=True, text=True, timeout=15)
+    if out.returncode != 0 or not out.stdout.strip():
+        raise RuntimeError("process-tree ps snapshot failed or was empty")
     kids: dict[int, list[int]] = {}
     for line in out.stdout.splitlines():
         parts = line.split()
-        if len(parts) != 2:
+        if not parts:
             continue
+        if len(parts) != 2:
+            raise RuntimeError("malformed process-tree ps snapshot")
         try:
             pid, ppid = int(parts[0]), int(parts[1])
-        except ValueError:
-            continue
+        except ValueError as exc:
+            raise RuntimeError("malformed process-tree ps snapshot") from exc
         kids.setdefault(ppid, []).append(pid)
     return kids
 
@@ -116,8 +121,15 @@ def tree_footprint(roots: list[int]) -> int:
     total = 0
     for pid in tree_pids(roots):
         fp = phys_footprint(pid)
-        if fp is not None:
-            total += fp
+        if fp is None:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue  # The process exited after the enumeration snapshot.
+            except OSError as exc:
+                raise RuntimeError(f"pid {pid} footprint and liveness unreadable") from exc
+            raise RuntimeError(f"live pid {pid} phys_footprint unreadable")
+        total += fp
     return total
 
 
@@ -166,16 +178,18 @@ def main(argv: list[str]) -> int:
     except ValueError:
         sys.stderr.write("root pids must be integers\n")
         return 2
-    # MEDIUM-2: FAIL CLOSED when a ROOT pid is unreadable.  tree_footprint() skips any
-    # pid whose rusage returns None, so an unreadable root (or its whole subtree) would
-    # otherwise print 0 (or a partial sum) with rc 0 -- the guard would then see a tiny
-    # box_used and never trip (fail-open).  The guard treats rc != 0 as "reader broke"
-    # and aborts, so exit 2 when we cannot read the step's own root footprint.
+    # An unreadable root is never a valid zero-sized tree. Descendant read failures
+    # are checked against liveness by tree_footprint; only exited children are omitted.
     for r in roots:
         if phys_footprint(r) is None:
             sys.stderr.write(f"root pid {r} phys_footprint unreadable\n")
             return 2
-    print(tree_footprint(roots))
+    try:
+        total = tree_footprint(roots)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        sys.stderr.write(f"process-tree footprint unavailable: {exc}\n")
+        return 2
+    print(total)
     return 0
 
 

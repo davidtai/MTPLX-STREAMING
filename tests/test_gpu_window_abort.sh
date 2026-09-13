@@ -25,6 +25,8 @@ export GPU_WINDOW_TEST_MODE=1
 export MTPLX_GPU_LOCK="${TMP}/hermetic.lock"
 export GPU_WINDOW_LOCK_TIMEOUT=20
 export GPU_WINDOW_VM_STAT_CMD="${TMP}/fake_vmstat"
+export GPU_WINDOW_COMPRESSOR_CMD="${TMP}/fake_compressor"
+export GPU_WINDOW_FOOTPRINT_READER="${TMP}/fake_footprint"
 export GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000
 export GPU_WINDOW_RSS_POLL_SECONDS=1
 export GPU_WINDOW_KILL_GRACE_SECONDS=1
@@ -40,12 +42,17 @@ cat > "${GPU_WINDOW_VM_STAT_CMD}" <<'EOF'
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
+Pages active:                               1500000.
+Pages inactive:                                   0.
 Anonymous pages:                            1500000.
 Pages wired down:                           1500000.
 Pages occupied by compressor:                276800.
 V
 EOF
 chmod +x "${GPU_WINDOW_VM_STAT_CMD}"
+printf '#!/bin/bash\necho 0\n' > "${GPU_WINDOW_COMPRESSOR_CMD}"
+printf '#!/bin/bash\necho 1048576\n' > "${GPU_WINDOW_FOOTPRINT_READER}"
+chmod +x "${GPU_WINDOW_COMPRESSOR_CMD}" "${GPU_WINDOW_FOOTPRINT_READER}"
 
 # The step: a python child that -- AFTER 1 s (so the fork races the first tree
 # snapshot) -- spawns a `sleep` GRANDCHILD, writes both pids, and then the child

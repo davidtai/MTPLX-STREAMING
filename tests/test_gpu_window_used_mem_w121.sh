@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # W121 hermetic test for gpu_window.sh's corrected box-used guard.
 #
-# The guard quantity is the PLAIN SUM David asked for:
-#   box_used = used_at_start (one-time baseline wired+anon+comp, file cache excluded)
-#            + Σ phys_footprint over the step tree (proc_pid_rusage ri_phys_footprint,
-#              which INCLUDES Metal/IOAccelerator wired-or-not but NOT the shared file
-#              page cache).
+# The guard compares live physical used with the conservative estimate:
+#   guard_accounted = max(live physical used, baseline + step tree footprint).
+# Physical used includes wired, active, inactive, and physical compressor pages,
+# including file cache. The estimate is not presented as a measured total.
 # Plus a compressor tripwire: abort if vm.compressor_bytes_used grows > trip GiB over
 # its at-start value (the swap-collapse signature).
 #
-# This replaces the earlier top-equivalent (wired+active+inactive+spec+comp) attempt,
-# which summed the 269 GiB expert bank's reclaimable FILE CACHE and false-aborted the
-# window-47 load 10 s in.
+# The old W121 exclusion of file cache is no longer the accepted accounting.
 #
 #   nice -n 19 bash tests/test_gpu_window_used_mem_w121.sh
 # Exit 0 = all pass; 1 = a failure.
@@ -31,33 +28,28 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n     %s\n' "$1" "$2"; }
 
-# fake vm_stat: baseline = wired+anon+comp.  wired 700000 + anon 53248 + comp 65536
-#   = 818784 pages * 16384 = 13413236736 B = 12.49 GiB.  Choose ~11.5 GiB (window 46
-#   baseline): wired 640000 + anon 40000 + comp 74000 = 754000 * 16384 = 11.51 GiB.
+# Physical baseline: wired 640000 + active 30000 + inactive 10000 + compressor
+# 74000 = 754000 pages * 16384 = 11.51 GiB. Anonymous is not added again.
 FAKE_VMS="${TMP}/vmstat"
 cat > "${FAKE_VMS}" <<'EOF'
 #!/bin/bash
 cat <<'V'
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  100000.
-Pages active:                               4300000.
-Pages inactive:                              300000.
+Pages active:                                 30000.
+Pages inactive:                               10000.
 Anonymous pages:                              40000.
 Pages wired down:                            640000.
 Pages occupied by compressor:                 74000.
 V
 EOF
 chmod +x "${FAKE_VMS}"
-# baseline (wired 640000 + anon 40000 + comp 74000) * 16384 = 12,353,536,000 B = 11.50 GiB
-# NOTE: active/inactive are HUGE here (the 269 GiB bank's file cache); the baseline
-# formula must IGNORE them (that is the whole point).
-
-# --- 1. baseline ignores file cache (active/inactive) ---
+# --- 1. baseline includes active/inactive and counts compressor physically ---
 BASE_GIB="$(GPU_WINDOW_VM_STAT_CMD="${FAKE_VMS}" bash "${SCRIPT}" --selftest used-mem-gib | tr -d '[:space:]')"
 if [[ "${BASE_GIB}" == "11.5" ]]; then
-  ok "baseline = wired+anon+comp only (${BASE_GIB} GiB), ignores the file-cache active/inactive"
+  ok "physical baseline includes active/inactive (${BASE_GIB} GiB), without adding anonymous twice"
 else
-  bad "baseline ignores file cache" "got ${BASE_GIB} GiB (expected 11.5; active/inactive must NOT count)"
+  bad "physical baseline" "got ${BASE_GIB} GiB (expected 11.5 including active/inactive)"
 fi
 
 # --- 2. box_used = baseline + step footprint ---
@@ -101,7 +93,7 @@ printf '#!/bin/bash\necho 1073741824\n' > "${SYSCTL_FLAT}"; chmod +x "${SYSCTL_F
 
 # --- 3. window-46 vector (footprint 74, baseline 11.5, flat compressor) -> NO abort ---
 eval "$(run_window "${FP74}" "${SYSCTL_FLAT}")"
-if [[ "${rc}" == "0" ]] && grep -q "box used 85.5 GiB" "${log}"; then
+if [[ "${rc}" == "0" ]] && grep -q "guard accounted 85.5 GiB" "${log}"; then
   ok "box 85.5 GiB (< 100 ceiling) does NOT abort; mem sample logs the three numbers"
 else
   bad "no false abort at box 85.5" "rc=${rc}; $(grep -m1 'mem sample\|ERROR' "${log}" || echo 'no sample')"
@@ -110,7 +102,7 @@ fi
 # --- 4. footprint 95 GiB -> box 106.5 > 100 ceiling -> abort exit 8 ---
 FP95="${TMP}/fp95"; printf '#!/bin/bash\necho 102005473280\n' > "${FP95}"; chmod +x "${FP95}"  # 95 GiB
 eval "$(run_window "${FP95}" "${SYSCTL_FLAT}")"
-if [[ "${rc}" == "8" ]] && grep -q "BOX used memory" "${log}"; then
+if [[ "${rc}" == "8" ]] && grep -q "GUARD accounted memory" "${log}"; then
   ok "box 106.5 GiB (> 100 ceiling) aborts exit 8 (baseline + footprint over ceiling)"
 else
   bad "box over ceiling aborts" "rc=${rc}; $(grep -m1 'ERROR' "${log}" || echo none)"

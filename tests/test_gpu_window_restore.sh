@@ -20,6 +20,7 @@ trap 'rm -rf "${TMP}"' EXIT
 
 # HARD SAFETY NET: never touch the real launchctl or lock even if a code path slips.
 export GPU_WINDOW_LAUNCHCTL_CMD="${TMP}/fake_launchctl"
+export GPU_WINDOW_CURL_CMD="${TMP}/fake_curl"
 export MTPLX_GPU_LOCK="${TMP}/hermetic.lock"
 export GPU_WINDOW_TEST_MODE=1
 export GPU_WINDOW_RESTORE_TIMEOUT=3
@@ -43,6 +44,14 @@ case "\$1" in
 esac
 EOF
 chmod +x "${GPU_WINDOW_LAUNCHCTL_CMD}"
+cat > "${GPU_WINDOW_CURL_CMD}" <<'EOF'
+#!/bin/bash
+case "${!#}" in
+  */v1/models) echo '{"data":[{"id":"hermetic-model"}]}' ;;
+  *) echo '{"ok":true,"startup":{"warmup":{"background":{"state":"done"}}}}' ;;
+esac
+EOF
+chmod +x "${GPU_WINDOW_CURL_CMD}"
 
 _reset_state() { rm -f "${TMP}/bootstrap_calls" "${TMP}/loaded"; }
 _bootstrapped() { [[ -f "${TMP}/bootstrap_calls" ]] && cat "${TMP}/bootstrap_calls" || printf ''; }
@@ -131,7 +140,7 @@ GPU_WINDOW_QWEN_PLIST="${CANON}" GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 \
   bash "${SCRIPT}" --selftest restore-run 1 "${CANON}" >"${TMP}/f.log" 2>&1
 F_RC=$?
 if [[ "${F_RC}" -eq 0 ]] && [[ -z "$(_bootstrapped)" ]] \
-   && grep -q "already loaded; nothing to do" "${TMP}/f.log" \
+   && grep -q "already loaded; verifying API readiness" "${TMP}/f.log" \
    && ! grep -q "may be DOWN" "${TMP}/f.log"; then
   ok "F: was_loaded=1 + already-loaded -> short-circuit, no bootstrap, no false DOWN"
 else
