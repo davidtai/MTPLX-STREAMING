@@ -3290,7 +3290,11 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             from mtplx import dsv41_decode_timeline as _decode_tl
 
             if _decode_tl.env_armed():
-                _decode_tl.configure(len(model.layers))
+                # MEDIUM (red-team): size to the actual decode length so a
+                # 1024-token run is not truncated at the 512 default.
+                _decode_tl.configure(
+                    len(model.layers), max_tokens=max(1, int(steps))
+                )
                 _decode_tl.reset()
             else:
                 _decode_tl = None

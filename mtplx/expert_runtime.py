@@ -4111,6 +4111,28 @@ class ExpertStreamingRuntime:
         # routing barrier (the device->host sync / device-LUT resolve), so it is
         # the "routing indices barrier done" host event for this layer.
         _tl.barrier_done(layer)
+        # W125 (red-team HIGH-2/MEDIUM): stamp which switch path this run uses, once.
+        # deferred_pin_release / split_route_release are NOT in _PROFILE_PLAN_FIELDS,
+        # so on the shipped default (fenced) with SWITCH_FASTPATH off the split path
+        # blocks on mx.eval of the gather -- meaning ready_to_dispatch and the
+        # miss_issue_to_ready PHASE include GPU gather time; only miss_wait_total
+        # (ACC) is the pure host SSD wait. A reader needs this flag to interpret them.
+        if _tl.enabled() and not _tl.config_noted():
+            _cfg = self.config
+            _dpr = bool(getattr(_cfg, "deferred_pin_release", False))
+            _srr = str(getattr(_cfg, "split_route_release", "fenced"))
+            _fastpath = os.environ.get("MTPLX_DSV41_SWITCH_FASTPATH") == "1"
+            _tl.note_switch_config(
+                deferred_pin_release=_dpr,
+                split_route_release=_srr,
+                switch_fastpath=_fastpath,
+                overlap_miss_reads=bool(getattr(_cfg, "overlap_miss_reads", False)),
+                device_route=(
+                    os.environ.get("MTPLX_DSV41_DEVICE_ROUTE") == "1"
+                    or os.environ.get("MTPLX_DSV41_DEVICE_ROUTE_PINNED") == "1"
+                ),
+                fenced_split_path=(not _dpr and _srr == "fenced" and not _fastpath),
+            )
         census = self._route_census
         if (
             census is None

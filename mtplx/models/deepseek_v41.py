@@ -4726,28 +4726,32 @@ class Model(nn.Module):
         # (prefill / DSpark verify) forwards never call this, so they never record.
         if int(input_ids.shape[1]) == 1:
             _tl.token_begin(len(self.model.layers))
-        keep_last = _resolve_logits_keep(logits_keep, logits_rows)
-        h, main_hidden = self.model(
-            input_ids, cache, prefill_chunk=prefill_chunk,
-            prefill_layer_major=prefill_layer_major, return_main_hidden=True
-        )
-        logits = None
-        if emit_logits:
-            # Row-independent GEMM: head(h)[:, -k:] == head(h[:, -k:]) exactly, so
-            # narrowing the head input never changes the surviving rows' logits.
-            with _stime.stage("head") as _st:
-                source = h if keep_last is None else h[:, -keep_last:, :]
-                logits = self._apply_head(source)
-                _st.add(logits)
-        # W125: the head matmul is dispatched; the remaining tail (head eval + the
-        # caller's argmax + the token sync) is captured as sample_sync in the next
-        # token_begin. forward_end closes recording so a following multi-row forward
-        # is not attributed to this token.
-        _tl.token_head_done()
-        _tl.forward_end()
-        if not return_hidden:
-            return logits
-        return logits, main_hidden
+        # W125 (red-team LOW): forward_end() runs in a finally so a raising forward
+        # never leaves _REC latched -- a later multi-row (prefill/verify) forward
+        # would otherwise be misattributed to this token.
+        try:
+            keep_last = _resolve_logits_keep(logits_keep, logits_rows)
+            h, main_hidden = self.model(
+                input_ids, cache, prefill_chunk=prefill_chunk,
+                prefill_layer_major=prefill_layer_major, return_main_hidden=True
+            )
+            logits = None
+            if emit_logits:
+                # Row-independent GEMM: head(h)[:, -k:] == head(h[:, -k:]) exactly,
+                # so narrowing the head input never changes the surviving logits.
+                with _stime.stage("head") as _st:
+                    source = h if keep_last is None else h[:, -keep_last:, :]
+                    logits = self._apply_head(source)
+                    _st.add(logits)
+            # W125: the head matmul is dispatched; the remaining tail (head eval +
+            # the caller's argmax + the token sync) is captured as sample_sync in
+            # the next token_begin.
+            _tl.token_head_done()
+            if not return_hidden:
+                return logits
+            return logits, main_hidden
+        finally:
+            _tl.forward_end()
 
     @property
     def layers(self):

@@ -112,8 +112,13 @@ _CUR = -1                       # current decode-token index (-1 == none open)
 _REC = False                    # True only inside a single-row decode forward
 _NTOK = 0                       # decode tokens seen (may exceed MAXTOK -> clamped)
 _DROPPED = 0                    # decode tokens past MAXTOK (not recorded)
-_MARKS = 0                      # total hot-path mark writes (for overhead stamp)
-_MARK_COST_NS = 0.0             # calibrated mean cost of one mark write
+_MARKS = 0                      # total layer/acc mark writes (for overhead stamp)
+_NOW_CALLS = 0                  # now() calls while recording (overhead stamp)
+_MARK_COST_NS = 0.0             # calibrated cost of one full mark call
+_NOW_COST_NS = 0.0             # calibrated cost of one now() call
+_CONFIG_FLAGS: dict = {}        # runtime switch-path flags, stamped into the block
+_SNAP_CACHE: dict | None = None       # memoised aggregate (O(MAXTOK*NL) is not free)
+_SNAP_CACHE_KEY: tuple | None = None  # (_NTOK, _MARKS): changes on any new mark
 
 
 def env_armed() -> bool:
@@ -128,31 +133,60 @@ def enabled() -> bool:
     return _ON
 
 
-def _calibrate() -> float:
-    """Mean nanoseconds for one ``_layer_ts`` write, measured on a scratch cell so
-    the figure includes perf_counter_ns + index math + the list store. Used only to
-    STAMP the overhead; it never gates the hot path."""
+def config_noted() -> bool:
+    """Whether the runtime has already stamped its switch-path config (a once-guard
+    so the hot path builds the flag dict at most once)."""
+    return bool(_CONFIG_FLAGS)
+
+
+def note_switch_config(**flags: Any) -> None:
+    """Stamp which switch path the runtime is using (fenced_split_path,
+    deferred_pin_release, split_route_release, device_route). Called once by the
+    runtime; carried verbatim into the snapshot's ``switch_config`` so a reader can
+    tell whether ``ready_to_dispatch``/``miss_issue_to_ready`` include a blocking
+    GPU gather fence (see the phase semantics)."""
+    if _ON:
+        _CONFIG_FLAGS.update(flags)
+
+
+def _calibrate() -> tuple[float, float]:
+    """Calibrate the FULL public mark path (function call + ``_REC`` check + index
+    math + ``perf_counter_ns`` + list store + counter increment) AND ``now()``
+    separately, on scratch cells, so the stamped overhead reflects real per-mark
+    cost -- not just the raw list store (~26 ns), which undercounts the ~100+ ns
+    real path. Never gates the hot path."""
+    global _REC, _CUR, _MARKS, _NOW_CALLS
     if not _TS:
-        return 0.0
+        return 0.0, 0.0
+    save = (_REC, _CUR, _MARKS, _NOW_CALLS)
+    _REC = True
+    _CUR = 0
     reps = 20000
-    scratch = 0  # base index 0 (token 0, layer 0) -- overwritten by real marks
     t0 = _perf()
     for _ in range(reps):
-        _TS[scratch] = _perf()
-    t1 = _perf()
-    _TS[scratch] = 0.0  # undo the scratch write
-    return (t1 - t0) / reps
+        attn_end(0)  # full public mark path (last-write branch)
+    cost_mark = (_perf() - t0) / reps
+    t0 = _perf()
+    for _ in range(reps):
+        now()
+    cost_now = (_perf() - t0) / reps
+    _TS[(0 * _NL + 0) * _NE + ATTN_END] = 0.0  # undo the scratch write
+    _REC, _CUR, _MARKS, _NOW_CALLS = save     # restore state + counters
+    return cost_mark, cost_now
 
 
 def configure(n_layers: int, *, max_tokens: int | None = None) -> None:
     """Arm and size the probe. Idempotent: a second call with a compatible layer
     count is a no-op, so the model may call it every forward without cost. Does
     nothing unless the env flag is set."""
-    global _ON, _MAXTOK, _NL, _TS, _ACC, _TTS, _MARK_COST_NS
+    global _ON, _MAXTOK, _NL, _TS, _ACC, _TTS, _MARK_COST_NS, _NOW_COST_NS
     if not env_armed():
         return
     n_layers = int(n_layers)
-    if _ON and n_layers <= _NL:
+    # Re-size when the layer count grows OR a larger token budget is requested
+    # (the bench passes max_tokens == decode steps so a 1024-token run is not
+    # truncated at the 512 default).
+    if _ON and n_layers <= _NL and (max_tokens is None or int(max_tokens) <= _MAXTOK):
         return
     if max_tokens is None:
         raw = os.environ.get("MTPLX_DSV41_DECODE_TIMELINE_MAXTOK", "512")
@@ -160,19 +194,20 @@ def configure(n_layers: int, *, max_tokens: int | None = None) -> None:
             max_tokens = max(1, int(raw))
         except ValueError:
             max_tokens = 512
-    _MAXTOK = int(max_tokens)
-    _NL = max(1, n_layers)
+    _MAXTOK = max(int(max_tokens), _MAXTOK)
+    _NL = max(n_layers, _NL, 1)
     _TS = [0.0] * (_MAXTOK * _NL * _NE)
     _ACC = [0.0] * (_MAXTOK * _NL * _NA)
     _TTS = [0.0] * (_MAXTOK * _NTE)
     _ON = True
-    _MARK_COST_NS = _calibrate()
+    _MARK_COST_NS, _NOW_COST_NS = _calibrate()
 
 
 def reset() -> None:
     """Zero the buffers and token cursor without re-sizing (a fresh measurement
     over the same arming). Cheap; safe to call between bench arms."""
-    global _CUR, _REC, _NTOK, _DROPPED, _MARKS
+    global _CUR, _REC, _NTOK, _DROPPED, _MARKS, _NOW_CALLS
+    global _SNAP_CACHE, _SNAP_CACHE_KEY
     if not _ON:
         return
     for i in range(len(_TS)):
@@ -186,6 +221,10 @@ def reset() -> None:
     _NTOK = 0
     _DROPPED = 0
     _MARKS = 0
+    _NOW_CALLS = 0
+    _CONFIG_FLAGS.clear()
+    _SNAP_CACHE = None
+    _SNAP_CACHE_KEY = None
 
 
 # --------------------------------------------------------------------------- #
@@ -320,7 +359,11 @@ def layer_end(layer: int) -> None:
 def now() -> int:
     """Monotonic ns, or 0 when not recording (so a guarded caller can cheaply skip
     the paired ``add_*`` too)."""
-    return _perf() if _REC else 0
+    global _NOW_CALLS
+    if not _REC:
+        return 0
+    _NOW_CALLS += 1
+    return _perf()
 
 
 def _add_acc(slot: int, layer: int, start_ns: int) -> None:
@@ -385,15 +428,46 @@ def _count_stats(values: list[float]) -> dict[str, Any]:
 
 
 #: Derived phase -> (end_event, start_event). Positive-delta cells only are kept.
+#: NOTE on lazy eval (HIGH-1): MLX is lazy and the only per-layer blocking sync is
+#: the switch's ``mx.eval(indices)`` (expert_mlx.py), which the marks bracket as
+#: ``gate_to_barrier`` (MOE_START->BARRIER_DONE). That eval materializes the PREVIOUS
+#: layer's routed gather + THIS layer's attention + gate, so ``gate_to_barrier`` is
+#: dominated by GPU EXECUTION + the sync, and ``attn``/``combine`` are lazy
+#: graph-BUILD microseconds, not the attention/combine compute. The true host gap is
+#: ``post_barrier_host`` (BARRIER_DONE->EXPERT_DISPATCHED): the .tolist / route plan
+#: / gather graph-build the host runs after the sync. See ``phase_semantics`` below.
 _PHASES = {
     "attn": (ATTN_END, ATTN_START),
     "gate_to_barrier": (BARRIER_DONE, MOE_START),
     "barrier_to_issue": (MISS_ISSUE, BARRIER_DONE),
-    "miss_wait": (MISS_READY, MISS_ISSUE),
-    "dispatch": (EXPERT_DISPATCHED, MISS_READY),
+    "miss_issue_to_ready": (MISS_READY, MISS_ISSUE),
+    "ready_to_dispatch": (EXPERT_DISPATCHED, MISS_READY),
+    "post_barrier_host": (EXPERT_DISPATCHED, BARRIER_DONE),
     "combine": (L_END, EXPERT_DISPATCHED),
     "moe_total": (L_END, MOE_START),
     "layer_total": (L_END, L_START),
+}
+
+#: How to read each phase (GPU-inclusive vs graph-build vs pure host), stamped into
+#: the snapshot so a reader never mistakes a graph-build microsecond for real work.
+_PHASE_SEMANTICS = {
+    "attn": "graph-build us (attention runs lazily; its compute is forced at the "
+            "next gate_to_barrier eval, not here)",
+    "gate_to_barrier": "barrier wait incl. GPU (prev layer's routed gather + this "
+                       "layer's attention + gate) + the mx.eval(indices) sync",
+    "barrier_to_issue": "host: .tolist route + plan/pin hits before demand reads "
+                        "are submitted (miss layers only)",
+    "miss_issue_to_ready": "issue->slots-ready by timestamp; on the FENCED split "
+                           "path this can include a blocking gather fence on "
+                           "multi-part routes -- use miss_wait_total (ACC) for the "
+                           "pure host SSD wait (see switch_config.fenced_split_path)",
+    "ready_to_dispatch": "ready->switch-returned; on the FENCED split path this "
+                         "includes the blocking mx.eval of the routed gather",
+    "post_barrier_host": "pure host after the barrier sync (route plan + gather "
+                         "graph-build); this is the host_gap component",
+    "combine": "graph-build us (HC combine is lazy)",
+    "moe_total": "moe_start->layer_end (spans the barrier, so GPU-inclusive)",
+    "layer_total": "layer_start->layer_end (GPU-inclusive)",
 }
 
 
@@ -403,9 +477,17 @@ def _ntok_recorded() -> int:
 
 def snapshot() -> dict[str, Any]:
     """Aggregate the recorded timeline. Safe to call when disabled (returns a
-    small stub). This does the percentile work in Python off the hot path."""
+    small stub). The O(MAXTOK*NL*phases) percentile work runs off the hot path and
+    is MEMOISED on ``(_NTOK, _MARKS)`` -- the served snapshot() is called twice per
+    request, and without the cache each call re-aggregated (~tens of ms). Any new
+    mark changes _MARKS and invalidates the cache; ``reset`` clears it."""
+    global _SNAP_CACHE, _SNAP_CACHE_KEY
     if not _ON:
         return {"enabled": False, "env_armed": env_armed()}
+
+    key = (_NTOK, _MARKS)
+    if _SNAP_CACHE_KEY == key and _SNAP_CACHE is not None:
+        return _SNAP_CACHE
 
     ntok = _ntok_recorded()
 
@@ -438,10 +520,12 @@ def snapshot() -> dict[str, Any]:
         name: {} for name in _PHASES
     }
 
+    unrouted_per_tok: list[float] = []
+
     for t in range(ntok):
         sums = {name: 0.0 for name in _PHASES}
         mw = rc = bar = at = dsp = hg = ilg = moe = lyr = 0.0
-        n_miss = n_hit = 0
+        n_miss = n_hit = n_unrouted = 0
         prev_layer_end = 0.0
         for l in range(_NL):
             l_start = cell(t, l, L_START)
@@ -454,13 +538,15 @@ def snapshot() -> dict[str, Any]:
                     d = b - a
                     sums[name] += d
                     layer_phase_vals[name].setdefault(l, []).append(d)
-            # host-gap: attention drains, then the host runs gate/barrier/reconcile/
-            # miss-wait before the routed gather dispatches -- the GPU is idle across
-            # that span. Upper bound on the per-layer inter-dispatch host gap.
             a_end = cell(t, l, ATTN_END)
             disp = cell(t, l, EXPERT_DISPATCHED)
-            if a_end > 0.0 and disp > a_end:
-                hg += disp - a_end
+            b_done = cell(t, l, BARRIER_DONE)
+            # host_gap (HIGH-1): the PURE host span after the routing-barrier sync,
+            # barrier_done -> expert_dispatched (route plan + gather graph-build). The
+            # older attn_end->dispatch span wrongly swallowed all the GPU compute the
+            # barrier eval forces, so it is NOT used for host_gap.
+            if b_done > 0.0 and disp > b_done:
+                hg += disp - b_done
             if prev_layer_end > 0.0 and l_start > prev_layer_end:
                 ilg += l_start - prev_layer_end
             le = cell(t, l, L_END)
@@ -468,7 +554,6 @@ def snapshot() -> dict[str, Any]:
                 prev_layer_end = le
             mw += acc(t, l, ACC_MISS_WAIT)
             rc += acc(t, l, ACC_RECONCILE)
-            b_done = cell(t, l, BARRIER_DONE)
             m_start = cell(t, l, MOE_START)
             if m_start > 0.0 and b_done > m_start:
                 bar += b_done - m_start
@@ -486,6 +571,11 @@ def snapshot() -> dict[str, Any]:
                 n_miss += 1
             if cell(t, l, ALL_HIT) > 0.0:
                 n_hit += 1
+            # MEDIUM: a device-route (or dense-island) layer bypasses observe_route,
+            # so BARRIER_DONE never fires though the layer ran -- count it so a
+            # zero barrier/miss population is explained, not silently dropped.
+            if b_done == 0.0:
+                n_unrouted += 1
         for name in _PHASES:
             if sums[name] > 0.0:
                 per_token_phase[name].append(sums[name])
@@ -495,6 +585,7 @@ def snapshot() -> dict[str, Any]:
         tok_attn.append(at)
         tok_dispatch.append(dsp)
         tok_host_gap.append(hg)
+        unrouted_per_tok.append(float(n_unrouted))
         tok_interlayer_gap.append(ilg)
         tok_moe.append(moe)
         tok_layer_sum.append(lyr)
@@ -515,21 +606,26 @@ def snapshot() -> dict[str, Any]:
         for l, vals in layer_phase_vals[name].items():
             per_layer[name][str(l)] = _stats(vals)
 
-    # ---- overhead stamp ------------------------------------------------------
-    overhead_ns_total = _MARKS * _MARK_COST_NS
+    # ---- overhead stamp (full mark path + now() calls) -----------------------
+    overhead_ns_total = _MARKS * _MARK_COST_NS + _NOW_CALLS * _NOW_COST_NS
     overhead_ms_per_token = (
         overhead_ns_total / max(1, ntok) / 1e6 if ntok else None
     )
 
-    return {
+    result = {
         "enabled": True,
         "env_armed": env_armed(),
-        "schema": "w125.decode_timeline.v1",
+        "schema": "w125.decode_timeline.v2",
         "tokens_recorded": ntok,
         "tokens_seen": _NTOK,
         "tokens_dropped_over_capacity": _DROPPED,
         "n_layers": _NL,
         "max_tokens": _MAXTOK,
+        # Which switch path ran (stamped by the runtime once). fenced_split_path
+        # True => ready_to_dispatch and the miss_issue_to_ready PHASE include a
+        # blocking GPU gather fence; only miss_wait_total (ACC) is the pure host
+        # SSD wait. Empty {} if no routed layer reported (e.g. a device-route arm).
+        "switch_config": dict(_CONFIG_FLAGS),
         # Per-token phase sums (aggregated across layers), then over tokens.
         "per_token": {
             **{name: _stats(per_token_phase[name]) for name in _PHASES},
@@ -537,7 +633,7 @@ def snapshot() -> dict[str, Any]:
             "routing_barrier_total": _stats(tok_barrier),
             "reconcile_total": _stats(tok_reconcile),
             "miss_wait_total": _stats(tok_miss_wait),
-            "dispatch_total": _stats(tok_dispatch),
+            "ready_to_dispatch_total": _stats(tok_dispatch),
             "moe_total_sum": _stats(tok_moe),
             "layer_total_sum": _stats(tok_layer_sum),
             "host_gap": _stats(tok_host_gap),
@@ -548,19 +644,33 @@ def snapshot() -> dict[str, Any]:
             # counts, not durations -- keys mean/p50/p95 (no _ms scaling)
             "miss_layers": _count_stats(miss_layers_per_tok),
             "hit_layers": _count_stats(hit_layers_per_tok),
+            "unrouted_layers": _count_stats(unrouted_per_tok),
         },
         # Per-layer phase percentiles (aggregated across tokens).
         "per_layer": per_layer,
+        "phase_semantics": dict(_PHASE_SEMANTICS),
+        "n_semantics": (
+            "PHASE metrics (attn, gate_to_barrier, miss_issue_to_ready, "
+            "ready_to_dispatch, ...) are timestamp deltas summed per token, so their "
+            "n counts only tokens with >=1 layer where BOTH endpoints fired (e.g. "
+            "miss_issue_to_ready.n = tokens with >=1 miss layer). The *_total keys "
+            "(miss_wait_total, reconcile_total, ready_to_dispatch_total, ...) are "
+            "summed over ALL recorded tokens (n = tokens_recorded), 0 where absent. "
+            "Compare like with like."
+        ),
         "host_gap_definition": (
-            "per token: sum over layers of (expert_dispatched - attn_end), the "
-            "host span from attention drain to routed-gather dispatch during which "
-            "no GPU work is in flight (barrier round-trip + reconcile await + "
-            "exposed miss wait + host gather-build). Components broken out as "
-            "routing_barrier_total, reconcile_total, miss_wait_total."
+            "per token: sum over layers of (expert_dispatched - barrier_done) == "
+            "post_barrier_host: the PURE host span after the mx.eval(indices) sync "
+            "(route .tolist + plan + gather graph-build) during which no GPU work is "
+            "in flight. NOT attn_end->dispatch (that swallows the GPU compute the "
+            "barrier eval forces). The barrier round-trip itself (GPU-inclusive) is "
+            "routing_barrier_total; the pure exposed SSD read wait is miss_wait_total."
         ),
         "overhead": {
             "mark_cost_ns_calibrated": _MARK_COST_NS,
+            "now_cost_ns_calibrated": _NOW_COST_NS,
             "marks_total": _MARKS,
+            "now_calls_total": _NOW_CALLS,
             "overhead_ms_per_token": overhead_ms_per_token,
             "budget_ms_per_token": 0.5,
             "within_budget": (
@@ -569,6 +679,9 @@ def snapshot() -> dict[str, Any]:
             ),
         },
     }
+    _SNAP_CACHE = result
+    _SNAP_CACHE_KEY = key
+    return result
 
 
 def cell_head(t: int, e: int) -> float:

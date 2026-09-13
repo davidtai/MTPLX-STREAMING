@@ -203,8 +203,10 @@ def test_phase_arithmetic_single_miss_layer(monkeypatch):
     assert pl["attn"]["0"]["mean_ms"] == pytest.approx(500 / ms)
     assert pl["gate_to_barrier"]["0"]["mean_ms"] == pytest.approx(1000 / ms)
     assert pl["barrier_to_issue"]["0"]["mean_ms"] == pytest.approx(300 / ms)
-    assert pl["miss_wait"]["0"]["mean_ms"] == pytest.approx(1200 / ms)  # 4000-2800
-    assert pl["dispatch"]["0"]["mean_ms"] == pytest.approx(200 / ms)    # 4200-4000
+    assert pl["miss_issue_to_ready"]["0"]["mean_ms"] == pytest.approx(1200 / ms)  # 4000-2800
+    assert pl["ready_to_dispatch"]["0"]["mean_ms"] == pytest.approx(200 / ms)     # 4200-4000
+    # post_barrier_host = expert_dispatched - barrier_done = 4200-2500 = 1700
+    assert pl["post_barrier_host"]["0"]["mean_ms"] == pytest.approx(1700 / ms)
     assert pl["combine"]["0"]["mean_ms"] == pytest.approx(200 / ms)     # 4400-4200
     assert pl["moe_total"]["0"]["mean_ms"] == pytest.approx(2900 / ms)  # 4400-1500
     assert pl["layer_total"]["0"]["mean_ms"] == pytest.approx(3400 / ms)  # 4400-1000
@@ -215,8 +217,9 @@ def test_phase_arithmetic_single_miss_layer(monkeypatch):
     assert pt["miss_wait_total"]["mean_ms"] == pytest.approx(1200 / ms)  # add_miss_wait
     assert pt["attn_total"]["mean_ms"] == pytest.approx(500 / ms)
     assert pt["routing_barrier_total"]["mean_ms"] == pytest.approx(1000 / ms)
-    # host_gap per token == sum(expert_dispatched - attn_end) = 4200-1500 = 2700
-    assert pt["host_gap"]["mean_ms"] == pytest.approx(2700 / ms)
+    # host_gap (HIGH-1) == sum(expert_dispatched - barrier_done) = 4200-2500 = 1700
+    assert pt["host_gap"]["mean_ms"] == pytest.approx(1700 / ms)
+    assert pt["ready_to_dispatch_total"]["mean_ms"] == pytest.approx(200 / ms)
     # head dispatch = head_done - token_start = 4600-1000
     assert pt["head_dispatch"]["mean_ms"] == pytest.approx(3600 / ms)
     assert pt["miss_layers"]["mean"] == pytest.approx(1.0)  # one miss layer
@@ -244,14 +247,14 @@ def test_all_hit_layer_has_no_miss_phase(monkeypatch):
 
     snap = tl.snapshot()
     pl = snap["per_layer"]
-    # no miss issue/ready recorded -> the miss_wait phase has zero samples
-    assert pl["miss_wait"] == {}
+    # no miss issue/ready recorded -> the miss phase has zero samples
+    assert pl["miss_issue_to_ready"] == {}
     assert pl["barrier_to_issue"] == {}
     assert snap["per_token"]["hit_layers"]["mean"] == pytest.approx(1.0)
     assert snap["per_token"]["miss_layers"]["mean"] == pytest.approx(0.0)
     assert snap["per_token"]["miss_wait_total"]["mean_ms"] == pytest.approx(0.0)
-    # host_gap still measured: dispatched - attn_end = 350 - 100 = 250
-    assert snap["per_token"]["host_gap"]["mean_ms"] == pytest.approx(250 / 1e6)
+    # host_gap = dispatched - barrier_done = 350 - 300 = 50
+    assert snap["per_token"]["host_gap"]["mean_ms"] == pytest.approx(50 / 1e6)
 
 
 def test_percentiles_and_token_total_multi_token(monkeypatch):
@@ -386,3 +389,179 @@ def test_reset_clears_between_arms(monkeypatch):
     )
     fr.forward_end(200)
     assert tl.snapshot()["tokens_recorded"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Red-team fixes (W125 review)
+# --------------------------------------------------------------------------- #
+def test_high1_host_gap_excludes_barrier_gpu(monkeypatch):
+    """Reviewer's test: a 100 ms routing barrier (GPU compute forced by
+    mx.eval(indices)) + 50 us of post-barrier host work must give host_gap ~= 0.05 ms
+    (the post-barrier host span), NOT ~100 ms. gate_to_barrier keeps the 100 ms."""
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(1)
+    clk = _Clock()
+    monkeypatch.setattr(tl, "_perf", clk)
+    fr = FakeRunner(tl, clk)
+
+    barrier = 100_000_000   # 100 ms in ns
+    post = 50_000           # 50 us in ns
+    fr.token_begin(0, 1)
+    fr.layer_hit(
+        0,
+        l_start=0, attn_start=0, attn_end=1000,
+        moe_start=1000, barrier=1000 + barrier,
+        all_hit=1000 + barrier + 10,
+        dispatched=1000 + barrier + post,
+        l_end=1000 + barrier + post + 100,
+    )
+    fr.token_head_done(1000 + barrier + post + 200)
+    fr.forward_end(1000 + barrier + post + 300)
+
+    pt = tl.snapshot()["per_token"]
+    assert pt["host_gap"]["mean_ms"] == pytest.approx(post / 1e6)          # ~0.05 ms
+    assert pt["host_gap"]["mean_ms"] == pytest.approx(0.05, abs=1e-6)
+    assert pt["post_barrier_host"]["mean_ms"] == pytest.approx(post / 1e6)
+    # the 100 ms lives in gate_to_barrier (barrier wait incl. GPU), not host_gap
+    assert pt["gate_to_barrier"]["mean_ms"] == pytest.approx(barrier / 1e6)
+
+
+def test_high2_switch_config_stamped(monkeypatch):
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(1)
+    assert tl.config_noted() is False
+    tl.note_switch_config(
+        fenced_split_path=True, deferred_pin_release=False,
+        split_route_release="fenced", switch_fastpath=False, device_route=False,
+    )
+    assert tl.config_noted() is True
+    cfg = tl.snapshot()["switch_config"]
+    assert cfg["fenced_split_path"] is True
+    assert cfg["deferred_pin_release"] is False
+    assert cfg["split_route_release"] == "fenced"
+    # n_semantics + phase_semantics are stamped so a reader can interpret the phases
+    snap = tl.snapshot()
+    assert "n_semantics" in snap
+    assert "fenced" in snap["phase_semantics"]["ready_to_dispatch"].lower()
+
+
+def test_unrouted_layers_counted(monkeypatch):
+    """A device-route (or dense-island) layer runs (layer_start fires) but bypasses
+    observe_route, so barrier_done never fires -> it is counted as unrouted."""
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(2)
+    clk = _Clock()
+    monkeypatch.setattr(tl, "_perf", clk)
+
+    clk.t = 10 ** 12
+    tl.token_begin(2)
+    # layer 0: normal all-hit (barrier fires)
+    fr = FakeRunner(tl, clk)
+    fr.layer_hit(
+        0, l_start=0, attn_start=0, attn_end=50, moe_start=50,
+        barrier=100, all_hit=110, dispatched=120, l_end=130,
+    )
+    # layer 1: device-route style -- only layer_start/attn/dispatch/end, NO barrier
+    clk.t = 10 ** 12 + 200
+    tl.layer_start(1)
+    clk.t = 10 ** 12 + 210
+    tl.attn_start(1)
+    clk.t = 10 ** 12 + 260
+    tl.attn_end(1)
+    clk.t = 10 ** 12 + 300
+    tl.expert_dispatched(1)
+    clk.t = 10 ** 12 + 320
+    tl.layer_end(1)
+    clk.t = 10 ** 12 + 400
+    tl.token_head_done()
+    tl.forward_end()
+
+    pt = tl.snapshot()["per_token"]
+    assert pt["unrouted_layers"]["mean"] == pytest.approx(1.0)  # layer 1
+    assert pt["hit_layers"]["mean"] == pytest.approx(1.0)       # layer 0
+
+
+def test_snapshot_is_memoised(monkeypatch):
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(1)
+    clk = _Clock()
+    monkeypatch.setattr(tl, "_perf", clk)
+    fr = FakeRunner(tl, clk)
+    fr.token_begin(0, 1)
+    fr.layer_hit(
+        0, l_start=0, attn_start=0, attn_end=50, moe_start=50,
+        barrier=100, all_hit=110, dispatched=120, l_end=130,
+    )
+    fr.forward_end(200)
+    a = tl.snapshot()
+    b = tl.snapshot()
+    assert a is b  # same object -> aggregation not recomputed
+    # a new mark changes _MARKS -> cache invalidated -> fresh object
+    fr.token_begin(1000, 1)
+    fr.layer_hit(
+        0, l_start=1000, attn_start=1000, attn_end=1050, moe_start=1050,
+        barrier=1100, all_hit=1110, dispatched=1120, l_end=1130,
+    )
+    fr.forward_end(1200)
+    c = tl.snapshot()
+    assert c is not a
+    assert c["tokens_recorded"] == 2
+
+
+def test_overhead_stamp_matches_wall(monkeypatch):
+    """The stamped overhead must track a real wall measurement of the marks (the
+    old calibration timed only the store, ~26 ns, vs ~118 ns real -> ~4.5x low)."""
+    import time as _time
+
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(40)
+    n_layers, tokens = 40, 64
+
+    def _drive():
+        for _t in range(tokens):
+            tl.token_begin(n_layers)
+            for l in range(n_layers):
+                tl.layer_start(l); tl.attn_start(l); tl.attn_end(l)
+                tl.moe_start(l); tl.barrier_done(l)
+                s = tl.now(); tl.add_reconcile(l, s); tl.reconcile_done(l)
+                tl.miss_issue(l)
+                s = tl.now(); tl.add_miss_wait(l, s); tl.miss_ready(l)
+                tl.expert_dispatched(l); tl.layer_end(l)
+            tl.token_head_done(); tl.forward_end()
+
+    t0 = _time.perf_counter_ns()
+    _drive()
+    wall_ms_per_token = (_time.perf_counter_ns() - t0) / tokens / 1e6
+
+    ov = tl.snapshot()["overhead"]
+    assert ov["within_budget"] is True
+    assert ov["overhead_ms_per_token"] < 0.5
+    # the stamp must be in the same ballpark as the measured wall (loop overhead
+    # inflates the wall, so stamped <= wall; guard against a >3x undercount).
+    assert ov["overhead_ms_per_token"] <= wall_ms_per_token * 1.2
+    assert ov["overhead_ms_per_token"] >= wall_ms_per_token / 3.0
+    assert ov["now_calls_total"] > 0
+    assert ov["now_cost_ns_calibrated"] > 0
+
+
+def test_configure_max_tokens_override_not_truncated(monkeypatch):
+    """configure(n_layers, max_tokens=steps) must size to the run so a long decode
+    is not clamped at the 512 default."""
+    tl = _fresh(monkeypatch, armed=True)
+    tl.configure(1, max_tokens=1024)
+    clk = _Clock()
+    monkeypatch.setattr(tl, "_perf", clk)
+    fr = FakeRunner(tl, clk)
+    for i in range(600):  # > 512 default, < 1024 configured
+        fr.token_begin(i * 1000, 1)
+        fr.layer_hit(
+            0, l_start=i * 1000, attn_start=i * 1000, attn_end=i * 1000 + 20,
+            moe_start=i * 1000 + 20, barrier=i * 1000 + 30, all_hit=i * 1000 + 35,
+            dispatched=i * 1000 + 40, l_end=i * 1000 + 45,
+        )
+        fr.token_head_done(i * 1000 + 50)
+    fr.forward_end(600 * 1000)
+    snap = tl.snapshot()
+    assert snap["max_tokens"] == 1024
+    assert snap["tokens_recorded"] == 600
+    assert snap["tokens_dropped_over_capacity"] == 0
