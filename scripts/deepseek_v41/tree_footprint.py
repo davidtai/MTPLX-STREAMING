@@ -166,6 +166,15 @@ def main(argv: list[str]) -> int:
     except ValueError:
         sys.stderr.write("root pids must be integers\n")
         return 2
+    # MEDIUM-2: FAIL CLOSED when a ROOT pid is unreadable.  tree_footprint() skips any
+    # pid whose rusage returns None, so an unreadable root (or its whole subtree) would
+    # otherwise print 0 (or a partial sum) with rc 0 -- the guard would then see a tiny
+    # box_used and never trip (fail-open).  The guard treats rc != 0 as "reader broke"
+    # and aborts, so exit 2 when we cannot read the step's own root footprint.
+    for r in roots:
+        if phys_footprint(r) is None:
+            sys.stderr.write(f"root pid {r} phys_footprint unreadable\n")
+            return 2
     print(tree_footprint(roots))
     return 0
 

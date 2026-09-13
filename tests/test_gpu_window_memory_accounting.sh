@@ -100,6 +100,7 @@ GPU_WINDOW_FOOTPRINT_READER="${FAKE_FP}" \
 GPU_WINDOW_COMPRESSOR_CMD="${FAKE_COMP}" \
 GPU_WINDOW_FOREIGN_WORKER_RSS_GB=100000 \
 GPU_WINDOW_RSS_POLL_SECONDS=1 \
+GPU_WINDOW_TOTAL_MEM_CEILING_GB=100 \
   bash "${SCRIPT}" bash -c "${STEP_CHAIN}" >"${LOG}" 2>&1
 RC=$?
 
@@ -171,7 +172,8 @@ fi
 
 # 7b. W106 HIGH-2 + MEDIUM-B: the step-start log states BOTH guard caps, and since
 #     this scenario's baseline is 50 GiB used with the DEFAULT 93 GiB child cap and the
-#     W121 HIGH-3 DEFAULT 100 GiB ceiling (50 + 93 > 100), MEDIUM-B LOWERS the effective
+#     EXPLICIT 100 GiB ceiling this run sets (the default is now 96, HIGH-3/MEDIUM-1),
+#     50 + 93 > 100, so MEDIUM-B LOWERS the effective
 #     child cap to ceiling - used_start = 50 GiB. Assert the lowering line (naming the
 #     original 93 GiB default) + the guard-caps line showing the 50 GiB effective cap.
 if grep -q "phase 4: effective child-tree footprint cap 50.0 GiB (lowered from 93.0 GiB" "${LOG}" \

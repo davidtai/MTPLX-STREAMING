@@ -104,3 +104,14 @@ def test_cli_tree_sum_is_positive_integer():
     )
     assert out.returncode == 0
     assert int(out.stdout.strip()) > 0
+
+
+def test_cli_tree_root_unreadable_exits_2():
+    # MEDIUM-2: a bogus/unreadable ROOT pid must FAIL CLOSED (exit 2), not print 0 rc 0 --
+    # the gpu_window guard treats rc != 0 as "footprint reader broke" and aborts, so an
+    # unreadable step root can never silently read as box_used == baseline.
+    out = subprocess.run(
+        [sys.executable, str(_TF_PATH), "2000000000"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert out.returncode == 2, f"expected exit 2 for an unreadable root, got {out.returncode}: {out.stdout!r}"

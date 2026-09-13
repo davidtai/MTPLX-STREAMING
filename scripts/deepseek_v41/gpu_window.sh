@@ -160,7 +160,12 @@ COMPRESSOR_TRIP_BYTES=$(( COMPRESSOR_TRIP_GB * 1024 * 1024 * 1024 ))
 # 110 GB hard line (was 105 GiB ~= 112.7 GB, OVER the hard line).
 # HIGH-3: REFUSE on an invalid ceiling (a fractional 95.5 must NOT silently become
 # the 102 default and raise the ceiling over the operator's intent).
-TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-100}"  # HIGH-3: 100 GiB ~= 107 GB (102 -> 109.5 GB was too near the 110 GB panic line)
+# MEDIUM-1: 96 GiB ~= 103 GB.  The box guard polls at ~1 s effective, so at an 8 GB/s
+# ramp it cannot catch the box before 110 GB from a 107 GB ceiling (100 GiB) -- 96 GiB
+# leaves ~7 GB of catch-up.  The REAL bound is the wired limit: apply_mlx_memory_cap /
+# the served path call set_wired_limit (and iogpu.wired_limit_mb caps the box), so Metal
+# cannot exceed it regardless of the poll; this ceiling is the belt to that suspenders.
+TOTAL_MEM_CEILING_GB="${GPU_WINDOW_TOTAL_MEM_CEILING_GB:-96}"
 _require_int GPU_WINDOW_TOTAL_MEM_CEILING_GB "${TOTAL_MEM_CEILING_GB}" 1 || exit 2
 TOTAL_MEM_CEILING_BYTES=$(( TOTAL_MEM_CEILING_GB * 1024 * 1024 * 1024 ))
 FOREIGN_WORKER_RSS_GB="${GPU_WINDOW_FOREIGN_WORKER_RSS_GB:-2}"   # GiB: refuse to start if another mtplx/python worker exceeds this RSS
@@ -888,6 +893,12 @@ while :; do
   #   box_used = max(baseline + step footprint, live system used).
   live_used="$(used_mem_bytes)"
   live_ok=0; [[ "${live_used}" =~ ^[0-9]+$ ]] && live_ok=1
+  # MEDIUM-4: never silently drop the live system term -- a missing vm_stat means the
+  # guard is blind to OTHER processes growing this tick.  WARN (loudly) so the operator
+  # sees the coverage gap; the baseline+footprint term still bounds the STEP itself.
+  if (( ! live_ok )); then
+    log "phase 4: WARN vm_stat unreadable this tick (live system-used term dropped); guarding on baseline + step footprint only -- box pressure from OTHER processes is NOT visible until vm_stat recovers"
+  fi
   if (( ! tree_ok )); then
     # HIGH-3: FAIL CLOSED.  The footprint reader broke (subprocess error / 15 s timeout)
     # and returned '0' -- do NOT continue at box_used == baseline (fail-open, blind to
