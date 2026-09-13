@@ -19,7 +19,7 @@ uses `mx.take`, with no floating-point arithmetic in the copies.
 
 The bounded memory regression uses under 64 MiB of generated prompt arrays,
 no model weights, and all three direct/served/custom-forward routes. Original
-retention was 50,733,068 / 33,947,648 / 50,733,068 bytes. Final synchronized
+retention was 50,733,068 / 33,955,852 / 50,733,068 bytes. Final synchronized
 measurements retain 17,920 bytes in each route. Synchronization and garbage
 collection are measurement-only; neither was added to the production decode
 loop. One existing small-model greedy test still exercises acceptance and
