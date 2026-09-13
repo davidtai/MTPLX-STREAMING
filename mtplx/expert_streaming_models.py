@@ -1045,7 +1045,9 @@ def plan_expert_memory(
     # ``ring_slots * n_streamed_layers`` carved from the persistent LRU budget.
     # Records are uniform here (the ring is forbidden for mixed-official banks
     # above), so one ``expert_record_bytes`` is the exact per-slot size.
-    prefetch_bytes = prefetch_ring_slots * spec.expert_record_bytes
+    prefetch_bytes = (
+        prefetch_ring_slots * spec.expert_record_bytes if prefetch_ring_slots else 0
+    )
     if miss_shadow is not None and miss_shadow not in SHADOW_CODECS:
         choices = ", ".join(repr(codec) for codec in SHADOW_CODECS)
         raise ValueError(f"miss_shadow must be None, {choices}")

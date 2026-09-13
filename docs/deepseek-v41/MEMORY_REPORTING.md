@@ -178,3 +178,34 @@ labeled sampled observations. No additional swapouts occurred, and the exact
 service returned healthy with completed warmup. See the default-run receipt
 summary for raw byte counts and provenance. This validates that workload,
 not the separate 20 TPS objective.
+
+## Runner corrections after budget validation
+
+Current direct-slot and component-bank layouts retain their complete backing
+storage. The planner now reserves `max_live_kv_tokens` before allocating expert
+slots for these layouts, as it already did for mapped storage. KV admission
+checks that reservation and releases its token count at request completion;
+logical expert eviction no longer pretends to free physical backing arrays.
+The 17,664-token benchmark reservation adds 56,524,800 bytes to the fixed plan.
+The existing runtime reserve and measured transient envelope still cover
+allocation behavior beyond this modeled KV term.
+
+New requests reset prompt-frequency counts before accumulating their first
+prefill chunk; later chunks retain that request's counts. Transaction rollback
+restores the prior counter. Mixed-precision banks with no prefetch ring no
+longer query an undefined uniform record size while pricing zero ring bytes.
+
+The bounded-KV experimental lane has no validated full-model Metal parity and
+is rejected at construction before allocator limits or buffers change. Tiny
+cache tests remain available for investigating its numerical cause. A/B
+summaries compare effective changed environment settings, report unexpected
+token mismatches with exit status 1, and compare authoritative memory-budget
+bytes. Missing plan metadata is unknown. An unchanged rounding lever cannot
+excuse a mismatch, and AR-versus-DSpark margins are not attributed to a
+different cross-arm comparison.
+
+The focused guarded integration bundle passes 313 tests, including physical
+slot ownership, KV admission, cross-request state, mixed-bank execution and
+runner reporting. Mixed-bank numerical tests explicitly select Metal and
+restore the prior device, so CPU-pinned test collection cannot change their
+reference arithmetic. No numerical tolerances were relaxed.

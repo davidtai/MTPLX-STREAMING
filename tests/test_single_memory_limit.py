@@ -1,11 +1,7 @@
-"""Single unified-memory-limit policy over KV admission and the expert cache.
+"""Single unified-memory limit over fixed slot storage and KV admission.
 
-Issue #46: ``memory_limit_bytes`` is the only required memory knob.  When no
-explicit ``expert_cache_limit_bytes`` is supplied, the runtime derives the
-streamed expert-cache byte allowance from the total limit at every KV
-boundary and synchronously evicts policy victims down to it before KV may
-grow.  Supplying ``expert_cache_limit_bytes`` preserves the static
-whole-context reservation exactly.
+All supported layouts retain their backing storage, so maximum-context KV is
+reserved before slot allocation, with or without an explicit expert-cache cap.
 """
 
 from __future__ import annotations
@@ -70,6 +66,7 @@ def _open_runtime(
             _fixed_bytes(spec)
             + additional_resident_bytes
             + slots * _slot_bytes(spec)
+            + max_live_kv_tokens * spec.kv_bytes_per_token
         ),
         max_live_kv_tokens=max_live_kv_tokens,
         **config_kwargs,
@@ -104,28 +101,24 @@ def _policy(runtime) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# Config: one knob selects the derived policy; the second knob restores the
-# static plan exactly.
+# Config: one total-limit knob prices maximum KV and the fixed expert pool.
 # ---------------------------------------------------------------------------
 
 
-def test_omitting_expert_cache_limit_engages_derived_policy() -> None:
+def test_omitting_expert_cache_limit_reserves_maximum_context() -> None:
     spec = _spec()
     config = _derived_config(
         spec,
         memory_limit_bytes=_fixed_bytes(spec) + 2 * _slot_bytes(spec),
         max_live_kv_tokens=864,
     )
-    assert config.derived_expert_cache_policy is True
+    assert config.derived_expert_cache_policy is False
     plan = config.memory_plan(spec)
-    # The post-load boundary plan reserves no whole-context KV up front.
-    assert plan.context_tokens == 0
-    assert plan.kv_bytes == 0
-    assert plan.slots_per_layer == 2
-    boundary = config.memory_plan(spec, live_kv_tokens=432)
-    assert boundary.context_tokens == 432
-    assert boundary.kv_bytes == 432 * spec.kv_bytes_per_token
-    assert boundary.slots_per_layer == 1
+    assert plan.context_tokens == 864
+    assert plan.kv_bytes == 864 * spec.kv_bytes_per_token
+    assert plan.slots_per_layer == 0
+    with pytest.raises(ExpertStreamingConfigurationError, match="static plans"):
+        config.memory_plan(spec, live_kv_tokens=432)
 
 
 def test_supplying_expert_cache_limit_preserves_static_plan_exactly() -> None:
@@ -165,11 +158,11 @@ def test_metal_mmap_layout_keeps_the_static_plan() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Boundary 1: post-load initialization of the derived allowance.
+# Boundary 1: post-load reporting of the fixed reservation.
 # ---------------------------------------------------------------------------
 
 
-def test_open_sizes_pool_to_the_post_load_allowance(tmp_path: Path) -> None:
+def test_open_sizes_pool_after_reserving_maximum_context(tmp_path: Path) -> None:
     runtime, spec, _expected = _open_runtime(
         tmp_path,
         slots=2,
@@ -177,11 +170,12 @@ def test_open_sizes_pool_to_the_post_load_allowance(tmp_path: Path) -> None:
     )
     try:
         assert runtime.plan.slots_per_layer == 2
+        assert runtime.plan.kv_bytes == 864 * spec.kv_bytes_per_token
         policy = _policy(runtime)
         assert policy == {
-            "derived": True,
-            "allowance_bytes": 2 * _slot_bytes(spec),
-            "persistent_capacity": 2,
+            "derived": False,
+            "allowance_bytes": None,
+            "persistent_capacity": None,
             "cached_bytes": 0,
         }
     finally:
@@ -228,12 +222,11 @@ def test_static_runtime_reports_no_derived_policy(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Boundary 2/3: KV growth evicts policy victims down to the new allowance and
-# fails closed when the request cannot fit at all.
+# Boundary 2/3: KV growth retains expert storage and enforces the reserved cap.
 # ---------------------------------------------------------------------------
 
 
-def test_kv_growth_evicts_lru_entries_to_the_new_allowance(tmp_path: Path) -> None:
+def test_kv_growth_preserves_resident_experts_and_capacity(tmp_path: Path) -> None:
     runtime, spec, expected = _open_runtime(
         tmp_path,
         expert_count=4,
@@ -249,16 +242,16 @@ def test_kv_growth_evicts_lru_entries_to_the_new_allowance(tmp_path: Path) -> No
 
         grow = _tokens_for_bytes(spec, 2 * _slot_bytes(spec))
         admission = runtime.admit_kv_tokens(grow)
-        assert bank.occupancy == 1
-        assert bank.resident_experts == (0,)
-        assert bank.persistent_capacity == 1
+        assert bank.occupancy == 3
+        assert set(bank.resident_experts) == {0, 1, 2}
+        assert bank.persistent_capacity == 3
         policy = _policy(runtime)
-        assert policy["allowance_bytes"] == _slot_bytes(spec)
-        assert policy["persistent_capacity"] == 1
-        assert policy["cached_bytes"] == _slot_bytes(spec)
+        assert policy["allowance_bytes"] is None
+        assert policy["persistent_capacity"] is None
+        assert policy["cached_bytes"] == 3 * _slot_bytes(spec)
         states = _slot_states(runtime)
-        assert states["ready"] == 1
-        assert states["empty"] == 3
+        assert states["ready"] == 3
+        assert states["empty"] == 1
 
         # The surviving entry stays on the ordinary hit path.
         ready = runtime.ensure_route(1, [0], phase="decode")
@@ -267,11 +260,10 @@ def test_kv_growth_evicts_lru_entries_to_the_new_allowance(tmp_path: Path) -> No
         assert bytes(ready.bindings[0].buffer) == expected[0]
         ready.release(synchronize=False)
 
-        # Between boundaries a miss may only replace the policy victim; the
-        # cache never regrows past the allowance while KV is held.
-        _decode(runtime, 1, 1)
-        assert bank.occupancy == 1
-        assert bank.resident_experts == (1,)
+        # Ordinary replacement still follows LRU within the fixed capacity.
+        _decode(runtime, 1, 3)
+        assert bank.occupancy == 3
+        assert set(bank.resident_experts) == {0, 2, 3}
         admission.release()
     finally:
         runtime.close()
@@ -284,23 +276,23 @@ def test_kv_growth_fails_closed_when_it_cannot_fit(tmp_path: Path) -> None:
         max_live_kv_tokens=10_000,
     )
     try:
-        limit = _tokens_for_bytes(spec, 2 * _slot_bytes(spec))
+        limit = runtime.config.max_live_kv_tokens
         with pytest.raises(
-            ExpertStreamingConfigurationError, match="oversubscribes"
+            ExpertStreamingConfigurationError, match="exceeds planned"
         ):
             runtime.admit_kv_tokens(limit + 1)
         assert runtime._live_kv_tokens == 0
         assert runtime._banks[1].persistent_capacity == 2
 
         admission = runtime.admit_kv_tokens(limit)
-        assert runtime._banks[1].persistent_capacity == 0
+        assert runtime._banks[1].persistent_capacity == 2
         admission.release()
         assert runtime._banks[1].persistent_capacity == 2
     finally:
         runtime.close()
 
 
-def test_kv_growth_fails_closed_when_victims_are_pinned(tmp_path: Path) -> None:
+def test_kv_growth_does_not_require_evicting_pinned_experts(tmp_path: Path) -> None:
     runtime, spec, _expected = _open_runtime(
         tmp_path,
         slots=1,
@@ -309,25 +301,24 @@ def test_kv_growth_fails_closed_when_victims_are_pinned(tmp_path: Path) -> None:
     try:
         grow = _tokens_for_bytes(spec, _slot_bytes(spec))
         pinned = runtime.ensure_route(1, [0], phase="decode")
-        with pytest.raises(ExpertStreamingConfigurationError, match="pinned"):
-            runtime.admit_kv_tokens(grow)
-        assert runtime._live_kv_tokens == 0
-        pinned.release(synchronize=False)
-
-        admission = runtime.admit_kv_tokens(grow)
-        assert runtime._banks[1].occupancy == 0
-        assert _slot_states(runtime)["ready"] == 0
-        admission.release()
+        try:
+            admission = runtime.admit_kv_tokens(grow)
+            assert runtime._live_kv_tokens == grow
+            assert runtime._banks[1].occupancy == 1
+            assert _slot_states(runtime)["ready"] == 1
+            admission.release()
+        finally:
+            pinned.release(synchronize=False)
     finally:
         runtime.close()
 
 
 # ---------------------------------------------------------------------------
-# Boundary 4: KV shrink recomputes the larger allowance without allocating.
+# Boundary 4: KV release neither allocates nor resizes the fixed expert pool.
 # ---------------------------------------------------------------------------
 
 
-def test_kv_shrink_raises_allowance_without_allocating(tmp_path: Path) -> None:
+def test_kv_shrink_preserves_capacity_without_allocating(tmp_path: Path) -> None:
     runtime, spec, _expected = _open_runtime(
         tmp_path,
         expert_count=4,
@@ -340,7 +331,7 @@ def test_kv_shrink_raises_allowance_without_allocating(tmp_path: Path) -> None:
         admission = runtime.admit_kv_tokens(
             _tokens_for_bytes(spec, 2 * _slot_bytes(spec))
         )
-        assert bank.persistent_capacity == 1
+        assert bank.persistent_capacity == 3
 
         counters_before = runtime.counters.as_dict()
         admission.release()
@@ -352,7 +343,7 @@ def test_kv_shrink_raises_allowance_without_allocating(tmp_path: Path) -> None:
         assert states["ready"] == 1
         assert states["empty"] == 3
 
-        # Later misses refill the cache naturally up to the new allowance.
+        # Later misses fill previously empty slots in the fixed pool.
         ready = runtime.ensure_route(1, [1], phase="decode")
         assert len(ready.plan.loads) == 1
         assert ready.plan.loads[0].persistent is True
@@ -363,7 +354,7 @@ def test_kv_shrink_raises_allowance_without_allocating(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The fixed footprint is never evictable; only the streamed slot cache is.
+# KV and transient service both retain their construction-time reservation.
 # ---------------------------------------------------------------------------
 
 
@@ -384,13 +375,14 @@ def test_transient_service_is_outside_the_evictable_set(tmp_path: Path) -> None:
         admission = runtime.admit_kv_tokens(
             _tokens_for_bytes(spec, _slot_bytes(spec))
         )
-        assert _policy(runtime)["allowance_bytes"] == 0
+        assert runtime.plan.kv_bytes == 10_000 * spec.kv_bytes_per_token
+        assert runtime._banks[1].persistent_capacity == 1
         admission.release()
     finally:
         runtime.close()
 
 
-def test_additional_resident_bytes_shrink_the_derived_allowance(
+def test_additional_resident_bytes_are_priced_with_maximum_kv(
     tmp_path: Path,
 ) -> None:
     record_bytes = _slot_bytes(_spec())
@@ -403,12 +395,12 @@ def test_additional_resident_bytes_shrink_the_derived_allowance(
     )
     try:
         assert runtime.plan.slots_per_layer == 3
+        assert runtime.plan.resident_bytes == spec.resident_bytes + record_bytes
+        assert runtime.plan.kv_bytes == 2000 * spec.kv_bytes_per_token
         admission = runtime.admit_kv_tokens(
             _tokens_for_bytes(spec, _slot_bytes(spec))
         )
-        policy = _policy(runtime)
-        assert policy["allowance_bytes"] == 2 * _slot_bytes(spec)
-        assert policy["persistent_capacity"] == 2
+        assert runtime._banks[1].persistent_capacity == 3
         admission.release()
     finally:
         runtime.close()
@@ -419,13 +411,16 @@ def test_additional_resident_bytes_shrink_the_derived_allowance(
 # ---------------------------------------------------------------------------
 
 
-def test_global_scope_evicts_least_recent_across_layers(tmp_path: Path) -> None:
+def test_global_scope_preserves_residents_across_kv_boundaries(tmp_path: Path) -> None:
     root, spec, manifest, _expected = _global_artifact(tmp_path)
     manifest_path = root / "expert-manifest.json"
     save_expert_manifest(manifest, manifest_path)
     config = _derived_config(
         spec,
-        memory_limit_bytes=_fixed_bytes(spec) + 3 * _slot_bytes(spec),
+        memory_limit_bytes=(
+            _fixed_bytes(spec) + 3 * _slot_bytes(spec)
+            + 2000 * spec.kv_bytes_per_token
+        ),
         max_live_kv_tokens=2000,
         cache_scope="global",
     )
@@ -448,10 +443,10 @@ def test_global_scope_evicts_least_recent_across_layers(tmp_path: Path) -> None:
         admission = runtime.admit_kv_tokens(
             _tokens_for_bytes(spec, 2 * _slot_bytes(spec))
         )
-        assert bank.occupancy == 1
-        assert bank.persistent_capacity == 1
-        assert bank.resident_experts_by_layer == {1: (1,), 2: ()}
-        assert _policy(runtime)["persistent_capacity"] == 1
+        assert bank.occupancy == 3
+        assert bank.persistent_capacity == 3
+        assert bank.resident_experts_by_layer == {1: (0, 1), 2: (0,)}
+        assert _policy(runtime)["persistent_capacity"] is None
         admission.release()
         assert bank.persistent_capacity == 3
     finally:
@@ -503,7 +498,7 @@ def test_allowance_respects_a_paged_mmap_band() -> None:
     assert derived_expert_cache_allowance_bytes(drowned) == -10
 
 
-def test_runtime_boundary_respects_a_paged_band_plan(
+def test_runtime_boundaries_never_replan_fixed_storage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime, spec, _expected = _open_runtime(
@@ -513,34 +508,24 @@ def test_runtime_boundary_respects_a_paged_band_plan(
         max_live_kv_tokens=10_000,
     )
     try:
-        real_plan = runtime._derived_expert_plan
+        def replan(live_kv_tokens: int):
+            pytest.fail("fixed backing storage cannot be reclaimed by replanning")
 
-        def banded_plan(live_kv_tokens: int):
-            plan = real_plan(live_kv_tokens)
-            return SimpleNamespace(
-                total_limit_bytes=plan.total_limit_bytes,
-                fixed_bytes=plan.fixed_bytes,
-                persistent_budget_bytes=plan.persistent_budget_bytes,
-                mmap_islands_wired=False,
-                mmap_island_bytes=_slot_bytes(spec),
-            )
-
-        monkeypatch.setattr(runtime, "_derived_expert_plan", banded_plan)
+        monkeypatch.setattr(runtime, "_derived_expert_plan", replan)
         _decode(runtime, 1, 0)
         _decode(runtime, 1, 1)
         admission = runtime.admit_kv_tokens(
             _tokens_for_bytes(spec, _slot_bytes(spec))
         )
-        # 3 slots - 1 slot of KV - 1 slot of paged band = 1 slot allowance.
-        assert runtime._banks[1].persistent_capacity == 1
-        assert runtime._banks[1].occupancy == 1
+        assert runtime._banks[1].persistent_capacity == 3
+        assert runtime._banks[1].occupancy == 2
         admission.release()
 
         with pytest.raises(
-            ExpertStreamingConfigurationError, match="oversubscribes"
+            ExpertStreamingConfigurationError, match="exceeds planned"
         ):
             runtime.admit_kv_tokens(
-                _tokens_for_bytes(spec, 3 * _slot_bytes(spec))
+                runtime.config.max_live_kv_tokens + 1
             )
     finally:
         runtime.close()

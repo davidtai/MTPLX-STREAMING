@@ -7,14 +7,40 @@ per-token `mx.concatenate`, no per-token realloc.
 This window audits every KV lane at the standard cell shape (16,384 prompt + 256
 decode, `--max-kv 17408`), then adds one master switch — `MTPLX_DSV41_KV_BOUNDED`
 — that preallocates **all** lanes to `max_kv` at prefill and writes each token in
-place, byte-identical by construction. Default ON for the `cell16k_ring*` arms.
+place. **Current status: unvalidated Metal parity; full-model installation is
+rejected.** The low-level flag defaults OFF. Isolated cache classes remain available
+for small correctness probes; CPU parity and donation evidence do not prove Metal
+logit or token parity.
+
+The saved [window 47 growing receipt](receipts/gpu-windows/window-47/ar-v2-attn.json)
+and [window 48 bounded receipt](receipts/gpu-windows/window-48/ar-v2-attn.json) use the
+same prompt SHA and agree through output index 32. At zero-based index 33 they emit
+832 and 790 respectively. **These runs also changed persistent capacity from 66 to
+71 slots per layer and have different memory-plan records.** They demonstrate a
+recorded parity failure, not an isolated numerical root cause. Layout-dependent
+rounding remains a hypothesis; the bounded-versus-growing Metal logit error has not
+been established. The AR-versus-DSpark divergence payload is a different comparison
+and does not settle this question.
+
+The shared installation validator rejects an enabled flag in the served loader
+before its native-MTP cap step, and in `ExpertStreamingRuntime.open` before direct
+or A/B reader, cap, or slot-buffer creation. It leaves the environment unchanged
+and does not substitute a different cache lane.
+The A/B summary compares the effective env of both receipts: an unchanged
+`ATTN_FUSED_PROJ` cannot excuse a bounded-only mismatch. A mismatch without an
+eligible changed rounding lever now returns exit status 1. Plan comparisons use
+the actual `resolved_plan.memory_limit_bytes`, with target-budget and legacy GiB
+fallbacks for older receipts; missing budgets are reported as unknown. The allocation and
+historical review notes below describe the candidate implementation, not production
+approval.
 
 Code touched:
 - `mtplx/models/deepseek_v41_cache.py` — the bounded lanes, per-lane counters,
   `kv_bytes_at_max_kv`.
 - `scripts/deepseek_v41/ab_decode_env_levers.py` — the `MTPLX_DSV41_KV_BOUNDED`
-  lever, default-ON on `cell16k_ring*`, `max_kv` stamping, receipt counters block.
+  candidate presets, `max_kv` stamping, receipt counters and pairwise classification.
 - `tests/test_deepseek_v41_w107_kv_growth.py` — CPU proof.
+- `tests/test_deepseek_v41_unvalidated_kv_lane.py` — CPU installation and reporting regressions.
 
 ---
 
@@ -107,18 +133,19 @@ as not-preallocated.
 that would exceed `bounded_cap` **raises `ValueError`** ("append … would exceed
 preallocated cap …") — no silent growth past `max_kv`.
 
-**Byte-identity.** Pure preallocation + in-place reorder. The `_GrowBuffer` `view()`
-(`buf[:, :length]`) is byte-identical to the equivalent `_grow` (concatenate) store,
-so every downstream reader (attention score/gather, indexer, pooling math,
-trim/rollback, mlx_lm `state`) is unchanged. The window lane's byte-identity was
-already proven by W80's drop_offset seam. Verified end-to-end in §5.
+**Parity scope.** The logical `_GrowBuffer` view (`buf[:, :length]`) is intended to
+contain the same rows as `_grow` (concatenate). The CPU tests in §5 check this and
+selected end-to-end configurations. They do not establish equivalent Metal
+execution, exclude a GPU-specific indexing problem, or quantify a Metal rounding
+difference. Full-model installation remains rejected pending that evidence.
 
 ---
 
 ## §3 — Counters & env
 
 **Env** (all read at use, not import):
-- `MTPLX_DSV41_KV_BOUNDED=1|0` — master switch. Default ON on `cell16k_ring*`.
+- `MTPLX_DSV41_KV_BOUNDED=1|0` — master switch. Default OFF; full-model streaming
+  rejects ON. Use the isolated cache classes for parity investigation.
 - `MTPLX_DSV41_KV_BOUNDED_MAXKV=<int>` — preallocation cap; harness-stamped from the
   cell `max_kv`, falls back to `MTPLX_DSV41_WINDOW_RING_MAXKV`.
 
@@ -236,17 +263,18 @@ tests/test_deepseek_v41_engram_state.py       ..... 6 passed in 1.01s
 
 ---
 
-## §6 — What still needs a GPU measurement (do NOT measure here)
+## §6 — Historical measurement questions (superseded by the parity gate above)
 
-A GPU benchmark window is running on this box; this window is CPU-only and never
-loaded the real model. Left for a GPU window:
+The initial W107 investigation was CPU-only. These performance questions remain
+historical work items; they do not authorize installing the unvalidated full-model
+lane. Establish numerical correctness on bounded shapes first.
 
 1. **The 25 ms/token O(T) KV claim.** The census attributes ≈25 ms/token to O(T) KV
    work (KV-append ≈11 + compress-append ≈7 + indexer-select ≈7). KV_BOUNDED targets
    the two **append** lanes (window + compress/index + the latent concatenate); the
    indexer-**select** is a *read/gather* over the full compress store, not a growth
-   lane, and is untouched. Receipt placeholder: `<PENDING GPU A/B: cell16k_ring vs
-   cell16k_ring + KV_BOUNDED=0 — cache_append / compress_append ms/tok, decode tok/s,
+   lane, and is untouched. Receipt placeholder: `<PENDING validated GPU A/B:
+   cell16k_ring vs cell16k_ring_bounded — cache_append / compress_append ms/tok, decode tok/s,
    peak GB, byte-identity>`.
 2. **Metal donation.** On CPU the bounded `slice_update` donates (memory flat, §5).
    On Metal, a live `view()` slice published to the model / SharedAttentionRuntime can
@@ -264,28 +292,19 @@ loaded the real model. Left for a GPU window:
    break the whole-sequence deep-trim used by the unit tests / bare-forward path, so
    they are deferred behind their own lever.
 
-### GPU A/B to run later (do NOT run now)
+### Small parity probe before any full-model promotion
 
-The lever is default ON for the `cell16k_ring*` arms, so the A/B is bounded-ON vs the
-same arm with the switch forced OFF:
-
-```
-# control (bounded OFF) vs candidate (bounded ON, the default) on the standard cell:
-python scripts/deepseek_v41/ab_decode_env_levers.py \
-    --model /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4 \
-    --context-tokens 16384 --decode-tokens 256 --max-kv 17408 \
-    --arms cell16k_ring cell16k_ring \
-    --out <receipt.jsonl> --stage-timing
-# force the control arm's switch off via env before its run:
-#   MTPLX_DSV41_KV_BOUNDED=0   (cell16k_ring with KV_BOUNDED disabled)
-# candidate = cell16k_ring as-is (KV_BOUNDED=1 by default, max_kv auto-stamped 17408)
-```
-
-Read on the receipt: `kv_bounded` block (compress/index/latent `kv_realloc_* ==
-1/1/2` and staying there across decode + rejected verify cycles; `kv_realloc_window`
-settles once the window shrinks back to base; `kv_inplace_writes_*` = decode steps;
-`alloc_bytes ≈ 320.2 MB`), the `cache_append` / `compress_append` stage-timing ms/tok
-delta, decode tok/s, peak GB, and `byte_identical_vs_ar` (must hold — pure prealloc).
+Start with the existing isolated CPU model test
+`test_deepseek_v41_w121_kv_parity_cpu.py`, using separate subprocesses for the two
+lanes so compiled functions cannot retain another model's weights. For Metal,
+first test `CompressorState.push` with identical deterministic fp32 inputs, ratio 2,
+head dimension 512, and independently bounded allocations. Compare completed
+pooled rows and logical stored bytes across prefill, at least 64 decode steps, and
+verify/trim cycles. Only then add the real indexer dimensions and compare scores,
+selected indices, gathered KV, and final logits to find the first differing stage.
+Use the parent-owned GPU guard even for small probes; do not invoke the full-model
+loader or remove its rejection to run these tests. A passing small probe is a
+diagnostic result, not full-model promotion evidence.
 
 ---
 

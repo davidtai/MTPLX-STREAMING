@@ -851,7 +851,13 @@ def _load_impl(
             ExpertStreamingConfigurationError,
             ExpertStreamingRuntime,
             apply_mlx_memory_cap,
+            validate_deepseek_v41_runtime_env,
         )
+        if not isinstance(expert_streaming_config, ExpertStreamingConfig):
+            raise TypeError("expert_streaming_config must be an ExpertStreamingConfig")
+        # Native MTP serving can set the allocator cap before runtime.open.
+        # Validate here as well as at the direct runtime/benchmark boundary.
+        validate_deepseek_v41_runtime_env(expert_streaming_config.model_key)
         from .expert_streaming_models import get_model_spec
         from .models.expert_mlx import (
             make_mlx_component_bank_allocator,
@@ -861,8 +867,6 @@ def _load_impl(
 
         import mlx.core as mx
 
-        if not isinstance(expert_streaming_config, ExpertStreamingConfig):
-            raise TypeError("expert_streaming_config must be an ExpertStreamingConfig")
         streaming_spec = get_model_spec(expert_streaming_config.model_key)
         # DeepSeek-V4.1 DSpark MTP is a NATIVE in-artifact draft head (worker W23),
         # not an external hy3/glm MTP adapter. When --generation-mode mtp selects

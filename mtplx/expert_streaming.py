@@ -895,11 +895,11 @@ class LayerExpertSlotBank:
         # prompt-frequent experts even when every persistent slot is already
         # full (the return value/seed selection below is otherwise unchanged).
         experts = self._validate_experts_for_seed(expert_ids)
-        self._prefill_route_freq.update(experts)
         # W87 HIGH-2: a new request demotes the prior protected set here, so the
         # seed budget below is the whole (now-unprotected) pool rather than the
         # zero empty slots a full pool would report.
         self._reopen_pool_for_new_request()
+        self._prefill_route_freq.update(experts)
         if self.single_pool:
             # Budget = capacity - protected: demoted residents are probationary and
             # the seed evicts them, so the seed can span the whole pool per request.
@@ -1218,6 +1218,11 @@ class LayerExpertSlotBank:
 
         if self.single_pool and self._saw_decode_since_prefill:
             self._protected.clear()
+            # Prompt frequency belongs to this request. Keep decode recency,
+            # but do not let a prior prompt reverse the new seed's priority.
+            # Replace rather than clear so a route transaction can restore the
+            # old counter by reference if this unseeded reopen is rolled back.
+            self._prefill_route_freq = Counter()
             self._saw_decode_since_prefill = False
 
     def plan(
@@ -1456,6 +1461,7 @@ class LayerExpertSlotBank:
         pool_recency = dict(self._pool_recency)
         pool_clock = self._pool_clock
         saw_decode = self._saw_decode_since_prefill
+        prefill_route_freq = self._prefill_route_freq
         plan = self.plan(experts, phase=phase)
 
         def rollback() -> None:
@@ -1480,6 +1486,7 @@ class LayerExpertSlotBank:
             self._pool_recency = pool_recency
             self._pool_clock = pool_clock
             self._saw_decode_since_prefill = saw_decode
+            self._prefill_route_freq = prefill_route_freq
 
         return plan, RoutePolicyTxn(rollback=rollback)
 

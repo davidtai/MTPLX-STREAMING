@@ -399,9 +399,10 @@ def _window_ring_config() -> tuple:
 #: (``comp_state.raw_kv`` / ``raw_score``, the "main latent KV"), which the shipped
 #: path grew with a per-token ``_grow`` (O(n_fed) concatenate == O(T^2) over the
 #: cell).  Under this flag that frontier is a ``_GrowBuffer`` capped to ``max_kv``,
-#: written in place.  Every reachable read is byte-identical by construction (pure
-#: prealloc + in-place reorder; the ring's drop_offset seam already proved
-#: byte-identity for the window).  Precedence: KV_BOUNDED > WINDOW_RING > chunk-grow.
+#: written in place. CPU parity is covered by isolated tests; Metal parity remains
+#: unvalidated, so the shared streaming runtime rejects full-model installation.
+#: These cache classes remain available for small numerical investigations.
+#: Precedence: KV_BOUNDED > WINDOW_RING > chunk-grow.
 #: Read at construction (per request, after the harness stamps the key; NOT frozen
 #: at import -- [[env-flags-read-at-use-not-import]]).  Default OFF.
 _KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
@@ -429,17 +430,15 @@ def _kv_bounded_enabled() -> bool:
     proven across index_topk / candidate-block / sliding-window / prompt-length /
     chunked-prefill / huge-cap configs, each lane in its own process
     (tests/test_deepseek_v41_w121_kv_parity_cpu.py) -- because the logical ``view()``
-    equals the concatenated store and CPU reductions are layout-independent.  On Metal it
-    DIVERGES (real receipts: windows 43/45/48 = bounded token sha, 44/46/47 = growing sha,
-    first diff ~decode token 33) -- the leading hypothesis is a layout-dependent GEMM
-    reduction reassociation (the preallocated sliced-view buffers vs the growing lane's
-    contiguous arrays), which would be rounding-class; that is NOT a beyond-len read (a
-    huge cap with ~1860 garbage rows is still bit-exact on CPU), but the Metal MAGNITUDE
-    is UNMEASURED (needs an fp32 probe on a window).  It changes greedy tokens, so it
-    stays OFF by default until a Metal A/B proves greedy parity.
-    The low-level default here is OFF (unset -> off); only an explicit
-    ``MTPLX_DSV41_KV_BOUNDED`` / an explicit ``*_bounded`` A/B arm turns it on.  Set to
-    ``0``/``false``/``off``/``no`` disables it even when something stamped it.
+    contains the expected rows on those tested paths. Recorded Metal runs differ near
+    output index 33. Window 47/48 also changed persistent capacity from 66 to 71 slots
+    per layer, so the pair does not isolate a numerical root cause. Layout-dependent
+    GEMM reassociation is only a hypothesis; the Metal logit-error magnitude is
+    unmeasured. CPU tests do not rule out a GPU-specific indexing or layout defect.
+    The shared streaming runtime rejects full-model installation until Metal parity
+    is established. The low-level default here remains OFF (unset -> off); an explicit
+    ``MTPLX_DSV41_KV_BOUNDED`` enables isolated cache tests. Set to
+    ``0``/``false``/``off``/``no`` to disable it.
 
     Read at call time (never frozen at import): the serving harness stamps the key
     after importing this module, and each request builds a fresh cache."""

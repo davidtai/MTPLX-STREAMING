@@ -488,9 +488,10 @@ RUNNER_ENV = "MTPLX_DSV41_RUNNER"  # W95: "v2" = the composed SSD-hiding runner
 # written in place (O(new rows)/token, no per-token concatenate/realloc): the W80
 # window ring + preallocated compress/index + the PREALLOCATED compressor frontier
 # (the "main latent KV", the one lane W80 left growing with a per-token _grow == O(T^2)
-# over the cell).  Byte-identical to the ring arm's CLASS by construction (pure
-# prealloc/in-place; the ring's drop_offset already proved the window byte-identity).
-# Default ON for the cell16k_ring* arms; MTPLX_DSV41_KV_BOUNDED=0 disables.  MAXKV is
+# over the cell). CPU parity is covered; Metal parity remains unvalidated after
+# differing recorded greedy outputs. OFF by default, and the shared runtime-open
+# boundary rejects full-model use. Named bounded presets remain for dry-run/config
+# inspection; isolated cache classes support the numerical investigation. MAXKV is
 # stamped from the resolved cell max_kv in _run_arm (falls back to WINDOW_RING_MAXKV).
 KV_BOUNDED_ENV = "MTPLX_DSV41_KV_BOUNDED"
 KV_BOUNDED_MAXKV_ENV = "MTPLX_DSV41_KV_BOUNDED_MAXKV"
@@ -989,8 +990,8 @@ ARM_PRESETS = {
     # the dense/lean prefill reassoc; the ring adds NO new lossiness).
     # W107 (review round-2 finding 2): cell16k_ring is THE paired CONTROL in every
     # window (39-42), so its env set is FROZEN -- it must NOT carry kv_bounded (a
-    # round-1 mistake defaulted it on, changing the timing basis vs windows 39-41 even
-    # though the lever is byte-identical).  The bounded lever is a CANDIDATE
+    # round-1 mistake defaulted it on, changing the timing basis vs windows 39-41).
+    # The bounded lever has unvalidated Metal parity and remains a CANDIDATE
     # (cell16k_ring_bounded below); this control matches window-39's arm_env exactly.
     "cell16k_ring": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
@@ -1467,10 +1468,11 @@ ARM_PRESETS = {
     ),
     # W107F pair for window 44: cell16k_ring_v2_attn + kv_bounded="1".  The A/B arm that
     # ISOLATES the bounded-KV lever on top of the full attention stack.  W121 HIGH-4:
-    # bounded KV is byte-identical on CPU but ROUNDING-CLASS on Metal (the preallocated
-    # sliced-view buffers give a different GEMM reduction layout -> a greedy near-tie can
-    # flip; windows 43/45/48 = bounded sha, 44/46/47 = growing sha, first diff ~token 33),
-    # so it is NOT the default -- this named arm is how you measure it.  EXACT KEY SET =
+    # bounded KV is byte-identical on CPU but has UNVALIDATED Metal parity. Recorded
+    # outputs differ around token 33; layout-dependent rounding is only a hypothesis.
+    # Window 47/48 also changed cache capacity (66 -> 71 slots/layer), so that pair
+    # does not isolate the numerical cause. Full-model installation is rejected;
+    # this preset is retained for dry-run/config inspection. EXACT KEY SET =
     # cell16k_ring_v2_attn (layer_major, prefill_dense, score_path=lean, selected_keys,
     # window_ring, layout_fix, head=bf16, sinkhorn, attn, win_memo, runner=v2, wo_a_cache,
     # attn_lean_casts, attn_fused_proj) PLUS kv_bounded="1".
@@ -1482,8 +1484,8 @@ ARM_PRESETS = {
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
     # W107F pair for window 44 (DSpark): cell16k_ring_v2_draft_attn + kv_bounded="1" --
-    # the DSpark A/B that isolates the bounded-KV lever (rounding-class on Metal, W121
-    # HIGH-4; not the default).  EXACT KEY SET = cell16k_ring_v2_draft_attn (its 16 keys
+    # the DSpark bounded-KV candidate (unvalidated Metal parity, W121 HIGH-4;
+    # full-model installation rejected). EXACT KEY SET = cell16k_ring_v2_draft_attn (its 16 keys
     # incl. runner=v2, draft, draft_head_bf16, wo_a_cache, attn_lean_casts,
     # attn_fused_proj) PLUS kv_bounded="1".
     "cell16k_ring_v2_draft_attn_bounded": _preset(
@@ -1545,9 +1547,9 @@ ARM_PRESETS = {
 # reason.  An arm whose preset arms ANY of these keys has decoded tokens that are
 # EXPECTED to differ from control by rounding (the lever reassociates the fp32
 # attention core / softmax, so a greedy near-tie can flip -- [[dsv41-inexact-ok-if-
-# tie-flips]]).  A token-id sha mismatch on such an arm is "expected (rounding-class)",
-# NOT a broken exact lever, so the byte-identity summary must not FAIL it; every other
-# arm keeps the FAIL (an exact lever that changed the tokens is a bug).
+# tie-flips]]). These are per-arm metadata, not a pairwise parity exemption. The
+# summary compares effective levers in BOTH receipts: an unchanged rounding lever
+# cannot explain a new mismatch, and unvalidated bounded KV is never exempted.
 #
 # ROUNDING_CLASS_ARMS is DERIVED from ARM_PRESETS (not a hand list), so a new arm is
 # classified automatically the moment its preset names one of these keys.  Each key's
@@ -1621,6 +1623,47 @@ def _is_rounding_class(arm: str) -> bool:
 
 # Derived, not hand-listed: every arm whose preset arms a rounding-class env key.
 ROUNDING_CLASS_ARMS = frozenset(a for a in ARM_PRESETS if _is_rounding_class(a))
+
+
+def _pairwise_rounding_class_keys(base, candidate) -> list:
+    """Known rounding levers whose effective setting changed between these runs.
+
+    Recorded runtime env wins over presets (including explicit None/OFF). Presets
+    supply missing keys in older receipts. Historical per-arm ``rounding_class``
+    labels cannot establish the cause of a difference between two composite arms.
+    Bounded KV has no validated Metal error bound, so it cannot claim an exemption.
+    """
+    def effective_env(receipt):
+        env = dict(ARM_PRESETS.get(receipt.get("arm"), {}))
+        env.update(receipt.get("arm_env") or {})
+        return env
+
+    def state(key, value):
+        raw = str(value or "").strip().lower()
+        if key == KV_BOUNDED_ENV:
+            return raw in ("1", "true", "yes", "on")
+        if key in (DECODE_ATTN_KERNEL_ENV, ATTN_CORE_COMPILE_ENV, ATTN_FUSED_PROJ_ENV):
+            # Match the strict bool resolvers without importing the Metal model.
+            if raw in ("", "0", "false", "off", "no", "none", "default"):
+                return False
+            if raw in ("1", "true", "yes", "on"):
+                return True
+            return None  # an invalid/unknown setting cannot excuse a mismatch
+        # SMALL_STAGES_FUSED, HC_PREMIX_KERNEL and DRAFT_HEAD_BF16 use this
+        # permissive resolver (not the strict bool resolver's none/default aliases).
+        return raw not in ("", "0", "false", "off", "no", "auto")
+
+    left, right = effective_env(base), effective_env(candidate)
+    if state(KV_BOUNDED_ENV, left.get(KV_BOUNDED_ENV)) or state(
+        KV_BOUNDED_ENV, right.get(KV_BOUNDED_ENV)
+    ):
+        return []
+    changed = []
+    for key in ROUNDING_CLASS_ENVS:
+        before, after = state(key, left.get(key)), state(key, right.get(key))
+        if before is not None and after is not None and before != after:
+            changed.append(key)
+    return changed
 
 
 def _load_bench_module():
@@ -2885,6 +2928,7 @@ def _resolved_plan(runtime, args) -> dict | None:
         except Exception:
             slots_per_layer_no_ring = slots_per_layer
     return {
+        "memory_limit_bytes": getattr(plan, "total_limit_bytes", None),
         "transient_slots": transient_slots,
         "persistent_slots": persistent_slots,
         # review MEDIUM-d: LRU depth WITH the ring vs the hypothetical no-ring plan.
@@ -2916,6 +2960,22 @@ def _resolved_plan(runtime, args) -> dict | None:
             else "loader-default(top_k)"
         ),
     }
+
+
+def _receipt_plan_limit_bytes(receipt) -> int | None:
+    """Canonical engine budget, preserving old target/legacy receipt support."""
+    for block, key in (("resolved_plan", "memory_limit_bytes"),
+                       ("memory_cap", "engine_budget_bytes")):
+        value = (receipt.get(block) or {}).get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    memory = receipt.get("memory") or {}
+    for key in ("plan_limit_gib_effective", "plan_limit_gib_derived"):
+        value = memory.get(key)
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and value > 0):
+            return int(value * GIB)
+    return None
 
 
 def _load_model(args, bench, mx):
@@ -5264,26 +5324,29 @@ def main(argv=None) -> int:
         )
 
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.
+    parity_failed = False
     if len(receipts) >= 2:
         base = receipts[0]
-        # W106 HIGH-2: byte-identity across arms is only meaningful if every arm ran
-        # the SAME plan (same residency).  Assert equal plan_limit_gib_effective (or
-        # _derived) before trusting the comparison; a differing plan is flagged.
-        def _plan_of(r):
-            m = r.get("memory") or {}
-            return m.get("plan_limit_gib_effective", m.get("plan_limit_gib_derived"))
-        _base_plan = _plan_of(base)
-        _plans_equal = all(_plan_of(r) == _base_plan for r in receipts)
-        if not _plans_equal:
+        # Compare actual engine budgets in bytes. Schema-2 memory samples no
+        # longer carry the old GiB plan fields; absent metadata is unknown, not
+        # evidence that all arms used the same budget. Intentional budget/cache
+        # tradeoffs remain reportable, with their differing budgets explicit.
+        _plan_limits = [_receipt_plan_limit_bytes(r) for r in receipts]
+        _known_plan_limits = [value for value in _plan_limits if value is not None]
+        if len(set(_known_plan_limits)) > 1:
             print(
-                "[ab] WARN: arms ran DIFFERENT plan_limit values "
-                f"({[_plan_of(r) for r in receipts]}); byte-identity/tok-s across "
-                "arms is NOT comparable -- pin the plan with --memory-plan-from "
-                "<out-dir>/derived-plan.json for every arm after the first.",
+                "[ab] WARN: arms ran DIFFERENT plan_limit_bytes values "
+                f"({_plan_limits}); throughput also reflects this budget change. "
+                "Pin the plan with --memory-plan-from for an equal-budget comparison.",
                 flush=True,
             )
-        else:
-            print(f"[ab] plan reproducibility: all arms ran plan_limit={_base_plan}",
+        if len(_known_plan_limits) != len(_plan_limits):
+            print(
+                "[ab] WARN: plan_limit_bytes unknown for one or more arms "
+                f"({_plan_limits}); equal budgets cannot be established.", flush=True,
+            )
+        elif len(set(_known_plan_limits)) == 1:
+            print(f"[ab] plan reproducibility: all arms ran plan_limit_bytes={_plan_limits[0]}",
                   flush=True)
         for cand in receipts[1:]:
             identical = cand["token_ids_sha256"] == base["token_ids_sha256"]
@@ -5299,44 +5362,26 @@ def main(argv=None) -> int:
                 else f"[ab] {cand['arm']} vs {base['arm']}: byte_identical={identical}"
             )
             if not identical:
-                # W97 (review item 7): a rounding-class attention lever (the n=1 core
-                # compile / K29 tile reduction reassociates the fp32 softmax) can flip
-                # a greedy near-tie -- that is EXPECTED, not a broken exact lever, so
-                # it must not read as FAIL.  Every other arm keeps the FAIL.  Read the
-                # machine label off the receipt (fall back to deriving it, so an older
-                # receipt without the field still classifies).
-                cand_rc = cand.get("rounding_class")
-                if cand_rc is None:
-                    cand_rc = _is_rounding_class(cand["arm"])
-                if cand_rc:
-                    # Name the reason keys so the label is machine-checkable, not a
-                    # bare "expected".
-                    keys = cand.get("rounding_class_keys") or _rounding_class_keys(
-                        cand["arm"]
-                    )
-                    keys_str = ", ".join(keys) if keys else "?"
-                    # When the receipt already classified a divergence (the dspark
-                    # decode path records one), add the first divergence index and the
-                    # control top-2 logit margin there -- a tiny margin corroborates a
-                    # rounding tie ([[dsv41-inexact-ok-if-tie-flips]]).
-                    div = (cand.get("dspark") or {}).get("divergence")
-                    div_str = ""
-                    if isinstance(div, dict) and div.get("divergence_index") is not None:
-                        div_str = (
-                            f"; first divergence @ {div['divergence_index']}, "
-                            f"control top-2 logit margin {_fmt(div.get('ar_top2_margin'))} "
-                            f"(cand {_fmt(div.get('dspark_top2_margin'))})"
-                        )
+                # An unchanged rounding lever cannot explain a difference caused
+                # by another change. Use the pair's effective env, not the
+                # candidate's broad per-arm metadata. Bounded KV is unvalidated.
+                keys = _pairwise_rounding_class_keys(base, cand)
+                if keys:
+                    keys_str = ", ".join(keys)
+                    # A receipt's DSpark divergence compares that arm's AR and
+                    # speculative streams, not this base/candidate pair. Preserve
+                    # it in the receipt without misattributing its logit margins.
                     print(
                         f"[ab] {cand['arm']}: token-id sha differs -- expected "
-                        f"(rounding-class: {keys_str}){div_str}"
+                        f"(rounding-class: {keys_str})"
                     )
                 else:
+                    parity_failed = True
                     print(
                         f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
-                        "(the lever must be a pure execution reorder)"
+                        "(no validated changed rounding lever explains this pair)"
                     )
-    return 0
+    return 1 if parity_failed else 0
 
 
 if __name__ == "__main__":

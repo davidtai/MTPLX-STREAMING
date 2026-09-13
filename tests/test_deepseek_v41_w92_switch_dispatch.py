@@ -89,9 +89,7 @@ def _open_runtime(tmp_path, *, resident_slots, transient=_TOP_K, kv_tokens=0):
         memory_limit_bytes=(
             fixed + spec.persistent_cache_bytes(resident_slots) + kv_bytes
         ),
-        # No expert_cache_limit_bytes -> the derived single-limit policy (the
-        # deepseek-v41-mxfp4-75 profile), so admit/release_kv_tokens run
-        # _apply_derived_allowance (which takes every layer lock).
+        # No explicit cache cap: fixed slot storage is sized after maximum KV.
         max_live_kv_tokens=kv_tokens,
         runtime_reserve_bytes=0,
         transient_slots=transient,
@@ -518,17 +516,14 @@ def test_reroute_after_flush_byte_identical_to_control(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 def test_deferred_split_route_does_not_deadlock_kv_admission(tmp_path) -> None:
     # Under the arm, an M=1 miss route defers _DeferredSplitClose, which keeps the
-    # layer lock held until the next covering flush. On the derived-policy profile
-    # (no expert_cache_limit_bytes) admit_kv_tokens -> _apply_derived_allowance
-    # takes EVERY layer lock, so the generation thread would self-deadlock on the
-    # lock only a later forward would release. _apply_derived_allowance now flushes
-    # the deferred releases first; assert admit_kv_tokens completes off-thread <5s.
+    # layer lock held until the next covering flush. Maximum KV is already priced,
+    # so admission must complete without taking the deferred route's layer lock.
     import threading
 
     rt, spec = _open_runtime(tmp_path, resident_slots=10, transient=_TOP_K, kv_tokens=64)
     layer = spec.routed_layer_start
     try:
-        assert rt._derived_cache_policy, "test needs the derived single-limit policy"
+        assert not rt._derived_cache_policy
         _arm(False)
         sw = HotExpertSwitchGLU(rt, layer)
         for e in (0, 1, 2):
@@ -566,8 +561,8 @@ def test_deferred_split_route_does_not_deadlock_kv_admission(tmp_path) -> None:
 
 def test_deferred_split_kv_admission_completes_same_thread(tmp_path) -> None:
     # Same-thread variant: the generation thread ITSELF hits the KV boundary while
-    # holding a deferred split's layer lock (the real production shape). With the
-    # flush in _apply_derived_allowance this returns; without it, it self-deadlocks.
+    # holding a deferred split's layer lock (the real production shape). Static
+    # admission must leave that pending gather and its covering flush untouched.
     # A SIGALRM watchdog bounds the same-thread call so a regression fails loudly
     # instead of hanging the suite (SIGALRM fires only on the main thread, where
     # pytest runs without -n auto).
@@ -577,7 +572,7 @@ def test_deferred_split_kv_admission_completes_same_thread(tmp_path) -> None:
     layer = spec.routed_layer_start
     old_handler = signal.getsignal(signal.SIGALRM)
     try:
-        assert rt._derived_cache_policy
+        assert not rt._derived_cache_policy
         _arm(False)
         sw = HotExpertSwitchGLU(rt, layer)
         for e in (0, 1, 2):
@@ -597,8 +592,10 @@ def test_deferred_split_kv_admission_completes_same_thread(tmp_path) -> None:
                 pass
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)
-        # the KV boundary flushed the deferral (its own thread's), releasing the lock.
-        assert len(getattr(rt, "_deferred_slot_releases", [])) == 0
+        # Admission preserves the deferral; normal generation owns its flush.
+        assert len(getattr(rt, "_deferred_slot_releases", [])) == 1
+        assert rt._layer_locks[layer].locked()
+        rt.flush_deferred_slot_releases(evaluate=True)
         assert not rt._layer_locks[layer].locked()
     finally:
         signal.signal(signal.SIGALRM, old_handler)

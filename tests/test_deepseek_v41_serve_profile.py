@@ -138,14 +138,14 @@ def test_resolved_serve_config_no_flags() -> None:
     assert cfg.verify_record_hashes is False
     assert cfg.verify_sidecar_hash_at_open is False
     assert cfg.prefer_sidecar is True
-    # remainder ("derived") expert-cache policy: no explicit cache cap
+    # Fixed storage uses the remainder after maximum KV; no explicit cache cap.
     assert cfg.expert_cache_limit_bytes is None
-    assert cfg.derived_expert_cache_policy is True
+    assert cfg.derived_expert_cache_policy is False
     # islands are off (mxfp4 cannot serve dense/mmap islands)
     assert cfg.island_layers == ()
     assert cfg.island_layer_count is None
     assert cfg.mmap_island_layers == ()
-    # engram row cache 2 GiB via env in the profile child_env
+    # Engram row cache 256 MiB per bank via the profile child_env.
     assert profile.child_env.get("MTPLX_ENGRAM_CACHE_LIMIT") == "256MiB"
 
 

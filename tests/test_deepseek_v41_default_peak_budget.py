@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from mtplx import expert_runtime as runtime
-from mtplx.expert_streaming_models import get_model_spec, plan_expert_memory
+from mtplx.expert_streaming_models import get_model_spec
 
 GIB = 1024**3
 GB = 1_000_000_000
@@ -20,6 +20,7 @@ RESIDENT_BYTES = 15_103_104_448
 FIXED_BYTES = 23_521_727_936
 RECORD_BYTES = 18_800_640
 LAYERS = 40
+MAX_KV = 17_664
 
 # calibration-resident-uncached.jsonl and python-16k-1024-band16.jsonl;
 # source measurements include all prefill/decode active allocation peaks.
@@ -42,12 +43,18 @@ def test_default_slot_capacity_leaves_measured_peak_and_full_caches_under_110gb(
     spec = get_model_spec("deepseek-v41-flash-expert-mxfp4")
     # Use the real uniform-slot planner with the calibrated effective residents
     # (text-only discount plus installed wo_a cache), including its slot rounding.
-    plan = plan_expert_memory(
-        spec, total_limit_bytes=budget["engine_budget_bytes"], context_tokens=0,
+    config = runtime.ExpertStreamingConfig(
+        model_key=spec.key, memory_limit_bytes=budget["engine_budget_bytes"],
+        max_live_kv_tokens=MAX_KV, slot_layout="component-banks",
         runtime_reserve_bytes=7 * GIB, transient_slots=48,
+    )
+    plan = config.memory_plan(
+        spec,
         resident_discount_bytes=spec.resident_bytes - RESIDENT_BYTES,
     )
-    assert plan.fixed_bytes == FIXED_BYTES
+    # The calibrated active peak already includes real KV. The fixed-storage
+    # admission correction now reserves its configured maximum before sizing slots.
+    assert plan.fixed_bytes == FIXED_BYTES + MAX_KV * spec.kv_bytes_per_token
     assert spec.expert_record_bytes == RECORD_BYTES
     assert spec.routed_layer_count == LAYERS
     measured_persistent_bytes = measured_slots * LAYERS * RECORD_BYTES

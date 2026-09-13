@@ -79,6 +79,22 @@ class ExpertStreamingConfigurationError(ValueError):
     pass
 
 
+def validate_deepseek_v41_runtime_env(model_key: str) -> None:
+    """Reject unvalidated full-model lanes before load-time caps or allocations.
+
+    Read the actual process environment used by cache construction. Isolated cache
+    classes remain available for numerical investigation; this is installation-only.
+    """
+    if model_key.startswith("deepseek-v41") and (
+        os.environ.get("MTPLX_DSV41_KV_BOUNDED") or ""
+    ).strip().lower() in ("1", "true", "yes", "on"):
+        raise ExpertStreamingConfigurationError(
+            "MTPLX_DSV41_KV_BOUNDED has unvalidated Metal parity and cannot "
+            "be installed for DeepSeek-V4.1 streaming; disable it before "
+            "loading. Use isolated cache tests to investigate the lane."
+        )
+
+
 def _pipeline_call(
     ledger: ExpertPipelineLedger | None,
     route: ExpertPipelineRoute,
@@ -541,20 +557,16 @@ class ExpertStreamingConfig:
 
     @property
     def derived_expert_cache_policy(self) -> bool:
-        """Whether the expert-cache byte allowance is derived at runtime.
+        """Current layouts require a static maximum-context reservation.
 
-        With no explicit ``expert_cache_limit_bytes``, ``memory_limit_bytes``
-        is the single memory knob: the runtime recomputes the streamed
-        expert-cache allowance from it at every KV admission boundary instead
-        of reserving the whole ``max_live_kv_tokens`` context up front.  The
-        metal-mmap layout has no slot cache to budget, so it keeps the static
-        plan.
+        Direct slots and component banks allocate their full backing storage
+        at construction. Evicting an expert only changes its logical mapping;
+        it cannot fund growing KV storage. Reserve ``max_live_kv_tokens`` before
+        sizing either pool, including when no expert-cache cap is supplied.
+        The mapped layout also retains its existing static reservation.
         """
 
-        return (
-            self.expert_cache_limit_bytes is None
-            and self.slot_layout != "metal-mmap"
-        )
+        return False
 
     def memory_plan(
         self,
@@ -2761,6 +2773,7 @@ class ExpertStreamingRuntime:
         model_spec = get_model_spec(config.model_key) if spec is None else spec
         if model_spec.key != config.model_key:
             raise ExpertStreamingConfigurationError("config and spec model keys differ")
+        validate_deepseek_v41_runtime_env(config.model_key)
         # Optimization-profile enforcement (issue #99): knobs the profile
         # marks not_applicable fail loudly when explicitly forced. This
         # generalizes resident_loader's _verify_kv_quant_honored probe to
