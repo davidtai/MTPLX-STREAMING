@@ -144,6 +144,22 @@ slots to require about 115.21 GB when the measured active peak and full cache
 capacities are included. The revised defaults reserve 10 GiB for transients
 and bound the allocator cache to 2 GiB. At the same baseline, they admit 35
 slots per layer and project a 107.91 GB envelope. CPU regressions cover both
-benchmark and serving session-bank reservations. A guarded run at these new
-defaults is still required; the projection only covers the measured 16K AR
-geometry and does not establish safety for arbitrary contexts or MTP.
+benchmark and serving session-bank reservations. The guarded validation below covers the measured 16K AR geometry; it does
+not establish safety for arbitrary contexts or MTP.
+
+`python-16k-1024-defaults-*` validates source `1fbe425ca` with the same exact
+input and 1,024-token output cap. The guard measured a 47.1807 GB baseline;
+actual allocation was 35 slots per layer (1,400 total), 2 GiB Python capacity,
+2 GiB retained Metal cache and a 10 GiB transient band. Decode was **4.201765 TPS**
+over 243.469 s; prefill was 135.005 s. All 1,024 output token IDs are identical
+to the 27-slot control. This single paired observation is not repeatability
+evidence or fulfillment of the 20 TPS target.
+
+The true MLX active peak was **56,845,381,092 bytes**. The 250 ms external sampler
+observed **106,349,838,336 bytes** of physical usage and **58,733,392,096 bytes**
+of process footprint. The runner's 1 s sampler observed a lower physical peak
+(104.55 GB), demonstrating why every report labels its sampling method. Both
+raw traces are retained; do not replace one observation with the other or claim
+an instantaneous OS peak. Swapouts remained unchanged. The guard ran 332 tests
+plus seven subtests before the model and restored the exact service with
+background warmup complete afterward.

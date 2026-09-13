@@ -169,3 +169,12 @@ after actual slot rounding. This regression uses the true MLX active peak,
 full cache capacity, full Python reserve and measured baseline, not a sampled
 OS peak alone. These are workload-specific bounds; other shapes, MTP and larger
 explicit cache overrides still require their own headroom checks.
+
+The revised defaults completed the exact 16,384-input/1,024-output Python
+workload: 4.201765 decode TPS, identical output token IDs to the smaller-cache
+control, 56.845 GB MLX active peak, and 106.350 GB sampled physical peak from
+the 250 ms trace. The runner's 1 s trace observed 104.55 GB; both are correctly
+labeled sampled observations. No additional swapouts occurred, and the exact
+service returned healthy with completed warmup. See the default-run receipt
+summary for raw byte counts and provenance. This validates that workload,
+not the separate 20 TPS objective.
