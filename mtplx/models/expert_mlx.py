@@ -21,6 +21,9 @@ import numpy as np
 from mlx_lm.models.activations import swiglu
 
 from mtplx import expert_route_probe as _route_probe
+# W125 (red-team HIGH-1b): the decode timeline probe brackets the blocking gather
+# fence here so host_gap can subtract it. No-op unless MTPLX_DSV41_DECODE_TIMELINE=1.
+from mtplx import dsv41_decode_timeline as _tl
 from mtplx.models import deepseek_v41_stage_timing as _stime
 
 from mtplx.expert_io import PositionalExpertReader
@@ -2764,8 +2767,17 @@ class HotExpertSwitchGLU(nn.Module):
                     synchronous_fences=1,
                     synchronous_fence_slots=len(ready.bindings),
                 )
+            # W125 HIGH-1b: this blocking mx.eval is the routed-gather fence taken on
+            # the shipped regime (all-hit + fenced split path); it is GPU execution
+            # the host waits on, so the timeline records it as fence_total (subtracted
+            # from host_gap). self.layer_index is in scope (synchronous_fence is a
+            # closure of _run). No-op unless the probe is recording this decode token.
+            _tl_f = _tl.now()
             try:
-                mx.eval(values)
+                try:
+                    mx.eval(values)
+                finally:
+                    _tl.add_fence(self.layer_index, _tl_f)
             except BaseException as exc:
                 update_fence_metrics(ready, completion_fence_failures=1)
                 record = getattr(
