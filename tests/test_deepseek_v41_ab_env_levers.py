@@ -1318,6 +1318,45 @@ def test_cell16k_ring_composite_arms(env_levers):
 
 
 # --------------------------------------------------------------------------
+# W122 gate-prefetch-width pair: cell16k_ring_v2_attn_pf0 / _pf8 must each be an
+# EXACT copy of cell16k_ring_v2_attn plus a single pinned MTPLX_DSV41_GATE_PREFETCH,
+# so an edit to the base arm propagates and no stray key drifts into the pair.  The
+# width is a receipt-attributable A/B (off vs wide vs the k=6 v2 auto-arm), NOT a
+# rounding-class lever (prefetch only warms the cache on the true route).
+# --------------------------------------------------------------------------
+_GP = "MTPLX_DSV41_GATE_PREFETCH"
+
+
+def test_gate_prefetch_width_arms_w122(env_levers):
+    presets = env_levers.ARM_PRESETS
+    base = presets["cell16k_ring_v2_attn"]
+    for name in ("cell16k_ring_v2_attn_pf0", "cell16k_ring_v2_attn_pf8"):
+        assert name in presets, f"{name} arm missing from ARM_PRESETS"
+    # pf0 = base + gate_prefetch="0" (explicit off, wins over the v2 auto-arm ->
+    # _resolve_gate_prefetch_k == 0, byte-identical routing, no speculative traffic).
+    assert {
+        k: v for k, v in presets["cell16k_ring_v2_attn_pf0"].items()
+        if v != base.get(k)
+    } == {_GP: "0"}, "pf0 must be cell16k_ring_v2_attn + ONLY gate_prefetch=0"
+    # pf8 = base + gate_prefetch="8" (explicit wider predict width).
+    assert {
+        k: v for k, v in presets["cell16k_ring_v2_attn_pf8"].items()
+        if v != base.get(k)
+    } == {_GP: "8"}, "pf8 must be cell16k_ring_v2_attn + ONLY gate_prefetch=8"
+    # The base arm leaves the width UNPINNED (None) so the v2 runner auto-arms it;
+    # the pair pins it explicitly.  gate_prefetch is not a rounding-class key, so the
+    # pair inherits the base arm's rounding-class status UNCHANGED (both carry
+    # attn_fused_proj -> rounding-class; adding the width does not alter the class).
+    assert base.get(_GP) is None, "base arm must leave gate_prefetch unpinned (v2 auto-arm)"
+    assert _GP not in env_levers.ROUNDING_CLASS_ENVS, "gate_prefetch must not be rounding-class"
+    for name in ("cell16k_ring_v2_attn_pf0", "cell16k_ring_v2_attn_pf8"):
+        assert env_levers._rounding_class_keys(name) == \
+            env_levers._rounding_class_keys("cell16k_ring_v2_attn"), (
+            f"{name} rounding-class keys must match cell16k_ring_v2_attn (prefetch adds none)"
+        )
+
+
+# --------------------------------------------------------------------------
 # W97 (review item 7): rounding-class arm labelling.  A rounding-class attention
 # lever (the n=1 core compile / K29 fused decode kernel / K35 fused small stages)
 # reassociates the fp32 attention core, so a greedy near-tie can flip -- a token-id

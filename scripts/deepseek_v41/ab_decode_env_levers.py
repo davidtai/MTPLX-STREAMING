@@ -1296,6 +1296,58 @@ ARM_PRESETS = {
         runner="v2",
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
     ),
+    # W122 prefetch-width pair for the SSD roofline: cell16k_ring_v2_attn with the
+    # gate-oracle predict width PINNED explicitly (off vs wide), to isolate whether
+    # the v2 auto-armed prefetch is net-positive or is drowning the demand reads.
+    # MOTIVATION (W122 roofline census): under cell16k_ring_v2_attn the v2 runner
+    # auto-arms the gate-oracle at k=6 (MTPLX_DSV41_GATE_PREFETCH UNSET -> the runner
+    # default _RUNNER_V2_GATE_PREFETCH_K), and the census found prefetch is DOUBLING
+    # the SSD traffic without hiding the misses it costs:
+    #   * 1.428 GB/token total SSD read vs 0.711 GB/token DEMAND -- the speculative
+    #     reads are ~= the demand reads (a 2x traffic multiplier), yet
+    #   * the ring COMMIT rate is only 59% (41% of prefetched records are evicted
+    #     unconsumed -- wasted bandwidth), and
+    #   * the io reader pool runs at an effective queue depth of 1 (QD1): a
+    #     speculative read in flight BLOCKS the next demand read behind it, so the
+    #     prefetch is not just wasted bandwidth, it serializes ahead of the reads the
+    #     token actually needs.
+    # These two arms pin the width so a clean A/B (both vs cell16k_ring_v2_attn's
+    # k=6 auto-arm) measures: pf0 = prefetch fully OFF (does removing the 2x traffic /
+    # the QD1 head-of-line block recover decode?), pf8 = prefetch WIDER (does more
+    # lookahead raise the 59% commit rate enough to pay for the extra traffic?).
+    # SAME rounding class as cell16k_ring_v2_attn (both inherit attn_fused_proj, the
+    # only rounding-class key in the set); the added gate_prefetch key is ITSELF
+    # byte-identical -- the gate-oracle only WARMS the expert cache on the layer's TRUE
+    # route (a mispredict wastes a read, a hit saves a wait); the MoE still gathers on
+    # the true route, so neither width changes the routed math.
+    # NOTE (why the presets are REQUIRED, not ambient env): _apply_arm_env pops every
+    # key whose preset value is None, so an ambient MTPLX_DSV41_GATE_PREFETCH exported
+    # in the parent shell is CLEARED by cell16k_ring_v2_attn (its gate_prefetch=None)
+    # -- the width can only be pinned by a preset that carries the key.
+    # pf0: MTPLX_DSV41_GATE_PREFETCH=0 -> deepseek_v41._resolve_gate_prefetch_k returns
+    # 0 (a non-positive explicit value is OFF and, being explicit, WINS over the v2
+    # auto-arm) -> the ring is not issued, byte-identical routing with zero speculative
+    # traffic.
+    "cell16k_ring_v2_attn_pf0": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        gate_prefetch="0",
+    ),
+    # pf8: MTPLX_DSV41_GATE_PREFETCH=8 -> _resolve_gate_prefetch_k returns 8 (explicit,
+    # wins over the k=6 auto-arm) -> a WIDER one-layer-ahead predict set than the v2
+    # default; tests whether more lookahead lifts the 59% commit rate above the extra
+    # 2x traffic cost.
+    "cell16k_ring_v2_attn_pf8": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        gate_prefetch="8",
+    ),
     # W97F composite (DSpark): cell16k_ring_v2_draft + the SAME three attention keys as
     # cell16k_ring_v2_attn.  EXACT KEY SET (15 keys) = cell16k_ring_v2_draft's twelve
     #   layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
