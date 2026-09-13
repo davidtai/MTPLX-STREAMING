@@ -1,0 +1,17 @@
+{
+  "source_commit": "5c7661db48a1bed22cef753e336f9aba911add24",
+  "wrapper_sha256": "9fc40abc96482777affc82b0d51ff8f8f424c8b2fc4220390cca70df5e90b3ab",
+  "baseline_bytes": 10542000000.0,
+  "engine_budget_bytes": 85499356288,
+  "expected_slots_per_layer": 71,
+  "active_bound_bytes": 89532379884,
+  "physical_bound_bytes": 104369347180.0,
+  "wired_before_bytes": 3330424832,
+  "graph_and_capture_margin_bytes": 2147483648,
+  "maximum_raw_route_payload_bytes": 184140,
+  "target_verify_rows": 6,
+  "target_max_assignments": 36,
+  "shared_transient_slots": 48,
+  "requested_decode_steps": 1023,
+  "scope": "diagnostic only, native artifact and exact 16K/1024 Python workload; no AR pass or comparable TPS claim"
+}

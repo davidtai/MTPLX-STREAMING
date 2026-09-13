@@ -30,6 +30,39 @@ input tokens and 1,023 decode steps plus the first token emitted by prefill.
 
 # Plan Status
 
+## 78-slot exact workload and MTP locality, 2026-09-13 23:11 UTC
+
+- **Best full workload is now 9.498634789 decode TPS; 20 TPS remains unmet.**
+  Source `5c7661db48a1bed22cef753e336f9aba911add24` has unchanged production
+  model code from the prior full run. Exact 16,384-input/1,024-output Python
+  benchmark, native MTP block5, fanout4, pf0, original MXFP4 artifact.
+  Scoped benchmark transient planning band 11->6 GiB admits 78 target slots/layer
+  rather than72. Keep the general runner's conservative reserve for other shapes;
+  this candidate is bounded for the pinned workload, not a global default.
+- Full MTP decode107.699688s / 9.498635 TPS versus114.444762s / 8.938810 TPS,
+  **+6.262854%**. I/O 50,552 records/950,409,953,280B, down4,142 records
+  and77,872,250,880B. AR6.289236 TPS. Both complete AR and MTP ID streams equal
+  the prior full run; same tie_flip at297,206 MTP cycles,91.6388% acceptance.
+- MTP MLX peak91,897,033,560B. Physical full-workflow peak103,392,870,400B
+  (250ms samples,2,516 samples) versus108,632,200,780B static admission bound
+  and110e9 hard ceiling. Baseline10.2927GB,2GiB Python,2GiB allocator cache,
+  2GiB graph margin beyond exact slot delta; zero prefill saving credited.
+  Swapouts unchanged4,399,765; guard0, exact Qwen restored/warm and GPU lock free
+  independently checked. Receipt:
+  `docs/deepseek-v41/receipts/target-slot-band6-20260913/`.
+- Diagnostic full-length native MTP gate capture at71 target slots recorded
+  206 cycles /618 stage route arrays, with all1,024 IDs equal to the prior MTP
+  run. MTP stages used93/58/32 distinct experts; a hypothetical cold LRU bank
+  of72/48/24 slots would free exactly6 target slots/layer but add213 draft
+  record reads/4.0045GB plus three new host routing barriers/cycle. No MTP
+  streaming implementation or speed claim; bounded source reads and native
+  ownership remain required. Receipt:
+  `docs/deepseek-v41/receipts/mtp-route-capture-20260913/`.
+- Next: profile target verify's non-I/O work and screen a deployable cache policy
+  against actual MTP verification routes; AR-only clairvoyant curves are
+  opportunity bounds, not MTP proof. Avoid another full run for minor slot gains;
+  78 slots already uses the conservative physical admission band.
+
 ## Block-6 screen, 2026-09-13 22:44 UTC
 
 - **Best full workload remains 8.938810168 TPS; 20 TPS remains unmet.**
