@@ -1907,8 +1907,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--box-budget-gib",
         type=float,
         default=None,
-        help="TOTAL box-use budget GiB the plan is derived from (default: "
-        "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
+        help="Explicit legacy total box-use budget in GiB. When omitted, "
+        "the default allocation uses --box-target-gb (110 decimal GB).",
     )
     # Target and baseline are decimal GB; cache/reserve overrides are GiB.
     p.add_argument("--box-target-gb", type=float, default=None, metavar="GB",
@@ -1927,7 +1927,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="GIB",
         help="MLX freed-buffer cache bound in GiB (set_cache_limit); reserved out of "
-        "the engine budget so the LRU holds across misses (default 6, "
+        "the engine budget so the LRU holds across misses (target-mode default 2, "
         "MTPLX_DSV41_MLX_CACHE_LIMIT_GIB).",
     )
     p.add_argument(
@@ -1937,7 +1937,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="GIB",
         help="active memory at decode start ABOVE the plan (active_start - plan) in GiB; "
         "with the cache room it bounds the decode-regime reserve max(band, active + cache) "
-        "(default 1.44, MTPLX_DSV41_ACTIVE_OVERSHOOT_GIB).",
+        "(target-mode default 1.45, MTPLX_DSV41_ACTIVE_OVERSHOOT_GIB).",
     )
     p.add_argument(
         "--transient-band-gib",
@@ -1945,8 +1945,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="GIB",
         help="prefill/decode transient band in GiB (mlx_peak - active_at_decode_start) "
-        "reserved below the allocator limit when sizing the persistent slots (default "
-        "4.1, MTPLX_DSV41_TRANSIENT_BAND_GIB).",
+        "reserved below the allocator limit when sizing the persistent slots "
+        "(target-mode default 10, MTPLX_DSV41_TRANSIENT_BAND_GIB).",
     )
     p.add_argument(
         "--mlx-limit-headroom-gib",

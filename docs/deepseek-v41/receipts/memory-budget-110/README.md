@@ -283,5 +283,27 @@ in both the normal and all-hit planners. Subsequent prefill chunks remain fully
 protected, and a new request can seed its whole pool again. The existing
 transaction snapshots restore the phase and protection on rollback. Five focused
 CPU regression cases reproduced the missing transition before the fix; those
-and 37 existing policy cases pass with MLX imports blocked. Full-run performance
-validation of the transition is pending.
+and 37 existing policy cases pass with MLX imports blocked. The full-run result
+below completes this transition's workload check.
+
+### Full-run result for the transition fix
+
+`python-16k-1024-pool-transition`, source `d25825554`, completed the exact full
+workload at **6.535996 TPS**, with 136.356 s prefill and 156.518 s decode.
+The live 10.7453 GB baseline admitted 83 slots/layer. This is 4.05% faster than
+the prior 84-slot run and 55.55% faster than the original 35-slot run, although
+changing baseline/capacity means it is not an isolated same-capacity A/B.
+All 1,024 output IDs match the prior controls. Decode streamed 42,368 records
+(41.415/token), with 64.000 ms/token of I/O windows at 12.166 GB/s.
+
+The external 250 ms sampler retained 1,133 samples: **106,063,642,624 B physical
+peak** and 94,845,375,960 B process-footprint peak. MLX active peak was
+92,947,785,768 B. The guard exited 0, restored healthy Qwen with warmup complete,
+and released the lock; those states were independently verified. Swapouts
+remained 4,399,765 pages. The 20 TPS goal is still unmet.
+
+The storage-delta active-memory projection underpredicted this active peak by
+5,175,876 B. The full 10 GiB transient/cache reserve still covered the observed
+active overhang plus the 2 GiB cache, and physical usage remained below 110 GB.
+Keep the original bounds receipt unchanged; future capacity extrapolations need
+an explicit allowance for graph-workspace variation, not just persistent bytes.

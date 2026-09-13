@@ -41,7 +41,7 @@ raises, verified with a fake device and no MLX import.
 
 # Evidence
 
-- Integration branch: `feat/deepseek-v41-streaming`; current committed head
+- Integration branch: `feat/deepseek-v41-streaming`; historical source
   `f743d1bdc` produced the corrected-run diagnostic. Source `1fbe425ca`
   produced the clean default-budget run; see git log for later receipt commits.
 - `docs/deepseek-v41/receipts/memory-budget-110/` contains raw receipts, OS
@@ -63,6 +63,14 @@ raises, verified with a fake device and no MLX import.
   The output is a capped Python diff, not validated generated code.
 - Prompt SHA:
   `38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2`.
+- Current best, source `d25825554`, after decode pool transition repair:
+  **6.535995651 TPS**, 83 slots/layer, 136.356 s prefill, 156.518 s decode,
+  106,063,642,624 B external physical peak, 92,947,785,768 B MLX active peak.
+  All 1,024 IDs equal the controls; no added swapouts. Guard exited 0 at 11:35:02
+  UTC, restored Qwen/warmup and released the lock by 11:35:19, independently
+  verified afterward. No GPU child remains. Full receipt prefix:
+  python-16k-1024-pool-transition. Gain is 55.55% over35 slots and 4.05% over84,
+  but this is not an isolated same-capacity A/B. The goal remains unmet.
 - Prior guarded bundle: 332 tests plus 7 subtests. New fixed-storage/request
   fixes: 315 CPU tests, actual MLX imports blocked; 15 new cases independently
   rechecked. Construction/parity reporting: 32 focused regressions; combined integration
@@ -153,8 +161,15 @@ raises, verified with a fake device and no MLX import.
   _begin_pool_decode now trims once on the first decode route (normal/all-hit);
   transaction rollback and next-request reopening preserve prior semantics.
   Five targeted regressions plus 37 existing CPU policy tests pass with real
-  MLX imports blocked. Independent scoped review found no issues. A clean full
-  run is next; do not claim a throughput gain for this transition yet.
+  MLX imports blocked. Independent scoped review found no issues. The clean full
+  run above confirms useful throughput with all output IDs equal. Decode misses
+  are 42368 (41.415/token), versus44848 (43.840/token) in the84-slot control.
+  I/O windows63.9998ms/token at12.1662GB/s, not an additive critical-path split.
+  The old storage-delta active projection underpredicted active peak by5,175,876B;
+  full10GiB transient/cache reserve still covered active overhang plus2GiBcache.
+  Future full-model capacity bounds must allow graph-workspace variation explicitly.
+  Historical raw bounds stay unchanged. CLI help now names the actual target-mode
+  defaults:110GB total,2GiB allocator cache,10GiB transient band,1.45GiB overshoot.
 - Historical work already checked: window-16 switch_fastpath_b was only
   4.1339 vs 4.0191 TPS on its older 1K prompt; W127b saw <=2.5% at16K.
   Window-17 native mxfp4 full-MLP microbench was 417.083 us at M1, convention

@@ -1,0 +1,11 @@
+{
+  "source_commit": "d2582555402e0c727d14d69983f449edc44ab6c3",
+  "wrapper_sha256": "40f022d1eb3d82530545d1cc802c0a27b2638d6c8f55895df066b17af7a766bc",
+  "baseline_bytes": 10745300000.0,
+  "engine_budget_bytes": 86369798112,
+  "expected_slots_per_layer": 83,
+  "active_bound_bytes": 92942609892,
+  "physical_bound_bytes": 107982877188.0,
+  "wired_before_bytes": 3518447616,
+  "scope": "same 16K/1023-step AR pf0 forward geometry; exact persistent delta beyond conservative 72-slot peak projection; full 2GiB allocator cache and 2GiB Python capacity; 10GiB transient reserve"
+}
