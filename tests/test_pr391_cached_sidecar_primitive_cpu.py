@@ -19,6 +19,8 @@ HEADER = EXT / "cached_sidecar_primitive.h"
 BINDINGS = EXT / "bindings.cpp"
 CMAKE = EXT / "CMakeLists.txt"
 PACKAGE = EXT / "mtplx_native_ple_cpu_rows" / "__init__.py"
+DEFERRED_HEADER = EXT / "deferred_ar_rows.h"
+DEFERRED_SOURCE = EXT / "deferred_ar_rows.cpp"
 
 
 def _body(source: str, marker: str) -> str:
@@ -156,3 +158,29 @@ def test_cached_primitive_header_keeps_ticket_and_completion_surface_mlxfree_bou
     assert "CachedRowHandoff" in header
     assert "drain_cached_completions" in header
     assert "CachedRowsArrays" in header
+
+
+def test_deferred_ar_rows_are_mlx_owned_prebound_leaves():
+    assert DEFERRED_HEADER.is_file()
+    assert DEFERRED_SOURCE.is_file()
+    header = DEFERRED_HEADER.read_text(encoding="utf-8")
+    source = DEFERRED_SOURCE.read_text(encoding="utf-8")
+    cmake = CMAKE.read_text(encoding="utf-8")
+    bindings = BINDINGS.read_text(encoding="utf-8")
+    package = PACKAGE.read_text(encoding="utf-8")
+
+    assert "deferred_ar_rows.cpp" in cmake
+    assert "DeferredArRows" in source
+    assert "mx::Shape{16, 20}" in source
+    assert source.count("mx::Shape{16, 5}") >= 2
+    assert source.count("mx::allocator::malloc") == 4
+    assert source.count("std::memset") == 4
+    assert source.count("std::memcpy") == 3
+    assert "filled_" not in header
+    assert "already filled" not in source
+    assert '"make_deferred_ar_rows"' in bindings
+    assert '"make_deferred_ar_token"' in bindings
+    assert '"planes"' in bindings
+    assert '"fill"' in bindings
+    assert "make_deferred_ar_rows" in package
+    assert "make_deferred_ar_token" in package

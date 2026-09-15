@@ -153,6 +153,14 @@ class _FakeNative:
         self.trace.append(("install_provider", io_workers))
         return self.provider
 
+    @staticmethod
+    def make_deferred_ar_rows():
+        raise AssertionError("the AR leaf factory is lazy and must not run at install")
+
+    @staticmethod
+    def make_deferred_ar_token():
+        raise AssertionError("the AR token factory is lazy and must not run at install")
+
     def compute_cached_row_ids(self, provider, previous, current):
         assert provider is self.provider
         current = tuple(int(value) for value in current)
@@ -249,6 +257,7 @@ def _fixture(*, capacity: int = 8):
             np.arange(16, dtype=np.int64) + 32,
             np.arange(16, dtype=np.int64) * 4,
         ),
+        _rows_np=lambda ids, previous: (ids, previous),
     )
     inner = SimpleNamespace(
         _ple_stage_idx=0,
@@ -308,8 +317,23 @@ def test_module_import_is_cpu_only_and_keeps_native_api_deferred():
         "compute_cached_row_ids",
         "make_cached_sidecar_rows",
         "drain_cached_completions",
+        "make_deferred_ar_rows",
+        "make_deferred_ar_token",
     ):
         assert name in module.NATIVE_CACHED_PROVIDER_API
+
+
+def test_install_binds_streamed_ar_route_to_the_validated_embedding():
+    fixture = _fixture()
+    runtime, installation, _mx, _native, _sidecar, _trace, _builds, source = _install(
+        fixture
+    )
+    try:
+        embedding = runtime.inner.layers[0].ple.ple_embedding
+        assert embedding._streamed_ar_ple is installation.streamed_ar
+        assert installation.streamed_ar.pending is False
+    finally:
+        source.close()
 
 
 @pytest.mark.parametrize("sync", (False, True))

@@ -113,6 +113,7 @@ target_sources(
   PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/cached_sidecar_primitive.cpp
     ${CMAKE_CURRENT_LIST_DIR}/cached_sidecar_producer.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/deferred_ar_rows.cpp
     ${CMAKE_CURRENT_LIST_DIR}/ple_cpu_rows.cpp
     ${CMAKE_CURRENT_LIST_DIR}/sidecar_primitive.cpp
     ${CMAKE_CURRENT_LIST_DIR}/sidecar_producer.cpp

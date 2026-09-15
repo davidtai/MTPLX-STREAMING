@@ -19331,6 +19331,8 @@ PUBLIC_MTPLX_STATS_KEYS = (
     "runtime_mtp_enabled",
     "draft_head_installed",
     "ar_return_hidden",
+    "ar_pipeline_active",
+    "ar_pipeline_variant",
     "forward_ar_hidden_calls",
     "forward_ar_plain_calls",
     "mtp_forward_calls",

@@ -31,6 +31,8 @@ NATIVE_CACHED_PROVIDER_API = frozenset(
         "compute_cached_row_ids",
         "make_cached_sidecar_rows",
         "drain_cached_completions",
+        "make_deferred_ar_rows",
+        "make_deferred_ar_token",
     }
 )
 _EMPTY_PACKED_MISSES = np.empty(
@@ -190,6 +192,7 @@ class CachedAuxInstallation:
     provider: Any
     auxiliary_stream: Any
     _state: Any
+    streamed_ar: Any
 
     @property
     def pending_count(self) -> int:
@@ -449,6 +452,8 @@ def _install_cached_builder(
         "compute_cached_row_ids",
         "make_cached_sidecar_rows",
         "drain_cached_completions",
+        "make_deferred_ar_rows",
+        "make_deferred_ar_token",
     )
     if any(not callable(getattr(native_module, name, None)) for name in required):
         raise ValueError("cached native PLE provider API is incomplete")
@@ -470,6 +475,28 @@ def _install_cached_builder(
         make_cached_sidecar_rows=native_module.make_cached_sidecar_rows,
         drain_cached_completions=native_module.drain_cached_completions,
     )
+    from .ple_streamed_ar import StreamedArPle
+
+    def gather_ar_planes(flat: np.ndarray):
+        matrices = sidecar._rows_matrices(flat, _PLANE_NAMES)
+        return (
+            np.ascontiguousarray(matrices["weight"], dtype=np.uint32),
+            np.ascontiguousarray(matrices["scales"], dtype=np.uint16),
+            np.ascontiguousarray(matrices["biases"], dtype=np.uint16),
+        )
+
+    streamed_ar = StreamedArPle(
+        native_module=native_module,
+        mx_module=mx_module,
+        rows=embedding._rows_np,
+        gather_planes=gather_ar_planes,
+        eos_id=embedding.eos_id,
+        context_len=embedding.context_len,
+        output_dim=contract["output_dim"],
+        bits=sidecar.bits,
+        group_size=sidecar.group_size,
+    )
+    embedding._streamed_ar_ple = streamed_ar
     auxiliary_stream = mx_module.new_stream(mx_module.gpu)
     previous_tokens = stock_module._fixed_m4_previous_tokens
     stock_aux_type = stock_module._FixedM4SidecarAux
@@ -500,7 +527,7 @@ def _install_cached_builder(
             raise
 
     runtime.build_fixed_m4_compiled_verify_aux = build
-    return CachedAuxInstallation(provider, auxiliary_stream, state)
+    return CachedAuxInstallation(provider, auxiliary_stream, state, streamed_ar)
 
 
 def install_fixed_m4_cached_aux_builder(

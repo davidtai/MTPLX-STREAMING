@@ -5545,6 +5545,9 @@ class NGramEmbedding(nn.Module):
                     :, -self.context_len :
                 ]
             return compiled
+        streamed_ar = getattr(self, "_streamed_ar_active", None)
+        if streamed_ar is not None:
+            return streamed_ar.build(input_ids, cache, state_idx)
         staged = getattr(self, "_staged", None)
         if staged is not None:
             self._staged = None
@@ -6557,28 +6560,93 @@ class Model(nn.Module):
             )
 
     def set_ar_pipeline_mode(self, enabled: bool) -> bool:
-        """Flip the family into (or out of) the pipelined-AR decode contract:
-        n-gram staging off + in-graph mmap-lazy gathers, so a forward built
-        on LAZY token ids records no host sync. Returns False when the lazy
-        table binding is unavailable (lane must not engage)."""
-        ready = True
+        """Flip the family into the installed pipelined-AR decode route.
+
+        A resident table keeps the original in-graph lazy gather.  A streamed
+        table uses a deferred packed-row leaf installed by ``ple_cached_aux``.
+        Route selection is completed before any layer state is changed.
+        """
+        routes = []
+        token_factory = None
         for layer in self.layers:
             if "ple" not in layer:
                 continue
             emb = layer.ple.ple_embedding
             table = emb.ngram_embedding
-            if enabled and getattr(table, "_lazy_parts", None) is None:
-                ready = False
-                continue
-            emb._stage_disabled = bool(enabled)
-            table.prefer_lazy = bool(enabled)
-        if ready:
-            model = self.language_model.model
-            if not getattr(model, "_gdn_compile_explicit_off", False):
-                model._gdn_compiled_lane = bool(enabled)
+            if enabled:
+                streamed = getattr(emb, "_streamed_ar_ple", None)
+                candidate_factory = getattr(streamed, "make_token", None)
+                if not callable(candidate_factory):
+                    return False
+                if token_factory is None:
+                    token_factory = candidate_factory
+                if getattr(table, "_lazy_parts", None) is not None:
+                    routes.append((emb, table, "resident", None))
+                    continue
+                routes.append((emb, table, "streamed", streamed))
             else:
-                model._gdn_compiled_lane = False
-        return ready
+                routes.append(
+                    (
+                        emb,
+                        table,
+                        getattr(emb, "_ar_pipeline_route", None),
+                        getattr(emb, "_streamed_ar_active", None),
+                    )
+                )
+
+        if enabled and (not routes or token_factory is None):
+            return False
+
+        # Validate every phase transition before publishing any route fields.
+        for _emb, _table, route, streamed in routes:
+            if route == "streamed" and streamed is not None:
+                streamed.set_active(bool(enabled))
+
+        flushers = []
+        discarders = []
+        for emb, table, route, streamed in routes:
+            if route == "streamed" and streamed is not None:
+                if enabled:
+                    flushers.append(streamed.flush)
+                    discarders.append(streamed.discard)
+            emb._streamed_ar_active = (
+                streamed if enabled and route == "streamed" else None
+            )
+            emb._ar_pipeline_route = route if enabled else None
+            emb._stage_disabled = bool(enabled)
+            table.prefer_lazy = bool(enabled and route == "resident")
+
+        variants = {route for _emb, _table, route, _streamed in routes}
+        self._ar_pipeline_variant = (
+            next(iter(variants)) if enabled and len(variants) == 1 else ""
+        )
+        self._ar_pipeline_token_factory = token_factory if enabled else None
+        self._ar_pipeline_ple_flushers = tuple(flushers)
+        self._ar_pipeline_ple_discarders = tuple(discarders)
+
+        model = self.language_model.model
+        if not getattr(model, "_gdn_compile_explicit_off", False):
+            model._gdn_compiled_lane = bool(enabled)
+        else:
+            model._gdn_compiled_lane = False
+        return True
+
+    def make_ar_pipeline_token(self):
+        """Return a fresh token leaf from the installed pipeline contract."""
+
+        return self._ar_pipeline_token_factory()
+
+    def flush_ar_pipeline_ple(self) -> None:
+        """Fill the streamed PLE leaf before its consumer is submitted."""
+
+        for flush in self._ar_pipeline_ple_flushers:
+            flush()
+
+    def discard_ar_pipeline_ple(self) -> None:
+        """Discard an unsubmitted streamed leaf after a failed graph build."""
+
+        for discard in self._ar_pipeline_ple_discarders:
+            discard()
 
     # -- family capture-commit (repair-free verify rollback) ----------------
 
