@@ -729,6 +729,7 @@ _PLE_CPU_ROWS_REQUIRED = (
     "make_cached_sidecar_rows",
     "drain_cached_completions",
     "make_deferred_ar_rows",
+    "make_deferred_ar_token",
 )
 
 

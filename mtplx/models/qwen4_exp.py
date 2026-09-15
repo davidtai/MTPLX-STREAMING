@@ -6567,18 +6567,22 @@ class Model(nn.Module):
         Route selection is completed before any layer state is changed.
         """
         routes = []
+        token_factory = None
         for layer in self.layers:
             if "ple" not in layer:
                 continue
             emb = layer.ple.ple_embedding
             table = emb.ngram_embedding
             if enabled:
+                streamed = getattr(emb, "_streamed_ar_ple", None)
+                candidate_factory = getattr(streamed, "make_token", None)
+                if not callable(candidate_factory):
+                    return False
+                if token_factory is None:
+                    token_factory = candidate_factory
                 if getattr(table, "_lazy_parts", None) is not None:
                     routes.append((emb, table, "resident", None))
                     continue
-                streamed = getattr(emb, "_streamed_ar_ple", None)
-                if streamed is None:
-                    return False
                 routes.append((emb, table, "streamed", streamed))
             else:
                 routes.append(
@@ -6590,9 +6594,21 @@ class Model(nn.Module):
                     )
                 )
 
-        for emb, table, route, streamed in routes:
+        if enabled and (not routes or token_factory is None):
+            return False
+
+        # Validate every phase transition before publishing any route fields.
+        for _emb, _table, route, streamed in routes:
             if route == "streamed" and streamed is not None:
                 streamed.set_active(bool(enabled))
+
+        flushers = []
+        discarders = []
+        for emb, table, route, streamed in routes:
+            if route == "streamed" and streamed is not None:
+                if enabled:
+                    flushers.append(streamed.flush)
+                    discarders.append(streamed.discard)
             emb._streamed_ar_active = (
                 streamed if enabled and route == "streamed" else None
             )
@@ -6604,6 +6620,9 @@ class Model(nn.Module):
         self._ar_pipeline_variant = (
             next(iter(variants)) if enabled and len(variants) == 1 else ""
         )
+        self._ar_pipeline_token_factory = token_factory if enabled else None
+        self._ar_pipeline_ple_flushers = tuple(flushers)
+        self._ar_pipeline_ple_discarders = tuple(discarders)
 
         model = self.language_model.model
         if not getattr(model, "_gdn_compile_explicit_off", False):
@@ -6612,25 +6631,22 @@ class Model(nn.Module):
             model._gdn_compiled_lane = False
         return True
 
+    def make_ar_pipeline_token(self):
+        """Return a fresh token leaf from the installed pipeline contract."""
+
+        return self._ar_pipeline_token_factory()
+
     def flush_ar_pipeline_ple(self) -> None:
         """Fill the streamed PLE leaf before its consumer is submitted."""
 
-        for layer in self.layers:
-            if "ple" not in layer:
-                continue
-            streamed = getattr(layer.ple.ple_embedding, "_streamed_ar_active", None)
-            if streamed is not None:
-                streamed.flush()
+        for flush in self._ar_pipeline_ple_flushers:
+            flush()
 
     def discard_ar_pipeline_ple(self) -> None:
         """Discard an unsubmitted streamed leaf after a failed graph build."""
 
-        for layer in self.layers:
-            if "ple" not in layer:
-                continue
-            streamed = getattr(layer.ple.ple_embedding, "_streamed_ar_active", None)
-            if streamed is not None:
-                streamed.discard()
+        for discard in self._ar_pipeline_ple_discarders:
+            discard()
 
     # -- family capture-commit (repair-free verify rollback) ----------------
 

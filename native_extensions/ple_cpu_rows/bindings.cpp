@@ -182,9 +182,19 @@ NB_MODULE(_ext, m) {
           "scales"_a,
           "biases"_a);
 
+  nb::class_<mtplx_native::ple_cpu_rows::DeferredArToken>(m, "DeferredArToken")
+      .def("array", &mtplx_native::ple_cpu_rows::DeferredArToken::array)
+      .def("fill",
+           &mtplx_native::ple_cpu_rows::DeferredArToken::fill,
+           "token"_a);
+
   m.def("make_deferred_ar_rows",
         &mtplx_native::ple_cpu_rows::DeferredArRows::make,
-        "Create one zero-filled, single-use S=1 packed-row leaf set.");
+        "Create one fresh zero-filled S=1 packed-row leaf set.");
+
+  m.def("make_deferred_ar_token",
+        &mtplx_native::ple_cpu_rows::DeferredArToken::make,
+        "Create one fresh zero-filled int64 AR token leaf.");
 
   m.def(
       "install_sidecar_provider",

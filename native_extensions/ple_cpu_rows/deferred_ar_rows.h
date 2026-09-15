@@ -18,6 +18,22 @@ constexpr std::size_t kArMetadataValues = kArRows * 5;
 
 using DeferredArPlanes = std::tuple<mx::array, mx::array, mx::array>;
 
+class DeferredArToken final {
+ public:
+  static std::shared_ptr<DeferredArToken> make();
+
+  DeferredArToken(const DeferredArToken&) = delete;
+  DeferredArToken& operator=(const DeferredArToken&) = delete;
+
+  mx::array array() const;
+  void fill(std::int64_t token);
+
+ private:
+  DeferredArToken();
+
+  mx::array token_;
+};
+
 class DeferredArRows final {
  public:
   static std::shared_ptr<DeferredArRows> make();
@@ -36,7 +52,6 @@ class DeferredArRows final {
   mx::array weights_;
   mx::array scales_;
   mx::array biases_;
-  bool filled_ = false;
 };
 
 }  // namespace mtplx_native::ple_cpu_rows

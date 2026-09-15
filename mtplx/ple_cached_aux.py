@@ -32,6 +32,7 @@ NATIVE_CACHED_PROVIDER_API = frozenset(
         "make_cached_sidecar_rows",
         "drain_cached_completions",
         "make_deferred_ar_rows",
+        "make_deferred_ar_token",
     }
 )
 _EMPTY_PACKED_MISSES = np.empty(
@@ -452,6 +453,7 @@ def _install_cached_builder(
         "make_cached_sidecar_rows",
         "drain_cached_completions",
         "make_deferred_ar_rows",
+        "make_deferred_ar_token",
     )
     if any(not callable(getattr(native_module, name, None)) for name in required):
         raise ValueError("cached native PLE provider API is incomplete")

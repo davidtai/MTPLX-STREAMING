@@ -5212,39 +5212,6 @@ def _sample_from_logits(
     return sample_from_distribution(probs, rng), probs
 
 
-def _mx_lazy_sample(row: mx.array, config: SamplerConfig, key: mx.array) -> mx.array:
-    """Device-side shaped sampling (temp -> top-k -> top-p -> categorical)
-    returning a LAZY scalar token array — the pipelined-AR lane's sampler.
-
-    Shaping is distribution-identical to the CPU sampler; the randomness
-    stream is mx.random keyed from the request seed instead of the numpy
-    generator, so runs stay deterministic per seed but the streams differ.
-    Callers gate on temperature > 0 and 1 < top_k < vocab.
-
-    The top-k selection runs on the model dtype (half the bytes over the
-    248k vocab); only the k survivors are cast to fp32 for temperature,
-    top-p and the draw — bf16 argpartition ranks by value exactly.
-    """
-    k = int(config.top_k or 0)
-    top_idx = mx.argpartition(-row, kth=k - 1)[:k]
-    logits = mx.take(row, top_idx).astype(mx.float32) * (
-        1.0 / max(float(config.temperature), 1e-6)
-    )
-    top_vals = logits
-    top_p = float(config.top_p or 1.0)
-    if 0.0 < top_p < 1.0:
-        order = mx.argsort(-top_vals)
-        sv = mx.take(top_vals, order)
-        sp = mx.softmax(sv)
-        # nucleus keep-rule incl. the first probability that crosses top_p
-        keep_n = mx.maximum(mx.sum((mx.cumsum(sp) - sp) < top_p), 1)
-        sv = mx.where(mx.arange(k) < keep_n, sv, mx.array(float("-inf")))
-        local = mx.random.categorical(sv[None], key=key)[0]
-        return mx.take(top_idx, mx.take(order, local))
-    local = mx.random.categorical(top_vals[None], key=key)[0]
-    return mx.take(top_idx, local)
-
-
 def _greedy_draft_token_and_top_values(
     logits: mx.array,
     *,
@@ -6857,16 +6824,16 @@ def generate_ar(
     ) or bool(os.environ.get("MTPLX_EVAL_AUDIT"))
 
     # ---- Pipelined AR lane (MTPLX_AR_PIPELINE) ---------------------------
-    # Software pipeline over the decode stream: sampling runs INSIDE the lazy
-    # graph (_mx_lazy_sample), so step k+1's graph is built on step k's
-    # still-lazy sampled token while the GPU executes step k. A token's KV is
-    # only ever written by the forward that consumes it, and only committed
-    # tokens are consumed — the cache never runs ahead of the committed
-    # sequence, so there is no rollback machinery. Guards observe at commit
+    # Software pipeline over the decode stream. Step k+1's graph is built on a
+    # native mutable token leaf while the GPU executes step k. The original
+    # CPU sampler then materializes step k with the request's NumPy RNG, fills
+    # that leaf, and submits its already-built consumer. This preserves the
+    # classic sampler arithmetic and random stream exactly while overlapping
+    # graph construction. A token's KV is written only by the forward that
+    # consumes it, so the cache never needs rollback. Guards observe at commit
     # (lag <= 1 step); when one arms, the lane drains into the classic loop
     # with its exact entry invariant (logits row + cache both at the last
-    # committed token). Engages only on models that publish
-    # set_ar_pipeline_mode (qwen4_exp: staging off + in-graph mmap gathers).
+    # committed token).
     _lane_committed = 0
     _lane_finished = False
     _lane_cache_has_final = False
@@ -6874,6 +6841,7 @@ def generate_ar(
     _lane_mode_off = None
     _lane_flush_ple = None
     _lane_discard_ple = None
+    _lane_make_token = None
     _lane_variant = ""
     if (
         _env_truthy("MTPLX_AR_PIPELINE")
@@ -6889,10 +6857,15 @@ def generate_ar(
             _lane_mode_off = _set_lane_mode
             _lane_flush_ple = getattr(rt.model, "flush_ar_pipeline_ple", None)
             _lane_discard_ple = getattr(rt.model, "discard_ar_pipeline_ple", None)
-            if not callable(_lane_flush_ple) or not callable(_lane_discard_ple):
+            _lane_make_token = getattr(rt.model, "make_ar_pipeline_token", None)
+            if (
+                not callable(_lane_flush_ple)
+                or not callable(_lane_discard_ple)
+                or not callable(_lane_make_token)
+            ):
                 _set_lane_mode(False)
                 raise RuntimeError(
-                    "pipelined AR model must provide PLE flush/discard hooks"
+                    "pipelined AR model must provide token and PLE flush/discard hooks"
                 )
             _lane_variant = str(
                 getattr(rt.model, "_ar_pipeline_variant", "unknown")
@@ -6900,7 +6873,6 @@ def generate_ar(
     if _lane_mode_off is not None:
         try:
             events.append({"ar_pipeline": True})
-            _lane_key = mx.random.key(int(seed) & 0x7FFFFFFF)
             token, _ = _sample_from_logits(logits[0], sampler, rng)
             tokens.append(token)
             emit_token(token)
@@ -6910,29 +6882,28 @@ def generate_ar(
                 _lane_finished = True
             else:
 
-                def _lane_step(tok_lazy: mx.array) -> tuple[mx.array, mx.array]:
-                    nonlocal _lane_key
-                    _lane_key, sub = mx.random.split(_lane_key)
+                def _lane_forward(token_array: mx.array) -> mx.array:
                     with attention_phase("ar_decode"):
-                        out = rt.forward_ar(tok_lazy.reshape(1, 1), cache=cache)
-                    row = out[:, -1, :]
-                    nxt = _mx_lazy_sample(row[0], sampler, sub)
-                    return row, nxt
+                        out = rt.forward_ar(token_array.reshape(1, 1), cache=cache)
+                    return out[:, -1, :]
 
                 started = time.perf_counter()
-                row_lazy, tok_lazy = _lane_step(mx.array([token]))
+                row_current = _lane_forward(mx.array([token]))
                 target_forward_graph_time += time.perf_counter() - started
                 _lane_flush_ple()
-                mx.async_eval(tok_lazy)
+                mx.async_eval(row_current)
                 while True:
                     built = time.perf_counter()
-                    row_next, tok_next = _lane_step(tok_lazy)
+                    token_handle = _lane_make_token()
+                    token_leaf = token_handle.array()
+                    row_next = _lane_forward(token_leaf)
                     build_elapsed = time.perf_counter() - built
                     target_forward_graph_time += build_elapsed
                     waited = time.perf_counter()
+                    v, _ = _sample_from_logits(row_current[0], sampler, rng)
+                    token_handle.fill(v)
                     _lane_flush_ple()
-                    mx.async_eval(tok_next)
-                    v = int(tok_lazy.item())
+                    mx.async_eval(row_next)
                     wait_elapsed = time.perf_counter() - waited
                     target_eval_time += wait_elapsed
                     target_decode_time += build_elapsed + wait_elapsed
@@ -6998,7 +6969,7 @@ def generate_ar(
                         _eval(row_next)
                         logits = row_next
                         break
-                    row_lazy, tok_lazy = row_next, tok_next
+                    row_current = row_next
             if _env_truthy("MTPLX_AR_PIPELINE_DEBUG") and _lane_committed > 1:
                 n = max(_lane_committed - 1, 1)
                 print(

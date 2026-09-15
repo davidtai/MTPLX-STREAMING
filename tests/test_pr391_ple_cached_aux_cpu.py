@@ -157,6 +157,10 @@ class _FakeNative:
     def make_deferred_ar_rows():
         raise AssertionError("the AR leaf factory is lazy and must not run at install")
 
+    @staticmethod
+    def make_deferred_ar_token():
+        raise AssertionError("the AR token factory is lazy and must not run at install")
+
     def compute_cached_row_ids(self, provider, previous, current):
         assert provider is self.provider
         current = tuple(int(value) for value in current)
@@ -314,6 +318,7 @@ def test_module_import_is_cpu_only_and_keeps_native_api_deferred():
         "make_cached_sidecar_rows",
         "drain_cached_completions",
         "make_deferred_ar_rows",
+        "make_deferred_ar_token",
     ):
         assert name in module.NATIVE_CACHED_PROVIDER_API
 

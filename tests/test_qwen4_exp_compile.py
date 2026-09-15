@@ -78,16 +78,30 @@ def test_streamed_pipeline_route_arms_flushes_and_disarms_without_resident_table
         def discard(self):
             routes.append(("discard",))
 
+        @staticmethod
+        def make_token():
+            return object()
+
     bound = 0
+    bindings = []
     for layer in model.layers:
         if "ple" in layer:
-            layer.ple.ple_embedding._streamed_ar_ple = Route()
+            route = Route()
+            layer.ple.ple_embedding._streamed_ar_ple = route
+            bindings.append((layer.ple.ple_embedding, route))
             bound += 1
     assert bound > 0
 
     assert model.set_ar_pipeline_mode(True) is True
+    assert model.make_ar_pipeline_token() is not None
+    # The enabled hot path uses activation-bound callables. It does not walk
+    # module metadata again for every decoded token.
+    for embedding, _route in bindings:
+        embedding._streamed_ar_active = None
     model.flush_ar_pipeline_ple()
     model.discard_ar_pipeline_ple()
+    for embedding, route in bindings:
+        embedding._streamed_ar_active = route
     assert all(
         layer.ple.ple_embedding._stage_disabled
         for layer in model.layers

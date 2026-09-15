@@ -41,6 +41,10 @@ class _Native:
         self.handles.append(handle)
         return handle
 
+    @staticmethod
+    def make_deferred_ar_token():
+        return object()
+
 
 class _Embedding:
     shape = (1, 1, 640)
@@ -124,6 +128,11 @@ def test_build_records_one_pending_leaf_without_advancing_history():
     assert mx.dequantize_calls[0][3:] == (32, 4)
 
 
+def test_token_factory_is_bound_to_the_validated_native_module():
+    adapter, _native, _mx, _row_calls, _gather_calls = _adapter()
+    assert adapter.make_token() is not None
+
+
 def test_flush_materializes_ids_fills_exact_planes_then_commits_history():
     adapter, native, _mx, row_calls, gather_calls = _adapter()
     adapter.set_active(True)
@@ -159,15 +168,11 @@ def test_discard_does_not_advance_history_and_next_build_gets_fresh_leaf():
     assert adapter.pending is True
 
 
-def test_protocol_rejects_wrong_shape_double_build_and_disable_with_pending():
+def test_phase_boundary_rejects_disable_with_pending_leaf():
     adapter, _native, _mx, _rows, _gathers = _adapter()
     adapter.set_active(True)
     cache = [None, None, None, np.array([[7, 8]], dtype=np.int64)]
-    with pytest.raises(ValueError, match="shape.*1, 1"):
-        adapter.build(np.array([[9, 10]], dtype=np.int64), cache, 3)
     adapter.build(np.array([[9]], dtype=np.int64), cache, 3)
-    with pytest.raises(RuntimeError, match="pending"):
-        adapter.build(np.array([[10]], dtype=np.int64), cache, 3)
     with pytest.raises(RuntimeError, match="pending"):
         adapter.set_active(False)
 
@@ -182,9 +187,9 @@ def test_flush_failure_poisoned_route_requires_model_reload():
 
     with pytest.raises(OSError, match="pread"):
         adapter.flush()
-    with pytest.raises(RuntimeError, match="reload"):
-        adapter.build(np.array([[10]], dtype=np.int64), cache, 3)
     adapter.discard()
+    adapter.set_active(False)
+    with pytest.raises(RuntimeError, match="reload"):
+        adapter.set_active(True)
     assert isinstance(adapter.failure, OSError)
     assert module.AR_ROWS == 16
-

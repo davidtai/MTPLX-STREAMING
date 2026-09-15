@@ -3,7 +3,6 @@
 #include "deferred_ar_rows.h"
 
 #include <cstring>
-#include <stdexcept>
 
 #include "mlx/allocator.h"
 
@@ -14,8 +13,26 @@ namespace {
 constexpr std::size_t kArWeightBytes = kArWeightValues * sizeof(std::uint32_t);
 constexpr std::size_t kArMetadataBytes =
     kArMetadataValues * sizeof(std::uint16_t);
+constexpr std::size_t kArTokenBytes = sizeof(std::int64_t);
 
 }  // namespace
+
+DeferredArToken::DeferredArToken()
+    : token_(mx::allocator::malloc(kArTokenBytes), mx::Shape{1}, mx::int64) {
+  std::memset(token_.data<std::int64_t>(), 0, kArTokenBytes);
+}
+
+std::shared_ptr<DeferredArToken> DeferredArToken::make() {
+  return std::shared_ptr<DeferredArToken>(new DeferredArToken());
+}
+
+mx::array DeferredArToken::array() const {
+  return token_;
+}
+
+void DeferredArToken::fill(std::int64_t token) {
+  *token_.data<std::int64_t>() = token;
+}
 
 DeferredArRows::DeferredArRows()
     : weights_(mx::allocator::malloc(kArWeightBytes),
@@ -43,14 +60,9 @@ DeferredArPlanes DeferredArRows::planes() const {
 void DeferredArRows::fill(const std::uint32_t* weights,
                           const std::uint16_t* scales,
                           const std::uint16_t* biases) {
-  if (filled_) {
-    throw std::runtime_error(
-        "[mtplx_native_ple_cpu_rows] deferred AR rows already filled");
-  }
   std::memcpy(weights_.data<std::uint32_t>(), weights, kArWeightBytes);
   std::memcpy(scales_.data<std::uint16_t>(), scales, kArMetadataBytes);
   std::memcpy(biases_.data<std::uint16_t>(), biases, kArMetadataBytes);
-  filled_ = true;
 }
 
 }  // namespace mtplx_native::ple_cpu_rows

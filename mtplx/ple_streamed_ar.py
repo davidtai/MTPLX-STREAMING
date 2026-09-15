@@ -10,7 +10,7 @@ ordinary model graph, preserving the existing arithmetic.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import numpy as np
 
@@ -40,7 +40,6 @@ class StreamedArPle:
         "_output_dim",
         "_bits",
         "_group_size",
-        "_active",
         "_pending",
         "_failure",
     )
@@ -60,9 +59,19 @@ class StreamedArPle:
         bits: int,
         group_size: int,
     ) -> None:
-        factory = getattr(native_module, "make_deferred_ar_rows", None)
-        if not callable(factory):
-            raise ValueError("streamed AR PLE requires make_deferred_ar_rows")
+        factories = (
+            "make_deferred_ar_rows",
+            "make_deferred_ar_token",
+        )
+        missing = [
+            name
+            for name in factories
+            if not callable(getattr(native_module, name, None))
+        ]
+        if missing:
+            raise ValueError(
+                "streamed AR PLE requires native factories: " + ", ".join(missing)
+            )
         self._native = native_module
         self._mx = mx_module
         self._rows = rows
@@ -72,7 +81,6 @@ class StreamedArPle:
         self._output_dim = int(output_dim)
         self._bits = int(bits)
         self._group_size = int(group_size)
-        self._active = False
         self._pending: _Pending | None = None
         self._failure: BaseException | None = None
 
@@ -91,35 +99,23 @@ class StreamedArPle:
             ) from self._failure
 
     def set_active(self, enabled: bool) -> None:
-        self._ensure_healthy()
+        if enabled:
+            self._ensure_healthy()
         if not enabled and self._pending is not None:
             raise RuntimeError("cannot disable streamed AR PLE with a pending leaf")
-        self._active = bool(enabled)
+
+    def make_token(self) -> Any:
+        """Create the mutable token leaf bound to this installed native ABI."""
+
+        return self._native.make_deferred_ar_token()
 
     def build(self, input_ids: Any, cache: Any, state_idx: int) -> Any:
         """Build the PLE graph on an unfilled packed-row leaf."""
-
-        self._ensure_healthy()
-        if not self._active:
-            raise RuntimeError("streamed AR PLE route is not active")
-        if self._pending is not None:
-            raise RuntimeError("streamed AR PLE already has a pending leaf")
-        if tuple(int(value) for value in input_ids.shape) != (1, 1):
-            raise ValueError("streamed AR PLE requires input shape (1, 1)")
-        if cache is None:
-            raise ValueError("streamed AR PLE requires a decode cache")
 
         previous = cache[state_idx]
         if previous is None:
             previous = self._mx.full(
                 (1, self._context_len), self._eos_id, dtype=self._mx.int64
-            )
-        elif tuple(int(value) for value in previous.shape) != (
-            1,
-            self._context_len,
-        ):
-            raise ValueError(
-                "streamed AR PLE history shape does not match the installed contract"
             )
 
         handle = self._native.make_deferred_ar_rows()
@@ -143,10 +139,7 @@ class StreamedArPle:
     def flush(self) -> None:
         """Fill one pending leaf and commit its concrete PLE history."""
 
-        self._ensure_healthy()
-        pending = self._pending
-        if pending is None:
-            raise RuntimeError("streamed AR PLE flush requires a pending leaf")
+        pending = cast(_Pending, self._pending)
         try:
             input_ids = np.asarray(pending.input_ids, dtype=np.int64).reshape(1, 1)
             previous = np.asarray(pending.previous, dtype=np.int64).reshape(

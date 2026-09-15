@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 import mlx.core as mx
 import mtplx_native_ple_cpu_rows as native
@@ -38,16 +37,37 @@ def test_gpu_consumer_built_before_fill_reads_the_filled_bytes():
     np.testing.assert_array_equal(np.asarray(biases_seen), payload[2] + 3)
 
 
-def test_leaf_is_single_fill_and_independent_across_steps():
+def test_row_leaves_are_independent_across_steps():
     first = native.make_deferred_ar_rows()
     second = native.make_deferred_ar_rows()
     first.fill(*_payload(7))
     second.fill(*_payload(19))
-    with pytest.raises(RuntimeError, match="already filled"):
-        first.fill(*_payload(23))
-
     first_weight, _, _ = first.planes()
     second_weight, _, _ = second.planes()
     mx.eval(first_weight, second_weight)
     np.testing.assert_array_equal(np.asarray(first_weight), _payload(7)[0])
     np.testing.assert_array_equal(np.asarray(second_weight), _payload(19)[0])
+
+
+def test_token_consumer_built_before_fill_reads_exact_int64_value():
+    handle = native.make_deferred_ar_token()
+    token = handle.array()
+    assert token.shape == (1,) and token.dtype == mx.int64
+
+    consumer = token * mx.array(3, dtype=mx.int64)
+    handle.fill(712_345)
+    mx.eval(consumer)
+
+    np.testing.assert_array_equal(np.asarray(consumer), [2_137_035])
+
+
+def test_token_leaves_are_independent_across_steps():
+    first = native.make_deferred_ar_token()
+    second = native.make_deferred_ar_token()
+    first.fill(17)
+    second.fill(23)
+    first_value = first.array()
+    second_value = second.array()
+    mx.eval(first_value, second_value)
+    np.testing.assert_array_equal(np.asarray(first_value), [17])
+    np.testing.assert_array_equal(np.asarray(second_value), [23])
