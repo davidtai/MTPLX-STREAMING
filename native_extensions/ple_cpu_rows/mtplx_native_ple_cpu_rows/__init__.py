@@ -7,6 +7,7 @@ from ._ext import (
     install_cached_sidecar_provider,
     make_cached_sidecar_rows,
     make_cpu_rows,
+    make_deferred_ar_rows,
     make_sidecar_rows,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "install_cached_sidecar_provider",
     "make_cached_sidecar_rows",
     "make_cpu_rows",
+    "make_deferred_ar_rows",
     "make_sidecar_rows",
 ]

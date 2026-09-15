@@ -5545,6 +5545,9 @@ class NGramEmbedding(nn.Module):
                     :, -self.context_len :
                 ]
             return compiled
+        streamed_ar = getattr(self, "_streamed_ar_active", None)
+        if streamed_ar is not None:
+            return streamed_ar.build(input_ids, cache, state_idx)
         staged = getattr(self, "_staged", None)
         if staged is not None:
             self._staged = None
@@ -6557,28 +6560,77 @@ class Model(nn.Module):
             )
 
     def set_ar_pipeline_mode(self, enabled: bool) -> bool:
-        """Flip the family into (or out of) the pipelined-AR decode contract:
-        n-gram staging off + in-graph mmap-lazy gathers, so a forward built
-        on LAZY token ids records no host sync. Returns False when the lazy
-        table binding is unavailable (lane must not engage)."""
-        ready = True
+        """Flip the family into the installed pipelined-AR decode route.
+
+        A resident table keeps the original in-graph lazy gather.  A streamed
+        table uses a deferred packed-row leaf installed by ``ple_cached_aux``.
+        Route selection is completed before any layer state is changed.
+        """
+        routes = []
         for layer in self.layers:
             if "ple" not in layer:
                 continue
             emb = layer.ple.ple_embedding
             table = emb.ngram_embedding
-            if enabled and getattr(table, "_lazy_parts", None) is None:
-                ready = False
-                continue
-            emb._stage_disabled = bool(enabled)
-            table.prefer_lazy = bool(enabled)
-        if ready:
-            model = self.language_model.model
-            if not getattr(model, "_gdn_compile_explicit_off", False):
-                model._gdn_compiled_lane = bool(enabled)
+            if enabled:
+                if getattr(table, "_lazy_parts", None) is not None:
+                    routes.append((emb, table, "resident", None))
+                    continue
+                streamed = getattr(emb, "_streamed_ar_ple", None)
+                if streamed is None:
+                    return False
+                routes.append((emb, table, "streamed", streamed))
             else:
-                model._gdn_compiled_lane = False
-        return ready
+                routes.append(
+                    (
+                        emb,
+                        table,
+                        getattr(emb, "_ar_pipeline_route", None),
+                        getattr(emb, "_streamed_ar_active", None),
+                    )
+                )
+
+        for emb, table, route, streamed in routes:
+            if route == "streamed" and streamed is not None:
+                streamed.set_active(bool(enabled))
+            emb._streamed_ar_active = (
+                streamed if enabled and route == "streamed" else None
+            )
+            emb._ar_pipeline_route = route if enabled else None
+            emb._stage_disabled = bool(enabled)
+            table.prefer_lazy = bool(enabled and route == "resident")
+
+        variants = {route for _emb, _table, route, _streamed in routes}
+        self._ar_pipeline_variant = (
+            next(iter(variants)) if enabled and len(variants) == 1 else ""
+        )
+
+        model = self.language_model.model
+        if not getattr(model, "_gdn_compile_explicit_off", False):
+            model._gdn_compiled_lane = bool(enabled)
+        else:
+            model._gdn_compiled_lane = False
+        return True
+
+    def flush_ar_pipeline_ple(self) -> None:
+        """Fill the streamed PLE leaf before its consumer is submitted."""
+
+        for layer in self.layers:
+            if "ple" not in layer:
+                continue
+            streamed = getattr(layer.ple.ple_embedding, "_streamed_ar_active", None)
+            if streamed is not None:
+                streamed.flush()
+
+    def discard_ar_pipeline_ple(self) -> None:
+        """Discard an unsubmitted streamed leaf after a failed graph build."""
+
+        for layer in self.layers:
+            if "ple" not in layer:
+                continue
+            streamed = getattr(layer.ple.ple_embedding, "_streamed_ar_active", None)
+            if streamed is not None:
+                streamed.discard()
 
     # -- family capture-commit (repair-free verify rollback) ----------------
 

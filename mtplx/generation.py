@@ -2493,6 +2493,8 @@ class GenerationStats:
     runtime_mtp_enabled: bool = False
     draft_head_installed: bool | None = None
     ar_return_hidden: bool = False
+    ar_pipeline_active: bool = False
+    ar_pipeline_variant: str = ""
     forward_ar_hidden_calls: int = 0
     forward_ar_plain_calls: int = 0
     mtp_forward_calls: int = 0
@@ -6870,6 +6872,9 @@ def generate_ar(
     _lane_cache_has_final = False
     _lane_final_row: mx.array | None = None
     _lane_mode_off = None
+    _lane_flush_ple = None
+    _lane_discard_ple = None
+    _lane_variant = ""
     if (
         _env_truthy("MTPLX_AR_PIPELINE")
         and constraint is None
@@ -6882,6 +6887,16 @@ def generate_ar(
         _set_lane_mode = getattr(rt.model, "set_ar_pipeline_mode", None)
         if callable(_set_lane_mode) and _set_lane_mode(True):
             _lane_mode_off = _set_lane_mode
+            _lane_flush_ple = getattr(rt.model, "flush_ar_pipeline_ple", None)
+            _lane_discard_ple = getattr(rt.model, "discard_ar_pipeline_ple", None)
+            if not callable(_lane_flush_ple) or not callable(_lane_discard_ple):
+                _set_lane_mode(False)
+                raise RuntimeError(
+                    "pipelined AR model must provide PLE flush/discard hooks"
+                )
+            _lane_variant = str(
+                getattr(rt.model, "_ar_pipeline_variant", "unknown")
+            )
     if _lane_mode_off is not None:
         try:
             events.append({"ar_pipeline": True})
@@ -6906,15 +6921,17 @@ def generate_ar(
 
                 started = time.perf_counter()
                 row_lazy, tok_lazy = _lane_step(mx.array([token]))
-                mx.async_eval(tok_lazy)
                 target_forward_graph_time += time.perf_counter() - started
+                _lane_flush_ple()
+                mx.async_eval(tok_lazy)
                 while True:
                     built = time.perf_counter()
                     row_next, tok_next = _lane_step(tok_lazy)
-                    mx.async_eval(tok_next)
                     build_elapsed = time.perf_counter() - built
                     target_forward_graph_time += build_elapsed
                     waited = time.perf_counter()
+                    _lane_flush_ple()
+                    mx.async_eval(tok_next)
                     v = int(tok_lazy.item())
                     wait_elapsed = time.perf_counter() - waited
                     target_eval_time += wait_elapsed
@@ -6990,6 +7007,9 @@ def generate_ar(
                     f"per-step={target_decode_time / n * 1e3:.2f}ms",
                     flush=True,
                 )
+        except BaseException:
+            _lane_discard_ple()
+            raise
         finally:
             _lane_mode_off(False)
 
@@ -7198,6 +7218,8 @@ def generate_ar(
             )
         ),
         target_forward_time_s=prompt_eval_time + target_decode_time,
+        ar_pipeline_active=_lane_mode_off is not None,
+        ar_pipeline_variant=_lane_variant,
         prompt_eval_time_s=prompt_eval_time,
         prompt_tps=(
             prompt_state.suffix_tokens / prompt_eval_time

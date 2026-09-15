@@ -13,6 +13,7 @@
 #include <stdexcept>
 
 #include "cached_sidecar_primitive.h"
+#include "deferred_ar_rows.h"
 #include "ple_cpu_rows.h"
 
 namespace nb = nanobind;
@@ -40,6 +41,14 @@ using PackedCompletionArray = nb::ndarray<const std::uint8_t,
                                            nb::numpy,
                                            nb::c_contig,
                                            nb::ndim<2>>;
+using ArWeightArray = nb::ndarray<const std::uint32_t,
+                                  nb::numpy,
+                                  nb::c_contig,
+                                  nb::shape<16, 20>>;
+using ArMetadataArray = nb::ndarray<const std::uint16_t,
+                                    nb::numpy,
+                                    nb::c_contig,
+                                    nb::shape<16, 5>>;
 
 using OwnedRowIds = std::array<std::uint32_t, 64>;
 
@@ -158,6 +167,24 @@ NB_MODULE(_ext, m) {
       .def_prop_ro(
           "io_workers",
           &mtplx_native::ple_cpu_rows::CachedSidecarProducer::io_workers);
+
+  nb::class_<mtplx_native::ple_cpu_rows::DeferredArRows>(m, "DeferredArRows")
+      .def("planes", &mtplx_native::ple_cpu_rows::DeferredArRows::planes)
+      .def(
+          "fill",
+          [](mtplx_native::ple_cpu_rows::DeferredArRows& rows,
+             const ArWeightArray& weights,
+             const ArMetadataArray& scales,
+             const ArMetadataArray& biases) {
+            rows.fill(weights.data(), scales.data(), biases.data());
+          },
+          "weights"_a,
+          "scales"_a,
+          "biases"_a);
+
+  m.def("make_deferred_ar_rows",
+        &mtplx_native::ple_cpu_rows::DeferredArRows::make,
+        "Create one zero-filled, single-use S=1 packed-row leaf set.");
 
   m.def(
       "install_sidecar_provider",

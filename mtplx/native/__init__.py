@@ -728,6 +728,7 @@ _PLE_CPU_ROWS_REQUIRED = (
     "compute_cached_row_ids",
     "make_cached_sidecar_rows",
     "drain_cached_completions",
+    "make_deferred_ar_rows",
 )
 
 
