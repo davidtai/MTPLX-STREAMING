@@ -31,7 +31,7 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 - `scripts/deepseek_v41/ab_decode_env_levers.py`: pass the benchmark model to
   the shared counter collector and expose the cache policy arm.
 - `scripts/deepseek_v41/bench_standard_shape.py`: keep profile cache-policy
-  resolution and receipt stamping aligned with the A/B runner.
+  resolution and scheduling receipt stamping aligned with the A/B runner.
 - `docs/deepseek-v41/receipts/`: winning benchmark and validation evidence only.
 
 ### Task 0: Correct benchmark memory and Engram reporting
@@ -131,6 +131,31 @@ the generic bounded-wave path that already submits shared work early.
   `.venv/bin/python -m py_compile mtplx/models/expert_mlx.py`.
   Result: exit 0.
 
+### Task 3b: Expose bounded decode miss completion
+
+**Files:**
+- Modify: `mtplx/expert_runtime.py`
+- Modify: `scripts/deepseek_v41/ab_decode_env_levers.py`
+- Modify: `scripts/deepseek_v41/bench_standard_shape.py`
+
+**Security flag:** none
+
+**Does NOT cover:** Prefill, compressed streamed records, non-DeepSeek models,
+an automatic part-size choice, or a fallback from the enabled candidate.
+
+- [x] Add immutable `decode_miss_records_per_part`; require the DeepSeek-V4.1
+  component-bank overlap path and raw sidecar placement at construction.
+- [x] Submit every bounded part before resident work, sort by physical sidecar
+  placement, and prefer part boundaries between noncontiguous records.
+- [x] Preserve assignment order, disjoint slot ownership, transaction rollback,
+  completion-order consumption, and final policy publication.
+- [x] Expose `--decode-miss-records-per-part` in both runners and stamp the
+  installed value in receipts and the runtime snapshot.
+- [x] Run syntax, no-MLX construction/plumbing, and whitespace validation only;
+  defer regression tests until a matched GPU arm wins.
+- [ ] Screen three records per part against the unchanged layer-wide batch.
+  Screen two records only if the three-record candidate improves wall time.
+
 ### Task 4: Measure and promote only winners
 
 **Files:**
@@ -147,7 +172,8 @@ or component-rANS implementation without a separate decoder gate.
 - [ ] Use `bench/laguna/run_guarded.py`, capture current baseline and exact Qwen
   identity, and refuse any arm whose admitted peak exceeds 110,000,000,000 bytes.
 - [ ] Run one short matched batch with separately selectable corrected cap-83
-  control, causal-policy, and shared-overlap arms. Remove any losing candidate.
+  control, three-record miss parts, causal-policy, and shared-overlap arms.
+  Remove any losing candidate; screen two-record parts only after a chunking win.
 - [ ] Screen the winning stack at cap 89. Attempt cap 91 only after cap 89
   confirms allocator and whole-machine headroom; never arm cap 92 under the
   current allocator limit.

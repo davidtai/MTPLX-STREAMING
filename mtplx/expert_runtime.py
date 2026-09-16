@@ -231,6 +231,12 @@ class ExpertStreamingConfig:
     # coalesced into scatter reads) so resident-expert compute overlaps the
     # miss reads. OFF leaves the per-expert split-part path byte-identical.
     overlap_miss_reads: bool = False
+    # DeepSeek-V4.1 decode scheduling arm.  When overlap_miss_reads is enabled,
+    # cap each independently completable miss part to this many records while
+    # still submitting every part at once.  ``None`` keeps the current one-part
+    # layer batch.  The cap is construction-selected so the enabled hot path
+    # never probes or falls back.
+    decode_miss_records_per_part: int | None = None
     # DeepSeek-V4.1 verify-only scheduling arm: after a split route has submitted
     # its demand misses, enqueue the resident shared MLP before waiting for those
     # reads. Installed once at switch construction; OFF preserves the unchanged
@@ -368,6 +374,30 @@ class ExpertStreamingConfig:
             raise ValueError(
                 "overlap_miss_reads requires the component-banks slot layout"
             )
+        if self.decode_miss_records_per_part is not None:
+            object.__setattr__(
+                self,
+                "decode_miss_records_per_part",
+                _integer(
+                    "decode_miss_records_per_part",
+                    self.decode_miss_records_per_part,
+                    minimum=1,
+                ),
+            )
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "decode_miss_records_per_part is only installed for "
+                    "DeepSeek-V4.1"
+                )
+            if not self.overlap_miss_reads:
+                raise ValueError(
+                    "decode_miss_records_per_part requires overlap_miss_reads"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "decode_miss_records_per_part requires the component-banks "
+                    "slot layout"
+                )
         if not isinstance(self.verify_shared_overlap, bool):
             raise ValueError("verify_shared_overlap must be bool")
         if self.verify_shared_overlap:
@@ -508,6 +538,11 @@ class ExpertStreamingConfig:
                 raise ValueError(
                     "streamed_codec decodes compressed records into slots; it is "
                     "incompatible with the metal-mmap zero-copy layout"
+                )
+            if self.decode_miss_records_per_part is not None:
+                raise ValueError(
+                    "decode_miss_records_per_part requires raw sidecar records; "
+                    "disable streamed_codec for this scheduling arm"
                 )
         elif self.streamed_codec_manifest is not None:
             raise ValueError(
@@ -2423,6 +2458,21 @@ class ExpertStreamingRuntime:
         self.memory_cap_report = memory_cap_report
         self.integrity_report = integrity_report
         self._pipeline_ledger = pipeline_ledger
+        self._decode_miss_records_per_part = int(
+            config.decode_miss_records_per_part or 0
+        )
+        self._decode_miss_placement = (
+            {
+                (record.layer, record.expert): (
+                    int(record.part),
+                    int(record.sidecar_offset),
+                    int(record.sidecar_length),
+                )
+                for record in manifest.records
+            }
+            if config.decode_miss_records_per_part is not None
+            else {}
+        )
         # Mixed-official (issue #51, M2): per-layer record bytes for telemetry
         # accounting, since ``spec.expert_record_bytes`` raises for mixed. The
         # representative (exemplar) value stands in where a single scalar is
@@ -2876,6 +2926,15 @@ class ExpertStreamingRuntime:
                 )
         manifest = load_expert_manifest(manifest_path)
         cls._validate_manifest_identity(manifest, model_spec)
+        if config.decode_miss_records_per_part is not None:
+            if manifest.sidecar is None or any(
+                record.sidecar_offset is None or record.sidecar_length is None
+                for record in manifest.records
+            ):
+                raise ExpertStreamingConfigurationError(
+                    "decode_miss_records_per_part requires construction-verified "
+                    "sidecar placement for every expert record"
+                )
         if config.island_layers and not set(config.island_layers) <= set(
             model_spec.routed_layer_indices
         ):
@@ -3820,7 +3879,46 @@ class ExpertStreamingRuntime:
         )
 
     @staticmethod
-    def _miss_route_parts(plan: RoutePlan) -> tuple[RoutePlan, ...]:
+    def _grouped_miss_route_parts(
+        plan: RoutePlan,
+        *,
+        expert_groups: tuple[tuple[int, ...], ...],
+    ) -> tuple[RoutePlan, ...]:
+        loads_by_expert = {load.expert: load for load in plan.loads}
+        parts: list[RoutePlan] = []
+        for group in expert_groups:
+            group_set = set(group)
+            positions = tuple(
+                index
+                for index, candidate in enumerate(plan.experts)
+                if candidate in group_set
+            )
+            parts.append(
+                RoutePlan(
+                    phase=plan.phase,
+                    experts=tuple(plan.experts[index] for index in positions),
+                    slots=tuple(plan.slots[index] for index in positions),
+                    hits=(),
+                    misses=tuple(
+                        expert for expert in plan.misses if expert in group_set
+                    ),
+                    loads=tuple(loads_by_expert[expert] for expert in group),
+                    evictions=tuple(
+                        eviction
+                        for eviction in plan.evictions
+                        if eviction.next_expert in group_set
+                    ),
+                    generations=(
+                        tuple(plan.generations[index] for index in positions)
+                        if plan.generations
+                        else ()
+                    ),
+                )
+            )
+        return tuple(parts)
+
+    @classmethod
+    def _miss_route_parts(cls, plan: RoutePlan) -> tuple[RoutePlan, ...]:
         """Split a miss plan by expert while preserving assignment duplicates."""
 
         unique_experts = tuple(dict.fromkeys(plan.experts))
@@ -3833,39 +3931,54 @@ class ExpertStreamingRuntime:
             )
         if len({load.slot for load in plan.loads}) != len(plan.loads):
             raise ExpertSlotError("incremental miss parts must own disjoint slots")
-        parts: list[RoutePlan] = []
-        for expert in unique_experts:
-            positions = tuple(
-                index
-                for index, candidate in enumerate(plan.experts)
-                if candidate == expert
+        return cls._grouped_miss_route_parts(
+            plan,
+            expert_groups=tuple((expert,) for expert in unique_experts),
+        )
+
+    def _bounded_decode_miss_route_parts(
+        self,
+        layer: int,
+        plan: RoutePlan,
+    ) -> tuple[RoutePlan, ...]:
+        """Build bounded, sidecar-ordered parts for early miss completion."""
+
+        records_per_part = self._decode_miss_records_per_part
+        placement = self._decode_miss_placement
+        ordered_experts = tuple(
+            load.expert
+            for load in sorted(
+                plan.loads,
+                key=lambda load: placement[(layer, load.expert)][:2],
             )
-            loads = tuple(load for load in plan.loads if load.expert == expert)
-            if len(loads) != 1:
-                raise ExpertSlotError(
-                    "each incremental miss expert must own exactly one slot load"
-                )
-            parts.append(
-                RoutePlan(
-                    phase=plan.phase,
-                    experts=tuple(plan.experts[index] for index in positions),
-                    slots=tuple(plan.slots[index] for index in positions),
-                    hits=(),
-                    misses=(expert,),
-                    loads=loads,
-                    evictions=tuple(
-                        eviction
-                        for eviction in plan.evictions
-                        if eviction.next_expert == expert
-                    ),
-                    generations=(
-                        tuple(plan.generations[index] for index in positions)
-                        if plan.generations
-                        else ()
-                    ),
-                )
-            )
-        return tuple(parts)
+        )
+
+        # Prefer a boundary at a physical gap.  This retains a contiguous
+        # sidecar run in one scatter read unless the run itself exceeds the
+        # construction-time bound.
+        groups: list[tuple[int, ...]] = []
+        start = 0
+        while start < len(ordered_experts):
+            end = min(start + records_per_part, len(ordered_experts))
+            if end < len(ordered_experts):
+                gap = None
+                for index in range(start + 1, end + 1):
+                    left = placement[(layer, ordered_experts[index - 1])]
+                    right = placement[(layer, ordered_experts[index])]
+                    adjacent = (
+                        left[0] == right[0]
+                        and left[1] + left[2] == right[1]
+                    )
+                    if not adjacent:
+                        gap = index
+                if gap is not None:
+                    end = gap
+            groups.append(ordered_experts[start:end])
+            start = end
+        return self._grouped_miss_route_parts(
+            plan,
+            expert_groups=tuple(groups),
+        )
 
     def _rollback_route_loads(self, layer: int, plan: RoutePlan) -> None:
         for load in plan.loads:
@@ -4027,21 +4140,31 @@ class ExpertStreamingRuntime:
                     self.demand_bytes_read += (
                         len(miss_plan.loads) * _demand_record_bytes
                     )
-            # Fix (B) overlap: the layer's decode misses go down as ONE part
-            # (single future, admission ahead of the wait, adjacency-run
-            # scatter reads in the pool) instead of one part per expert.
+            # Fix (B) overlap submits the layer's decode misses together.  The
+            # unchanged mode uses one part; the construction-selected bounded
+            # mode exposes several completion groups while still submitting all
+            # groups before the caller starts resident work.
             batch_misses = (
                 self.config.overlap_miss_reads
                 and miss_plan is not None
                 and plan.phase is RoutingPhase.DECODE
             )
-            miss_parts = (
-                self._miss_route_parts(miss_plan)
-                if miss_plan is not None
-                and plan.phase is RoutingPhase.DECODE
-                and not batch_misses
-                else ((miss_plan,) if miss_plan is not None else ())
-            )
+            if miss_plan is None:
+                miss_parts = ()
+            elif (
+                batch_misses
+                and self.config.decode_miss_records_per_part is not None
+            ):
+                miss_parts = self._bounded_decode_miss_route_parts(
+                    layer,
+                    miss_plan,
+                )
+            elif batch_misses:
+                miss_parts = (miss_plan,)
+            elif plan.phase is RoutingPhase.DECODE:
+                miss_parts = self._miss_route_parts(miss_plan)
+            else:
+                miss_parts = (miss_plan,)
             pipeline_ledger = self._pipeline_ledger
             if pipeline_ledger is not None:
                 try:
@@ -5593,6 +5716,11 @@ class ExpertStreamingRuntime:
             "single_pool": bool(getattr(self, "_single_slot_pool", False)),
             "overlap_miss_reads": bool(
                 getattr(self.config, "overlap_miss_reads", False)
+            ),
+            "decode_miss_records_per_part": getattr(
+                self.config,
+                "decode_miss_records_per_part",
+                None,
             ),
             # W123: resolved io read-fanout (1 == OFF; the reader holds the
             # env-override-applied value). Pairs with io.read_inflight_max and

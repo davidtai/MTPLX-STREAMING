@@ -11,9 +11,11 @@ while keeping whole-machine physical use below 110,000,000,000 bytes.
 This stage corrects projection-cache lifetime accounting, fixes the benchmark's
 model-owned Engram telemetry, installs a bounded causal cache-admission
 candidate for the MTP verification route, and submits the resident shared
-branch while target-expert miss reads are open. Each performance candidate
-remains construction-selected so an unchanged control can be measured without
-a hot-path fallback.
+branch while target-expert miss reads are open. It also adds a bounded decode
+miss-part candidate so completed expert records can reach Metal before the
+slowest read in the layer finishes. Each performance candidate remains
+construction-selected so an unchanged control can be measured without a
+hot-path fallback.
 
 The stage does not load MLX or run Metal while another GPU job owns the machine.
 It does not build a compressed expert artifact. Component-separated lossless
@@ -29,6 +31,10 @@ but the exact workload remains below 20 tok/s.
   policies did not improve held-out behavior materially.
 - Component-separated rANS: 10.4792% smaller on the exact record, but the
   resulting 50.67-second I/O floor leaves too little compute margin by itself.
+- A cap-83 scheduling-shape replay has 8,033 miss-bearing layer calls across
+  8,240 calls. Those calls average 5.90 physical records; 6,768 layer calls
+  have at least three misses. A three-record bound therefore exposes about
+  2.25 completion groups per layer call instead of one layer-wide completion.
 
 ## Memory accounting
 
@@ -118,6 +124,29 @@ construction binds the submit callable once and refuses the candidate if
 or fall back to the control. Both runners stamp the installed boolean in the
 resolved-plan receipt, so the matched control and candidate are auditable.
 
+## Bounded decode miss completion
+
+The current overlap route submits every decode miss in a layer as one outer
+future. Its inner reader futures preserve SSD queue depth, but the outer future
+becomes ready only after every record finishes. The switch therefore cannot
+dispatch any miss gather while a slower record from the same layer is still in
+flight.
+
+The candidate keeps all miss parts submitted concurrently and caps each outer
+part with `--decode-miss-records-per-part`. Before generation, construction
+requires the DeepSeek-V4.1 component-bank path, raw sidecar records, the
+existing overlap route, and verified placement for every record. At runtime,
+loads are ordered by sidecar part and byte offset; boundaries prefer physical
+gaps so a contiguous run remains one scatter read unless the run itself exceeds
+the configured cap. Router assignment order, slot ownership, policy commit,
+rollback, and gather recombination retain the existing split-route contracts.
+
+`None` is the unchanged one-part control. The first candidate is three records
+per part; two records is a follow-up only if the three-record arm confirms that
+earlier completion outweighs the extra gather submissions. The actual value is
+stamped in the resolved plan and runtime snapshot. No environment read,
+eligibility probe, retry, or fallback is added to the enabled route.
+
 ## Validation and promotion
 
 No new optimization regression tests are added before measurement, following
@@ -126,14 +155,15 @@ contract because incorrect memory admission is a safety bug.
 
 When the GPU lane is available, the guard must acquire
 `/tmp/mtplx-gpu-exclusive.lock` before stopping Qwen. A short matched arm batch
-will compare the corrected cap-83 control, causal cache admission, and
-shared-work overlap one change at a time. The winning scheduling/cache stack is
-then screened at cap 89. Cap 91 is eligible only after cap 89's measured peak
-validates the static projection; cap 92 is not an arm. Only the winning stack
-receives an exact 16K/1K run and focused regression tests. Every full run must
-report MLX peak, process `phys_footprint`, whole-machine physical peak, token
-digest or an allowed tie flip, physical record reads, wall time, and exact Qwen
-restoration.
+will compare the corrected cap-83 control, three-record miss parts, causal cache
+admission, and shared-work overlap one change at a time. Two-record miss parts
+are screened only after the three-record arm improves wall time. The winning
+scheduling/cache stack is then screened at cap 89. Cap 91 is eligible only after
+cap 89's measured peak validates the static projection; cap 92 is not an arm.
+Only the winning stack receives an exact 16K/1K run and focused regression
+tests. Every full run must report MLX peak, process `phys_footprint`,
+whole-machine physical peak, token digest or an allowed tie flip, physical
+record reads, wall time, and exact Qwen restoration.
 
 ## Failure modes
 
@@ -144,6 +174,9 @@ restoration.
   the cap rather than cross either limit.
 - Shared work could be submitted twice or outlive its pipeline claim. A single
   stored result and the existing claim/close protocol prevent duplication.
+- Smaller miss parts add outer-future and gather-dispatch overhead. The
+  construction flag defaults off, and the candidate is removed unless its
+  matched wall time improves despite that overhead.
 - Lossless decode cost may erase compression savings. No compressed artifact is
   promoted without a real-record decoder microbenchmark that clears the
   end-to-end required margin.

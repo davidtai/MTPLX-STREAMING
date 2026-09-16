@@ -2054,6 +2054,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--decode-miss-records-per-part",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "construction-time decode scheduling arm: submit every miss part "
+            "immediately but expose completion after at most N records. Requires "
+            "the v2 overlap-miss route. Default None keeps one layer-wide part."
+        ),
+    )
+    p.add_argument(
         "--verify-shared-overlap",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -2898,6 +2909,9 @@ def _resolve_plan_overrides(args) -> dict:
     explicit_policy = getattr(args, "cache_policy", None)
     if explicit_policy is not None:
         overrides["cache_policy"] = str(explicit_policy)
+    explicit_miss_part = getattr(args, "decode_miss_records_per_part", None)
+    if explicit_miss_part is not None:
+        overrides["decode_miss_records_per_part"] = int(explicit_miss_part)
     overrides["verify_shared_overlap"] = bool(
         getattr(args, "verify_shared_overlap", False)
     )
@@ -3023,6 +3037,11 @@ def _resolved_plan(runtime, args) -> dict | None:
         "split_route_release": getattr(config, "split_route_release", None),
         "runtime_reserve_bytes": getattr(config, "runtime_reserve_bytes", None),
         "cache_policy": getattr(config, "cache_policy", None),
+        "decode_miss_records_per_part": getattr(
+            config,
+            "decode_miss_records_per_part",
+            None,
+        ),
         "verify_shared_overlap": bool(
             getattr(config, "verify_shared_overlap", False)
         ),
