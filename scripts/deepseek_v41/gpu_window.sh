@@ -147,6 +147,31 @@ except (OSError, ValueError):
     exit 2
   fi
 fi
+# Optional receipt-bound auxiliary safetensor set, used by the compact MTP
+# resident banks. This is reclaimed separately because it lives outside the
+# candidate model directory and would otherwise bias a later matched arm.
+CANDIDATE_AUX_PATH="${GPU_WINDOW_CANDIDATE_AUX_DIR:-}"
+if [[ -n "${CANDIDATE_AUX_PATH}" ]]; then
+  if ! CANDIDATE_AUX_PATH="$(/usr/bin/env python3 -c '
+import pathlib, sys
+try:
+    path = pathlib.Path(sys.argv[1]).resolve(strict=True)
+    if not path.is_dir():
+        raise ValueError("candidate auxiliary path is not a directory")
+    print(path)
+except (OSError, ValueError):
+    sys.exit(1)
+' "${CANDIDATE_AUX_PATH}")"; then
+    printf '%s [gpu_window] ERROR: GPU_WINDOW_CANDIDATE_AUX_DIR is not a valid directory\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+    exit 2
+  fi
+  if [[ "${CANDIDATE_AUX_PATH}" == "${CANDIDATE_MODEL_PATH}" ]]; then
+    printf '%s [gpu_window] ERROR: candidate model and auxiliary cache directories must differ\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+    exit 2
+  fi
+fi
 # HIGH-3: safety caps REFUSE (exit 2) on an invalid value (never silently fall back).
 MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"  # GiB the step needs available after the stop
 _require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
@@ -463,6 +488,20 @@ _reclaim_candidate_file_cache() {
   log "phase 3: reclaiming stale candidate clean file cache from ${CANDIDATE_MODEL_PATH}"
   /usr/bin/env python3 "$(dirname "${SCRIPT_PATH}")/reclaim_file_cache.py" \
     --operation candidate_file_cache_reclamation "${CANDIDATE_MODEL_PATH}" || return 1
+  _check_abort
+}
+
+_reclaim_candidate_aux_file_cache() {
+  local before
+  before="$(used_mem_bytes)" || return 1
+  if (( before + 1073741824 >= TOTAL_MEM_CEILING_BYTES )); then
+    err "candidate auxiliary cache reclamation lacks its bounded 1 GiB host headroom"
+    return 1
+  fi
+  log "phase 3: reclaiming receipt-bound candidate clean file cache from ${CANDIDATE_AUX_PATH}"
+  /usr/bin/env python3 "$(dirname "${SCRIPT_PATH}")/reclaim_file_cache.py" \
+    --operation candidate_aux_file_cache_reclamation \
+    --layout receipt-safetensors "${CANDIDATE_AUX_PATH}" || return 1
   _check_abort
 }
 
@@ -1028,6 +1067,16 @@ fi
 if [[ -n "${CANDIDATE_MODEL_PATH}" && "${CANDIDATE_MODEL_PATH}" != "${QWEN_MODEL_PATH}" ]]; then
   if ! _reclaim_candidate_file_cache; then
     err "phase 3: candidate file-cache reclamation failed; refusing workload and restoring service"
+    exit 8
+  fi
+fi
+if [[ -n "${CANDIDATE_AUX_PATH}" ]]; then
+  if [[ "${CANDIDATE_AUX_PATH}" == "${QWEN_MODEL_PATH}" ]]; then
+    err "phase 3: candidate auxiliary cache directory aliases the stopped service model"
+    exit 8
+  fi
+  if ! _reclaim_candidate_aux_file_cache; then
+    err "phase 3: candidate auxiliary cache reclamation failed; refusing workload and restoring service"
     exit 8
   fi
 fi

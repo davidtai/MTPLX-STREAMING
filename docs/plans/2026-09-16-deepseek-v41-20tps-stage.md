@@ -169,8 +169,11 @@ or component-rANS implementation without a separate decoder gate.
 
 - [ ] Wait until the operator says the GPU lane is available; do not probe or
   queue the lock while other jobs run.
-- [ ] Use `bench/laguna/run_guarded.py`, capture current baseline and exact Qwen
-  identity, and refuse any arm whose admitted peak exceeds 110,000,000,000 bytes.
+- [ ] Use `scripts/deepseek_v41/gpu_window.sh` directly. It acquires the shared
+  lock before bootout, captures the exact Qwen identity, reclaims the stopped
+  service and candidate file caches, enforces the live 110,000,000,000-byte
+  whole-machine ceiling, restores Qwen, and releases the lock last. Do not nest
+  it under `bench/laguna/run_guarded.py`; both guards own the same lock.
 - [ ] Run one short matched batch with separately selectable corrected cap-83
   control, three-record miss parts, causal-policy, and shared-overlap arms.
   Remove any losing candidate; screen two-record parts only after a chunking win.

@@ -39,6 +39,70 @@ def model_files(root: Path, *, max_files: int = 512) -> list[Path]:
     return sorted(paths)
 
 
+def receipt_safetensor_files(root: Path, *, max_files: int = 16) -> list[Path]:
+    """Resolve a small current-user-owned safetensor set from ``receipt.json``.
+
+    Benchmark-owned compact resident banks live outside the model artifact.  Their
+    receipt binds each file by absolute path and size, which lets the GPU guard
+    invalidate stale clean pages without accepting an arbitrary directory scan.
+    """
+
+    root = root.resolve(strict=True)
+    root_info = root.stat()
+    if not root.is_dir() or root_info.st_uid != os.getuid():
+        raise ValueError('expected a current-user-owned receipt directory')
+    receipt_path = root / 'receipt.json'
+    receipt_info = receipt_path.lstat()
+    if (
+        receipt_path.is_symlink()
+        or not stat.S_ISREG(receipt_info.st_mode)
+        or receipt_info.st_uid != os.getuid()
+    ):
+        raise ValueError('receipt directory is missing regular current-user-owned receipt.json')
+    try:
+        receipt = json.loads(receipt_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError('receipt.json is unreadable or malformed') from exc
+    records = receipt.get('files') if isinstance(receipt, dict) else None
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get('schema') != 1
+        or not isinstance(records, list)
+    ):
+        raise ValueError('receipt.json has an unsupported schema')
+    if not 0 < len(records) <= max_files:
+        raise ValueError('receipt file count is outside bounded reclamation scope')
+
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError('receipt file entry must be an object')
+        try:
+            declared = Path(record['path'])
+            declared_size = int(record['file_bytes'])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError('receipt file entry is malformed') from exc
+        if not declared.is_absolute() or declared.suffix != '.safetensors':
+            raise ValueError('receipt must name absolute safetensors paths')
+        if declared.parent.resolve(strict=True) != root:
+            raise ValueError(f'receipt file escapes its directory: {declared}')
+        info = declared.lstat()
+        if (
+            declared.is_symlink()
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_size != declared_size
+        ):
+            raise ValueError(f'receipt file identity changed: {declared}')
+        path = declared.resolve(strict=True)
+        if path in seen:
+            raise ValueError(f'receipt file is duplicated: {declared}')
+        seen.add(path)
+        paths.append(path)
+    return sorted(paths)
+
+
 def check(rc: int, operation: str) -> None:
     if rc != 0:
         error = ctypes.get_errno()
@@ -111,6 +175,12 @@ def reclaim_model(root: Path) -> list[dict]:
     return [reclaim_file(path) for path in paths]
 
 
+def reclaim_receipt_safetensors(root: Path) -> list[dict]:
+    # Validate the complete receipt-bound set before the first invalidation.
+    paths = receipt_safetensor_files(root)
+    return [reclaim_file(path) for path in paths]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -118,8 +188,14 @@ def main() -> None:
         choices=(
             'stopped_service_file_cache_reclamation',
             'candidate_file_cache_reclamation',
+            'candidate_aux_file_cache_reclamation',
         ),
         default='stopped_service_file_cache_reclamation',
+    )
+    parser.add_argument(
+        '--layout',
+        choices=('model', 'receipt-safetensors'),
+        default='model',
     )
     parser.add_argument('model_dir', type=Path)
     args = parser.parse_args()
@@ -130,10 +206,15 @@ def main() -> None:
 
     before = host_memory_snapshot()
     started = time.monotonic()
-    rows = reclaim_model(args.model_dir)
+    rows = (
+        reclaim_model(args.model_dir)
+        if args.layout == 'model'
+        else reclaim_receipt_safetensors(args.model_dir)
+    )
     after = host_memory_snapshot()
     print(json.dumps({
         'operation': args.operation,
+        'layout': args.layout,
         'model_dir': str(args.model_dir.resolve()), 'files': rows,
         'before': before, 'after': after, 'elapsed_s': time.monotonic() - started,
         'physical_used_reduction_bytes': before['box']['used_bytes'] - after['box']['used_bytes'],
