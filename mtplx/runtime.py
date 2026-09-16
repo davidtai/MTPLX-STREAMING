@@ -1105,7 +1105,9 @@ def _load_impl(
                     path, expert_runtime, config=config, with_mtp=native_streamed_mtp
                 )
                 model = resident.model
-                resident_load_report = resident.report.as_dict()
+                resident_load_report = dict(
+                    getattr(model, "_mtplx_resident_load_report", resident.report.as_dict())
+                )
                 tokenizer = _load_tokenizer_resilient(path, config)
                 if mtp:
                     if native_streamed_mtp:

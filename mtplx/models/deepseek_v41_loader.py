@@ -93,9 +93,11 @@ WO_A_CACHE_RESIDENT_BYTES = NUM_TEXT_LAYERS * WO_A_DENSE_F32_BYTES  # ~5.4 GB
 def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
     """Fixed resident reserve priced into the memory plan: the SWA window plus, when
     ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense caches.
-    Fused projection caches bf16 transposes even with the f32 cache disabled.
-    The target owns one representation per layer, so reserve the larger enabled
-    representation, including prefill on later requests. MTP uses only f32.
+    Fused projection normally caches bf16 transposes even with the f32 cache
+    disabled. The direct packed route owns no target decode copy; layer-major
+    prefill holds at most one target f32 copy at a time. Other target routes own
+    one representation per layer, so reserve the larger enabled representation,
+    including prefill on later requests. MTP uses only f32.
     ``mtp_layers`` adds each loaded DSpark stage's fp32 window and wo_a cache.
 
     ``derived_expert_cache_allowance_bytes`` subtracts ``plan.fixed_bytes`` (which is
@@ -105,11 +107,32 @@ def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
     unless it is reserved here the expert cache keeps its full allowance and the
     process runs ~5.4 GB over plan.  Read at use so the arm's env is honoured at
     open() time (the ab bench arms the lever before load)."""
-    from .deepseek_v41 import _resolve_attn_fused_proj, _resolve_wo_a_cache
+    from .deepseek_v41 import (
+        _resolve_attn_fused_proj,
+        _resolve_attn_wo_a_direct,
+        _resolve_prefill_layer_major,
+        _resolve_wo_a_cache,
+    )
 
     dense_bytes = WO_A_DENSE_F32_BYTES if _resolve_wo_a_cache() else 0
     fused_bytes = WO_A_DENSE_BF16_BYTES if _resolve_attn_fused_proj() else 0
-    extra = NUM_TEXT_LAYERS * max(dense_bytes, fused_bytes) + mtp_layers * dense_bytes
+    direct = _resolve_attn_wo_a_direct()
+    if direct and not fused_bytes:
+        raise ValueError(
+            "MTPLX_DSV41_ATTN_WO_A_DIRECT=1 requires "
+            "MTPLX_DSV41_ATTN_FUSED_PROJ=1"
+        )
+    if direct:
+        # Packed decode owns no dense target copy. Layer-major prefill releases
+        # each f32 cache before advancing, so at most one target layer is live.
+        target_extra = (
+            dense_bytes
+            if dense_bytes and _resolve_prefill_layer_major(None)
+            else NUM_TEXT_LAYERS * dense_bytes
+        )
+    else:
+        target_extra = NUM_TEXT_LAYERS * max(dense_bytes, fused_bytes)
+    extra = target_extra + mtp_layers * dense_bytes
     # DSpark windows store post-RoPE fp32 rows, in addition to their manifest
     # weights. Each stage also inherits the lazy fp32 wo_a cache above.
     mtp_windows = mtp_layers * SLIDING_WINDOW * KV_LATENT_DIM * 4
@@ -772,6 +795,14 @@ def construct_deepseek_v41_resident_model(
     except Exception as exc:
         raise ResidentLoadError(f"resident parameter validation failed: {exc}") from exc
 
+    attention_route_report = None
+    install_attention_routes = getattr(model, "install_attention_routes", None)
+    if callable(install_attention_routes):
+        try:
+            attention_route_report = install_attention_routes()
+        except Exception as exc:
+            raise ResidentLoadError(f"could not install attention routes: {exc}") from exc
+
     if mx_module is None:
         import mlx.core as mx
     else:
@@ -839,6 +870,11 @@ def construct_deepseek_v41_resident_model(
         # ``raw_tensor_bytes`` (unchanged, it prices the bf16 head read from disk)
         # says 1.32 GB.
         resident_report = {**resident_report, **head_mode_pricing}
+    if attention_route_report is not None:
+        resident_report = {
+            **resident_report,
+            "attention_routes": attention_route_report,
+        }
     setattr(model, "_mtplx_expert_runtime", runtime)
     setattr(model, "_mtplx_resident_load_report", resident_report)
     setattr(model, "_mtplx_engram_bank_path", str(engram_bank_path) if engram_bank_path else None)

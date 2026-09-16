@@ -808,6 +808,103 @@ def _select_candidate_blocks(logits, compress_lens, topk_blocks, block_size):
     return keep
 
 
+def _linear_logical_weight_shape(linear) -> tuple[int, ...]:
+    """Return a linear's logical ``[output, input]`` shape without dequantizing."""
+    weight_shape = tuple(getattr(getattr(linear, "weight", None), "shape", ()))
+    if len(weight_shape) != 2:
+        return ()
+    if not isinstance(linear, nn.QuantizedLinear):
+        return weight_shape
+    bits = int(linear.bits)
+    group_size = int(linear.group_size)
+    scales_shape = tuple(linear.scales.shape)
+    packed_divisor = 32 // bits if bits > 0 and 32 % bits == 0 else 0
+    if not packed_divisor or group_size <= 0 or len(scales_shape) != 2:
+        return ()
+    packed = (weight_shape[0], weight_shape[1] * packed_divisor)
+    scaled = (scales_shape[0], scales_shape[1] * group_size)
+    return packed if packed == scaled else ()
+
+
+class _DirectMXFP8OLoraOut:
+    """Prevalidated packed target o-LoRA route with no enabled-path fallback."""
+
+    __slots__ = (
+        "bits",
+        "group_size",
+        "groups",
+        "mode",
+        "per_group_input",
+        "rank",
+        "scales",
+        "weight",
+        "wo_b",
+    )
+
+    def __init__(self, attention: "Attention", quant: tuple) -> None:
+        weight, scales, biases, group_size, bits, mode = quant
+        groups = int(attention.n_groups)
+        rank = int(attention.o_lora_rank)
+        per_group_input = int(
+            attention.n_heads * attention.head_dim // attention.n_groups
+        )
+        if (str(mode), int(bits), int(group_size)) != ("mxfp8", 8, 32):
+            raise ValueError(
+                "direct wo_a route requires the measured mxfp8/bits=8/group_size=32 codec"
+            )
+        if biases is not None:
+            raise ValueError("mxfp8 wo_a must not carry affine biases")
+        if groups <= 0 or rank <= 0 or per_group_input <= 0:
+            raise ValueError("direct wo_a geometry must be positive")
+        expected_weight = (groups * rank, per_group_input // 4)
+        expected_scales = (groups * rank, per_group_input // 32)
+        if tuple(weight.shape) != expected_weight:
+            raise ValueError(
+                f"direct wo_a packed weight shape {tuple(weight.shape)} != {expected_weight}"
+            )
+        if tuple(scales.shape) != expected_scales:
+            raise ValueError(
+                f"direct wo_a scale shape {tuple(scales.shape)} != {expected_scales}"
+            )
+        if _linear_logical_weight_shape(attention.wo_b) != (
+            int(attention.dim), groups * rank
+        ):
+            raise ValueError("direct wo_a route found an incompatible wo_b geometry")
+        self.groups = groups
+        self.rank = rank
+        self.per_group_input = per_group_input
+        self.weight = weight.reshape(groups, rank, -1)
+        self.scales = scales.reshape(groups, rank, -1)
+        self.group_size = int(group_size)
+        self.bits = int(bits)
+        self.mode = str(mode)
+        self.wo_b = attention.wo_b
+
+    def project_grouped(self, grouped: mx.array) -> mx.array:
+        """Project pre-grouped ``[groups, rows, input]`` BF16 activations."""
+        return mx.gather_qmm(
+            grouped,
+            self.weight,
+            self.scales,
+            None,
+            transpose=True,
+            group_size=self.group_size,
+            bits=self.bits,
+            mode=self.mode,
+        )
+
+    def __call__(self, o, qcos, qsin, b, s):
+        from mtplx.models import deepseek_v41_fused_proj_kernels as _fp
+
+        o = _fp.rope_heads(o, qcos, qsin, inverse=True, out_dtype=mx.bfloat16)
+        grouped = o.reshape(b * s, self.groups, self.per_group_input).swapaxes(0, 1)
+        o = self.project_grouped(grouped)
+        o = o.swapaxes(0, 1).reshape(b, s, self.groups * self.rank)
+        out = self.wo_b(o)
+        _fp.note_out()
+        return out
+
+
 # ---------------------------------------------------------------------------
 # Attention (MLA + o-LoRA + sliding window + CSA2)
 # ---------------------------------------------------------------------------
@@ -853,6 +950,9 @@ class Attention(nn.Module):
         # einsum, not a plain GEMM); an nn.Linear so nn.quantize can make it q8.
         self.wo_a = nn.Linear(in_per_group, self.n_groups * self.o_lora_rank, bias=False)
         self.wo_b = nn.Linear(self.n_groups * self.o_lora_rank, self.dim, bias=False)
+        # The measured packed route is installed after strict resident loading.
+        # This prebound default preserves the existing fused BF16-matmul path.
+        self._out_prep_fused_impl = self._out_prep_fused_dense
 
         self.compressor = Compressor(args, self.compress_ratio) if self.is_kv_source else None
         self.indexer = Indexer(args, owns_k=self.is_kv_source) if self.is_index_source else None
@@ -1622,6 +1722,35 @@ class Attention(nn.Module):
         w = self._o_lora_dense_weight()
         return mx.einsum("bsgd,grd->bsgr", o.astype(mx.float32), w.astype(mx.float32))
 
+    def _wo_a_quant(self):
+        """Return packed ``wo_a`` storage and format without materializing it."""
+        wo = self.wo_a
+        if not isinstance(wo, nn.QuantizedLinear):
+            return None
+        return (
+            wo.weight,
+            wo.scales,
+            wo.get("biases"),
+            wo.group_size,
+            wo.bits,
+            getattr(wo, "mode", "affine"),
+        )
+
+    def install_wo_a_direct_route(self) -> dict:
+        """Validate and bind the measured packed-MXFP8 fused output route."""
+        quant = self._wo_a_quant()
+        if quant is None:
+            raise ValueError("direct wo_a route requires a quantized wo_a")
+        route = _DirectMXFP8OLoraOut(self, quant)
+        self._wo_a_bf16T_cache = None
+        self._out_prep_fused_impl = route
+        return {
+            "mode": "direct_mxfp8_gather_qmm",
+            "groups": route.groups,
+            "rank": route.rank,
+            "input_per_group": route.per_group_input,
+        }
+
     # --- W101 / K36: fused decode/verify projection-chain path -----------------
     def _qkv_prep_fused(self, x, qcos, qsin, b, s, H, hd):
         """W101 fused qkv-prep (GPU, small-M): the three ``mx.quantized_matmul``
@@ -1638,6 +1767,10 @@ class Attention(nn.Module):
         return q, qr, kv_new
 
     def _out_prep_fused(self, o, qcos, qsin, b, s):
+        """Execute the construction-bound fused output route directly."""
+        return self._out_prep_fused_impl(o, qcos, qsin, b, s)
+
+    def _out_prep_fused_dense(self, o, qcos, qsin, b, s):
         """W101 fused out-prep (GPU, small-M).  The query-RoPE removal + group layout
         is ONE fused ``metal_kernel``.  The grouped o-LoRA down-projection is a
         BATCHED ``mx.matmul`` (one tuned dispatch) over a weight cached in the
@@ -2389,6 +2522,7 @@ def _resolve_attn_lean_casts(raw=None) -> bool:
 #: win is a GPU-window measurement; the fused path caches a bf16 wo_a copy resident
 #: per layer, ~67 MB x 40 = 2.7 GB -- opt-in under the box budget).
 _ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
+_ATTN_WO_A_DIRECT_ENV = "MTPLX_DSV41_ATTN_WO_A_DIRECT"
 
 
 def _resolve_attn_fused_proj(raw=None) -> bool:
@@ -2405,6 +2539,20 @@ def _resolve_attn_fused_proj(raw=None) -> bool:
     raise ValueError(
         f"{_ATTN_FUSED_PROJ_ENV}={val!r} is not a boolean "
         "(1/true/on/yes or empty/0/off for the eager projection chains)"
+    )
+
+
+def _resolve_attn_wo_a_direct(raw=None) -> bool:
+    """Resolve the construction-time packed MXFP8 ``wo_a`` route (default OFF)."""
+    val = os.environ.get(_ATTN_WO_A_DIRECT_ENV) if raw is None else raw
+    val = (val or "").strip().lower()
+    if val in ("", "0", "false", "off", "no", "none", "default"):
+        return False
+    if val in ("1", "true", "on", "yes"):
+        return True
+    raise ValueError(
+        f"{_ATTN_WO_A_DIRECT_ENV}={val!r} is not a boolean "
+        "(1/true/on/yes or empty/0/off)"
     )
 
 
@@ -4614,6 +4762,30 @@ class Model(nn.Module):
                     mode="mxfp4",
                     class_predicate=_make_mtp_expert_quant_predicate(32),
                 )
+
+    def install_attention_routes(self) -> dict:
+        """Install post-load target attention routes at one validation boundary."""
+        if not _resolve_attn_wo_a_direct():
+            return {"wo_a_mode": "dense_bf16_matmul", "layers_installed": 0}
+        if not _resolve_attn_fused_proj():
+            raise ValueError(
+                f"{_ATTN_WO_A_DIRECT_ENV}=1 requires {_ATTN_FUSED_PROJ_ENV}=1"
+            )
+        reports = [layer.attn.install_wo_a_direct_route() for layer in self.model.layers]
+        contracts = {
+            (report["mode"], report["groups"], report["rank"], report["input_per_group"])
+            for report in reports
+        }
+        if len(contracts) != 1:
+            raise ValueError("target attention layers do not share one direct wo_a contract")
+        mode, groups, rank, per_group_input = contracts.pop()
+        return {
+            "wo_a_mode": mode,
+            "layers_installed": len(reports),
+            "groups": groups,
+            "rank": rank,
+            "input_per_group": per_group_input,
+        }
 
     def apply_head_mode(self) -> Optional[dict]:
         """Repack the output head per ``MTPLX_DSV41_HEAD_MODE`` (W40 / K21), ONCE,

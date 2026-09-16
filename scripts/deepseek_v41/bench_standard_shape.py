@@ -1399,7 +1399,9 @@ def run_real(args) -> int:
     receipt["memory_limit_bytes"] = runtime.config.memory_limit_bytes
     receipt["expert_cache_limit_bytes"] = runtime.config.expert_cache_limit_bytes
     receipt["resolved_plan"] = _resolved_plan(runtime, args)
-    receipt["resident_load_report"] = resident.report.as_dict()
+    receipt["resident_load_report"] = dict(
+        getattr(model, "_mtplx_resident_load_report", resident.report.as_dict())
+    )
     receipt["memory_derivation"] = derivation.as_dict()
     receipt["target_plan"] = getattr(args, "_dsv41_target_plan", None)
     receipt["allocator_cache_limit"] = cache_limit_report

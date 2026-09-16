@@ -84,17 +84,36 @@ def test_fused_cache_reloads_each_packed_input(attention, member):
     np.testing.assert_array_equal(rebuilt, expected.reshape(2, 2, 6).swapaxes(1, 2))
 
 
-@pytest.mark.parametrize("cache,fused", [(False, False), (False, True), (True, False), (True, True)])
-def test_plan_prices_largest_target_representation_and_native_mtp(monkeypatch, cache, fused):
+@pytest.mark.parametrize(
+    "cache,fused,direct,layer_major",
+    [
+        (False, False, False, False),
+        (False, True, False, False),
+        (True, False, False, False),
+        (True, True, False, False),
+        (True, True, True, True),
+    ],
+)
+def test_plan_prices_largest_target_representation_and_native_mtp(
+    monkeypatch, cache, fused, direct, layer_major
+):
     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41", SimpleNamespace(
-        _resolve_wo_a_cache=lambda: cache, _resolve_attn_fused_proj=lambda: fused))
+        _resolve_wo_a_cache=lambda: cache,
+        _resolve_attn_fused_proj=lambda: fused,
+        _resolve_attn_wo_a_direct=lambda: direct,
+        _resolve_prefill_layer_major=lambda _override: layer_major,
+    ))
     ns = definitions("mtplx/models/deepseek_v41_loader.py",
                      {"deepseek_v41_additional_resident_bytes"}, {
         "__package__": "mtplx.models", "NUM_TEXT_LAYERS": 40,
         "WO_A_DENSE_F32_BYTES": 134217728, "WO_A_DENSE_BF16_BYTES": 67108864,
         "SWA_WINDOW_BYTES": 5242880, "SLIDING_WINDOW": 128, "KV_LATENT_DIM": 512,
     })
-    target = 40 * (134217728 if cache else 67108864 if fused else 0)
+    target = (
+        134217728
+        if direct and layer_major and cache
+        else 40 * (134217728 if cache else 67108864 if fused else 0)
+    )
     stage = 134217728 if cache else 0
     assert ns["deepseek_v41_additional_resident_bytes"](mtp_layers=3) == (
         5242880 + 3 * 128 * 512 * 4 + target + 3 * stage)

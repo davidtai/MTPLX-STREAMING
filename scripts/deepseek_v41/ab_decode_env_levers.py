@@ -551,6 +551,8 @@ ATTN_LEAN_CASTS_ENV = "MTPLX_DSV41_ATTN_LEAN_CASTS"
 # bf16 wo_a), GPU-only, small-M.  Independent of K29 (the SEPARATE core); composes
 # with the wo_a cache + lean casts (docs/deepseek-v41/W101_ATTN_FUSED_PROJ.md).
 ATTN_FUSED_PROJ_ENV = "MTPLX_DSV41_ATTN_FUSED_PROJ"
+# Packed MXFP8 target ``wo_a`` route, installed once after strict resident load.
+ATTN_WO_A_DIRECT_ENV = "MTPLX_DSV41_ATTN_WO_A_DIRECT"
 
 # W115: the DSpark lane's per-verify K29 knob.  ``_run_arm`` (and the served
 # ``arm_dspark_decode_kernels``) ``os.environ.setdefault`` K29 (DECODE_ATTN_KERNEL) +
@@ -638,6 +640,7 @@ ALL_LEVER_ENVS = (
     ATTN_LEAN_CASTS_ENV,
     # W101 (appended):
     ATTN_FUSED_PROJ_ENV,
+    ATTN_WO_A_DIRECT_ENV,
     # W118 (appended; coordinate with any concurrent list extension): the MLX
     # allocator-limit headroom lever (GiB above the plan; residency-only, byte-identical).
     MLX_LIMIT_HEADROOM_ENV,
@@ -677,7 +680,7 @@ def _preset(
     runner=None,
     kv_bounded=None, kv_bounded_maxkv=None,
     wo_a_cache=None, attn_core_compile=None,
-    attn_lean_casts=None, attn_fused_proj=None,
+    attn_lean_casts=None, attn_fused_proj=None, attn_wo_a_direct=None,
     dspark_verify_k29=None,
     verify_record_hashes=None,
     mlx_limit_headroom=None,
@@ -746,6 +749,7 @@ def _preset(
         ATTN_CORE_COMPILE_ENV: attn_core_compile,
         ATTN_LEAN_CASTS_ENV: attn_lean_casts,
         ATTN_FUSED_PROJ_ENV: attn_fused_proj,
+        ATTN_WO_A_DIRECT_ENV: attn_wo_a_direct,
         DSPARK_VERIFY_K29_ENV: dspark_verify_k29,
         VERIFY_RECORD_HASHES_ENV: verify_record_hashes,
         MLX_LIMIT_HEADROOM_ENV: mlx_limit_headroom,
@@ -1535,6 +1539,18 @@ ARM_PRESETS = {
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
         decode_attn_kernel="0", dspark_verify_k29="0", gate_prefetch="0",
     ),
+    # Exact-layout real-weight one-layer screen: direct packed MXFP8 wo_a plus
+    # the common wo_b was 1.22x at M=1 and 1.19x at M=6, while removing the
+    # 2.684 GB target BF16 cache.
+    "cell16k_ring_v2_draft_attn_pf0_woa_direct": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="bf16", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        attn_wo_a_direct="1",
+        decode_attn_kernel="0", dspark_verify_k29="0", gate_prefetch="0",
+    ),
     # W110 (BENCH-ONLY DIAGNOSTIC): cell16k_ring_v2 + decode-path per-record sha256
     # turned ON (MTPLX_DSV41_VERIFY_RECORD_HASHES=1, env-authoritative over the ab
     # harness's --verify-record-hashes default False).  This is NOT a perf lever:
@@ -1595,6 +1611,7 @@ ROUNDING_CLASS_ENVS = (
     HC_PREMIX_KERNEL_ENV,
     "MTPLX_DSV41_DRAFT_HEAD_BF16",
     ATTN_FUSED_PROJ_ENV,  # W101: metal_kernel glue + cached pre-transposed wo_a (GPU numerics: rounding-class, 0 greedy flips / 65)
+    ATTN_WO_A_DIRECT_ENV,  # packed MXFP8 gather_qmm changes the reduction path
 )
 
 
@@ -1652,7 +1669,12 @@ def _pairwise_rounding_class_keys(base, candidate) -> list:
         raw = str(value or "").strip().lower()
         if key == KV_BOUNDED_ENV:
             return raw in ("1", "true", "yes", "on")
-        if key in (DECODE_ATTN_KERNEL_ENV, ATTN_CORE_COMPILE_ENV, ATTN_FUSED_PROJ_ENV):
+        if key in (
+            DECODE_ATTN_KERNEL_ENV,
+            ATTN_CORE_COMPILE_ENV,
+            ATTN_FUSED_PROJ_ENV,
+            ATTN_WO_A_DIRECT_ENV,
+        ):
             # Match the strict bool resolvers without importing the Metal model.
             if raw in ("", "0", "false", "off", "no", "none", "default"):
                 return False
@@ -4585,7 +4607,9 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # counts + bytes + source), so an A/B is attributable to a capacity and
             # the in-process bench is comparable to the served profile plan.
             "resolved_plan": _resolved_plan(runtime, args),
-            "resident_load_report": resident.report.as_dict(),
+            "resident_load_report": dict(
+                getattr(model, "_mtplx_resident_load_report", resident.report.as_dict())
+            ),
             # W81: DECODE-scoped expert-streaming counters for the AR reference
             # decode (hit rate + streamed bytes/token), matching the served
             # daemon's serve_stream_counters. David: hit rate + bandwidth/token.

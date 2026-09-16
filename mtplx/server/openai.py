@@ -3249,6 +3249,7 @@ _DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
     "MTPLX_DSV41_ATTN_CORE_COMPILE",
     "MTPLX_DSV41_ATTN_LEAN_CASTS",
     "MTPLX_DSV41_ATTN_FUSED_PROJ",
+    "MTPLX_DSV41_ATTN_WO_A_DIRECT",
     # W118 (appended -- coordinate with any concurrent list extension): the MLX
     # allocator-limit headroom lever.  It is read on the served path too
     # (expert_runtime.apply_mlx_memory_cap, called from ExpertStreamingRuntime.open),
