@@ -13,9 +13,10 @@ experts + engram attached), for each requested prefill cell:
     (``scripts/deepseek_v41/dump_hidden_states.build_prompt``), so every receipt
     carries identical prompt-build metadata;
   * one greedy (argmax) generation of ``--steps`` decode tokens (default 256);
-  * reports per cell: prefill tok/s, TTFT, decode tok/s, peak GB
-    (``mx.get_peak_memory`` + process RSS), wall time, expert records gathered,
-    engram rows gathered, and the first 200 chars of the decoded text.
+  * reports per cell: prefill tok/s, TTFT, decode tok/s, the separate MLX
+    allocator peak, process ``phys_footprint`` peak, and whole-machine physical
+    peak (including file cache), wall time, expert records gathered, engram rows
+    gathered, and the first 200 chars of the decoded text.
 
 The default cells are 1,024 (David's THE input) and 16,384 (the prefill cell);
 both are run in one invocation. A greedy run is deterministic, so three seeds are
@@ -310,11 +311,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--cache-policy",
+        choices=("frequency", "lru", "transition-window"),
+        default=None,
+        help=(
+            "expert-cache admission policy. DEFAULT: resolve from --expert-profile; "
+            "transition-window is the bounded DeepSeek-V4.1 causal-policy arm."
+        ),
+    )
+    parser.add_argument(
+        "--verify-shared-overlap",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "construction-time M6 arm: enqueue the resident shared MLP after "
+            "verify demand reads are submitted and before waiting for them. "
+            "Default OFF is the unchanged routed-then-shared control."
+        ),
+    )
+    parser.add_argument(
         "--expert-profile",
         default="deepseek-v41-mxfp4-75",
         help=(
             "profile whose plan fields (transient_slots, split_route_release, "
-            "prefetch_slots) seed the runtime when the flag is unset; 'none' "
+            "prefetch_slots, cache_policy) seed the runtime when the flag is unset; 'none' "
             "disables profile resolution (loader defaults)."
         ),
     )
@@ -349,6 +369,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pre-load system baseline in decimal GB; guard measurement takes precedence.")
     parser.add_argument("--allocator-cache-gib", type=float, default=None,
         help="Retained MLX allocator cache in GiB (default 6, inside the Metal budget).")
+    parser.add_argument(
+        "--runtime-reserve-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=(
+            "in-plan MLX transient reserve (default 7 GiB); staged 110 GB "
+            "capacity screens may lower it to 3 or 2 GiB after measured headroom."
+        ),
+    )
     parser.add_argument(
         "--memory-profile",
         action="store_true",
@@ -614,7 +644,7 @@ class _MLXMemProbe:
         return _process_rss_bytes()
 
     def new_sampler(self, interval_s: float = 1.0) -> "_MemorySampler":
-        """A fresh 1 Hz background RSS + system-used sampler (start/stop it around
+        """A fresh 1 Hz background phys_footprint + system-used sampler (start/stop it around
         the timed decode; feed it to :meth:`memory_block`)."""
 
         return _MemorySampler(interval_s=interval_s)
@@ -1232,7 +1262,11 @@ def run_dry(args) -> int:
 
 
 _PROFILE_PLAN_FIELDS = (
-    "transient_slots", "split_route_release", "prefetch_slots", "bypass_page_cache",
+    "transient_slots",
+    "split_route_release",
+    "prefetch_slots",
+    "bypass_page_cache",
+    "cache_policy",
 )
 
 
@@ -1241,14 +1275,21 @@ def _resolve_plan_overrides(args) -> dict:
 
     The standard-shape bench must run the SAME slot plan as the served profile;
     the loader otherwise leaves transient_slots unset -> spec.top_k, which starved
-    the verify fast path in window 31.  Precedence: explicit --transient-slots >
-    profile value > loader default (unset).
+    the verify fast path in window 31.  Explicit transient-slot and cache-policy
+    flags take precedence over the profile, which takes precedence over loader
+    defaults.
     """
 
     overrides: dict = {}
     explicit_transient = getattr(args, "transient_slots", None)
     if explicit_transient is not None:
         overrides["transient_slots"] = int(explicit_transient)
+    explicit_policy = getattr(args, "cache_policy", None)
+    if explicit_policy is not None:
+        overrides["cache_policy"] = str(explicit_policy)
+    overrides["verify_shared_overlap"] = bool(
+        getattr(args, "verify_shared_overlap", False)
+    )
     profile_name = str(getattr(args, "expert_profile", "none") or "none")
     if profile_name != "none":
         try:
@@ -1275,15 +1316,20 @@ def _resolved_plan(runtime, args) -> dict | None:
     record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
     transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
+    config = getattr(runtime, "config", None)
     return {
         "transient_slots": transient_slots,
         "persistent_slots": int(getattr(plan, "persistent_slots", 0) or 0),
         "expert_record_bytes": record_bytes,
         "transient_bytes_total": transient_slots * record_bytes,
         "io_cache_mode": getattr(getattr(runtime, "reader", None), "cache_mode", None),
-        "split_route_release": getattr(
-            getattr(runtime, "config", None), "split_route_release", None
+        "split_route_release": getattr(config, "split_route_release", None),
+        "runtime_reserve_bytes": getattr(config, "runtime_reserve_bytes", None),
+        "cache_policy": getattr(config, "cache_policy", None),
+        "verify_shared_overlap": bool(
+            getattr(config, "verify_shared_overlap", False)
         ),
+        "single_slot_pool": bool(getattr(runtime, "_single_slot_pool", False)),
         "source": (
             "explicit" if getattr(args, "transient_slots", None) is not None
             else f"profile:{getattr(args, 'expert_profile', 'none')}"

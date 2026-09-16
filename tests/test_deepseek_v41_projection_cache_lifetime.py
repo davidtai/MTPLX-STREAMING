@@ -91,6 +91,7 @@ def test_fused_cache_reloads_each_packed_input(attention, member):
         (False, True, False, False),
         (True, False, False, False),
         (True, True, False, False),
+        (True, True, False, True),
         (True, True, True, True),
     ],
 )
@@ -112,6 +113,8 @@ def test_plan_prices_largest_target_representation_and_native_mtp(
     target = (
         134217728
         if direct and layer_major and cache
+        else max(40 * 67108864, 134217728 + 39 * 67108864)
+        if cache and fused and layer_major
         else 40 * (134217728 if cache else 67108864 if fused else 0)
     )
     stage = 134217728 if cache else 0

@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import random
 from collections import Counter
+from types import SimpleNamespace
 
 import mlx.core as mx
 import pytest
@@ -676,6 +677,13 @@ def test_bench_counters_and_cold_reset_work_with_bare_runtime():
     class _Model:
         def __init__(self, rt):
             self._mtplx_expert_runtime = rt
+            self._engram_banks = [
+                SimpleNamespace(
+                    cache=SimpleNamespace(
+                        stats={"hits": 7, "misses": 2, "rows_read": 18}
+                    )
+                )
+            ]
 
     rt = _BareRuntime()
     model = _Model(rt)
@@ -683,6 +691,7 @@ def test_bench_counters_and_cold_reset_work_with_bare_runtime():
     assert snap is not None, "bench lost the streaming snapshot on a bare runtime"
     assert "expert_cache" in snap and "cold_start" in snap
     assert snap["expert_cache"]["pool_loads"] == 1
+    assert snap["engram_row_cache"] == {"hits": 7, "misses": 2, "rows_read": 18}
     assert ab._cold_reset_expert_streaming(model) is True
     assert rt.reset_calls == 1  # the DSpark cold reset actually fired
 

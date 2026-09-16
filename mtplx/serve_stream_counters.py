@@ -49,7 +49,10 @@ _EXPERT_CACHE_KEYS = (
 
 def _engram_row_cache_totals(rt: Any) -> dict[str, int] | None:
     """Sum NGramRowCache.stats across the model's per-layer engram banks."""
-    model = getattr(rt, "model", None)
+    # Served generation supplies the MTPLX runtime, whose ``model`` owns the
+    # banks.  The in-process DeepSeek benchmark has only the bare expert runtime
+    # plus the model as a separate object, so its caller passes that model here.
+    model = getattr(rt, "model", None) or rt
     banks = getattr(model, "_engram_banks", None)
     if not banks:
         return None
@@ -68,7 +71,7 @@ def _engram_row_cache_totals(rt: Any) -> dict[str, int] | None:
     return agg if found else None
 
 
-def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
+def snapshot_stream_counters(rt: Any, *, model: Any = None) -> dict[str, Any]:
     """Best-effort flat snapshot of the per-request-attributable counters.
 
     Every source is guarded: an unavailable one is absent from the result
@@ -155,7 +158,7 @@ def snapshot_stream_counters(rt: Any) -> dict[str, Any]:
             out["io"] = {str(k): io_metrics[k] for k in io_metrics}
 
     # 2. Engram row cache (per-layer NGramRowCache stats, summed).
-    engram = _engram_row_cache_totals(rt)
+    engram = _engram_row_cache_totals(model if model is not None else rt)
     if engram is not None:
         out["engram_row_cache"] = engram
 

@@ -41,6 +41,7 @@ from .expert_streaming import (
     RoutePlan,
     RoutePolicyTxn,
     RoutingPhase,
+    TRANSITION_WINDOW_CACHE_POLICY,
 )
 from .expert_streaming_models import (
     MIXED_OFFICIAL_CODEC,
@@ -230,6 +231,11 @@ class ExpertStreamingConfig:
     # coalesced into scatter reads) so resident-expert compute overlaps the
     # miss reads. OFF leaves the per-expert split-part path byte-identical.
     overlap_miss_reads: bool = False
+    # DeepSeek-V4.1 verify-only scheduling arm: after a split route has submitted
+    # its demand misses, enqueue the resident shared MLP before waiting for those
+    # reads. Installed once at switch construction; OFF preserves the unchanged
+    # routed-then-shared control ordering.
+    verify_shared_overlap: bool = False
     prefetch_slots: int = 0
     speculative_io_fraction: float = 0.25
     route_census: bool = True
@@ -288,8 +294,15 @@ class ExpertStreamingConfig:
         if not 0.0 < decay <= 1.0:
             raise ValueError("frequency_decay must be in (0, 1]")
         object.__setattr__(self, "frequency_decay", decay)
-        if self.cache_policy not in {"frequency", "lru"}:
-            raise ValueError("cache_policy must be 'frequency' or 'lru'")
+        if self.cache_policy not in {
+            "frequency",
+            "lru",
+            TRANSITION_WINDOW_CACHE_POLICY,
+        }:
+            raise ValueError(
+                "cache_policy must be 'frequency', 'lru', or "
+                f"{TRANSITION_WINDOW_CACHE_POLICY!r}"
+            )
         if self.cache_scope not in {"layer", "global"}:
             raise ValueError("cache_scope must be 'layer' or 'global'")
         if self.q2_expert_kernel not in {
@@ -355,6 +368,17 @@ class ExpertStreamingConfig:
             raise ValueError(
                 "overlap_miss_reads requires the component-banks slot layout"
             )
+        if not isinstance(self.verify_shared_overlap, bool):
+            raise ValueError("verify_shared_overlap must be bool")
+        if self.verify_shared_overlap:
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "verify_shared_overlap is only installed for DeepSeek-V4.1"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "verify_shared_overlap requires the component-banks slot layout"
+                )
         object.__setattr__(
             self,
             "prefetch_slots",
@@ -362,6 +386,26 @@ class ExpertStreamingConfig:
         )
         if self.prefetch_slots and self.cache_scope != "layer":
             raise ValueError("prefetch_slots require cache_scope 'layer'")
+        if self.cache_policy == TRANSITION_WINDOW_CACHE_POLICY:
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "transition-window cache policy is only installed for "
+                    "DeepSeek-V4.1"
+                )
+            if self.cache_scope != "layer":
+                raise ValueError(
+                    "transition-window cache policy requires cache_scope 'layer'"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "transition-window cache policy requires the component-banks "
+                    "slot layout"
+                )
+            if self.prefetch_slots:
+                raise ValueError(
+                    "transition-window cache policy cannot be combined with "
+                    "speculative prefetch"
+                )
         if isinstance(self.speculative_io_fraction, bool) or not isinstance(
             self.speculative_io_fraction, (int, float)
         ):
@@ -2895,12 +2939,25 @@ class ExpertStreamingRuntime:
         # MED-6: the single slot pool is implemented only for per-layer banks
         # (GlobalExpertSlotBank has no pool policy and would fault every prefill
         # wave). Gate it on layer scope and warn rather than crash a served config.
-        single_slot_pool = _ssp_env and config.cache_scope == "layer"
+        # The transition-window policy is itself a construction-time request for
+        # the per-layer merged pool; it does not depend on a second environment
+        # switch.  Other policies retain the existing runner/env selection.
+        single_slot_pool = (
+            config.cache_policy == TRANSITION_WINDOW_CACHE_POLICY
+            or (_ssp_env and config.cache_scope == "layer")
+        )
         if _ssp_env and config.cache_scope != "layer":
             _LOGGER.warning(
                 "MTPLX_DSV41_SINGLE_SLOT_POOL ignored: it requires cache_scope "
                 "'layer' (got %r); running the two-tier path.",
                 config.cache_scope,
+            )
+        if (
+            config.cache_policy == TRANSITION_WINDOW_CACHE_POLICY
+            and model_spec.expert_count != 384
+        ):
+            raise ExpertStreamingConfigurationError(
+                "transition-window cache policy requires exactly 384 experts"
             )
         plan = config.memory_plan(
             model_spec,

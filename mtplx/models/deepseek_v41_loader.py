@@ -94,10 +94,11 @@ def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
     """Fixed resident reserve priced into the memory plan: the SWA window plus, when
     ``MTPLX_DSV41_ATTN_WO_A_CACHE`` is armed, the f32 ``wo_a`` dense caches.
     Fused projection normally caches bf16 transposes even with the f32 cache
-    disabled. The direct packed route owns no target decode copy; layer-major
-    prefill holds at most one target f32 copy at a time. Other target routes own
-    one representation per layer, so reserve the larger enabled representation,
-    including prefill on later requests. MTP uses only f32.
+    disabled. The direct packed route owns no target decode copy. Layer-major
+    prefill holds at most one target f32 copy at a time; on the non-direct fused
+    route it replaces that layer's bf16 copy while the other layers remain bf16.
+    Other target routes own one representation per layer, so reserve the larger
+    enabled representation, including prefill on later requests. MTP uses only f32.
     ``mtp_layers`` adds each loaded DSpark stage's fp32 window and wo_a cache.
 
     ``derived_expert_cache_allowance_bytes`` subtracts ``plan.fixed_bytes`` (which is
@@ -129,6 +130,15 @@ def deepseek_v41_additional_resident_bytes(*, mtp_layers: int = 0) -> int:
             dense_bytes
             if dense_bytes and _resolve_prefill_layer_major(None)
             else NUM_TEXT_LAYERS * dense_bytes
+        )
+    elif dense_bytes and fused_bytes and _resolve_prefill_layer_major(None):
+        # Layer-major prefill replaces each layer's persistent bf16 decode copy
+        # with one temporary f32 copy, then restores bf16 before advancing.  The
+        # peak is therefore either all bf16 copies or the current f32 copy plus
+        # the other layers' bf16 copies; the f32 form is never live for all layers.
+        target_extra = max(
+            NUM_TEXT_LAYERS * fused_bytes,
+            dense_bytes + (NUM_TEXT_LAYERS - 1) * fused_bytes,
         )
     else:
         target_extra = NUM_TEXT_LAYERS * max(dense_bytes, fused_bytes)

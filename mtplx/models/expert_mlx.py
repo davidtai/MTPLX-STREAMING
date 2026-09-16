@@ -2346,6 +2346,28 @@ class HotExpertSwitchGLU(nn.Module):
         self._shadow_bank = (
             shadow_lookup(self.layer_index) if callable(shadow_lookup) else None
         )
+        # M6 is an explicit construction-time route. The control binds no
+        # submitter and retains routed-then-shared ordering; the candidate binds
+        # the verify-miss submitter once, with no environment read or invariant
+        # revalidation in the measured path.
+        self._verify_shared_async_eval = None
+        self._verify_shared_submit = None
+        if getattr(runtime.config, "verify_shared_overlap", False):
+            async_eval = getattr(mx, "async_eval", None)
+            if not callable(async_eval):
+                raise RuntimeError(
+                    "verify_shared_overlap requires callable mlx.core.async_eval"
+                )
+            self._verify_shared_async_eval = async_eval
+            self._verify_shared_submit = self._submit_verify_shared_overlap
+
+    def _submit_verify_shared_overlap(
+        self,
+        shared_work: Callable[[], mx.array],
+    ) -> mx.array:
+        shared = shared_work()
+        self._verify_shared_async_eval(shared)
+        return shared
 
     def _dispatch_component_bank(
         self,
@@ -3191,6 +3213,43 @@ class HotExpertSwitchGLU(nn.Module):
                                 defer=True,
                             )
                             _fence_ready = _pending.hit_ready
+                        # The resident shared branch depends only on ``x``.  Its
+                        # graph can run while the native readers satisfy this
+                        # verify wave's demand misses, rather than after the
+                        # blocking miss iterator has drained.  Keep the result so
+                        # the post-route once-only guard handles all-hit and
+                        # non-decode routes without duplicating the branch.
+                        if (
+                            self._verify_shared_submit is not None
+                            and shared_work is not None
+                            and shared is None
+                            and phase is RoutingPhase.DECODE
+                            and _pending.misses_pending
+                        ):
+                            if (
+                                pipeline_ledger is not None
+                                and shared_pipeline_work is not None
+                            ):
+                                _pipeline_work_call(
+                                    pipeline_ledger,
+                                    shared_pipeline_work,
+                                    "claim",
+                                    phase=phase,
+                                )
+                            try:
+                                shared = self._verify_shared_submit(shared_work)
+                            finally:
+                                if (
+                                    pipeline_ledger is not None
+                                    and shared_pipeline_work is not None
+                                ):
+                                    _pipeline_work_call(
+                                        pipeline_ledger,
+                                        shared_pipeline_work,
+                                        "close",
+                                        phase=phase,
+                                    )
+                                    shared_pipeline_work = None
                         for _miss_ready in _pending.iter_ready_misses():
                             _ready_experts = set(_miss_ready.plan.experts)
                             _miss_positions = tuple(

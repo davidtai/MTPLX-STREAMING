@@ -15,6 +15,11 @@ from math import isfinite
 from operator import index
 from typing import Callable, Iterable
 
+import numpy as np
+
+
+TRANSITION_WINDOW_CACHE_POLICY = "transition-window"
+
 
 def _integer(name: str, value: object, *, minimum: int | None = None) -> int:
     if isinstance(value, bool):
@@ -623,8 +628,24 @@ class LayerExpertSlotBank:
         self.prefetch_slots = prefetch_slots
         self.slot_count = persistent_slots + transient_slots + prefetch_slots
         self.frequency_decay = frequency_decay
-        if cache_policy not in {"frequency", "lru"}:
-            raise ValueError("cache_policy must be 'frequency' or 'lru'")
+        if cache_policy not in {
+            "frequency",
+            "lru",
+            TRANSITION_WINDOW_CACHE_POLICY,
+        }:
+            raise ValueError(
+                "cache_policy must be 'frequency', 'lru', or "
+                f"{TRANSITION_WINDOW_CACHE_POLICY!r}"
+            )
+        if cache_policy == TRANSITION_WINDOW_CACHE_POLICY:
+            if not single_pool:
+                raise ValueError(
+                    "transition-window cache policy requires a single slot pool"
+                )
+            if expert_count != 384:
+                raise ValueError(
+                    "transition-window cache policy requires exactly 384 experts"
+                )
         self.cache_policy = cache_policy
 
         # Prefill traffic must neither age nor refresh decode admission state.
@@ -693,6 +714,28 @@ class LayerExpertSlotBank:
         # the next PREFILL (a new request) demotes the prior request's protected
         # set so this prompt can re-warm.  Reset by that demote and by reset().
         self._saw_decode_since_prefill = False
+        # Exact DeepSeek-V4.1 MTP candidate selected at construction.  The dense
+        # float32 table is bounded to 384x384 per routed layer (~576 KiB); the
+        # window contains at most sixteen unique-expert routes.  State remains
+        # absent on every other policy, so their hot paths and host footprint are
+        # unchanged.
+        if self.cache_policy == TRANSITION_WINDOW_CACHE_POLICY:
+            self._transition_counts: np.ndarray | None = np.zeros(
+                (self.expert_count, self.expert_count), dtype=np.float32
+            )
+            self._transition_denominators: np.ndarray | None = np.zeros(
+                self.expert_count, dtype=np.float32
+            )
+            self._transition_window_frequency: np.ndarray | None = np.zeros(
+                self.expert_count, dtype=np.float32
+            )
+            self._transition_window: deque[tuple[int, ...]] | None = deque()
+        else:
+            self._transition_counts = None
+            self._transition_denominators = None
+            self._transition_window_frequency = None
+            self._transition_window = None
+        self._transition_previous: tuple[int, ...] | None = None
 
     @property
     def resident_experts(self) -> tuple[int, ...]:
@@ -793,6 +836,7 @@ class LayerExpertSlotBank:
         self._pool_recency.clear()
         self._pool_clock = 0
         self._saw_decode_since_prefill = False
+        self._reset_transition_window()
 
     def plan_prefetch(self, expert_ids: Iterable[int]) -> tuple[SlotLoad, ...]:
         """Assign shared-ring slots for this layer's predicted experts.
@@ -1206,6 +1250,233 @@ class LayerExpertSlotBank:
                 self._protected.discard(coldest)
         return 1
 
+    # ------------------------------------------------------------------
+    # DeepSeek-V4.1 one-step transition + 16-route window admission.
+    # ------------------------------------------------------------------
+    def _reset_transition_window(self) -> None:
+        counts = self._transition_counts
+        if counts is None:
+            return
+        denominators = self._transition_denominators
+        window_frequency = self._transition_window_frequency
+        window = self._transition_window
+        assert denominators is not None
+        assert window_frequency is not None
+        assert window is not None
+        counts.fill(0.0)
+        denominators.fill(0.0)
+        window_frequency.fill(0.0)
+        window.clear()
+        self._transition_previous = None
+
+    def _observe_transition_window(self, current: tuple[int, ...]) -> None:
+        """Publish one causal decode-route observation.
+
+        The previous-to-current transition is learned before scoring the cache
+        for the next route, matching the trace screen.  ``current`` contains
+        unique experts, so NumPy advanced assignment cannot double-increment a
+        cell.  The caller already validated every id at construction/runtime
+        boundaries.
+        """
+
+        counts = self._transition_counts
+        denominators = self._transition_denominators
+        window_frequency = self._transition_window_frequency
+        window = self._transition_window
+        assert counts is not None
+        assert denominators is not None
+        assert window_frequency is not None
+        assert window is not None
+
+        current_array = np.fromiter(current, dtype=np.intp, count=len(current))
+        previous = self._transition_previous
+        if previous is not None:
+            previous_array = np.fromiter(
+                previous, dtype=np.intp, count=len(previous)
+            )
+            counts[np.ix_(previous_array, current_array)] += 1.0
+            denominators[previous_array] += float(len(current))
+
+        window.append(current)
+        window_frequency[current_array] += 1.0
+        if len(window) > 16:
+            expired = window.popleft()
+            expired_array = np.fromiter(
+                expired, dtype=np.intp, count=len(expired)
+            )
+            window_frequency[expired_array] -= 1.0
+        self._transition_previous = current
+
+    def _transition_window_scores(self) -> np.ndarray:
+        counts = self._transition_counts
+        denominators = self._transition_denominators
+        window_frequency = self._transition_window_frequency
+        current = self._transition_previous
+        assert counts is not None
+        assert denominators is not None
+        assert window_frequency is not None
+        assert current is not None
+
+        current_array = np.fromiter(current, dtype=np.intp, count=len(current))
+        valid = denominators[current_array] > 0.0
+        if np.any(valid):
+            rows = current_array[valid]
+            prediction = np.sum(
+                counts[rows] / denominators[rows, None],
+                axis=0,
+                dtype=np.float32,
+            )
+        else:
+            prediction = np.zeros(self.expert_count, dtype=np.float32)
+
+        max_window = max(float(window_frequency.max()), 1.0)
+        last_used = np.fromiter(
+            (history.last_used for history in self._history),
+            dtype=np.int64,
+            count=self.expert_count,
+        )
+        recency = np.zeros(self.expert_count, dtype=np.float32)
+        observed = last_used >= 0
+        recency[observed] = 1.0 / (
+            1.0 + self._decode_epoch - last_used[observed]
+        )
+        return (
+            np.float32(0.7) * prediction
+            + np.float32(0.2) * (window_frequency / max_window)
+            + np.float32(0.1) * recency
+        )
+
+    def _transition_window_rank(
+        self, expert: int, scores: np.ndarray
+    ) -> tuple[float, int, int, int]:
+        return (
+            float(scores[expert]),
+            self._history[expert].last_used,
+            self._prefill_route_freq.get(expert, 0),
+            -expert,
+        )
+
+    def _transition_window_admissions(
+        self,
+        misses: list[int],
+        *,
+        pinned: set[int],
+    ) -> dict[int, int]:
+        """Choose persistent slots for this route's misses as one bounded cut.
+
+        Current-route hits and explicit working-set pins cannot be recycled
+        before their gathers finish.  Among the remaining residents and misses,
+        retain the highest causal scores; every rejected miss keeps its original
+        route position and uses the existing transient scratch.
+        """
+
+        if not misses:
+            return {}
+        scores = self._transition_window_scores()
+        blocked = pinned | self._pinned if self._pinned else pinned
+        evictable: list[tuple[int, int]] = []
+        for slot, expert in enumerate(self._slot_to_expert):
+            if expert is not None and expert not in blocked:
+                evictable.append((expert, slot))
+
+        free_budget = max(0, self._persistent_capacity - self.occupancy)
+        empty_slots = [
+            slot
+            for slot, expert in enumerate(self._slot_to_expert)
+            if expert is None
+        ][:free_budget]
+        adjustable = len(empty_slots) + len(evictable)
+        if adjustable == 0:
+            return {}
+
+        candidates = [expert for expert, _slot in evictable] + misses
+        keep_count = min(adjustable, len(candidates))
+        retained = set(
+            sorted(
+                candidates,
+                key=lambda expert: self._transition_window_rank(expert, scores),
+                reverse=True,
+            )[:keep_count]
+        )
+        admitted = [expert for expert in misses if expert in retained]
+        if not admitted:
+            return {}
+
+        victim_slots = [
+            slot for expert, slot in evictable if expert not in retained
+        ]
+
+        def victim_rank(slot: int) -> tuple[float, int, int, int]:
+            expert = self._slot_to_expert[slot]
+            assert expert is not None
+            return self._transition_window_rank(expert, scores)
+
+        victim_slots.sort(key=victim_rank)
+        available_slots = empty_slots + victim_slots
+        if len(available_slots) < len(admitted):
+            raise RuntimeError("transition-window admission exceeded slot capacity")
+        return dict(
+            zip(admitted, available_slots[: len(admitted)], strict=True)
+        )
+
+    def _assign_transition_window_slot(
+        self,
+        *,
+        expert: int,
+        slot: int,
+        evictions: list[SlotEviction],
+    ) -> None:
+        victim = self._slot_to_expert[slot]
+        if victim is not None:
+            self._protected.discard(victim)
+            self._pool_recency.pop(victim, None)
+        self._assign_persistent(slot=slot, expert=expert, evictions=evictions)
+        self._pool_clock += 1
+        self._pool_recency[expert] = self._pool_clock
+        self._protected.discard(expert)
+
+    def _transition_window_checkpoint(
+        self,
+    ) -> tuple[tuple[int, ...] | None, tuple[tuple[int, ...], ...]] | None:
+        window = self._transition_window
+        if window is None:
+            return None
+        return self._transition_previous, tuple(window)
+
+    def _rollback_transition_window(
+        self,
+        current: tuple[int, ...],
+        checkpoint: tuple[
+            tuple[int, ...] | None, tuple[tuple[int, ...], ...]
+        ],
+    ) -> None:
+        counts = self._transition_counts
+        denominators = self._transition_denominators
+        window_frequency = self._transition_window_frequency
+        window = self._transition_window
+        assert counts is not None
+        assert denominators is not None
+        assert window_frequency is not None
+        assert window is not None
+
+        previous, old_window = checkpoint
+        if previous is not None:
+            previous_array = np.fromiter(
+                previous, dtype=np.intp, count=len(previous)
+            )
+            current_array = np.fromiter(
+                current, dtype=np.intp, count=len(current)
+            )
+            counts[np.ix_(previous_array, current_array)] -= 1.0
+            denominators[previous_array] -= float(len(current))
+        window.clear()
+        window.extend(old_window)
+        window_frequency.fill(0.0)
+        for route in old_window:
+            route_array = np.fromiter(route, dtype=np.intp, count=len(route))
+            window_frequency[route_array] += 1.0
+        self._transition_previous = previous
+
     def _reopen_pool_for_new_request(self) -> None:
         """W87 HIGH-2: on the first PREFILL after a DECODE (a new request), demote
         this layer's protected hot set -- clear ``_protected`` but KEEP
@@ -1224,6 +1495,7 @@ class LayerExpertSlotBank:
             # old counter by reference if this unseeded reopen is rolled back.
             self._prefill_route_freq = Counter()
             self._saw_decode_since_prefill = False
+            self._reset_transition_window()
 
     def _begin_pool_decode(self) -> None:
         """Restore the decode segment sizes after the prefill seed's protection."""
@@ -1258,6 +1530,8 @@ class LayerExpertSlotBank:
                 self._begin_pool_decode()
             for expert in experts:
                 self._touch_decode(expert)
+            if self._transition_counts is not None:
+                self._observe_transition_window(unique_experts)
             # W93: advance this layer's epoch in the shared ring so its reeviction
             # embargo tracks the layer's own decode cadence.
             if self._prefetch_ring is not None:
@@ -1307,6 +1581,12 @@ class LayerExpertSlotBank:
         pool_loads = 0
         scan_inserts = 0
         promotions = 0
+        transition_admissions = (
+            self._transition_window_admissions(miss_order, pinned=pinned)
+            if phase is RoutingPhase.DECODE
+            and self._transition_counts is not None
+            else None
+        )
         if self.single_pool:
             # Decode hits promote (2Q); PREFILL hits only refresh recency --
             # prefill promotion is FREQUENCY-driven via the seed (HIGH-2), not
@@ -1358,13 +1638,22 @@ class LayerExpertSlotBank:
                 # evicts a protected/seeded expert (allow_protected=False) -- it
                 # overflows to transient instead.
                 is_seed = is_prefill and expert in self._prefill_seed_candidates
-                persistent_slot = self._pool_admit(
-                    expert=expert,
-                    evictions=evictions,
-                    pinned=pinned,
-                    protect=is_seed,
-                    allow_protected=not is_prefill,
-                )
+                if transition_admissions is not None:
+                    persistent_slot = transition_admissions.get(expert)
+                    if persistent_slot is not None:
+                        self._assign_transition_window_slot(
+                            expert=expert,
+                            slot=persistent_slot,
+                            evictions=evictions,
+                        )
+                else:
+                    persistent_slot = self._pool_admit(
+                        expert=expert,
+                        evictions=evictions,
+                        pinned=pinned,
+                        protect=is_seed,
+                        allow_protected=not is_prefill,
+                    )
                 if is_seed:
                     self._prefill_seed_candidates.discard(expert)
                 if persistent_slot is None:
@@ -1462,6 +1751,12 @@ class LayerExpertSlotBank:
     ) -> tuple[RoutePlan, RoutePolicyTxn]:
         experts = self._validate_experts(expert_ids)
         unique_experts = tuple(dict.fromkeys(experts))
+        route_phase = RoutingPhase(phase)
+        transition_checkpoint = (
+            self._transition_window_checkpoint()
+            if route_phase is RoutingPhase.DECODE
+            else None
+        )
         decode_epoch = self._decode_epoch
         histories = {
             expert: (
@@ -1477,7 +1772,7 @@ class LayerExpertSlotBank:
         pool_clock = self._pool_clock
         saw_decode = self._saw_decode_since_prefill
         prefill_route_freq = self._prefill_route_freq
-        plan = self.plan(experts, phase=phase)
+        plan = self.plan(experts, phase=route_phase)
 
         def rollback() -> None:
             evictions = {eviction.slot: eviction for eviction in plan.evictions}
@@ -1502,6 +1797,10 @@ class LayerExpertSlotBank:
             self._pool_clock = pool_clock
             self._saw_decode_since_prefill = saw_decode
             self._prefill_route_freq = prefill_route_freq
+            if transition_checkpoint is not None:
+                self._rollback_transition_window(
+                    unique_experts, transition_checkpoint
+                )
 
         return plan, RoutePolicyTxn(rollback=rollback)
 
@@ -1533,6 +1832,8 @@ class LayerExpertSlotBank:
                 self._begin_pool_decode()
             for expert in experts:
                 self._touch_decode(expert)
+            if self._transition_counts is not None:
+                self._observe_transition_window(unique_experts)
             for expert in unique_experts:
                 self._history[expert].last_used = self._decode_epoch
 
@@ -1569,6 +1870,12 @@ class LayerExpertSlotBank:
     ) -> tuple[RoutePlan, RoutePolicyTxn] | None:
         experts = self._validate_experts_for_seed(expert_ids)
         unique_experts = tuple(dict.fromkeys(experts))
+        route_phase = RoutingPhase(phase)
+        transition_checkpoint = (
+            self._transition_window_checkpoint()
+            if route_phase is RoutingPhase.DECODE
+            else None
+        )
         decode_epoch = self._decode_epoch
         histories = {
             expert: (
@@ -1582,7 +1889,7 @@ class LayerExpertSlotBank:
         pool_recency = dict(self._pool_recency)
         pool_clock = self._pool_clock
         saw_decode = self._saw_decode_since_prefill
-        plan = self.try_plan_all_hits(experts, phase=phase)
+        plan = self.try_plan_all_hits(experts, phase=route_phase)
         if plan is None:
             return None
 
@@ -1595,6 +1902,10 @@ class LayerExpertSlotBank:
             self._pool_recency = pool_recency
             self._pool_clock = pool_clock
             self._saw_decode_since_prefill = saw_decode
+            if transition_checkpoint is not None:
+                self._rollback_transition_window(
+                    unique_experts, transition_checkpoint
+                )
 
         return plan, RoutePolicyTxn(rollback=rollback)
 

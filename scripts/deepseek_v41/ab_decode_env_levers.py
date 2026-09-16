@@ -229,8 +229,9 @@ def _resolve_receipt_baseline_gb(args):
     Window-49 fix: box_used was 0 on the explicit --memory-limit-gib path because the
     baseline was read ONLY from the target plan.  Prefer the target plan (when armed),
     else the env MTPLX_DSV41_BOX_BASELINE_GB that gpu_window.sh exports from its in-window
-    USED_START, else --box-baseline-gb -- so box_used = baseline + footprint is correct
-    independent of the target derivation."""
+    USED_START, else --box-baseline-gb.  The baseline is retained for the explicitly
+    labelled baseline-plus-process estimate; measured ``box_used_gb`` comes from
+    ``vm_stat`` and already includes the process and file cache."""
 
     tp = getattr(args, "_dsv41_target_plan", None)
     if tp and tp.get("box_baseline_gb") is not None:
@@ -1979,6 +1980,17 @@ def build_parser() -> argparse.ArgumentParser:
         "(target-mode default 10, MTPLX_DSV41_TRANSIENT_BAND_GIB).",
     )
     p.add_argument(
+        "--runtime-reserve-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help=(
+            "in-plan MLX transient reserve (default 7 GiB). The 110 GB staged "
+            "capacity screen uses 3 GiB for cap 89 and may use 2 GiB for cap 91 "
+            "only after measured headroom; values below 2 GiB are refused."
+        ),
+    )
+    p.add_argument(
         "--mlx-limit-headroom-gib",
         type=float,
         default=None,
@@ -2033,11 +2045,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--cache-policy",
+        choices=("frequency", "lru", "transition-window"),
+        default=None,
+        help=(
+            "expert-cache admission policy. DEFAULT: resolve from --expert-profile; "
+            "transition-window is the bounded DeepSeek-V4.1 causal-policy arm."
+        ),
+    )
+    p.add_argument(
+        "--verify-shared-overlap",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "construction-time M6 arm: enqueue the resident shared MLP after "
+            "verify demand reads are submitted and before waiting for them. "
+            "Default OFF is the unchanged routed-then-shared control."
+        ),
+    )
+    p.add_argument(
         "--expert-profile",
         default="deepseek-v41-mxfp4-75",
         help=(
             "profile whose plan fields (transient_slots, split_route_release, "
-            "prefetch_slots) seed the in-process runtime when the matching flag "
+            "prefetch_slots, cache_policy) seed the in-process runtime when the matching flag "
             "is unset; 'none' disables profile resolution (loader defaults)."
         ),
     )
@@ -2782,6 +2813,15 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 
     from mtplx.deepseek_v41_memory_profile import derive_plan_from_budget
 
+    runtime_reserve_gib = getattr(args, "runtime_reserve_gib", None)
+    if runtime_reserve_gib is None:
+        runtime_reserve_gib = 7.0
+    runtime_reserve_gib = _parse_headroom_gib_value(
+        runtime_reserve_gib, source_label="--runtime-reserve-gib"
+    )
+    if runtime_reserve_gib < 2.0:
+        raise ValueError("--runtime-reserve-gib must be at least 2 GiB")
+
     target_plan = _resolve_target_plan(args)
     args._dsv41_target_plan = target_plan
     if target_plan is not None:
@@ -2823,6 +2863,7 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
         box_budget_gib=(getattr(args, "box_budget_gib", None) if target_plan is None
                         else target_plan["box_target_gb"] * 1e9 / GIB),
         override_memory_limit_gib=override,
+        runtime_reserve_gib=runtime_reserve_gib,
         **target_fields,
     )
     return derivation
@@ -2831,9 +2872,14 @@ def _resolve_derivation(args, *, bench=None, max_kv=None):
 # Plan fields the served profile sets that the loader would otherwise default
 # (the W81 finding: transient_slots defaulted to spec.top_k=6, not the profile's
 # 48).  Seeded into the in-process runtime so a bench A/B is on the production
-# plan.  ``transient_slots`` also takes the explicit ``--transient-slots`` flag.
+# plan. ``transient_slots`` and ``cache_policy`` also take explicit flags;
+# ``verify_shared_overlap`` is always an explicit construction-time arm.
 _PROFILE_PLAN_FIELDS = (
-    "transient_slots", "split_route_release", "prefetch_slots", "bypass_page_cache",
+    "transient_slots",
+    "split_route_release",
+    "prefetch_slots",
+    "bypass_page_cache",
+    "cache_policy",
 )
 
 
@@ -2849,6 +2895,12 @@ def _resolve_plan_overrides(args) -> dict:
     explicit_transient = getattr(args, "transient_slots", None)
     if explicit_transient is not None:
         overrides["transient_slots"] = int(explicit_transient)
+    explicit_policy = getattr(args, "cache_policy", None)
+    if explicit_policy is not None:
+        overrides["cache_policy"] = str(explicit_policy)
+    overrides["verify_shared_overlap"] = bool(
+        getattr(args, "verify_shared_overlap", False)
+    )
 
     profile_name = str(getattr(args, "expert_profile", "none") or "none")
     if profile_name != "none":
@@ -2969,6 +3021,14 @@ def _resolved_plan(runtime, args) -> dict | None:
         "transient_bytes_total": transient_slots * record_bytes,
         "transient_bytes_scope": "shared_across_layers",
         "split_route_release": getattr(config, "split_route_release", None),
+        "runtime_reserve_bytes": getattr(config, "runtime_reserve_bytes", None),
+        "cache_policy": getattr(config, "cache_policy", None),
+        "verify_shared_overlap": bool(
+            getattr(config, "verify_shared_overlap", False)
+        ),
+        "single_slot_pool": bool(
+            getattr(runtime, "_single_slot_pool", False)
+        ),
         # GLOBAL ring: prefetch_slots records TOTAL (shared); k = predict width.
         "prefetch_slots": prefetch_slots,
         # W110: the ACTUAL armed state / predict width the runtime ran (v2 auto-arm
@@ -3119,7 +3179,7 @@ def _load_model(args, bench, mx):
             "artifact or drop --decode-mode dspark."
         )
     # W121: no post-load non-Metal re-measure / budget abort -- the target model
-    # (target - baseline - cache; box_used = baseline + phys_footprint) is measured
+    # (target - baseline - cache) is measured
     # against the target by the receipt's memory block + the gpu_window.sh guard, not
     # forecast from a vm_stat baseline before load.
     return resident
@@ -3170,7 +3230,7 @@ def _stream_counters_snapshot(model):
         rt = getattr(model, "_mtplx_expert_runtime", None)
         if rt is None:
             return None
-        return snapshot_stream_counters(rt)
+        return snapshot_stream_counters(rt, model=model)
     except Exception:
         return None
 
@@ -3305,7 +3365,7 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
     classic argmax loop; the AR-reference byte-identity gate (this arm's
     ``token_ids_sha256`` vs the dspark ids) therefore still holds."""
     mem_probe.reset_peak()
-    # W106: sample process RSS + system used memory off the hot path (daemon thread,
+    # W106: sample process phys_footprint + system used memory off the hot path (daemon thread,
     # 1 Hz, no MLX calls) over the whole generation, so the receipt's memory block
     # carries the real envelope, not just the MLX allocator peak (peak_gb).
     _mem_sampler = mem_probe.new_sampler()
@@ -3516,8 +3576,8 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
         "ttft_s": ttft_s,
         "decode_wall_s": decode_wall_s,
         "peak_gb": mem_probe.peak_bytes() / 1_000_000_000,
-        # W106: full memory envelope (mlx_peak_gb == peak_gb, + process RSS peak and
-        # the whole-box used-memory peak the gpu_window.sh guard aborts on).  W118
+        # W106: full memory envelope (mlx_peak_gb == peak_gb, process phys_footprint,
+        # and sampled whole-machine physical use including file cache).  W118
         # review MEDIUM-2: merge the allocator readback proof keys (limit readback,
         # gc_limit, active/cache at decode start/end, peak-over-limit).
         "memory": _ab_memory_block(
@@ -3739,7 +3799,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
     from mtplx.sampling import SamplerConfig
 
     mem_probe.reset_peak()
-    # W106: 1 Hz off-hot-path RSS + system-used sampler over the headline pass (see
+    # W106: 1 Hz off-hot-path phys_footprint + system-used sampler over the headline pass (see
     # _generate). Stopped right after the headline peak_gb is captured, before the
     # optional timed stage-timing pass, so the memory block matches that peak_gb.
     _mem_sampler = mem_probe.new_sampler()
@@ -4552,7 +4612,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "peak_gb": run["peak_gb"],
             "peak_process_gb": _peak_process_gb(run),
             # W106: the memory envelope (mlx_peak_gb == the peak_gb above, plus the
-            # process RSS peak and the whole-box used-memory peak/at-start the
+            # process phys_footprint peak and the whole-box used-memory peak/at-start the
             # gpu_window.sh guard measures). peak_gb alone is the MLX allocator peak
             # of this process -- it excludes the Python heap, the expert-reader
             # buffers, other processes, and the OS cache, so it is NOT the box usage.
@@ -4691,7 +4751,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 "pass_wall_s": dsp.get("pass_wall_s"),
                 "decode_tok_s": dsp.get("decode_tok_s"),
                 "peak_gb": dsp["peak_gb"],  # MLX allocator peak only (legacy)
-                "peak_process_gb": _peak_process_gb(dsp),  # whole-process RSS peak
+                "peak_process_gb": _peak_process_gb(dsp),  # process phys_footprint peak
                 # W106: memory envelope for the dspark headline pass (see AR above).
                 "memory": dsp.get("memory"),
                 "tokens_per_cycle": st["tokens_per_cycle"],
@@ -4986,10 +5046,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     "kv_realloc_window == num_layers (no transient prefill grow)"
                 )
                 receipt["kv_bounded"] = bstats
-        # W121: inject box_used = baseline + process footprint (decimal GB) into the
-        # memory block from the target baseline armed for this run.  No budget-total
-        # forecast keys (plan_overshoot / safety / non_metal / vm_stat baseline) --
-        # W121 dropped those static forecasts.
+        # Preserve the armed baseline and its explicitly labelled process estimate,
+        # while reporting sampled whole-machine use from vm_stat as box_used_gb.
         # MEDIUM-6: lift the apply_mlx_memory_cap report (applied limit, wired/cache
         # applied, slot_derivation, target components) into the receipt, and take
         # mlx_limit_gib_effective from ITS applied limit -- mlx 0.32.2 has no
