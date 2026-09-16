@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import logging
@@ -27,6 +28,7 @@ from mtplx.expert_streaming_models import get_model_spec
 RECEIPT_SCHEMA = 1
 DEFAULT_RECEIPT_ROOT = Path("~/.mtplx/receipts").expanduser()
 _MAX_RECEIPT_BYTES = 1024 * 1024
+_CACHE_INVALIDATE_WINDOW_BYTES = 1024**3
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -142,6 +144,55 @@ def _prepare_bank_hash(descriptor: int, relative_name: str) -> None:
         ) from exc
 
 
+def _invalidate_hashed_bank_cache(
+    descriptor: int,
+    size: int,
+    relative_name: str,
+) -> None:
+    """Discard clean pages left speculative by a Darwin ``F_NOCACHE`` scan."""
+
+    if sys.platform != "darwin":
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.mmap.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_longlong,
+    ]
+    libc.mmap.restype = ctypes.c_void_p
+    libc.msync.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    libc.msync.restype = ctypes.c_int
+    libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    libc.munmap.restype = ctypes.c_int
+
+    for offset in range(0, size, _CACHE_INVALIDATE_WINDOW_BYTES):
+        length = min(_CACHE_INVALIDATE_WINDOW_BYTES, size - offset)
+        address = libc.mmap(None, length, 1, 1, descriptor, offset)
+        if address == ctypes.c_void_p(-1).value:
+            error = ctypes.get_errno()
+            raise ExpertManifestError(
+                f"could not map {relative_name} for post-hash cache invalidation: "
+                f"{os.strerror(error)}"
+            )
+        try:
+            if libc.msync(address, length, 0x10 | 0x2) != 0:  # MS_SYNC | MS_INVALIDATE
+                error = ctypes.get_errno()
+                raise ExpertManifestError(
+                    f"could not invalidate post-hash cache for {relative_name}: "
+                    f"{os.strerror(error)}"
+                )
+        finally:
+            if libc.munmap(address, length) != 0:
+                error = ctypes.get_errno()
+                raise ExpertManifestError(
+                    f"could not unmap {relative_name} after cache invalidation: "
+                    f"{os.strerror(error)}"
+                )
+
+
 def _trusted_matches(
     trusted: TrustedFileDigest,
     metadata: os.stat_result,
@@ -208,6 +259,7 @@ def _inspect_bank(
         else:
             _prepare_bank_hash(descriptor, relative_name)
             digest = _hash_bank_descriptor(descriptor)
+            _invalidate_hashed_bank_cache(descriptor, before.st_size, relative_name)
         after = os.fstat(descriptor)
     finally:
         os.close(descriptor)
