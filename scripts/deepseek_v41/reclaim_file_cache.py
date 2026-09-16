@@ -113,6 +113,14 @@ def reclaim_model(root: Path) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        '--operation',
+        choices=(
+            'stopped_service_file_cache_reclamation',
+            'candidate_file_cache_reclamation',
+        ),
+        default='stopped_service_file_cache_reclamation',
+    )
     parser.add_argument('model_dir', type=Path)
     args = parser.parse_args()
     signal.alarm(30)
@@ -125,7 +133,7 @@ def main() -> None:
     rows = reclaim_model(args.model_dir)
     after = host_memory_snapshot()
     print(json.dumps({
-        'operation': 'stopped_service_file_cache_reclamation',
+        'operation': args.operation,
         'model_dir': str(args.model_dir.resolve()), 'files': rows,
         'before': before, 'after': after, 'elapsed_s': time.monotonic() - started,
         'physical_used_reduction_bytes': before['box']['used_bytes'] - after['box']['used_bytes'],
