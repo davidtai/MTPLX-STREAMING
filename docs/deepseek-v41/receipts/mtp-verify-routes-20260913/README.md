@@ -61,6 +61,15 @@ prefetches. This is not a safe bandwidth trade under the 110 GB limit. The
 captured MTP target trace, warm-state replay and these screens should guide a
 measured scheduling/compute investigation, not an unmeasured policy install.
 
+Changing slot ownership also fails the promotion screen. At the same 2,920
+total slots, a trace-fitted per-layer allocation lowers the 106-cycle held-out
+read count from **26,227** to **25,834** (1.50%); even a full-trace oracle reaches
+only **52,811** reads (2.20% below control). A stronger clairvoyant relaxation
+that lets every slot move between layers at every access reaches **28,168**
+reads, versus the **29,812** fixed-layer clairvoyant floor. Thus global ownership
+adds only 5.51% to the already-unimplementable oracle gain. Neither allocation
+change merits runtime code or tests.
+
 The exact route JSON is archived as `mtp-verify-routes-16k-1024-v2.json.gz`
 (`gzip.open(..., "rt")`); the wrapper's original uncompressed output remains
 under `/tmp/dsv41-110-preflight/`. The 250 ms OS samples, bounds, guard logs,
