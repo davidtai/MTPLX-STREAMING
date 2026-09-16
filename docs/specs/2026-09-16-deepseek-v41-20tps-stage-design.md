@@ -31,6 +31,11 @@ but the exact workload remains below 20 tok/s.
   policies did not improve held-out behavior materially.
 - Component-separated rANS: 10.4792% smaller on the exact record, but the
   resulting 50.67-second I/O floor leaves too little compute margin by itself.
+- Python raw-record L2: at the same 1,504,051,200-byte cost as two target slots
+  per layer, an idealized cap-89 victim cache still needs 40,239 SSD reads in
+  the saved-route replay; cap 91 with those bytes in Metal needs 40,111 and
+  avoids eviction copies. Keep the 2 GiB host allowance for bounded Python
+  caches and metadata rather than adding a duplicate expert-record cache.
 - A cap-83 scheduling-shape replay has 8,033 miss-bearing layer calls across
   8,240 calls. Those calls average 5.90 physical records; 6,768 layer calls
   have at least three misses. A three-record bound therefore exposes about
