@@ -1541,10 +1541,10 @@ ARM_PRESETS = {
         decode_attn_kernel="0", dspark_verify_k29="0", gate_prefetch="0",
     ),
     # Same bounded DSpark route with the shared output head repacked once to
-    # affine q8. The planner credits the manifest-derived 620.5 MB resident
-    # saving before component-bank construction; target and draft both execute
-    # the installed q8 head directly. This tie-break-class candidate stays
-    # opt-in until the exact 16K/1K lane measures it.
+    # affine q8. Target and draft both execute the installed q8 head directly.
+    # The slot plan deliberately keeps pricing the dense construction head: the
+    # component banks are materialized before the post-load repack releases it.
+    # This tie-break-class candidate stays opt-in until the exact lane measures it.
     "cell16k_ring_v2_draft_attn_pf0_head_q8": _preset(
         layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
         window_ring="1", layout_fix="1",

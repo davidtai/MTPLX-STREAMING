@@ -1003,7 +1003,6 @@ def _load_impl(
             from .expert_runtime import (
                 proj_quant_plan_discount,
                 proj_requant_plan_discount,
-                deepseek_v41_head_mode_resident_discount,
                 text_only_resident_discount,
             )
 
@@ -1018,9 +1017,6 @@ def _load_impl(
                     getattr(expert_streaming_config, "proj_requant", None),
                 )
                 + text_only_resident_discount(_preflight_manifest, streaming_spec)
-                + deepseek_v41_head_mode_resident_discount(
-                    _preflight_manifest, streaming_spec
-                )
             )
             if _resident_discount:
                 preflight_plan_kwargs["resident_discount_bytes"] = _resident_discount

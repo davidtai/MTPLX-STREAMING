@@ -604,7 +604,6 @@ def _component_bank_allocator_for(
     from ..expert_runtime import (
         proj_quant_plan_discount,
         proj_requant_plan_discount,
-        deepseek_v41_head_mode_resident_discount,
         resolve_island_placement,
         text_only_resident_discount,
     )
@@ -634,7 +633,6 @@ def _component_bank_allocator_for(
             proj_quant_plan_discount(manifest, resolved_config.proj_quant)
             + proj_requant_plan_discount(manifest, resolved_config.proj_requant)
             + text_only_resident_discount(manifest, spec)
-            + deepseek_v41_head_mode_resident_discount(manifest, spec)
         ),
         layer_record_bytes=(
             manifest.record_bytes_by_layer() if spec.is_mixed_official else None

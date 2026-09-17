@@ -1698,7 +1698,6 @@ def proj_requant_plan_discount(manifest: Any, proj_requant: str | None) -> int:
 # these dotted-name prefixes). Kept here so the memory-plan discount and the
 # loader's text-only filter share one prefix set; a test locks the two equal.
 TEXT_ONLY_SKIP_PREFIXES = ("mtp.", "vision.", "aligner.", "image_")
-_DSV41_HEAD_MODE_ENV = "MTPLX_DSV41_HEAD_MODE"
 
 
 def text_only_resident_discount(manifest: Any, spec: Any) -> int:
@@ -1727,79 +1726,6 @@ def text_only_resident_discount(manifest: Any, spec: Any) -> int:
             continue
         discount += tensor.length
     return discount
-
-
-def deepseek_v41_head_mode_resident_discount(
-    manifest: Any,
-    spec: Any,
-    *,
-    env: Mapping[str, str] | None = None,
-) -> int:
-    """Bytes removed when the dense BF16 output head is repacked at load.
-
-    The expert-slot plan is built before the resident model, while
-    ``Model.apply_head_mode`` repacks ``head.weight`` after loading it. Price the
-    same construction-selected codec here so the component-bank allocator and
-    runtime plan can use the released bytes. The manifest is the admission
-    boundary: a requested codec receives no speculative credit unless it names
-    one dense BF16 ``head.weight`` with the exact stored shape and byte count.
-    """
-
-    if not str(getattr(spec, "key", "")).startswith("deepseek-v41"):
-        return 0
-    source = os.environ if env is None else env
-    mode = str(source.get(_DSV41_HEAD_MODE_ENV, "") or "").strip().lower()
-    if mode not in ("mxfp8", "q8"):
-        return 0
-
-    heads = [
-        tensor
-        for tensor in manifest.resident_tensors
-        if tensor.tensor == "head.weight"
-    ]
-    if len(heads) != 1:
-        raise ExpertStreamingConfigurationError(
-            f"{_DSV41_HEAD_MODE_ENV}={mode!r} requires exactly one resident "
-            "head.weight tensor"
-        )
-    head = heads[0]
-    shape = tuple(int(dim) for dim in head.shape)
-    if (
-        head.dtype.upper() not in {"BF16", "BFLOAT16"}
-        or len(shape) != 2
-        or shape[0] <= 0
-        or shape[1] <= 0
-    ):
-        raise ExpertStreamingConfigurationError(
-            f"{_DSV41_HEAD_MODE_ENV}={mode!r} requires a 2-D BF16 head.weight"
-        )
-    elements = shape[0] * shape[1]
-    if int(head.length) != elements * 2:
-        raise ExpertStreamingConfigurationError(
-            "head.weight manifest length does not match its BF16 shape"
-        )
-
-    if mode == "q8":
-        group_size = 64
-        if shape[1] % group_size:
-            raise ExpertStreamingConfigurationError(
-                "q8 head mode requires hidden size divisible by 64"
-            )
-        # Affine q8: one packed byte/value plus BF16 scale and bias/group.
-        kept_bytes = elements + 4 * (elements // group_size)
-    else:
-        group_size = 32
-        if shape[1] % group_size:
-            raise ExpertStreamingConfigurationError(
-                "mxfp8 head mode requires hidden size divisible by 32"
-            )
-        # Native mxfp8: one packed byte/value plus one E8M0 byte/group.
-        kept_bytes = elements + elements // group_size
-    if kept_bytes >= int(head.length):
-        raise ExpertStreamingConfigurationError(
-            f"{_DSV41_HEAD_MODE_ENV}={mode!r} does not reduce head residency"
-        )
-    return int(head.length) - kept_bytes
 
 
 def reconcile_mlx_memory_cap(
@@ -3099,8 +3025,7 @@ class ExpertStreamingRuntime:
                 manifest, config.proj_quant
             )
             + proj_requant_plan_discount(manifest, config.proj_requant)
-            + text_only_resident_discount(manifest, model_spec)
-            + deepseek_v41_head_mode_resident_discount(manifest, model_spec),
+            + text_only_resident_discount(manifest, model_spec),
             layer_record_bytes=(
                 manifest.record_bytes_by_layer() if mixed_official else None
             ),
