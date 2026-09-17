@@ -22,3 +22,17 @@ Rejected:
 - Early projection reclamation with no measured benefit.
 Open:
 - Reach 20 TPS by reducing I/O and verification cost.
+
+## 2026-09-17 12:55 UTC [saved]
+Goal: Improve DeepSeek memory accuracy and reduce exact-workload decode cost.
+Decisions:
+- Preserve unavailable MLX peaks as null; headline and detailed memory values share one observation.
+- Report effective DSpark depth separately from requested depth; requesting six does not extend the native five-token head.
+- Keep cache policy and capacity changes conditional on measured full-workload allocation and throughput evidence.
+Rejected:
+- Serial rANS decoding costs more than its saved I/O time.
+- Native HC chain compilation without verified numerical compatibility.
+- More prefill fences without a measured whole-run peak reduction.
+Open:
+- Isolate prefill combine allocations when the exclusive GPU lane is available.
+- Reach 20 TPS within the 110 GB whole-machine ceiling.

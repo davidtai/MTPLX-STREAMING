@@ -23,9 +23,10 @@ TPS on the exact 16,384-input / 1,024-output Python workload under 110 decimal G
 # Plan Status
 
 Executing `docs/plans/2026-09-16-deepseek-v41-20tps-stage.md`, Task 4.
-Memory-reporting and guard fixes are committed at e589c1e4b and c9f090573.
-The captured-hidden lifetime fix is promoted and verified; receipt archival
-and this checkpoint accompany that change. The target performance is unmet.
+Promoted lifetime fix: 9c4fac40f. Reporting fixes: c031119a1 records effective
+and requested draft depth; b95f8d1a7 preserves unknown MLX peaks as null and
+derives headline values from the same memory-block reading. Earlier memory
+and guard fixes remain at e589c1e4b and c9f090573. The target is unmet.
 
 The winning full run uses depth 5, 94 persistent slots/layer, 48 shared
 transients, full six-row verification, transition-window admission,
@@ -40,7 +41,7 @@ expert slots per layer consume 3,008,102,400 bytes of that saving.
 
 # Evidence
 
-See `docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/README.md` and its manifest.
+Receipts: `docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/README.md`.
 The archived source-pinned wrappers contain each measured installation.
 
 - Full depth 5/cap 94: 87.2840954s decode, 11.7203483 TPS, 206 cycles,
@@ -58,15 +59,16 @@ The archived source-pinned wrappers contain each measured installation.
   AR digest remains
   `2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090`.
   First difference is the accepted tie_flip at 297; AR contested margin 0.0.
-- Eighteen CPU memory-reporting checks passed. After the successful optimization,
-  both existing guarded tiny quantized prefill checks passed. Full model AST
-  equality confirms promotion matches the measured patch. No new test module.
-- Every completed window exited 0 and restored Qwen healthy/warm with exact ID
-  `mtplx-flash-next-optimized-speed`. Last check is in
-  `promotion-service-health.json`; no owned GPU child or guard remains.
-- AR-reference reuse saves repeated AR generation/replay. Its public AR timing,
-  memory and counters are null, provenance is explicit, and candidate MTP
-  logits are always fresh. The cached AR diagnostic row is content-hashed.
+- Twenty CPU reporting checks passed after b95f8d1a7, with MLX imports blocked.
+  The missing-counter regression rejects the previous implementation. Existing
+  guarded tiny prefill checks validate the earlier promoted lifetime change.
+- On 2026-09-17 at 12:35 UTC the cap94 attempt refused its 11.962 GB live
+  baseline before model loading. Qwen returned healthy/warm with its exact ID
+  and the lock was released at 12:36:04. The cap90 retry timed out queued at
+  12:48:12, with no child launch. At12:56:51 Qwen was healthy/warm with exact
+  model ID; another benchmark still owned the lane.
+- Reused AR timing, memory and counters are null. Provenance and the cached
+  diagnostic row are hashed; candidate MTP logits remain fresh.
 
 # Open Issues
 
@@ -75,12 +77,24 @@ The archived source-pinned wrappers contain each measured installation.
 - Reject staged 3+3 (slower), early projection reclaim (no gain), and the prior
   chunk256 arm (17 MB saving and changed output). The old 3+3-dependent cap 93-97
   ladder is superseded; its eighteen-transient bounds do not price full M4/M6.
-- Full-M6 CPU replay rejects the tuned transition policy. Five-shape nonuniform
-  allocation projects only about 3% fewer reads and has no GPU speed proof.
+- Full-M6 replay rejects tuned admission; the 35-policy sweep favors the current
+  policy. Wider nonuniform allocation projects only 3% fewer reads.
 - MTP seed setup does not raise the observed peak; seed truncation is not
   supported as the next peak-memory optimization. The remaining peak precedes it.
 - `mlx_active_*_at_decode_start` in receipts before e589c1e4b is mislabeled;
   other peak and decode-end fields are unaffected. Reused-reference wrappers
   are tied to their recorded base source, not portable general-runner defaults.
-
-Historical observations remain in dated receipts and prior state.md revisions.
+- Retiring consumed inputs alone preserves the full digest but gives only
+  11.7617 TPS and 15 MB lower peak; no promotion. Per-chunk combine evaluation
+  alone raises the prefill peak to 97,208,261,708B. Their combination is unmeasured.
+- The unchanged prefill peak is 97,146,256,508B at layer39's combine fence.
+  This includes queued MoE reorder/reduction work; it does not isolate HC alone.
+- Serial rANS decoding costs at least 1.369 ms per record, versus under 0.1 ms
+  saved I/O: reject. Native-shaped HC chain compilation changes results: keep off.
+- Decode-only growth to cap104 projects 34,211 reads versus 38,613 at cap94,
+  but resize ownership and full decode peak remain unbounded; do not install it.
+- Current-source profile wrappers still pin c031119a1 and are obsolete after
+  b95f8d1a7. Regenerate the exact source compatibility proof before retrying.
+- `/tmp/dsv41-110-stage/CONTINUATION.md` holds detailed negative receipts and
+  job status. HC-post session81450 also timed out queued at 12:55:04 UTC;
+  no owned guard or child remains. Its prepared 512MiB probe is unmeasured.
