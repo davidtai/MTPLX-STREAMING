@@ -95,10 +95,13 @@ git rev, spec key, manifest SHA-256, and the prompt-build metadata.
 - One entry in `cells[]` per prefill cell (1,024 and 16,384 by default), each
   with `prompt_build` (the shared prefill_bench + BOS metadata — `prompt_source`,
   `input_tokens`, `bos_prepended`, ...) and a `repeats[]` list. Per repeat:
-  `prefill_tok_s`, `ttft_s`, `decode_tok_s`, `peak_mlx_gb` + `process_rss_gb`
-  (peak GB), `wall_s`, `expert_records_gathered`, `engram_rows_gathered`, and the
-  first 200 chars of the decoded text. `fastest_of` gives the max decode tok/s /
-  min TTFT with the range (memory/report-fastest-of-seeds.md).
+  `prefill_tok_s`, `ttft_s`, `decode_tok_s`, and a schema-2 `memory` block with
+  separate allocator, process `phys_footprint`, and whole-machine physical-used
+  peaks, plus `wall_s`, `expert_records_gathered`, `engram_rows_gathered`, and
+  the first 200 chars of the decoded text. The legacy top-level
+  `process_rss_gb` is the process-lifetime RSS high-water mark; it is not the
+  measured run-window footprint. `fastest_of` gives the max decode tok/s / min
+  TTFT with the range (memory/report-fastest-of-seeds.md).
 - Greedy, single prompt, no batching (memory/dsv41-standard-benchmark-shape.md,
   follow-the-specific-setup.md). Three seeds are not needed for a greedy run;
   `--repeats` is for later speed windows. Expert/engram counts are read off the
@@ -183,9 +186,10 @@ they already default to the mxfp4 artifact. `$WT`/`$PY` as at the top of this fi
     #   $PY -m mtplx.cli bench serve --host 127.0.0.1 --port <PORT>
 
     # B. David's shape, greedy — 1,024-token prefill_bench prompt + 16,384 cell.
-    #    Reports prefill_tok_s, ttft_s, decode_tok_s, peak GB (peak_mlx_gb +
-    #    process_rss_gb) and wall_s per cell. Pin the memory limit to the profile
-    #    envelope (82 GiB) so the plan matches the served profile's slot count.
+    #    Reports prefill_tok_s, ttft_s, decode_tok_s, wall_s, and separate
+    #    allocator, process phys_footprint, and whole-machine physical-used peaks
+    #    per cell. Pin the memory limit to the profile envelope (82 GiB) so the
+    #    plan matches the served profile's slot count.
     cd $WT && bash scripts/deepseek_v41/gpu_window.sh env PYTHONPATH=$WT $PY scripts/deepseek_v41/bench_standard_shape.py --context-tokens 1024 16384 --steps 256 --memory-limit-gib 82 --out-dir $WT/.benchmark-artifacts/deepseek-v41
 
     # C. one HumanEval(164) pass@1 cell at David's sampler (HTTP; profile-resolved)
