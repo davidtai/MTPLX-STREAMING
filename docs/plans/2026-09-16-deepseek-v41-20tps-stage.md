@@ -21,9 +21,13 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Measured update, 2026-09-17
 
-Task 4 has full-workload results; **20 TPS remains unmet**. The retained best is
-12.1146645 TPS at depth 5/cap 93->100, with 105,642,098,688B maximum sampled
-whole-machine usage. See `../deepseek-v41/receipts/post-prefill-cache-growth-20260917/README.md`.
+Task 4 has full-workload results; **20 TPS remains unmet**. The latest single
+complete candidate is 12.6731624 TPS at depth 5/cap 84->102, with
+106,288,578,560B maximum sampled whole-machine usage during the DeepSeek run.
+See `../deepseek-v41/receipts/plane-overlap-20260917/README.md` for exact output,
+bounded integration and the distinct post-restoration Qwen memory finding.
+The earlier native growth stage below reached 12.1146645 TPS at cap93->100;
+see `../deepseek-v41/receipts/post-prefill-cache-growth-20260917/README.md`.
 The initial cap-94 result below was 11.7203483 TPS.
 
 The accepted prefill change evaluates MTP hidden captures at the existing

@@ -1,0 +1,27 @@
+{
+  "source_commit": "ee72b77e0cdbc33db4208e08a8883f3a631d3067",
+  "static_incremental_bound_bytes": 8589934592,
+  "bound_components": {
+    "mlx_memory_limit_bytes": 2147483648,
+    "mlx_cache_limit_bytes": 268435456,
+    "host_manifest_threads_compiler_and_slack_bytes": 6442450944,
+    "cache_note": "The cache policy is inside the Metal allocation allowance, not an additional buffer allocation."
+  },
+  "bound_scope": "Existing real-weight geometry probe envelope; bank shrinks from48 to3 slots and no second weight bank is introduced. Same kernels plus one submitted hidden result.",
+  "box_budget_bytes": 110000000000,
+  "layer": 20,
+  "experts": [
+    127,
+    200,
+    273
+  ],
+  "bank_capacity": 3,
+  "helper_sha256": {
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf"
+  },
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "comparison": "unchanged reader versus GU-first all-ready versus GU-first early compute; synthetic BF16 rows, real packed weights; not full model throughput",
+  "probe_sha256": "c85508d829105d12fa238ac8aee6d290649b1d72405eeff6348273c8777a34ed"
+}

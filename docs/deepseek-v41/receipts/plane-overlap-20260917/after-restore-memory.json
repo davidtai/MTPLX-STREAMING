@@ -1,0 +1,30 @@
+{
+  "sample_start_monotonic_ns": 153167441194833,
+  "sample_end_monotonic_ns": 153167444675125,
+  "process": {
+    "peak_maxrss_bytes": 20381696,
+    "resident_bytes": 21086208,
+    "phys_footprint_bytes": 12255712,
+    "compressed_bytes": 0,
+    "source": "mach_task_vm_info"
+  },
+  "box": {
+    "page_size": 16384,
+    "free_bytes": 172113920,
+    "wired_bytes": 92802662400,
+    "active_bytes": 14901116928,
+    "inactive_bytes": 23576657920,
+    "speculative_bytes": 1667399680,
+    "anonymous_bytes": 13915570176,
+    "file_backed_bytes": 26229604352,
+    "compressor_bytes": 1632813056,
+    "compressed_bytes": 7123140608,
+    "used_bytes": 132913250304,
+    "non_file_used_bytes": 108351045632,
+    "swapins_pages": 4817074,
+    "swapouts_pages": 7666694,
+    "ok": true,
+    "source": "vm_stat",
+    "used_includes_file_cache": true
+  }
+}

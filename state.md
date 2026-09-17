@@ -2,7 +2,7 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
 TPS on exact 16,384-input / 1,024-output Python under 110 decimal GB.
-Best complete candidate: **12.4439935 TPS; 20 TPS remains unmet.**
+Best single complete candidate: **12.6731624 TPS; 20 TPS remains unmet.**
 Latest full Q8 candidate: 10.7541904 TPS; keep native KV for the fastest route.
 At least 256K KV support is also required, secondary to reaching 20 TPS.
 
@@ -34,6 +34,41 @@ and current slot/transient storage versus source_expert_record_bytes.
 The 37 CPU reporting cases and eight loader/budget cases pass with real MLX
 imports blocked. Both latest full arms exercise correct source/current record
 sizes and shared transient allocation bytes.
+
+# Latest Packed Plane Overlap
+
+Source ee72b77e0: full native-KV D5/M6 candidate84->102 completes at
+12.6731624TPS/80.7217623s, including3.4263s phase installation. Same1024 native
+IDs and206 cycles, SHA0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
+Fresh candidate vs cached nativeAR297 passes the same index-matched tie gate.
+This is1.84% above the old12.4439935TPS single result; prefill84 vs91 and
+background differ, so no isolated/repeatable full-model gain is claimed.
+
+Gate/up computation starts after those planes finish; original full ReadyRoute
+publication, policy, leases and deferred releases still wait for down. The
+one-time post-prefill lane carries context through both split and I/O executors.
+One-layer real-runtime interleaving is exact for168 outputs,3.34%/2.05% lower
+M1/M6 medians; the original three-expert coupled probe was5.4-5.6% faster.
+Two focused CPU success/down-failure cases verify writer-view lifetime. First
+integration failure (missing thread context) is archived; no full load failed.
+
+Bound109,891,934,440B at baseline9,955,393,536B; original allowances plus64MiB
+for early roots. Allocator peak94,044,288,356B; internal process95,804,685,552B;
+internal physical106,288,578,560B; guard physical106,287,955,968B (223 samples).
+Full reads620,943,114,240B/35,092 records; read union47.9346s, verify74.8540s,
+draft2.0636s. No new swapouts;2,372 swapins in the wider sampled phase.
+Receipt: docs/deepseek-v41/receipts/plane-overlap-20260917/README.md.
+Live harness: /tmp/dsv41-plane-overlap-20260917/full; pinned to measuredHEAD.
+Lane is experimental and single-request; not a general serving default.
+
+Full guard exit0/restored23:19:34UTC, independently healthy/free23:19:54.
+A post-restore sample later reached132.913GB. An additional cleanup-only guard
+found ZERO residual DeepSeek resident/aux pages, reclaimed22.130GB Qwen cache,
+and measured10.303GB after shutdown. Restored exactQwen again23:25:05;
+23:25:58 healthy/idle/warmed/free, but machine use131.652GB. Thus110GB is
+verified for the DeepSeek run, not Qwen normal service. Do NOT infer a DeepSeek
+cleanup defect from this growth. No Qwen configuration or other job was changed.
+No live child remains (8306 full and30594 cleanup guard both terminal).
 
 # Latest Fixed Q8 and Budget Work
 

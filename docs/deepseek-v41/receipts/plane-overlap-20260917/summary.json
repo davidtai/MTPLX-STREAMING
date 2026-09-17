@@ -1,0 +1,99 @@
+{
+  "source_commit": "ee72b77e0cdbc33db4208e08a8883f3a631d3067",
+  "full_receipt_sha256": "b071d2a4a812f1884f1c7bb637d8067b5e2ca8d7854f7815041c50151a43f829",
+  "input_tokens": 16384,
+  "output_tokens": 1024,
+  "timed_decode_steps": 1023,
+  "decode_tps": 12.673162359609387,
+  "decode_wall_s": 80.72176233300706,
+  "best_prior_tps": 12.443993545872985,
+  "best_prior_decode_wall_s": 82.2083357909869,
+  "observed_tps_increase_percent": 1.8416018369955323,
+  "comparison_scope": "Best single completed native-stream result; historical comparison. Same native output/depth and102 decode slots, different prefill capacity84 versus91 and background. Not an isolated or repeatable full-model gain claim.",
+  "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "exact_retained_output": true,
+  "cycles": 206,
+  "ar_divergence": {
+    "divergence_index": 297,
+    "ar_token": 11067,
+    "dspark_token": 62596,
+    "ar_top2_margin": 0.0,
+    "dspark_top2_margin": 0.25,
+    "max_abs_logit_delta": 0.75,
+    "tie_margin": 0.03,
+    "tie_band_used": 0.75,
+    "tie_ulps": 3,
+    "peak_contested_logit": 33.75,
+    "ulp_bf16_at_peak": 0.25,
+    "ar_contested_margin": 0.0,
+    "dspark_contested_margin": 0.25,
+    "delta_at_ar_token": 0.0,
+    "delta_at_dspark_token": 0.25,
+    "rounding_class_by_delta": true,
+    "deltas_within_tie_band": true,
+    "rows_consistent": true,
+    "unavailable_logits": [],
+    "ar_logit_at_ar_token": 33.75,
+    "ar_logit_at_dspark_token": 33.75,
+    "dspark_logit_at_ar_token": 33.75,
+    "dspark_logit_at_dspark_token": 34.0,
+    "class": "tie_flip",
+    "ar_replay_error": null,
+    "capture_index": 297,
+    "capture_index_matches_first": true
+  },
+  "expert_read_bytes": 620943114240,
+  "expert_records": 35092,
+  "read_union_s": 47.934567814,
+  "phase_time_s": {
+    "draft": 2.063621542067267,
+    "verify": 74.85400811696309,
+    "accept": 0.06277149994275533,
+    "commit": 0.1651195059530437
+  },
+  "charged_phase_installation_s": 3.4262648750154767,
+  "prefill_slots": 84,
+  "decode_slots": 102,
+  "kv_bits": 16,
+  "live_admission_bound_bytes": 109891934440,
+  "plane_extra_live_allowance_bytes": 67108864,
+  "memory": {
+    "mlx_peak_bytes": 94044288356,
+    "process_footprint_peak_bytes": 95804685552,
+    "system_used_peak_bytes": 106288578560
+  },
+  "guard_process_peak_bytes": 95812009200,
+  "guard_physical_peak_bytes": 106287955968,
+  "guard_complete_samples": 223,
+  "whole_pass_swapins_pages": 2372,
+  "whole_pass_swapouts_pages": 0,
+  "packed_reclamation": {
+    "files": 361,
+    "cached_page_bytes_before": 0,
+    "cached_page_bytes_after": 0
+  },
+  "integration_arm_medians_s": {
+    "1": {
+      "stock": 0.0093541875,
+      "full": 0.009340698,
+      "early": 0.00904196875
+    },
+    "6": {
+      "stock": 0.018534,
+      "full": 0.018571406,
+      "early": 0.01815403125
+    }
+  },
+  "integration_after_close_bytes": 8,
+  "full_guard_exit_code": 0,
+  "goal_20_tps_reached": false,
+  "kv_256k_priority": "secondary; no full256K prefill claimed",
+  "post_restore_memory": {
+    "initial_sample_bytes": 132913250304,
+    "after_cleanup_window_bytes": 131652091904,
+    "candidate_resident_cached_pages_found_bytes": 0,
+    "candidate_aux_cached_pages_found_bytes": 0,
+    "stopped_qwen_cached_pages_reclaimed_bytes": 22129917952,
+    "scope": "The110GB ceiling was enforced during the DeepSeek window. Restoring the exact Qwen service subsequently exceeded it; the followup found no residual candidate pages. No evidence supports changing DeepSeek shutdown cleanup, and no Qwen configuration or other job was altered."
+  }
+}

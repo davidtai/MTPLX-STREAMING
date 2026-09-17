@@ -1,0 +1,4 @@
+#!/bin/zsh
+set -eu
+cd /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41
+exec env GPU_WINDOW_LOCK_TIMEOUT=120 GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 GPU_WINDOW_CHILD_RSS_CAP_BYTES=8589934592 GPU_WINDOW_MIN_AVAIL_GB=8 GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 PYTHONUNBUFFERED=1 MTPLX_DSV41_SWITCH_FASTPATH=1 PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41:/tmp/dsv41-plane-overlap-20260917 scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-plane-overlap-20260917/integration_probe.py > /tmp/dsv41-plane-overlap-20260917/integration-guard-v2.log 2>&1
