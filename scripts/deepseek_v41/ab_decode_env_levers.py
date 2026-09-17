@@ -269,17 +269,47 @@ def _resolve_receipt_baseline_gb(args):
     return None if v is None else float(v)
 
 
+def _resolve_receipt_baseline_bytes(args):
+    """Authoritative pre-load baseline bytes, when the guard or plan supplied it."""
+    tp = getattr(args, "_dsv41_target_plan", None)
+    if tp and tp.get("box_baseline_bytes") is not None:
+        return int(tp["box_baseline_bytes"])
+    baseline_gb = _resolve_receipt_baseline_gb(args)
+    return (
+        None
+        if baseline_gb is None
+        else int(round(baseline_gb * 1_000_000_000))
+    )
+
+
 def _inject_box_used(mem, args) -> None:
     """Keep measured whole-machine usage separate from baseline+process estimate."""
     if not isinstance(mem, dict):
         return
-    baseline_gb = _resolve_receipt_baseline_gb(args)
-    fp = mem.get("process_footprint_peak_gb")
-    mem["box_baseline_gb"] = baseline_gb
-    mem["baseline_plus_process_peak_estimate_gb"] = (
-        None if baseline_gb is None or fp is None else round(baseline_gb + fp, 4)
+    baseline_bytes = _resolve_receipt_baseline_bytes(args)
+    footprint_bytes = mem.get("process_footprint_peak_bytes")
+    estimate_bytes = (
+        None
+        if baseline_bytes is None or footprint_bytes is None
+        else baseline_bytes + int(footprint_bytes)
     )
+    mem["box_baseline_bytes"] = baseline_bytes
+    mem["box_baseline_gb"] = (
+        None if baseline_bytes is None else baseline_bytes / 1_000_000_000
+    )
+    mem["box_baseline_gib"] = (
+        None if baseline_bytes is None else baseline_bytes / GIB
+    )
+    mem["baseline_plus_process_peak_estimate_bytes"] = estimate_bytes
+    mem["baseline_plus_process_peak_estimate_gb"] = (
+        None if estimate_bytes is None else round(estimate_bytes / 1_000_000_000, 4)
+    )
+    mem["baseline_plus_process_peak_estimate_gib"] = (
+        None if estimate_bytes is None else estimate_bytes / GIB
+    )
+    mem["box_used_bytes"] = mem.get("system_used_peak_bytes")
     mem["box_used_gb"] = mem.get("system_used_peak_gb")
+    mem["box_used_gib"] = mem.get("system_used_peak_gib")
     mem["box_used_source"] = "sampled_vm_stat_including_file_cache"
 
 
@@ -2886,7 +2916,9 @@ def _resolve_target_plan(args):
     r = resolve_box_target_mlx_limit_bytes(os.environ)
     resolved = {
         "memory_plan_source": "box_target",
+        "box_target_bytes": int(r["box_target_bytes"]),
         "box_target_gb": r["box_target_gb"],
+        "box_baseline_bytes": int(r["box_baseline_bytes"]),
         "box_baseline_gb": r["box_baseline_gb"],
         "host_overhead_gib": r["host_overhead_gib"],
         "allocator_cache_limit_gib": r["allocator_cache_limit_gib"],
@@ -4465,7 +4497,9 @@ def _abort_receipt_row(arm, exc, args=None) -> dict:
     if tp is not None:
         row["memory"] = {
             "memory_plan_source": "box_target",
+            "box_target_bytes": tp.get("box_target_bytes"),
             "box_target_gb": tp.get("box_target_gb"),
+            "box_baseline_bytes": tp.get("box_baseline_bytes"),
             "box_baseline_gb": tp.get("box_baseline_gb"),
             "engine_budget_gib": round(tp.get("engine_budget_gib", 0.0), 4),
         }

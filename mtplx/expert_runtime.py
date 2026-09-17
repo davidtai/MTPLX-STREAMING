@@ -2135,6 +2135,7 @@ def resolve_box_target_mlx_limit_bytes(
         )
     return {
         "mlx_limit_bytes": mlx_limit,
+        "box_target_bytes": target_b,
         "box_target_gb": target_gb,
         "box_baseline_gb": baseline_gb,
         "box_baseline_bytes": baseline_b,
@@ -2311,7 +2312,9 @@ def apply_mlx_memory_cap(
         **cache_report,
     }
     if box_target is not None:
+        report["box_target_bytes"] = int(box_target["box_target_bytes"])
         report["box_target_gb"] = box_target["box_target_gb"]
+        report["box_baseline_bytes"] = int(box_target["box_baseline_bytes"])
         report["box_baseline_gb"] = round(box_target["box_baseline_gb"], 6)
         report["box_target_mlx_limit_bytes"] = int(box_target["mlx_limit_bytes"])
         report["host_overhead_bytes"] = int(box_target["host_overhead_bytes"])

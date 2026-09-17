@@ -16,6 +16,11 @@ decimal GB. It is not the process or machine total.
 | `system_used_peak_bytes`, `box_used_gb` | Sampled physical machine usage, including active/inactive file cache, matching `top`'s PhysMem used definition. |
 | `baseline_plus_process_peak_estimate_gb` | The old pre-load baseline plus process peak calculation. An estimate, not measured system usage. |
 
+Compatibility aliases now retain authoritative byte partners:
+`box_used_bytes` equals `system_used_peak_bytes`, while `box_baseline_bytes` and
+`baseline_plus_process_peak_estimate_bytes` preserve the exact guard baseline
+and its explicitly labeled estimate. Their `_gb` and `_gib` forms are renderings.
+
 System used is `(wired + active + inactive + physical compressor) * page_size`.
 Speculative pages are free, and compressed logical pages must not replace the
 physical compressor size. This follows [Apple's top implementation](https://github.com/apple-oss-distributions/top/blob/main/globalstats.c#L485-L488).
