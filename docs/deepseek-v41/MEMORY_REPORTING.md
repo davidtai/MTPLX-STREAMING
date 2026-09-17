@@ -130,8 +130,12 @@ nonzero `RESTORE_FAILED` result; bounded recovery failure requires operator
 recovery before another GPU run.
 
 The guard's sampled physical peak and conservative baseline-plus-child guard
-estimate are reported separately. Sampling and MLX allocator policies do not
-prove a hard instantaneous peak bound. The prior transient bands are workload
+estimate are reported separately, with exact bytes alongside GiB. Its exit
+summary includes the complete step sample count and poll interval. A child that
+finishes before any complete observation has `n/a` step peaks, not zero; the
+pre-step baseline alone does not measure that child's peak. Even a successful
+sample can miss a short allocation between polls. Sampling and MLX allocator
+policies do not prove a hard instantaneous peak bound. The prior transient bands are workload
 evidence, not certification of new shapes or a full-model 110 GB run. Validate
 compile/graph and loading headroom before such a run; file-cache growth can
 legitimately consume the budget and trip the guard.

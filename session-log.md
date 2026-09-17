@@ -148,3 +148,17 @@ real MLX imports. Generation arithmetic unchanged.47 hashed raw artifacts at
 docs/deepseek-v41/receipts/decode-read-attribution-20260917. Retained12.1146645TPS,
 20TPS still open. Next improvement must materially reduce read bytes or expose
 less I/O wait; do not repeat rejected width,confidence,lookup or policy screens.
+
+## 2026-09-17 18:37 UTC [saved]
+Goal: Reduce expert transfer/compute costs while preserving accurate memory reporting.
+Decisions:
+- Label guard peaks as sampled, include exact bytes and sample counts, and report n/a without child observations.
+- Retain down specialization as a prototype; its whole-MLP gain shrinks to about1% on larger cases.
+- Check dispatch against installed MLX0.32.2; the local mlx-fork is0.31.2.
+Rejected:
+- Cross-expert XOR/reference coding; tested entropy bounds lose to independent component bytes.
+- Sorting existing decode banks to activate native reuse; B/E is too small.
+- Promoting a down-only timing gain as a complete decode improvement.
+Open:
+- Reach20TPS through materially fewer expert reads or less exposed I/O wait.
+- Preserve exact arithmetic and bounded memory before another full-model run.

@@ -1,0 +1,16 @@
+Working directory: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41
+Measured source: 8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5
+Python: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python
+
+Entropy (CPU only, but guard used to reclaim Qwen and enforce shared-lane ownership):
+env PYTHONPATH=. DSV41_SOURCE_COMMIT=8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5 GPU_WINDOW_LOCK_TIMEOUT=120 GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 GPU_WINDOW_CHILD_RSS_CAP_BYTES=2147483648 scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-expert-delta-20260917/screen.py
+
+Kernel probes (three separate windows, exact Qwen restoration between each):
+env PYTHONPATH=. PYTHONUNBUFFERED=1 DSV41_SOURCE_COMMIT=8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5 GPU_WINDOW_LOCK_TIMEOUT=120 GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 GPU_WINDOW_CHILD_RSS_CAP_BYTES=6442450944 scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-down-tail-20260917/probe.py
+env PYTHONPATH=. PYTHONUNBUFFERED=1 DSV41_SOURCE_COMMIT=8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5 GPU_WINDOW_LOCK_TIMEOUT=120 GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 GPU_WINDOW_CHILD_RSS_CAP_BYTES=6442450944 scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-down-tail-20260917/probe-v2.py
+env PYTHONPATH=. PYTHONUNBUFFERED=1 DSV41_SOURCE_COMMIT=8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5 GPU_WINDOW_LOCK_TIMEOUT=120 GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 GPU_WINDOW_CHILD_RSS_CAP_BYTES=6442450944 scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-down-tail-20260917/mlp-probe.py
+
+Guard checks after reporting fix (CPU only):
+/bin/bash -n scripts/deepseek_v41/gpu_window.sh tests/test_gpu_window_memory_accounting.sh
+PYTHONPATH=. /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python -m pytest -q tests/test_gpu_window_runner_safety.py -k step_peak_summary
+nice -n 19 /bin/bash tests/test_gpu_window_memory_accounting.sh

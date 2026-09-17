@@ -589,3 +589,21 @@ difference; acceptance remains strict.33 focused CPU reporting checks pass with
 real MLX imports blocked; no generation arithmetic changed. Evidence:
 [decode-read-attribution-20260917](../deepseek-v41/receipts/decode-read-attribution-20260917/README.md).
 Task4 stays open at the retained12.1146645TPS.
+
+## Additional Task4 result, 2026-09-17 18:37 UTC
+
+A15-record CPU entropy screen rejects cross-expert XOR/reference coding.
+Sorting existing native decode banks also cannot select MLX0.32.2's sorted
+reuse route at36 assignment rows over98-100 persistent or48 transient slots.
+A corrected native down specialization preserves all sampled output bytes,
+but the complete MLP gain is7.67% at18rows/3experts and only0.82-0.94% for
+larger cases. Keep it as a prototype; no production kernel or full-model run.
+
+The short probes exposed guard-summary ambiguity. It now prints sampled
+peaks with exact bytes, observation count and cadence; no complete child sample
+means n/a. Admission, readers, cadence and restoration are unchanged. One
+focused CPU regression covers missing, measured-zero and nonzero cases;
+19 existing hermetic memory/abort checks pass. No broad GPU tests were added.
+Qwen restored and warmed before lock release18:31:39UTC, independently checked
+18:37:02UTC. See[the evidence](../deepseek-v41/receipts/read-kernel-screen-20260917/README.md).
+The retained12.1146645TPS and Task4's open20TPS criterion are unchanged.

@@ -165,12 +165,12 @@ else
 fi
 
 # 7b. W106 HIGH-2 + MEDIUM-B: the step-start log states BOTH guard caps, and since
-#     this scenario's baseline is 50 GiB used with the DEFAULT 93 GiB child cap and the
+#     this scenario's baseline is 50 GiB used with the DEFAULT 100 GiB child cap and the
 #     EXPLICIT 100 GiB ceiling this run sets (the default is 110 decimal GB),
-#     50 + 93 > 100, so MEDIUM-B LOWERS the effective
+#     50 + 100 > 100, so MEDIUM-B LOWERS the effective
 #     child cap to ceiling - used_start = 50 GiB. Assert the lowering line (naming the
-#     original 93 GiB default) + the guard-caps line showing the 50 GiB effective cap.
-if grep -q "phase 4: effective child-tree footprint cap 50.0 GiB (lowered from 93.0 GiB" "${LOG}" \
+#     original 100 GiB default) + the guard-caps line showing the 50 GiB effective cap.
+if grep -q "phase 4: effective child-tree footprint cap 50.0 GiB (lowered from 100.0 GiB" "${LOG}" \
    && grep -q "phase 4: guard caps -- child-tree footprint cap 50.0 GiB" "${LOG}" \
    && grep -q "physical-used ceiling 107374182400 bytes" "${LOG}"; then
   ok "MEDIUM-B: effective child cap lowered to ceiling-used_start (50 GiB); box-used ceiling 100 GiB (HIGH-3 default)"

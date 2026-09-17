@@ -1,0 +1,83 @@
+{
+  "source_commit": "8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5",
+  "production_kernel_installed": false,
+  "full_model_run": false,
+  "retained_best_decode_tps": 12.114664476181137,
+  "target_decode_tps": 20,
+  "entropy_scope": "Representative CPU entropy bounds only; no codec size, decoder speed or inference claim",
+  "entropy_mean_ideal_record_fractions": {
+    "raw_byte_entropy": 0.8921512457410409,
+    "xor_byte_entropy": 0.9477628754159757,
+    "conditional_nibble_bits_per_byte": 0.8954870705100189
+  },
+  "kernel_cases": [
+    {
+      "rows": 18,
+      "unique_experts": 3,
+      "exact_bytes": true,
+      "median_of_arm_block_medians_s": {
+        "stock": 0.000576958,
+        "fixed_loop": 0.0005340415,
+        "unroll9": 0.000532708
+      },
+      "unroll9_latency_reduction_fraction": 0.07669535737436695
+    },
+    {
+      "rows": 36,
+      "unique_experts": 12,
+      "exact_bytes": true,
+      "median_of_arm_block_medians_s": {
+        "stock": 0.001326208,
+        "fixed_loop": 0.0013165215,
+        "unroll9": 0.0013137295
+      },
+      "unroll9_latency_reduction_fraction": 0.009409157537882407
+    },
+    {
+      "rows": 36,
+      "unique_experts": 36,
+      "exact_bytes": true,
+      "median_of_arm_block_medians_s": {
+        "stock": 0.001392416,
+        "fixed_loop": 0.001377709,
+        "unroll9": 0.001380938
+      },
+      "unroll9_latency_reduction_fraction": 0.008243226162296446
+    }
+  ],
+  "kernel_memory": {
+    "static_increment_bound_bytes": 6442450944,
+    "mlx_allocator_peak_bytes": 678724030,
+    "process_footprint_after_bytes": 1628718832,
+    "system_used_before_bytes": 10035527680,
+    "system_used_after_bytes": 11758698496
+  },
+  "upstream_sources": {
+    "quantized.cpp": {
+      "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/quantized.cpp",
+      "sha256": "44483286a359afb7f35d8a9c1658ffaec6ff6c01a7ab34ac7bb35cf6438804a6"
+    },
+    "fp_quantized.h": {
+      "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/kernels/fp_quantized.h",
+      "sha256": "bdf6d419b623cdfd7493ff58fbf9c70b4a2c2c39511330d6a61646093148225e"
+    },
+    "fp4.h": {
+      "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/kernels/fp4.h",
+      "sha256": "e3159945d7e5ae24f7a1ca9c4875b2a5d15cfb6952405df24a0df1bb2622a93a"
+    },
+    "fp8.h": {
+      "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/kernels/fp8.h",
+      "sha256": "3ee75c58a1e125ee9eaed3961ef89719d47ce4c8446bb930390d7a4579f08439"
+    },
+    "quantized_utils.h": {
+      "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/kernels/quantized_utils.h",
+      "sha256": "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51"
+    }
+  },
+  "guard_reporting": {
+    "change": "sampled peaks, exact bytes, complete observation count and n/a when no complete child sample exists",
+    "regression": "old source fails all three subcases; fixed source passes",
+    "hermetic_memory_accounting": "19 passed, 0 failed; fake readers, temporary lock, no GPU or real service changes",
+    "fixed_guard_sha256": "bf286587cd3d33a4170cc6d8511aa78951463b6c3f3213c3ecf25caf463e3913"
+  }
+}

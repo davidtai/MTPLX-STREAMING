@@ -1,0 +1,11 @@
+{
+  "checked_utc": "2026-09-17T18:37:02.732139+00:00",
+  "health_ok": true,
+  "active_requests": 0,
+  "warmup_state": "done",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "lock_free": true,
+  "swapusage": "vm.swapusage: total = 3072.00M  used = 2130.38M  free = 941.62M  (encrypted)"
+}

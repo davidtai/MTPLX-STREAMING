@@ -897,6 +897,7 @@ PEAK_MAX_PROC_RSS_BYTES=0   # (retained; legacy ps-tree telemetry, no longer pol
 PEAK_GUARD_ACCOUNTED_BYTES=0  # peak of max(baseline + footprint estimate, physical used)
 PEAK_SYSTEM_USED_BYTES=0      # sampled physical-used peak, including baseline
 PEAK_COMPRESSOR_DELTA_BYTES=0  # running peak of compressor growth over its at-start value
+STEP_MEMORY_SAMPLES=0         # complete observations while the owned child was live
 PLIST=""
 QWEN_PID=""
 
@@ -1268,6 +1269,7 @@ while :; do
     _kill_step_child
     exit 8
   fi
+  STEP_MEMORY_SAMPLES=$(( STEP_MEMORY_SAMPLES + 1 ))
   # One memory-envelope sample every 30 s (and once on the first poll): the three
   # numbers David asked for (baseline start, step tree footprint, compressor delta).
   _now_epoch="$(date +%s)"
@@ -1280,7 +1282,11 @@ done
 wait "${STEP_PID}"
 step_rc=$?
 STEP_PID=""
-log "phase 4: GPU step exited with code ${step_rc}; peak step footprint $(gib "${PEAK_TREE_RSS_BYTES}") GiB, peak guard accounted $(gib "${PEAK_GUARD_ACCOUNTED_BYTES}") GiB, peak physical used $(gib "${PEAK_SYSTEM_USED_BYTES}") GiB, peak compressor delta $(gib "${PEAK_COMPRESSOR_DELTA_BYTES}") GiB"
+if (( STEP_MEMORY_SAMPLES > 0 )); then
+  log "phase 4: GPU step exited with code ${step_rc}; sampled peak step footprint $(gib "${PEAK_TREE_RSS_BYTES}") GiB (${PEAK_TREE_RSS_BYTES} bytes), sampled peak guard accounted $(gib "${PEAK_GUARD_ACCOUNTED_BYTES}") GiB (${PEAK_GUARD_ACCOUNTED_BYTES} bytes), sampled peak physical used $(gib "${PEAK_SYSTEM_USED_BYTES}") GiB (${PEAK_SYSTEM_USED_BYTES} bytes), sampled peak compressor delta $(gib "${PEAK_COMPRESSOR_DELTA_BYTES}") GiB (${PEAK_COMPRESSOR_DELTA_BYTES} bytes); complete step memory samples ${STEP_MEMORY_SAMPLES}, poll interval ${RSS_POLL_SECONDS}s"
+else
+  log "phase 4: GPU step exited with code ${step_rc}; sampled peak step footprint n/a, sampled peak guard accounted n/a, sampled peak physical used n/a, sampled peak compressor delta n/a; complete step memory samples 0, poll interval ${RSS_POLL_SECONDS}s"
+fi
 
 # phase 5 (restore + lock release) runs in the teardown trap on this exit.
 exit "${step_rc}"

@@ -94,6 +94,35 @@ class GuardSafetyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(int(result.stdout), (10 + 100 + 200 + 30) * 16384)
 
+    def test_step_peak_summary_distinguishes_missing_and_sampled_zero(self):
+        source = GUARD.read_text()
+        start = source.index('\nSTEP_PID=""', source.rindex('\nwait "${STEP_PID}"'))
+        end = source.index('\n# phase 5', start)
+        summary = source[start:end]
+        for samples, footprint in ((0, 0), (2, 0), (2, 3 * 1024**3)):
+            with self.subTest(samples=samples, footprint=footprint):
+                script = 'log() { printf "%s\\n" "$*"; };\n'
+                script += 'gib() { awk -v b="$1" \'BEGIN{printf "%.1f", b/1073741824}\'; };\n'
+                script += f'STEP_MEMORY_SAMPLES={samples}; PEAK_TREE_RSS_BYTES={footprint};\n'
+                script += f'PEAK_GUARD_ACCOUNTED_BYTES={50 * 1024**3 + footprint};\n'
+                script += f'PEAK_SYSTEM_USED_BYTES={50 * 1024**3};\n'
+                script += 'PEAK_COMPRESSOR_DELTA_BYTES=0; RSS_POLL_SECONDS=1; step_rc=0;\n'
+                result = subprocess.run(['/bin/bash', '-c', script + summary],
+                                        capture_output=True, text=True, timeout=3)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'complete step memory samples {samples}', result.stdout)
+                self.assertIn('poll interval 1s', result.stdout)
+                if samples == 0:
+                    for measure in ('step footprint', 'guard accounted',
+                                    'physical used', 'compressor delta'):
+                        self.assertIn(f'sampled peak {measure} n/a', result.stdout)
+                else:
+                    self.assertNotIn('n/a', result.stdout)
+                    self.assertIn(f'sampled peak step footprint {footprint / 1024**3:.1f} GiB '
+                                  f'({footprint} bytes)', result.stdout)
+                    self.assertIn(f'sampled peak physical used 50.0 GiB ({50 * 1024**3} bytes)',
+                                  result.stdout)
+
     def test_capture_actual_model_directory(self):
         Path(self.env['FAKE_HEALTH']).write_text(json.dumps({'model_path': str(self.path)}))
         result = self.run_guard('--selftest', 'model-path')
