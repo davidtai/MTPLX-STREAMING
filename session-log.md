@@ -10,6 +10,26 @@ Rejected:
 - Treat pending Metal fences as GPU utilization or routed bytes as DRAM traffic.
 Open: Capture authorized process GPU samples when attribution remains incomplete.
 
+## 2026-09-17 15:08 UTC [saved]
+Goal: Screen native I/O fanout without exceeding110GB or disturbing other jobs.
+Decisions:
+- Keep fanout4. Bounded CPU component-scatter A/B/A gives only0.351% bandwidth
+  gain for fanout8 while doubling preadv calls; no full-model speedup is claimed.
+- Full-model fanout8 was refused before loading:12.209GB baseline produces
+  conservative111.672GB prefill/112.517GB decode bounds, including512MiB for
+  added worker stacks and kernel I/O state. Qwen file-cache reclamation succeeded.
+- Native main inventory is40x384 experts;128 belongs to MTP. An initial probe
+  setup error caught this before reads; v2 uses the manifest-checked inventory.
+- Archive exact scripts, raw metrics, setup/refusal logs and separate admission
+  bounds. No regression tests or production runtime change for this small gain.
+Lifecycle:
+- All owned windows terminal; final exact Qwen restore, warmup and lock release
+  at15:06:03UTC, live verified15:07:54. No unrelated process signaled.
+Open:
+- Best complete workload remains12.1146645TPS;20TPS remains unmet.
+- Reduce expert bytes or exposed verification cost. New full-model attempts need
+  a fresh baseline and bounded allocation/host/cache/compile headroom.
+
 ## 2026-09-17 [saved]
 Goal: Reduce DeepSeek V4.1 memory and exact-workload decode cost within 110 GB.
 Decisions:

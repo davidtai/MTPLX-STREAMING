@@ -25,7 +25,7 @@ The measurements are distinct: allocator usage is not process footprint or
 machine physical use. Machine use includes file cache. Sampled peaks can miss
 shorter spikes; admission also prices allocation/copy peaks, host reserve,
 cache retention and wired headroom. `records_read` counts expert records;
-`read_operations` counts native read operations and is not interchangeable.
+`read_operations` counts subreads (Python `preadv` here) and is not interchangeable.
 
 Both runs use source `d4051aeccc938a65a71734f1379e00f69f0d1823`, native BF16 target
 head, D5/M6, 48 shared transients, no prefetch, fanout 4, three-record miss parts,

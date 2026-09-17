@@ -60,10 +60,12 @@ shared overlap, maxKV17664. Only cache capacity changes after prefill.
 
 # Lifecycle
 
-All owned GPU jobs are terminal. Growth/control restored and released14:21:02 /
-14:27:13 UTC. The HC follow-up exited4 on digest rejection, then restored, warmed
-and released14:40:47 UTC. Live health, exact identity and lock release verified.
-Last swap2693.44MiB; no increase. Another owner may acquire at any time.
+All owned GPU jobs are terminal. The fanout8 full-model attempt was refused by
+admission before model loading; Qwen restored/warmed/released14:59:08 UTC.
+The small I/O probe setup failure restored15:04:20; its corrected v2 completed
+and restored/warmed/released15:06:03 UTC. Live health, exact identity and lock
+release verified15:07:54. Last swap2589.38MiB, below the prior2693.44MiB.
+Another owner may acquire at any time; never infer ownership from this note.
 
 # Open Work
 
@@ -82,9 +84,21 @@ Last swap2693.44MiB; no increase. Another owner may acquire at any time.
   and nearly unchanged verify time/cycle do not support a useful HC speed claim.
   Follow-up evidence is included with the growth receipt; original full sources
   and logs remain under /tmp/dsv41-hc-decode-20260917.
-- Next inspect the native I/O scheduling/transfer boundaries and memory-cache
-  overshoot bound. Use existing full counters and static ownership first; do
-  not repeat the HC screen or equate isolated-kernel gains with decode gains.
+- Fanout8 is screened and not promoted. Native component scatter uses Python
+  preadv, not the scalar native extension. A bounded CPU I/O A/B/A gives only
+  +0.351% bandwidth, doubles read calls and increases thread stack capacity.
+  Main layers have384 experts, MTP layers128. The initial128-main-expert probe
+  assumption failed before reads; the corrected exact inventory is40*384.
+  Evidence:docs/deepseek-v41/receipts/native-scatter-fanout-20260917/README.md.
+- The latest full-model attempt saw12.208914432GB baseline. With512MiB extra
+  fanout headroom, prefill/decode physical bounds were111.672/112.517GB and the
+  run was correctly refused before loading. Do not silently lower cache capacity
+  for an allegedly matched comparison or weaken bounds to force admission.
+- Next reduce expert bytes per committed token or exposed verification cost,
+  using retained full counters. Inspect cache overshoot ownership before pricing
+  more capacity. A depth>5 path must change actual block geometry and establish
+  native-shape allocation bounds. Do not repeat HC/fanout8 screens or equate an
+  isolated operation gain with full decode throughput.
 - Reject prior staged3+3, D3 on the full workload, retirement-only tiny wins,
   per-chunk fences, serial rANS, tuned full-M6 policy, and target-head non-tie drift.
   A depth>5 candidate must change actual DSpark block geometry, not only CLI depth.

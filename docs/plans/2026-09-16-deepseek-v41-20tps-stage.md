@@ -504,3 +504,17 @@ cycles and an additional unclassified control/candidate token difference at480.
 Native M6 synthetic outputs are not bit-exact despite the old row-cap comment;
 comments are corrected without changing the executable AST. Retained best remains
 12.1146645TPS. See the HC follow-up in the same receipt folder.
+
+## Additional Task4 result, 2026-09-17 15:08 UTC
+
+Fanout8 is not promoted. Its fixed93/100 full-model attempt was refused before
+loading because a12.209GB baseline plus bounded allocations and added worker
+headroom exceeds110GB. A small native component-scatter CPU A/B/A then gives
+only0.351% bandwidth gain while doubling preadv calls. It does not measure GPU
+overlap or complete decode throughput. Main layers have384 experts, versus128
+in MTP; the initial probe's wrong main-inventory assumption failed before reads.
+The corrected probe verifies the manifest inventory and landed byte hashes.
+All owned windows restored exact Qwen identity, health and warmup before release.
+See[the receipts](../deepseek-v41/receipts/native-scatter-fanout-20260917/README.md).
+Task4 remains open at12.1146645TPS. Do not repeat this fanout screen or weaken
+admission to fit the current baseline.
