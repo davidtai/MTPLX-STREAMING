@@ -1134,8 +1134,11 @@ log "phase 4: guard accounting = max(baseline + step footprint estimate, live ph
 # with the resident agent booted out -- rather than a hand-passed --box-baseline-gb (which
 # the bench now treats as a fallback only).  Both units logged.
 if [[ "${USED_START:-}" =~ ^[0-9]+$ ]]; then
-  export MTPLX_DSV41_BOX_BASELINE_GB="$(awk -v b="${USED_START}" 'BEGIN{printf "%.4f", b/1e9}')"
-  log "phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=${MTPLX_DSV41_BOX_BASELINE_GB} (decimal GB) == $(gib "${USED_START}") GiB baseline to the step env"
+  # Seventeen significant digits round-trip every physical-byte integer on this
+  # machine through the runner's float(decimal GB) -> bytes conversion. Four
+  # fractional digits previously discarded up to 50,000 authoritative bytes.
+  export MTPLX_DSV41_BOX_BASELINE_GB="$(awk -v b="${USED_START}" 'BEGIN{printf "%.17g", b/1e9}')"
+  log "phase 4: exported exact ${USED_START}-byte baseline as MTPLX_DSV41_BOX_BASELINE_GB=${MTPLX_DSV41_BOX_BASELINE_GB} (decimal GB; $(gib "${USED_START}") GiB) to the step env"
 fi
 
 # W106 MEDIUM-B: relate the child-tree cap to the measured baseline.  If the step
