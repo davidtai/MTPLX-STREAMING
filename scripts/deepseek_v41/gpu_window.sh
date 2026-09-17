@@ -21,10 +21,10 @@
 #      pid + whether it is loaded.
 #   3. `launchctl bootout gui/<uid>/com.tea.qwen` (NO kickstart -- kickstart -k
 #      races the port yield and leaves it down; memory/guarded-window-launch-
-#      protocol.md).  Poll until its pid is gone AND free memory rises by the
-#      expected resident-agent release, or fail loudly (no hidden retries).
-#      Capture its model directory before bootout, wait for captured descendants,
-#      then reclaim clean model-file cache before measuring the workload baseline.
+#      protocol.md).  Capture its model directory before bootout, wait for every
+#      captured descendant to exit, immediately reclaim its clean model-file
+#      cache, then require the expected available-memory threshold. Fail loudly
+#      on any step (no hidden retries) before measuring the workload baseline.
 #   4. Run the step (argv) under a SYSTEM-WIDE memory guard.  Before starting it
 #      refuses to open if other mtplx/python workers above the foreign cap
 #      (default 2 GiB RSS) are resident (prints them).  While it runs, aborts +

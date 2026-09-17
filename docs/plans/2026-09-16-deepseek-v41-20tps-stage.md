@@ -371,6 +371,10 @@ automatic expert selection, or promotion from route replay alone.
   artifact and its receipt remain auditable.
 - [x] Run syntax, shell-parse, arithmetic, artifact-subset, and no-MLX static
   checks only. Add focused tests only if the measured arm wins.
+- [x] Reclaim Qwen's clean model pages immediately after its captured process
+  tree exits, before testing the post-stop availability threshold. Bind every
+  staged prepacked command to separate receipt-covered compact-MTP and q8-head
+  auxiliary roots; the original compact-MTP receipt did not name the head file.
 
 ### Task 4: Measure and promote only winners
 
