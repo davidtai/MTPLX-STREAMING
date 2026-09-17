@@ -1040,6 +1040,13 @@ if (( WAS_LOADED == 1 )); then
     err "phase 3: only $(gib "${AVAIL_NOW}") GiB available after stop ($(gib "${freed}") GiB freed; need >= ${MIN_AVAIL_GB} GiB available); aborting"
     exit 5
   fi
+  # The service is now stopped and every captured descendant is gone. Reclaim
+  # its clean model pages here, as part of shutdown, so a later preflight
+  # refusal (for example a foreign worker appearing) cannot skip reclamation.
+  if ! _reclaim_qwen_file_cache; then
+    err "phase 3: stopped-service file-cache reclamation failed; refusing workload and restoring service"
+    exit 8
+  fi
 fi
 
 # ---------------- phase 4: run the step under the SYSTEM-WIDE memory guard -----
@@ -1057,12 +1064,6 @@ if [[ -n "${HEAVY_WORKERS}" ]]; then
     err "    ${_hw_line}"
   done
   exit 7
-fi
-if [[ -n "${QWEN_MODEL_PATH}" ]]; then
-  if ! _reclaim_qwen_file_cache; then
-    err "phase 3: file-cache reclamation failed; refusing workload and restoring service"
-    exit 8
-  fi
 fi
 if [[ -n "${CANDIDATE_MODEL_PATH}" && "${CANDIDATE_MODEL_PATH}" != "${QWEN_MODEL_PATH}" ]]; then
   if ! _reclaim_candidate_file_cache; then

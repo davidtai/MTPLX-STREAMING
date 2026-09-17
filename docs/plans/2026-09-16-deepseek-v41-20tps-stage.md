@@ -348,6 +348,14 @@ automatic expert selection, or promotion from route replay alone.
   reference the CLI-derived target-slot value before that value is bound.
 - [x] Gate cap 95 on matching five-shape cap-94 evidence. Require its own
   128-token arm to beat cap 94 before allowing the 1,023-token run.
+- [x] Before GPU measurement, improve only the equal-frequency selection tie.
+  Rank all stage/expert residents by distinct-cycle presence globally; eleven
+  residents tie at the capacity boundary and nine fit. Among those 55 subsets,
+  retain the one touching the fewest trace cycles, then use lexicographic order.
+  The resulting `(69, 48, 26)` split keeps the same 143 residents, same
+  2,688,491,520 payload bytes, and same 59 omitted stage-cycle incidences while
+  reducing affected cycles from 40 to 35. Stage it separately so the earlier
+  artifact and its receipt remain auditable.
 - [x] Run syntax, shell-parse, arithmetic, artifact-subset, and no-MLX static
   checks only. Add focused tests only if the measured arm wins.
 
