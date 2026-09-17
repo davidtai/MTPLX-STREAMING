@@ -1093,10 +1093,20 @@ def fastest_of(repeats: list[dict]) -> dict | None:
     def _vals(key):
         return [r[key] for r in repeats if isinstance(r.get(key), (int, float))]
 
+    def _memory_vals(key):
+        values = []
+        for repeat in repeats:
+            value = (repeat.get("memory") or {}).get(key)
+            if isinstance(value, (int, float)):
+                values.append(value)
+        return values
+
     decode = _vals("decode_tok_s")
     prefill = _vals("prefill_tok_s")
     ttft = _vals("ttft_s")
     peak = _vals("peak_mlx_gb")
+    footprint = _memory_vals("process_footprint_peak_gb")
+    system_used = _memory_vals("system_used_peak_gb")
     return {
         "decode_tok_s_fastest": max(decode) if decode else None,
         "decode_tok_s_range": [min(decode), max(decode)] if decode else None,
@@ -1104,8 +1114,19 @@ def fastest_of(repeats: list[dict]) -> dict | None:
         "prefill_tok_s_range": [min(prefill), max(prefill)] if prefill else None,
         "ttft_s_fastest": min(ttft) if ttft else None,
         "ttft_s_range": [min(ttft), max(ttft)] if ttft else None,
+        # Compatibility alias: this remains the MLX allocator peak. New readers
+        # should use the explicit three-field memory headline below.
         "peak_gb_highest": max(peak) if peak else None,
+        "mlx_peak_gb_highest": max(peak) if peak else None,
+        "process_footprint_peak_gb_highest": (
+            max(footprint) if footprint else None
+        ),
+        "system_used_peak_gb_highest": max(system_used) if system_used else None,
     }
+
+
+def _display_memory_gb(value) -> str:
+    return "n/a" if not isinstance(value, (int, float)) else f"{value:.2f}"
 
 
 # --------------------------------------------------------------------------
@@ -1600,12 +1621,16 @@ def run_real(args) -> int:
                     device_sample=_resolve_device_sample(args),
                 )
                 repeats.append(metrics)
+                memory = metrics.get("memory") or {}
                 print(
                     f"[bench]   prefill_tok_s={metrics['prefill_tok_s']:.2f} "
                     f"ttft_s={metrics['ttft_s']:.3f} "
                     f"decode_tok_s={metrics['decode_tok_s']:.2f} "
-                    f"peak_gb={metrics['peak_mlx_gb']:.2f} "
-                    f"rss_gb={metrics['process_rss_gb']:.2f}",
+                    f"mlx_peak_gb={_display_memory_gb(memory.get('mlx_peak_gb'))} "
+                    "process_footprint_peak_gb="
+                    f"{_display_memory_gb(memory.get('process_footprint_peak_gb'))} "
+                    "system_used_peak_gb="
+                    f"{_display_memory_gb(memory.get('system_used_peak_gb'))}",
                     flush=True,
                 )
             receipt["cells"].append(
@@ -1631,7 +1656,10 @@ def run_real(args) -> int:
             f"[bench] cell ctx={cell['context_tokens']} "
             f"decode_tok_s(fastest)={fast.get('decode_tok_s_fastest')} "
             f"prefill_tok_s(fastest)={fast.get('prefill_tok_s_fastest')} "
-            f"peak_gb={fast.get('peak_gb_highest')}",
+            f"mlx_peak_gb={fast.get('mlx_peak_gb_highest')} "
+            "process_footprint_peak_gb="
+            f"{fast.get('process_footprint_peak_gb_highest')} "
+            f"system_used_peak_gb={fast.get('system_used_peak_gb_highest')}",
             flush=True,
         )
     return 0
