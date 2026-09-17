@@ -1,0 +1,52 @@
+[
+  {
+    "archive": "raw/full-native84-paired-20260917.2bd0ad017b95.ar-reference.output.txt.gz",
+    "original_sha256": "dae9c8b00536fdaa7f451679cf19b93b56cfd937c0b6528a7d9c9a280a5ce3d5",
+    "original_bytes": 4602
+  },
+  {
+    "archive": "raw/full-native84-paired-20260917.2bd0ad017b95.output.txt.gz",
+    "original_sha256": "f2c5bd9116201c526f06c9d5fd0d8517258e9746f1375063d1e68cd648a2dafe",
+    "original_bytes": 4566
+  },
+  {
+    "archive": "raw/full-native84-paired-20260917.jsonl.gz",
+    "original_sha256": "1e1126af820c30ec108d35686c4a576857c37ff0dd32ba6a23444a1f2effa40a",
+    "original_bytes": 234816
+  },
+  {
+    "archive": "raw/full-native84-paired-20260917.os.jsonl.gz",
+    "original_sha256": "9cb7f3477829c8fd804665540f1786f7b7ac6765278d2837b8a5704d7daa2c58",
+    "original_bytes": 690126
+  },
+  {
+    "archive": "raw/full-native84-paired-20260917.passes.jsonl.gz",
+    "original_sha256": "d1a95535fa00bb43ab6945eb514aae9cc9177b01fada2155a06b9fefa189f85c",
+    "original_bytes": 1100
+  },
+  {
+    "archive": "raw/full-packed84-paired-20260917.2bd0ad017b95.ar-reference.output.txt.gz",
+    "original_sha256": "dae9c8b00536fdaa7f451679cf19b93b56cfd937c0b6528a7d9c9a280a5ce3d5",
+    "original_bytes": 4602
+  },
+  {
+    "archive": "raw/full-packed84-paired-20260917.2bd0ad017b95.output.txt.gz",
+    "original_sha256": "7735b9a458fb9a1db64a647bbd402955e0edcef4413967d2a4a68052d8a0a08d",
+    "original_bytes": 4566
+  },
+  {
+    "archive": "raw/full-packed84-paired-20260917.jsonl.gz",
+    "original_sha256": "786db0ed7bcb316a596950094544802da88ed0315aabf6adf214c95b31e905a5",
+    "original_bytes": 235135
+  },
+  {
+    "archive": "raw/full-packed84-paired-20260917.os.jsonl.gz",
+    "original_sha256": "0641cdcb4ce3c6bcd6fab7ee38fbea84c020e79bbdca1eb8196951308cae063d",
+    "original_bytes": 685401
+  },
+  {
+    "archive": "raw/full-packed84-paired-20260917.passes.jsonl.gz",
+    "original_sha256": "d77409dc601d2a075da317a97ad45e13eda6904eb3b8b242925ce5ec4c551a38",
+    "original_bytes": 1267
+  }
+]

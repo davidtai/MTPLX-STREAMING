@@ -211,3 +211,22 @@ Open:
 
 - Fresh native comparison when machine headroom permits.
 - DeepSeek 20 TPS target remains unmet.
+
+## 2026-09-17 15:44 CDT [saved]
+
+Goal: Continue the exact DeepSeek 20 TPS workload within 110 GB.
+
+Decisions:
+
+- Use the measured 84-slot prefill envelope when fixed 91 admission fails; preserve every existing margin.
+- Compare native and packed scales in one guarded sequential batch, reclaiming owned files between arms.
+- Treat the single-pair gain as combined storage/capacity evidence, not isolated kernel or repeatability proof.
+
+Rejected:
+
+- Repeating fixed 91 admission against changing baselines or loosening its safety margins.
+
+Open:
+
+- Reduce expert-read or verification cost toward 20 TPS.
+- General serving requires an explicit subsequent-prefill storage lifecycle.

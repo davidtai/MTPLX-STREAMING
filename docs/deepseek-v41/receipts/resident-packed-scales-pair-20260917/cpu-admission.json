@@ -1,0 +1,71 @@
+[
+  {
+    "baseline_bytes": 9613836288,
+    "native": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 100,
+      "physical_bound_bytes": 109441541612,
+      "allocator_limit_bytes": 98238680064
+    },
+    "packed": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109483268328,
+      "allocator_limit_bytes": 98238680064
+    }
+  },
+  {
+    "baseline_bytes": 10707943424,
+    "native": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 98,
+      "physical_bound_bytes": 109031597548,
+      "allocator_limit_bytes": 97144572928
+    },
+    "packed": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 100,
+      "physical_bound_bytes": 109161797864,
+      "allocator_limit_bytes": 97144572928
+    }
+  },
+  {
+    "baseline_bytes": 11128700928,
+    "native": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 98,
+      "physical_bound_bytes": 109452355052,
+      "allocator_limit_bytes": 96723815424
+    },
+    "packed": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 99,
+      "physical_bound_bytes": 108874766568,
+      "allocator_limit_bytes": 96723815424
+    }
+  },
+  {
+    "baseline_bytes": 12300000000,
+    "native": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 96,
+      "physical_bound_bytes": 109119602924,
+      "allocator_limit_bytes": 95552516352
+    },
+    "packed": {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 98,
+      "physical_bound_bytes": 109338276840,
+      "allocator_limit_bytes": 95552516352
+    }
+  },
+  {
+    "baseline_bytes": 28352921600,
+    "native": {
+      "refused": "cap84 prefill cannot fit the current baseline: 121626114628B"
+    },
+    "packed": {
+      "refused": "cap84 prefill cannot fit the current baseline: 121626114628B"
+    }
+  }
+]

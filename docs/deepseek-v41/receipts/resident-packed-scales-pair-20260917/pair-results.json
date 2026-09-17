@@ -1,0 +1,18 @@
+[
+  {
+    "mode": "native",
+    "receipt": "/tmp/dsv41-110-stage/full-native84-paired-20260917.jsonl",
+    "receipt_sha256": "1e1126af820c30ec108d35686c4a576857c37ff0dd32ba6a23444a1f2effa40a",
+    "output_tokens": 1024,
+    "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "baseline_bytes": 10974773248
+  },
+  {
+    "mode": "packed",
+    "receipt": "/tmp/dsv41-110-stage/full-packed84-paired-20260917.jsonl",
+    "receipt_sha256": "786db0ed7bcb316a596950094544802da88ed0315aabf6adf214c95b31e905a5",
+    "output_tokens": 1024,
+    "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "baseline_bytes": 11254906880
+  }
+]

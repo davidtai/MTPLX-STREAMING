@@ -2,7 +2,8 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
 TPS on exact 16,384-input / 1,024-output Python under 110 decimal GB.
-Latest complete candidate: **12.4439935 TPS; 20 TPS remains unmet.** Native historical best: 12.1146645 TPS; fresh paired control pending.
+Best complete candidate: **12.4439935 TPS; 20 TPS remains unmet.**
+Fresh pair: native 11.7141789 TPS, packed scales 12.2253796 TPS (+4.364%).
 
 # Decisions
 
@@ -22,78 +23,69 @@ Latest complete candidate: **12.4439935 TPS; 20 TPS remains unmet.** Native hist
 # Plan Status
 
 Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 remains open.
-Memory/runner fixes include actual measured-pass summaries, phase budgets,
-fresh Mach footprint reads with cached bindings, short-reply rejection,
-missing diagnostic logits remaining unclassified, and sampled guard peaks.
-Newest fix: current storage and plan transient bytes are reported separately
-from source_expert_record_bytes. 37 CPU reporting cases pass with real MLX
-imports forbidden; generation ASTs are unchanged.
+Reporting fixes cover actual measured passes and phases, fresh Mach footprint
+reads, short-reply rejection, missing diagnostic logits, sampled guard peaks,
+and current slot/transient storage versus source_expert_record_bytes.
+The 37 CPU reporting cases remain unchanged; both latest real arms exercise
+correct source/current record sizes and shared transient allocation bytes.
 
-# Latest Complete Candidate
+# Latest Verified Pair
 
-Measured source 4a5acf9d4: lossless global packed scales, native FP4 weights,
-native BF16 target head, compact MTP 93/58/32, D5/M6, 91 prefill -> 102 decode,
-48 shared transients, pf0, transition-window, miss parts 3, shared overlap,
-fanout setting 4 but three weight-plane reads per record; max KV 17664.
-HC/attention/window compile flags false; prefill HC post remains compiled.
+Measured source 170a576dc; one sequential native/packed full-workload batch.
+Both use native BF16 target arithmetic, compact MTP 93/58/32, D5/M6, 48 shared
+transients, pf0, transition-window, miss parts 3, shared overlap, max KV 17664.
+The measured 84-slot prefill replaces fixed 91; all original margins remain.
+Native grows 84->98; packed scales grow 84->99 at separate live baselines.
 
-12.4439935459 TPS / 82.2083357910s, 206 cycles, all 1,024 output IDs identical.
-Installation 3.4511022910s is charged to decode. 35,058 expert records read
-620,341,493,760 weight bytes; packed-scale installation reads another
-3,086,136,060B. Read union 47.811560985s; software concurrency 10.9616, not HW QD.
-Historical native 93->100: 12.1146645 TPS / 84.4431145420s, 35,880 records /
-674,566,963,200B; resize 1.954109s. This is not a fresh paired comparison.
+Native: 11.7141788902 TPS / 87.3300646670s; baseline 10,974,773,248B;
+whole-machine bound 109,298,427,372B; external machine peak 105,846,996,992B.
+Packed: 12.2253796176 TPS / 83.6783831670s; baseline 11,254,906,880B;
+bound 109,000,972,520B; external machine peak 105,399,713,792B.
+Both produce 1,024 identical IDs in 206 cycles, SHA
+0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
 
-Allocator peak 94,044,462,082B; internal sampled process 95,847,005,496B and
-machine 106,215,473,152B. Baseline 9,613,836,288B; conservative bound
-109,483,268,328B. Guard machine peak 106,198,253,568B, 226 complete samples,
-zero reported compressor growth. Physical weight slots 73,043,804,160B;
-resident packed scales 3,086,136,060B; raw scales released 4,078,632,960B.
+Native reads 691,543,941,120B /36,783 records; packed reads 643,326,935,040B /
+36,357 records plus 3,086,136,060B of scale installation. Read unions 53.9567s
+and 49.5391s are not GPU-idle measurements. Charged phase costs 1.8932s/3.3879s.
+Packed reports 17,694,720-byte weight records and 849,346,560 shared transient
+bytes; the original source record remains 18,800,640B. Scale owners are separate.
+This single pair includes capacity/baseline differences, not isolated kernel or
+repeatability proof. No new optimization tests or production defaults were added.
+Receipt: docs/deepseek-v41/receipts/resident-packed-scales-pair-20260917/README.md.
 
-Receipt: docs/deepseek-v41/receipts/resident-packed-scales-20260917/README.md.
-Original slot-summary record/transient fields are stale; the derived corrected
-receipt preserves every timing, memory observation and token. The inherited
-capacity_selection label was stale too; the live helper's label is corrected.
-Full output SHA: 0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
+# Lifecycle and Artifacts
 
-# Artifact and Lifecycle
+Guard child/guard exit 0; 462 complete samples; no compressor growth or new swapouts.
+Both model children are terminal. Each parent cleanup removed 12,416,466,944
+cached-page bytes to zero, separate from physical use. Exact Qwen restoration,
+health and warmup preceded lock release 20:42:03UTC; independent verification
+at 20:42:43UTC found healthy/idle/warmed Qwen, no owned children and a free lock.
+Earlier cap91 refusals at 28.35/10.71/11.13GB are retained; do not repeat them.
 
-Complete source-record SHA coverage and exact scale reconstruction: all 15,360
-records / 288,777,830,400B. Packed inventory is 3.086 GB versus 16.987 GB raw.
-Payload: ignored benchmarks/raw/deepseek-v41-resident-scales/20260917;
-/tmp/dsv41-resident-scales-20260917/artifact is a symlink to it. 360 files hashed.
-Small proof covers persistent103 / transient48, nonidentity slot/expert indices,
-all 384 layer-20 scales and four exact MLP cases. Close leaves 8 MLX bytes;
-peak allocator 2.841 GB within an 8 GiB admission bound.
+Live pair helpers: /tmp/dsv41-prefill84-pair-20260917/{native,packed} plus
+run_pair.py; used output prefixes must not be overwritten. Helpers are one-request
+benchmarks and explicitly reject a second prefill. Update live source proofs
+only after verifying unchanged runtime hashes when committing documentation.
+Packed payload: ignored benchmarks/raw/deepseek-v41-resident-scales/20260917;
+360 files /3,086,136,060B, complete source SHA coverage and exact reconstruction.
+Manifest SHA b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16.
 
-CPU export accumulated source file cache despite F_NOCACHE, invalidating its
-proposed 20 GiB incremental bound. Physical used stayed below 110 GB, but Qwen
-restore timed out (exit 10). Verified-source reclamation removed 122.343 GB of
-cached pages including speculative/free pages; exact Qwen recovery was checked.
-Do not rerun that exporter unchanged. The runtime loader uses direct Metal
-buffers and disables read-ahead. Its guarded finally reclaims source and packed
-files before Qwen restore. The full candidate exited 0; exact restore/warmup and
-lock release completed 19:39:28 UTC. A native control retry at 20:08 UTC was
-refused before model loading: baseline 28.353 GB, allowed <=9.672 GB for cap 100.
-Exact Qwen restore/warmup and free lock were independently verified at 20:11:41 UTC.
-All our children are terminal. See docs/deepseek-v41/receipts/resident-packed-scales-control-refusal-20260917.
+# Retained Context and Next Work
 
-# Open Work and Retained Context
-
-- Live helpers: /tmp/dsv41-resident-scales-20260917. One-request benchmark only;
-  general serving needs a prefill reload/shrink design. Do not enable by default.
-- Native D5 cap91->100 control needs <=9.672 GB baseline at the recorded wired
-  usage. Use a new evidence prefix only when headroom changes; keep all bounds.
-- Refresh live installation HEAD/source hashes after commits. Measured archives
-  are immutable; phase_memory_control_sha256 names a receipt, never a wrapper.
-- Native growth helpers: /tmp/dsv41-cache-growth-20260917; native M6/M8 bounds:
-  /tmp/dsv41-depth7-full-20260917. The cap93 attempt was refused before loading.
-- Valid attribution: receipts/decode-read-attribution-20260917. Native M6 loop
-  84.671768s includes 52.271397s missing-read wait and 19.940574s Metal eval/encode.
-  Do not repeat cProfile; its threaded Python 3.12 attribution was corrupt.
+- Earlier best packed91->102 is12.4439935TPS at 106,215,473,152B sampled physical
+  use. See receipts/resident-packed-scales-20260917; do not rerun unchanged.
+- Latest sources /tmp/dsv41-resident-scales-20260917 remain cap91-specific.
+  Cap84 pair helpers solve current prefill admission without weakening budgets.
+- Valid native attribution: receipts/decode-read-attribution-20260917. Its loop
+  includes 52.271397s missing-read wait and 19.940574s Metal eval/encode. Existing
+  miss handling already overlaps hits/shared work and dispatches ready parts.
+- Further progress must reduce expert-read or verification cost materially.
+  Small policy cleanup cannot bridge the remaining gap to 20TPS.
 - Do not repeat unchanged rejected fanout8, D7-full, staged3+3, D3-full, rANS,
   XOR/reference coding, cache-policy, prompt-lookup, confidence0.5, HC or q8-head
   candidates. Down-only specialization gives small larger-case MLP gains.
 - Teacher: /tmp/dsv41-depth-replay-20260917 and ignored
   benchmarks/raw/deepseek-v41-depth-teacher/20260917. Do not recapture.
 - AR cached logits cover only divergence 297; never reuse them for 376 or 480.
+- The CPU scale exporter accumulated source-file cache despite F_NOCACHE and
+  caused a restore timeout; recovery was verified. Do not rerun it unchanged.

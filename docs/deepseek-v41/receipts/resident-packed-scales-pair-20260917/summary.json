@@ -1,0 +1,146 @@
+{
+  "source_commit": "170a576dcb22183c5e5d1366b4241a1f03e67de3",
+  "scope": "one sequential native/packed pair, full16K/1024 Python, separate maximum-admitted decode capacities at each live baseline",
+  "arms": {
+    "native": {
+      "receipt": "/tmp/dsv41-110-stage/full-native84-paired-20260917.jsonl",
+      "receipt_sha256": "1e1126af820c30ec108d35686c4a576857c37ff0dd32ba6a23444a1f2effa40a",
+      "prefill_slots": 84,
+      "decode_slots": 98,
+      "baseline_bytes": 10974773248,
+      "physical_bound_bytes": 109298427372,
+      "decode_tps": 11.714178890176015,
+      "decode_wall_s": 87.33006466701045,
+      "pass_wall_s": 226.9190267920203,
+      "output_tokens": 1024,
+      "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+      "cycles": 206,
+      "memory": {
+        "mlx_peak_bytes": 92514520730,
+        "process_footprint_peak_bytes": 94264277344,
+        "system_used_peak_bytes": 105821372416
+      },
+      "external_sampling": {
+        "samples": 883,
+        "process_footprint_peak_bytes": 94272993632,
+        "system_used_peak_bytes": 105846996992,
+        "swapout_delta_pages": 0
+      },
+      "io": {
+        "read_bytes": 691543941120,
+        "records_read": 36783,
+        "read_wall_ns": 53956704860,
+        "python_preadv_invocations": 143473
+      },
+      "slot_storage": {
+        "expert_record_bytes": 18800640,
+        "source_expert_record_bytes": 18800640,
+        "transient_bytes_total": 902430720,
+        "transient_bytes_scope": "shared_across_layers"
+      },
+      "phase_growth": {
+        "phase": "decode",
+        "prefill_slots_per_layer": 84,
+        "decode_slots_per_layer": 98,
+        "growth_payload_bytes": 10528358400,
+        "timing_scope": "inside decode wall time, after the original prefill callback",
+        "active_before_bytes": 79727883508,
+        "cache_before_bytes": 0,
+        "growth_seconds": 1.8931623340176884,
+        "active_after_bytes": 90256241908,
+        "cache_after_bytes": 0,
+        "transition_peak_bytes": 90829108472,
+        "physical_allocated_bytes": 74600939520,
+        "plan_limit_bytes": 93954972488,
+        "plan_persistent_bytes": 73698508800
+      },
+      "growth_keys_available": [
+        "post_prefill_growth",
+        "phase_memory_plans",
+        "resolved_plan_phase",
+        "phase_budget"
+      ]
+    },
+    "packed": {
+      "receipt": "/tmp/dsv41-110-stage/full-packed84-paired-20260917.jsonl",
+      "receipt_sha256": "786db0ed7bcb316a596950094544802da88ed0315aabf6adf214c95b31e905a5",
+      "prefill_slots": 84,
+      "decode_slots": 99,
+      "baseline_bytes": 11254906880,
+      "physical_bound_bytes": 109000972520,
+      "decode_tps": 12.225379617558994,
+      "decode_wall_s": 83.67838316698908,
+      "pass_wall_s": 224.68539987498662,
+      "output_tokens": 1024,
+      "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+      "cycles": 206,
+      "memory": {
+        "mlx_peak_bytes": 91920930862,
+        "process_footprint_peak_bytes": 93695735776,
+        "system_used_peak_bytes": 105392947200
+      },
+      "external_sampling": {
+        "samples": 877,
+        "process_footprint_peak_bytes": 93715871712,
+        "system_used_peak_bytes": 105399713792,
+        "swapout_delta_pages": 0
+      },
+      "io": {
+        "read_bytes": 643326935040,
+        "records_read": 36357,
+        "read_wall_ns": 49539127192,
+        "python_preadv_invocations": 109071
+      },
+      "slot_storage": {
+        "expert_record_bytes": 17694720,
+        "source_expert_record_bytes": 18800640,
+        "transient_bytes_total": 849346560,
+        "transient_bytes_scope": "shared_across_layers"
+      },
+      "phase_growth": {
+        "phase": "decode",
+        "prefill_slots_per_layer": 84,
+        "decode_slots_per_layer": 99,
+        "growth_payload_bytes": 9933992700,
+        "resident_packed_scales_bytes": 3086136060,
+        "source_record_bytes": 18800640,
+        "decode_weight_record_bytes": 17694720,
+        "timing_scope": "scale installation, raw backing release and one weight resize are inside decode wall time",
+        "active_before_bytes": 79727883576,
+        "growth_seconds": 3.3879024169873446,
+        "active_after_bytes": 89662817592,
+        "cache_after_bytes": 0,
+        "transition_peak_bytes": 90246743356,
+        "raw_scale_backing_released_bytes": 3768975360,
+        "physical_allocated_bytes": 70920437760,
+        "plan_limit_bytes": 93360606788,
+        "plan_persistent_bytes": 70071091200
+      },
+      "growth_keys_available": [
+        "post_prefill_growth",
+        "phase_memory_plans",
+        "resolved_plan_phase",
+        "phase_budget"
+      ]
+    }
+  },
+  "decode_tps_improvement_pct": 4.363948443810206,
+  "decode_wall_reduction_pct": 4.181471196597908,
+  "decode_seconds_saved": 3.6516815000213683,
+  "packed_scale_installation_read_bytes": 3086136060,
+  "token_streams_identical": true,
+  "target_tps": 20,
+  "target_met": false,
+  "guard_exit": 0,
+  "guard": {
+    "sampled_process_tree_peak_bytes": 94289984320,
+    "sampled_machine_peak_bytes": 105816915968,
+    "complete_samples": 462,
+    "poll_interval_s": 1,
+    "compressor_growth_bytes": 0,
+    "service_restored_and_lock_released_utc": "2026-09-17T20:42:03Z"
+  },
+  "independent_restoration_utc": "2026-09-17T20:42:43.516138+00:00",
+  "packed_total_read_bytes_including_scale_installation": 646413071100,
+  "read_bytes_reduction_including_installation_pct": 6.526103019123797
+}

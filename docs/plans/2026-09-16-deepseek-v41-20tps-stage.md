@@ -646,3 +646,18 @@ Qwen identity, health, warmup, and lock release were independently verified.
 Do not retry with unchanged headroom or overwrite this attempt's prefix.
 Task 4 remains open; see
 `../deepseek-v41/receipts/resident-packed-scales-control-refusal-20260917/README.md`.
+
+### Completed cap84 native/packed comparison, 2026-09-17
+
+Using the already-measured 84-slot prefill envelope resolved fixed 91 admission
+failures without weakening any memory margin. One guarded full 16K/1024 batch
+measured native 84->98 at 11.7141789 TPS and packed 84->99 at 12.2253796 TPS: an
+observed 4.364% gain and 3.6517s less decode time. Both produce all 1,024 identical
+output IDs. External machine peaks are 105.847 GB/105.400 GB; both fit 110 GB.
+
+The pair includes different live baselines and maximum-admitted decode
+capacities; it does not isolate the kernel contribution or prove repeatability.
+Current source/current-storage reporting is correct in both real receipts.
+Qwen identity, health, warmup and lock release were independently verified.
+Task 4 and the 20 TPS goal remain open. See
+`../deepseek-v41/receipts/resident-packed-scales-pair-20260917/README.md`.
