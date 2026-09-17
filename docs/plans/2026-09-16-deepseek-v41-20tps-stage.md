@@ -46,6 +46,9 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 - [x] Keep allocator peak, process `phys_footprint`, and whole-machine physical
   use as separate measures; never add process footprint to machine use.
+- [x] Preserve allocator-limit readback, derived allocator GC threshold, and
+  peak-over-limit with authoritative byte fields plus decimal-GB and binary-GiB
+  renderings. Do not relabel the raw limit readback as the GC threshold.
 - [x] Pass the benchmark model separately from its bare expert runtime so
   model-owned Engram cache totals appear in `serve_stream_counters`.
 - [x] Run the existing counter test and a direct no-MLX runner plumbing check.

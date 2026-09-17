@@ -154,6 +154,13 @@ def _mlx_headroom_readback_keys(
         return None if b is None else int(b) / GIB
 
     return {
+        "mlx_limit_readback_bytes": readback,
+        "mlx_gc_limit_effective_bytes": gc_limit,
+        "mlx_peak_over_limit_bytes": (
+            None
+            if (readback is None or mlx_peak_bytes is None)
+            else int(mlx_peak_bytes) - readback
+        ),
         "mlx_limit_gib_readback": _gib(readback),
         "mlx_gc_limit_gib_effective": _gib(gc_limit),
         "mlx_active_gb_at_decode_start": _gib(active_start_bytes),
@@ -181,7 +188,20 @@ def _ab_memory_block(block: dict, readback: dict) -> dict:
         out[name.replace("_gb_", "_bytes_")] = None if gib is None else round(gib * GIB)
         out[name.replace("_gb_", "_gib_")] = gib
         out[name] = None if gib is None else gib * GIB / 1_000_000_000
-    out["mlx_gc_limit_gib_readback"] = readback.get("mlx_limit_gib_readback")
+    for name in (
+        "mlx_limit_readback",
+        "mlx_gc_limit_effective",
+        "mlx_peak_over_limit",
+    ):
+        value = readback.get(name + "_bytes")
+        out[name + "_bytes"] = value
+        out[name + "_gb"] = None if value is None else value / 1_000_000_000
+        out[name + "_gib"] = None if value is None else value / GIB
+    # Compatibility aliases retained for older receipt readers. Both now name
+    # the value their key claims: the allocator limit readback and the derived
+    # GC threshold, respectively.
+    out["mlx_limit_gib_readback"] = out["mlx_limit_readback_gib"]
+    out["mlx_gc_limit_gib_readback"] = out["mlx_gc_limit_effective_gib"]
     out["mlx_limit_gib_effective"] = None
     return out
 
@@ -221,7 +241,10 @@ def _apply_effective_limit(mem, cap) -> None:
         mem["mlx_limit_gib_effective"] = int(cap["limit"]) / GIB
     elif mem.get("mlx_limit_gib_effective") is None:
         # last-resort: the clamped readback (better than None when no cap report).
-        mem["mlx_limit_gib_effective"] = mem.get("mlx_gc_limit_gib_readback")
+        mem["mlx_limit_gib_effective"] = mem.get(
+            "mlx_limit_readback_gib",
+            mem.get("mlx_gc_limit_gib_readback"),
+        )
 
 
 def _resolve_receipt_baseline_gb(args):
