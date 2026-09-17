@@ -3769,10 +3769,16 @@ def _dspark_divergence_rule(d: dict) -> str:
     return "+".join(fired) if fired else "none"
 
 
-def _dspark_tie_class_gate_passes(divergence: dict | None) -> bool:
-    """Accept identity or a proven tie flip at the compared decode position."""
-    if divergence is None:
-        return True
+def _dspark_tie_class_gate_passes(dspark: dict | None) -> bool:
+    """Accept a complete identity receipt or a proven, index-matched tie flip."""
+    if not isinstance(dspark, dict):
+        return False
+    identical = dspark.get("byte_identical_vs_ar")
+    divergence = dspark.get("divergence")
+    if identical is True:
+        return divergence is None
+    if identical is not False or not isinstance(divergence, dict):
+        return False
     return (
         divergence.get("class") == "tie_flip"
         and divergence.get("capture_index_matches_first") is True
@@ -5592,8 +5598,7 @@ def main(argv=None) -> int:
     parity_failed = False
     if getattr(args, "dspark_require_tie_class", False):
         for receipt in receipts:
-            divergence = (receipt.get("dspark") or {}).get("divergence")
-            if not _dspark_tie_class_gate_passes(divergence):
+            if not _dspark_tie_class_gate_passes(receipt.get("dspark")):
                 parity_failed = True
                 print(
                     f"[ab] FAIL: {receipt['arm']} DSpark divergence is not an "
