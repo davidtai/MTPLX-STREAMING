@@ -398,6 +398,7 @@ class PositionalExpertReader:
             codec_sidecar.record_map() if codec_sidecar is not None else None
         )
         self._decode_container = None  # lazily bound Metal decoder (needs MLX)
+        self._eval_decoded = None
         # W24 R4 (Factor D) lever, default OFF (==1): split one large record's
         # positional read into N contiguous sub-range reads issued CONCURRENTLY
         # on the shared (ref-counted) fd -- raises SSD queue depth beyond the
@@ -1183,10 +1184,13 @@ class PositionalExpertReader:
 
         fn = self._decode_container
         if fn is None:
+            import mlx.core as mx
+
             from mtplx.expert_rans_metal import decode_container
 
             fn = decode_container
             self._decode_container = fn
+            self._eval_decoded = mx.eval
         return fn
 
     def _decode_targets(
@@ -1228,12 +1232,11 @@ class PositionalExpertReader:
         reading the uncompressed record (the #112 decode-store parity).
         """
 
-        import numpy as np
-
         assert self.codec_sidecar is not None
         verify_hash = verify_hash and self.codec_verify
         self.metrics.update(record_requests=1, sidecar_record_requests=1)
         view, component_views = self._decode_targets(destination, record)
+        raw_view = None
         try:
             # 1) Pull the (smaller) compressed container off SSD. Reusing the
             #    range reader keeps native/preadv, cancel/deadline, and the
@@ -1248,17 +1251,20 @@ class PositionalExpertReader:
                 deadline_ns=deadline_ns,
                 pipeline_phase=pipeline_phase,
             )
-            # 2) Decode through the Metal kernel (host round-trip is a fast
-            #    unified-memory copy, far below the SSD read it replaces).
+            # 2) Decode through the Metal kernel. Both the bytearray and an
+            #    evaluated MLX uint8 array expose the Python buffer protocol, so
+            #    keep the compressed input and decoded output zero-copy on the
+            #    host. The prior bytes(staging) + np.array(decoded) pair copied
+            #    roughly compressed_bytes + raw_bytes on every cache miss.
             decode_started = time.monotonic_ns()
-            decoded = self._decode_container_fn()(bytes(staging))
-            raw = np.array(decoded, dtype=np.uint8).reshape(-1)
-            if raw.size < record.logical_bytes:
+            decoded = self._decode_container_fn()(staging)
+            self._eval_decoded(decoded)
+            if int(decoded.size) < record.logical_bytes:
                 raise ExpertIOShortRead(
                     f"decoded record ({record.layer}, {record.expert}) is "
-                    f"{raw.size} bytes; record needs {record.logical_bytes}"
+                    f"{decoded.size} bytes; record needs {record.logical_bytes}"
                 )
-            raw_view = memoryview(raw)[: record.logical_bytes]
+            raw_view = memoryview(decoded).cast("B")[: record.logical_bytes]
             # 3) Land raw bytes exactly where the uncompressed path would.
             if component_views is None:
                 assert view is not None
@@ -1289,6 +1295,11 @@ class PositionalExpertReader:
                 self.metrics.update(records_unhashed=1)
                 digest = "unverified"
         finally:
+            if raw_view is not None:
+                try:
+                    raw_view.release()
+                except Exception:
+                    pass
             if component_views is not None:
                 for component_view in component_views:
                     try:
