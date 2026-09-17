@@ -3,7 +3,8 @@
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
 TPS on exact 16,384-input / 1,024-output Python under 110 decimal GB.
 Best complete candidate: **12.4439935 TPS; 20 TPS remains unmet.**
-Fresh pair: native 11.7141789 TPS, packed scales 12.2253796 TPS (+4.364%).
+Latest full Q8 candidate: 10.7541904 TPS; keep native KV for the fastest route.
+At least 256K KV support is also required, secondary to reaching 20 TPS.
 
 # Decisions
 
@@ -21,6 +22,8 @@ Fresh pair: native 11.7141789 TPS, packed scales 12.2253796 TPS (+4.364%).
 - Preserve Claude W126/W127/W128 worktrees; keep unvalidated bounded KV off.
 - User explicitly requested fixed Q8 KV. The new fixed Q8 factory is separate
   from the old disabled bounded-KV lane; native 16-bit storage remains the control.
+- The 16K/1K throughput workload stays unchanged. A 256K store configuration
+  does not establish the memory envelope for a complete 256K prefill.
 
 # Plan Status
 
@@ -46,25 +49,44 @@ Fixed backings total112,503,168B; loader reserves503,316,480B for all Q8
 backings/copies/views before expert allocation, keeping old native allowances.
 Packed snapshots/rollback preserve bytes; no cache owner bound-method cycles.
 
-Final bounded probe passes 16K real-width storage/reference/rollback/restore,
-native draft detach, and a tiny real model's prefill plus12 verify/trim cycles.
-Storage stays112.5MB; MLX peak274,186,240B; after teardown975,688B active.
-No full-model Q8 quality or throughput result. Native full-run growth wrappers
-are now source-stale and their native cache bounds are invalid for Q8; do not
-refresh hashes alone or reuse the native AR digest as a Q8 reference.
-Receipt: docs/deepseek-v41/receipts/fixed-q8-budget110-20260917/README.md.
+The fresh Native/Q8/Native lifetime probe preserves every per-chunk shared
+compressed/index view as layer-major prefill does. Native peak669,729,292B
+in both arms; Q8 peak373,304,920B; all release to8 active bytes. Thus the full
+Q8 envelope retains native bounds and adds503,316,480B without native discounts.
 
-Latest guard child/guard exit0. Exact Qwen restore/warmup and lock release at
-21:37:12UTC; independent21:37:40UTC healthy/idle/warmed/free, no owned child.
-Automatic shutdown reclamation removed36.54GB cached pages (36.47GB measured
-physical reduction). No abandoned DeepSeek process was found. Active Colima
-containers ndh-runner/qwen36-webstatus and VS Code were preserved.
+Source67c0906cbc658de6219d384cf94bbdbc0484efe2 full Q8 runs:
+- AR reference84->99, complete1024 tokens, full FP32 logits at every index.
+  Physical bound109,853,513,960B; internal machine peak104,161,181,696B.
+  AR7.005TPS includes logit capture and is diagnostic only.
+- MTP84->101:10.7541904TPS/95.1257102s, including3.3733s packed installation.
+  229 cycles; complete1024 tokens. First Q8-AR difference at53 passes the
+  index-matched tie gate (0.125 contested margins/deltas, band0.375).
+  Physical bound109,817,256,168B; guard physical peak106,263,920,640B.
+  Reads726,739,845,120B;56.658s read union;88.869s verification,2.405s draft.
+  Different trajectories/capacities prevent isolating Q8 overhead. Not a winner.
+Receipt: docs/deepseek-v41/receipts/fixed-q8-full-20260917/README.md.
+
+All guard children terminal with exit0. Final exact Qwen restore/warmup and
+lock release22:26:03UTC; independent22:26:42 healthy/idle/warmed/free, no child.
+Candidate shutdown reclamation removed35.83GB cached pages to zero. No new
+swapouts;8 swapins during candidate samples. Active other jobs were preserved.
+
+Live source-pinned Q8 harness: /tmp/dsv41-q8-full-20260917. Never overwrite used
+output prefixes. Logits also retained at ignored
+benchmarks/raw/deepseek-v41-fixed-q8-reference/20260917/ar-logits.f32,
+SHA c0cccefd38d50628259f2e72f671f1f4f78951244f24d1fb565a6470ff8ecc3e.
+The Q8 reference is specific to Q8; it cannot classify native-KV candidates.
+
+256K CPU geometry: max_kv262144, max_append953, fixed552,567,168B and additional
+reserve2,952,790,016B. Full256K prefill is unverified: retained per-chunk views,
+hidden states, attention and draft seeding need a complete bound first. This
+secondary task must not delay the20TPS work.
 
 Completed packed geometry screen: R8/SG2, R4/SG4 and FP4 float-bit conversion
 all exact but flat/slower across real shapes; no installation or full rerun.
 Receipt: docs/deepseek-v41/receipts/packed-geometry-screen-20260917/README.md.
 
-# Latest Full Workload Pair
+# Retained Native/Packed Full Workload Pair
 
 Measured source 170a576dc; one sequential native/packed full-workload batch.
 Both use native BF16 target arithmetic, compact MTP 93/58/32, D5/M6, 48 shared
@@ -88,7 +110,7 @@ This single pair includes capacity/baseline differences, not isolated kernel or
 repeatability proof. No new optimization tests or production defaults were added.
 Receipt: docs/deepseek-v41/receipts/resident-packed-scales-pair-20260917/README.md.
 
-# Lifecycle and Artifacts
+# Retained Pair Lifecycle and Artifacts
 
 Guard child/guard exit 0; 462 complete samples; no compressor growth or new swapouts.
 Both model children are terminal. Each parent cleanup removed 12,416,466,944
@@ -122,5 +144,6 @@ Manifest SHA b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16.
 - Teacher: /tmp/dsv41-depth-replay-20260917 and ignored
   benchmarks/raw/deepseek-v41-depth-teacher/20260917. Do not recapture.
 - AR cached logits cover only divergence 297; never reuse them for 376 or 480.
+  That restriction is for native KV. The new Q8 reference covers all1024 rows.
 - The CPU scale exporter accumulated source-file cache despite F_NOCACHE and
   caused a restore timeout; recovery was verified. Do not rerun it unchanged.

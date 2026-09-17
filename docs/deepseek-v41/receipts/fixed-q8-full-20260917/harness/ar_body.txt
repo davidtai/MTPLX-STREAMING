@@ -1,0 +1,75 @@
+    original_ar = ab._generate
+    logit_report = {'path': str(PREFIX.with_suffix('.ar-logits.f32')), 'shape': [1024,129280],
+                    'dtype': 'float32', 'row_bytes':129280*4, 'row_sha256':[],
+                    'scope':'Complete Q8 M1 reference rows; capture adds diagnostic time to AR only'}
+    prefill_boundary_memory = {}
+    def admitted_ar(*a, **kw):
+        global phase
+        import fcntl
+        import numpy as np
+        phase = 'q8_ar_reference'
+        sample()
+        rt=kw['model']._mtplx_expert_runtime
+        ops=kw['ops']
+        fd=os.open(logit_report['path'],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        fcntl.fcntl(fd,fcntl.F_NOCACHE,1)
+        class CaptureOps:
+            def __getattr__(self,name):
+                return getattr(ops,name)
+            def argmax_last(self,logits):
+                token=ops.argmax_last(logits)
+                row=np.asarray(logits[0,-1].astype(mx.float32))
+                if row.shape!=(129280,) or row.dtype!=np.float32:
+                    raise RuntimeError('reference logit row shape/dtype changed')
+                payload=row.tobytes()
+                logit_report['row_sha256'].append(hashlib.sha256(payload).hexdigest())
+                view=memoryview(payload)
+                while view:
+                    n=os.write(fd,view)
+                    if n<=0:
+                        raise RuntimeError('short Q8 reference logit write')
+                    view=view[n:]
+                return token
+        kw['ops']=CaptureOps()
+        callback=kw.get('mem_profile')
+        def at_boundary(name,token=None):
+            if name=='after_prefill':
+                prefill_boundary_memory.update(active_bytes=int(mx.get_active_memory()),peak_bytes=int(mx.get_peak_memory()))
+                growth_transition()
+            if callback is not None:
+                callback(name,token=token)
+        kw['mem_profile']=at_boundary
+        try:
+            with rt.admit_kv_tokens(len(kw['prompt_ids'])+int(kw['steps'])):
+                result=original_ar(*a,**kw)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        if len(logit_report['row_sha256'])!=1024:
+            raise RuntimeError('Q8 reference did not produce all 1024 logit rows')
+        assert rt._live_kv_tokens==0
+        phase='q8_ar_reference_end'
+        sample()
+        record_pass('q8_ar_reference',result)
+        return result
+    original_run_arm=ab._run_arm
+    def reference_receipt(*a,**kw):
+        receipt=original_run_arm(*a,**kw)
+        if len(receipt['token_ids'])!=1024 or growth_report.get('phase')!='decode':
+            raise RuntimeError('incomplete Q8 reference or packed phase transition')
+        if receipt['fixed_q8_cache']['bits']!=8:
+            raise RuntimeError('reference cache precision differs')
+        receipt['reference_only']=True
+        receipt['measurement_origin']={'ar':'current_run_with_logit_capture','dspark':None}
+        receipt['reference_logit_storage']=logit_report
+        receipt['post_prefill_growth']=dict(growth_report)
+        receipt['prefill_boundary_memory']=prefill_boundary_memory
+        receipt['phase_memory_plans']={'prefill':prefill_resolved_plan,'decode':receipt['resolved_plan']}
+        receipt['phase_budget']={'allocator_limit_bytes':ALLOCATOR_LIMIT_BYTES,'prefill_engine_bytes':engine,
+                                'decode_engine_bytes':engine+growth_admission['growth_payload_bytes'],
+                                'admission':growth_admission}
+        receipt['source_installation']=COMPATIBILITY
+        return receipt
+    ab._generate=admitted_ar
+    ab._run_arm=reference_receipt
+    raise SystemExit(ab.main())

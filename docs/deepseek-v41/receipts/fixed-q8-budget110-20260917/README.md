@@ -1,5 +1,9 @@
 # Fixed Q8 KV and 110 GB budget
 
+Follow-up: the [full Q8 workload receipt](../fixed-q8-full-20260917/README.md)
+now records the complete reference, MTP result and additional memory envelope.
+The verification below describes this earlier implementation checkpoint.
+
 The decimal and legacy GiB budget interfaces now share **110,000,000,000
 bytes**. The staged native/packed admission helpers use that same physical
 ceiling. Baseline, Python, allocator cache, transient copies and wired-memory

@@ -264,3 +264,38 @@ Open:
 - Derive a new complete full-model Q8 envelope and measure Q8 quality/throughput.
 - Old full-run source proofs are stale after these implementation changes.
 - 20 TPS remains unmet; best complete result remains12.4439935TPS.
+
+## 2026-09-17 17:34 CDT [saved]
+
+Goal: Complete fixed Q8 workload evidence; preserve20TPS as the primary target.
+
+Decisions:
+
+- User requires at least256K KV support, explicitly secondary to20TPS. Keep the
+  exact16K-input/1024-output performance workload unchanged.
+- Full Q8 admission retains native envelopes and adds503,316,480B, supported by
+  a fresh cache lifetime probe with per-chunk shared views held through prefill.
+- Use a new full Q8 AR reference with all1024 FP32 logit rows; preserve its
+  529,530,880-byte binary as an ignored artifact with whole-file and row hashes.
+- Keep Q8 explicit. Its10.7541904TPS result is slower than retained12.4439935TPS;
+  different output trajectories and capacities prevent an isolated comparison.
+
+Verified:
+
+- Lifetime Native/Q8/Native peaks669,729,292/373,304,920/669,729,292B; each arm
+  releases to8 active bytes. No full model was needed for this lifetime probe.
+- Q8 MTP completes1024 tokens in229 cycles at95.1257102s, charging3.3733s growth.
+  Index53 divergence against Q8 AR is an index-matched accepted tie.
+- Q8 MTP bound109,817,256,168B; guard peak106,263,920,640B. No new swapouts;
+  independent candidate samples observe8 swapins.
+- Both full guards exit0 and restore exact Qwen before releasing the lock.
+  Final release22:26:03UTC; independent22:26:42 healthy/idle/warmed/free, no child.
+- CPU-only256K store pricing:552,567,168B fixed,2,952,790,016B additional reserve.
+
+Open:
+
+- Reduce expert-read or target-verification cost materially toward20TPS; do not
+  repeat unchanged Q8 throughput or add tests for its losing throughput result.
+- Secondary256K full-prefill bound/verification: retained per-chunk decoded
+  views, hidden states, attention and draft seeding are not covered by the16K bound.
+- Receipt: docs/deepseek-v41/receipts/fixed-q8-full-20260917/README.md.

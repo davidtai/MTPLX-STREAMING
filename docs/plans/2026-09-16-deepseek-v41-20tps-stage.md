@@ -682,11 +682,33 @@ head decision. The new cache is separate from the old disabled bounded-KV lane.
   and the legacy budget assertion pass with real MLX imports blocked.
 - [x] Verify automatic Qwen reclamation and exact healthy/warmed restoration.
   No abandoned DeepSeek process was found; active other jobs were preserved.
-- [ ] Establish a fresh complete full-model Q8 memory envelope and Q8 reference,
-  then measure quality and throughput. Native source proofs/cache envelopes
-  cannot authorize Q8 simply by refreshing hashes. Keep native default/control.
+- [x] Establish a fresh complete full-model Q8 memory envelope and Q8 reference,
+  then measure the exact workload and throughput. The cache lifetime probe
+  bounds retained prefill views; the full envelope adds the complete Q8 reserve
+  without discounting native allowances. Keep native default/control.
 
 Evidence: `../deepseek-v41/receipts/fixed-q8-budget110-20260917/README.md`.
 The independent packed-geometry screen rejected all three candidates; see
 `../deepseek-v41/receipts/packed-geometry-screen-20260917/README.md`.
 Task4 and the20TPS goal remain open; best full result remains12.4439935TPS.
+
+### Full fixed Q8 result and priority update, 2026-09-17
+
+The complete Q8 candidate yields10.7541904TPS/95.1257102s, including3.3733s
+packed installation, at84->101 slots/layer. All1024 output tokens are present;
+the first difference at53 passes the existing index-matched tie gate against a
+new Q8 AR reference. Complete FP32 reference rows are archived by hash for all
+1024 positions. This is workload evidence, not a broad model-quality assessment.
+
+Calculated physical bound109,817,256,168B and guard peak106,263,920,640B both
+fit110GB. Final Qwen restoration, health/warmup, no owned child and free lock
+were independently verified. No additional optimization tests or full rerun
+are justified for this slower candidate. See
+`../deepseek-v41/receipts/fixed-q8-full-20260917/README.md`.
+
+The user requires at least256K KV support, explicitly secondary to20TPS.
+- [x] Account for262144-token fixed Q8 storage:552,567,168B with an additional
+  2,952,790,016B reserve. The existing factory accepts that configuration.
+- [ ] Reach20TPS on the unchanged16K-input/1024-output Python workload.
+- [ ] Establish and verify the complete256K prefill/rollover envelope, including
+  retained chunk views and hidden states. The16K full bound does not cover it.

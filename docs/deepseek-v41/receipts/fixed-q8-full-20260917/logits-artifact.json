@@ -1,0 +1,15 @@
+{
+  "original_path": "/tmp/dsv41-110-stage/full-fixedq8-ar-20260917-v1.ar-logits.f32",
+  "retained_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-fixed-q8-reference/20260917/ar-logits.f32",
+  "retained_repo_relative_path": "benchmarks/raw/deepseek-v41-fixed-q8-reference/20260917/ar-logits.f32",
+  "bytes": 529530880,
+  "sha256": "c0cccefd38d50628259f2e72f671f1f4f78951244f24d1fb565a6470ff8ecc3e",
+  "storage": "hard link; same inode; ignored large artifact",
+  "shape": [
+    1024,
+    129280
+  ],
+  "dtype": "float32",
+  "row_bytes": 517120,
+  "row_hash_manifest": "ar/full-fixedq8-ar-20260917-v1.jsonl:reference_logit_storage.row_sha256"
+}

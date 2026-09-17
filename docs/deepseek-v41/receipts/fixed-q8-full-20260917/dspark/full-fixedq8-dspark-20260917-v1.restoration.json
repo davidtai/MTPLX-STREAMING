@@ -1,0 +1,58 @@
+{
+  "recorded_utc": "2026-09-17T22:26:42.687558+00:00",
+  "guard_exit_code": 0,
+  "health_ok": true,
+  "model": "mtplx-flash-next-optimized-speed",
+  "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "warmup": {
+    "enabled": true,
+    "ran": true,
+    "tokens": 16,
+    "elapsed_s": 1.6145790829905309,
+    "error": null,
+    "completion_tokens": 16,
+    "tok_s": 71.23675153495473,
+    "background": {
+      "mode": "background",
+      "state": "done",
+      "steps": [
+        {
+          "kind": "gqa_packed_pipelines",
+          "state": "ok",
+          "elapsed_s": 0.012,
+          "yields": 0
+        },
+        {
+          "kind": "ladder",
+          "context": 512,
+          "state": "ok",
+          "elapsed_s": 0.528,
+          "yields": 0,
+          "tok_s": 97.24
+        },
+        {
+          "kind": "ladder",
+          "context": 2560,
+          "state": "ok",
+          "elapsed_s": 2.354,
+          "yields": 0,
+          "tok_s": 100.21
+        }
+      ],
+      "started_at_s": 1789683958.79687,
+      "finished_at_s": 1789683962.5168252,
+      "elapsed_s": 3.72,
+      "resubmits": 0
+    },
+    "extended": {
+      "mode": "background",
+      "steps_planned": 3
+    }
+  },
+  "active_requests": 0,
+  "lock_free": true,
+  "owned_gpu_children": []
+}
