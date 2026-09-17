@@ -1540,6 +1540,19 @@ ARM_PRESETS = {
         wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
         decode_attn_kernel="0", dspark_verify_k29="0", gate_prefetch="0",
     ),
+    # Same bounded DSpark route with the shared output head repacked once to
+    # affine q8. The planner credits the manifest-derived 620.5 MB resident
+    # saving before component-bank construction; target and draft both execute
+    # the installed q8 head directly. This tie-break-class candidate stays
+    # opt-in until the exact 16K/1K lane measures it.
+    "cell16k_ring_v2_draft_attn_pf0_head_q8": _preset(
+        layer_major="1", prefill_dense="1", score_path="lean", selected_keys="1",
+        window_ring="1", layout_fix="1",
+        head="q8", sinkhorn="1", attn="1", win_memo="1",
+        runner="v2", draft="1", draft_head_bf16="1",
+        wo_a_cache="1", attn_lean_casts="1", attn_fused_proj="1",
+        decode_attn_kernel="0", dspark_verify_k29="0", gate_prefetch="0",
+    ),
     # Exact-layout real-weight one-layer screen: direct packed MXFP8 wo_a plus
     # the common wo_b was 1.22x at M=1 and 1.19x at M=6, while removing the
     # 2.684 GB target BF16 cache.
