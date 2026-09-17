@@ -74,6 +74,16 @@ def test_receipt_units_are_explicit_and_no_sample_stays_unknown():
     assert block["process_footprint_peak_bytes"] is None
     assert block["system_used_peak_bytes"] is None
 
+    def failed_counter():
+        raise RuntimeError("allocator counter unavailable")
+
+    for mx in (SimpleNamespace(), SimpleNamespace(get_peak_memory=failed_counter),
+               SimpleNamespace(get_peak_memory=lambda: -1)):
+        missing = bench._MLXMemProbe(mx).memory_block()
+        assert missing["mlx_peak_bytes"] is None
+        assert missing["mlx_peak_gb"] is None
+        assert missing["mlx_peak_gib"] is None
+
 
 def test_ab_preserves_measured_system_peak_and_never_calls_rss_footprint():
     ab = load_script("ab_decode_env_levers")
@@ -194,14 +204,15 @@ def test_pinned_plan_restores_python_capacity_and_rejects_larger_live_baseline(m
         ab._resolve_target_plan(args)
 
 
-def test_standard_cell_keeps_ar_and_dspark_memory_windows_separate(monkeypatch):
+@pytest.mark.parametrize("peak_available", [True, False])
+def test_standard_cell_keeps_ar_and_dspark_memory_windows_separate(monkeypatch, peak_available):
     bench = load_script("bench_standard_shape")
     class Probe(bench._DryMemProbe):
         resets = 0
         def reset_peak(self):
             self.resets += 1
         def peak_bytes(self):
-            return self.resets * GIB
+            return self.resets * GIB if peak_available else None
     stats = {key: 0 for key in ("tokens_per_cycle", "accept_rate", "accept_rate_by_depth",
              "drafted_by_depth", "accepted_by_depth", "cycles", "verify_calls",
              "verify_decode_phase", "per_cycle", "phase_time_s")}
@@ -217,22 +228,25 @@ def test_standard_cell_keeps_ar_and_dspark_memory_windows_separate(monkeypatch):
     result = bench.bench_one_cell(model=model, tokenizer=bench._FakeTokenizer(),
         ops=bench._FakeOps(), mem_probe=Probe(), gather_probe=bench._GatherProbe(model),
         prompt_ids=[0, 2], steps=2, decode_mode="dspark")
-    assert result["peak_mlx_bytes"] == GIB
-    assert result["memory"]["mlx_peak_bytes"] == GIB
-    assert result["dspark"]["memory"]["mlx_peak_bytes"] == 2 * GIB
+    assert result["peak_mlx_bytes"] == (GIB if peak_available else None)
+    assert result["memory"]["mlx_peak_bytes"] == (GIB if peak_available else None)
+    assert result["dspark"]["memory"]["mlx_peak_bytes"] == (2 * GIB if peak_available else None)
+    assert result["peak_mlx_gb"] == result["memory"]["mlx_peak_gb"]
+    assert result["dspark"]["peak_mlx_gb"] == result["dspark"]["memory"]["mlx_peak_gb"]
     assert (result["memory"]["samples"][-1]["sample_end_monotonic_ns"] <=
             result["dspark"]["memory"]["samples"][0]["sample_start_monotonic_ns"])
 
 
-def test_dspark_decode_memory_boundaries_exclude_prefill_and_cache_release(monkeypatch):
+@pytest.mark.parametrize("peak_bytes", [9 * GIB, None])
+def test_dspark_decode_memory_boundaries_exclude_prefill_and_cache_release(monkeypatch, peak_bytes):
     ab = load_script("ab_decode_env_levers")
     active = {"bytes": GIB}
     mx = SimpleNamespace(get_active_memory=lambda: active["bytes"],
                          get_cache_memory=lambda: 0)
     sampler = SimpleNamespace(start=lambda: None, stop=lambda: None)
     probe = SimpleNamespace(reset_peak=lambda: None, new_sampler=lambda: sampler,
-                            peak_bytes=lambda: 9 * GIB,
-                            memory_block=lambda _: {"mlx_peak_bytes": 9 * GIB})
+                            peak_bytes=lambda: peak_bytes,
+                            memory_block=lambda _: {"mlx_peak_bytes": peak_bytes})
 
     def generate(*args, **kwargs):
         active["bytes"] = 7 * GIB
@@ -255,6 +269,8 @@ def test_dspark_decode_memory_boundaries_exclude_prefill_and_cache_release(monke
                                  prompt_ids=[1, 2], steps=1, depth=3)
     assert result["memory"]["mlx_active_bytes_at_decode_start"] == 7 * GIB
     assert result["memory"]["mlx_active_bytes_at_decode_end"] == 9 * GIB
+    assert result["memory"]["mlx_peak_bytes"] == peak_bytes
+    assert result["peak_gb"] == result["memory"]["mlx_peak_gb"]
 
 
 @pytest.mark.parametrize("max_tokens", [1, 3])

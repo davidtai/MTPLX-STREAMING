@@ -697,15 +697,17 @@ class _MLXMemProbe:
             except Exception:
                 pass
 
-    def peak_bytes(self) -> int:
+    def peak_bytes(self) -> int | None:
         for owner in (self._mx, getattr(self._mx, "metal", None)):
             call = getattr(owner, "get_peak_memory", None)
             if callable(call):
                 try:
-                    return int(call())
+                    value = int(call())
+                    if value >= 0:
+                        return value
                 except Exception:
                     pass
-        return 0
+        return None
 
     def rss_bytes(self) -> int:
         return _process_rss_bytes()
@@ -967,7 +969,6 @@ def bench_one_cell(
             text = ""
 
         sampler.stop()
-        ar_peak = mem_probe.peak_bytes()
         ar_rss = mem_probe.rss_bytes()
         ar_memory = mem_probe_block(mem_probe, sampler)
         decode_tokens = int(steps)
@@ -1027,8 +1028,9 @@ def bench_one_cell(
                     f"{first}; speculative lane is not lossless"
                 )
             sd = st.to_dict()
+            dsp_memory = mem_probe_block(mem_probe, dsp_sampler)
             dspark_metrics = {
-                "memory": mem_probe_block(mem_probe, dsp_sampler),
+                "memory": dsp_memory,
                 "depth": int(sd["speculative_depth"]),
                 "requested_depth": int(dspark_depth),
                 "verify_chunks": sd["verify_chunks"],
@@ -1040,8 +1042,8 @@ def bench_one_cell(
                 "decode_tok_s": (
                     (len(dsp_ids) - 1) / (dsp_end - dsp_decode_start)
                     if dsp_decode_start is not None and dsp_end > dsp_decode_start else None),
-                "peak_mlx_gb": mem_probe.peak_bytes() / 1_000_000_000,
-                "peak_mlx_gib": mem_probe.peak_bytes() / GIB,
+                "peak_mlx_gb": dsp_memory["mlx_peak_gb"],
+                "peak_mlx_gib": dsp_memory["mlx_peak_gib"],
                 "tokens_per_cycle": sd["tokens_per_cycle"],
                 "accept_rate": sd["accept_rate"],
                 "accept_rate_by_depth": sd["accept_rate_by_depth"],
@@ -1065,9 +1067,9 @@ def bench_one_cell(
             else None,
             "wall_s": wall_s,
             "memory": ar_memory,
-            "peak_mlx_bytes": ar_peak,
-            "peak_mlx_gb": ar_peak / 1_000_000_000,
-            "peak_mlx_gib": ar_peak / GIB,
+            "peak_mlx_bytes": ar_memory["mlx_peak_bytes"],
+            "peak_mlx_gb": ar_memory["mlx_peak_gb"],
+            "peak_mlx_gib": ar_memory["mlx_peak_gib"],
             "process_rss_bytes": ar_rss,
             "process_rss_gb": ar_rss / 1_000_000_000,
             "process_rss_gib": ar_rss / GIB,

@@ -50,6 +50,9 @@ to 4,096 observations, a total observation count, failed-read count, and the
 complete observations at the process and system peaks. These are sampled peaks;
 brief transients between observations can be missed. Missing readings are null
 in JSON and `n/a` in the headline.
+This also applies when MLX's peak accessor is absent, fails, or returns an invalid
+negative value. Both runners derive their headline peak and unit conversions
+from the same memory-block reading; an unavailable counter never becomes zero.
 
 AR and DSpark have separate sampling windows and allocator resets. AR's final
 observation is collected while its cache is still alive. A generation receipt
@@ -61,6 +64,10 @@ The 110 GB allocation target must cover Metal allocations, allocator retention,
 Python caches, I/O buffers, and the separately measured system baseline. Memory
 limits and planned cache capacities are configuration, not usage measurements.
 The allocation change below is separate from usage measurement.
+The requested allocator cache limit is a retention policy, not an instantaneous
+cache measurement. Prefill profiling observed cached bytes above that setting;
+admission still requires the measured allocation envelope and whole-machine
+headroom, with the guard enforcing the sampled physical ceiling.
 
 ## 110 GB allocation
 

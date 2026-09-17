@@ -3737,25 +3737,27 @@ def _generate(*, model, ops, mem_probe, prompt_ids, steps, mem_profile=None,
             )
     finally:
         _mem_sampler.stop()
+    headline_memory = mem_probe.memory_block(_mem_sampler)
+    memory = _ab_memory_block(
+        headline_memory,
+        _mlx_headroom_readback_keys(
+            getattr(mem_probe, "_mx", None),
+            mlx_peak_bytes=headline_memory.get("mlx_peak_bytes"),
+            active_start_bytes=_active_start_bytes,
+            active_end_bytes=_active_end_bytes,
+            cache_end_bytes=_cache_end_bytes,
+        ),
+    )
     return {
         "generated": [int(t) for t in generated],
         "ttft_s": ttft_s,
         "decode_wall_s": decode_wall_s,
-        "peak_gb": mem_probe.peak_bytes() / 1_000_000_000,
+        "peak_gb": memory["mlx_peak_gb"],
         # W106: full memory envelope (mlx_peak_gb == peak_gb, process phys_footprint,
         # and sampled whole-machine physical use including file cache).  W118
         # review MEDIUM-2: merge the allocator readback proof keys (limit readback,
         # gc_limit, active/cache at decode start/end, peak-over-limit).
-        "memory": _ab_memory_block(
-            mem_probe.memory_block(_mem_sampler),
-            _mlx_headroom_readback_keys(
-                getattr(mem_probe, "_mx", None),
-                mlx_peak_bytes=mem_probe.peak_bytes(),
-                active_start_bytes=_active_start_bytes,
-                active_end_bytes=_active_end_bytes,
-                cache_end_bytes=_cache_end_bytes,
-            ),
-        ),
+        "memory": memory,
         "extra_forward_steps": int(extra_forward_steps),
         # W113: DECODE tokens actually generated (== steps unless --stop-on-eos).
         "decode_steps_run": int(decode_steps_run),
@@ -4068,20 +4070,21 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             # --stop-on-eos, where len(toks) is the truncated stream.
             generated_tokens=max(0, len(toks) - 1),
         )
-        peak_gb = mem_probe.peak_bytes() / 1_000_000_000  # headline peak, captured before the timed pass
     finally:
         _mem_sampler.stop()
     # W118 review MEDIUM-2: merge the allocator readback proof keys into the block.
+    headline_memory = mem_probe.memory_block(_mem_sampler)
     _dspark_memory_block = _ab_memory_block(
-        mem_probe.memory_block(_mem_sampler),
+        headline_memory,
         _mlx_headroom_readback_keys(
             mx,
-            mlx_peak_bytes=mem_probe.peak_bytes(),
+            mlx_peak_bytes=headline_memory.get("mlx_peak_bytes"),
             active_start_bytes=_active_start_bytes,
             active_end_bytes=_active_end_bytes,
             cache_end_bytes=_cache_end_bytes,
         ),
     )
+    peak_gb = _dspark_memory_block["mlx_peak_gb"]
     report = None
     w61 = None
     if stage_timing:
