@@ -2869,6 +2869,11 @@ def _hc_ffn_prep_impl(attn_out, residual, attn_pre, attn_post, attn_comb,
 #: tiny repeating shapes.
 _HC_COMPILED: dict = {}
 
+# Keep the post-MoE prefill combine separate from the small-row HC prep tapes.
+# Compiling this array-only function reduces temporary storage while all
+# layer-major chunks are queued, without adding another evaluation fence.
+_PREFILL_HC_POST = mx.compile(_hc_post_impl)
+
 
 def _hc_compiled(kind: str, *consts):
     key = (kind, consts)
@@ -4278,7 +4283,9 @@ class DeepseekV41Backbone(nn.Module):
             # budget) would be exceeded; at 16 K the whole prompt is one call.
             moe_outputs = self._layer_major_moe(layer, moe_inputs, spans, row_cap)
             for c in range(n_chunks):
-                hs[c] = layer.moe_combine(moe_outputs[c], carries[c])
+                with _stime.stage("hc.combine") as _st:
+                    hs[c] = _PREFILL_HC_POST(moe_outputs[c], *carries[c])
+                    _st.add(hs[c])
             mx.eval(hs)
             if release_dense_projection:
                 # This existing fence has consumed the attention and FFN

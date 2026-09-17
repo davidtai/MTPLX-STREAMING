@@ -36,3 +36,25 @@ Rejected:
 Open:
 - Isolate prefill combine allocations when the exclusive GPU lane is available.
 - Reach 20 TPS within the 110 GB whole-machine ceiling.
+
+## 2026-09-17 13:43 UTC [saved]
+Goal: Reduce DeepSeek V4.1 memory before using more cache to approach20TPS.
+Decisions:
+- Bind import-time HC/attention/window flags before model construction; record
+  actual booleans. Historical arm_env alone did not prove route engagement.
+- Compile only post-MoE HC during layer-major prefill, preserving existing fences.
+  Full1024-token MTP digest and the existing indexed AR tie classification hold.
+- Preserve full-run allocator peak while measuring seed+decode separately:
+  95.208GB versus88.755GB atcap93. Whole-machine sampled peak105.459GB.
+- Archive measured installations, memory samples and hashed references; run one
+  existing strict prefill regression after the memory win. It passed under guard.
+Rejected:
+- Treat the1.186GB capacity-normalized historical difference as a fresh paired
+  identical-flags causal estimate; old window-memo state is unrecorded.
+- Add a second persistent bank for cache growth; existing gather and device-LUT
+  paths require one bank identity per layer.
+Open:
+- Bound and implement cache resize at drained phase boundaries, including all
+  exported views, allocator closure plans, logical slots and future requests.
+-20TPS remains unmet; latest11.6513TPS at93slots is a memory result, not a new
+  throughput winner. Qwen restored and lock released13:39:41; another job owns it.

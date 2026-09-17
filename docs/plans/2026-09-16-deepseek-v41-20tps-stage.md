@@ -460,3 +460,24 @@ implementation without a separate direct-decoder gate.
 - Policy names, fixed weights, cache scope, and excluded paths are explicit.
 - Component compression remains a separate stage because it needs an artifact
   and decoder design plus independent performance evidence.
+
+## Additional Task4 result, 2026-09-17 13:43 UTC
+
+The post-MoE HC combine now has a separately measured prefill-only compiled
+callable. Existing evaluation fences and diagnostic timing hooks remain.
+The full1024-token MTP digest and indexed AR tie classification are unchanged.
+Atcap93 the complete-run allocator peak is95,208,121,956B; the separately
+measured seed+decode peak is88,755,252,592B. Maximum sampled machine usage is
+105,458,794,496B. The historical capacity-normalized allocator difference is
+about1.186GB; actual old import-bound globals were not recorded, so do not
+present it as a fresh identical-flags paired causal measurement.
+
+The existing strict layer-major/chunk-major regression passed under guard.
+The final inactive timing hook has CPU-only equivalence and registration
+checks. No broad suite or new test module was added. See
+[the receipts](../deepseek-v41/receipts/hc-post-prefill-20260917/README.md).
+
+The latest full decode result is11.6513TPS at93slots, not a throughput winner.
+Task4 stays open. A larger post-prefill cache needs a coherent single-bank
+resize implementation and copy/ownership/memory bounds; the measured decode
+peak is evidence for that design, not permission to reuse a prefill slot bound.

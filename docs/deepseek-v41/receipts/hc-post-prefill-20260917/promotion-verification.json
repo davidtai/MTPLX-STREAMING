@@ -1,0 +1,10 @@
+{
+  "measured_source_commit": "ca207c3d7f923678f5355ca63a0b89a483120dff",
+  "promoted_model_sha256": "308c4bffb10e742c611ea1a602bc64389640718f9a979add3bdaa7f744698d13",
+  "timing_source_sha256": "7e10383f24b0c96f7a349be56cbc556c35c6e37a2307812105644de2618cb7aa",
+  "inactive_hook_normalized_method_ast_matches_measured": true,
+  "inactive_hook_uses_real_stateless_noop": true,
+  "mlx_imported": false,
+  "numeric_check": "existing strict layer-major/chunk-major test passed under guard before retaining the original timing bracket; final off-path arithmetic is unchanged by the no-op hook",
+  "active_hook_check": "actual final combine loop checked by check_dsv41_prefill_stage_hook.py"
+}

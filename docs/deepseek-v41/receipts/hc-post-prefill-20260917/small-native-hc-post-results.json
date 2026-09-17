@@ -1,0 +1,55 @@
+{
+  "scope": "one native [1,512,4,5120] float32 HC post, synthetic activations; original einsum and rounded multiply/add; no model loading, generation, or production throughput claim",
+  "allocator_limit_bytes": 536870912,
+  "allocator_cache_limit_bytes": 67108864,
+  "static_resident_input_bytes": 52469760,
+  "config_sha256": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d",
+  "source_commit": "86a1d1c67a4d9da0ccc003fd076e34b0c55992f0",
+  "hc_post_source_sha256": "e21aa3b6863f8815eb649283a1509185793942040d942bee5bf67ee0baa187a3",
+  "wrapper_sha256": "6d38ff195fa3f65dd451c3157a1a9e4415e2b9ac55f232816ecedf2f9063da27",
+  "reference_sha256": "d4feb6c333e5e3e1a46308c66414c38e4f3dbbc6fa22576235e6e7136f11472e",
+  "results": {
+    "eager": {
+      "median_s": 0.0015214875005767682,
+      "samples_s": [
+        0.0024166375005734153,
+        0.0015214875005767682,
+        0.0010061167005915195
+      ],
+      "input_active_bytes": 52469768,
+      "peak_active_bytes": 136355848,
+      "temporary_and_output_peak_bytes": 83886080,
+      "bit_exact": true,
+      "max_abs": 0.0,
+      "sha256": "d4feb6c333e5e3e1a46308c66414c38e4f3dbbc6fa22576235e6e7136f11472e"
+    },
+    "compiled": {
+      "median_s": 0.0007080208000843413,
+      "samples_s": [
+        0.0008704791005584411,
+        0.0007037625007797032,
+        0.0007080208000843413
+      ],
+      "input_active_bytes": 52469768,
+      "peak_active_bytes": 94412808,
+      "temporary_and_output_peak_bytes": 41943040,
+      "bit_exact": true,
+      "max_abs": 0.0,
+      "sha256": "d4feb6c333e5e3e1a46308c66414c38e4f3dbbc6fa22576235e6e7136f11472e"
+    },
+    "rounded_tail": {
+      "median_s": 0.001068512500205543,
+      "samples_s": [
+        0.0018602790994918905,
+        0.001068512500205543,
+        0.0010295208005118184
+      ],
+      "input_active_bytes": 52469768,
+      "peak_active_bytes": 136355852,
+      "temporary_and_output_peak_bytes": 83886084,
+      "bit_exact": true,
+      "max_abs": 0.0,
+      "sha256": "d4feb6c333e5e3e1a46308c66414c38e4f3dbbc6fa22576235e6e7136f11472e"
+    }
+  }
+}
