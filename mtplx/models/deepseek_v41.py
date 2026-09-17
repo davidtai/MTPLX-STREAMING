@@ -4267,7 +4267,11 @@ class DeepseekV41Backbone(nn.Module):
                     pre_mixes[c] = ffn_pre_c
                     # Free this chunk's attention score before the next chunk's
                     # graph is built (only one [chunk, H, T] transient live at once).
-                    self._eval_layer_transients(lc, moe_in_c, ffn_pre_c)
+                    # Materialize captured means here too, so their lazy graphs
+                    # do not retain earlier layers' full Hyper-Connection states.
+                    self._eval_layer_transients(
+                        lc, moe_in_c, ffn_pre_c, main_hiddens[c]
+                    )
 
             # One routed-expert call per layer over every chunk's rows -> the bank
             # is streamed once.  Split only if the row cap (routed-output transient

@@ -19,6 +19,32 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ---
 
+## Measured update, 2026-09-17
+
+Task 4 has full-workload results; **20 TPS remains unmet**. The best measured
+result is 11.7203483 TPS at depth 5/cap 94, with 107,453,988,864B maximum sampled
+whole-machine usage. See `../deepseek-v41/receipts/hidden-capture-110gb-20260917/README.md`.
+
+The accepted prefill change evaluates MTP hidden captures at the existing
+chunk fence, freeing earlier Hyper-Connection graphs. After exact slot-byte
+normalization it saves 3,011,286,868B of allocator peak; cap 94 safely uses that
+space. The promoted module AST matches the measured candidate, and both
+existing tiny quantized prefill cases pass. There is no additional hot-path
+validation, fallback, instrumentation, or synchronization.
+
+The full workload selects depth 5 even though the short prefix favored depth 3.
+`3,3` verification loses, so Tasks 3e-3h remain historical staging only: their
+conditional q8/eighteen-transient/tuned-capacity ladder is superseded and must
+not run unchanged. Full-M6 replay also rejects the tuned policy. Nonuniform
+allocation is only a roughly 3% read-reduction projection, without GPU proof.
+The target head stays native BF16 and the winning route retains 48 transients.
+
+The DSpark decode-start memory field now samples after prefill (e589c1e4b).
+The Bash 3.2 guard handles empty auxiliary arrays (c9f090573), and automatic
+Qwen cache reclamation/restoration has been observed in every completed window.
+AR-reference reuse records null public AR measurements and explicit provenance;
+a hashed diagnostic row avoids repeated AR replay while MTP logits stay fresh.
+
 ## Files
 
 - `mtplx/models/deepseek_v41_loader.py`: target projection-cache lifetime.
@@ -399,33 +425,30 @@ automatic expert selection, or promotion from route replay alone.
 **Does NOT cover:** Any GPU execution while another job owns the lane or codec
 implementation without a separate direct-decoder gate.
 
-- [ ] Wait until the operator says the GPU lane is available; do not probe or
-  queue the lock while other jobs run.
-- [ ] Use `scripts/deepseek_v41/gpu_window.sh` directly. It acquires the shared
+- [x] User authorized retry. Acquire the exclusive lock before MLX; wait for
+  other owners and never steal their lane.
+- [x] Use `scripts/deepseek_v41/gpu_window.sh` directly. It acquires the shared
   lock before bootout, captures the exact Qwen identity, reclaims the stopped
   service and candidate file caches, enforces the live 110,000,000,000-byte
   whole-machine ceiling, restores Qwen, and releases the lock last. Do not nest
   it under `bench/laguna/run_guarded.py`; both guards own the same lock.
-- [ ] Run one short matched batch with separately selectable corrected cap-83
+- [x] Run one short matched batch with separately selectable corrected cap-83
   control, three-record miss parts, causal-policy, shared-overlap, and `3,3`
   staged-verify arms. Remove losing candidates; screen finer partitions only
   after the corresponding coarse candidate wins.
-- [ ] Screen the winning stack at cap 89. Attempt cap 91 only after cap 89
+- [x] Screen the winning stack at cap 89. Attempt cap 91 only after cap 89
   confirms allocator and whole-machine headroom.
-- [ ] If the q8 head wins with an allowed output classification, run conditional
-  prepacked cap 92. Run bounded-Engram cap 93 only after the matching cap-92
-  receipt establishes its measured predecessor bounds. Run the cap-93 `3,3`
-  transition arm with eighteen transient slots only after the matching cap-93
-  frequency/full-verify arm succeeds. Run conditional cap-94 MTP-direct only
-  after the matching cap-93 transition receipt succeeds. Screen tuned cap 94
-  only after the uniform cap-94 receipt succeeds; screen the five-shape geometry
-  only after tuned uniform succeeds. Combine other winners only after each
-  unchanged predecessor succeeds.
+- [x] Reject the dependent `3,3` ladder after its measured loss. Keep native
+  BF16 target arithmetic, full verification, and48 transients. The hidden-capture
+  lifetime win funds cap94 through separately measured whole-workflow bounds.
+- [x] Run the complete workload at depth3 and depth5 with matched cap94.
+  Depth5 wins11.7203483 vs11.1612548 TPS; full output digest is unchanged.
 - [ ] Run the exact 16,384-input/1,024-output Python workload for the winning
   stack and require at least 20 decode tok/s.
-- [ ] Add focused regression tests only for measured winners, then run those
-  tests once.
-- [ ] Record guard exit, service health/model identity, lock release, token
+- [x] After the measured lifetime win, run the two existing tiny quantized
+  prefill checks once. Reuse the18 passing CPU memory-reporting checks; no new
+  optimization test module or broad GPU suite.
+- [x] Record guard exit, service health/model identity, lock release, token
   digest or allowed tie classification, physical reads, wall time, and all three
   memory measures.
 

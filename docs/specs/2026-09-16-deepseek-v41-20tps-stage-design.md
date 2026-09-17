@@ -23,6 +23,27 @@ It does not build a compressed expert artifact. Component-separated lossless
 compression is a later stage only if the cache and scheduling candidates win
 but the exact workload remains below 20 tok/s.
 
+## Current measured decision, 2026-09-17
+
+The full-workload winner is depth 5/cap 94 at 11.7203483 TPS, with a maximum
+sampled whole-machine footprint of 107.454 GB. The 20 TPS goal remains open.
+`../deepseek-v41/receipts/hidden-capture-110gb-20260917/README.md` contains the
+memory bounds, exact outputs, lifecycle receipts, and the measured model patch.
+
+Evaluate captured MTP hidden means at the existing prefill chunk fence. This
+releases their source graphs without another fence or changed arithmetic and
+saves 3.011 GB after normalizing the exact expert-slot difference. The observed
+peak funds four additional slots per layer under the same 110 GB ceiling.
+Native BF16 target arithmetic and 48 shared transients remain in the winner.
+
+The historical conditional 3+3/q8/tuned-capacity ladder below is superseded:
+3+3 lost its GPU screen and the tuned policy loses full-M6 CPU replay. Its
+18-transient projections cannot price full M4/M6. The short prefix's depth 3
+advantage also does not carry over to the full workload. MTP seed setup does
+not raise the observed allocator peak, so seed truncation is not the next
+peak-memory candidate. Reuse the verified AR reference with explicit null
+current-run AR measurements; classify each candidate using fresh MTP logits.
+
 ## Measured basis
 
 - Exact best: 1,023 decode steps in 105.9119402 seconds, or 9.6589676 tok/s.

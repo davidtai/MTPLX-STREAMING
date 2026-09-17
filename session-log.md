@@ -9,3 +9,16 @@ Rejected:
 - Infer serialization from elapsed time or low SSD use alone.
 - Treat pending Metal fences as GPU utilization or routed bytes as DRAM traffic.
 Open: Capture authorized process GPU samples when attribution remains incomplete.
+
+## 2026-09-17 [saved]
+Goal: Reduce DeepSeek V4.1 memory and exact-workload decode cost within 110 GB.
+Decisions:
+- Evaluate captured hidden means at the existing prefill fence; lazy source graphs otherwise retain earlier layer states.
+- Retain depth five for the complete Python workload; the short prefix favored depth three.
+- Reuse validated AR references with null current-run measurements and hashed diagnostic logits; candidate logits remain fresh.
+Rejected:
+- Staged 3+3 verification and its dependent allocation ladder.
+- Tuned transition policy on full six-row route replay.
+- Early projection reclamation with no measured benefit.
+Open:
+- Reach 20 TPS by reducing I/O and verification cost.
