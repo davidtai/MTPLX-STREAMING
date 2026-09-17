@@ -4001,7 +4001,11 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         _sc: dict = {}
 
         def _stream_prefill_cb(_info):
+            nonlocal _active_start_bytes
             _sc["after_prefill"] = _stream_counters_snapshot(model)
+            # Observe the live caches at the actual decode boundary, before
+            # starting the clock. Before dspark_generate is still before prefill.
+            _active_start_bytes = _mlx_call_int(mx, "get_active_memory")
             # W100: mark the prefill->decode boundary so decode_wall_s can exclude the
             # re-prefill (this callback fires after prefill, before the decode cycles).
             _sc["decode_start"] = time.perf_counter()
@@ -4031,8 +4035,6 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
         # guard and still dispatches under timing, but the double-count alone is reason
         # enough to capture before it.  Closes the window-43 "fused_proj = AR only" gap.
         _eng_reset = _reset_dspark_engagement_counters()
-        # W118 review MEDIUM-2: allocator active readback just before the timed pass.
-        _active_start_bytes = _mlx_call_int(mx, "get_active_memory")
         t0 = time.perf_counter()
         toks = dspark_generate(
             model,

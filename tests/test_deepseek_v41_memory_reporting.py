@@ -89,7 +89,8 @@ def test_ab_preserves_measured_system_peak_and_never_calls_rss_footprint():
 def test_box_usage_is_measured_and_baseline_sum_is_only_an_estimate(monkeypatch):
     ab = load_script("ab_decode_env_levers")
     monkeypatch.delenv("MTPLX_DSV41_BOX_BASELINE_GB", raising=False)
-    mem = {"process_footprint_peak_gb": 80.0, "system_used_peak_gb": 112.0}
+    mem = {"process_footprint_peak_bytes": 80_000_000_000,
+           "process_footprint_peak_gb": 80.0, "system_used_peak_gb": 112.0}
     ab._inject_box_used(mem, SimpleNamespace(box_baseline_gb=10.0))
     assert mem["box_used_gb"] == 112.0
     assert mem["baseline_plus_process_peak_estimate_gb"] == 90.0
@@ -204,6 +205,7 @@ def test_standard_cell_keeps_ar_and_dspark_memory_windows_separate(monkeypatch):
     stats = {key: 0 for key in ("tokens_per_cycle", "accept_rate", "accept_rate_by_depth",
              "drafted_by_depth", "accepted_by_depth", "cycles", "verify_calls",
              "verify_decode_phase", "per_cycle", "phase_time_s")}
+    stats["verify_chunks"] = [4]
     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_dspark_decode", SimpleNamespace(
         DSparkDecodeStats=lambda: SimpleNamespace(to_dict=lambda: stats),
         dspark_generate=lambda *a, **k: (k["completion_callback"](), [1, 2, 3])[1],
@@ -221,11 +223,46 @@ def test_standard_cell_keeps_ar_and_dspark_memory_windows_separate(monkeypatch):
             result["dspark"]["memory"]["samples"][0]["sample_start_monotonic_ns"])
 
 
+def test_dspark_decode_memory_boundaries_exclude_prefill_and_cache_release(monkeypatch):
+    ab = load_script("ab_decode_env_levers")
+    active = {"bytes": GIB}
+    mx = SimpleNamespace(get_active_memory=lambda: active["bytes"],
+                         get_cache_memory=lambda: 0)
+    sampler = SimpleNamespace(start=lambda: None, stop=lambda: None)
+    probe = SimpleNamespace(reset_peak=lambda: None, new_sampler=lambda: sampler,
+                            peak_bytes=lambda: 9 * GIB,
+                            memory_block=lambda _: {"mlx_peak_bytes": 9 * GIB})
+
+    def generate(*args, **kwargs):
+        active["bytes"] = 7 * GIB
+        kwargs["prefill_callback"]({"prompt_tokens": 2})
+        active["bytes"] = 9 * GIB
+        kwargs["completion_callback"]()
+        active["bytes"] = GIB
+        return [3, 4]
+
+    monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_dspark_decode", SimpleNamespace(
+        DSparkDecodeStats=lambda: SimpleNamespace(to_dict=lambda: {}),
+        DivergenceCapture=lambda _: None, dspark_generate=generate,
+    ))
+    monkeypatch.setitem(sys.modules, "mtplx.sampling", SimpleNamespace(SamplerConfig=lambda **k: None))
+    monkeypatch.setattr(ab, "_stream_counters_snapshot", lambda _: {})
+    monkeypatch.setattr(ab, "_reset_dspark_engagement_counters", lambda: {})
+    monkeypatch.setattr(ab, "_capture_dspark_engagement", lambda _: {})
+    monkeypatch.setattr(ab, "_runner_receipt_blocks", lambda _: {})
+    result = ab._generate_dspark(model=object(), mx=mx, mem_probe=probe,
+                                 prompt_ids=[1, 2], steps=1, depth=3)
+    assert result["memory"]["mlx_active_bytes_at_decode_start"] == 7 * GIB
+    assert result["memory"]["mlx_active_bytes_at_decode_end"] == 9 * GIB
+
+
 @pytest.mark.parametrize("max_tokens", [1, 3])
 def test_dspark_completion_observes_cache_before_release(monkeypatch, max_tokens):
     path = ROOT / "mtplx/models/deepseek_v41_dspark_decode.py"
-    node = next(n for n in ast.parse(path.read_text()).body
-                if isinstance(n, ast.FunctionDef) and n.name == "dspark_generate")
+    nodes = [n for n in ast.parse(path.read_text()).body
+             if isinstance(n, ast.FunctionDef)
+             and n.name in ("dspark_generate", "_normalize_verify_chunks")]
+    assert len(nodes) == 2
     alive = []
     class Cache:
         def __init__(self):
@@ -246,7 +283,7 @@ def test_dspark_completion_observes_cache_before_release(monkeypatch, max_tokens
         "_verify_decode_phase_enabled": lambda: False,
         "_decode_cycles": lambda **k: ([2, 3], "length"),
     }
-    code = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), node], type_ignores=[])
+    code = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *nodes], type_ignores=[])
     exec(compile(ast.fix_missing_locations(code), str(path), "exec"), scope)
     monkeypatch.setitem(sys.modules, "mtplx.generation", SimpleNamespace(_sample_from_logits=lambda *a: (1, None)))
     seen = []
@@ -293,6 +330,7 @@ def test_standard_dspark_releases_ar_state_and_reports_decode_only(monkeypatch):
     stats = {key: 0 for key in ("tokens_per_cycle", "accept_rate", "accept_rate_by_depth",
         "drafted_by_depth", "accepted_by_depth", "cycles", "verify_calls",
         "verify_decode_phase", "per_cycle", "phase_time_s")}
+    stats["verify_chunks"] = [4]
     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_dspark_decode", SimpleNamespace(
         DSparkDecodeStats=lambda: SimpleNamespace(to_dict=lambda: stats), dspark_generate=dspark))
     monkeypatch.setitem(sys.modules, "mtplx.sampling", SimpleNamespace(SamplerConfig=lambda **k: None))
