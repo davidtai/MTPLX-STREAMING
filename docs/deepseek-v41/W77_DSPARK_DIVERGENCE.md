@@ -90,6 +90,12 @@ both streams to full length.**
 exactness-class arms whose ship bar *is* byte-identity (exact-by-construction
 reorders like `shared_overlap`). Default OFF → classify.
 
+`--dspark-require-tie-class` is the benchmark acceptance gate for lanes where
+the approved policy permits tie breakers. It accepts byte identity or a
+`tie_flip` whose captured verify row matches the first compared mismatch. It
+keeps a genuine or suspect divergence in the receipt and returns a nonzero exit
+status, so a single-arm benchmark cannot accidentally promote it.
+
 ### Receipt shape (added under `receipt["dspark"]["divergence"]`)
 
 ```json

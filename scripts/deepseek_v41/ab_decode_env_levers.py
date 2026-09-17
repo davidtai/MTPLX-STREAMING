@@ -1841,6 +1841,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--dspark-require-tie-class",
+        action="store_true",
+        help=(
+            "Require a DSpark stream to be byte-identical to AR or have its "
+            "first mismatch classified as an index-matched tie_flip. A genuine "
+            "or suspect divergence is still written to the receipt, then makes "
+            "the runner exit nonzero."
+        ),
+    )
+    p.add_argument(
         "--dspark-tie-margin",
         type=float,
         default=DSPARK_TIE_MARGIN_DEFAULT,
@@ -3759,6 +3769,16 @@ def _dspark_divergence_rule(d: dict) -> str:
     return "+".join(fired) if fired else "none"
 
 
+def _dspark_tie_class_gate_passes(divergence: dict | None) -> bool:
+    """Accept identity or a proven tie flip at the compared decode position."""
+    if divergence is None:
+        return True
+    return (
+        divergence.get("class") == "tie_flip"
+        and divergence.get("capture_index_matches_first") is True
+    )
+
+
 def _print_dspark_divergence(arm: str, d: dict) -> None:
     """W120 census line for a classified DSpark divergence.  ``tie_flip`` is a
     one-line note (acceptable, rounding-class); ``divergent`` is LOUD (the flip is
@@ -4866,6 +4886,13 @@ def _run_arm(args, arm, bench, mx) -> dict:
             receipt["dspark"] = {
                 "depth": int(args.dspark_depth),
                 "verify_chunks": st["verify_chunks"],
+                "divergence_policy": (
+                    "lossless"
+                    if getattr(args, "dspark_require_lossless", False)
+                    else "tie_or_identical"
+                    if getattr(args, "dspark_require_tie_class", False)
+                    else "classify"
+                ),
                 # W91: the tok/s/tokens/stats/peak below come from an UNTIMED headline
                 # pass (fused decode levers active); --stage-timing adds a SEPARATE
                 # timed attribution pass (verify_stage_timing) that does not feed tok/s.
@@ -5494,6 +5521,13 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.dspark_require_tie_class and args.decode_mode != "dspark":
+        print(
+            "ab_decode_env_levers: --dspark-require-tie-class requires "
+            "--decode-mode dspark",
+            file=sys.stderr,
+        )
+        return 2
     bench = _load_bench_module()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -5556,6 +5590,16 @@ def main(argv=None) -> int:
 
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.
     parity_failed = False
+    if getattr(args, "dspark_require_tie_class", False):
+        for receipt in receipts:
+            divergence = (receipt.get("dspark") or {}).get("divergence")
+            if not _dspark_tie_class_gate_passes(divergence):
+                parity_failed = True
+                print(
+                    f"[ab] FAIL: {receipt['arm']} DSpark divergence is not an "
+                    "index-matched tie_flip (--dspark-require-tie-class)",
+                    flush=True,
+                )
     if len(receipts) >= 2:
         base = receipts[0]
         # Compare actual engine budgets in bytes. Schema-2 memory samples no

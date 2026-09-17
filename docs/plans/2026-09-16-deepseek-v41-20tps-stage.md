@@ -53,6 +53,9 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
   physical-used peak by their full names in the standard runner and retain all
   three in its fastest-of summary; keep the legacy `peak_gb_highest` only as an
   allocator-peak compatibility alias.
+- [x] Add a single-arm DSpark acceptance gate that permits byte identity or an
+  index-matched `tie_flip`, but returns nonzero for genuine or suspect
+  divergences after preserving the diagnostic receipt.
 - [x] Pass the benchmark model separately from its bare expert runtime so
   model-owned Engram cache totals appear in `serve_stream_counters`.
 - [x] Run the existing counter test and a direct no-MLX runner plumbing check.
