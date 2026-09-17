@@ -686,7 +686,25 @@ def run_census(args, log) -> dict:
                 "prefetch_slots": getattr(getattr(runtime, "config", None), "prefetch_slots", None),
                 "max_inflight_io_bytes": getattr(getattr(runtime, "config", None), "max_inflight_io_bytes", None),
                 "max_read_chunk_bytes": getattr(getattr(runtime, "config", None), "max_read_chunk_bytes", None),
-                "slots_per_layer": getattr(getattr(runtime, "plan", None), "slots_per_layer", None),
+                "slots_per_layer": (
+                    None
+                    if getattr(
+                        getattr(runtime, "plan", None),
+                        "persistent_slots_by_layer",
+                        (),
+                    )
+                    else getattr(
+                        getattr(runtime, "plan", None), "slots_per_layer", None
+                    )
+                ),
+                "persistent_slots_by_layer": {
+                    str(layer): capacity
+                    for layer, capacity in getattr(
+                        getattr(runtime, "plan", None),
+                        "persistent_slots_by_layer",
+                        (),
+                    )
+                },
                 "transient_slots": getattr(getattr(runtime, "plan", None), "transient_slots", None),
             },
         }

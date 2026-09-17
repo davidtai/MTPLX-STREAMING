@@ -13,7 +13,7 @@ allocate MLX arrays.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from operator import index
 
@@ -347,6 +347,11 @@ class ExpertMemoryPlan:
     persistent_cache_bytes: int
     unallocated_bytes: int
     fits_fixed: bool
+    # Optional exact per-layer geometry, ordered as ``(layer, capacity)``.
+    # ``slots_per_layer`` remains the uniform-equivalent scalar for legacy
+    # diagnostics; allocation and execution must use ``slots_for_layer`` when
+    # this tuple is populated.
+    persistent_slots_by_layer: tuple[tuple[int, int], ...] = ()
     island_layer_count: int = 0
     island_bytes: int = 0
     mmap_island_layer_count: int = 0
@@ -387,6 +392,17 @@ class ExpertMemoryPlan:
     @property
     def allocated_bytes(self) -> int:
         return self.fixed_bytes + self.persistent_cache_bytes
+
+    def slots_for_layer(self, layer: int) -> int:
+        """Return the construction-selected persistent capacity for ``layer``."""
+
+        layer = _integer("layer", layer, minimum=0)
+        for planned_layer, capacity in self.persistent_slots_by_layer:
+            if planned_layer == layer:
+                return capacity
+        if self.persistent_slots_by_layer:
+            raise ValueError(f"layer {layer} has no planned persistent capacity")
+        return self.slots_per_layer
 
 
 # Measured 2026-07-16: 511-step decode route trace (issue #63 heatmap), layers
@@ -862,8 +878,9 @@ def plan_expert_memory(
     miss_shadow: str | None = None,
     miss_shadow_layers: int | None = None,
     layer_record_bytes: Mapping[int, int] | None = None,
+    persistent_slots_by_layer: Mapping[int, int] | Sequence[int] | None = None,
 ) -> ExpertMemoryPlan:
-    """Fit uniform persistent expert slots under an explicit memory ceiling.
+    """Fit persistent expert slots under an explicit memory ceiling.
 
     The total limit is never treated as an expert-cache-only setting: resident
     weights, KV state, runtime headroom, and transient miss service are removed
@@ -942,6 +959,52 @@ def plan_expert_memory(
         )
     if mmap_island_layer_count and cache_scope != "layer":
         raise ValueError("mmap island layers require cache_scope 'layer'")
+
+    resolved_slots_by_layer: tuple[tuple[int, int], ...] = ()
+    if persistent_slots_by_layer is not None:
+        if cache_scope != "layer":
+            raise ValueError(
+                "persistent_slots_by_layer requires cache_scope 'layer'"
+            )
+        if island_layer_count or mmap_island_layer_count:
+            raise ValueError(
+                "persistent_slots_by_layer cannot be combined with island layers"
+            )
+        if prefetch_ring_slots:
+            raise ValueError(
+                "persistent_slots_by_layer cannot be combined with prefetch slots"
+            )
+        routed_layers = tuple(spec.routed_layer_indices)
+        if isinstance(persistent_slots_by_layer, Mapping):
+            supplied = {
+                _integer("persistent slot layer", layer, minimum=0): _integer(
+                    "persistent layer capacity", capacity, minimum=0
+                )
+                for layer, capacity in persistent_slots_by_layer.items()
+            }
+            if set(supplied) != set(routed_layers):
+                raise ValueError(
+                    "persistent_slots_by_layer must cover every routed layer exactly"
+                )
+            capacities = tuple(supplied[layer] for layer in routed_layers)
+        else:
+            if isinstance(persistent_slots_by_layer, (str, bytes)):
+                raise TypeError(
+                    "persistent_slots_by_layer must be a sequence of integers"
+                )
+            capacities = tuple(
+                _integer("persistent layer capacity", capacity, minimum=0)
+                for capacity in persistent_slots_by_layer
+            )
+            if len(capacities) != len(routed_layers):
+                raise ValueError(
+                    "persistent_slots_by_layer must have one capacity per routed layer"
+                )
+        if any(capacity > spec.expert_count for capacity in capacities):
+            raise ValueError(
+                "persistent layer capacity cannot exceed the model expert count"
+            )
+        resolved_slots_by_layer = tuple(zip(routed_layers, capacities, strict=True))
 
     # Mixed-official (issue #51, M2): resolve every per-record byte quantity from
     # the manifest-derived ``layer_record_bytes`` instead of the (raising)
@@ -1103,6 +1166,27 @@ def plan_expert_memory(
         slots_per_layer = 0
         persistent_slots = 0
         persistent_cache_bytes = 0
+    elif resolved_slots_by_layer:
+        if is_mixed:
+            persistent_cache_bytes = sum(
+                capacity * resolved_layer_bytes[layer]
+                for layer, capacity in resolved_slots_by_layer
+            )
+        else:
+            persistent_cache_bytes = (
+                sum(capacity for _layer, capacity in resolved_slots_by_layer)
+                * spec.expert_record_bytes
+            )
+        if persistent_cache_bytes > persistent_budget_bytes:
+            raise ValueError(
+                "persistent_slots_by_layer requires "
+                f"{persistent_cache_bytes} bytes but only "
+                f"{persistent_budget_bytes} bytes are available"
+            )
+        persistent_slots = sum(
+            capacity for _layer, capacity in resolved_slots_by_layer
+        )
+        slots_per_layer = persistent_slots // streamed_layer_count
     else:
         slots_per_layer = min(
             spec.expert_count, persistent_budget_bytes // bytes_per_uniform_slot
@@ -1133,6 +1217,7 @@ def plan_expert_memory(
         persistent_cache_bytes=persistent_cache_bytes,
         unallocated_bytes=unallocated_bytes,
         fits_fixed=fixed_bytes <= total_limit_bytes,
+        persistent_slots_by_layer=resolved_slots_by_layer,
         island_layer_count=island_layer_count,
         island_bytes=island_bytes,
         mmap_island_layer_count=mmap_island_layer_count,

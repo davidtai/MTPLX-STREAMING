@@ -751,10 +751,22 @@ class ExpertSlotPool:
         self.global_persistent_slots = (
             plan.persistent_slots if cache_scope == "global" else 0
         )
+        self._persistent_route_capacities = {
+            layer: (
+                self.global_persistent_slots
+                if cache_scope == "global"
+                else plan.slots_for_layer(layer)
+            )
+            for layer in spec.routed_layer_indices
+        }
         self._persistent_route_capacity = (
             self.global_persistent_slots
             if cache_scope == "global"
-            else plan.slots_per_layer
+            else (
+                None
+                if plan.persistent_slots_by_layer
+                else plan.slots_per_layer
+            )
         )
         self.metrics = ExpertSlotMetrics()
         self._allocator = buffer_allocator or (lambda size, _label: bytearray(size))
@@ -790,7 +802,7 @@ class ExpertSlotPool:
                     (layer, slot_index)
                     for layer in spec.routed_layer_indices
                     if layer not in island_set
-                    for slot_index in range(plan.slots_per_layer)
+                    for slot_index in range(plan.slots_for_layer(layer))
                 )
             )
             for layer, slot_index in persistent_layout:
@@ -1207,7 +1219,8 @@ class ExpertSlotPool:
     def _physical(self, layer: int, logical_slot: int) -> _PhysicalSlot:
         if layer not in self.spec.routed_layer_indices:
             raise ExpertSlotError(f"layer {layer} is not a routed model layer")
-        if logical_slot < self._persistent_route_capacity:
+        persistent_capacity = self._persistent_route_capacities[layer]
+        if logical_slot < persistent_capacity:
             try:
                 key_layer = -1 if self.cache_scope == "global" else layer
                 return self._persistent[(key_layer, logical_slot)]
@@ -1215,7 +1228,7 @@ class ExpertSlotPool:
                 raise ExpertSlotError(
                     "persistent slot is outside the memory plan"
                 ) from exc
-        transient_index = logical_slot - self._persistent_route_capacity
+        transient_index = logical_slot - persistent_capacity
         if self._is_mixed:
             # Route the transient slot to the bank of THIS layer's gate/up tier
             # geometry (issue #51 M2b); prefetch is forbidden for mixed.
@@ -2462,6 +2475,10 @@ class ExpertSlotPool:
             "persistent_slot_count": len(self._persistent),
             "cache_scope": self.cache_scope,
             "persistent_route_capacity": self._persistent_route_capacity,
+            "persistent_route_capacities": {
+                str(layer): capacity
+                for layer, capacity in self._persistent_route_capacities.items()
+            },
             "transient_slot_count": len(self._transient),
             "prefetch_slot_count": len(self._prefetch),
             "states": states,

@@ -434,7 +434,7 @@ def make_mlx_slot_buffer_allocator(
         if label.startswith("layer-") and "-persistent-" in label:
             layer = int(parts[1])
             slot = int(parts[-1])
-            count = plan.slots_per_layer
+            count = plan.slots_for_layer(layer)
             if layer not in spec.routed_layer_indices:
                 raise ValueError(f"persistent slot layer {layer} is not routed")
         elif label.startswith("layer-") and "-prefetch-" in label:
@@ -1460,7 +1460,7 @@ def make_mlx_component_bank_allocator(
         if bank is not None:
             return bank
         if kind == "persistent":
-            capacity = plan.slots_per_layer
+            capacity = plan.slots_for_layer(int(discriminator))
             record = record_by_layer[discriminator]
             label = f"layer-{discriminator}-persistent-bank"
         elif kind == "prefetch":
@@ -1529,7 +1529,7 @@ def make_mlx_component_bank_allocator(
             slot_index = int(layer_persistent.group(2))
             if layer not in spec.routed_layer_indices:
                 raise ValueError(f"persistent slot layer {layer} is not routed")
-            if not 0 <= slot_index < plan.slots_per_layer:
+            if not 0 <= slot_index < plan.slots_for_layer(layer):
                 raise ValueError("persistent slot is outside planned capacity")
             bank = bank_for("persistent", layer)
         elif label.startswith("layer-") and "-persistent-" in label:
@@ -1586,9 +1586,9 @@ def make_mlx_component_bank_allocator(
     setattr(allocate, "banks", banks)
     setattr(allocate, "close", close_banks)
     # The plan this allocator sizes its per-bank capacities from. Exposed so a
-    # caller/test can confirm the allocator's ``slots_per_layer`` matches the
-    # slot pool's plan (they must agree or a persistent slot the pool enumerates
-    # is rejected as "outside planned capacity"); no bank is allocated to read it.
+    # caller can confirm each allocator bank matches the slot pool's exact plan
+    # (they must agree or a persistent slot the pool enumerates is rejected as
+    # "outside planned capacity"); no bank is allocated to read it.
     setattr(allocate, "plan", plan)
     return allocate
 

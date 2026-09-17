@@ -197,6 +197,20 @@ def _parse_dspark_verify_chunks(raw: str) -> tuple[int, ...]:
     return chunks
 
 
+def _parse_persistent_slots_by_layer(raw: str) -> tuple[int, ...]:
+    try:
+        capacities = tuple(int(part.strip()) for part in raw.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "persistent layer capacities must be comma-separated integers"
+        ) from exc
+    if not capacities or any(capacity < 0 for capacity in capacities):
+        raise argparse.ArgumentTypeError(
+            "persistent layer capacities must be comma-separated nonnegative integers"
+        )
+    return capacities
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -337,11 +351,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cache-policy",
-        choices=("frequency", "lru", "transition-window"),
+        choices=(
+            "frequency",
+            "lru",
+            "transition-window",
+            "transition-window-tuned",
+        ),
         default=None,
         help=(
             "expert-cache admission policy. DEFAULT: resolve from --expert-profile; "
             "transition-window is the bounded DeepSeek-V4.1 causal-policy arm."
+        ),
+    )
+    parser.add_argument(
+        "--persistent-slots-by-layer",
+        type=_parse_persistent_slots_by_layer,
+        default=None,
+        metavar="N0,N1,...",
+        help=(
+            "construction-time persistent capacities ordered by routed layer; "
+            "the exact vector must fit the resolved expert-cache byte budget"
         ),
     )
     parser.add_argument(
@@ -1326,6 +1355,9 @@ def _resolve_plan_overrides(args) -> dict:
     explicit_policy = getattr(args, "cache_policy", None)
     if explicit_policy is not None:
         overrides["cache_policy"] = str(explicit_policy)
+    explicit_capacities = getattr(args, "persistent_slots_by_layer", None)
+    if explicit_capacities is not None:
+        overrides["persistent_slots_by_layer"] = tuple(explicit_capacities)
     explicit_miss_part = getattr(args, "decode_miss_records_per_part", None)
     if explicit_miss_part is not None:
         overrides["decode_miss_records_per_part"] = int(explicit_miss_part)
@@ -1359,9 +1391,18 @@ def _resolved_plan(runtime, args) -> dict | None:
     transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
     config = getattr(runtime, "config", None)
+    slots_per_layer = int(getattr(plan, "slots_per_layer", 0) or 0)
+    layer_capacities = tuple(
+        getattr(plan, "persistent_slots_by_layer", ()) or ()
+    )
     return {
         "transient_slots": transient_slots,
         "persistent_slots": int(getattr(plan, "persistent_slots", 0) or 0),
+        "slots_per_layer": None if layer_capacities else slots_per_layer,
+        "uniform_equivalent_slots_per_layer": slots_per_layer,
+        "persistent_slots_by_layer": {
+            str(layer): capacity for layer, capacity in layer_capacities
+        },
         "expert_record_bytes": record_bytes,
         "transient_bytes_total": transient_slots * record_bytes,
         "io_cache_mode": getattr(getattr(runtime, "reader", None), "cache_mode", None),

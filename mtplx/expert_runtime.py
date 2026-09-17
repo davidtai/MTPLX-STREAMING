@@ -41,7 +41,9 @@ from .expert_streaming import (
     RoutePlan,
     RoutePolicyTxn,
     RoutingPhase,
+    TRANSITION_WINDOW_CACHE_POLICIES,
     TRANSITION_WINDOW_CACHE_POLICY,
+    TUNED_TRANSITION_WINDOW_CACHE_POLICY,
 )
 from .expert_streaming_models import (
     MIXED_OFFICIAL_CODEC,
@@ -168,6 +170,9 @@ class ExpertStreamingConfig:
     max_live_kv_tokens: int
     runtime_reserve_bytes: int = 16 * 1024**3
     expert_cache_limit_bytes: int | None = None
+    # Exact per-routed-layer persistent capacities. Empty keeps the uniform
+    # budget-derived geometry. The tuple is ordered by spec.routed_layer_indices.
+    persistent_slots_by_layer: tuple[int, ...] = ()
     transient_slots: int | None = None
     io_staging_bytes: int = 0
     execution_workspace_bytes: int = 0
@@ -303,14 +308,32 @@ class ExpertStreamingConfig:
         if self.cache_policy not in {
             "frequency",
             "lru",
-            TRANSITION_WINDOW_CACHE_POLICY,
+            *TRANSITION_WINDOW_CACHE_POLICIES,
         }:
             raise ValueError(
-                "cache_policy must be 'frequency', 'lru', or "
-                f"{TRANSITION_WINDOW_CACHE_POLICY!r}"
+                "cache_policy must be 'frequency', 'lru', "
+                f"{TRANSITION_WINDOW_CACHE_POLICY!r}, or "
+                f"{TUNED_TRANSITION_WINDOW_CACHE_POLICY!r}"
             )
         if self.cache_scope not in {"layer", "global"}:
             raise ValueError("cache_scope must be 'layer' or 'global'")
+        layer_capacities = self.persistent_slots_by_layer
+        if layer_capacities is None:
+            layer_capacities = ()
+        if isinstance(layer_capacities, (str, bytes)) or not isinstance(
+            layer_capacities, (tuple, list)
+        ):
+            raise TypeError(
+                "persistent_slots_by_layer must be a tuple of capacities"
+            )
+        object.__setattr__(
+            self,
+            "persistent_slots_by_layer",
+            tuple(
+                _integer("persistent layer capacity", capacity, minimum=0)
+                for capacity in layer_capacities
+            ),
+        )
         if self.q2_expert_kernel not in {
             "stock",
             "nax",
@@ -416,7 +439,7 @@ class ExpertStreamingConfig:
         )
         if self.prefetch_slots and self.cache_scope != "layer":
             raise ValueError("prefetch_slots require cache_scope 'layer'")
-        if self.cache_policy == TRANSITION_WINDOW_CACHE_POLICY:
+        if self.cache_policy in TRANSITION_WINDOW_CACHE_POLICIES:
             if not self.model_key.startswith("deepseek-v41"):
                 raise ValueError(
                     "transition-window cache policy is only installed for "
@@ -629,6 +652,31 @@ class ExpertStreamingConfig:
             raise ValueError(
                 "global expert caching requires direct-slots or component-banks"
             )
+        if self.persistent_slots_by_layer:
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "persistent_slots_by_layer is only installed for DeepSeek-V4.1"
+                )
+            if self.cache_scope != "layer":
+                raise ValueError(
+                    "persistent_slots_by_layer requires cache_scope 'layer'"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "persistent_slots_by_layer requires component-banks"
+                )
+            if (
+                self.island_layers
+                or self.island_layer_count is not None
+                or self.mmap_island_layers
+            ):
+                raise ValueError(
+                    "persistent_slots_by_layer cannot be combined with island layers"
+                )
+            if self.prefetch_slots:
+                raise ValueError(
+                    "persistent_slots_by_layer cannot be combined with prefetch slots"
+                )
         if self.prefill_admission:
             raise ValueError(
                 "prefill admission is not implemented; prefill must use transient slots"
@@ -709,6 +757,9 @@ class ExpertStreamingConfig:
             miss_shadow=self.miss_shadow,
             miss_shadow_layers=self.miss_shadow_layers,
             layer_record_bytes=layer_record_bytes,
+            persistent_slots_by_layer=(
+                self.persistent_slots_by_layer or None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -2548,7 +2599,7 @@ class ExpertStreamingRuntime:
             else {
                 layer: LayerExpertSlotBank(
                     expert_count=spec.expert_count,
-                    persistent_slots=plan.slots_per_layer,
+                    persistent_slots=plan.slots_for_layer(layer),
                     transient_slots=plan.transient_slots,
                     frequency_decay=config.frequency_decay,
                     cache_policy=config.cache_policy,
@@ -3002,7 +3053,7 @@ class ExpertStreamingRuntime:
         # the per-layer merged pool; it does not depend on a second environment
         # switch.  Other policies retain the existing runner/env selection.
         single_slot_pool = (
-            config.cache_policy == TRANSITION_WINDOW_CACHE_POLICY
+            config.cache_policy in TRANSITION_WINDOW_CACHE_POLICIES
             or (_ssp_env and config.cache_scope == "layer")
         )
         if _ssp_env and config.cache_scope != "layer":
@@ -3012,7 +3063,7 @@ class ExpertStreamingRuntime:
                 config.cache_scope,
             )
         if (
-            config.cache_policy == TRANSITION_WINDOW_CACHE_POLICY
+            config.cache_policy in TRANSITION_WINDOW_CACHE_POLICIES
             and model_spec.expert_count != 384
         ):
             raise ExpertStreamingConfigurationError(
@@ -5466,7 +5517,16 @@ class ExpertStreamingRuntime:
                 "total_limit_bytes": self.plan.total_limit_bytes,
                 "fixed_bytes": self.plan.fixed_bytes,
                 "persistent_cache_bytes": self.plan.persistent_cache_bytes,
-                "slots_per_layer": self.plan.slots_per_layer,
+                "slots_per_layer": (
+                    None
+                    if self.plan.persistent_slots_by_layer
+                    else self.plan.slots_per_layer
+                ),
+                "uniform_equivalent_slots_per_layer": self.plan.slots_per_layer,
+                "persistent_slots_by_layer": {
+                    str(layer): capacity
+                    for layer, capacity in self.plan.persistent_slots_by_layer
+                },
                 "cache_scope": self.config.cache_scope,
                 "global_persistent_slots": (
                     self.plan.persistent_slots
@@ -5514,7 +5574,10 @@ class ExpertStreamingRuntime:
             snapshot["io"] = self.reader.metrics.as_dict()
         except Exception:
             pass
-        if self._belady_oracle is not None:
+        if (
+            self._belady_oracle is not None
+            and not self.plan.persistent_slots_by_layer
+        ):
             # The clairvoyant fetch floor over the full decode window, at the
             # actual per-layer slot budget — the runtime analog of the offline
             # replay, reported alongside the measured loads for a live gap.

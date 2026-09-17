@@ -263,6 +263,51 @@ silent fallback, or promotion from replay alone.
 - [x] Run syntax, static arithmetic, and no-MLX checks only. Add focused tests
   only after a matched GPU arm wins.
 
+### Task 3f: Stage tuned admission and nonuniform cap 94
+
+**Files:**
+- Modify: `mtplx/expert_streaming_models.py`
+- Modify: `mtplx/expert_streaming.py`
+- Modify: `mtplx/expert_runtime.py`
+- Modify: `mtplx/expert_slots.py`
+- Modify: `mtplx/models/expert_mlx.py`
+- Modify: `scripts/deepseek_v41/ab_decode_env_levers.py`
+- Modify: `scripts/deepseek_v41/bench_standard_shape.py`
+- Conditional wrappers and commands under `/tmp/dsv41-110-stage/`.
+
+**Security flag:** none
+
+**Does NOT cover:** Automatic capacity learning, per-request policy changes,
+prefetch, islands, a hot fallback, or promotion from replay alone.
+
+- [x] Preserve `transition-window` as the unchanged 0.7/0.2/0.1, 16-route
+  control. Add `transition-window-tuned` as a separate construction-selected
+  0.8/0.1/0.1, 32-route arm.
+- [x] Reject the `4,2` verify schedule: its median adds 196 reads to `3,3` in
+  exchange for only fourteen fewer target forwards. Reject the stage-conditioned
+  cache ranker because every coarse candidate regresses the tuned control.
+- [x] Replay tuned uniform cap 94 over all eight acceptance orders: median
+  36,061 reads versus 36,547.5 for the prior policy, with no memory change.
+- [x] Add an explicit 40-layer capacity vector to the immutable plan. Require
+  DeepSeek-V4.1 component banks, layer scope, no islands, and no prefetch; reject
+  vectors whose exact component bytes exceed the resolved cache budget.
+- [x] Allocate and resolve every physical persistent slot from its layer's
+  construction-time capacity. Keep the enabled route free of metadata checks,
+  environment reads, counters, and fallbacks.
+- [x] Report `slots_per_layer=null`, the full layer-to-capacity map, and the
+  uniform-equivalent scalar for nonuniform plans. Keep all three memory measures
+  separate in benchmark receipts.
+- [x] Solve the full cap-94 vector: median 34,829 reads at the same 3,760 slots.
+  Constrain the staged arm to five bank shapes `(73, 88, 96, 112, 128)` to bound
+  graph-shape variation; its median is 34,896.5 reads, only 67.5 above the
+  unconstrained optimum and 1,164.5 below tuned uniform cap 94.
+- [x] Confirm without importing MLX that the plan contains 3,760 slots,
+  70,690,406,400 persistent bytes, and the exact 40-layer vector. Run syntax and
+  whitespace validation only; do not add regression tests before a measured win.
+- [x] Stage the 128-token tuned-policy arm after uniform cap 94, then the
+  five-shape arm after tuned uniform. Each 1,023-token wrapper additionally
+  requires its own 128-token arm to beat the matching predecessor.
+
 ### Task 4: Measure and promote only winners
 
 **Files:**
@@ -292,8 +337,10 @@ implementation without a separate direct-decoder gate.
   receipt establishes its measured predecessor bounds. Run the cap-93 `3,3`
   transition arm with eighteen transient slots only after the matching cap-93
   frequency/full-verify arm succeeds. Run conditional cap-94 MTP-direct only
-  after the matching cap-93 transition receipt succeeds. Combine other winners
-  only after each unchanged predecessor succeeds.
+  after the matching cap-93 transition receipt succeeds. Screen tuned cap 94
+  only after the uniform cap-94 receipt succeeds; screen the five-shape geometry
+  only after tuned uniform succeeds. Combine other winners only after each
+  unchanged predecessor succeeds.
 - [ ] Run the exact 16,384-input/1,024-output Python workload for the winning
   stack and require at least 20 decode tok/s.
 - [ ] Add focused regression tests only for measured winners, then run those

@@ -261,6 +261,49 @@ the eight acceptance orders, with a 35,314-to-36,046 range; its median and
 worst cases miss the 35,769.77-read threshold and leave no wall-time margin.
 Neither candidate is promoted from CPU replay.
 
+## Tuned admission and nonuniform target cache
+
+The follow-up replay keeps the old `transition-window` policy intact and adds a
+separate `transition-window-tuned` construction choice. The tuned policy uses a
+32-route window with weights 0.8 transition probability, 0.1 normalized window
+frequency, and 0.1 recency. Uniform cap 94 falls from a 36,547.5-read median to
+36,061 across the same eight within-chunk acceptance orders. A stage-conditioned
+ranker and the `4,2` verification partition both regress this control and are not
+staged.
+
+The memory planner may also carry an exact capacity for every routed layer.
+This lane is limited at construction to DeepSeek-V4.1 per-layer component banks
+without islands or prefetch. The planner validates all forty entries, prices
+each component bank exactly, and refuses a vector above the resolved persistent
+budget. Slot allocation, policy banks, and physical-slot translation all use the
+prebound layer capacity. The hot route performs only the layer-indexed lookup
+needed to translate a logical transient slot; it does not revalidate the plan or
+fall back to a uniform bank.
+
+Receipts do not describe a nonuniform plan as `slots_per_layer=94`.
+`slots_per_layer` is null, `uniform_equivalent_slots_per_layer` remains 94 for
+comparison, and `persistent_slots_by_layer` records the complete allocation.
+The total remains 3,760 records and 70,690,406,400 bytes, so the 110 GB Metal,
+Python-cache, allocator, and whole-machine split is unchanged.
+
+The unconstrained CPU optimum has a 34,829-read median. To limit possible MLX
+graph specialization, the staged vector uses only capacities 73, 88, 96, 112,
+and 128:
+
+```text
+128,128,128,96,112,96,73,88,96,88,
+88,88,96,96,88,96,88,88,88,112,
+73,73,73,88,73,73,73,96,73,88,
+88,96,96,96,88,88,96,112,128,128
+```
+
+It retains the same 3,760 slots and projects a 34,896.5-read median, 1,164.5
+below tuned uniform cap 94 and only 67.5 above the unconstrained optimum. This
+is trace evidence, not a TPS result. The conditional ladder first measures the
+tuned uniform policy after the existing uniform cap-94 MTP-direct arm, then
+measures the five-shape vector after tuned uniform. A full 1,023-step run is
+refused until that exact arm wins its 128-token screen.
+
 ## Validation and promotion
 
 No new optimization regression tests are added before measurement, following
@@ -282,7 +325,9 @@ Only a successful cap-93 frequency/full-verify receipt may unlock the cap-93
 `3,3` arm with eighteen transient slots. Only a successful matching cap-93
 transition receipt may unlock the conditional cap-94 MTP-direct arm. The
 scheduling candidates are combined at the highest measured-safe capacity only
-after their individual screens win. Only the winning stack receives an exact
+after their individual screens win. Tuned uniform cap 94 requires the matching
+uniform cap-94 predecessor, and the five-shape geometry requires tuned uniform.
+Only the winning stack receives an exact
 16K/1K run and focused regression tests. Every full run must report MLX peak,
 process `phys_footprint`,
 whole-machine physical peak, token digest or an allowed tie flip, physical

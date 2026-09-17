@@ -609,7 +609,20 @@ def plan_breakdown(
         "expert_cache_planned_bytes": int(
             getattr(plan, "persistent_cache_bytes", 0)
         ),
-        "slots_per_layer": int(getattr(plan, "slots_per_layer", 0)),
+        "slots_per_layer": (
+            None
+            if getattr(plan, "persistent_slots_by_layer", ())
+            else int(getattr(plan, "slots_per_layer", 0))
+        ),
+        "uniform_equivalent_slots_per_layer": int(
+            getattr(plan, "slots_per_layer", 0)
+        ),
+        "persistent_slots_by_layer": {
+            str(layer): capacity
+            for layer, capacity in getattr(
+                plan, "persistent_slots_by_layer", ()
+            )
+        },
         "unallocated_bytes": int(getattr(plan, "unallocated_bytes", 0)),
         "fits_fixed": bool(getattr(plan, "fits_fixed", False)),
         "context_tokens": int(getattr(plan, "context_tokens", 0)),

@@ -230,7 +230,12 @@ def add_expert_streaming_args(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--expert-cache-policy",
-        choices=["frequency", "lru"],
+        choices=[
+            "frequency",
+            "lru",
+            "transition-window",
+            "transition-window-tuned",
+        ],
         help="Decode expert-cache replacement policy.",
     )
     group.add_argument(

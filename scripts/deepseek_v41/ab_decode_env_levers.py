@@ -1740,6 +1740,20 @@ def _parse_dspark_verify_chunks(raw: str) -> tuple[int, ...]:
     return chunks
 
 
+def _parse_persistent_slots_by_layer(raw: str) -> tuple[int, ...]:
+    try:
+        capacities = tuple(int(part.strip()) for part in raw.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "persistent layer capacities must be comma-separated integers"
+        ) from exc
+    if not capacities or any(capacity < 0 for capacity in capacities):
+        raise argparse.ArgumentTypeError(
+            "persistent layer capacities must be comma-separated nonnegative integers"
+        )
+    return capacities
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -2084,11 +2098,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--cache-policy",
-        choices=("frequency", "lru", "transition-window"),
+        choices=(
+            "frequency",
+            "lru",
+            "transition-window",
+            "transition-window-tuned",
+        ),
         default=None,
         help=(
             "expert-cache admission policy. DEFAULT: resolve from --expert-profile; "
             "transition-window is the bounded DeepSeek-V4.1 causal-policy arm."
+        ),
+    )
+    p.add_argument(
+        "--persistent-slots-by-layer",
+        type=_parse_persistent_slots_by_layer,
+        default=None,
+        metavar="N0,N1,...",
+        help=(
+            "construction-time persistent capacities ordered by routed layer; "
+            "the exact vector must fit the resolved expert-cache byte budget"
         ),
     )
     p.add_argument(
@@ -2947,6 +2976,9 @@ def _resolve_plan_overrides(args) -> dict:
     explicit_policy = getattr(args, "cache_policy", None)
     if explicit_policy is not None:
         overrides["cache_policy"] = str(explicit_policy)
+    explicit_capacities = getattr(args, "persistent_slots_by_layer", None)
+    if explicit_capacities is not None:
+        overrides["persistent_slots_by_layer"] = tuple(explicit_capacities)
     explicit_miss_part = getattr(args, "decode_miss_records_per_part", None)
     if explicit_miss_part is not None:
         overrides["decode_miss_records_per_part"] = int(explicit_miss_part)
@@ -3018,6 +3050,9 @@ def _resolved_plan(runtime, args) -> dict | None:
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
     prefetch_slots = int(getattr(config, "prefetch_slots", 0) or 0)
     slots_per_layer = int(getattr(plan, "slots_per_layer", 0) or 0)
+    layer_capacities = tuple(
+        getattr(plan, "persistent_slots_by_layer", ()) or ()
+    )
     # W93 (review CRITICAL): an EXPLICIT gate-oracle lever must have ACTUALLY armed
     # the GLOBAL ring on this cell -- otherwise the A/B is control-vs-control. Fail
     # loudly rather than silently benchmarking an unarmed ring. (Explicit-lever guard
@@ -3050,7 +3085,7 @@ def _resolved_plan(runtime, args) -> dict | None:
     # W93 (review MEDIUM-d): the 0.36 GiB ring comes out of the PERSISTENT budget,
     # not free reserve. Show slots_per_layer WITHOUT vs WITH the ring so the LRU
     # effect (kept the same only via floor-division slack) is auditable per run.
-    slots_per_layer_no_ring = slots_per_layer
+    slots_per_layer_no_ring = None if layer_capacities else slots_per_layer
     if prefetch_slots > 0 and config is not None and spec is not None:
         try:
             import dataclasses
@@ -3066,7 +3101,11 @@ def _resolved_plan(runtime, args) -> dict | None:
         "transient_slots": transient_slots,
         "persistent_slots": persistent_slots,
         # review MEDIUM-d: LRU depth WITH the ring vs the hypothetical no-ring plan.
-        "slots_per_layer": slots_per_layer,
+        "slots_per_layer": None if layer_capacities else slots_per_layer,
+        "uniform_equivalent_slots_per_layer": slots_per_layer,
+        "persistent_slots_by_layer": {
+            str(layer): capacity for layer, capacity in layer_capacities
+        },
         "slots_per_layer_no_ring": slots_per_layer_no_ring,
         "expert_record_bytes": record_bytes,
         "transient_bytes_per_layer": transient_slots * record_bytes,

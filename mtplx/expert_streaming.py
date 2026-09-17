@@ -19,6 +19,10 @@ import numpy as np
 
 
 TRANSITION_WINDOW_CACHE_POLICY = "transition-window"
+TUNED_TRANSITION_WINDOW_CACHE_POLICY = "transition-window-tuned"
+TRANSITION_WINDOW_CACHE_POLICIES = frozenset(
+    {TRANSITION_WINDOW_CACHE_POLICY, TUNED_TRANSITION_WINDOW_CACHE_POLICY}
+)
 
 
 def _integer(name: str, value: object, *, minimum: int | None = None) -> int:
@@ -631,13 +635,14 @@ class LayerExpertSlotBank:
         if cache_policy not in {
             "frequency",
             "lru",
-            TRANSITION_WINDOW_CACHE_POLICY,
+            *TRANSITION_WINDOW_CACHE_POLICIES,
         }:
             raise ValueError(
-                "cache_policy must be 'frequency', 'lru', or "
-                f"{TRANSITION_WINDOW_CACHE_POLICY!r}"
+                "cache_policy must be 'frequency', 'lru', "
+                f"{TRANSITION_WINDOW_CACHE_POLICY!r}, or "
+                f"{TUNED_TRANSITION_WINDOW_CACHE_POLICY!r}"
             )
-        if cache_policy == TRANSITION_WINDOW_CACHE_POLICY:
+        if cache_policy in TRANSITION_WINDOW_CACHE_POLICIES:
             if not single_pool:
                 raise ValueError(
                     "transition-window cache policy requires a single slot pool"
@@ -715,11 +720,19 @@ class LayerExpertSlotBank:
         # set so this prompt can re-warm.  Reset by that demote and by reset().
         self._saw_decode_since_prefill = False
         # Exact DeepSeek-V4.1 MTP candidate selected at construction.  The dense
-        # float32 table is bounded to 384x384 per routed layer (~576 KiB); the
-        # window contains at most sixteen unique-expert routes.  State remains
+        # float32 table is bounded to 384x384 per routed layer (~576 KiB). State remains
         # absent on every other policy, so their hot paths and host footprint are
         # unchanged.
-        if self.cache_policy == TRANSITION_WINDOW_CACHE_POLICY:
+        if self.cache_policy in TRANSITION_WINDOW_CACHE_POLICIES:
+            if self.cache_policy == TUNED_TRANSITION_WINDOW_CACHE_POLICY:
+                self._transition_window_limit = 32
+                self._transition_prediction_weight = np.float32(0.8)
+                self._transition_frequency_weight = np.float32(0.1)
+            else:
+                self._transition_window_limit = 16
+                self._transition_prediction_weight = np.float32(0.7)
+                self._transition_frequency_weight = np.float32(0.2)
+            self._transition_recency_weight = np.float32(0.1)
             self._transition_counts: np.ndarray | None = np.zeros(
                 (self.expert_count, self.expert_count), dtype=np.float32
             )
@@ -1251,7 +1264,7 @@ class LayerExpertSlotBank:
         return 1
 
     # ------------------------------------------------------------------
-    # DeepSeek-V4.1 one-step transition + 16-route window admission.
+    # DeepSeek-V4.1 one-step transition + bounded route-window admission.
     # ------------------------------------------------------------------
     def _reset_transition_window(self) -> None:
         counts = self._transition_counts
@@ -1299,7 +1312,7 @@ class LayerExpertSlotBank:
 
         window.append(current)
         window_frequency[current_array] += 1.0
-        if len(window) > 16:
+        if len(window) > self._transition_window_limit:
             expired = window.popleft()
             expired_array = np.fromiter(
                 expired, dtype=np.intp, count=len(expired)
@@ -1341,9 +1354,9 @@ class LayerExpertSlotBank:
             1.0 + self._decode_epoch - last_used[observed]
         )
         return (
-            np.float32(0.7) * prediction
-            + np.float32(0.2) * (window_frequency / max_window)
-            + np.float32(0.1) * recency
+            self._transition_prediction_weight * prediction
+            + self._transition_frequency_weight * (window_frequency / max_window)
+            + self._transition_recency_weight * recency
         )
 
     def _transition_window_rank(
