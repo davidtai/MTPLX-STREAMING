@@ -147,12 +147,33 @@ except (OSError, ValueError):
     exit 2
   fi
 fi
-# Optional receipt-bound auxiliary safetensor set, used by the compact MTP
-# resident banks. This is reclaimed separately because it lives outside the
-# candidate model directory and would otherwise bias a later matched arm.
-CANDIDATE_AUX_PATH="${GPU_WINDOW_CANDIDATE_AUX_DIR:-}"
-if [[ -n "${CANDIDATE_AUX_PATH}" ]]; then
-  if ! CANDIDATE_AUX_PATH="$(/usr/bin/env python3 -c '
+# Optional receipt-bound auxiliary safetensor sets, used by compact MTP banks,
+# prepacked heads, and other admitted residents outside the candidate artifact.
+# The plural form is colon-separated.  Keep the singular spelling compatible,
+# but refuse both together so no auxiliary set can be silently omitted.
+if [[ -n "${GPU_WINDOW_CANDIDATE_AUX_DIR:-}" && -n "${GPU_WINDOW_CANDIDATE_AUX_DIRS:-}" ]]; then
+  printf '%s [gpu_window] ERROR: specify only GPU_WINDOW_CANDIDATE_AUX_DIR or GPU_WINDOW_CANDIDATE_AUX_DIRS\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+  exit 2
+fi
+CANDIDATE_AUX_SPEC="${GPU_WINDOW_CANDIDATE_AUX_DIRS:-${GPU_WINDOW_CANDIDATE_AUX_DIR:-}}"
+CANDIDATE_AUX_PATHS=()
+if [[ -n "${CANDIDATE_AUX_SPEC}" ]]; then
+  if [[ "${CANDIDATE_AUX_SPEC}" == :* \
+     || "${CANDIDATE_AUX_SPEC}" == *: \
+     || "${CANDIDATE_AUX_SPEC}" == *::* ]]; then
+    printf '%s [gpu_window] ERROR: GPU_WINDOW_CANDIDATE_AUX_DIRS contains an empty directory\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+    exit 2
+  fi
+  IFS=':' read -r -a _candidate_aux_raw <<< "${CANDIDATE_AUX_SPEC}"
+  for _candidate_aux_path in "${_candidate_aux_raw[@]}"; do
+    if [[ -z "${_candidate_aux_path}" ]]; then
+      printf '%s [gpu_window] ERROR: GPU_WINDOW_CANDIDATE_AUX_DIRS contains an empty directory\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+      exit 2
+    fi
+    if ! _candidate_aux_path="$(/usr/bin/env python3 -c '
 import pathlib, sys
 try:
     path = pathlib.Path(sys.argv[1]).resolve(strict=True)
@@ -161,16 +182,25 @@ try:
     print(path)
 except (OSError, ValueError):
     sys.exit(1)
-' "${CANDIDATE_AUX_PATH}")"; then
-    printf '%s [gpu_window] ERROR: GPU_WINDOW_CANDIDATE_AUX_DIR is not a valid directory\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
-    exit 2
-  fi
-  if [[ "${CANDIDATE_AUX_PATH}" == "${CANDIDATE_MODEL_PATH}" ]]; then
-    printf '%s [gpu_window] ERROR: candidate model and auxiliary cache directories must differ\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
-    exit 2
-  fi
+' "${_candidate_aux_path}")"; then
+      printf '%s [gpu_window] ERROR: candidate auxiliary path is not a valid directory: %s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_candidate_aux_path}" >&2
+      exit 2
+    fi
+    if [[ "${_candidate_aux_path}" == "${CANDIDATE_MODEL_PATH}" ]]; then
+      printf '%s [gpu_window] ERROR: candidate model and auxiliary cache directories must differ\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+      exit 2
+    fi
+    for _candidate_aux_seen in "${CANDIDATE_AUX_PATHS[@]}"; do
+      if [[ "${_candidate_aux_path}" == "${_candidate_aux_seen}" ]]; then
+        printf '%s [gpu_window] ERROR: duplicate candidate auxiliary directory: %s\n' \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_candidate_aux_path}" >&2
+        exit 2
+      fi
+    done
+    CANDIDATE_AUX_PATHS+=("${_candidate_aux_path}")
+  done
 fi
 # HIGH-3: safety caps REFUSE (exit 2) on an invalid value (never silently fall back).
 MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"  # GiB the step needs available after the stop
@@ -492,16 +522,16 @@ _reclaim_candidate_file_cache() {
 }
 
 _reclaim_candidate_aux_file_cache() {
-  local before
+  local candidate_aux_path="${1:?candidate auxiliary path required}" before
   before="$(used_mem_bytes)" || return 1
   if (( before + 1073741824 >= TOTAL_MEM_CEILING_BYTES )); then
     err "candidate auxiliary cache reclamation lacks its bounded 1 GiB host headroom"
     return 1
   fi
-  log "phase 3: reclaiming receipt-bound candidate clean file cache from ${CANDIDATE_AUX_PATH}"
+  log "phase 3: reclaiming receipt-bound candidate clean file cache from ${candidate_aux_path}"
   /usr/bin/env python3 "$(dirname "${SCRIPT_PATH}")/reclaim_file_cache.py" \
     --operation candidate_aux_file_cache_reclamation \
-    --layout receipt-safetensors "${CANDIDATE_AUX_PATH}" || return 1
+    --layout receipt-safetensors "${candidate_aux_path}" || return 1
   _check_abort
 }
 
@@ -1071,16 +1101,16 @@ if [[ -n "${CANDIDATE_MODEL_PATH}" && "${CANDIDATE_MODEL_PATH}" != "${QWEN_MODEL
     exit 8
   fi
 fi
-if [[ -n "${CANDIDATE_AUX_PATH}" ]]; then
-  if [[ "${CANDIDATE_AUX_PATH}" == "${QWEN_MODEL_PATH}" ]]; then
+for _candidate_aux_path in "${CANDIDATE_AUX_PATHS[@]}"; do
+  if [[ "${_candidate_aux_path}" == "${QWEN_MODEL_PATH}" ]]; then
     err "phase 3: candidate auxiliary cache directory aliases the stopped service model"
     exit 8
   fi
-  if ! _reclaim_candidate_aux_file_cache; then
-    err "phase 3: candidate auxiliary cache reclamation failed; refusing workload and restoring service"
+  if ! _reclaim_candidate_aux_file_cache "${_candidate_aux_path}"; then
+    err "phase 3: candidate auxiliary cache reclamation failed for ${_candidate_aux_path}; refusing workload and restoring service"
     exit 8
   fi
-fi
+done
 if ! USED_START="$(used_mem_bytes)"; then
   err "phase 4: baseline vm_stat unreadable or incomplete; refusing to start the step"
   exit 8
