@@ -72,9 +72,9 @@ prefill, or MTP-stage fp32 caches; their formulas remain unchanged.
   virtualenv was used. The broader CPU-only batch passed 57 checks without a
   model load; the memory-reporting subset was rerun after runner wiring and
   passed 17 checks.
-- [x] Recompute the corrected plan. The unchanged reserve admits cap 83. Cap 91
-  is the highest allocator-safe staged candidate; cap 92 exceeds the allocator
-  limit by 540,558,640 bytes and is excluded even though it fits the 110 GB
+- [x] Recompute the corrected BF16-head plan. The unchanged reserve admits cap
+  83. Cap 91 is the highest allocator-safe baseline candidate; cap 92 exceeds
+  that allocator limit by 540,558,640 bytes even though it fits the 110 GB
   whole-machine projection.
 - [x] Add a receipt-stamped `--runtime-reserve-gib` runner choice: 7 GiB remains
   the cap-83 control, 3 GiB selects cap 89, and 2 GiB selects cap 91. Refuse
@@ -184,6 +184,48 @@ or promotion before matched GPU wall-time evidence.
 - [ ] Screen `3,3` against the unchanged six-row verify at depth five. Screen
   `2,2,2` only if `3,3` improves decode wall time.
 
+### Task 3d: Stage conditional cap 92 and cap 93 capacity
+
+**Files:**
+- Conditional benchmark wrappers and commands under `/tmp/dsv41-110-stage/`.
+- Promote only winning reusable behavior into tracked runner code.
+
+**Security flag:** none
+
+**Does NOT cover:** General-serving compact MTP residency, assumed q8 parity,
+static admission of cap 93, or a compressed expert artifact.
+
+- [x] Price the authenticated prepacked affine-q8 head before target-cache
+  allocation. It saves 620,544,000 resident bytes and improves the six-row head
+  microbenchmark, but its 63/64 sampled argmax result still requires measured
+  output/tie classification.
+- [x] Construct the exact trace-covered MTP resident inventory and verify its
+  source manifest, selected expert sets `(93, 58, 32)`, tensor geometry, and
+  3,778,928,640-byte saving before allocation.
+- [x] Stage cap 92 with 45 transient slots and a 19,489,831,752-byte fixed
+  footprint. Require a measured cap-91 q8 win before this command is eligible.
+- [x] Bound Engram at 119,537,664 bytes per bank. The 128-token screen requires
+  at most 414,720 of 452,794 rows; the recorded 1,023-step control requires at
+  most 447,432 rows. Exact payload, metadata, and 1 GiB other-host reserve total
+  1,544,647,680 bytes.
+- [x] Stage cap 93 with 44 transient slots and a 19,471,031,112-byte fixed
+  footprint. Require matching cap-92 receipt, bounds, and OS samples, then
+  derive MLX, process-footprint, and whole-machine admission from those measured
+  peaks plus the exact one-slot/one-transient delta.
+- [x] Confirm the reference projection: 98,702,754,032 active bytes against a
+  98,708,752,320-byte allocator limit, leaving 5,998,288 bytes. This is a
+  refusal-sensitive reference, not sufficient admission evidence.
+- [x] Replay transition-window plus `3,3` at cap 93 across all eight
+  within-chunk acceptance orders. Median 36,991.5 reads, 369 forwards, and 1,107
+  rows imply a 19.34-tok/s raw-I/O ceiling, so 20 TPS remains open.
+- [x] Measure one exact whole-record rANS size on CPU without importing MLX:
+  17,561,059 of 18,800,640 bytes. Its 20.70-tok/s I/O-only ceiling warrants a
+  later direct-decoder gate; the current serial decode-and-copy path is not an
+  arm.
+- [x] Sample scale bytes from four experts in every routed layer with uncached
+  reads. A lossless three-bit-plus-escape layout projects 3.6765% record savings
+  but only 0.20 seconds of I/O margin at 20 TPS, so do not build the sidecar yet.
+
 ### Task 4: Measure and promote only winners
 
 **Files:**
@@ -192,8 +234,8 @@ or promotion before matched GPU wall-time evidence.
 
 **Security flag:** none
 
-**Does NOT cover:** Any GPU execution while another job owns the lane, cap 93,
-or component-rANS implementation without a separate decoder gate.
+**Does NOT cover:** Any GPU execution while another job owns the lane or codec
+implementation without a separate direct-decoder gate.
 
 - [ ] Wait until the operator says the GPU lane is available; do not probe or
   queue the lock while other jobs run.
@@ -207,8 +249,11 @@ or component-rANS implementation without a separate decoder gate.
   staged-verify arms. Remove losing candidates; screen finer partitions only
   after the corresponding coarse candidate wins.
 - [ ] Screen the winning stack at cap 89. Attempt cap 91 only after cap 89
-  confirms allocator and whole-machine headroom; never arm cap 92 under the
-  current allocator limit.
+  confirms allocator and whole-machine headroom.
+- [ ] If the q8 head wins with an allowed output classification, run conditional
+  prepacked cap 92. Run bounded-Engram cap 93 only after the matching cap-92
+  receipt establishes its measured predecessor bounds. Combine other winners
+  only after the unchanged cap-93 arm succeeds.
 - [ ] Run the exact 16,384-input/1,024-output Python workload for the winning
   stack and require at least 20 decode tok/s.
 - [ ] Add focused regression tests only for measured winners, then run those

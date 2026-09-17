@@ -30,8 +30,17 @@ but the exact workload remains below 20 tok/s.
 - Expert I/O: 49,298 records and 926,833,950,720 bytes in 70.4950996 seconds.
 - Cap-92 causal replay: 39,580 records. Longer-history and row-position
   policies did not improve held-out behavior materially.
-- Component-separated rANS: 10.4792% smaller on the exact record, but the
-  resulting 50.67-second I/O floor leaves too little compute margin by itself.
+- A shipped-format whole-record rANS size recurrence, checked against the real
+  encoder on a bounded sample, prices one exact 18,800,640-byte MXFP4 record at
+  17,561,059 bytes (6.5933% smaller). Applied to the combined cap-93 replay it
+  moves the I/O-only ceiling from 19.34 to 20.70 tok/s. The current runtime
+  serializes record decodes and materializes a separate decoded array before
+  copying into the slot, so that ceiling is not promotion evidence.
+- A 160-record uncached scale-only sample spanning all 40 layers found
+  99.999882% of scale bytes in 119..125. A lossless three-bit code with an
+  escape byte prices a record at about 18,109,441 bytes (3.6765% smaller), but
+  leaves only 0.20 seconds under the 51.15-second 20-TPS I/O budget. It remains
+  a decoder-design lead rather than an implementation candidate.
 - Python raw-record L2: at the same 1,504,051,200-byte cost as two target slots
   per layer, an idealized cap-89 victim cache still needs 40,239 SSD reads in
   the saved-route replay; cap 91 with those bytes in Metal needs 40,111 and
@@ -75,12 +84,34 @@ runner's construction-time bound. Relative to the measured cap-80 run, cap 91
 projects to 97,894,449,392 allocator bytes, leaving just 211,466,960 bytes under
 the 98,105,916,352-byte allocator limit. Its external whole-machine projection
 is 107,876,024,320 bytes, leaving 2,123,975,680 bytes under the hard ceiling.
-Cap 92 is excluded: its 98,646,474,992-byte allocator projection exceeds the
-limit by 540,558,640 bytes even though its whole-machine projection remains
-below 110 GB. The first staged capacity arm is cap 89; cap 91 is attempted only
-if cap 89 confirms the projection and leaves the required measured headroom.
-Python remains bounded to 2,131,214,336 bytes for Engram payload, Engram
-metadata, and other host reserve.
+Cap 92 is excluded for the unchanged BF16-head plan: its
+98,646,474,992-byte allocator projection exceeds the limit by 540,558,640
+bytes even though its whole-machine projection remains below 110 GB. The first
+staged capacity arm is cap 89; cap 91 is attempted only if cap 89 confirms the
+projection and leaves the required measured headroom. The unchanged Python
+allowance is 2,131,214,336 bytes for Engram payload, Engram metadata, and other
+host reserve.
+
+A separate exact-workload wrapper can conditionally reach cap 92. It installs
+the authenticated prepacked affine-q8 shared output head, retains only the MTP
+experts covered by the pinned 16K/1K trace, and returns three shared transient
+records. The fixed footprint is 19,489,831,752 bytes with 45 transient slots.
+The q8 screen saved 620,544,000 resident bytes and matched 63 of 64 sampled
+argmaxes; therefore cap 92 is gated on a measured cap-91 q8 win and output/tie
+classification rather than assumed parity.
+
+Cap 93 is a second conditional step after a successful like-for-like cap-92
+run. Setting each Engram bank to 119,537,664 bytes gives 452,794 rows per bank.
+The 128-token screen has a conservative 414,720-row bound; the recorded
+1,023-step control has a 447,432-row bound. Together with the existing 1 GiB
+other-host reserve and exact metadata cost, this reduces the Python allowance
+to 1,544,647,680 bytes. Returning one more transient record and assigning the
+freed budget to Metal yields a 19,471,031,112-byte fixed footprint, 44
+transient slots, and 93 target slots. At the reference baseline the static MLX
+projection is 98,702,754,032 bytes against a 98,708,752,320-byte allocator
+limit, only 5,998,288 bytes of margin. The wrapper therefore derives admission
+from the measured cap-92 MLX, process-footprint, and external machine peaks and
+refuses cap 93 when any live bound fails.
 
 The runners expose the in-plan portion as `--runtime-reserve-gib`. The default
 stays at 7 GiB (cap 83); 3 GiB selects cap 89, and 2 GiB selects cap 91 for the
@@ -187,6 +218,13 @@ Configuration must be a non-empty positive partition whose sum is exactly
 runners. The enabled loop does not read environment state, recheck model
 metadata, or fall back to the one-shot route.
 
+At cap 93, CPU replay over all eight within-chunk acceptance-order
+permutations projects 39,093 reads for transition-window with the unchanged
+six-row verify and a 36,991.5 median for transition-window plus `3,3`. The
+combined route makes 369 target forwards and evaluates 1,107 rows. At the
+measured 13.1475 GB/s this is a 52.90-second raw-record I/O floor, or a
+19.34-tok/s ceiling, so the replay does not establish the 20-TPS goal.
+
 ## Validation and promotion
 
 No new optimization regression tests are added before measurement, following
@@ -196,14 +234,18 @@ contract because incorrect memory admission is a safety bug.
 When the GPU lane is available, the guard must acquire
 `/tmp/mtplx-gpu-exclusive.lock` before stopping Qwen. A short matched arm batch
 will compare the corrected cap-83 control, three-record miss parts, causal cache
-admission, and shared-work overlap one change at a time. Two-record miss parts
+admission, shared-work overlap, and `3,3` verification one change at a time.
+Two-record miss parts
 are screened only after the three-record arm improves wall time. The `3,3`
 staged-verify arm is screened separately; `2,2,2` is attempted only if `3,3`
 improves decode wall time. The winning scheduling/cache stack is then screened
-at cap 89. Cap 91 is eligible only after
-cap 89's measured peak validates the static projection; cap 92 is not an arm.
-Only the winning stack receives an exact 16K/1K run and focused regression
-tests. Every full run must report MLX peak, process `phys_footprint`,
+at cap 89. Cap 91 is eligible only after cap 89's measured peak validates the
+static projection. A q8 win may unlock the conditional prepacked cap-92 screen;
+only a successful matching cap-92 receipt may unlock bounded-Engram cap 93.
+The scheduling candidates are combined at the highest measured-safe capacity
+only after their individual screens win. Only the winning stack receives an
+exact 16K/1K run and focused regression tests. Every full run must report MLX
+peak, process `phys_footprint`,
 whole-machine physical peak, token digest or an allowed tie flip, physical
 record reads, wall time, and exact Qwen restoration.
 
@@ -214,6 +256,9 @@ record reads, wall time, and exact Qwen restoration.
 - A changed machine baseline may make cap 89 or cap 91 unsafe. Both allocator
   and whole-machine projections are gates; live admission must lower or refuse
   the cap rather than cross either limit.
+- The conditional cap-93 reference has only 5,998,288 bytes of allocator
+  margin. It is never admitted from static arithmetic alone and cannot run
+  without measured cap-92 predecessor evidence.
 - Shared work could be submitted twice or outlive its pipeline claim. A single
   stored result and the existing claim/close protocol prevent duplication.
 - Smaller miss parts add outer-future and gather-dispatch overhead. The
@@ -222,6 +267,7 @@ record reads, wall time, and exact Qwen restoration.
 - Staged verification adds target-forward and host acceptance boundaries on
   cycles whose first chunk fully accepts. The route is rejected unless avoided
   expert reads outweigh those boundaries in matched decode wall time.
-- Lossless decode cost may erase compression savings. No compressed artifact is
-  promoted without a real-record decoder microbenchmark that clears the
-  end-to-end required margin.
+- Lossless decode cost may erase compression savings. The existing whole-record
+  rANS path needs direct batched slot decode, and the scale-only lead needs a
+  bounded exact decoder. Neither receives a full artifact or promotion without
+  a real-record decoder benchmark that clears the end-to-end required margin.
