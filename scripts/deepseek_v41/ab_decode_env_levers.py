@@ -1726,6 +1726,20 @@ def _load_bench_module():
     return module
 
 
+def _parse_dspark_verify_chunks(raw: str) -> tuple[int, ...]:
+    try:
+        chunks = tuple(int(part.strip()) for part in str(raw).split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "DSpark verify chunks must be comma-separated positive integers"
+        ) from exc
+    if not chunks or any(value <= 0 for value in chunks):
+        raise argparse.ArgumentTypeError(
+            "DSpark verify chunks must be comma-separated positive integers"
+        )
+    return chunks
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1767,6 +1781,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
+    )
+    p.add_argument(
+        "--dspark-verify-chunks",
+        type=_parse_dspark_verify_chunks,
+        default=None,
+        metavar="ROWS[,ROWS...]",
+        help=(
+            "Construction-time partition of the K+1 target verify rows. The "
+            "default is one full verify; e.g. --dspark-depth 5 with 3,3 stops "
+            "before the second target forward after an early rejection."
+        ),
     )
     p.add_argument(
         "--dspark-require-lossless",
@@ -3810,7 +3835,8 @@ def _capture_dspark_engagement(reset_ok: dict) -> dict:
 
 
 def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
-                     stage_timing=False, ar_reference=None, stop_ids=None):
+                     verify_chunks=None, stage_timing=False, ar_reference=None,
+                     stop_ids=None):
     """Greedy DSpark-DIRECT prefill + ``steps`` decode; captures tokens and the
     per-cycle accept + phase-timing statistics.  Total tokens == steps + 1 to match
     ``_generate`` (prefill token + ``steps`` decode tokens).
@@ -3892,6 +3918,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
             sampler=SamplerConfig(temperature=0.0),
             seed=0,
             speculative_depth=int(depth),
+            verify_chunks=verify_chunks,
             stats=stats,
             divergence_capture=capture,
             prefill_callback=_stream_prefill_cb,
@@ -3957,6 +3984,7 @@ def _generate_dspark(*, model, mx, mem_probe, prompt_ids, steps, depth,
                 sampler=SamplerConfig(temperature=0.0),
                 seed=0,
                 speculative_depth=int(depth),
+                verify_chunks=verify_chunks,
                 stats=DSparkDecodeStats(),
                 stop_ids=stop_ids,  # W113: match the headline pass
             )
@@ -4756,6 +4784,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 model=model, mx=mx, mem_probe=mem_probe,
                 prompt_ids=prompt_ids, steps=args.decode_tokens,
                 depth=args.dspark_depth,
+                verify_chunks=getattr(args, "dspark_verify_chunks", None),
                 stage_timing=bool(getattr(args, "stage_timing", False)),
                 ar_reference=ids,
                 # W113: under --stop-on-eos both lanes stop at EOS so the AR-vs-
@@ -4771,6 +4800,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             st = dsp["stats"]
             receipt["dspark"] = {
                 "depth": int(args.dspark_depth),
+                "verify_chunks": st["verify_chunks"],
                 # W91: the tok/s/tokens/stats/peak below come from an UNTIMED headline
                 # pass (fused decode levers active); --stage-timing adds a SEPARATE
                 # timed attribution pass (verify_stage_timing) that does not feed tok/s.
@@ -5388,6 +5418,17 @@ def _run_dry(args, bench) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if int(args.dspark_depth) < 0:
+        print("ab_decode_env_levers: --dspark-depth must be >= 0", file=sys.stderr)
+        return 2
+    verify_chunks = getattr(args, "dspark_verify_chunks", None)
+    if verify_chunks is not None and sum(verify_chunks) != int(args.dspark_depth) + 1:
+        print(
+            "ab_decode_env_levers: --dspark-verify-chunks must sum to "
+            f"--dspark-depth + 1 ({int(args.dspark_depth) + 1})",
+            file=sys.stderr,
+        )
+        return 2
     bench = _load_bench_module()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

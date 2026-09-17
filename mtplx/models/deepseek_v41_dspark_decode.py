@@ -23,9 +23,11 @@ see its L129-131, so acceptance/rollback are standard speculative decoding):
   clears ``confidence_threshold`` (a pure latency lever -- it changes the verify
   width, never the output, since verify is authoritative).
 
-* **Verify.**  One target forward over the ``1 + K`` rows ``[primary, d1, ..., dK]``
-  yields ``K+1`` logit rows; row ``i`` is the target's distribution for the token
-  *after* block position ``i`` (row 0 = the token after ``primary``).
+* **Verify.**  By default one target forward over the ``1 + K`` rows
+  ``[primary, d1, ..., dK]`` yields ``K+1`` logit rows; row ``i`` is the target's
+  distribution for the token *after* block position ``i`` (row 0 = the token
+  after ``primary``).  A construction-selected schedule may partition those
+  rows and stop before a later target forward after an early rejection.
 
 * **Acceptance.**  Greedy: accept the longest draft prefix whose tokens equal the
   target argmax at the preceding row; the correction (or, on a full accept, the
@@ -244,15 +246,18 @@ class DSparkDecodeStats:
 
     ``drafted_by_depth[i]`` / ``accepted_by_depth[i]`` count the draft proposed /
     accepted at depth ``i`` (0-indexed) across all cycles; their sums are
-    ``drafted_tokens`` / ``accepted_drafts``.  ``cycles`` == ``verify_calls`` (one
-    K+1-row verify per cycle).  ``correction_tokens`` counts cycles that emitted a
-    reject-correction; ``bonus_tokens`` counts cycles that emitted an all-accept
+    ``drafted_tokens`` / ``accepted_drafts``.  ``cycles`` counts logical draft /
+    verify cycles while ``verify_calls`` counts target forward calls.  They are
+    equal for the default one-shot verify; a staged verify may use more than one
+    target forward in a cycle.  ``correction_tokens`` counts cycles that emitted
+    a reject-correction; ``bonus_tokens`` counts cycles that emitted an all-accept
     bonus.
     """
 
     speculative_depth: int = 0
     cycles: int = 0
     verify_calls: int = 0
+    verify_chunks: List[int] = field(default_factory=list)
     drafted_tokens: int = 0
     accepted_drafts: int = 0
     rejected_drafts: int = 0
@@ -297,6 +302,7 @@ class DSparkDecodeStats:
             "speculative_depth": self.speculative_depth,
             "cycles": self.cycles,
             "verify_calls": self.verify_calls,
+            "verify_chunks": list(self.verify_chunks),
             "drafted_tokens": self.drafted_tokens,
             "accepted_drafts": self.accepted_drafts,
             "rejected_drafts": self.rejected_drafts,
@@ -779,22 +785,47 @@ class DivergenceCapture:
     def found(self) -> bool:
         return self.index is not None
 
-    def observe(self, *, base_len: int, committed: Sequence[int], verify_logits) -> None:
+    def observe(
+        self,
+        *,
+        base_len: int,
+        committed: Sequence[int],
+        verify_logits=None,
+        verify_logits_parts: Optional[Sequence[tuple[int, Any]]] = None,
+    ) -> None:
         """Compare this cycle's actually-committed tokens against the AR
         reference and snapshot the verify row of the first mismatch.
 
         ``base_len`` is ``len(new_tokens)`` before this cycle appended, so the
         m-th committed token is at global position ``base_len + m + 1`` and was
-        produced by ``verify_logits[0, m]``.
+        produced by logical verify row ``m``.
         """
-        if self.found or self.ar_reference is None or verify_logits is None:
+        if (
+            self.found
+            or self.ar_reference is None
+            or (
+                verify_logits is None
+                and verify_logits_parts is None
+            )
+        ):
             return
         for m, tok in enumerate(committed):
             gpos = base_len + m + 1
             if gpos >= len(self.ar_reference):
                 return
             if int(tok) != int(self.ar_reference[gpos]):
-                row = np.asarray(verify_logits[0, m].astype(mx.float32)).reshape(-1)
+                if verify_logits_parts is not None:
+                    source = None
+                    for start, part in verify_logits_parts:
+                        width = int(part.shape[1])
+                        if int(start) <= m < int(start) + width:
+                            source = part[0, m - int(start)]
+                            break
+                    if source is None:
+                        raise IndexError(f"missing staged verify logits row {m}")
+                else:
+                    source = verify_logits[0, m]
+                row = np.asarray(source.astype(mx.float32)).reshape(-1)
                 self.index = gpos
                 self.dspark_token = int(tok)
                 self.ar_token = int(self.ar_reference[gpos])
@@ -808,6 +839,34 @@ class DivergenceCapture:
 # ---------------------------------------------------------------------------
 def _is_stop(token: int, stop_ids: Optional[set]) -> bool:
     return bool(stop_ids) and int(token) in stop_ids
+
+
+def _normalize_verify_chunks(
+    verify_chunks: Optional[Sequence[int]], k_cap: int
+) -> tuple[int, ...]:
+    """Resolve the construction-time target-verify schedule.
+
+    The schedule partitions the ``K+1`` target input rows. Requiring an exact
+    partition keeps every enabled lane explicit: a short schedule cannot silently
+    add a final one-shot forward, and an oversized schedule cannot stamp a shape
+    that never executes. Confidence early-stop truncates only the final active
+    chunk at runtime.
+    """
+    k_cap = int(k_cap)
+    if k_cap < 0:
+        raise ValueError("dspark speculative depth must be >= 0")
+    width = k_cap + 1
+    if verify_chunks is None:
+        return (width,)
+    chunks = tuple(int(value) for value in verify_chunks)
+    if not chunks or any(value <= 0 for value in chunks):
+        raise ValueError("dspark verify chunks must be a non-empty sequence of positive ints")
+    if sum(chunks) != width:
+        raise ValueError(
+            "dspark verify chunks must partition speculative_depth + 1 exactly: "
+            f"sum={sum(chunks)}, required={width}"
+        )
+    return chunks
 
 
 def _confidence_threshold_from_env(explicit: Optional[float]) -> Optional[float]:
@@ -1064,6 +1123,7 @@ def _decode_cycles(
     abort_check: Optional[Callable[[], bool]],
     verify_decode_phase: bool = True,
     divergence_capture: Optional["DivergenceCapture"] = None,
+    verify_chunks: Optional[Sequence[int]] = None,
 ) -> tuple[List[int], str]:
     """Run DSpark-direct cycles from ``primary`` (already emitted) + its predictor
     hidden ``main_h``.  Returns ``(new_tokens, finish_reason)`` where ``new_tokens``
@@ -1083,8 +1143,10 @@ def _decode_cycles(
     dspark = model.mtp
     block_size = int(getattr(dspark, "block_size", 0) or 0)
     k_cap = min(int(k_request), block_size) if block_size else int(k_request)
+    verify_chunks = _normalize_verify_chunks(verify_chunks, k_cap)
     greedy = float(getattr(sampler, "temperature", 0.0)) <= 0.0
     stats.speculative_depth = k_cap
+    stats.verify_chunks = list(verify_chunks)
     stats._ensure_depth(k_cap)
 
     def _target_p(row: mx.array):
@@ -1130,68 +1192,101 @@ def _decode_cycles(
             drafts = [int(out_np[1 + i]) for i in range(k_eff)]
         stats.draft_time_s += _time.perf_counter() - _t
 
-        # ---- verify: one forward over [primary, d1..d_keff] --------------
-        # Route the K+1-row verify through the DECODE expert-routing phase (an MTP
+        # ---- verify + accept, stopping before an unneeded later chunk ------
+        # Route every verify chunk through the DECODE expert-routing phase (an MTP
         # verify batch is decode traffic regardless of width) so the streamed
         # switch does a persistent-slot small-M gather instead of the PREFILL
-        # wave/admission/dense re-read that costs seconds per cycle. The W37 frame
-        # records the verify's internal model stages when a probe is armed.
+        # wave/admission/dense re-read that costs seconds per cycle.  The default
+        # schedule has one K+1-row chunk.  A construction-selected staged schedule
+        # can stop after the first rejected draft, avoiding all later target rows.
         block_ids = [int(primary)] + drafts
         before = snapshot_untrimmable_cache(cache)
-        _t = _time.perf_counter()
-        with _verify_routing_context(verify_decode_phase), _frame(), _stage("dspark.verify"):
-            verify_logits, verify_hidden = forward(mx.array([block_ids]), cache)
-            mx.eval(verify_logits, verify_hidden)
-        stats.verify_time_s += _time.perf_counter() - _t
-        stats.cycles += 1
-        stats.verify_calls += 1
-
-        # ---- acceptance --------------------------------------------------
-        _t = _time.perf_counter()
         accepted = 0
-        emitted: List[int] = []
-        if greedy:
-            argmax_rows = np.asarray(mx.argmax(verify_logits[0], axis=-1)).reshape(-1)
-            for i in range(k_eff):
-                stats.drafted_by_depth[i] += 1
-                stats.drafted_tokens += 1
-                if int(argmax_rows[i]) == drafts[i]:
-                    accepted += 1
-                    stats.accepted_by_depth[i] += 1
-                    stats.accepted_drafts += 1
-                else:
+        correction: Optional[int] = None
+        verified_tokens = 0
+        verify_hidden_parts: List[Any] = []
+        verify_logits_parts: List[tuple[int, Any]] = []
+        accept_time_s = 0.0
+
+        for configured_width in verify_chunks:
+            if verified_tokens >= len(block_ids):
+                break
+            chunk_start = verified_tokens
+            chunk_end = min(chunk_start + int(configured_width), len(block_ids))
+            chunk_ids = block_ids[chunk_start:chunk_end]
+
+            _t = _time.perf_counter()
+            with (
+                _verify_routing_context(verify_decode_phase),
+                _frame(),
+                _stage("dspark.verify"),
+            ):
+                chunk_logits, chunk_hidden = forward(mx.array([chunk_ids]), cache)
+                mx.eval(chunk_logits, chunk_hidden)
+            stats.verify_time_s += _time.perf_counter() - _t
+            stats.verify_calls += 1
+            verify_logits_parts.append((chunk_start, chunk_logits))
+            verify_hidden_parts.append(chunk_hidden)
+            verified_tokens = chunk_end
+
+            _t = _time.perf_counter()
+            if greedy:
+                target_tokens = np.asarray(
+                    mx.argmax(chunk_logits[0], axis=-1)
+                ).reshape(-1)
+                for local_row, target_token in enumerate(target_tokens):
+                    depth = chunk_start + local_row
+                    if depth < k_eff:
+                        stats.drafted_by_depth[depth] += 1
+                        stats.drafted_tokens += 1
+                        if int(target_token) == drafts[depth]:
+                            accepted += 1
+                            stats.accepted_by_depth[depth] += 1
+                            stats.accepted_drafts += 1
+                            continue
+                    correction = int(target_token)
                     break
-            correction = int(argmax_rows[accepted])
-            emitted = drafts[:accepted] + [correction]
-        else:
-            vocab = int(verify_logits.shape[-1])
-            reject_at = None
-            correction = None
-            for i in range(k_eff):
-                stats.drafted_by_depth[i] += 1
-                stats.drafted_tokens += 1
-                target_p = _target_p(verify_logits[0, i])
-                d = drafts[i]
-                # The DSpark draft is greedy (DSparkBlock.temperature == 0), so its
-                # proposal is the deterministic point mass q = delta_d; standard
-                # speculative sampling with q = delta_d accepts d w.p. min(1, p(d))
-                # and draws the correction from norm(max(0, p - q)) -> output ~ p.
-                q = SparseDistribution.one_hot(d, vocab)
-                ap = _accept_prob(target_p, q, d)
-                if float(rng.random()) <= ap:
-                    accepted += 1
-                    stats.accepted_by_depth[i] += 1
-                    stats.accepted_drafts += 1
-                else:
+            else:
+                vocab = int(chunk_logits.shape[-1])
+                for local_row in range(int(chunk_logits.shape[1])):
+                    depth = chunk_start + local_row
+                    if depth >= k_eff:
+                        # All drafts accepted: sample the bonus from the target's
+                        # final row.  K=0 reaches this row immediately and remains
+                        # the exact AR-sampling path under the same seed.
+                        bonus, _ = _sample_from_logits(
+                            chunk_logits[0, local_row], sampler, rng
+                        )
+                        correction = int(bonus)
+                        break
+                    stats.drafted_by_depth[depth] += 1
+                    stats.drafted_tokens += 1
+                    target_p = _target_p(chunk_logits[0, local_row])
+                    draft = drafts[depth]
+                    # DSpark proposes a deterministic point mass q = delta_d.
+                    q = SparseDistribution.one_hot(draft, vocab)
+                    ap = _accept_prob(target_p, q, draft)
+                    if float(rng.random()) <= ap:
+                        accepted += 1
+                        stats.accepted_by_depth[depth] += 1
+                        stats.accepted_drafts += 1
+                        continue
                     correction = int(_sample_dist(_residual(target_p, q), rng))
-                    reject_at = i
                     break
-            if reject_at is None:
-                # all k_eff accepted -> bonus from target p at the last row (this
-                # is also the exact K=0 == AR path: k_eff==0 -> sample row 0).
-                bonus, _ = _sample_from_logits(verify_logits[0, accepted], sampler, rng)
-                correction = int(bonus)
-            emitted = drafts[:accepted] + [int(correction)]
+            accept_time_s += _time.perf_counter() - _t
+            if correction is not None:
+                break
+
+        if correction is None or not verify_hidden_parts:
+            raise RuntimeError("dspark-direct: verify schedule did not produce a target token")
+        stats.cycles += 1
+        stats.accept_time_s += accept_time_s
+        verify_hidden = (
+            verify_hidden_parts[0]
+            if len(verify_hidden_parts) == 1
+            else mx.concatenate(verify_hidden_parts, axis=1)
+        )
+        emitted = drafts[:accepted] + [correction]
 
         # A cycle reaches (evaluates) ``accepted`` drafts plus, when it did not
         # accept the whole block, the one that broke the run -- later block
@@ -1203,13 +1298,11 @@ def _decode_cycles(
             stats.correction_tokens += 1
         else:
             stats.bonus_tokens += 1
-        stats.accept_time_s += _time.perf_counter() - _t
-
         # ---- commit: keep [primary, d1..da] in the target cache ----------
         _t = _time.perf_counter()
         with _stage("dspark.commit"):
             kept = trim_verified_window_to_prefix(
-                cache, before, verified_tokens=len(block_ids), keep_tokens=accepted + 1
+                cache, before, verified_tokens=verified_tokens, keep_tokens=accepted + 1
             )
             if not kept:
                 # V4.1 caches are all-trimmable, so this should not happen; a
@@ -1241,10 +1334,12 @@ def _decode_cycles(
         stats.generated_tokens = len(new_tokens)
         # W77: for greedy decode, snapshot the verify logits row of the first
         # committed token that differs from the AR reference (zero extra
-        # forwards; verify_logits[0, m] produced committed token m).
+        # forwards; logical verify row m produced committed token m).
         if greedy and divergence_capture is not None and delta:
             divergence_capture.observe(
-                base_len=base_len, committed=delta, verify_logits=verify_logits
+                base_len=base_len,
+                committed=delta,
+                verify_logits_parts=verify_logits_parts,
             )
         if token_callback is not None and delta:
             token_callback(delta)
@@ -1294,6 +1389,7 @@ def dspark_generate(
     seed: int = 0,
     stop_ids: Optional[set] = None,
     speculative_depth: Optional[int] = None,
+    verify_chunks: Optional[Sequence[int]] = None,
     confidence_threshold: Optional[float] = None,
     verify_decode_phase: Optional[bool] = None,
     stats: Optional[DSparkDecodeStats] = None,
@@ -1312,6 +1408,11 @@ def dspark_generate(
 
     The model must carry a DSpark head (``model.mtp`` built via the ``mtp=True``
     load path) and an all-trimmable V4.1 cache.
+
+    ``verify_chunks`` is an optional construction-time partition of the
+    ``speculative_depth + 1`` target input rows. The default is one full verify.
+    Every explicit value must be positive and the values must sum to the full
+    width.
 
     ``prefill_callback`` (optional) fires exactly once right after the prompt
     prefill, before the decode cycles, with ``{"prompt_tokens",
@@ -1339,6 +1440,8 @@ def dspark_generate(
     stats = stats if stats is not None else DSparkDecodeStats()
     block_size = int(getattr(model.mtp, "block_size", 0) or 0)
     k_request = block_size if speculative_depth is None else int(speculative_depth)
+    k_cap = min(k_request, block_size) if block_size else k_request
+    verify_chunks = _normalize_verify_chunks(verify_chunks, k_cap)
     confidence_threshold = _confidence_threshold_from_env(confidence_threshold)
     rng = np.random.default_rng(seed)
     fwd = forward if forward is not None else _target_forward(model)
@@ -1396,6 +1499,7 @@ def dspark_generate(
             else bool(verify_decode_phase)
         ),
         divergence_capture=divergence_capture,
+        verify_chunks=verify_chunks,
     )
     tokens.extend(rest)
     stats.generated_tokens = len(tokens)
@@ -1415,6 +1519,7 @@ def generate_dspark(
     stop_token_ids: Optional[set] = None,
     token_callback: Optional[Callable[[List[int]], None]] = None,
     speculative_depth: Optional[int] = None,
+    verify_chunks: Optional[Sequence[int]] = None,
     confidence_threshold: Optional[float] = None,
     verify_decode_phase: Optional[bool] = None,
     trace_label: Optional[str] = None,
@@ -1454,6 +1559,8 @@ def generate_dspark(
     )
     block_size = int(getattr(model.mtp, "block_size", 0) or 0)
     requested = block_size if speculative_depth is None else int(speculative_depth)
+    k_cap = min(requested, block_size) if block_size else requested
+    verify_chunks = _normalize_verify_chunks(verify_chunks, k_cap)
     confidence_threshold = _confidence_threshold_from_env(confidence_threshold)
     rng = np.random.default_rng(seed)
     stats = DSparkDecodeStats()
@@ -1512,6 +1619,7 @@ def generate_dspark(
                     if verify_decode_phase is None
                     else bool(verify_decode_phase)
                 ),
+                verify_chunks=verify_chunks,
             )
         tokens.extend(rest)
     else:

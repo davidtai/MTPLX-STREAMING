@@ -183,6 +183,20 @@ def _prompt_args(args, context_tokens: int) -> argparse.Namespace:
 # --------------------------------------------------------------------------
 
 
+def _parse_dspark_verify_chunks(raw: str) -> tuple[int, ...]:
+    try:
+        chunks = tuple(int(part.strip()) for part in str(raw).split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "DSpark verify chunks must be comma-separated positive integers"
+        ) from exc
+    if not chunks or any(value <= 0 for value in chunks):
+        raise argparse.ArgumentTypeError(
+            "DSpark verify chunks must be comma-separated positive integers"
+        )
+    return chunks
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -224,6 +238,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
+    )
+    parser.add_argument(
+        "--dspark-verify-chunks",
+        type=_parse_dspark_verify_chunks,
+        default=None,
+        metavar="ROWS[,ROWS...]",
+        help=(
+            "Construction-time partition of the K+1 target verify rows. The "
+            "default is one full verify; e.g. --dspark-depth 5 with 3,3 stops "
+            "before the second target forward after an early rejection."
+        ),
     )
     parser.add_argument(
         "--device-sample",
@@ -804,6 +829,7 @@ def bench_one_cell(
     steps: int,
     decode_mode: str = "ar",
     dspark_depth: int = 3,
+    dspark_verify_chunks=None,
     memory_profile: bool = False,
     memory_profile_every: int = 64,
     mx=None,
@@ -951,6 +977,7 @@ def bench_one_cell(
                     sampler=SamplerConfig(temperature=0.0),
                     seed=0,
                     speculative_depth=int(dspark_depth),
+                    verify_chunks=dspark_verify_chunks,
                     stats=st,
                     completion_callback=complete_dspark,
                     prefill_callback=prefill_dspark,
@@ -972,6 +999,7 @@ def bench_one_cell(
             dspark_metrics = {
                 "memory": mem_probe_block(mem_probe, dsp_sampler),
                 "depth": int(dspark_depth),
+                "verify_chunks": sd["verify_chunks"],
                 "byte_identical_vs_ar": byte_identical,
                 "pass_wall_s": dsp_wall,
                 "decode_tokens": max(0, len(dsp_ids) - 1),
@@ -1521,6 +1549,7 @@ def run_real(args) -> int:
                     steps=args.steps,
                     decode_mode=getattr(args, "decode_mode", "ar"),
                     dspark_depth=getattr(args, "dspark_depth", 3),
+                    dspark_verify_chunks=getattr(args, "dspark_verify_chunks", None),
                     memory_profile=bool(args.memory_profile),
                     memory_profile_every=int(args.memory_profile_every),
                     mx=mx,
@@ -1566,6 +1595,17 @@ def run_real(args) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if int(args.dspark_depth) < 0:
+        print("bench_standard_shape: --dspark-depth must be >= 0", file=sys.stderr)
+        return 2
+    verify_chunks = getattr(args, "dspark_verify_chunks", None)
+    if verify_chunks is not None and sum(verify_chunks) != int(args.dspark_depth) + 1:
+        print(
+            "bench_standard_shape: --dspark-verify-chunks must sum to "
+            f"--dspark-depth + 1 ({int(args.dspark_depth) + 1})",
+            file=sys.stderr,
+        )
+        return 2
     if int(args.steps) < 1:
         print("bench_standard_shape: --steps must be >= 1", file=sys.stderr)
         return 2

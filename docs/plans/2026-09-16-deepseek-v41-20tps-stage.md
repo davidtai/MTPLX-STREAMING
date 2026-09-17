@@ -27,6 +27,7 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 - `mtplx/expert_runtime.py`: construction-time policy validation and binding.
 - `mtplx/expert_streaming.py`: bounded causal policy state and admission.
 - `mtplx/models/expert_mlx.py`: M6 shared-work submission ordering.
+- `mtplx/models/deepseek_v41_dspark_decode.py`: staged target verification.
 - `mtplx/serve_stream_counters.py`: model-owned Engram counter collection.
 - `scripts/deepseek_v41/ab_decode_env_levers.py`: pass the benchmark model to
   the shared counter collector and expose the cache policy arm.
@@ -156,6 +157,33 @@ an automatic part-size choice, or a fallback from the enabled candidate.
 - [ ] Screen three records per part against the unchanged layer-wide batch.
   Screen two records only if the three-record candidate improves wall time.
 
+### Task 3c: Stop target verification after an early rejected chunk
+
+**Files:**
+- Modify: `mtplx/models/deepseek_v41_dspark_decode.py`
+- Modify: `scripts/deepseek_v41/ab_decode_env_levers.py`
+- Modify: `scripts/deepseek_v41/bench_standard_shape.py`
+
+**Security flag:** none
+
+**Does NOT cover:** Automatic schedule selection, a hot fallback to full verify,
+or promotion before matched GPU wall-time evidence.
+
+- [x] Add a construction-time verify-row partition whose default is the unchanged
+  single `K+1` forward and whose values must sum exactly to `K+1`.
+- [x] Evaluate acceptance after each chunk and submit the next target forward only
+  when every draft covered by the current chunk was accepted.
+- [x] Preserve target-cache rollback, committed DSpark hidden seeding, sampled RNG
+  order, stop handling, and first-divergence logits capture across chunks.
+- [x] Count `cycles` as logical speculative cycles and `verify_calls` as actual
+  target forwards; stamp the installed chunk schedule in both runner receipts.
+- [x] Expose `--dspark-verify-chunks` in both runners and reject an invalid
+  partition before model work.
+- [x] Run syntax and whitespace validation only; do not add optimization tests
+  before a matched arm wins.
+- [ ] Screen `3,3` against the unchanged six-row verify at depth five. Screen
+  `2,2,2` only if `3,3` improves decode wall time.
+
 ### Task 4: Measure and promote only winners
 
 **Files:**
@@ -175,8 +203,9 @@ or component-rANS implementation without a separate decoder gate.
   whole-machine ceiling, restores Qwen, and releases the lock last. Do not nest
   it under `bench/laguna/run_guarded.py`; both guards own the same lock.
 - [ ] Run one short matched batch with separately selectable corrected cap-83
-  control, three-record miss parts, causal-policy, and shared-overlap arms.
-  Remove any losing candidate; screen two-record parts only after a chunking win.
+  control, three-record miss parts, causal-policy, shared-overlap, and `3,3`
+  staged-verify arms. Remove losing candidates; screen finer partitions only
+  after the corresponding coarse candidate wins.
 - [ ] Screen the winning stack at cap 89. Attempt cap 91 only after cap 89
   confirms allocator and whole-machine headroom; never arm cap 92 under the
   current allocator limit.

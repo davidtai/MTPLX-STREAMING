@@ -13,7 +13,8 @@ model-owned Engram telemetry, installs a bounded causal cache-admission
 candidate for the MTP verification route, and submits the resident shared
 branch while target-expert miss reads are open. It also adds a bounded decode
 miss-part candidate so completed expert records can reach Metal before the
-slowest read in the layer finishes. Each performance candidate remains
+slowest read in the layer finishes. A staged target-verification candidate
+stops before later verify rows when an earlier draft rejects. Each performance candidate remains
 construction-selected so an unchanged control can be measured without a
 hot-path fallback.
 
@@ -40,6 +41,11 @@ but the exact workload remains below 20 tok/s.
   8,240 calls. Those calls average 5.90 physical records; 6,768 layer calls
   have at least three misses. A three-record bound therefore exposes about
   2.25 completion groups per layer call instead of one layer-wide completion.
+- Exact-route replay with the measured acceptance-depth distribution projects
+  49,270 target record reads for a six-row verify at cap 80. A `3,3` schedule
+  projects 46,355 reads (5.92% fewer) and 1,107 evaluated rows (10.4% fewer);
+  `2,2,2` projects 45,616 reads (7.42% fewer) and 1,076 rows (12.9% fewer).
+  These are CPU route projections, not GPU throughput results.
 
 ## Memory accounting
 
@@ -152,6 +158,35 @@ earlier completion outweighs the extra gather submissions. The actual value is
 stamped in the resolved plan and runtime snapshot. No environment read,
 eligibility probe, retry, or fallback is added to the enabled route.
 
+## Staged target verification
+
+The default DSpark route retains its single `K+1` target forward. The candidate
+partitions those input rows at construction with `--dspark-verify-chunks`; for
+the exact depth-five workload the first arm is `3,3`. Each target chunk is
+evaluated and accepted before the next chunk is submitted. A rejection ends the
+cycle immediately, so later target rows and their expert reads do not run.
+
+Chunk boundaries preserve the causal sequence. For `3,3`, the first forward
+consumes `[primary, d1, d2]` and verifies `d1`, `d2`, and `d3`. If all three
+drafts pass, the second forward consumes `[d3, d4, d5]`, verifies `d4` and `d5`,
+and produces the bonus row. The target cache therefore contains the same six
+logical inputs after a full accept. On rejection, the pre-cycle snapshot trims
+the total rows actually forwarded back to `[primary, accepted drafts]`.
+Concatenated target hiddens seed the DSpark windows from that committed prefix.
+
+Greedy and sampled acceptance both run at the chunk boundary. Sampled mode
+retains the original RNG order: it draws once per reached draft and draws the
+same residual correction or final bonus, while unreachable later chunks consume
+no random values. `cycles` remains the logical speculative-cycle count;
+`verify_calls` reports actual target forwards and can exceed `cycles` only on a
+staged route. The installed schedule is stamped in DSpark statistics and the
+benchmark receipt.
+
+Configuration must be a non-empty positive partition whose sum is exactly
+`speculative_depth + 1`; invalid schedules fail before model work in the
+runners. The enabled loop does not read environment state, recheck model
+metadata, or fall back to the one-shot route.
+
 ## Validation and promotion
 
 No new optimization regression tests are added before measurement, following
@@ -162,8 +197,10 @@ When the GPU lane is available, the guard must acquire
 `/tmp/mtplx-gpu-exclusive.lock` before stopping Qwen. A short matched arm batch
 will compare the corrected cap-83 control, three-record miss parts, causal cache
 admission, and shared-work overlap one change at a time. Two-record miss parts
-are screened only after the three-record arm improves wall time. The winning
-scheduling/cache stack is then screened at cap 89. Cap 91 is eligible only after
+are screened only after the three-record arm improves wall time. The `3,3`
+staged-verify arm is screened separately; `2,2,2` is attempted only if `3,3`
+improves decode wall time. The winning scheduling/cache stack is then screened
+at cap 89. Cap 91 is eligible only after
 cap 89's measured peak validates the static projection; cap 92 is not an arm.
 Only the winning stack receives an exact 16K/1K run and focused regression
 tests. Every full run must report MLX peak, process `phys_footprint`,
@@ -182,6 +219,9 @@ record reads, wall time, and exact Qwen restoration.
 - Smaller miss parts add outer-future and gather-dispatch overhead. The
   construction flag defaults off, and the candidate is removed unless its
   matched wall time improves despite that overhead.
+- Staged verification adds target-forward and host acceptance boundaries on
+  cycles whose first chunk fully accepts. The route is rejected unless avoided
+  expert reads outweigh those boundaries in matched decode wall time.
 - Lossless decode cost may erase compression savings. No compressed artifact is
   promoted without a real-record decoder microbenchmark that clears the
   end-to-end required margin.
