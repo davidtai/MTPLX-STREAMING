@@ -1,0 +1,62 @@
+{
+  "before": {
+    "source_sha256": "014413c8c7145cb274444a5d3ec0ee2cc821f8b5d5858da41f6500e081a0c030",
+    "diagnostic": {
+      "divergence_index": 376,
+      "ar_token": 0,
+      "dspark_token": 1,
+      "ar_top2_margin": null,
+      "dspark_top2_margin": 0.25,
+      "max_abs_logit_delta": null,
+      "tie_margin": 0.03,
+      "tie_band_used": 0.03,
+      "tie_ulps": 3,
+      "peak_contested_logit": null,
+      "ulp_bf16_at_peak": null,
+      "ar_contested_margin": null,
+      "dspark_contested_margin": 0.25,
+      "delta_at_ar_token": null,
+      "delta_at_dspark_token": null,
+      "rounding_class_by_delta": null,
+      "deltas_within_tie_band": null,
+      "rows_consistent": false,
+      "ar_logit_at_ar_token": null,
+      "ar_logit_at_dspark_token": null,
+      "dspark_logit_at_ar_token": 32.5,
+      "dspark_logit_at_dspark_token": 32.75,
+      "class": "divergent"
+    }
+  },
+  "after": {
+    "source_sha256": "a96e9ce3eb2285eee779605a31abd33881f83f67658de6f119945dbc2fa04d25",
+    "diagnostic": {
+      "divergence_index": 376,
+      "ar_token": 0,
+      "dspark_token": 1,
+      "ar_top2_margin": null,
+      "dspark_top2_margin": 0.25,
+      "max_abs_logit_delta": null,
+      "tie_margin": 0.03,
+      "tie_band_used": 0.03,
+      "tie_ulps": 3,
+      "peak_contested_logit": null,
+      "ulp_bf16_at_peak": null,
+      "ar_contested_margin": null,
+      "dspark_contested_margin": 0.25,
+      "delta_at_ar_token": null,
+      "delta_at_dspark_token": null,
+      "rounding_class_by_delta": null,
+      "deltas_within_tie_band": null,
+      "rows_consistent": null,
+      "unavailable_logits": [
+        "ar"
+      ],
+      "ar_logit_at_ar_token": null,
+      "ar_logit_at_dspark_token": null,
+      "dspark_logit_at_ar_token": 32.5,
+      "dspark_logit_at_dspark_token": 32.75,
+      "class": "unclassified"
+    }
+  },
+  "scope": "CPU-only synthetic missing-reference reproduction using actual source AST; no MLX import or generation"
+}

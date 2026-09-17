@@ -21,9 +21,10 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Measured update, 2026-09-17
 
-Task 4 has full-workload results; **20 TPS remains unmet**. The best measured
-result is 11.7203483 TPS at depth 5/cap 94, with 107,453,988,864B maximum sampled
-whole-machine usage. See `../deepseek-v41/receipts/hidden-capture-110gb-20260917/README.md`.
+Task 4 has full-workload results; **20 TPS remains unmet**. The retained best is
+12.1146645 TPS at depth 5/cap 93->100, with 105,642,098,688B maximum sampled
+whole-machine usage. See `../deepseek-v41/receipts/post-prefill-cache-growth-20260917/README.md`.
+The initial cap-94 result below was 11.7203483 TPS.
 
 The accepted prefill change evaluates MTP hidden captures at the existing
 chunk fence, freeing earlier Hyper-Connection graphs. After exact slot-byte
@@ -568,3 +569,23 @@ cycles and an additional unclassified control/candidate token difference at480.
 Native M6 synthetic outputs are not bit-exact despite the old row-cap comment;
 comments are corrected without changing the executable AST. Retained best remains
 12.1146645TPS. See the HC follow-up in the same receipt folder.
+
+## Additional Task4 result, 2026-09-17 explicit read attribution
+
+CPU-validated main-thread boundary timing attributes52.271397s to expert-read
+waiting/completion and19.940574s to Metal evaluation/encoding, out of84.671768s.
+Only0.350480s is expert graph construction. Native D5/M6 at84->98 matches the
+entire output, but its instrumented11.79836TPS is not a throughput control.
+Independent machine peak105,505,128,448B fits the109,126,510,060B bound.
+
+Causal prompt lookup loses the CPU screen. Native confidence0.5 reduces head-only
+verification rows, but full84->99 yields12.12157TPS,217cycles and a new output
+trajectory. Its additional AR divergence376 lacks a reference logit row, so no
+tie proof exists. The candidate is not promoted and receives no optimization
+tests. Exact Qwen restore/warmup/lock release completes17:56:43UTC.
+
+Missing diagnostic logits now report unclassified instead of asserting a non-tie
+difference; acceptance remains strict.33 focused CPU reporting checks pass with
+real MLX imports blocked; no generation arithmetic changed. Evidence:
+[decode-read-attribution-20260917](../deepseek-v41/receipts/decode-read-attribution-20260917/README.md).
+Task4 stays open at the retained12.1146645TPS.

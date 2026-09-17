@@ -164,6 +164,57 @@ def test_headline_does_not_turn_missing_measurements_into_zero():
     assert "box_used_gb=n/a" in line
 
 
+@pytest.mark.parametrize("ar,draft,classification,unavailable", [
+    (None, [9.99, 10.0], "unclassified", ["ar"]),
+    ([], [9.99, 10.0], "unclassified", ["ar"]),
+    ([10.0, 9.99], None, "unclassified", ["dspark"]),
+    (None, None, "unclassified", ["ar", "dspark"]),
+    ([10.0, 9.99], [9.99, 10.0], "tie_flip", []),
+    ([10.0, 1.0], [1.0, 10.0], "divergent", []),
+])
+def test_divergence_reporting_distinguishes_missing_evidence(
+    ar, draft, classification, unavailable, capsys,
+):
+    import math
+    import os
+    import numpy as np
+
+    path = ROOT / "mtplx/models/deepseek_v41_dspark_decode.py"
+    names = {"_row_to_np", "_logit_at", "_ulp_bf16", "_tie_ulps_from_env",
+             "_peak_contested_logit", "_top2_margin", "classify_divergence"}
+    constants = {"DSPARK_BF16_CLASS_DELTA", "DSPARK_TIE_MARGIN_DEFAULT",
+                 "DSPARK_DIVERGENCE_TIE_ULPS_ENV", "DSPARK_DIVERGENCE_TIE_ULPS_DEFAULT",
+                 "DSPARK_DIVERGENCE_TIE_ULPS_MAX"}
+    nodes = [node for node in ast.parse(path.read_text()).body
+             if (isinstance(node, ast.FunctionDef) and node.name in names)
+             or (isinstance(node, ast.Assign) and any(
+                 isinstance(target, ast.Name) and target.id in constants
+                 for target in node.targets))]
+    code = ast.Module(body=[ast.ImportFrom(module="__future__",
+        names=[ast.alias(name="annotations")], level=0), *nodes], type_ignores=[])
+    scope = {"np": np, "math": math, "os": os,
+             "mx": SimpleNamespace(array=type("UnusedMLXArray", (), {}))}
+    exec(compile(ast.fix_missing_locations(code), str(path), "exec"), scope)
+    result = scope["classify_divergence"](
+        index=376, ar_token=0, dspark_token=1,
+        ar_logits_row=ar, dspark_logits_row=draft, tie_ulps=3,
+    )
+    assert result["class"] == classification
+    assert result["unavailable_logits"] == unavailable
+    ab = load_script("ab_decode_env_levers")
+    result["capture_index_matches_first"] = True
+    assert ab._dspark_tie_class_gate_passes({
+        "byte_identical_vs_ar": False, "divergence": result,
+    }) == (classification == "tie_flip")
+    ab._print_dspark_divergence("control", result)
+    output = capsys.readouterr().out
+    if unavailable:
+        assert result["rows_consistent"] is None
+        assert "class=unclassified" in output and "tie status unproven" in output
+        assert "NOT a tie-break flip" not in output
+        assert "row argmax != credited token" not in output
+
+
 @pytest.mark.parametrize("mode,candidate_sha,expected_status", [
     ("dspark", "target-changed", 1),
     ("dspark", "target-control", 0),

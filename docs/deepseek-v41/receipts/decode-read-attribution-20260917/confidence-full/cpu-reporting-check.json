@@ -1,0 +1,10 @@
+{
+  "scope": "existing focused CPU reporting suite; real MLX imports blocked with MetaPathFinder",
+  "path": "tests/test_deepseek_v41_memory_reporting.py",
+  "command": "PYTHONPATH=. /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python - (invoke pytest.main with -q and a real-MLX import blocker)",
+  "exit_code": 0,
+  "passed_cases": 33,
+  "stdout": ".................................                                        [100%]\n",
+  "tool_wall_seconds": 0.43713125,
+  "model_test_modules": "Only their matching expectations and syntax were updated; not imported or executed."
+}

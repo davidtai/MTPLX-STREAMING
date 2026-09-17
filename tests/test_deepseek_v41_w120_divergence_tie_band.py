@@ -118,7 +118,7 @@ def test_window45_reconstruction_is_tie_flip():
 
 
 # ---------------------------------------------------------------------------
-# 3. red-team divergence cases (verbatim) -- all must class "divergent"
+# 3. Non-tie differences and unavailable evidence -- none may be absolved
 # ---------------------------------------------------------------------------
 def test_verify_tie_large_delta_is_divergent():
     # HIGH-1: a tight VERIFY top-2 (dspark tie 0.0) must NOT absolve when the
@@ -174,13 +174,13 @@ def test_garbage_verify_logit_does_not_self_absolve():
     assert out["deltas_within_tie_band"] is False
 
 
-def test_degenerate_ar_row_is_divergent():
+def test_degenerate_ar_row_is_not_absolved():
     # MEDIUM-2: a partial/failed replay (empty or 1-element AR row) is not silently
     # absolved, even with a hard verify tie.
     dsp = _row({7: 16.0, 3: 16.0})   # dspark tie 0.0
     for ar in (np.array([], dtype=np.float32), np.array([5.0], dtype=np.float32)):
         out = _cls(ar, dsp, ar_token=3, dspark_token=7)
-        assert out["class"] == "divergent"
+        assert out["class"] == ("unclassified" if ar.size == 0 else "divergent")
         assert out["ar_top2_margin"] is None
         assert out["ar_contested_margin"] is None
 

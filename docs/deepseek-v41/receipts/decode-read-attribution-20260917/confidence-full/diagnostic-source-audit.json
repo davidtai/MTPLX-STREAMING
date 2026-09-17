@@ -1,0 +1,14 @@
+{
+  "changed_top_level_functions": {
+    "mtplx/models/deepseek_v41_dspark_decode.py": [
+      "classify_divergence"
+    ],
+    "scripts/deepseek_v41/ab_decode_env_levers.py": [
+      "_dspark_divergence_rule",
+      "_run_arm",
+      "_print_dspark_divergence"
+    ]
+  },
+  "generation_arithmetic_unchanged": true,
+  "tie_class_gate_unchanged": true
+}

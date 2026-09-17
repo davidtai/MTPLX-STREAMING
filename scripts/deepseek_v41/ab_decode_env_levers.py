@@ -3791,6 +3791,9 @@ def _dspark_divergence_rule(d: dict) -> str:
     """Which W120 rule fired for a tie_flip (or why one did not), from the receipt
     scalars.  Uses the CONTESTED margins + the magnitude-aware ``tie_band_used`` --
     NOT the legacy ``ar_top2_margin < tie_margin`` (false for a W120 tie_flip)."""
+    unavailable = d.get("unavailable_logits")
+    if unavailable:
+        return f"unclassified (missing {', '.join(unavailable)} logits)"
     band = d.get("tie_band_used", d.get("tie_margin"))
     arc = d.get("ar_contested_margin")
     dsc = d.get("dspark_contested_margin")
@@ -3832,8 +3835,8 @@ def _print_dspark_divergence(arm: str, d: dict) -> None:
     """W120 census line for a classified DSpark divergence.  ``tie_flip`` is a
     one-line note (acceptable, rounding-class); ``divergent`` is LOUD (the flip is
     larger than the bf16 rounding envelope -- a real lane bug or a non-rounding
-    lever), so the operator sees it in the arm log even though the arm no longer
-    aborts.  Prints the magnitude-aware ``tie_band_used``, BOTH contested margins,
+    lever). Missing rows stay unclassified and do not pass the acceptance gate.
+    Prints the magnitude-aware ``tie_band_used``, BOTH contested margins,
     and which rule fired (the old ``ar_top2_margin < tie_margin`` line was false for
     W120 tie_flips)."""
     i = d["divergence_index"]
@@ -3850,6 +3853,14 @@ def _print_dspark_divergence(arm: str, d: dict) -> None:
             f"[ab] dspark divergence @ {i} class=tie_flip (acceptable) "
             f"rule={_dspark_divergence_rule(d)} {margins} "
             f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']} (arm {arm!r})",
+            flush=True,
+        )
+    elif d["class"] == "unclassified":
+        print(
+            f"[ab] DSpark greedy stream != AR @ {i} class=unclassified "
+            f"(arm {arm!r}): tie status unproven -- "
+            f"rule={_dspark_divergence_rule(d)} {margins}; "
+            f"ar_tok={d['ar_token']} dsp_tok={d['dspark_token']}",
             flush=True,
         )
     else:
@@ -5049,12 +5060,14 @@ def _run_arm(args, arm, bench, mx) -> dict:
                 # pass; only the AR row needs a (one-time) faithful M=1 replay.
                 dsp_row = cap.get("dspark_logits_row") if cap else None
                 ar_row = None
+                ar_replay_error = None
                 try:
                     ar_row = _ar_logits_row_at_index(
                         model=model, ops=ops, mx=mx, prompt_ids=prompt_ids,
                         ar_tokens=ids, index=first,
                     )
                 except Exception as exc:  # pragma: no cover - defensive
+                    ar_replay_error = repr(exc)
                     print(f"[ab] WARN: AR logits replay at {first} failed: {exc!r}",
                           flush=True)
                 divergence = classify_divergence(
@@ -5063,6 +5076,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
                     tie_margin=float(getattr(args, "dspark_tie_margin",
                                              DSPARK_TIE_MARGIN_DEFAULT)),
                 )
+                divergence["ar_replay_error"] = ar_replay_error
                 # Reconcile the capture's index (from the pass) with the list
                 # compare; they agree for a decode-position divergence, but record
                 # the capture index AND an explicit mismatch flag so a divergence

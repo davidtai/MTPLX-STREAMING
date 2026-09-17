@@ -21,8 +21,8 @@ TPS on exact16,384-input/1,024-output Python under110 decimal GB.
 
 Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task4 remains open.
 Memory/runner fixes include the measured DSpark headline/comparison and phase
-budget. This stage caches process-reader function bindings and rejects a short
-Mach response instead of reporting its untouched footprint field as zero.
+budget, cached process-reader bindings and rejection of truncated Mach replies.
+Missing diagnostic logits now stay unclassified; they still fail the tie gate.
 
 # Retained Evidence
 
@@ -39,49 +39,53 @@ Full MTP digest0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
 
 # Latest Evidence
 
-Process-reader CPU A/B/A medians24.167/1.125/22.1875us; a touched16MiB allocation
-immediately adds16,809,984B of measured footprint. Bindings only are cached.
-The old reader reports0 for a successful reply missing phys_footprint; the new
-reader reports unknown.27 focused CPU cases pass, real MLX imports forbidden.
+Source7953020cd explicit main-thread boundaries replace corrupt cProfile.
+Native D5/M6 at84->98 slots preserves the entire output. Loop84.671768s:
+missing-expert wait/completion52.271397s, mx.eval encode/wait19.940574s,
+expert graph construction0.350480s. Exclusive times sum exactly to root.
+36,783 records/691,543,941,120B; read union53.198113s. Charged11.79836TPS is
+instrumented, not a throughput control. External machine105,505,128,448B
+versus109,126,510,060B bound; no sampled swap-in/out growth.
 
-Keep platform vm_stat for system usage. Direct host_statistics64 was rejected:
-kernel rate limiting returns cached counters while vm_stat sees18,530,304B
-of fresh growth. Its700x microbenchmark and29 schema tests do NOT justify use.
+CPU prompt lookup loses: best575 versus206 native cycles. Native confidence0.5
+head-only screen suggests209cycles/1142rows versus206/1236, but full target
+run84->99 gives217cycles/1188rows and12.12157TPS, essentially unchanged.
+Output differs from retained MTP at297 and AR at376; AR logits376 unavailable.
+Reject candidate, not a proven tie or non-tie. External machine105,654,009,856B
+versus108,774,057,452B bound;0 swapouts and32 swapins. No optimization tests added.
 
-Eight causal online logistic cache policies fail the100-cycle selection window;
-post-service pin relaxation yields0 promotions and0 read savings. No runtime
-cache-policy change. Baseline replay35,981reads starts73+27empty slots, not the
-retained93->100 prefill state. Do not claim this as exact current-run replay.
+Runner now labels missing/empty logits unclassified with rows_consistent=null,
+names unavailable sides and preserves the AR replay error. Acceptance unchanged;
+33 focused CPU reporting checks pass with real MLX imports blocked. Generation
+arithmetic AST unchanged. Evidence and scripts:
+docs/deepseek-v41/receipts/decode-read-attribution-20260917/README.md.
 
-Source8f30 full D5/M6 cProfile diagnostic at91->100 matches1024tokens/206cycles,
-but thread attribution is corrupt (self time exceeds cumulative time; CPU-only
-reproduction confirms).10.7873TPS is instrumented, not a throughput candidate.
-Sampled machine106,117,201,920B versus109,431,449,068B bound; extra profiler
-host reserve128MiB. Do not use raw cProfile call counts or timings as evidence.
-All evidence:docs/deepseek-v41/receipts/memory-reader-20260917/README.md.
-Previous native D7/M8 loses at11.4315TPS; teacher tensors remain preserved.
-See docs/deepseek-v41/receipts/native-draft-width-20260917/README.md.
+Keep platform vm_stat: direct host_statistics64 was rejected for stale counters.
+Process reader caches bindings only;24.167/1.125/22.1875us CPU A/B/A and fresh
+16MiB growth verified. Earlier reader/policy rejections:memory-reader-20260917.
 
 # Lifecycle
 
-All owned GPU children are terminal. Latest diagnostic child exit0; exact Qwen
-restore, health, warmup and lock release17:01:33UTC. Independently verified
-health/model identity/free lock afterward. Other jobs may acquire at any time.
-No unrelated process was signaled. Subsequent work is CPU-only.
+All owned GPU children are terminal. Confidence child exits4 on its output gate;
+exact Qwen restore/health/warmup and lock release17:56:43UTC, independently
+verified17:57:08UTC. No unrelated process signaled. Later work CPU-only.
 
 # Open Work
 
 -20TPS remains open. Reduce physical expert bytes or exposed verification cost;
   fewer draft cycles alone increased total reads in the measured D7 screen.
-- A fresh profile needs independently verified thread attribution or explicit
-  timing boundaries. Do not repeat this environment's corrupt cProfile capture.
+- Explicit timing now identifies the bottleneck; do not recapture this profile
+  or use this environment's corrupt cProfile timings.
 - Reject repeated HC-compile,fanout8,D7-full,staged3+3,D3-full,retirement-only,
-  serial-rANS and target-head non-tie-divergence screens. Do not repeat them.
+  serial-rANS,online-policy,prompt-lookup,confidence0.5 and target-head screens.
 - One-request growth preserves one bank/layer and owns/synchronizes old backing.
   General serving still needs physical shrink/reload before another prefill.
 - /tmp/dsv41-cache-growth-20260917 holds retained growth; /tmp/dsv41-depth7-full-20260917
-  holds D7 evidence and the fixed wrapper. Rebuild installation source/HEAD hashes
-  after commits before another GPU run. Future comparisons must match actual caps.
+  holds D7 evidence. Refresh live installation source/HEAD hashes after commits.
+  Keep measured wrappers immutable. Future comparisons must match actual caps.
+- /tmp/dsv41-explicit-profile-20260917 and /tmp/dsv41-confidence-20260917 retain
+  this stage. phase_memory_control_sha256 is the predecessor RECEIPT hash, never
+  the wrapper hash. The initial confidence wrapper failed this check before load.
 - Teacher scripts/proofs: /tmp/dsv41-depth-replay-20260917. Tensor files are also
   preserved under ignored benchmarks/raw/deepseek-v41-depth-teacher/20260917,
   with hashes in the new receipt; avoid another full-model teacher capture.

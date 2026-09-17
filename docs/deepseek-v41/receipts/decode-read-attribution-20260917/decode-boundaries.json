@@ -1,0 +1,305 @@
+{
+  "root_wall_ns": 84671768000,
+  "exclusive_sum_ns": 84671768000,
+  "owner_thread_id": 8407769472,
+  "rows": [
+    {
+      "name": "miss_wait_and_completion",
+      "observations": 22928,
+      "inclusive_s": 52.271397293,
+      "exclusive_s": 52.271397293
+    },
+    {
+      "name": "mlx_eval_wait_and_encode",
+      "observations": 8901,
+      "inclusive_s": 19.940573891,
+      "exclusive_s": 19.940573891
+    },
+    {
+      "name": "target_forward",
+      "observations": 206,
+      "inclusive_s": 81.463089866,
+      "exclusive_s": 3.247913215
+    },
+    {
+      "name": "streamed_switch",
+      "observations": 8240,
+      "inclusive_s": 76.936898583,
+      "exclusive_s": 1.781569689
+    },
+    {
+      "name": "mlx_async_submit",
+      "observations": 23303,
+      "inclusive_s": 1.7508933,
+      "exclusive_s": 1.7508933
+    },
+    {
+      "name": "cache_policy_transaction",
+      "observations": 7865,
+      "inclusive_s": 1.549629408,
+      "exclusive_s": 1.549629408
+    },
+    {
+      "name": "route_plan_and_read_submit",
+      "observations": 7865,
+      "inclusive_s": 2.765263712,
+      "exclusive_s": 1.215634304
+    },
+    {
+      "name": "attention_graph_build",
+      "observations": 8240,
+      "inclusive_s": 1.047357444,
+      "exclusive_s": 0.968454323
+    },
+    {
+      "name": "retire_prior_gathers",
+      "observations": 8240,
+      "inclusive_s": 0.713477937,
+      "exclusive_s": 0.713477937
+    },
+    {
+      "name": "all_hit_probe",
+      "observations": 8240,
+      "inclusive_s": 0.392469814,
+      "exclusive_s": 0.392469814
+    },
+    {
+      "name": "expert_graph_build",
+      "observations": 23399,
+      "inclusive_s": 0.350480397,
+      "exclusive_s": 0.350480397
+    },
+    {
+      "name": "moe_graph_build",
+      "observations": 8858,
+      "inclusive_s": 77.196317488,
+      "exclusive_s": 0.160116944
+    },
+    {
+      "name": "decode_cycles",
+      "observations": 1,
+      "inclusive_s": 84.671768,
+      "exclusive_s": 0.140127638
+    },
+    {
+      "name": "gate_graph_build",
+      "observations": 8858,
+      "inclusive_s": 0.099301961,
+      "exclusive_s": 0.099301961
+    },
+    {
+      "name": "draft_graph_build",
+      "observations": 206,
+      "inclusive_s": 0.133712917,
+      "exclusive_s": 0.089727886
+    }
+  ],
+  "edges": [
+    {
+      "parent": "draft_graph_build",
+      "name": "mlx_eval_wait_and_encode",
+      "observations": 3,
+      "inclusive_s": 0.01548675,
+      "exclusive_s": 0.01548675
+    },
+    {
+      "parent": "moe_graph_build",
+      "name": "gate_graph_build",
+      "observations": 8858,
+      "inclusive_s": 0.099301961,
+      "exclusive_s": 0.099301961
+    },
+    {
+      "parent": "draft_graph_build",
+      "name": "moe_graph_build",
+      "observations": 618,
+      "inclusive_s": 0.028498281,
+      "exclusive_s": 0.021310677
+    },
+    {
+      "parent": "decode_cycles",
+      "name": "draft_graph_build",
+      "observations": 206,
+      "inclusive_s": 0.133712917,
+      "exclusive_s": 0.089727886
+    },
+    {
+      "parent": "decode_cycles",
+      "name": "mlx_eval_wait_and_encode",
+      "observations": 618,
+      "inclusive_s": 2.934837579,
+      "exclusive_s": 2.934837579
+    },
+    {
+      "parent": "attention_graph_build",
+      "name": "mlx_eval_wait_and_encode",
+      "observations": 40,
+      "inclusive_s": 0.078903121,
+      "exclusive_s": 0.078903121
+    },
+    {
+      "parent": "target_forward",
+      "name": "attention_graph_build",
+      "observations": 8240,
+      "inclusive_s": 1.047357444,
+      "exclusive_s": 0.968454323
+    },
+    {
+      "parent": "streamed_switch",
+      "name": "mlx_eval_wait_and_encode",
+      "observations": 8240,
+      "inclusive_s": 16.911346441,
+      "exclusive_s": 16.911346441
+    },
+    {
+      "parent": "streamed_switch",
+      "name": "retire_prior_gathers",
+      "observations": 8240,
+      "inclusive_s": 0.713477937,
+      "exclusive_s": 0.713477937
+    },
+    {
+      "parent": "streamed_switch",
+      "name": "all_hit_probe",
+      "observations": 8240,
+      "inclusive_s": 0.392469814,
+      "exclusive_s": 0.392469814
+    },
+    {
+      "parent": "route_plan_and_read_submit",
+      "name": "cache_policy_transaction",
+      "observations": 7865,
+      "inclusive_s": 1.549629408,
+      "exclusive_s": 1.549629408
+    },
+    {
+      "parent": "streamed_switch",
+      "name": "route_plan_and_read_submit",
+      "observations": 7865,
+      "inclusive_s": 2.765263712,
+      "exclusive_s": 1.215634304
+    },
+    {
+      "parent": "streamed_switch",
+      "name": "expert_graph_build",
+      "observations": 23399,
+      "inclusive_s": 0.350480397,
+      "exclusive_s": 0.350480397
+    },
+    {
+      "parent": "streamed_switch",
+      "name": "mlx_async_submit",
+      "observations": 23303,
+      "inclusive_s": 1.7508933,
+      "exclusive_s": 1.7508933
+    },
+    {
+      "parent": "streamed_switch",
+      "name": "miss_wait_and_completion",
+      "observations": 22928,
+      "inclusive_s": 52.271397293,
+      "exclusive_s": 52.271397293
+    },
+    {
+      "parent": "moe_graph_build",
+      "name": "streamed_switch",
+      "observations": 8240,
+      "inclusive_s": 76.936898583,
+      "exclusive_s": 1.781569689
+    },
+    {
+      "parent": "target_forward",
+      "name": "moe_graph_build",
+      "observations": 8240,
+      "inclusive_s": 77.167819207,
+      "exclusive_s": 0.138806267
+    },
+    {
+      "parent": "decode_cycles",
+      "name": "target_forward",
+      "observations": 206,
+      "inclusive_s": 81.463089866,
+      "exclusive_s": 3.247913215
+    },
+    {
+      "parent": null,
+      "name": "decode_cycles",
+      "observations": 1,
+      "inclusive_s": 84.671768,
+      "exclusive_s": 0.140127638
+    }
+  ],
+  "scope": "Diagnostic main-thread wall time at explicit call boundaries; GPU encode and wait stay combined; miss-next includes completion bookkeeping; no inference speedup claim",
+  "wrapper_sha256": "3d15267cc0d0b7953336b3eef9c9c61a3c8989661e8e14c959c086780cd98ed6",
+  "timer_sha256": "d590d8cded245cb497536d876bfd4e5d5d90eb5deb16775d27b876f92d5d4627",
+  "cpu_proof": {
+    "root_wall_ns": 43742084,
+    "exclusive_sum_ns": 43742084,
+    "owner_thread_id": 8407769472,
+    "rows": [
+      {
+        "name": "compute_between_yields",
+        "observations": 2,
+        "inclusive_s": 0.030023791,
+        "exclusive_s": 0.030023791
+      },
+      {
+        "name": "next_miss",
+        "observations": 3,
+        "inclusive_s": 0.013668083,
+        "exclusive_s": 0.013668083
+      },
+      {
+        "name": "decode",
+        "observations": 1,
+        "inclusive_s": 0.043742084,
+        "exclusive_s": 4.921e-05
+      },
+      {
+        "name": "throws",
+        "observations": 1,
+        "inclusive_s": 1e-06,
+        "exclusive_s": 1e-06
+      }
+    ],
+    "edges": [
+      {
+        "parent": "decode",
+        "name": "next_miss",
+        "observations": 3,
+        "inclusive_s": 0.013668083,
+        "exclusive_s": 0.013668083
+      },
+      {
+        "parent": "decode",
+        "name": "compute_between_yields",
+        "observations": 2,
+        "inclusive_s": 0.030023791,
+        "exclusive_s": 0.030023791
+      },
+      {
+        "parent": "decode",
+        "name": "throws",
+        "observations": 1,
+        "inclusive_s": 1e-06,
+        "exclusive_s": 1e-06
+      },
+      {
+        "parent": null,
+        "name": "decode",
+        "observations": 1,
+        "inclusive_s": 0.043742084,
+        "exclusive_s": 4.921e-05
+      }
+    ],
+    "scope": "CPU-only explicit-boundary validation; no model or MLX import",
+    "foreign_thread_excluded": true,
+    "iterator_consumer_time_excluded": true,
+    "exceptions_balance_scopes": true,
+    "overhead_ns_per_flat_call": 323.14459,
+    "timer_sha256": "d590d8cded245cb497536d876bfd4e5d5d90eb5deb16775d27b876f92d5d4627"
+  },
+  "decode_cycles_source_sha256": "34d88a622e2ba8ddc6741022711cbdf89837ae7229624b98cdc005ea7afc1d5d",
+  "growth_wrapper_sha256": "6438de51372267cba76af30e4071a0cc0b0b535faf79c41b6dbd5ba6ae9581e5",
+  "profiler_host_reserve_bytes": 134217728
+}

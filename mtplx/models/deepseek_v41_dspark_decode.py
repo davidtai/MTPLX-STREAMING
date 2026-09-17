@@ -394,7 +394,7 @@ DSPARK_TIE_MARGIN_DEFAULT = 3.0 * DSPARK_BF16_CLASS_DELTA  # 3e-2
 # 2**(floor(log2|x|)) * 2**-7``, ``peak = max(|ar[ar_token]|, |ar[dspark_token]|)``
 # taken from the AR REFERENCE row ONLY (a garbage verify logit must not widen the
 # band).  Absolution requires a real AR reference (>= 2 logits, both contested
-# tokens in range); otherwise the class is "divergent" (loud, conservative).
+# tokens in range). Missing logits are "unclassified" and never absolved.
 #
 # ``k`` is read from MTPLX_DSV41_DIVERGENCE_TIE_ULPS at USE.  It is a CLASSIFIER
 # setting (it changes only how a divergence receipt is LABELLED, never the tokens
@@ -562,8 +562,8 @@ def classify_divergence(
     ``ar_logits_row`` is the AR forward's full logits vector at ``index`` (the
     faithful M=1 replay); ``dspark_logits_row`` is the verify forward's logits row
     that produced the committed DSpark token there (captured, zero extra forwards).
-    Either row may be ``None`` (unavailable) -- the classifier degrades to the
-    signals it has and never raises on an absent row or an unusual dtype
+    Either row may be ``None`` (unavailable) -- the classifier reports
+    ``"unclassified"`` and never raises on an absent row or an unusual dtype
     (``mx.array`` rows, incl. bf16, are cast); a malformed row with ndim > 1 is a
     caller bug and DOES raise (see :func:`_row_to_np`).
 
@@ -595,8 +595,9 @@ def classify_divergence(
         dspark_contested_margin) <= |Δ(ar_token)| + |Δ(dspark_token)|`` (the
         measured contested deltas can close the smaller contested margin).
 
-    Otherwise ``class`` is ``"divergent"`` (loud, conservative -- a failed / partial
-    M=1 replay is never silently absolved).
+    Otherwise ``class`` is ``"divergent"`` when both rows are available, or
+    ``"unclassified"`` when either row is absent or empty. Neither passes the
+    tie acceptance gate; unavailable evidence cannot prove a non-tie difference.
 
     ``k`` (the ulp multiplier) defaults to :data:`DSPARK_DIVERGENCE_TIE_ULPS_DEFAULT`
     and is overridable via the ``tie_ulps`` argument or, at USE, the
@@ -616,6 +617,10 @@ def classify_divergence(
     """
     ar_np = _row_to_np(ar_logits_row)
     dsp_np = _row_to_np(dspark_logits_row)
+    unavailable_logits = [
+        name for name, row in (("ar", ar_np), ("dspark", dsp_np))
+        if row is None or row.size == 0
+    ]
     ar_margin = _top2_margin(ar_np)       # row top-2 gaps: DIAGNOSTIC receipt keys
     dspark_margin = _top2_margin(dsp_np)  # (NOT used for the class decision)
 
@@ -698,7 +703,7 @@ def classify_divergence(
     # token that TIES for its row's max is consistent; a token STRICTLY BELOW the max
     # means that row did not produce it (a fabricated / mismatched capture) and the
     # flip is not rounding.  Non-finite logits fail here too (``== nanmax`` is False).
-    rows_consistent = bool(
+    rows_consistent = None if unavailable_logits else bool(
         ar_np is not None and ar_np.size
         and dsp_np is not None and dsp_np.size
         and contested_logits_finite
@@ -726,6 +731,8 @@ def classify_divergence(
     tie_flip_by_delta = bool(absolvable and rounding_class_by_delta)
 
     cls = "tie_flip" if (near_tie_by_band or tie_flip_by_delta) else "divergent"
+    if unavailable_logits:
+        cls = "unclassified"
     return {
         "divergence_index": int(index),
         "ar_token": None if ar_token is None else int(ar_token),
@@ -746,6 +753,7 @@ def classify_divergence(
         "rounding_class_by_delta": rounding_class_by_delta,
         "deltas_within_tie_band": deltas_within_tie_band,
         "rows_consistent": rows_consistent,
+        "unavailable_logits": unavailable_logits,
         # raw contested logits so a serialized receipt is self-decidable:
         "ar_logit_at_ar_token": ar_l_at_ar,
         "ar_logit_at_dspark_token": ar_l_at_dsp,

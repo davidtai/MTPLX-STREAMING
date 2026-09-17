@@ -132,3 +132,19 @@ is unusable. Exact Qwen restored/warmed and lock released17:01:33UTC; no owned
 GPU child remains. Evidence:docs/deepseek-v41/receipts/memory-reader-20260917.
 Retained12.1146645TPS;20TPS open. Next profile must validate thread attribution
 before using a full-model window. No agents; no global memory writes.
+
+## 2026-09-17 explicit decode attribution [saved]
+
+Valid explicit timing replaces cProfile:52.271s expert-read wait/completion and
+19.941s eval/encoding out of84.672s; expert graph build only0.350s. Full native
+D5 output unchanged,84->98cap,109.127GB bound,105.505GB sampled machine peak.
+Prompt lookup loses CPU selection. Confidence0.5 screen looks promising, but
+full84->99 gives12.12157TPS/217cycles and unclassified extra divergence376.
+No promotion; no repeated GPU control or optimization tests. Qwen restored,
+warmup done and lock released17:56:43UTC; independent checks pass17:57:08UTC.
+Missing/empty logits now report unclassified/rows_consistent=null and retain
+replay errors; the tie gate remains strict.33 focused CPU checks pass without
+real MLX imports. Generation arithmetic unchanged.47 hashed raw artifacts at
+docs/deepseek-v41/receipts/decode-read-attribution-20260917. Retained12.1146645TPS,
+20TPS still open. Next improvement must materially reduce read bytes or expose
+less I/O wait; do not repeat rejected width,confidence,lookup or policy screens.

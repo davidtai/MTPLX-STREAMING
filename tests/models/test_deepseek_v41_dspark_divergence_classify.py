@@ -10,7 +10,7 @@ These gates cover the classification primitives in
 :mod:`mtplx.models.deepseek_v41_dspark_decode`:
 
   1. :func:`classify_divergence` -- synthetic near-tie -> ``tie_flip``; a wide AR
-     margin -> ``divergent``; missing AR logits -> conservative ``divergent``;
+     margin -> ``divergent``; missing AR logits -> rejected ``unclassified``;
      ``max_abs_logit_delta`` and both top-2 margins computed.
   2. :class:`DivergenceCapture` -- ``observe`` snapshots the verify logits row of
      the FIRST committed token that differs from the reference, at the right
@@ -160,14 +160,16 @@ def test_divergent_when_ar_margin_above_threshold():
     assert out["max_abs_logit_delta"] == pytest.approx(0.5, abs=1e-4)
 
 
-def test_missing_ar_row_is_conservative_divergent():
+def test_missing_ar_row_is_unclassified():
     dsp = _row(VOCAB, 7, 2.0, 3, 1.999)
     out = classify_divergence(
         index=5, ar_token=3, dspark_token=7,
         ar_logits_row=None, dspark_logits_row=dsp,
     )
-    # No AR margin -> cannot prove a near-tie -> divergent (loud, conservative).
-    assert out["class"] == "divergent"
+    # Missing evidence proves neither a tie nor a non-tie difference.
+    assert out["class"] == "unclassified"
+    assert out["rows_consistent"] is None
+    assert out["unavailable_logits"] == ["ar"]
     assert out["ar_top2_margin"] is None
     assert out["max_abs_logit_delta"] is None
     assert out["dspark_top2_margin"] == pytest.approx(0.001, abs=1e-4)

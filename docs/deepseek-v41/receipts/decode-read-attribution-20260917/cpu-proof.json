@@ -1,0 +1,67 @@
+{
+  "root_wall_ns": 43742084,
+  "exclusive_sum_ns": 43742084,
+  "owner_thread_id": 8407769472,
+  "rows": [
+    {
+      "name": "compute_between_yields",
+      "observations": 2,
+      "inclusive_s": 0.030023791,
+      "exclusive_s": 0.030023791
+    },
+    {
+      "name": "next_miss",
+      "observations": 3,
+      "inclusive_s": 0.013668083,
+      "exclusive_s": 0.013668083
+    },
+    {
+      "name": "decode",
+      "observations": 1,
+      "inclusive_s": 0.043742084,
+      "exclusive_s": 4.921e-05
+    },
+    {
+      "name": "throws",
+      "observations": 1,
+      "inclusive_s": 1e-06,
+      "exclusive_s": 1e-06
+    }
+  ],
+  "edges": [
+    {
+      "parent": "decode",
+      "name": "next_miss",
+      "observations": 3,
+      "inclusive_s": 0.013668083,
+      "exclusive_s": 0.013668083
+    },
+    {
+      "parent": "decode",
+      "name": "compute_between_yields",
+      "observations": 2,
+      "inclusive_s": 0.030023791,
+      "exclusive_s": 0.030023791
+    },
+    {
+      "parent": "decode",
+      "name": "throws",
+      "observations": 1,
+      "inclusive_s": 1e-06,
+      "exclusive_s": 1e-06
+    },
+    {
+      "parent": null,
+      "name": "decode",
+      "observations": 1,
+      "inclusive_s": 0.043742084,
+      "exclusive_s": 4.921e-05
+    }
+  ],
+  "scope": "CPU-only explicit-boundary validation; no model or MLX import",
+  "foreign_thread_excluded": true,
+  "iterator_consumer_time_excluded": true,
+  "exceptions_balance_scopes": true,
+  "overhead_ns_per_flat_call": 323.14459,
+  "timer_sha256": "d590d8cded245cb497536d876bfd4e5d5d90eb5deb16775d27b876f92d5d4627"
+}
