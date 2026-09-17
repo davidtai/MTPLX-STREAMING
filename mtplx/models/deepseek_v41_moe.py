@@ -378,6 +378,57 @@ class MoE(nn.Module):
         self.shared_experts = Expert(                               # L888
             args.hidden_size, args.moe_intermediate_size, swiglu_limit=args.swiglu_limit
         )
+        # Resolve the legacy environment arm once at construction.  The streamed
+        # binder may replace this route after it installs ``switch_mlp`` when the
+        # immutable runtime config selects verify_shared_overlap.  Keeping the
+        # callable prebound avoids an environment read and invariant check in
+        # every routed layer forward.
+        self._routed_shared_route = (
+            self._run_routed_shared_overlap
+            if os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1"
+            else self._run_routed_then_shared
+        )
+        self._shared_overlap_route_installed = (
+            os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1"
+        )
+
+    def install_streamed_shared_route(self, *, overlap: bool) -> None:
+        """Bind the routed/shared execution order after switch installation."""
+
+        self._shared_overlap_route_installed = bool(overlap)
+        self._routed_shared_route = (
+            self._run_routed_shared_overlap
+            if overlap
+            else self._run_routed_then_shared
+        )
+
+    def _run_routed_shared_overlap(
+        self,
+        xf: mx.array,
+        indices: mx.array,
+    ) -> tuple[mx.array, mx.array]:
+        with _stime.stage("moe.routed_switch") as _st:
+            routed, shared = run_switch_with_shared_overlap(
+                self.switch_mlp,
+                xf,
+                indices,
+                lambda: self.shared_experts(xf).astype(mx.float32),
+            )
+            _st.add(routed, shared)
+        return routed, shared
+
+    def _run_routed_then_shared(
+        self,
+        xf: mx.array,
+        indices: mx.array,
+    ) -> tuple[mx.array, mx.array]:
+        with _stime.stage("moe.routed_switch") as _st:
+            routed = self.switch_mlp(xf, indices)                   # [n, top_k, dim]
+            _st.add(routed)
+        with _stime.stage("moe.shared_expert") as _st:
+            shared = self.shared_experts(xf).astype(mx.float32)
+            _st.add(shared)
+        return routed, shared
 
     def combine_routed(
         self, routed: mx.array, weights: mx.array, xf: mx.array
@@ -431,44 +482,13 @@ class MoE(nn.Module):
         # expert output by its weight inside the loop (L900) -- done here in one
         # weighted sum, in f32 to match the reference's f32 accumulator (L893).
         # L903: shared expert every token passes through, added in f32.
-        if os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1":
-            # W28 (KERNEL_LEDGER K1) shared-overlap, behind a switch, default off.
-            # The shared expert depends only on xf, never on the routed indices,
-            # so hand it to the streamed switch as ``shared_work``: the switch
-            # dispatches it into the GPU-idle window of the per-layer routing
-            # barrier (``mx.eval(indices)``) + miss I/O instead of serialising it
-            # AFTER the routed gather.  Pure execution reorder -- ``routed`` and
-            # ``shared`` are the same arrays as below, so the f32 combine is
-            # bitwise-identical.  A switch without ``run_with_shared_overlap``
-            # (the resident SwitchGLU / test default) falls back to exactly the
-            # shipped ordering, so only the streamed path actually overlaps.
-            #
-            # W37 stage timing: the overlap fuses routed + shared into one call,
-            # so both are booked under moe.routed_switch and moe.shared_expert is
-            # absent (documented bias -- time the shared expert with the control
-            # arm, where it is a distinct dispatch).  The early moe.gate_topk fence
-            # also defeats the barrier-window overlap, so measure overlap tok/s
-            # with the probe OFF.
-            with _stime.stage("moe.routed_switch") as _st:
-                routed, shared = run_switch_with_shared_overlap(
-                    self.switch_mlp,
-                    xf,
-                    indices,
-                    lambda: self.shared_experts(xf).astype(mx.float32),
-                )
-                _st.add(routed, shared)
-            with _stime.stage("moe.combine") as _st:
-                y = _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
-                _st.add(y)
-        else:
-            with _stime.stage("moe.routed_switch") as _st:
-                routed = self.switch_mlp(xf, indices)               # [n, top_k, dim]
-                _st.add(routed)
-            with _stime.stage("moe.shared_expert") as _st:
-                shared = self.shared_experts(xf).astype(mx.float32)
-                _st.add(shared)
-            with _stime.stage("moe.combine") as _st:
-                y = _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
-                _st.add(y)
+        # W28/M6: construction selects one prebound execution route.  The
+        # overlap route hands shared work to the streamed switch after demand
+        # reads are submitted; the control computes the same shared branch after
+        # routed output.  Both feed the unchanged f32 combine below.
+        routed, shared = self._routed_shared_route(xf, indices)
+        with _stime.stage("moe.combine") as _st:
+            y = _moe_combine_dispatch(routed, weights, shared, int(xf.shape[0]))
+            _st.add(y)
         # L904: return y.type_as(x).view(shape)
         return y.astype(x.dtype).reshape(shape)

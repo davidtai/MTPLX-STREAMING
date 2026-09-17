@@ -5785,6 +5785,12 @@ class ExpertStreamingRuntime:
                 "decode_miss_records_per_part",
                 None,
             ),
+            "verify_shared_overlap": bool(
+                getattr(self.config, "verify_shared_overlap", False)
+            ),
+            "verify_shared_overlap_bound_layers": int(
+                getattr(self, "_verify_shared_overlap_bound_layers", 0)
+            ),
             # W123: resolved io read-fanout (1 == OFF; the reader holds the
             # env-override-applied value). Pairs with io.read_inflight_max and
             # io.read_ns/decode_wall_s to price the realized read-pool queue

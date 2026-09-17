@@ -128,6 +128,10 @@ the generic bounded-wave path that already submits shared work early.
   submit callable once during switch construction, fail construction when
   `mx.async_eval` is unavailable, and stamp the installed value in both runner
   receipts so the unchanged control remains measurable.
+- [x] Fix the runner/model seam so `--verify-shared-overlap` actually hands the
+  shared branch to every streamed target layer. Bind the routed/shared callable
+  once after switch installation, fail if any routed layer cannot install it,
+  and report the installed layer count instead of trusting the requested flag.
 - [x] Run syntax validation only before GPU evidence:
   `.venv/bin/python -m py_compile mtplx/models/expert_mlx.py`.
   Result: exit 0.

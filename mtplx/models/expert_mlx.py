@@ -3950,6 +3950,13 @@ def bind_streamed_switches(model: Any, runtime: ExpertStreamingRuntime) -> int:
         banked_store.prepare()
         banked_store.prefetch_all()
         runtime._banked_island_store = banked_store
+    verify_shared_overlap = bool(
+        getattr(runtime.config, "verify_shared_overlap", False)
+    )
+    legacy_shared_overlap = (
+        os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1"
+    )
+    shared_overlap_bound = 0
     for layer_index in runtime.spec.routed_layer_indices:
         layer = layers[layer_index]
         mlp = getattr(layer, "mlp", None)
@@ -3975,7 +3982,27 @@ def bind_streamed_switches(model: Any, runtime: ExpertStreamingRuntime) -> int:
                 mapped_store,
                 layer_index,
             )
+        install_shared_route = getattr(
+            mlp,
+            "install_streamed_shared_route",
+            None,
+        )
+        if callable(install_shared_route):
+            install_shared_route(
+                overlap=verify_shared_overlap or legacy_shared_overlap
+            )
+            if verify_shared_overlap:
+                shared_overlap_bound += 1
+        elif verify_shared_overlap:
+            raise TypeError(
+                f"layer {layer_index} cannot install verify_shared_overlap"
+            )
         bound += 1
+    runtime._verify_shared_overlap_bound_layers = shared_overlap_bound
+    if verify_shared_overlap and shared_overlap_bound != bound:
+        raise RuntimeError(
+            "verify_shared_overlap was not bound on every routed layer"
+        )
     # W93: wire each routed layer's MoE to the next layer's gate for one-ahead
     # gate-oracle prefetch. DSV4.1-only + self-guarding (non-DSV4.1 trunks carry
     # no `mlp.gate` with a `score_func`, so nothing is installed for them), and

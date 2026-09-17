@@ -3122,6 +3122,9 @@ def _resolved_plan(runtime, args) -> dict | None:
         "verify_shared_overlap": bool(
             getattr(config, "verify_shared_overlap", False)
         ),
+        "verify_shared_overlap_bound_layers": int(
+            getattr(runtime, "_verify_shared_overlap_bound_layers", 0)
+        ),
         "single_slot_pool": bool(
             getattr(runtime, "_single_slot_pool", False)
         ),
