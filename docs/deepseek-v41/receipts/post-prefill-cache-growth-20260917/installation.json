@@ -1,0 +1,21 @@
+{
+  "source_commit": "d4051aeccc938a65a71734f1379e00f69f0d1823",
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "308c4bffb10e742c611ea1a602bc64389640718f9a979add3bdaa7f744698d13",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "d540a77df3670786110aafd14d81a55e613aafae63e45b53cc58aaaf169e25da",
+    "scripts/deepseek_v41/bench_standard_shape.py": "6c235ac47fc4f447f3eb745195a6e337961570b4ba003d314698bf0d20e65fce"
+  },
+  "scope": "Exact single 16K/1024 benchmark; promoted compiled prefill HC post unchanged; grow persistent banks only after the prefill callback; no model reuse",
+  "explicit_bound_model_levers": {
+    "MTPLX_DSV41_HC_COMPILE": false,
+    "MTPLX_DSV41_ATTN_COMPILE": false,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": false
+  },
+  "helper_sha256": {
+    "admission.py": "08a5093c8d7db1d4367098b0d1b2d4c6f9711fdcf907e58b316c02e7e29c77f8",
+    "phase_growth.py": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac",
+    "bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b"
+  },
+  "phase_memory_control_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+  "numeric_predecessor": "d4051aecc promotes the post-only compiled callable; its archived AST equivalence and strict prefill regression cover this unchanged prefill arithmetic"
+}

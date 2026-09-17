@@ -481,3 +481,20 @@ The latest full decode result is11.6513TPS at93slots, not a throughput winner.
 Task4 stays open. A larger post-prefill cache needs a coherent single-bank
 resize implementation and copy/ownership/memory bounds; the measured decode
 peak is evidence for that design, not permission to reuse a prefill slot bound.
+
+## Additional Task4 result, 2026-09-17 14:29 UTC
+
+One-request post-prefill cache growth93->100 improves the complete workload to
+12.1146645TPS from a fresh93-slot control at11.6574573TPS (+3.922%). The1.9541s
+resize is charged to decode, and35,880 expert records replace39,093. Full output
+is identical. Maximum sampled machine usage105,642,098,688B remains under110GB;
+the allocator full-run peak stays95,208,120,648B because prefill still dominates.
+The phase controller preserves bank identity and allocator-plan ownership,
+synchronizes each old backing release, and rejects another prefill. This is
+measured benchmark code; general-serving shrink/reload is not implemented.
+
+The initial candidate phase alias was stale; its recorded DSpark slot_plan
+already contains the correct100 slots. The immutable original, derived phase
+correction and CPU check of the actual reporting assignments are archived.
+See[the receipts](../deepseek-v41/receipts/post-prefill-cache-growth-20260917/README.md).
+Task4's20TPS acceptance remains unchecked.

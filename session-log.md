@@ -58,3 +58,17 @@ Open:
   exported views, allocator closure plans, logical slots and future requests.
 -20TPS remains unmet; latest11.6513TPS at93slots is a memory result, not a new
   throughput winner. Qwen restored and lock released13:39:41; another job owns it.
+
+## 2026-09-17 14:29 UTC [saved]
+Goal: Reach20TPS on exact16K/1K DeepSeek under110GB.
+Decisions:
+- Preserve post-prefill cache growth as a one-request benchmark; subsequent prefill needs physical shrink or reload.
+- Charge resize time to decode and retain one bank per layer with stable row indices.
+- Synchronize copied components before spending released-buffer headroom; account for allocation-page padding.
+- Report pass-specific plans; the initial-loaded-plan header predates DSpark and can be stale for decode.
+Rejected:
+- Inferring freed Metal backing solely from mx.eval and releasing a memoryview.
+- Promoting benchmark-only growth as general-serving memory management.
+Open:
+- Activate small-M HC compilation with explicit memory and full-output gates.
+-20TPS remains open; exact receipts are preserved in the worktree.

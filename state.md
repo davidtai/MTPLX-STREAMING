@@ -2,100 +2,82 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
 TPS on the exact 16,384-input / 1,024-output Python workload under 110 decimal GB.
-**Best historical measured: 11.7203483 TPS. Latest: 11.6513006 TPS at cap93.
-The 20 TPS goal remains open.**
+**Best measured: 12.1146645 TPS. The 20 TPS goal remains open.**
 
 # Decisions
 
-- Separate allocator, process phys_footprint and whole-machine physical memory.
-  Never add process usage to machine usage or substitute RSS. Missing peaks are
-  null, not zero. Headline and detailed fields share the same observation.
-- Reserve 2 GiB for Python/host caches and metadata. Current benchmark cache
-  request is 1 GiB inside Metal. Its retention policy does not hard-bound
-  instantaneous cached allocations; the prefill profile observed about 2.7 GB.
-- Hold /tmp/mtplx-gpu-exclusive.lock before MLX import or stopping Qwen. Use
-  scripts/deepseek_v41/gpu_window.sh directly. Never nest guards or disturb
-  another GPU job. Automatically reclaim stopped Qwen and candidate file caches,
-  restore the exact service, verify health/warmup, then release the lock.
-- User permits tie breakers. Preserve full output digests and use index-matched
-  candidate logits for tie classification. Do not accept arbitrary drift.
-- Keep unvalidated bounded KV off. Preserve Claude's W126/W127/W128 worktrees.
-  Minimal testing; add optimization tests only after a measured win. No agents.
+- Keep allocator, process phys_footprint and machine physical usage separate.
+  Missing readings stay null; limits are policies, not usage measurements.
+- Reserve 2 GiB for Python/host state. Price Metal cache overshoot, live baseline,
+  temporary copies and compile/graph peaks before loading. Retention requests
+  are not hard instantaneous cache bounds. Ceiling:110,000,000,000 bytes.
+- Hold /tmp/mtplx-gpu-exclusive.lock before MLX or Qwen shutdown. Use
+  scripts/deepseek_v41/gpu_window.sh directly; never nest guards or disturb
+  another owner. Reclaim stopped model file caches, restore exact Qwen identity,
+  verify health/warmup and release the lock last.
+- Minimal testing; tests only after successful optimizations. Work inline.
+  Tie breakers are allowed; preserve exact output or indexed tie evidence.
+- Preserve Claude's W126/W127/W128 worktrees. Keep unvalidated bounded KV off.
 
-# Current Changes and Evidence
+# Plan Status
 
-Plan: docs/plans/2026-09-16-deepseek-v41-20tps-stage.md, Task4 remains open.
-Prior promoted capture lifetime fix:9c4fac40f. Reporting fixes:c031119a1 records
-requested/effective depth; b95f8d1a7 preserves missing peaks; ca207c3d7 binds the
-three model flags before construction and records actual bound booleans.
-Twenty-one focused no-MLX reporting checks passed before this continuation.
+Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md, Task4 remains open.
+Memory/runner fixes are already committed. ca207c3d7 binds actual import-time
+model levers before loading. d4051aecc compiles only the layer-major prefill
+post-MoE HC combine, preserving decode arithmetic and diagnostic timing hooks.
 
-The new prefill change compiles only _hc_post_impl for the layer-major post-MoE
-combine through the prebound _PREFILL_HC_POST. It preserves routing, captured
-states, evaluation fences and decode, including the original diagnostic timing
-hook. With that stateless inactive hook normalized, the method AST matches the
-measured installation. The existing strict layer-major versus
-chunk-major regression passed after the change; no new test module was added.
+# Evidence
 
-Receipts: docs/deepseek-v41/receipts/hc-post-prefill-20260917/README.md.
-Measured source:ca207c3d7 plus the archived candidate installation. Both new
-runs explicitly bound HC compile, attention compile and window memo false.
+New receipts: docs/deepseek-v41/receipts/post-prefill-cache-growth-20260917/README.md.
+Source d4051aecc. One full candidate and one fresh control, actual HC compile,
+attention compile and window memo all false. Existing post-only compiled
+prefill remains active. Native BF16 target head, compact MTP93/58/32, D5/M6,
+48 shared transients, pf0, transition-window, fanout4, three-record miss parts,
+shared overlap, maxKV17664. Only cache capacity changes after prefill.
 
-- Prefill-only cap93:140.618836208s; allocator peak95,208,123,264B.
-  Historical cap94 control peak97,146,256,508B minus one752,025,600B slot band
-  gives a capacity-normalized difference of1,186,107,644B. Historical actual
-  globals were not recorded; window memo can affect prefill, so this is not a
-  fresh identical-flags control or an exact isolated causal estimate.
-- Full cap93,D5/M6:11.6513006265TPS/87.8013565s,206cycles,1024output tokens.
-  Allocator peak95,208,121,956B. Separately measured MTP seed+decode peak
-  88,755,252,592B. One counter reset before the decode timer isolates the phase;
-  all full-run headline/detail values retain max(prefill,post-prefill).
-- Full external sampled process95,512,926,728B/system105,458,794,496B.
-  Internal process95,471,050,472B/system104,870,838,272B. Baseline9,586,573,312B;
-  physical admission bound108,512,945,408B. No prefill saving was spent yet.
-- Full MTP digest remains
+- Fresh control cap93:11.6574572920TPS /87.7549858750s;39,093 expert records,
+  734,973,419,520 bytes read. Previous same-control run:11.6513006TPS.
+- Candidate cap93 prefill ->100 decode:12.1146644762TPS /84.4431145420s;
+  35,880 records /674,566,963,200 bytes. +3.922% TPS, -8.219% records.
+  The1.954109s resize is charged to decode. No per-layer/token instrumentation.
+- Both allocator full-run peaks95,208,120,648B. Candidate seed+decode peak
+  94,018,544,659B; external sampled process95,784,385,944B and machine
+  105,642,098,688B. Candidate whole-machine admission bound108,757,001,708B.
+- Candidate engine budget90,194,844,488 ->95,459,023,688B;
+  allocator limit stays98,866,695,168B. Growth5,264,179,200 raw bytes; actual
+  active growth5,263,196,160B after scale-page padding changes.
+- Candidate and control full token digest
   0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
-  AR reference remains
-  2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090.
-  Existing tie_flip297 has matching capture index, consistent rows and zero AR
-  contested margin. Reference timing/memory is null; cached logits are hashed.
-- Native-shaped post-only micro was bit-exact and reduced temporary+output
-  storage83,886,080->41,943,040B. Whole-HC-chain compile is a different experiment
-  with native numerical differences; it still needs a full output/tie gate.
+  AR reference unchanged; indexed tie_flip297 remains valid. AR timing/memory
+  are null in current-run receipts; hashed AR logits are reused independently.
+- Tiny native byte-copy/ownership probe passes after adding synchronization
+  before reusing allocation headroom. Allocation accounting includes16KiB
+  page padding. Close leaves8B active; probe allocator cap512MiB.
+- Candidate initial phase alias copied the pre-DSpark plan. The correct100-slot
+  plan is already recorded under dspark.serve_stream_counters.slot_plan. Keep
+  the raw receipt immutable; archived correction and actual assignment-AST
+  check provide phase plans without changing usage samples or wall time.
 
 # Lifecycle
 
-All owned GPU jobs are terminal. Full-output session89807 returned0 and Qwen
-was healthy/warm with its exact ID before lock release13:31:16 UTC. Focused
-regression session56370 returned0 and restored/released13:39:41. Live API checks
-confirmed restoration. Another benchd acquired the lane afterward; never signal
-it. Last observed swap3165.44MiB, no increase in these windows.
+All owned GPU jobs are terminal. Candidate restored/warmed/released14:21:02 UTC;
+control14:27:13 UTC. Live API health, exact model ID and warmup verified afterward.
+Last swap3085.44MiB; no increase. Another owner may acquire at any time.
 
-# Next Work and Constraints
+# Open Work
 
-- Cache growth after prefill is now supported by a measured decode peak, but
-  has NOT been implemented or admitted. Cap93->102 adds6,768,230,400B; steady
-  MLX peak would project95,523,482,992B before new margins. Whole-machine and
-  resize-copy headroom, caches and ownership still need a conservative bound.
-- Preserve one physical component bank per layer. A separate tail bank breaks
-  _run_component_bank_q4 and device-route LUT invariants. Study component-wise
-  exact packed-byte copies within the same bank identity after draining all
-  readers, pins and Metal consumers. Release every old exported memoryview.
-- Keep allocator closure plan, physical slot maps, logical capacities, shifted
-  transient indices, runtime reporting and device LUTs coherent. Updating the
-  allocator's exposed plan alone leaves its captured plan stale. Subsequent
-  requests must shrink physical backing before prefill; logical shrink is not
-  enough. Partial resize failure must stop generation, with cleanup.
-- Historical staged wrappers imported dsv41 before presets. arm_env alone does
-  not prove active compile globals. New full performance arms need explicit
-  actual flag provenance and an unchanged control. Never fabricate a reference
-  diagnostic by replaying it through changed candidate arithmetic.
-- Best prior cap94,D5 full run:11.7203483TPS,38,613reads,725.95GB,55.64s active
-  I/O. D3 loses on the complete workload despite winning a short prefix.
-  Twenty TPS requires<=51.15s decode, so I/O and verification both need work.
-- Reject staged3+3, per-chunk combine fences, retirement-only tiny speed changes,
-  serial rANS decoding, tuned full-M6 admission, and direct target-head rounding
-  changes. Decode-only larger-cache replay is a projection, not GPU evidence.
-- /tmp/dsv41-110-stage/CONTINUATION.md preserves detailed receipts, rejected
-  candidates and ownership inspection. Old source-pinned wrappers become stale
-  after promotion; regenerate their installation proof before another run.
+- Cache growth is a benchmark installation, not general serving. It preserves
+  one bank/layer and row indices, drains all owners, grows component by component,
+  synchronizes old backing release, rebuilds the allocator with its new captured
+  plan, and publishes pool/policy/config/LUT updates once. Failure aborts/cleans
+  up. Another prefill is rejected; serving requires physical shrink or reload.
+- Current sources/results are archived and under /tmp/dsv41-cache-growth-20260917.
+  Source-pinned wrappers must be regenerated after commits; preserve measured
+  wrapper versions. Future comparisons must fix actual flags and decode cap100.
+- Next candidate is the existing small-M HC compile lane, separately activated
+  at construction. Its weights are tape inputs, shared across layers; prefill
+  is excluded by the7-row cap. Native numerics still need the full output/tie
+  gate, and its compile/allocation bound must be explicit before a full run.
+- Reject prior staged3+3, D3 on the full workload, retirement-only tiny wins,
+  per-chunk fences, serial rANS, tuned full-M6 policy, and target-head non-tie drift.
+  A depth>5 candidate must change actual DSpark block geometry, not only CLI depth.
