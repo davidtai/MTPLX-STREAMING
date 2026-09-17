@@ -375,6 +375,9 @@ automatic expert selection, or promotion from route replay alone.
   tree exits, before testing the post-stop availability threshold. Bind every
   staged prepacked command to separate receipt-covered compact-MTP and q8-head
   auxiliary roots; the original compact-MTP receipt did not name the head file.
+- [x] Restore the guard's documented 100 GiB child-footprint default. Its live
+  clamp now supplies the real secondary bound (`110 GB - measured baseline`)
+  instead of the stale 93 GiB cap rejecting an otherwise compliant plan.
 
 ### Task 4: Measure and promote only winners
 

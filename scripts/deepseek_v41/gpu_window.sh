@@ -28,7 +28,7 @@
 #   4. Run the step (argv) under a SYSTEM-WIDE memory guard.  Before starting it
 #      refuses to open if other mtplx/python workers above the foreign cap
 #      (default 2 GiB RSS) are resident (prints them).  While it runs, aborts +
-#      restores if EITHER the step tree footprint exceeds its cap (default 93 GiB)
+#      restores if EITHER the step tree footprint exceeds its cap (default 100 GiB)
 #      OR total physical used memory (wired+active+inactive+physical compressor)
 #      exceeds the ceiling (default 110 decimal GB, including file cache).
 #   5. EXIT/INT/TERM trap: `launchctl bootstrap gui/<uid> <plist>` to restore the
@@ -206,13 +206,14 @@ fi
 MIN_AVAIL_GB="${GPU_WINDOW_MIN_AVAIL_GB:-100}"  # GiB the step needs available after the stop
 _require_int GPU_WINDOW_MIN_AVAIL_GB "${MIN_AVAIL_GB}" || exit 2
 # W106 HIGH-2: all guard caps are GiB (bytes = N * 1024^3), stated explicitly.
-# Default child-tree RSS cap = 93 GiB ~= 100 GB (David's "100 GB total for
-# everything").  This cap is LIVE for the first time (pre-W106 the poll read the
-# few-MB `bash -c` shell RSS ~= 0); at 93 GiB it sits just under the 100 GB budget.
+# Default child-tree footprint cap = 100 GiB. The live whole-machine guard and
+# its measured baseline dynamically lower this to ``ceiling - baseline`` whenever
+# 100 GiB would exceed the 110 GB box target. This keeps the secondary cap from
+# rejecting a process that still fits the authoritative whole-machine budget.
 # HIGH-3: CHILD_RSS_CAP_BYTES is BYTES (not GiB) and must be >= 1 GiB -- "93" would
 # be 93 BYTES (killing the step right after bootout), and a fractional value would
 # break the arithmetic; refuse either.
-CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 93 * 1024 * 1024 * 1024 ))}"
+CHILD_RSS_CAP_BYTES="${GPU_WINDOW_CHILD_RSS_CAP_BYTES:-$(( 100 * 1024 * 1024 * 1024 ))}"
 _require_int GPU_WINDOW_CHILD_RSS_CAP_BYTES "${CHILD_RSS_CAP_BYTES}" $(( 1024 * 1024 * 1024 )) || exit 2
 # MEDIUM-1: default 1s (streaming grows fast).  LOW (round 4): REFUSE 0 -- `sleep 0`
 # is a busy-loop that pins a core and inflates the host-encode-sensitive window.
