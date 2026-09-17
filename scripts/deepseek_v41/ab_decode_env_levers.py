@@ -3111,8 +3111,16 @@ def _resolved_plan(runtime, args) -> dict | None:
         return None
     spec = getattr(runtime, "spec", None)
     config = getattr(runtime, "config", None)
-    record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
+    source_record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
+    # A phase may keep source scales resident separately from its weight slots.
+    # Report current storage independently of the unchanged on-disk record.
+    record_bytes = int(
+        getattr(runtime, "_representative_record_bytes", source_record_bytes) or 0
+    )
     transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
+    transient_bytes = int(
+        getattr(plan, "transient_bytes", transient_slots * record_bytes)
+    )
     persistent_slots = int(getattr(plan, "persistent_slots", 0) or 0)
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
     prefetch_slots = int(getattr(config, "prefetch_slots", 0) or 0)
@@ -3175,8 +3183,9 @@ def _resolved_plan(runtime, args) -> dict | None:
         },
         "slots_per_layer_no_ring": slots_per_layer_no_ring,
         "expert_record_bytes": record_bytes,
-        "transient_bytes_per_layer": transient_slots * record_bytes,
-        "transient_bytes_total": transient_slots * record_bytes,
+        "source_expert_record_bytes": source_record_bytes,
+        "transient_bytes_per_layer": transient_bytes,
+        "transient_bytes_total": transient_bytes,
         "transient_bytes_scope": "shared_across_layers",
         "split_route_release": getattr(config, "split_route_release", None),
         "runtime_reserve_bytes": getattr(config, "runtime_reserve_bytes", None),

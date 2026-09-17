@@ -28,6 +28,13 @@ File cache is reclaimable but remains visible in the physical total; excluding i
 must be labeled explicitly. Neither process footprint nor MLX bytes should be
 added to this system total: unified-memory pages are already included.
 
+Slot summaries distinguish current `expert_record_bytes` from
+`source_expert_record_bytes`. They use the active plan's transient-byte count:
+when exact scales become separate resident owners, the source record keeps its
+scale bytes while physical slots contain weights only. The packed-scale stage
+records its separate resident owner and preserves a derived metadata correction
+for the original benchmark receipt; its measured peaks and timing are unchanged.
+
 The normal `scripts/deepseek_v41/gpu_window.sh` shutdown now automatically
 captures Qwen's actual model directory, waits for its captured process tree to
 exit, and reclaims clean safetensors file cache using read-only mappings. It then

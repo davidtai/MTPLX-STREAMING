@@ -1,0 +1,66 @@
+2026-09-17T18:50:42Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-17T18:50:42Z [gpu_window] abort: to abort this window cleanly, kill -TERM 45494 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-17T18:50:42Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-17T18:50:42Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-17T18:50:42Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-17T18:50:42Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-17T18:50:42Z [gpu_window] phase 2: com.tea.qwen loaded (pid=43123); plist=/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-17T18:50:42Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-17T18:50:42Z [gpu_window] phase 3: available memory before bootout: 48.4 GiB
+2026-09-17T18:50:42Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-17T18:50:43Z [gpu_window] phase 3: com.tea.qwen captured process tree is gone
+2026-09-17T18:50:43Z [gpu_window] phase 3: reclaiming stopped-service clean file cache from /Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+{"operation": "stopped_service_file_cache_reclamation", "layout": "model", "model_dir": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed", "files": [{"file": "model-00001-of-00019.safetensors", "file_bytes": 4613737928, "cached_page_bytes_before": 4576493568, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00002-of-00019.safetensors", "file_bytes": 4299165294, "cached_page_bytes_before": 936198144, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00003-of-00019.safetensors", "file_bytes": 4613737948, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00004-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00005-of-00019.safetensors", "file_bytes": 4613737941, "cached_page_bytes_before": 1560100864, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00006-of-00019.safetensors", "file_bytes": 4299165282, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00007-of-00019.safetensors", "file_bytes": 4613737956, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00008-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00009-of-00019.safetensors", "file_bytes": 4613737939, "cached_page_bytes_before": 1560150016, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00010-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00011-of-00019.safetensors", "file_bytes": 4613737944, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00012-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00013-of-00019.safetensors", "file_bytes": 4613737945, "cached_page_bytes_before": 1322008576, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00014-of-00019.safetensors", "file_bytes": 4299165290, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00015-of-00019.safetensors", "file_bytes": 4613737952, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00016-of-00019.safetensors", "file_bytes": 4299165265, "cached_page_bytes_before": 3640459264, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00017-of-00019.safetensors", "file_bytes": 4830006690, "cached_page_bytes_before": 4160569344, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00018-of-00019.safetensors", "file_bytes": 4307505704, "cached_page_bytes_before": 1510440960, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00019-of-00019.safetensors", "file_bytes": 20813169, "cached_page_bytes_before": 18317312, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-vision.safetensors", "file_bytes": 897899145, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "mtp.safetensors", "file_bytes": 1678147375, "cached_page_bytes_before": 1660125184, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "ngram-table.safetensors", "file_bytes": 32000154008, "cached_page_bytes_before": 15352053760, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}], "before": {"sample_start_monotonic_ns": 136753477381458, "sample_end_monotonic_ns": 136753479702500, "process": {"peak_maxrss_bytes": 23838720, "resident_bytes": 23789568, "phys_footprint_bytes": 14631392, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 85658566656, "wired_bytes": 3109814272, "active_bytes": 5994987520, "inactive_bytes": 38074548224, "speculative_bytes": 390955008, "anonymous_bytes": 5074026496, "file_backed_bytes": 39386464256, "compressor_bytes": 1402585088, "compressed_bytes": 6459965440, "used_bytes": 48581935104, "non_file_used_bytes": 9586425856, "swapins_pages": 4808373, "swapouts_pages": 7663546, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "after": {"sample_start_monotonic_ns": 136756627579041, "sample_end_monotonic_ns": 136756630032166, "process": {"peak_maxrss_bytes": 23920640, "resident_bytes": 23920640, "phys_footprint_bytes": 14762464, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 121943752704, "wired_bytes": 3114156032, "active_bytes": 4098113536, "inactive_bytes": 3681107968, "speculative_bytes": 406831104, "anonymous_bytes": 5084069888, "file_backed_bytes": 3101982720, "compressor_bytes": 1402372096, "compressed_bytes": 6459801600, "used_bytes": 12295749632, "non_file_used_bytes": 9600598016, "swapins_pages": 4808373, "swapouts_pages": 7663546, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "elapsed_s": 3.1503879580122884, "physical_used_reduction_bytes": 36286185472, "cached_page_bytes_before": 36296916992, "cached_page_bytes_after": 0, "semantics": "cached pages include speculative free pages; physical-used reduction is measured separately"}
+2026-09-17T18:50:46Z [gpu_window] phase 3: stop confirmed -- pid gone, 69.2 GiB freed, 117.6 GiB available (>= 100 GiB)
+2026-09-17T18:50:46Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-17T18:50:46Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 11.4 GiB (ceiling 102.445483 GiB); compressor at start 1.1 GiB
+2026-09-17T18:50:46Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-17T18:50:46Z [gpu_window] phase 4: exported exact 12283166720-byte baseline as MTPLX_DSV41_BOX_BASELINE_GB=12.283166720000001 (decimal GB; 11.4 GiB) to the step env
+2026-09-17T18:50:46Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 2.0 GiB (~2 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-17T18:50:47Z [gpu_window] phase 4: starting GPU step (tag gpuwin-45494-1789671046-2808031721) under child-tree footprint cap 2.0 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-resident-scales-20260917/screen.py
+2026-09-17T18:50:47Z [gpu_window] phase 4: mem sample -- baseline 11.4 GiB + step footprint 0.0 GiB, live physical used 11.5 GiB => guard accounted 11.5 GiB; compressor +0.0 GiB (trip 8 GiB)
+SCALE_LAYER 0 packed_mean 203197
+SCALE_LAYER 1 packed_mean 201209
+SCALE_LAYER 2 packed_mean 198654
+SCALE_LAYER 3 packed_mean 198478
+SCALE_LAYER 4 packed_mean 199270
+SCALE_LAYER 5 packed_mean 198058
+SCALE_LAYER 6 packed_mean 197737
+SCALE_LAYER 7 packed_mean 199207
+SCALE_LAYER 8 packed_mean 200793
+SCALE_LAYER 9 packed_mean 198687
+SCALE_LAYER 10 packed_mean 198529
+SCALE_LAYER 11 packed_mean 199270
+SCALE_LAYER 12 packed_mean 200650
+SCALE_LAYER 13 packed_mean 201844
+SCALE_LAYER 14 packed_mean 204586
+SCALE_LAYER 15 packed_mean 210933
+SCALE_LAYER 16 packed_mean 203595
+SCALE_LAYER 17 packed_mean 200081
+SCALE_LAYER 18 packed_mean 200977
+SCALE_LAYER 19 packed_mean 200291
+SCALE_LAYER 20 packed_mean 204884
+SCALE_LAYER 21 packed_mean 198744
+SCALE_LAYER 22 packed_mean 202825
+SCALE_LAYER 23 packed_mean 198358
+SCALE_LAYER 24 packed_mean 198843
+SCALE_LAYER 25 packed_mean 197883
+SCALE_LAYER 26 packed_mean 198868
+SCALE_LAYER 27 packed_mean 199041
+SCALE_LAYER 28 packed_mean 199006
+SCALE_LAYER 29 packed_mean 197266
+SCALE_LAYER 30 packed_mean 204884
+SCALE_LAYER 31 packed_mean 198956
+SCALE_LAYER 32 packed_mean 198055
+SCALE_LAYER 33 packed_mean 198442
+SCALE_LAYER 34 packed_mean 197985
+SCALE_LAYER 35 packed_mean 201192
+SCALE_LAYER 36 packed_mean 201048
+SCALE_LAYER 37 packed_mean 203158
+SCALE_LAYER 38 packed_mean 232770
+SCALE_LAYER 39 packed_mean 204580
+SCALE_RESULT {"elapsed_s": 1.8338013339962345, "read_bytes": 3008102400, "sample_record_packed_mean_bytes": 201320.85, "sample_record_packed_max_bytes": 303040, "projected_all_target_scale_bytes": 3092288256.0, "all_target_bound_using_sample_max_bytes": 4654694400, "existing_cap100_persistent_scale_bytes": 4423680000}
+2026-09-17T18:50:49Z [gpu_window] phase 4: GPU step exited with code 0; sampled peak step footprint 0.2 GiB (181928560 bytes), sampled peak guard accounted 11.6 GiB (12501827584 bytes), sampled peak physical used 11.6 GiB (12501827584 bytes), sampled peak compressor delta 0.0 GiB (0 bytes); complete step memory samples 2, poll interval 1s
+2026-09-17T18:50:49Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-17T18:51:06Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-17T18:51:06Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

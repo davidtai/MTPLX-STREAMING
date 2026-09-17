@@ -1413,8 +1413,14 @@ def _resolved_plan(runtime, args) -> dict | None:
     if plan is None:
         return None
     spec = getattr(runtime, "spec", None)
-    record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
+    source_record_bytes = int(getattr(spec, "expert_record_bytes", 0) or 0)
+    record_bytes = int(
+        getattr(runtime, "_representative_record_bytes", source_record_bytes) or 0
+    )
     transient_slots = int(getattr(plan, "transient_slots", 0) or 0)
+    transient_bytes = int(
+        getattr(plan, "transient_bytes", transient_slots * record_bytes)
+    )
     routed_layers = int(getattr(spec, "routed_layer_count", 0) or 0)
     config = getattr(runtime, "config", None)
     slots_per_layer = int(getattr(plan, "slots_per_layer", 0) or 0)
@@ -1430,7 +1436,8 @@ def _resolved_plan(runtime, args) -> dict | None:
             str(layer): capacity for layer, capacity in layer_capacities
         },
         "expert_record_bytes": record_bytes,
-        "transient_bytes_total": transient_slots * record_bytes,
+        "source_expert_record_bytes": source_record_bytes,
+        "transient_bytes_total": transient_bytes,
         "io_cache_mode": getattr(getattr(runtime, "reader", None), "cache_mode", None),
         "split_route_release": getattr(config, "split_route_release", None),
         "runtime_reserve_bytes": getattr(config, "runtime_reserve_bytes", None),

@@ -162,3 +162,33 @@ Rejected:
 Open:
 - Reach20TPS through materially fewer expert reads or less exposed I/O wait.
 - Preserve exact arithmetic and bounded memory before another full-model run.
+
+## Checkpoint, 2026-09-17 resident packed scales
+
+The exact full Python workload reaches 12.4439935 TPS / 82.2083358s with all
+1,024 output IDs unchanged. A complete lossless 3,086,136,060-byte scale inventory
+covers all 15,360 target experts. The one-request phase replaces raw scales,
+grows weights once from91 to102 slots per layer, and reads only three native
+weight planes on a miss. Its3.4511s installation is charged to decode. Weight
+reads total620,341,493,760B plus3,086,136,060B of scale installation reads.
+
+Sampled machine peak106,215,473,152B is below the109,483,268,328B bound and110GB
+ceiling. The historical native best remains12.1146645TPS at93->100; the new result
+is not a fresh paired comparison. A native91->100 D5 control is staged, pending
+an idle Qwen service and the shared GPU lock.20TPS remains unmet.
+
+The CPU exporter exceeded its proposed incremental-memory bound because source
+file cache accumulated despite F_NOCACHE; actual physical used stayed below110GB.
+Its Qwen restore timed out, then verified-source reclamation restored exact Qwen
+health/warmup. Do not rerun that exporter unchanged. The full runtime candidate
+uses direct Metal destinations and automatically reclaims its source/packed file
+cache in the guarded finally. Its guard exits0 and restores Qwen before releasing
+the lock at19:39:28UTC. Another job subsequently acquired the lane.
+
+The candidate exposed stale source-sized slot/transient reporting. Both runner
+formatters now report current record storage, preserve source_expert_record_bytes,
+and use active-plan transient bytes. Four new CPU cases fail before the fix;
+all37 focused reporting cases pass afterward with real MLX imports forbidden.
+Only reporting ASTs change; original receipts remain immutable and a derived
+metadata correction retains their complete timings, memory readings and tokens.
+See[the evidence](../deepseek-v41/receipts/resident-packed-scales-20260917/README.md).

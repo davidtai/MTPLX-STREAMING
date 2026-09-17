@@ -48,6 +48,31 @@ def test_system_total_includes_file_pages_and_physical_compressor():
     assert snap["compressed_bytes"] == 17 * 16384
 
 
+@pytest.mark.parametrize("script", ["ab_decode_env_levers", "bench_standard_shape"])
+@pytest.mark.parametrize("phase", ["native", "packed"])
+def test_slot_summary_reports_current_storage_and_keeps_source_size(script, phase, monkeypatch):
+    module = load_script(script)
+    monkeypatch.setenv("MTPLX_DSV41_GATE_PREFETCH", "0")
+    record_bytes, transient_bytes = (
+        (18_800_640, 902_430_720) if phase == "native"
+        else (17_694_720, 849_346_560)
+    )
+    runtime = SimpleNamespace(
+        spec=SimpleNamespace(expert_record_bytes=18_800_640, routed_layer_count=40),
+        plan=SimpleNamespace(transient_slots=48, transient_bytes=transient_bytes,
+                             persistent_slots=4080, slots_per_layer=102),
+        config=SimpleNamespace(prefetch_slots=0),
+    )
+    if phase == "packed":
+        runtime._representative_record_bytes = record_bytes
+    result = module._resolved_plan(runtime, SimpleNamespace())
+    assert result["expert_record_bytes"] == record_bytes
+    assert result["source_expert_record_bytes"] == 18_800_640
+    assert result["transient_bytes_total"] == transient_bytes
+    if script == "ab_decode_env_levers":
+        assert result["transient_bytes_per_layer"] == transient_bytes
+
+
 def test_broken_system_reader_is_unknown(monkeypatch):
     monkeypatch.setattr(profile.subprocess, "run", lambda *a, **k:
                         SimpleNamespace(returncode=0, stdout="garbage", stderr=""))
