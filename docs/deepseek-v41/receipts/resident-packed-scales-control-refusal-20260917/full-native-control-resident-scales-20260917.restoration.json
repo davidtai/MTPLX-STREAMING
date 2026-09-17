@@ -1,0 +1,17 @@
+{
+  "utc": "2026-09-17T20:11:41.614742+00:00",
+  "guard_child_exit": 1,
+  "lock": "free",
+  "health": {
+    "ok": true,
+    "model": "mtplx-flash-next-optimized-speed",
+    "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+    "active_requests": 0
+  },
+  "warmup_state": "done",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "remaining_native_children": [],
+  "swap": "vm.swapusage: total = 3072.00M  used = 2131.56M  free = 940.44M  (encrypted)"
+}

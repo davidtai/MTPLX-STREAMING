@@ -2,8 +2,7 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
 TPS on exact 16,384-input / 1,024-output Python under 110 decimal GB.
-Latest complete candidate: **12.4439935 TPS; 20 TPS remains unmet.**
-Native historical best: 12.1146645 TPS. A fresh paired control is pending.
+Latest complete candidate: **12.4439935 TPS; 20 TPS remains unmet.** Native historical best: 12.1146645 TPS; fresh paired control pending.
 
 # Decisions
 
@@ -74,15 +73,17 @@ cached pages including speculative/free pages; exact Qwen recovery was checked.
 Do not rerun that exporter unchanged. The runtime loader uses direct Metal
 buffers and disables read-ahead. Its guarded finally reclaims source and packed
 files before Qwen restore. The full candidate exited 0; exact restore/warmup and
-lock release completed 19:39:28 UTC. Subsequent independent check found Qwen
-healthy/idle/warmed and another lock owner. All our children are terminal.
+lock release completed 19:39:28 UTC. A native control retry at 20:08 UTC was
+refused before model loading: baseline 28.353 GB, allowed <=9.672 GB for cap 100.
+Exact Qwen restore/warmup and free lock were independently verified at 20:11:41 UTC.
+All our children are terminal. See docs/deepseek-v41/receipts/resident-packed-scales-control-refusal-20260917.
 
 # Open Work and Retained Context
 
 - Live helpers: /tmp/dsv41-resident-scales-20260917. One-request benchmark only;
   general serving needs a prefill reload/shrink design. Do not enable by default.
-- Pending native D5 cap91->100 control command is in that directory. Run only
-  after live admission, free lock and idle Qwen; do not loosen bounds to fit it.
+- Native D5 cap91->100 control needs <=9.672 GB baseline at the recorded wired
+  usage. Use a new evidence prefix only when headroom changes; keep all bounds.
 - Refresh live installation HEAD/source hashes after commits. Measured archives
   are immutable; phase_memory_control_sha256 names a receipt, never a wrapper.
 - Native growth helpers: /tmp/dsv41-cache-growth-20260917; native M6/M8 bounds:

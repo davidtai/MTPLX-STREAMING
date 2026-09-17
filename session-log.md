@@ -192,3 +192,22 @@ all37 focused reporting cases pass afterward with real MLX imports forbidden.
 Only reporting ASTs change; original receipts remain immutable and a derived
 metadata correction retains their complete timings, memory readings and tokens.
 See[the evidence](../deepseek-v41/receipts/resident-packed-scales-20260917/README.md).
+
+## 2026-09-17 15:14 CDT [saved]
+
+Goal: Resume the exact DeepSeek comparison within the 110 GB machine limit.
+
+Decisions:
+
+- Keep the native control pending: its current baseline cannot meet unchanged admission.
+- Preserve the refusal receipt and use a new output prefix for any future retry.
+- Count Qwen reclamation and DeepSeek cache residency separately from machine physical use.
+
+Rejected:
+
+- Retrying unchanged admission or purging unidentified caches to manufacture headroom.
+
+Open:
+
+- Fresh native comparison when machine headroom permits.
+- DeepSeek 20 TPS target remains unmet.

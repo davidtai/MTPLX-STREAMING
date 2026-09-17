@@ -637,3 +637,12 @@ all37 focused reporting cases pass afterward with real MLX imports forbidden.
 Only reporting ASTs change; original receipts remain immutable and a derived
 metadata correction retains their complete timings, memory readings and tokens.
 See[the evidence](../deepseek-v41/receipts/resident-packed-scales-20260917/README.md).
+
+### Native control retry, 2026-09-17 20:08 UTC
+
+The complete native D5 cap91->100 control was refused before model loading: the
+post-Qwen baseline was 28.353 GB versus the unchanged admission maximum 9.672 GB.
+Qwen identity, health, warmup, and lock release were independently verified.
+Do not retry with unchanged headroom or overwrite this attempt's prefix.
+Task 4 remains open; see
+`../deepseek-v41/receipts/resident-packed-scales-control-refusal-20260917/README.md`.
