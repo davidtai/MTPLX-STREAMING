@@ -1,0 +1,107 @@
+{
+  "source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+  "wrapper_sha256": "12d2cccc0f8bc4a4720539fb6c98480a29d6a4030e17aef1f86a1da00c505d41",
+  "baseline_bytes": 10264576000,
+  "engine_budget_bytes": 83426614088,
+  "expected_slots_per_layer": 84,
+  "decode_expected_slots_per_layer": 84,
+  "post_prefill_growth": false,
+  "growth_admission": {
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 84,
+    "growth_payload_bytes": 0,
+    "transition_start_active_bound_bytes": 80802608372,
+    "steady_decode_active_bound_bytes": 83060764016,
+    "resize_active_bound_bytes": 0,
+    "active_bound_bytes": 90766867548,
+    "physical_bound_bytes": 106779260120,
+    "prefill_active_bound_bytes": 90766867548,
+    "prefill_physical_bound_bytes": 106779260120,
+    "host_reserve_bytes": 2147483648,
+    "trace_host_and_file_cache_allowance_bytes": 268435456,
+    "extra_geometry_margin_bytes": 1073741824,
+    "fixed_bank_storage_saving_bytes": 6768230400,
+    "requested_allocator_cache_limit_bytes": 1073741824,
+    "decode_cache_allowance_bytes": 3331897468,
+    "allocator_limit_bytes": 97319504896,
+    "wired_before_bytes": 3107586048,
+    "baseline_bytes": 10264576000,
+    "control_receipt": "/tmp/dsv41-110-stage/full-compiled-hc-post-ca207-20260917.jsonl",
+    "control_receipt_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118"
+  },
+  "runtime_reserve_gib": 2,
+  "runtime_reserve_bytes": 2147483648,
+  "fixed_footprint_bytes": 20166777672,
+  "plan_remainder_bytes": 89686016,
+  "transient_band_gib": 12.938762836158276,
+  "transient_band_bytes": 13892890808,
+  "allocator_limit_bytes": 97319504896,
+  "requested_allocator_cache_limit_bytes": 1073741824,
+  "active_bound_bytes": 90766867548,
+  "physical_bound_bytes": 106779260120,
+  "decode_steps": 1023,
+  "dspark_depth": 5,
+  "prefill_mtp_hidden_capture_at_existing_fence": true,
+  "prefill_hc_post_compiled": true,
+  "source_compatibility": {
+    "source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+    "runtime_source_sha256": {
+      "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+      "scripts/deepseek_v41/ab_decode_env_levers.py": "d540a77df3670786110aafd14d81a55e613aafae63e45b53cc58aaaf169e25da",
+      "scripts/deepseek_v41/bench_standard_shape.py": "6c235ac47fc4f447f3eb745195a6e337961570b4ba003d314698bf0d20e65fce",
+      "mtplx/expert_runtime.py": "d3c25b6e058f9ae6ae304890cab0723f398e8381c3814b881fbd38d512031a6e",
+      "mtplx/models/deepseek_v41_dspark.py": "aeb4835506bafdabfc51b34f2cfae6b107c267e0d25a2f7058b5ed5a6fec8950",
+      "mtplx/models/deepseek_v41_dspark_decode.py": "014413c8c7145cb274444a5d3ec0ee2cc821f8b5d5858da41f6500e081a0c030"
+    },
+    "scope": "Diagnostic native D5/M6 teacher capture on exact16K/1024 workload, fixed84 cache slots; 256MiB CPU/file-cache allowance and 1GiB extra allocation margin. No performance claim.",
+    "explicit_bound_model_levers": {
+      "MTPLX_DSV41_HC_COMPILE": false,
+      "MTPLX_DSV41_ATTN_COMPILE": false,
+      "MTPLX_DSV41_ATTN_WIN_MEMO": false
+    },
+    "helper_sha256": {
+      "admission.py": "8b68d0cdfc213ff343f8cc0a51dcd6e321ec4761d34004004579d8f73ae062c4",
+      "phase_growth.py": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac",
+      "bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b",
+      "teacher_capture.py": "c4e778abef446929153799bef668088e2d71fa8f8ad5bff790115bb6c06d434d"
+    },
+    "phase_memory_control_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+    "numeric_predecessor": "Executable model and decode arithmetic unchanged from d405. Diagnostic seed hook copies committed native hidden states and exact initialized MTP KV; full retained token digest gate remains required.",
+    "host_budget_cli_gib": 2.25,
+    "host_budget_split_bytes": {
+      "python_base": 2147483648,
+      "teacher_cpu_and_file_cache": 268435456
+    },
+    "teacher_storage": "Exact native BF16 bits as uint16, or FP32; per-field original dtype recorded. Bridge checked under guard before model load."
+  },
+  "diagnostic_only": true,
+  "performance_eligible": false,
+  "candidate_prefill_sha256": "b0cc782462dbc8fb2cf5849f4f7f50d2697a2dc4457e9fca3a2b6685c7cac66e",
+  "cache_policy": "transition-window",
+  "decode_miss_records_per_part": 3,
+  "verify_shared_overlap": true,
+  "selected_mtp_experts_by_stage": [
+    93,
+    58,
+    32
+  ],
+  "mtp_pruned_experts": 201,
+  "mtp_pruned_bytes": 3778928640,
+  "scope": "Diagnostic native D5/M6 teacher capture on exact16K/1024 workload, fixed84 cache slots; 256MiB CPU/file-cache allowance and 1GiB extra allocation margin. No performance claim.",
+  "actual_bound_model_levers": {
+    "MTPLX_DSV41_HC_COMPILE": false,
+    "MTPLX_DSV41_ATTN_COMPILE": false,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": false
+  },
+  "ar_reference_reuse": {
+    "receipt": "/private/tmp/dsv41-110-stage/live-combined-depth3-reserve2-1023.jsonl",
+    "receipt_sha256": "c1ad697c171e5c99dd4c1f1c0d7c71d314268429e7179ed494fdfa6920db6187",
+    "bounds_sha256": "ae755f51ee5463a44d96206e50c3696704b5aae8111e2ef12d764399c719032e",
+    "source_commit": "e589c1e4b17856f506d90d9fb2bbb5ce45711648",
+    "measurement_source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+    "token_ids_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090",
+    "current_run_ar_measured": false,
+    "reference_ar_decode_wall_s": 149.1273038340005,
+    "reference_ar_ttft_s": 141.8032028329908
+  }
+}

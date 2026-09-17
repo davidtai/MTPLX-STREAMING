@@ -518,3 +518,30 @@ All owned windows restored exact Qwen identity, health and warmup before release
 See[the receipts](../deepseek-v41/receipts/native-scatter-fanout-20260917/README.md).
 Task4 remains open at12.1146645TPS. Do not repeat this fanout screen or weaken
 admission to fit the current baseline.
+
+## Additional Task4 result, 2026-09-17 16:24 UTC
+
+Native D7/M8 is not promoted. Exact target-state replay screened it at176 versus
+206 cycles; the native cap16 allocation probe then matched129 output tokens.
+The full16K/1024 run at91 prefill/98 decode slots gives11.4315253TPS,176cycles
+and40,607 physical expert reads. Full output is identical to retained MTP.
+The lower cache capacity differs from the retained93/100 best, so this is not
+a matched estimate of width alone. It does not beat12.1146645TPS; no additional
+GPU control or new optimization test module was run. Maximum external sampled
+machine usage105,610,772,480B is below the109,314,275,908B admission bound and
+110GB ceiling. Exact Qwen restoration/warmup/lock release completed16:15:08UTC.
+
+The A/B summary now selects the requested measured pass for throughput, memory,
+cross-arm token identity and decode budget. Previously a reused AR reference
+printed unavailable measurements and could hide a different DSpark output.
+The24-case CPU memory/reporting suite passes with real MLX imports forbidden;
+the previous source fails the new regression. Both benchmark growth wrappers
+also abort through runtime cleanup when a critical resize callback fails,
+instead of allowing the telemetry callback to swallow that failure. A focused
+CPU control-flow check covers failure and unchanged success.
+
+Teacher tensors are preserved locally with hashes so this capture need not be
+repeated. Measured wrappers and raw receipts remain immutable; corrected
+wrappers are archived separately. See
+[the receipts](../deepseek-v41/receipts/native-draft-width-20260917/README.md).
+Task4's20TPS acceptance remains unchecked.

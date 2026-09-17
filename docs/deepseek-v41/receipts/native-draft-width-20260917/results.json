@@ -1,0 +1,181 @@
+{
+  "source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+  "decision": "D7 not promoted: full-workload speed does not exceed retained best. No additional D5 GPU comparison.",
+  "comparison_limit": "D7 uses91/98 slots versus retained D5 at93/100; not a matched estimate of draft-width effect.",
+  "workload": {
+    "prompt_tokens": 16384,
+    "output_tokens": 1024,
+    "timed_decode_steps": 1023,
+    "prompt_sha256": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2"
+  },
+  "candidate": {
+    "decode_tok_s": 11.431525256285385,
+    "decode_wall_s": 89.48937058399315,
+    "cycles": 176,
+    "phase_time_s": {
+      "draft": 2.1112952471594326,
+      "verify": 84.98501745391695,
+      "accept": 0.06290862793684937,
+      "commit": 0.17920283602143172
+    },
+    "per_cycle_ms": {
+      "draft_ms": 11.995995722496776,
+      "verify_ms": 482.86941735180085,
+      "accept_ms": 0.357435386004826,
+      "commit_ms": 1.018197931939953
+    },
+    "verify_chunks": [
+      8
+    ],
+    "token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "n_generated": 1024
+  },
+  "post_prefill_growth": {
+    "phase": "decode",
+    "prefill_slots_per_layer": 91,
+    "decode_slots_per_layer": 98,
+    "growth_payload_bytes": 5264179200,
+    "timing_scope": "inside decode wall time, after the original prefill callback",
+    "active_before_bytes": 84993045816,
+    "cache_before_bytes": 0,
+    "growth_seconds": 2.000505999996676,
+    "active_after_bytes": 90256241976,
+    "cache_after_bytes": 0,
+    "transition_peak_bytes": 90831697212,
+    "physical_allocated_bytes": 74600939520,
+    "plan_limit_bytes": 93954972488,
+    "plan_persistent_bytes": 73698508800
+  },
+  "physical_io": {
+    "record_requests": 40607,
+    "read_bytes": 763437588480,
+    "records_hashed": 0,
+    "decode_ns": 0,
+    "decoded_raw_bytes": 0,
+    "read_ns": 781743178257,
+    "native_positional_calls": 0,
+    "read_wall_ns": 58115487862,
+    "native_bytes_returned": 0,
+    "hash_thread_ns_total": 0,
+    "integrity_errors": 0,
+    "records_read": 40607,
+    "read_inflight_depth_sum": 1944527,
+    "read_operations": 157655,
+    "io_errors": 0,
+    "read_inflight_samples": 157655,
+    "cancellations": 0,
+    "deadline_errors": 0,
+    "source_record_requests": 0,
+    "bytes_read_saved": 0,
+    "python_preadv_invocations": 157655,
+    "sidecar_record_requests": 40607,
+    "requested_bytes": 763437588480,
+    "decoded_records": 0,
+    "open_files_peak": 0,
+    "records_unhashed": 40607,
+    "preadv_bytes_returned": 763437588480,
+    "short_reads": 0,
+    "records_hashed_per_token": 0.0,
+    "records_unhashed_per_token": 39.694,
+    "hash_fraction": 0.0,
+    "hash_thread_ms": 0.0,
+    "hash_thread_ms_per_token": 0.0,
+    "read_inflight_depth_mean": 12.3341,
+    "read_realized_qd": 13.4515,
+    "read_gb_per_s_window": 13.1366,
+    "read_thread_gb_per_s_window": 0.9766
+  },
+  "memory": {
+    "mlx_peak_bytes": 93704070260,
+    "mlx_peak_after_prefill_bytes": 92532465178,
+    "process_footprint_peak_bytes": 94293064008,
+    "system_used_peak_bytes": 105582788608
+  },
+  "external_sampled_peaks": {
+    "process_footprint_bytes": 94506621600,
+    "machine_physical_bytes": 105610772480
+  },
+  "admission": {
+    "prefill_slots_per_layer": 91,
+    "decode_slots_per_layer": 98,
+    "growth_payload_bytes": 5264179200,
+    "transition_start_active_bound_bytes": 86271407348,
+    "steady_decode_active_bound_bytes": 92844273008,
+    "resize_active_bound_bytes": 92158833908,
+    "active_bound_bytes": 95229672540,
+    "physical_bound_bytes": 109314275908,
+    "prefill_active_bound_bytes": 95229672540,
+    "prefill_physical_bound_bytes": 109314275908,
+    "prefill_cache_allowance_bytes": 1160216040,
+    "host_reserve_bytes": 2147483648,
+    "requested_allocator_cache_limit_bytes": 1073741824,
+    "decode_cache_overshoot_allowance_bytes": 2258155644,
+    "decode_cache_allowance_bytes": 3331897468,
+    "allocation_margin_bytes": 268435456,
+    "full_logical_kv_extra_allowance_bytes": 56524800,
+    "page_padding_allowance_bytes": 3932160,
+    "allocator_limit_bytes": 97075612672,
+    "wired_before_bytes": 3125116928,
+    "baseline_bytes": 10776903680,
+    "control_receipt": "/tmp/dsv41-110-stage/full-compiled-hc-post-ca207-20260917.jsonl",
+    "control_receipt_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+    "native_m8_probe": "/tmp/dsv41-depth-replay-20260917/target-m8-probe.json",
+    "native_m8_probe_sha256": "54ebb7f6befd94ddbcaa114e3578639cc1c5a86d5cf89b1102ad971d59d40ef7",
+    "capacity_selection": "largest admitted96..100; explicit fixed value required for a fresh matched control"
+  },
+  "retained_best": {
+    "decode_tok_s": 12.114664476181137,
+    "decode_wall_s": 84.44311454199487,
+    "prefill_slots": 93,
+    "decode_slots": 100,
+    "cycles": 206,
+    "records_read": 35880,
+    "read_bytes": 674566963200
+  },
+  "goal_20_tps_met": false,
+  "lifecycle": {
+    "last_gpu_child_exit": 0,
+    "restored_warmed_lock_released_utc": "2026-09-17T16:15:08Z",
+    "post_guard_health_and_model_identity_verified": true,
+    "other_jobs_signaled": false
+  },
+  "regression_checks": {
+    "cpu_only_memory_reporting_cases": 24,
+    "real_mlx_import_forbidden": true,
+    "previous_reporting_source_fails_new_regression": true,
+    "critical_resize_failure_escapes_telemetry_swallow": true
+  },
+  "native_teacher_tensors": {
+    "preserved_at": "2026-09-17T16:14:53.087452+00:00",
+    "scope": "Native teacher tensors; ignored binary artifacts retained locally to avoid another full-model capture",
+    "path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-depth-teacher/20260917",
+    "teacher_manifest_sha256": "1826c18118b11ddddb75493f2cf03a12c63135855e089a3a5527a4ab8767c7d2",
+    "files": [
+      {
+        "name": "committed-hidden.npy",
+        "bytes": 31580288,
+        "sha256": "48e29e24af067637f9ed93d9fcc9c0c4f63bb44a6898d5028ac69fa7b9a2bb0b"
+      },
+      {
+        "name": "initial-main.npy",
+        "bytes": 61568,
+        "sha256": "2b9be485b2e1a2c5db107929485192a12618dce6252d58b828557756b033421e"
+      },
+      {
+        "name": "initial-window-0.npy",
+        "bytes": 262272,
+        "sha256": "b026b6a5c8f8980ef07046b3fc8557bc15a6548ae8bd51fe05ad6da5580e60a7"
+      },
+      {
+        "name": "initial-window-1.npy",
+        "bytes": 262272,
+        "sha256": "9c958af6ee502e609da47ff7758fc0d9cb4b9d5fcea817e896abff91f1ab548c"
+      },
+      {
+        "name": "initial-window-2.npy",
+        "bytes": 262272,
+        "sha256": "b6ad3d36bba2150b5aa1116cf4f3911d12184870f5a48f1f0d3a6cf31e9e4e43"
+      }
+    ]
+  }
+}

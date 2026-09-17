@@ -1,0 +1,7 @@
+{
+  "original_source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+  "original_source_sha256": "d540a77df3670786110aafd14d81a55e613aafae63e45b53cc58aaaf169e25da",
+  "old_source_failed_new_parity_regression": true,
+  "original_output": "[ab] arm=control ctx=1024 decode=256\n[ab]   decode_tok_s=None mlx_peak_gb=n/a process_footprint_peak_gb=n/a box_used_gb=n/a (includes file cache) baseline_plus_process_estimate_gb=n/a sha=reused-ar-re\n[ab] arm=all_levers ctx=1024 decode=256\n[ab]   decode_tok_s=None mlx_peak_gb=n/a process_footprint_peak_gb=n/a box_used_gb=n/a (includes file cache) baseline_plus_process_estimate_gb=n/a sha=reused-ar-re\n[ab] plan reproducibility: all arms ran plan_limit_bytes=90000000000\n[ab] all_levers vs control: byte_identical=True\n",
+  "current_source_suite": "24 CPU-only checks pass; real MLX import rejected by import finder"
+}

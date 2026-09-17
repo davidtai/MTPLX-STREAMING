@@ -1,0 +1,32 @@
+{
+  "scope": "CPU-only exact extracted callback control flow, no MLX imports",
+  "original_wrapper_sha256": "5f2a746185e00f85015753132c250453f407362b39e0aef63ec30af8bd8443d4",
+  "fixed_wrapper_sha256": "01576b922b8e3da0efce726c430476d783594d786453d6bc1bea93f0e3138623",
+  "decode_source_sha256": "014413c8c7145cb274444a5d3ec0ee2cc821f8b5d5858da41f6500e081a0c030",
+  "results": [
+    {
+      "case": "original_resize_failure",
+      "outcome": "returned",
+      "calls": [
+        "telemetry",
+        "resize"
+      ]
+    },
+    {
+      "case": "fixed_resize_failure",
+      "outcome": "aborted_with_resize_cause",
+      "calls": [
+        "telemetry",
+        "resize"
+      ]
+    },
+    {
+      "case": "fixed_success",
+      "outcome": "returned",
+      "calls": [
+        "telemetry",
+        "resize"
+      ]
+    }
+  ]
+}

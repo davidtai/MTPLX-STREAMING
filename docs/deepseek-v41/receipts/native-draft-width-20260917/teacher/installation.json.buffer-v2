@@ -1,0 +1,30 @@
+{
+  "source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "d540a77df3670786110aafd14d81a55e613aafae63e45b53cc58aaaf169e25da",
+    "scripts/deepseek_v41/bench_standard_shape.py": "6c235ac47fc4f447f3eb745195a6e337961570b4ba003d314698bf0d20e65fce",
+    "mtplx/expert_runtime.py": "d3c25b6e058f9ae6ae304890cab0723f398e8381c3814b881fbd38d512031a6e",
+    "mtplx/models/deepseek_v41_dspark.py": "aeb4835506bafdabfc51b34f2cfae6b107c267e0d25a2f7058b5ed5a6fec8950",
+    "mtplx/models/deepseek_v41_dspark_decode.py": "014413c8c7145cb274444a5d3ec0ee2cc821f8b5d5858da41f6500e081a0c030"
+  },
+  "scope": "Diagnostic native D5/M6 teacher capture on exact16K/1024 workload, fixed84 cache slots; 256MiB CPU/file-cache allowance and 1GiB extra allocation margin. No performance claim.",
+  "explicit_bound_model_levers": {
+    "MTPLX_DSV41_HC_COMPILE": false,
+    "MTPLX_DSV41_ATTN_COMPILE": false,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": false
+  },
+  "helper_sha256": {
+    "admission.py": "8b68d0cdfc213ff343f8cc0a51dcd6e321ec4761d34004004579d8f73ae062c4",
+    "phase_growth.py": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac",
+    "bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b",
+    "teacher_capture.py": "4e3450e9cbc85717d0ee965395fe597f6cc4e148c7b1ebf9dbbe7dc2f896d286"
+  },
+  "phase_memory_control_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+  "numeric_predecessor": "Executable model and decode arithmetic unchanged from d405. Diagnostic seed hook copies committed native hidden states and exact initialized MTP KV; full retained token digest gate remains required.",
+  "host_budget_cli_gib": 2.25,
+  "host_budget_split_bytes": {
+    "python_base": 2147483648,
+    "teacher_cpu_and_file_cache": 268435456
+  }
+}

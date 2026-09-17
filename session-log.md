@@ -103,3 +103,18 @@ Rejected:
 - Promoting an isolated HC kernel gain as end-to-end decode improvement.
 Open:
 - Native I/O scheduling and cache-retention accounting remain optimization candidates.
+
+## 2026-09-17 16:24 UTC [saved]
+Goal: Correct DSpark reporting and screen wider native drafts under110GB.
+Decisions:
+- Report and compare the requested measured pass; reused AR references cannot supply current DSpark memory, throughput, tokens or phase budgets.
+- Keep D5. Full D7 uses fewer cycles but misses the retained throughput; differing cache capacities prevent an isolated width-effect claim.
+- Preserve native FP32 prefill and BF16 decode teacher tensors; oracle replay screens acceptance without proving target throughput.
+- Abort critical benchmark resize failures through runtime cleanup; ordinary telemetry exception handling otherwise swallows them.
+Rejected:
+- Promoting D7 from oracle cycle counts or the short native allocation probe.
+- Comparing matching AR references to establish cross-arm DSpark parity.
+- Repeating the full teacher capture when its hashed tensors remain available.
+Open:
+- Reach20TPS by reducing physical expert reads or exposed verification cost.
+- General serving needs shrink or reload before a second prefill.

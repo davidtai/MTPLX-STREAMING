@@ -3220,11 +3220,7 @@ def _resolved_plan(runtime, args) -> dict | None:
 
 
 def _receipt_plan_limit_bytes(receipt) -> int | None:
-    """Measured phase's engine budget, preserving legacy receipt support."""
-    phase_plan = (receipt.get("serve_stream_counters") or {}).get("slot_plan") or {}
-    value = phase_plan.get("memory_limit_bytes")
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
+    """Canonical engine budget, preserving old target/legacy receipt support."""
     for block, key in (("resolved_plan", "memory_limit_bytes"),
                        ("memory_cap", "engine_budget_bytes")):
         value = (receipt.get(block) or {}).get(key)
@@ -4306,11 +4302,6 @@ def _memory_headline(receipt) -> str:
         f" box_used_gb={fmt('box_used_gb')} (includes file cache)"
         f" baseline_plus_process_estimate_gb={fmt('baseline_plus_process_peak_estimate_gb')}"
     )
-
-
-def _measured_pass(receipt: dict, decode_mode: str) -> dict:
-    """Select the requested pass for display and cross-arm output comparison."""
-    return receipt["dspark"] if decode_mode == "dspark" else receipt
 
 
 # --------------------------------------------------------------------------
@@ -5643,11 +5634,10 @@ def main(argv=None) -> int:
         # W106 output persistence: the FULL decoded output as a text sidecar beside
         # the receipt (never overwriting an existing one), so David can audit it.
         _write_output_sidecars(args.out, receipt)
-        measured = _measured_pass(receipt, args.decode_mode)
         print(
-            f"[ab]   {args.decode_mode} decode_tok_s={measured['decode_tok_s']} "
-            f"{_memory_headline(measured)} "
-            f"sha={measured['token_ids_sha256'][:12]}"
+            f"[ab]   decode_tok_s={receipt['decode_tok_s']} "
+            f"{_memory_headline(receipt)} "
+            f"sha={receipt['token_ids_sha256'][:12]}"
         )
 
     # Control-vs-overlap summary: byte-identity is a recorded fact, not a claim.
@@ -5663,15 +5653,11 @@ def main(argv=None) -> int:
                 )
     if len(receipts) >= 2:
         base = receipts[0]
-        base_pass = _measured_pass(base, args.decode_mode)
         # Compare actual engine budgets in bytes. Schema-2 memory samples no
         # longer carry the old GiB plan fields; absent metadata is unknown, not
         # evidence that all arms used the same budget. Intentional budget/cache
         # tradeoffs remain reportable, with their differing budgets explicit.
-        _plan_limits = [
-            _receipt_plan_limit_bytes(_measured_pass(r, args.decode_mode))
-            for r in receipts
-        ]
+        _plan_limits = [_receipt_plan_limit_bytes(r) for r in receipts]
         _known_plan_limits = [value for value in _plan_limits if value is not None]
         if len(set(_known_plan_limits)) > 1:
             print(
@@ -5689,10 +5675,9 @@ def main(argv=None) -> int:
             print(f"[ab] plan reproducibility: all arms ran plan_limit_bytes={_plan_limits[0]}",
                   flush=True)
         for cand in receipts[1:]:
-            candidate_pass = _measured_pass(cand, args.decode_mode)
-            identical = candidate_pass["token_ids_sha256"] == base_pass["token_ids_sha256"]
-            d_base = base_pass["decode_tok_s"] or 0.0
-            d_cand = candidate_pass["decode_tok_s"] or 0.0
+            identical = cand["token_ids_sha256"] == base["token_ids_sha256"]
+            d_base = base["decode_tok_s"] or 0.0
+            d_cand = cand["decode_tok_s"] or 0.0
             delta = ((d_cand - d_base) / d_base * 100.0) if d_base else None
             print(
                 f"[ab] {cand['arm']} vs {base['arm']}: "

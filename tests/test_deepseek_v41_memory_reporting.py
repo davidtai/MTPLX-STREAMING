@@ -113,6 +113,60 @@ def test_headline_does_not_turn_missing_measurements_into_zero():
     assert "box_used_gb=n/a" in line
 
 
+@pytest.mark.parametrize("mode,candidate_sha,expected_status", [
+    ("dspark", "target-changed", 1),
+    ("dspark", "target-control", 0),
+    ("ar", "target-changed", 0),
+])
+def test_ab_summary_uses_measured_pass_with_reused_ar_reference(
+    monkeypatch, tmp_path, capsys, mode, candidate_sha, expected_status,
+):
+    from types import ModuleType
+
+    ab = load_script("ab_decode_env_levers")
+    core = ModuleType("mlx.core")
+    core.random = SimpleNamespace(seed=lambda value: None)
+    mlx = ModuleType("mlx")
+    mlx.core = core
+    monkeypatch.setitem(sys.modules, "mlx", mlx)
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    monkeypatch.setattr(ab, "_load_bench_module", lambda: None)
+    monkeypatch.setattr(ab, "_apply_cell_prompt_guard", lambda args: None)
+    monkeypatch.setattr(ab, "_write_output_sidecars", lambda *args: None)
+    rows = {}
+    for arm, sha, tps, budget in (
+        ("control", "target-control", 11.5, 93_000_000_000),
+        ("all_levers", candidate_sha, 12.5, 94_000_000_000),
+    ):
+        rows[arm] = {
+            "arm": arm, "token_ids_sha256": "reused-ar-reference",
+            "decode_tok_s": None, "memory": None,
+            "resolved_plan": {"memory_limit_bytes": 90_000_000_000},
+            "dspark": {
+                "token_ids_sha256": sha, "decode_tok_s": tps,
+                "resolved_plan": {"memory_limit_bytes": 90_000_000_000},
+                "serve_stream_counters": {"slot_plan": {"memory_limit_bytes": budget}},
+                "memory": {"mlx_peak_gb": 87.0, "process_footprint_peak_gb": 90.0,
+                           "box_used_gb": 100.0},
+            },
+        }
+    monkeypatch.setattr(ab, "_run_arm", lambda args, arm, bench, mx: rows[arm])
+    status = ab.main(["--arms", "control", "all_levers", "--decode-mode", mode,
+                      "--out", str(tmp_path / "receipts.jsonl")])
+    output = capsys.readouterr().out
+    assert status == expected_status
+    if mode == "dspark":
+        assert "dspark decode_tok_s=11.5 mlx_peak_gb=87.00" in output
+        assert "process_footprint_peak_gb=90.00 box_used_gb=100.00" in output
+        assert "decode_tok_s 11.500 -> 12.500" in output
+        assert "DIFFERENT plan_limit_bytes values ([93000000000, 94000000000])" in output
+        assert ("FAIL: all_levers changed the decoded tokens" in output) == (expected_status == 1)
+    else:
+        assert "ar decode_tok_s=None mlx_peak_gb=n/a" in output
+        assert "all arms ran plan_limit_bytes=90000000000" in output
+        assert "FAIL" not in output
+
+
 def test_model_levers_follow_each_arm_after_module_import(monkeypatch):
     from types import ModuleType
 
