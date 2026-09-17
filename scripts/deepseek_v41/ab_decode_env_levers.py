@@ -5676,21 +5676,23 @@ def main(argv=None) -> int:
                 else f"[ab] {cand['arm']} vs {base['arm']}: byte_identical={identical}"
             )
             if not identical:
-                # An unchanged rounding lever cannot explain a difference caused
-                # by another change. Use the pair's effective env, not the
-                # candidate's broad per-arm metadata. Bounded KV is unvalidated.
+                # A changed rounding lever is a possible cause, not evidence that
+                # this pair differs only at a near-tie. The DSpark classification
+                # compares each arm with its own AR stream; it cannot classify
+                # this control/candidate mismatch (including a changed head).
+                # Preserve the receipts and require paired logit evidence before
+                # accepting a cross-arm divergence.
+                parity_failed = True
                 keys = _pairwise_rounding_class_keys(base, cand)
                 if keys:
                     keys_str = ", ".join(keys)
-                    # A receipt's DSpark divergence compares that arm's AR and
-                    # speculative streams, not this base/candidate pair. Preserve
-                    # it in the receipt without misattributing its logit margins.
                     print(
-                        f"[ab] {cand['arm']}: token-id sha differs -- expected "
-                        f"(rounding-class: {keys_str})"
+                        f"[ab] FAIL: {cand['arm']} changed the decoded tokens; "
+                        "the cross-arm divergence is unclassified "
+                        f"(changed rounding levers: {keys_str}). "
+                        "A same-arm DSpark tie does not classify this pair."
                     )
                 else:
-                    parity_failed = True
                     print(
                         f"[ab] FAIL: {cand['arm']} changed the decoded tokens "
                         "(no validated changed rounding lever explains this pair)"

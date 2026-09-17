@@ -56,6 +56,9 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 - [x] Add a single-arm DSpark acceptance gate that permits byte identity or an
   index-matched `tie_flip`, but returns nonzero for genuine or suspect
   divergences after preserving the diagnostic receipt.
+- [x] Reject unclassified control/candidate token differences even when a
+  rounding lever changed. Each arm's DSpark-vs-AR classification applies only
+  to that arm; it cannot establish parity between different target heads.
 - [x] Pass the benchmark model separately from its bare expert runtime so
   model-owned Engram cache totals appear in `serve_stream_counters`.
 - [x] Run the existing counter test and a direct no-MLX runner plumbing check.
@@ -220,6 +223,12 @@ static admission of cap 93, or a compressed expert artifact.
   allocation. It saves 620,544,000 resident bytes and improves the six-row head
   microbenchmark, but its 63/64 sampled argmax result still requires measured
   output/tie classification.
+- [ ] Before promoting q8, compare its AR output with the matched BF16-head
+  control on the same prompt and output length. Matching Q8 AR and Q8 DSpark
+  outputs alone do not pass this gate. A cross-head mismatch requires paired
+  logits at the first divergence on the same prefix; classify it outside the
+  timed pass only after the speed screen wins. Unclassified differences remain
+  ineligible for promotion.
 - [x] Construct the exact trace-covered MTP resident inventory and verify its
   source manifest, selected expert sets `(93, 58, 32)`, tensor geometry, and
   3,778,928,640-byte saving before allocation.
