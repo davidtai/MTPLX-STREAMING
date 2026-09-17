@@ -251,7 +251,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dspark-depth",
         type=int,
         default=3,
-        help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
+        help=("requested draft width K per DSpark-DIRECT cycle; capped by the "
+              "loaded head's native block size. Receipts report effective depth "
+              "and requested_depth (--decode-mode dspark)"),
     )
     parser.add_argument(
         "--dspark-verify-chunks",
@@ -1027,7 +1029,8 @@ def bench_one_cell(
             sd = st.to_dict()
             dspark_metrics = {
                 "memory": mem_probe_block(mem_probe, dsp_sampler),
-                "depth": int(dspark_depth),
+                "depth": int(sd["speculative_depth"]),
+                "requested_depth": int(dspark_depth),
                 "verify_chunks": sd["verify_chunks"],
                 "byte_identical_vs_ar": byte_identical,
                 "pass_wall_s": dsp_wall,

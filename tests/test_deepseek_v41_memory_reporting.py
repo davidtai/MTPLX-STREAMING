@@ -206,6 +206,7 @@ def test_standard_cell_keeps_ar_and_dspark_memory_windows_separate(monkeypatch):
              "drafted_by_depth", "accepted_by_depth", "cycles", "verify_calls",
              "verify_decode_phase", "per_cycle", "phase_time_s")}
     stats["verify_chunks"] = [4]
+    stats["speculative_depth"] = 3
     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_dspark_decode", SimpleNamespace(
         DSparkDecodeStats=lambda: SimpleNamespace(to_dict=lambda: stats),
         dspark_generate=lambda *a, **k: (k["completion_callback"](), [1, 2, 3])[1],
@@ -330,15 +331,19 @@ def test_standard_dspark_releases_ar_state_and_reports_decode_only(monkeypatch):
     stats = {key: 0 for key in ("tokens_per_cycle", "accept_rate", "accept_rate_by_depth",
         "drafted_by_depth", "accepted_by_depth", "cycles", "verify_calls",
         "verify_decode_phase", "per_cycle", "phase_time_s")}
-    stats["verify_chunks"] = [4]
+    stats["verify_chunks"] = [6]
+    stats["speculative_depth"] = 5
     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_dspark_decode", SimpleNamespace(
         DSparkDecodeStats=lambda: SimpleNamespace(to_dict=lambda: stats), dspark_generate=dspark))
     monkeypatch.setitem(sys.modules, "mtplx.sampling", SimpleNamespace(SamplerConfig=lambda **k: None))
     model = Model()
     result = bench.bench_one_cell(model=model, tokenizer=bench._FakeTokenizer(),
         ops=bench._FakeOps(), mem_probe=bench._DryMemProbe(), gather_probe=bench._GatherProbe(model),
-        prompt_ids=[0, 2], steps=2, decode_mode="dspark")
+        prompt_ids=[0, 2], steps=2, decode_mode="dspark", dspark_depth=6)
     dsp = result["dspark"]
+    assert dsp["depth"] == 5
+    assert dsp["requested_depth"] == 6
+    assert dsp["verify_chunks"] == [6]
     assert dsp["pass_wall_s"] == 12
     assert dsp["decode_wall_s"] == 2
     assert dsp["decode_tokens"] == 2

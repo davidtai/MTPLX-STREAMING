@@ -1847,7 +1847,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dspark-depth",
         type=int,
         default=3,
-        help="draft block width K per DSpark-DIRECT cycle (--decode-mode dspark)",
+        help=("requested draft width K per DSpark-DIRECT cycle; capped by the "
+              "loaded head's native block size. Receipts report effective depth "
+              "and requested_depth (--decode-mode dspark)"),
     )
     p.add_argument(
         "--dspark-verify-chunks",
@@ -4926,7 +4928,8 @@ def _run_arm(args, arm, bench, mx) -> dict:
             byte_identical = dsp_ids == ids
             st = dsp["stats"]
             receipt["dspark"] = {
-                "depth": int(args.dspark_depth),
+                "depth": int(st["speculative_depth"]),
+                "requested_depth": int(args.dspark_depth),
                 "verify_chunks": st["verify_chunks"],
                 "divergence_policy": (
                     "lossless"

@@ -201,6 +201,13 @@ not the separate 20 TPS objective.
 
 ## Runner corrections after budget validation
 
+Both benchmark runners report the effective DSpark depth from generation
+statistics and preserve the CLI value separately as `requested_depth`. A request
+for depth six against the native five-token head therefore reports depth five;
+it does not imply seven-row target verification. Changing the native draft block
+requires a separately validated construction override. Existing receipts whose
+requested depth fits the head retain their original depth value.
+
 Current direct-slot and component-bank layouts retain their complete backing
 storage. The planner now reserves `max_live_kv_tokens` before allocating expert
 slots for these layouts, as it already did for mapped storage. KV admission
