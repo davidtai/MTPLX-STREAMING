@@ -226,6 +226,43 @@ static admission of cap 93, or a compressed expert artifact.
   reads. A lossless three-bit-plus-escape layout projects 3.6765% record savings
   but only 0.20 seconds of I/O margin at 20 TPS, so do not build the sidecar yet.
 
+### Task 3e: Stage transition-bound cap 93 and MTP-direct cap 94
+
+**Files:**
+- Conditional benchmark wrappers and commands under `/tmp/dsv41-110-stage/`.
+- Promote only a measured winner into tracked loader or runner code.
+
+**Security flag:** none
+
+**Does NOT cover:** A direct target projection, hot-path eligibility checks,
+silent fallback, or promotion from replay alone.
+
+- [x] Prove the `3,3` target route needs at most eighteen transient expert
+  slots per forward. Confirm the exact trace reaches eighteen and retain
+  `route_waves` plus `batch_admission_slots` for broader prefill routes.
+- [x] Stage cap 93 with eighteen transient slots, an 18,982,214,472-byte fixed
+  footprint, and a 503,422,976-byte plan remainder inside the fixed engine
+  budget. Derive allocator, process, and physical bounds from a matching
+  successful cap-93 frequency/full-verify predecessor.
+- [x] Keep the packed MXFP8 direct route rejected for target attention because
+  its exact screen has non-tie divergences. Restrict the conditional route to
+  the three MTP proposal stages, whose candidates remain target-verified.
+- [x] Remove only the three dense draft `wo_a` caches from resident pricing,
+  saving 402,653,184 bytes. Stage cap 94 with an 18,579,561,288-byte fixed
+  footprint and a 154,050,560-byte `plan_remainder_bytes` field. Derive live
+  allocator and whole-machine headroom from the measured predecessor.
+- [x] Validate all three draft projection contracts once after strict model
+  load, install fixed compiled direct callables, leave target attention
+  untouched, and fail construction instead of retaining an enabled fallback.
+- [x] Replay uniform cap 94 through cap 97. Cap-94 `3,3` reaches a 19.57-tok/s
+  raw-I/O ceiling; cap 96 first crosses 20 TPS but would prune 90 more MTP
+  residents and affect 157 of 206 cycles, so reject that funding path.
+- [x] Solve a trace-shaped nonuniform cap-93 allocation. Its eight-order mean
+  is 35,750 reads but its median and maximum miss the 35,769.77-read threshold;
+  reject it before GPU work because it has no wall-time margin.
+- [x] Run syntax, static arithmetic, and no-MLX checks only. Add focused tests
+  only after a matched GPU arm wins.
+
 ### Task 4: Measure and promote only winners
 
 **Files:**
@@ -252,8 +289,11 @@ implementation without a separate direct-decoder gate.
   confirms allocator and whole-machine headroom.
 - [ ] If the q8 head wins with an allowed output classification, run conditional
   prepacked cap 92. Run bounded-Engram cap 93 only after the matching cap-92
-  receipt establishes its measured predecessor bounds. Combine other winners
-  only after the unchanged cap-93 arm succeeds.
+  receipt establishes its measured predecessor bounds. Run the cap-93 `3,3`
+  transition arm with eighteen transient slots only after the matching cap-93
+  frequency/full-verify arm succeeds. Run conditional cap-94 MTP-direct only
+  after the matching cap-93 transition receipt succeeds. Combine other winners
+  only after each unchanged predecessor succeeds.
 - [ ] Run the exact 16,384-input/1,024-output Python workload for the winning
   stack and require at least 20 decode tok/s.
 - [ ] Add focused regression tests only for measured winners, then run those

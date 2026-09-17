@@ -225,6 +225,42 @@ combined route makes 369 target forwards and evaluates 1,107 rows. At the
 measured 13.1475 GB/s this is a 52.90-second raw-record I/O floor, or a
 19.34-tok/s ceiling, so the replay does not establish the 20-TPS goal.
 
+The `3,3` construction also tightens the target miss working set. Each target
+forward has three rows and selects at most eighteen unique experts. The exact
+control trace reaches that bound, while `route_waves` and
+`batch_admission_slots` continue to partition broader prefill routes. Reducing
+the transient pool from 44 to 18 slots saves 488,816,640 bytes without changing
+target arithmetic. The conditional cap-93 transition arm therefore has a
+fixed footprint of 18,982,214,472 bytes and a 503,422,976-byte plan remainder
+inside the fixed 89,424,018,248-byte engine budget. The wrapper records this
+only as `plan_remainder_bytes` and derives live allocator, process-footprint,
+and whole-machine bounds from the measured predecessor receipt.
+
+## MTP-only packed output projection
+
+The packed MXFP8 output projection remains rejected for target attention
+because its exact screen produced non-tie divergences. The draft path has a
+different correctness contract: its logits propose candidates, while the
+unchanged target route verifies every committed token. A construction-selected
+MTP-only direct route can therefore remove the three dense draft `wo_a` caches
+without changing target arithmetic or the target-authoritative commit rule.
+
+Those three caches total 402,653,184 bytes. Applying that saving after the
+18-slot transition arm funds cap 94 with a fixed footprint of 18,579,561,288
+bytes and a 154,050,560-byte plan remainder in the same engine budget. The
+cap-94 slot band costs 752,025,600 bytes, so the net increase over the staged
+cap-93 arm is 349,372,416 bytes. Live allocator, process, and physical margins
+remain predecessor-derived admission gates.
+
+CPU replay does not make that arm a winner. Uniform cap-94 `3,3` projects a
+36,547.5-read median, a 52.26-second raw-record I/O floor, and a 19.57-tok/s
+ceiling. Uniform cap 96 is the first capacity whose replay crosses 20 TPS, but
+funding it would prune 90 additional MTP residents and affect 157 of 206
+cycles. A trace-shaped nonuniform cap-93 allocation averages 35,750 reads over
+the eight acceptance orders, with a 35,314-to-36,046 range; its median and
+worst cases miss the 35,769.77-read threshold and leave no wall-time margin.
+Neither candidate is promoted from CPU replay.
+
 ## Validation and promotion
 
 No new optimization regression tests are added before measurement, following
@@ -242,10 +278,13 @@ improves decode wall time. The winning scheduling/cache stack is then screened
 at cap 89. Cap 91 is eligible only after cap 89's measured peak validates the
 static projection. A q8 win may unlock the conditional prepacked cap-92 screen;
 only a successful matching cap-92 receipt may unlock bounded-Engram cap 93.
-The scheduling candidates are combined at the highest measured-safe capacity
-only after their individual screens win. Only the winning stack receives an
-exact 16K/1K run and focused regression tests. Every full run must report MLX
-peak, process `phys_footprint`,
+Only a successful cap-93 frequency/full-verify receipt may unlock the cap-93
+`3,3` arm with eighteen transient slots. Only a successful matching cap-93
+transition receipt may unlock the conditional cap-94 MTP-direct arm. The
+scheduling candidates are combined at the highest measured-safe capacity only
+after their individual screens win. Only the winning stack receives an exact
+16K/1K run and focused regression tests. Every full run must report MLX peak,
+process `phys_footprint`,
 whole-machine physical peak, token digest or an allowed tie flip, physical
 record reads, wall time, and exact Qwen restoration.
 
@@ -259,6 +298,10 @@ record reads, wall time, and exact Qwen restoration.
 - The conditional cap-93 reference has only 5,998,288 bytes of allocator
   margin. It is never admitted from static arithmetic alone and cannot run
   without measured cap-92 predecessor evidence.
+- The conditional cap-94 route must install the fixed compiled direct
+  projection on all three MTP stages and leave target attention unchanged. Any
+  missing stage, incompatible geometry, or eager draft projection is a
+  construction failure; the enabled route has no fallback.
 - Shared work could be submitted twice or outlive its pipeline claim. A single
   stored result and the existing claim/close protocol prevent duplication.
 - Smaller miss parts add outer-future and gather-dispatch overhead. The
