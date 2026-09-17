@@ -192,7 +192,9 @@ except (OSError, ValueError):
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
       exit 2
     fi
-    for _candidate_aux_seen in "${CANDIDATE_AUX_PATHS[@]}"; do
+    # Bash 3.2 (the lock holder's /bin/bash) treats an empty array as unset
+    # under nounset. Expand zero arguments while retaining spaces in each path.
+    for _candidate_aux_seen in ${CANDIDATE_AUX_PATHS[@]+"${CANDIDATE_AUX_PATHS[@]}"}; do
       if [[ "${_candidate_aux_path}" == "${_candidate_aux_seen}" ]]; then
         printf '%s [gpu_window] ERROR: duplicate candidate auxiliary directory: %s\n' \
           "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_candidate_aux_path}" >&2
@@ -1106,7 +1108,7 @@ if [[ -n "${CANDIDATE_MODEL_PATH}" && "${CANDIDATE_MODEL_PATH}" != "${QWEN_MODEL
     exit 8
   fi
 fi
-for _candidate_aux_path in "${CANDIDATE_AUX_PATHS[@]}"; do
+for _candidate_aux_path in ${CANDIDATE_AUX_PATHS[@]+"${CANDIDATE_AUX_PATHS[@]}"}; do
   if [[ "${_candidate_aux_path}" == "${QWEN_MODEL_PATH}" ]]; then
     err "phase 3: candidate auxiliary cache directory aliases the stopped service model"
     exit 8
