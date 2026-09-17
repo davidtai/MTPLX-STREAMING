@@ -1042,6 +1042,7 @@ if (( WAS_LOADED == 1 )); then
   QWEN_STOP_REQUESTED=1
   deadline=$(( $(date +%s) + STOP_TIMEOUT ))
   pid_gone=0
+  qwen_cache_reclaimed=0
   freed=0
   while (( $(date +%s) < deadline )); do
     _check_abort   # W106 (a): abort promptly even during the bootout wait
@@ -1051,6 +1052,16 @@ if (( WAS_LOADED == 1 )); then
         if kill -0 "${_qwen_pid}" 2>/dev/null; then pid_gone=0; fi
       done
       if (( pid_gone == 1 )); then log "phase 3: ${QWEN_LABEL} captured process tree is gone"; fi
+    fi
+    # Reclaim as soon as every captured process is gone. Clean file pages can
+    # be the reason the availability threshold is not yet met, so waiting for
+    # that threshold first can skip reclamation after a successful shutdown.
+    if (( pid_gone == 1 && qwen_cache_reclaimed == 0 )); then
+      if ! _reclaim_qwen_file_cache; then
+        err "phase 3: stopped-service file-cache reclamation failed; refusing workload and restoring service"
+        exit 8
+      fi
+      qwen_cache_reclaimed=1
     fi
     AVAIL_NOW="$(avail_bytes)"
     freed=$(( AVAIL_NOW - AVAIL_BEFORE ))
@@ -1069,13 +1080,6 @@ if (( WAS_LOADED == 1 )); then
   if (( AVAIL_NOW < MIN_AVAIL_BYTES )); then
     err "phase 3: only $(gib "${AVAIL_NOW}") GiB available after stop ($(gib "${freed}") GiB freed; need >= ${MIN_AVAIL_GB} GiB available); aborting"
     exit 5
-  fi
-  # The service is now stopped and every captured descendant is gone. Reclaim
-  # its clean model pages here, as part of shutdown, so a later preflight
-  # refusal (for example a foreign worker appearing) cannot skip reclamation.
-  if ! _reclaim_qwen_file_cache; then
-    err "phase 3: stopped-service file-cache reclamation failed; refusing workload and restoring service"
-    exit 8
   fi
 fi
 
