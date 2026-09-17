@@ -308,6 +308,41 @@ prefetch, islands, a hot fallback, or promotion from replay alone.
   five-shape arm after tuned uniform. Each 1,023-token wrapper additionally
   requires its own 128-token arm to beat the matching predecessor.
 
+### Task 3g: Exchange low-presence draft experts for nonuniform cap 95
+
+**Files:**
+- Conditional benchmark wrappers and commands under `/tmp/dsv41-110-stage/`.
+- Promote only a measured winner into tracked model-loading code.
+
+**Security flag:** none
+
+**Does NOT cover:** General-serving MTP pruning, unverified draft-token commit,
+automatic expert selection, or promotion from route replay alone.
+
+- [x] Derive the retained draft inventory deterministically from the pinned
+  route trace. Rank each stage by distinct cycle appearances with expert id as
+  the tie break, retain `(67, 49, 27)`, and stack tensors in ascending expert-id
+  order so the compact lookup and physical expert axis agree.
+- [x] Stream three true subset safetensors from the existing authenticated
+  `(93, 58, 32)` artifacts with `F_NOCACHE`, verify every source payload digest,
+  and retain only the 143 selected records. Do not rely on
+  `ResidentShardReader.retained_names`, because macOS `mx.load` still
+  materializes every tensor in its input file.
+- [x] Remove forty additional draft experts, exactly 752,025,600 bytes, and
+  assign that band to one target-cache slot in every routed layer. The fixed
+  footprint becomes 17,827,535,688 bytes; cap 95 plus the 154,050,560-byte
+  remainder reproduces the unchanged 89,424,018,248-byte engine budget.
+- [x] Solve a five-shape cap-95 vector with 3,800 slots. Its eight-order target
+  replay median is 34,453 reads versus 34,896.5 for five-shape cap 94. The draft
+  subset replaces 59 distinct stage-cycle expert incidences across 40 of 206
+  recorded cycles, so replay is only a screen and not a throughput claim.
+- [x] Fix the cap-94 nonuniform wrapper's construction check so it does not
+  reference the CLI-derived target-slot value before that value is bound.
+- [x] Gate cap 95 on matching five-shape cap-94 evidence. Require its own
+  128-token arm to beat cap 94 before allowing the 1,023-token run.
+- [x] Run syntax, shell-parse, arithmetic, artifact-subset, and no-MLX static
+  checks only. Add focused tests only if the measured arm wins.
+
 ### Task 4: Measure and promote only winners
 
 **Files:**

@@ -304,6 +304,54 @@ tuned uniform policy after the existing uniform cap-94 MTP-direct arm, then
 measures the five-shape vector after tuned uniform. A full 1,023-step run is
 refused until that exact arm wins its 128-token screen.
 
+## Cap-95 draft-residency exchange
+
+One target-cache slot in every routed layer costs 752,025,600 bytes. The exact
+16K/1K draft trace touches 183 MTP experts across its three stages, while the
+compact source artifacts already contain only those trace-covered experts. A
+conditional cap-95 arm removes forty more draft experts from that authenticated
+inventory and transfers the exact byte band to the target cache. It retains 67,
+49, and 27 experts by stage, ranked by distinct cycle appearances with expert id
+as the deterministic tie break. Tensor banks remain ordered by expert id so the
+construction-fixed lookup table matches the stacked physical axis.
+
+The full compact artifacts remain the provenance boundary. A bounded CPU-only
+builder reads them with `F_NOCACHE`, verifies every recorded source payload
+digest, and writes three new subset safetensors containing only the 143 retained
+records. This is required because `ResidentShardReader.retained_names` performs
+admission accounting on macOS but `mx.load` still materializes every tensor in
+the file. Loading the full artifacts would either trip the 64 MiB discarded
+tensor bound or erase the intended 752,025,600-byte saving. The cap-95 receipt
+binds the source receipt, trace, selection, header hashes, payload hashes, and
+file sizes before the loader checks the tensor inventory against the model
+manifest.
+
+The total MTP discount is 241 records, or 4,530,954,240 bytes, of which
+752,025,600 bytes is incremental to cap 94. The resulting fixed footprint is
+17,827,535,688 bytes. Together with 3,800 target slots and the existing
+154,050,560-byte remainder, it exactly reproduces the 89,424,018,248-byte
+engine budget. Python cache allocation and the 110,000,000,000-byte
+whole-machine ceiling do not change.
+
+The five-shape cap-95 vector is:
+
+```text
+128,128,128,96,112,96,73,88,96,88,
+88,88,96,112,88,96,88,88,88,112,
+73,73,73,88,73,73,73,96,73,88,
+88,96,96,96,96,88,96,128,128,128
+```
+
+It contains 3,800 slots, or 71,442,432,000 target-cache bytes. Across the same
+eight acceptance-order replays, its target-read median is 34,453, 443.5 below
+five-shape cap 94. The removed draft experts account for 59 distinct missing
+stage-cycle expert incidences and touch 40 of 206 recorded speculative cycles.
+Those substitutions can change proposal quality and acceptance depth even
+though the target verifier remains authoritative for every committed token.
+The arm therefore requires matching cap-94 evidence, and its 1,023-token run is
+refused unless the exact 128-token pruning screen improves decode wall time.
+No regression test is added until the measured arm wins.
+
 ## Validation and promotion
 
 No new optimization regression tests are added before measurement, following
