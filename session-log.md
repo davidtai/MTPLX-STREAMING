@@ -118,3 +118,17 @@ Rejected:
 Open:
 - Reach20TPS by reducing physical expert reads or exposed verification cost.
 - General serving needs shrink or reload before a second prefill.
+# 2026-09-17 process memory reader [saved]
+
+Cache Mach function bindings, never measurements, for the process-footprint
+reader. CPU A/B/A24.167/1.125/22.1875us; immediate16MiB growth observed. Reject
+short TASK_VM_INFO replies as unknown instead of zero.27 focused CPU checks
+pass with real MLX forbidden. Keep platform vm_stat: the rejected native host
+reader hides18.53MB of fresh growth behind kernel rate limiting despite its
+fast microbenchmark. Eight causal online policies and post-service pin relaxation
+also fail their CPU screens. Full D5/M6 profiling matches1024tokens/206cycles
+within109.431GB bound, but cProfile thread attribution is corrupt and its timing
+is unusable. Exact Qwen restored/warmed and lock released17:01:33UTC; no owned
+GPU child remains. Evidence:docs/deepseek-v41/receipts/memory-reader-20260917.
+Retained12.1146645TPS;20TPS open. Next profile must validate thread attribution
+before using a full-model window. No agents; no global memory writes.

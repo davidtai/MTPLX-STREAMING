@@ -499,11 +499,6 @@ correction and CPU check of the actual reporting assignments are archived.
 See[the receipts](../deepseek-v41/receipts/post-prefill-cache-growth-20260917/README.md).
 Task4's20TPS acceptance remains unchecked.
 
-The subsequent native small-M HC screen is not promoted:12.2191TPS has204 vs206
-cycles and an additional unclassified control/candidate token difference at480.
-Native M6 synthetic outputs are not bit-exact despite the old row-cap comment;
-comments are corrected without changing the executable AST. Retained best remains
-12.1146645TPS. See the HC follow-up in the same receipt folder.
 
 ## Additional Task4 result, 2026-09-17 15:08 UTC
 
@@ -545,3 +540,31 @@ repeated. Measured wrappers and raw receipts remain immutable; corrected
 wrappers are archived separately. See
 [the receipts](../deepseek-v41/receipts/native-draft-width-20260917/README.md).
 Task4's20TPS acceptance remains unchecked.
+
+## Additional Task4 result, 2026-09-17 process-reader stage
+
+The process memory reader now caches only Mach/ctypes bindings, reducing its
+CPU A/B/A median from 24.167/22.1875 us controls to 1.125 us. A fresh 16 MiB allocation
+is observed immediately. Successful truncated replies now stay unknown instead
+of reporting zero footprint. 27 focused CPU reporting cases pass with real MLX
+imports blocked; the installed SDK confirms the ABI. This is sampling overhead
+reduction, not a measured decode throughput gain.
+
+Direct host_statistics64 was rejected despite a 700x microbenchmark: kernel rate
+limiting returned stale system counters while platform vm_stat observed 18.53 MB
+of growth. The production system reader remains unchanged. Eight online cache
+policies and post-service admission also fail CPU selection and are not installed.
+
+A guarded full D5/M6 diagnostic at 91->100 slots preserves the complete output.
+Its cProfile thread attribution is inconsistent and reproduced on CPU, so its
+function timings and 10.7873 TPS are not optimization evidence. Sampled internal
+machine peak 106.117 GB is below the 109.431 GB conservative bound. Exact Qwen
+restoration/warmup/lock release completed 17:01:33 UTC. No new GPU work follows.
+See [the evidence](../deepseek-v41/receipts/memory-reader-20260917/README.md).
+Task4 remains open at the retained 12.1146645 TPS.
+
+The subsequent native small-M HC screen is not promoted:12.2191TPS has204 vs206
+cycles and an additional unclassified control/candidate token difference at480.
+Native M6 synthetic outputs are not bit-exact despite the old row-cap comment;
+comments are corrected without changing the executable AST. Retained best remains
+12.1146645TPS. See the HC follow-up in the same receipt folder.

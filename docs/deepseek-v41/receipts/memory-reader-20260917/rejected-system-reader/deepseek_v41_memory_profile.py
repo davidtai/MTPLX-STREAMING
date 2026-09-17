@@ -7,7 +7,7 @@ suite can exercise them without a Metal device or the 195 GB artifact:
    phase (load-end / after-prefill / per-N-decode), the three MLX allocator
    accessors (:func:`mlx_memory_snapshot`), the process footprint via ``mach``
    ``task_info`` (:func:`process_rss_snapshot`, no ``psutil``), the box totals
-   from ``vm_stat`` (:func:`box_memory_snapshot`), and the planner's byte
+   from Mach VM counters (:func:`box_memory_snapshot`), and the planner's byte
    breakdown (:func:`plan_breakdown`).  :func:`format_memory_profile_table`
    renders one table for a window receipt.
 
@@ -57,7 +57,6 @@ from __future__ import annotations
 
 import os
 import resource
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -423,49 +422,39 @@ class _TaskVMInfo:
         return task_vm_info
 
 
-@lru_cache(maxsize=1)
-def _mach_task_vm_reader():
-    """Bind the process reader once; cache functions, never memory observations."""
-    import ctypes
+def _mach_task_vm_info() -> dict[str, int] | None:
+    """Current ``resident_size`` / ``phys_footprint`` via ``mach`` task_info.
 
-    info_type = _TaskVMInfo.struct()
-    words = ctypes.sizeof(info_type) // ctypes.sizeof(ctypes.c_int32)
-    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
-    mach_task_self = libc.mach_task_self
-    mach_task_self.argtypes, mach_task_self.restype = [], ctypes.c_uint32
-    task_info = libc.task_info
-    task_info.argtypes = [ctypes.c_uint32, ctypes.c_int,
-                         ctypes.POINTER(info_type), ctypes.POINTER(ctypes.c_uint32)]
-    task_info.restype = ctypes.c_int
+    ``psutil``-free: reads the kernel's ``TASK_VM_INFO`` for this task directly
+    through ctypes.  Returns ``None`` off darwin or on any mach failure.
+    """
 
-    def read() -> dict[str, int] | None:
-        info = info_type()
-        count = ctypes.c_uint32(words)
+    if sys.platform != "darwin":
+        return None
+    try:
+        import ctypes
+        import ctypes.util
+
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+        mach_task_self = libc.mach_task_self
+        mach_task_self.restype = ctypes.c_uint
+        task_info = libc.task_info
+        TASK_VM_INFO = 22
+        info = _TaskVMInfo.struct()()
+        count = ctypes.c_uint32(ctypes.sizeof(info) // 4)
         kr = task_info(
             mach_task_self(),
-            22,  # TASK_VM_INFO; request the rev1 prefix through phys_footprint.
+            TASK_VM_INFO,
             ctypes.byref(info),
             ctypes.byref(count),
         )
-        # A successful older/short response must not turn the untouched zero
-        # at phys_footprint into a reported zero-byte process measurement.
-        if kr != 0 or count.value != words:
+        if kr != 0:
             return None
         return {
             "resident_bytes": int(info.resident_size),
             "phys_footprint_bytes": int(info.phys_footprint),
             "compressed_bytes": int(info.compressed),
         }
-
-    return read
-
-
-def _mach_task_vm_info() -> dict[str, int] | None:
-    """Current process counters, or None off Darwin/on an incomplete Mach read."""
-    if sys.platform != "darwin":
-        return None
-    try:
-        return _mach_task_vm_reader()()
     except Exception:  # pragma: no cover - defensive
         return None
 
@@ -545,25 +534,104 @@ def _parse_vm_stat(text: str) -> dict[str, int]:
     }
 
 
+@lru_cache(maxsize=1)
+def _mach_host_vm_reader():
+    """Bind the stable HOST_VM_INFO64 rev1 prefix once, without launching vm_stat."""
+    import ctypes as ct
+
+    class VMStatistics64(ct.Structure):
+        # mach/vm_statistics.h and HOST_VM_INFO64_REV1_COUNT in host_info.h.
+        # Newer revisions append fields; these 38 natural_t words cover every
+        # counter used here, including physical and logical compressor sizes.
+        _fields_ = [
+            ("free_count", ct.c_uint32), ("active_count", ct.c_uint32),
+            ("inactive_count", ct.c_uint32), ("wire_count", ct.c_uint32),
+            ("zero_fill_count", ct.c_uint64), ("reactivations", ct.c_uint64),
+            ("pageins", ct.c_uint64), ("pageouts", ct.c_uint64),
+            ("faults", ct.c_uint64), ("cow_faults", ct.c_uint64),
+            ("lookups", ct.c_uint64), ("hits", ct.c_uint64),
+            ("purges", ct.c_uint64), ("purgeable_count", ct.c_uint32),
+            ("speculative_count", ct.c_uint32),
+            ("decompressions", ct.c_uint64), ("compressions", ct.c_uint64),
+            ("swapins", ct.c_uint64), ("swapouts", ct.c_uint64),
+            ("compressor_page_count", ct.c_uint32),
+            ("throttled_count", ct.c_uint32),
+            ("external_page_count", ct.c_uint32),
+            ("internal_page_count", ct.c_uint32),
+            ("total_uncompressed_pages_in_compressor", ct.c_uint64),
+        ]
+
+    words = ct.sizeof(VMStatistics64) // ct.sizeof(ct.c_int32)
+    if words != 38:
+        raise RuntimeError("unsupported HOST_VM_INFO64 rev1 layout")
+    page_size = int(os.sysconf("SC_PAGE_SIZE"))
+    if page_size <= 0:
+        raise RuntimeError("invalid host page size")
+    libc = ct.CDLL("/usr/lib/libSystem.B.dylib")
+    host_self = libc.mach_host_self
+    host_self.argtypes, host_self.restype = [], ct.c_uint32
+    task_self = libc.mach_task_self
+    task_self.argtypes, task_self.restype = [], ct.c_uint32
+    statistics = libc.host_statistics64
+    statistics.argtypes = [ct.c_uint32, ct.c_int, ct.POINTER(VMStatistics64),
+                          ct.POINTER(ct.c_uint32)]
+    statistics.restype = ct.c_int
+    deallocate = libc.mach_port_deallocate
+    deallocate.argtypes, deallocate.restype = [ct.c_uint32, ct.c_uint32], ct.c_int
+
+    def read() -> dict[str, int]:
+        # A fresh send right per read avoids caching a port name across fork.
+        # Every successful acquisition is balanced, including failed reads.
+        host = host_self()
+        if host in (0, 0xffffffff):
+            raise RuntimeError("mach_host_self returned an invalid port")
+        try:
+            info = VMStatistics64()
+            count = ct.c_uint32(words)
+            kr = statistics(host, 4, ct.byref(info), ct.byref(count))
+            if kr != 0 or count.value != words:
+                raise RuntimeError(
+                    f"host_statistics64 failed: return={kr}, words={count.value}"
+                )
+            return {
+                "page_size": page_size,
+                # Mach includes speculative pages in free_count; vm_stat's
+                # printed Pages free excludes them and reports them separately.
+                "free_bytes": (info.free_count - info.speculative_count) * page_size,
+                "wired_bytes": info.wire_count * page_size,
+                "active_bytes": info.active_count * page_size,
+                "inactive_bytes": info.inactive_count * page_size,
+                "speculative_bytes": info.speculative_count * page_size,
+                "anonymous_bytes": info.internal_page_count * page_size,
+                "file_backed_bytes": info.external_page_count * page_size,
+                "compressor_bytes": info.compressor_page_count * page_size,
+                "compressed_bytes": info.total_uncompressed_pages_in_compressor * page_size,
+                "used_bytes": (info.wire_count + info.active_count +
+                               info.inactive_count + info.compressor_page_count) * page_size,
+                "non_file_used_bytes": (info.wire_count + info.internal_page_count +
+                                        info.compressor_page_count) * page_size,
+                "swapins_pages": info.swapins,
+                "swapouts_pages": info.swapouts,
+            }
+        finally:
+            kr = deallocate(task_self(), host)
+            if kr != 0:
+                raise RuntimeError(f"host port deallocation failed: return={kr}")
+
+    return read
+
+
 def box_memory_snapshot() -> dict[str, Any]:
     """Physical page counters; used includes file cache, compressor is physical."""
 
     if sys.platform != "darwin":
         return {"ok": False, "reason": "not_darwin"}
     try:
-        proc = subprocess.run(
-            ["/usr/bin/vm_stat"], capture_output=True, text=True, timeout=2
-        )
+        out = _mach_host_vm_reader()()
     except Exception as exc:  # pragma: no cover - env guard
         return {"ok": False, "error": repr(exc)}
-    if proc.returncode != 0:
-        return {"ok": False, "error": proc.stderr.strip() or "vm_stat failed"}
-    try:
-        out = _parse_vm_stat(proc.stdout)
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
     out["ok"] = True
-    out["source"] = "vm_stat"
+    out["source"] = "host_statistics64"
     out["used_includes_file_cache"] = True
     return out
 

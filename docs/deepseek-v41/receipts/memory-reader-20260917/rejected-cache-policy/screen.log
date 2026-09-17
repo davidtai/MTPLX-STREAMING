@@ -1,0 +1,9 @@
+{"config": {"capacity": 100}, "elapsed_s": 0.6851381659944309, "train_reads": 19471, "heldout_reads": 16510, "total_reads": 35981}
+{"config": {"capacity": 100, "lags": 1, "lr": 0.1, "blend": 0.5}, "elapsed_s": 0.9247230000037234, "train_reads": 19580, "heldout_reads": 16735, "total_reads": 36315}
+{"config": {"capacity": 100, "lags": 1, "lr": 0.1, "blend": 1}, "elapsed_s": 0.7072239580011228, "train_reads": 21803, "heldout_reads": 19708, "total_reads": 41511}
+{"config": {"capacity": 100, "lags": 1, "lr": 0.5, "blend": 0.5}, "elapsed_s": 0.9365960830036784, "train_reads": 19507, "heldout_reads": 16396, "total_reads": 35903}
+{"config": {"capacity": 100, "lags": 1, "lr": 0.5, "blend": 1}, "elapsed_s": 0.7236925000033807, "train_reads": 20863, "heldout_reads": 17352, "total_reads": 38215}
+{"config": {"capacity": 100, "lags": 2, "lr": 0.1, "blend": 0.5}, "elapsed_s": 1.0358596249861876, "train_reads": 19539, "heldout_reads": 16755, "total_reads": 36294}
+{"config": {"capacity": 100, "lags": 2, "lr": 0.1, "blend": 1}, "elapsed_s": 0.7996449579950422, "train_reads": 21855, "heldout_reads": 19882, "total_reads": 41737}
+{"config": {"capacity": 100, "lags": 2, "lr": 0.5, "blend": 0.5}, "elapsed_s": 1.0239539580070414, "train_reads": 19492, "heldout_reads": 16397, "total_reads": 35889}
+{"config": {"capacity": 100, "lags": 2, "lr": 0.5, "blend": 1}, "elapsed_s": 0.8142302079941146, "train_reads": 20950, "heldout_reads": 17526, "total_reads": 38476}

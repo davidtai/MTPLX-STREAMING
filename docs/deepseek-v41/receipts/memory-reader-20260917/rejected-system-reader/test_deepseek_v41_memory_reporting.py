@@ -49,61 +49,83 @@ def test_system_total_includes_file_pages_and_physical_compressor():
 
 
 def test_broken_system_reader_is_unknown(monkeypatch):
-    monkeypatch.setattr(profile.subprocess, "run", lambda *a, **k:
-                        SimpleNamespace(returncode=0, stdout="garbage", stderr=""))
+    def unavailable():
+        raise OSError("host statistics unavailable")
+
+    monkeypatch.setattr(profile, "_mach_host_vm_reader", unavailable)
     monkeypatch.setattr(profile.sys, "platform", "darwin")
     assert profile.box_memory_snapshot()["ok"] is False
 
 
 @pytest.fixture
-def mach_process_reader(monkeypatch):
+def native_host_reader(monkeypatch):
+    """Exercise the ctypes call boundary without requiring a macOS kernel."""
     import ctypes
 
-    state = {"reads": 0, "bindings": 0, "result": 0, "words": 38}
+    state = {"result": 0, "words": 38, "release_result": 0,
+             "acquired": [], "released": []}
+
+    def host_self():
+        port = 100 + len(state["acquired"])
+        state["acquired"].append(port)
+        return port
 
     def task_self():
-        return 100 + state["reads"]
+        return 42
 
-    def task_info(task, flavor, info, count):
-        assert task == 100 + state["reads"] and flavor == 22
-        assert count._obj.value == 38
-        state["reads"] += 1
-        info._obj.resident_size = state["reads"] * 1000
-        info._obj.compressed = state["reads"] * 50
-        if state["words"] == 38:
-            info._obj.phys_footprint = state["reads"] * 2000
+    def statistics(host, flavor, info, count):
+        assert host == state["acquired"][-1] and flavor == 4
+        assert ctypes.sizeof(info._obj) == 152 and count._obj.value == 38
+        for name, value in {
+            "free_count": 12, "active_count": 10, "inactive_count": 20,
+            "wire_count": 4, "speculative_count": 3,
+            "internal_page_count": 12, "external_page_count": 21,
+            "compressor_page_count": 5,
+            "total_uncompressed_pages_in_compressor": 17,
+            "swapins": 6, "swapouts": 7,
+        }.items():
+            setattr(info._obj, name, value)
         count._obj.value = state["words"]
         return state["result"]
 
-    def bind(path):
-        state["bindings"] += 1
-        return SimpleNamespace(mach_task_self=task_self, task_info=task_info)
+    def deallocate(task, host):
+        assert task == 42
+        state["released"].append(host)
+        return state["release_result"]
 
-    profile._mach_task_vm_reader.cache_clear()
-    monkeypatch.setattr(ctypes, "CDLL", bind)
+    library = SimpleNamespace(mach_host_self=host_self, mach_task_self=task_self,
+                              host_statistics64=statistics,
+                              mach_port_deallocate=deallocate)
+    profile._mach_host_vm_reader.cache_clear()
+    monkeypatch.setattr(ctypes, "CDLL", lambda path: library)
+    monkeypatch.setattr(profile.os, "sysconf", lambda name: 16384)
     monkeypatch.setattr(profile.sys, "platform", "darwin")
     yield state
-    profile._mach_task_vm_reader.cache_clear()
+    profile._mach_host_vm_reader.cache_clear()
 
 
-def test_process_reader_caches_bindings_but_observes_fresh_values(mach_process_reader):
-    for reading in (1, 2):
-        assert profile._mach_task_vm_info() == {
-            "resident_bytes": reading * 1000,
-            "phys_footprint_bytes": reading * 2000,
-            "compressed_bytes": reading * 50,
-        }
-    assert mach_process_reader["bindings"] == 1
-    assert mach_process_reader["reads"] == 2
+def test_native_system_counters_match_vm_stat_and_balance_host_ports(native_host_reader):
+    expected = profile._parse_vm_stat(VM_STAT)
+    for _ in range(2):
+        snapshot = profile.box_memory_snapshot()
+        assert snapshot == {**expected, "ok": True,
+                            "source": "host_statistics64",
+                            "used_includes_file_cache": True}
+    assert native_host_reader["acquired"] == [100, 101]
+    assert native_host_reader["released"] == [100, 101]
 
 
-@pytest.mark.parametrize("field,value", [("words", 36), ("result", 5)])
-def test_incomplete_process_read_is_unknown_not_zero_or_rss(mach_process_reader, field, value):
-    mach_process_reader[field] = value
-    snapshot = profile.process_rss_snapshot()
-    assert snapshot["phys_footprint_bytes"] is None
-    assert snapshot["resident_bytes"] is None
-    assert snapshot["source"] == "getrusage_only"
+@pytest.mark.parametrize("field,value", [
+    ("result", 5), ("words", 24), ("words", 39), ("release_result", 5),
+])
+def test_native_system_read_failures_stay_unknown_and_release_ports(
+    native_host_reader, field, value,
+):
+    native_host_reader[field] = value
+    snapshot = profile.box_memory_snapshot()
+    assert snapshot["ok"] is False
+    assert "used_bytes" not in snapshot
+    assert native_host_reader["acquired"] == native_host_reader["released"] == [100]
 
 
 def test_footprint_reader_never_substitutes_rss(monkeypatch):

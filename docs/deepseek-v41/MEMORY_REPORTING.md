@@ -60,6 +60,16 @@ does not claim to include model loading. The GPU guard covers that lifecycle.
 For DeepSeek V4.1, `/health.memory_usage` uses the same OS reader, with bytes and
 sample timing; it is sampled only when health is requested.
 
+The process reader caches its ctypes/Mach function bindings, never the measured
+values, and validates that a successful reply includes `phys_footprint`.
+Truncated replies remain unknown instead of becoming zero-byte measurements.
+The whole-machine reader deliberately retains platform `vm_stat`: direct
+third-party `host_statistics64` calls can return kernel-cached counters and miss
+recent growth, as explained by
+[Apple's rate-limiting implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c#L703-L749).
+The [CPU measurements and freshness checks](receipts/memory-reader-20260917/README.md)
+cover the accepted process-reader optimization and rejected system-reader change.
+
 The 110 GB allocation target must cover Metal allocations, allocator retention,
 Python caches, I/O buffers, and the separately measured system baseline. Memory
 limits and planned cache capacities are configuration, not usage measurements.

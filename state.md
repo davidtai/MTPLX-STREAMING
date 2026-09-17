@@ -20,9 +20,9 @@ TPS on exact16,384-input/1,024-output Python under110 decimal GB.
 # Plan Status
 
 Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task4 remains open.
-Memory/runner fixes are committed through the prior stages. This checkpoint
-also fixes the A/B headline and cross-arm comparison selecting the AR reference
-instead of the actual DSpark measurements/tokens/phase budget.
+Memory/runner fixes include the measured DSpark headline/comparison and phase
+budget. This stage caches process-reader function bindings and rejects a short
+Mach response instead of reporting its untouched footprint field as zero.
 
 # Retained Evidence
 
@@ -39,38 +39,42 @@ Full MTP digest0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
 
 # Latest Evidence
 
-Source7537ead7 full native teacher atcap84 matches1024tokens/206cycles.
-Preserve FP32 prefill state and raw BF16 committed hidden bits. Draft-only
-replay validates D5 boundaries and screens D7 at176cycles. Compact/full D7
-individual boundaries differ despite equal totals; D9/D13 lose the screen.
-Native M8 target probe atcap16 matches129tokens before full-shape admission.
+Process-reader CPU A/B/A medians24.167/1.125/22.1875us; a touched16MiB allocation
+immediately adds16,809,984B of measured footprint. Bindings only are cached.
+The old reader reports0 for a successful reply missing phys_footprint; the new
+reader reports unknown.27 focused CPU cases pass, real MLX imports forbidden.
 
-Full D7/M8 atcap91->98 gives11.4315252563TPS /89.4893705840s,176cycles,
-40,607 physical reads /763,437,588,480B. Exact output digest preserved.
-Allocator93,704,070,260B; seed/decode92,532,465,178B; externalprocess
-94,506,621,600B and machine105,610,772,480B. Admission109,314,275,908B.
-No throughput promotion or additional matched GPU control: it does not beat
-retained best, and91/98 vs93/100 confounds an isolated width-effect claim.
-Receipts:docs/deepseek-v41/receipts/native-draft-width-20260917/README.md.
+Keep platform vm_stat for system usage. Direct host_statistics64 was rejected:
+kernel rate limiting returns cached counters while vm_stat sees18,530,304B
+of fresh growth. Its700x microbenchmark and29 schema tests do NOT justify use.
 
-A/B summary now reports actual DSpark throughput/memory, compares DSpark output
-hashes and uses measured decode budgets.24 CPU reporting cases pass with real
-MLX imports blocked. Previous source fails the new regression.
-The benchmark resize observer now aborts through runtime cleanup instead of
-letting telemetry swallow a resize failure; both live wrappers are fixed.
-Measured originals are preserved. CPU checks cover failure and success paths.
+Eight causal online logistic cache policies fail the100-cycle selection window;
+post-service pin relaxation yields0 promotions and0 read savings. No runtime
+cache-policy change. Baseline replay35,981reads starts73+27empty slots, not the
+retained93->100 prefill state. Do not claim this as exact current-run replay.
+
+Source8f30 full D5/M6 cProfile diagnostic at91->100 matches1024tokens/206cycles,
+but thread attribution is corrupt (self time exceeds cumulative time; CPU-only
+reproduction confirms).10.7873TPS is instrumented, not a throughput candidate.
+Sampled machine106,117,201,920B versus109,431,449,068B bound; extra profiler
+host reserve128MiB. Do not use raw cProfile call counts or timings as evidence.
+All evidence:docs/deepseek-v41/receipts/memory-reader-20260917/README.md.
+Previous native D7/M8 loses at11.4315TPS; teacher tensors remain preserved.
+See docs/deepseek-v41/receipts/native-draft-width-20260917/README.md.
 
 # Lifecycle
 
-All owned GPU children are terminal. Latest full D7 child exit0; exact Qwen
-restore, health, warmup and lock release16:15:08UTC. Independently verified
+All owned GPU children are terminal. Latest diagnostic child exit0; exact Qwen
+restore, health, warmup and lock release17:01:33UTC. Independently verified
 health/model identity/free lock afterward. Other jobs may acquire at any time.
-No unrelated process was signaled. No GPU work after that window in this stage.
+No unrelated process was signaled. Subsequent work is CPU-only.
 
 # Open Work
 
 -20TPS remains open. Reduce physical expert bytes or exposed verification cost;
   fewer draft cycles alone increased total reads in the measured D7 screen.
+- A fresh profile needs independently verified thread attribution or explicit
+  timing boundaries. Do not repeat this environment's corrupt cProfile capture.
 - Reject repeated HC-compile,fanout8,D7-full,staged3+3,D3-full,retirement-only,
   serial-rANS and target-head non-tie-divergence screens. Do not repeat them.
 - One-request growth preserves one bank/layer and owns/synchronizes old backing.

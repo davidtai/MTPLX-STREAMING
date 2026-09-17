@@ -1,0 +1,11 @@
+{
+  "allocation_geometry_matches": true,
+  "recorded_base_bytes": 9965830144,
+  "additional_profiler_reserve_bytes": 134217728,
+  "prefill_capacity": 91,
+  "decode_capacity": 99,
+  "physical_bound_bytes": 109175727596,
+  "allocator_limit_bytes": 97886686208,
+  "engine_budget_bytes": 88690793288,
+  "scope": "CPU extraction of actual admission function and runner budget arithmetic; no MLX imported"
+}
