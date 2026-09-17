@@ -208,6 +208,14 @@ not the separate 20 TPS objective.
 
 ## Runner corrections after budget validation
 
+Both runners bind the three import-time model flags for HC compilation,
+attention compilation and attention-window memoization before model construction.
+A/B arms can now enable and disable them after an earlier arm or wrapper imported
+the model module. Receipts record `bound_model_levers` separately from `arm_env`;
+historical environment snapshots alone do not establish which imported flags
+actually ran. Existing tensor shapes and row caps remain unchanged. Allocation
+and numerical evidence must match the bound configuration before a full run.
+
 Both benchmark runners report the effective DSpark depth from generation
 statistics and preserve the CLI value separately as `requested_depth`. A request
 for depth six against the native five-token head therefore reports depth five;

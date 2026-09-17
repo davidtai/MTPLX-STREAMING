@@ -1463,6 +1463,30 @@ def _resolve_memory_derivation(args):
     return module._resolve_derivation(args)
 
 
+def bind_model_levers(model_module) -> dict[str, bool]:
+    """Resolve import-bound flags once before constructing a benchmark model.
+
+    A/B arms share a process, and wrappers may import the model before applying
+    their preset. Environment changes alone do not update these module globals.
+    """
+    bindings = (
+        ("MTPLX_DSV41_HC_COMPILE", "_HC_COMPILE"),
+        ("MTPLX_DSV41_ATTN_COMPILE", "_ATTN_COMPILE"),
+        ("MTPLX_DSV41_ATTN_WIN_MEMO", "_ATTN_WIN_MEMO"),
+    )
+    for _, attribute in bindings:
+        if not hasattr(model_module, attribute):
+            raise RuntimeError(f"benchmark model is missing lever {attribute}")
+    bound = {}
+    for key, attribute in bindings:
+        value = (os.environ.get(key) or "").strip().lower() not in (
+            "", "0", "false", "no", "off", "auto",
+        )
+        setattr(model_module, attribute, value)
+        bound[key] = getattr(model_module, attribute)
+    return bound
+
+
 def run_real(args) -> int:
     import mlx.core as mx
 
@@ -1496,6 +1520,9 @@ def run_real(args) -> int:
     # (with_mtp=True) and reprices the MTP residents (~7.4 GiB) against the expert
     # cache so the plan still fits.
     from mtplx.models.deepseek_v41_dspark_decode import dspark_bench_loader_overrides
+    from mtplx.models import deepseek_v41 as model_module
+
+    bound_model_levers = bind_model_levers(model_module)
 
     want_head = (getattr(args, "decode_mode", "ar") == "dspark") or bool(
         getattr(args, "with_mtp", None)
@@ -1555,6 +1582,7 @@ def run_real(args) -> int:
         cache_limit_report = getattr(runtime, "memory_cap_report", None)
 
     receipt = _base_receipt(args, dry_run=False, worktree=worktree)
+    receipt["bound_model_levers"] = bound_model_levers
     receipt["max_live_kv_tokens"] = int(max_kv)
     receipt["device"] = "cpu" if args.cpu else "default"
     receipt["spec_key"] = runtime.spec.key

@@ -113,6 +113,37 @@ def test_headline_does_not_turn_missing_measurements_into_zero():
     assert "box_used_gb=n/a" in line
 
 
+def test_model_levers_follow_each_arm_after_module_import(monkeypatch):
+    from types import ModuleType
+
+    ab = load_script("ab_decode_env_levers")
+    bench = load_script("bench_standard_shape")
+    monkeypatch.setattr(ab.os, "environ", {})
+    model = ModuleType("benchmark_model")
+    model.__dict__.update(
+        _HC_COMPILE=False, _ATTN_COMPILE=False, _ATTN_WIN_MEMO=False,
+        _HC_COMPILE_MAX_ROWS=7, _ATTN_COMPILE_MAX_ROWS=32,
+        _stime=SimpleNamespace(recording=lambda: False, is_prefill=lambda: False),
+    )
+    source = (ROOT / "mtplx/models/deepseek_v41.py").read_text()
+    routes = [node for node in ast.parse(source).body
+              if isinstance(node, ast.FunctionDef)
+              and node.name in ("_hc_use_compile", "_attn_use_compile")]
+    tree = ast.Module(body=[ast.ImportFrom(module="__future__",
+        names=[ast.alias(name="annotations")], level=0), *routes], type_ignores=[])
+    exec(compile(ast.fix_missing_locations(tree), "native-route-selection", "exec"), model.__dict__)
+    for arm, expected in (("all_levers", (True, True, True)),
+                          ("control", (False, False, False)),
+                          ("hc_compile", (True, False, False))):
+        ab._apply_arm_env(arm)
+        bound = bench.bind_model_levers(model)
+        assert tuple(bound.values()) == expected
+        assert model._hc_use_compile(SimpleNamespace(shape=(1, 6, 4, 5120))) == expected[0]
+        assert model._attn_use_compile(6) == expected[1]
+        assert not model._hc_use_compile(SimpleNamespace(shape=(1, 512, 4, 5120)))
+        assert not model._attn_use_compile(512)
+
+
 def test_sampler_records_short_run_end_peak_and_same_sample_counters(monkeypatch):
     bench = load_script("bench_standard_shape")
     snapshots = iter([

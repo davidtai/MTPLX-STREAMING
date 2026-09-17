@@ -3239,6 +3239,9 @@ def _load_model(args, bench, mx):
     from mtplx.deepseek_v41_memory_profile import apply_allocator_cache_limit
     from mtplx.models.deepseek_v41_dspark_decode import dspark_bench_loader_overrides
     from mtplx.models.deepseek_v41_loader import load_deepseek_v41_streaming
+    from mtplx.models import deepseek_v41 as model_module
+
+    args._dsv41_bound_model_levers = bench.bind_model_levers(model_module)
 
     admission_receipt = None
     if args.admission_receipt is not None:
@@ -4775,6 +4778,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             "rounding_class_keys": _rounding_class_keys(arm),
             "overlap_env": os.environ.get(OVERLAP_ENV),
             "arm_env": _arm_env_snapshot(),
+            "bound_model_levers": dict(args._dsv41_bound_model_levers),
             # K14 (W63): the MLX command-buffer MB cap in effect for this arm
             # (None = MLX default). MLX binds it at Metal init, so run one arm per
             # process with it exported for a real A/B; recorded for reproducibility.
