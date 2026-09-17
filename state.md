@@ -19,6 +19,8 @@ Fresh pair: native 11.7141789 TPS, packed scales 12.2253796 TPS (+4.364%).
 - Work inline, no agents; minimal checks, optimization tests after wins.
   Tie breakers are allowed; arbitrary or unclassified output drift is not.
 - Preserve Claude W126/W127/W128 worktrees; keep unvalidated bounded KV off.
+- User explicitly requested fixed Q8 KV. The new fixed Q8 factory is separate
+  from the old disabled bounded-KV lane; native 16-bit storage remains the control.
 
 # Plan Status
 
@@ -26,10 +28,43 @@ Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 remains open
 Reporting fixes cover actual measured passes and phases, fresh Mach footprint
 reads, short-reply rejection, missing diagnostic logits, sampled guard peaks,
 and current slot/transient storage versus source_expert_record_bytes.
-The 37 CPU reporting cases remain unchanged; both latest real arms exercise
-correct source/current record sizes and shared transient allocation bytes.
+The 37 CPU reporting cases and eight loader/budget cases pass with real MLX
+imports blocked. Both latest full arms exercise correct source/current record
+sizes and shared transient allocation bytes.
 
-# Latest Verified Pair
+# Latest Fixed Q8 and Budget Work
+
+All default budget interfaces and the staged native/packed admission helpers
+now use 110,000,000,000 bytes. On the recorded 11.2549 GB baseline, native-KV
+packed admission selects 100 slots/layer at bound109,708,761,320B. Exactly110GB
+admits; one byte over reduces slots. Existing host/cache/copy margins remain.
+
+Explicit settings: --box-target-gb 110 --max-kv 17664 --kv-cache-bits 8
+--kv-max-append 953. Target window/compressed/index and draft storage is Q8,
+group64 with FP32 metadata; compressor working rows remain native FP32.
+Fixed backings total112,503,168B; loader reserves503,316,480B for all Q8
+backings/copies/views before expert allocation, keeping old native allowances.
+Packed snapshots/rollback preserve bytes; no cache owner bound-method cycles.
+
+Final bounded probe passes 16K real-width storage/reference/rollback/restore,
+native draft detach, and a tiny real model's prefill plus12 verify/trim cycles.
+Storage stays112.5MB; MLX peak274,186,240B; after teardown975,688B active.
+No full-model Q8 quality or throughput result. Native full-run growth wrappers
+are now source-stale and their native cache bounds are invalid for Q8; do not
+refresh hashes alone or reuse the native AR digest as a Q8 reference.
+Receipt: docs/deepseek-v41/receipts/fixed-q8-budget110-20260917/README.md.
+
+Latest guard child/guard exit0. Exact Qwen restore/warmup and lock release at
+21:37:12UTC; independent21:37:40UTC healthy/idle/warmed/free, no owned child.
+Automatic shutdown reclamation removed36.54GB cached pages (36.47GB measured
+physical reduction). No abandoned DeepSeek process was found. Active Colima
+containers ndh-runner/qwen36-webstatus and VS Code were preserved.
+
+Completed packed geometry screen: R8/SG2, R4/SG4 and FP4 float-bit conversion
+all exact but flat/slower across real shapes; no installation or full rerun.
+Receipt: docs/deepseek-v41/receipts/packed-geometry-screen-20260917/README.md.
+
+# Latest Full Workload Pair
 
 Measured source 170a576dc; one sequential native/packed full-workload batch.
 Both use native BF16 target arithmetic, compact MTP 93/58/32, D5/M6, 48 shared
@@ -62,7 +97,7 @@ health and warmup preceded lock release 20:42:03UTC; independent verification
 at 20:42:43UTC found healthy/idle/warmed Qwen, no owned children and a free lock.
 Earlier cap91 refusals at 28.35/10.71/11.13GB are retained; do not repeat them.
 
-Live pair helpers: /tmp/dsv41-prefill84-pair-20260917/{native,packed} plus
+Live pair helpers (now source-stale): /tmp/dsv41-prefill84-pair-20260917/{native,packed} plus
 run_pair.py; used output prefixes must not be overwritten. Helpers are one-request
 benchmarks and explicitly reject a second prefill. Update live source proofs
 only after verifying unchanged runtime hashes when committing documentation.

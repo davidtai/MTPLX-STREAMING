@@ -25,6 +25,8 @@ def test_mtp_is_priced_before_allocation(monkeypatch, tmp_path, explicit, env, i
     monkeypatch.setitem(sys.modules, "mlx_lm.utils", SimpleNamespace(load_config=lambda root: config))
     monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41",
                         SimpleNamespace(_resolve_wo_a_cache=lambda: True,
+                                        _resolve_attn_wo_a_direct=lambda: False,
+                                        _resolve_prefill_layer_major=lambda value=None: False,
                                         _resolve_attn_fused_proj=lambda: False))
 
     def open_runtime(root, path, runtime_config, **kwargs):
@@ -66,3 +68,66 @@ def test_separate_construction_refuses_an_unpriced_mtp_head(tmp_path):
             config={"model_type": "deepseek_v41", "n_mtp_layers": 3},
             model_class_resolver=no_model_import,
         )
+
+
+def test_fixed_q8_reserve_precedes_expert_allocation(monkeypatch, tmp_path):
+    config = {"model_type": "deepseek_v41", "text_config": {"n_mtp_layers": 3}}
+    manifest = SimpleNamespace(model_key="deepseek-v41-flash-expert-mxfp4",
+                               resident_tensors=[SimpleNamespace(tensor="mtp.0.ffn")])
+    events, opened = [], {}
+    q8_reserve = 512 * 1024**2
+    resident = SimpleNamespace(model=object())
+    monkeypatch.setattr(loader, "load_expert_manifest", lambda path: manifest)
+    monkeypatch.setattr(loader, "resolve_artifact_member", lambda root, name: root / name)
+    monkeypatch.setattr(loader, "resolve_gate_prefetch_ring_slots", lambda current: current)
+    monkeypatch.setitem(sys.modules, "mlx_lm.utils", SimpleNamespace(load_config=lambda root: config))
+    monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41", SimpleNamespace(
+        _resolve_wo_a_cache=lambda: True, _resolve_attn_fused_proj=lambda: False,
+        _resolve_attn_wo_a_direct=lambda: False,
+        _resolve_prefill_layer_major=lambda value=None: False))
+    monkeypatch.setattr(loader, "deepseek_v41_model_classes", lambda: (
+        object, SimpleNamespace(from_dict=lambda value: value)))
+
+    def cache_config(args, **kwargs):
+        assert args == config
+        assert kwargs == dict(max_kv=17664, max_append=953, draft_layers=3)
+        events.append("price")
+        return SimpleNamespace(max_kv=17664, max_append=953,
+                               reserve_bytes=lambda: q8_reserve)
+
+    def open_runtime(root, path, runtime_config, **kwargs):
+        events.append("allocate")
+        opened.update(kwargs)
+        return SimpleNamespace(close=lambda: None)
+
+    def construct(*args, **kwargs):
+        events.append("construct")
+        return resident
+
+    def install(model, **kwargs):
+        assert model is resident.model
+        assert kwargs == dict(max_kv=17664, max_append=953)
+        events.append("install")
+        return dict(additional_reserve_bytes=q8_reserve)
+
+    monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41_fixed_q8_cache",
+                        SimpleNamespace(FixedQ8CacheConfig=SimpleNamespace(from_args=cache_config),
+                                        install_fixed_q8_cache=install))
+    monkeypatch.setattr(loader.ExpertStreamingRuntime, "open", open_runtime)
+    monkeypatch.setattr(loader, "construct_deepseek_v41_resident_model", construct)
+    actual = loader.load_deepseek_v41_streaming(
+        tmp_path, memory_limit_bytes=80 * 1024**3, max_live_kv_tokens=17664,
+        admit=False, apply_memory_cap=False, with_mtp=True,
+        slot_layout="direct-slots", kv_cache_bits=8, kv_max_append=953)
+    assert actual is resident
+    assert events == ["price", "allocate", "construct", "install"]
+    native = loader.SWA_WINDOW_BYTES + 43 * loader.WO_A_DENSE_F32_BYTES + 3 * 128 * 512 * 4
+    assert opened["additional_resident_bytes"] == native + q8_reserve
+
+
+@pytest.mark.parametrize("bits,append", [(4, None), (16, 953)])
+def test_invalid_kv_settings_fail_before_artifact_access(tmp_path, bits, append):
+    with pytest.raises(ValueError, match="kv_"):
+        loader.load_deepseek_v41_streaming(
+            tmp_path / "absent", memory_limit_bytes=80 * 1024**3,
+            max_live_kv_tokens=17664, kv_cache_bits=bits, kv_max_append=append)

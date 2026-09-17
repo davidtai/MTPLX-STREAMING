@@ -1,0 +1,13 @@
+{
+  "source_commit": "041b93f8b58c11d82e0b2ee3ddc79b75f543aa78",
+  "unchanged_helpers_sha256": {
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf"
+  },
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "fp4_float_bit_formulation_all_16_codes_exact_including_negative_zero": true,
+  "static_incremental_bound_bytes": 6442450944,
+  "allocation_accounting": "48 raw records =902430720B, then849346560B weights +77275224B packed layer20 scales; reference/candidate outputs under8MiB; 2GiB MLX limit,256MiB cache,4GiB host/compiler allowance; no full model",
+  "numeric_invariants": "native K values per lane16/8, K steps10/9, dot grouping, E8M0 scale decode, SIMD sum and BF16 output; only output tiling/group count or exact FP4 scalar conversion changes"
+}

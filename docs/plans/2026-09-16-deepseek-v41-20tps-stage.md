@@ -661,3 +661,32 @@ Current source/current-storage reporting is correct in both real receipts.
 Qwen identity, health, warmup and lock release were independently verified.
 Task 4 and the 20 TPS goal remain open. See
 `../deepseek-v41/receipts/resident-packed-scales-pair-20260917/README.md`.
+
+### User-requested 110 GB and fixed Q8 KV, 2026-09-17
+
+The user authorized fixed Q8 KV and asked that RAM use be standardized at110GB.
+This changes KV precision explicitly; it does not change the earlier q8 output
+head decision. The new cache is separate from the old disabled bounded-KV lane.
+
+- [x] Unify decimal/GiB defaults and staged admission on110,000,000,000B.
+  The recorded baseline admits100 packed slots at109,708,761,320B; a one-byte
+  excess at the110GB boundary reduces capacity. Other allowances remain.
+- [x] Add fixed packed target window/compressed/index and draft KV; keep native
+  compressor arithmetic in fixed rolling stores. Resolve geometry and reserve
+  all backing/copy/view allowances before expert allocation.
+- [x] Expose `--kv-cache-bits 8 --kv-max-append 953` for max KV17664 and report
+  storage/reserve geometry in both real benchmark receipts.
+- [x] Verify112,503,168B constant backings, packed snapshot/rollback, draft seed,
+  native detach and tiny real-model forward/trim. Fix owner reference cycles.
+  Allocator peak274,186,240B;975,688B active after teardown.45 focused CPU cases
+  and the legacy budget assertion pass with real MLX imports blocked.
+- [x] Verify automatic Qwen reclamation and exact healthy/warmed restoration.
+  No abandoned DeepSeek process was found; active other jobs were preserved.
+- [ ] Establish a fresh complete full-model Q8 memory envelope and Q8 reference,
+  then measure quality and throughput. Native source proofs/cache envelopes
+  cannot authorize Q8 simply by refreshing hashes. Keep native default/control.
+
+Evidence: `../deepseek-v41/receipts/fixed-q8-budget110-20260917/README.md`.
+The independent packed-geometry screen rejected all three candidates; see
+`../deepseek-v41/receipts/packed-geometry-screen-20260917/README.md`.
+Task4 and the20TPS goal remain open; best full result remains12.4439935TPS.

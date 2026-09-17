@@ -65,6 +65,7 @@ from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
 GIB = 1024**3
+DEFAULT_BOX_BUDGET_BYTES = 110_000_000_000
 DEFAULT_ENGRAM_CACHE_BYTES = 256 * 1024**2  # per layer; two layers in this artifact
 
 
@@ -93,10 +94,11 @@ def python_cache_budget(env: Mapping[str, str]) -> dict[str, int]:
 # Derivation constants (documented; a few are env-overridable for tuning).
 # --------------------------------------------------------------------------
 
-#: David's TOTAL box-use safety budget in GB (the resident Qwen server is booted
-#: out during a GPU window, so the DSV4.1 process + macOS is all that runs).
-#: The box panics at ~110 GB; 100 keeps a margin below that.
-DEFAULT_BOX_BUDGET_GIB = 100.0
+#: Whole-machine physical-use ceiling, including the measured baseline, Python,
+#: Metal, file cache and transient allocations. Keep the legacy GiB interface
+#: expressed from the same decimal-byte ceiling as the target planner and guard.
+#: Host/cache/compile allowances are priced inside this ceiling, separately.
+DEFAULT_BOX_BUDGET_GIB = DEFAULT_BOX_BUDGET_BYTES / GIB
 
 #: macOS + file-cache pages that must stay free/file-backed or the compressor
 #: starts (measured: at a 92 GiB plan the box sat at 102 GB with 0.1 GB free and

@@ -451,6 +451,10 @@ class DSparkStageCache:
     def mark(self):
         return (self.offset, self.window)
 
+    def detach_prefill_backings(self):
+        self.window = mx.take(self.window, mx.arange(self.window.shape[1]), axis=1)
+        return [self.window]
+
     def rollback(self, mark) -> None:
         self.offset, self.window = mark
 

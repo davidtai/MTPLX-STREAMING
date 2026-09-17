@@ -3,7 +3,7 @@
 Pins four things the GPU window relies on, none of which need Metal or the
 195 GB artifact:
 
-1. The budget->plan derivation arithmetic (budget 100 -> plan 78 GiB) and its
+1. The 110 decimal GB budget-to-plan derivation arithmetic and its
    env/override paths and guards.
 2. The snapshot helper's schema against MOCKED MLX allocator stats.
 3. That the allocator cache-limit fix calls ``mx.set_cache_limit`` with the
@@ -33,18 +33,16 @@ GIB = 1024**3
 # --------------------------------------------------------------------------
 
 
-def test_derivation_budget_100_gives_78_gib():
-    # plan = budget(100) - macOS_floor(6) - host_overhead(10) - cache_limit(6).
+def test_derivation_default_uses_110_decimal_gb():
+    # The legacy GiB interface uses the same 110 decimal GB machine ceiling.
+    from mtplx.expert_runtime import DEFAULT_BOX_TARGET_GB
+
     d = mp.derive_plan_from_budget(env={})
     assert d.source == "budget"
-    assert d.box_budget_gib == 100.0
-    assert d.plan_gib == pytest.approx(78.0)
-    assert d.memory_limit_bytes == int(round(78.0 * GIB))
+    assert d.box_budget_gib * GIB == DEFAULT_BOX_TARGET_GB * 1e9 == 110_000_000_000
+    assert d.memory_limit_bytes == 110_000_000_000 - 22 * GIB
     assert d.cache_limit_bytes == int(round(6.0 * GIB))
     assert d.runtime_reserve_bytes == int(round(7.0 * GIB))
-    # The formula string carries every term with its number.
-    assert "budget(100)" in d.formula()
-    assert "= 78 GiB" in d.formula()
 
 
 def test_derivation_arithmetic_is_pure_subtraction():

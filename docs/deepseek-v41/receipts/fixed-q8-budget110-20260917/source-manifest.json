@@ -1,0 +1,12 @@
+{
+  "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+  "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+  "mtplx/models/deepseek_v41_fixed_q8_cache.py": "d4be865de846dee5bb39728f5f1c2f6ea45e27894057a6838eea288fd5e40e17",
+  "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+  "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+  "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+  "scripts/deepseek_v41/ab_decode_env_levers.py": "32d42a85ebe69ce986e6f8a7d0d20eb435ad70206c8fdc8649aa276043055963",
+  "scripts/deepseek_v41/bench_standard_shape.py": "7a2c5873ac54d90b060ea32a6d0d7c5c395bdf2f19f67023dbed58341e4d70ac",
+  "tests/test_deepseek_v41_memory_profile.py": "2408afb070e4fa14aa1e6112415bcaf7896a9136bb7bb6c19123bc1b99a80856",
+  "tests/test_deepseek_v41_mtp_budget.py": "ab863f653331c3a215a4df574cb643a8e53cb7388b17eb5ef1e63a4a237c6746"
+}

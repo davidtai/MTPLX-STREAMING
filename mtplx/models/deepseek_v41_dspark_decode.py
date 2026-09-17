@@ -1101,11 +1101,8 @@ def _seed_prefill_state(model, main_hidden, mtp_caches):
     """
     model.mtp.seed_main(main_hidden, mtp_caches)
     main_h = mx.take(main_hidden, mx.array([main_hidden.shape[1] - 1]), axis=1)
-    for cache in mtp_caches:
-        # Gather into independent storage; deepcopy/contiguous can share an
-        # already contiguous view's full parent allocation on MLX.
-        cache.window = mx.take(cache.window, mx.arange(cache.window.shape[1]), axis=1)
-    mx.eval(main_h, [cache.window for cache in mtp_caches])
+    backings = [array for cache in mtp_caches for array in cache.detach_prefill_backings()]
+    mx.eval(main_h, backings)
     return main_h
 
 

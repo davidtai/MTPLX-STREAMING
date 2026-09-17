@@ -2063,6 +2063,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Total physical RAM target in decimal GB (default 110 or "
         "MTPLX_DSV41_BOX_TARGET_GB). Reserves system baseline and Python capacity; "
         "conflicts with --memory-limit-gib.")
+    p.add_argument("--kv-cache-bits", type=int, choices=(8, 16), default=16,
+        help="KV storage precision: 8 installs fixed-capacity Q8; 16 keeps native storage.")
+    p.add_argument("--kv-max-append", type=int, default=None,
+        help="Maximum prefill chunk for fixed Q8 storage (default min(max-kv, 4096)).")
     p.add_argument("--box-baseline-gb", type=float, default=None, metavar="GB",
         help="Pre-load physical system usage in decimal GB, including file cache. "
         "The GPU guard's live baseline takes precedence; otherwise measured now.")
@@ -3332,6 +3336,8 @@ def _load_model(args, bench, mx):
         island_layers=(),
         verify_record_hashes=args.verify_record_hashes,
         with_mtp=with_mtp,
+        kv_cache_bits=getattr(args, "kv_cache_bits", 16),
+        kv_max_append=getattr(args, "kv_max_append", None),
         **plan_overrides,
     )
     # W62 (2): bound the MLX allocator's freed-buffer cache from the plan so
@@ -4892,6 +4898,7 @@ def _run_arm(args, arm, bench, mx) -> dict:
             # counts + bytes + source), so an A/B is attributable to a capacity and
             # the in-process bench is comparable to the served profile plan.
             "resolved_plan": _resolved_plan(runtime, args),
+            "fixed_q8_cache": getattr(model, "_mtplx_fixed_q8_cache", None),
             "resident_load_report": dict(
                 getattr(model, "_mtplx_resident_load_report", resident.report.as_dict())
             ),

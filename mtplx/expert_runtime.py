@@ -1904,7 +1904,9 @@ def resolve_mlx_limit_headroom_bytes(env: Mapping[str, str] | None = None) -> in
 # An unset target in the low-level runtime preserves the legacy explicit-plan path.
 BOX_TARGET_ENV = "MTPLX_DSV41_BOX_TARGET_GB"
 BOX_BASELINE_ENV = "MTPLX_DSV41_BOX_BASELINE_GB"
-DEFAULT_BOX_TARGET_GB = 110.0  # total decimal GB, including host allocations and baseline
+from .deepseek_v41_memory_profile import DEFAULT_BOX_BUDGET_BYTES
+
+DEFAULT_BOX_TARGET_GB = DEFAULT_BOX_BUDGET_BYTES / 1_000_000_000
 _DECIMAL_GB = 1_000_000_000
 _GIB = 1024**3
 

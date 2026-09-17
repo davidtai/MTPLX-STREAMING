@@ -487,6 +487,7 @@ def open_deepseek_v41_runtime(
     mx_module: Any | None = None,
     config: ExpertStreamingConfig | None = None,
     model_config: Mapping[str, Any] | None = None,
+    additional_cache_reserve_bytes: int = 0,
     **config_overrides: Any,
 ) -> ExpertStreamingRuntime:
     """Construct the ExpertStreamingRuntime from ``expert-manifest.json``.
@@ -523,6 +524,9 @@ def open_deepseek_v41_runtime(
     additional_resident_bytes = deepseek_v41_additional_resident_bytes(
         mtp_layers=mtp_layers
     )
+    if type(additional_cache_reserve_bytes) is not int or additional_cache_reserve_bytes < 0:
+        raise ValueError("additional cache reserve must be a nonnegative byte count")
+    additional_resident_bytes += additional_cache_reserve_bytes
     if config is None:
         config = build_streaming_config(
             spec,
@@ -919,6 +923,8 @@ def load_deepseek_v41_streaming(
     mx_module: Any | None = None,
     strict: bool = True,
     with_mtp: bool | None = None,
+    kv_cache_bits: int = 16,
+    kv_max_append: int | None = None,
     **config_overrides: Any,
 ) -> ResidentModel:
     """End-to-end serve entry: admit, open the runtime, construct the model.
@@ -938,6 +944,10 @@ def load_deepseek_v41_streaming(
     """
 
     artifact_root = Path(root).resolve()
+    if kv_cache_bits not in (8, 16):
+        raise ValueError("kv_cache_bits must be 8 or 16")
+    if kv_cache_bits == 16 and kv_max_append is not None:
+        raise ValueError("kv_max_append requires the fixed Q8 cache")
     receipt: Mapping[str, Any] | None = admission_receipt
     # Resolve head ownership before any expert-bank allocation. Passing with_mtp
     # only to construction leaves the planner pricing an AR-only model.
@@ -953,6 +963,14 @@ def load_deepseek_v41_streaming(
     resolved_with_mtp = resolve_with_mtp(model_config, manifest, with_mtp)
     spec = replace(spec or get_model_spec(manifest.model_key),
                    mtp_included=resolved_with_mtp)
+    q8_config = None
+    if kv_cache_bits == 8:
+        from .deepseek_v41_fixed_q8_cache import FixedQ8CacheConfig
+        _, args_class = deepseek_v41_model_classes()
+        q8_config = FixedQ8CacheConfig.from_args(
+            args_class.from_dict(model_config), max_kv=max_live_kv_tokens,
+            max_append=min(max_live_kv_tokens, 4096) if kv_max_append is None else kv_max_append,
+            draft_layers=deepseek_v41_mtp_layers(model_config) if resolved_with_mtp else 0)
     if admit and receipt is None:
         from ..expert_admission import ensure_expert_admitted
 
@@ -969,10 +987,11 @@ def load_deepseek_v41_streaming(
         admission_receipt=receipt,
         apply_memory_cap=apply_memory_cap,
         mx_module=mx_module,
+        additional_cache_reserve_bytes=q8_config.reserve_bytes() if q8_config is not None else 0,
         **config_overrides,
     )
     try:
-        return construct_deepseek_v41_resident_model(
+        resident = construct_deepseek_v41_resident_model(
             artifact_root,
             runtime,
             config=model_config,
@@ -980,6 +999,13 @@ def load_deepseek_v41_streaming(
             strict=strict,
             with_mtp=resolved_with_mtp,
         )
+        if q8_config is not None:
+            from .deepseek_v41_fixed_q8_cache import install_fixed_q8_cache
+            report = install_fixed_q8_cache(resident.model, max_kv=q8_config.max_kv,
+                                            max_append=q8_config.max_append)
+            if report['additional_reserve_bytes'] != q8_config.reserve_bytes():
+                raise RuntimeError("installed fixed Q8 cache differs from its pre-load reserve")
+        return resident
     except Exception:
         runtime.close()
         raise

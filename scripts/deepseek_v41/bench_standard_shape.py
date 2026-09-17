@@ -428,10 +428,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="TOTAL box-use budget GiB the plan is derived from (default: "
-        "MTPLX_DSV41_BOX_BUDGET_GB env, else 100).",
+        "MTPLX_DSV41_BOX_BUDGET_GB env, else 110 decimal GB expressed in GiB).",
     )
     parser.add_argument("--box-target-gb", type=float, default=None,
         help="Total physical RAM target in decimal GB (default 110).")
+    parser.add_argument("--kv-cache-bits", type=int, choices=(8, 16), default=16,
+        help="KV storage precision: 8 installs fixed-capacity Q8; 16 keeps native storage.")
+    parser.add_argument("--kv-max-append", type=int, default=None,
+        help="Maximum prefill chunk for fixed Q8 storage (default min(max-kv, 4096)).")
     parser.add_argument("--box-baseline-gb", type=float, default=None,
         help="Pre-load system baseline in decimal GB; guard measurement takes precedence.")
     parser.add_argument("--allocator-cache-gib", type=float, default=None,
@@ -1563,6 +1567,8 @@ def run_real(args) -> int:
         island_layers=(),
         verify_record_hashes=args.verify_record_hashes,
         with_mtp=with_mtp,
+        kv_cache_bits=getattr(args, "kv_cache_bits", 16),
+        kv_max_append=getattr(args, "kv_max_append", None),
         **plan_overrides,
     )
     # W62 (2): bound the MLX allocator's freed-buffer cache from the plan so
@@ -1591,6 +1597,7 @@ def run_real(args) -> int:
     receipt = _base_receipt(args, dry_run=False, worktree=worktree)
     receipt["bound_model_levers"] = bound_model_levers
     receipt["max_live_kv_tokens"] = int(max_kv)
+    receipt["fixed_q8_cache"] = getattr(model, "_mtplx_fixed_q8_cache", None)
     receipt["device"] = "cpu" if args.cpu else "default"
     receipt["spec_key"] = runtime.spec.key
     receipt["manifest_sha256"] = getattr(runtime.manifest, "manifest_sha256", None)

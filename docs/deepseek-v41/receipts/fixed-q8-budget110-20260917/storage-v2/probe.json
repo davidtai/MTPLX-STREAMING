@@ -1,0 +1,153 @@
+{
+  "construction": {
+    "scope": "isolated fixed Q8 storage, rollback and native compressor pooling; no full model",
+    "incremental_bound_bytes": 6442450944,
+    "allocator_limit_bytes": 1073741824,
+    "cache_limit_bytes": 134217728,
+    "host_compiler_allowance_bytes": 4294967296,
+    "config": {
+      "max_kv": 17664,
+      "max_append": 953,
+      "window_size": 128,
+      "head_dim": 512,
+      "index_head_dim": 128,
+      "ratios": [
+        0,
+        0,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "sources": [
+        2,
+        8,
+        14,
+        20
+      ],
+      "draft_layers": 3,
+      "max_rollback": 8
+    },
+    "storage_bytes": {
+      "window": 50181120,
+      "compressed": 25436160,
+      "index": 6359040,
+      "frontier": 26763264,
+      "draft": 3763584,
+      "total": 112503168
+    },
+    "source_sha256": "ecd6943a557d52acf863f5cd774ab02a71e5bd27cd0a185ebafe8dd64b7caf23",
+    "retry_change": "Pass the installed MLX slice_update required axes=(0,1,2); normalize config target layers separately from MTP tail."
+  },
+  "before": {
+    "sample_start_monotonic_ns": 145927832866666,
+    "sample_end_monotonic_ns": 145927836022250,
+    "process": {
+      "peak_maxrss_bytes": 24313856,
+      "resident_bytes": 24723456,
+      "phys_footprint_bytes": 13779424,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123097726976,
+      "wired_bytes": 3199746048,
+      "active_bytes": 3319365632,
+      "inactive_bytes": 3106242560,
+      "speculative_bytes": 195706880,
+      "anonymous_bytes": 4299440128,
+      "file_backed_bytes": 2321874944,
+      "compressor_bytes": 1074561024,
+      "compressed_bytes": 6375063552,
+      "used_bytes": 10699915264,
+      "non_file_used_bytes": 8573747200,
+      "swapins_pages": 4813916,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "checks": [
+    "native compressor pooling and Q8 storage match independent references at 16384 rows",
+    "six-row verify and rollback preserve Q8 prefix bytes",
+    "full draft seed, detach and rollback preserve packed state",
+    "fixed capacity is unchanged after prefill, quantization and rollback"
+  ],
+  "allocated_storage_bytes": 112503168,
+  "active_after_cache_construction_bytes": 116670464,
+  "constant_storage_bytes_after_decode": 112503168,
+  "q8_error": {
+    "max_abs": 0.022075653076171875,
+    "relative_rms": 0.00539807602763176
+  },
+  "complete": true,
+  "mlx_peak_bytes": 274186240,
+  "mlx_active_after_close_bytes": 116670464,
+  "after": {
+    "sample_start_monotonic_ns": 145928071292541,
+    "sample_end_monotonic_ns": 145928075357791,
+    "process": {
+      "peak_maxrss_bytes": 303202304,
+      "resident_bytes": 286965760,
+      "phys_footprint_bytes": 632570816,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 122505609216,
+      "wired_bytes": 3673030656,
+      "active_bytes": 3403939840,
+      "inactive_bytes": 3183476736,
+      "speculative_bytes": 203800576,
+      "anonymous_bytes": 4450959360,
+      "file_backed_bytes": 2340257792,
+      "compressor_bytes": 1074626560,
+      "compressed_bytes": 6375047168,
+      "used_bytes": 11335073792,
+      "non_file_used_bytes": 9198616576,
+      "swapins_pages": 4813920,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "elapsed_s": 0.17191762500442564
+}

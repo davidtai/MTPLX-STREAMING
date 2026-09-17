@@ -1,0 +1,37 @@
+{
+  "baseline_bytes": 11254906880,
+  "wired_before_bytes": 3141599232,
+  "old": {
+    "decode_slots_per_layer": 99,
+    "physical_bound_bytes": 109000972520,
+    "physical_ceiling_bytes": 109500000000,
+    "active_bound_bytes": 92266684524,
+    "allocator_limit_bytes": 96597609472,
+    "decode_cache_allowance_bytes": 3331897468,
+    "host_reserve_bytes": 2147483648,
+    "allocation_margin_bytes": 268435456,
+    "full_logical_kv_extra_allowance_bytes": 56524800,
+    "page_padding_allowance_bytes": 3932160,
+    "reported_shared_native_ceiling_bytes": 110000000000,
+    "ceiling_note": "The old outer packed helper applied 109.5 GB; the inherited native receipt field already said 110 GB."
+  },
+  "new": {
+    "decode_slots_per_layer": 100,
+    "physical_bound_bytes": 109708761320,
+    "physical_ceiling_bytes": 110000000000,
+    "active_bound_bytes": 92974473324,
+    "allocator_limit_bytes": 96597609472,
+    "decode_cache_allowance_bytes": 3331897468,
+    "host_reserve_bytes": 2147483648,
+    "allocation_margin_bytes": 268435456,
+    "full_logical_kv_extra_allowance_bytes": 56524800,
+    "page_padding_allowance_bytes": 3932160
+  },
+  "boundary": {
+    "baseline_at_100_slot_limit_bytes": 11546145560,
+    "at_limit_slots": 100,
+    "one_byte_over_slots": 99
+  },
+  "decimal_gb_and_legacy_gib_defaults_match": true,
+  "scope": "CPU capacity resolution on the recorded baseline, not a new full-model measurement; native KV only"
+}

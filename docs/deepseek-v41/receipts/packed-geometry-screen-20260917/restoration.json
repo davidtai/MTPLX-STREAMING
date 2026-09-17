@@ -1,0 +1,61 @@
+{
+  "utc": "2026-09-17T21:02:27.444297+00:00",
+  "guard_exit": 0,
+  "lock": "free",
+  "health": {
+    "ok": true,
+    "model": "mtplx-flash-next-optimized-speed",
+    "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+    "active_requests": 0
+  },
+  "warmup": {
+    "enabled": true,
+    "ran": true,
+    "tokens": 16,
+    "elapsed_s": 1.5908974580233917,
+    "error": null,
+    "completion_tokens": 16,
+    "tok_s": 69.77033216110122,
+    "background": {
+      "mode": "background",
+      "state": "done",
+      "steps": [
+        {
+          "kind": "gqa_packed_pipelines",
+          "state": "ok",
+          "elapsed_s": 0.027,
+          "yields": 0
+        },
+        {
+          "kind": "ladder",
+          "context": 512,
+          "state": "ok",
+          "elapsed_s": 0.526,
+          "yields": 0,
+          "tok_s": 96.65
+        },
+        {
+          "kind": "ladder",
+          "context": 2560,
+          "state": "ok",
+          "elapsed_s": 2.337,
+          "yields": 0,
+          "tok_s": 101.89
+        }
+      ],
+      "started_at_s": 1789678663.384146,
+      "finished_at_s": 1789678667.12309,
+      "elapsed_s": 3.739,
+      "resubmits": 0
+    },
+    "extended": {
+      "mode": "background",
+      "steps_planned": 3
+    }
+  },
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "owned_children": [],
+  "swap": "vm.swapusage: total = 3072.00M  used = 2099.56M  free = 972.44M  (encrypted)"
+}

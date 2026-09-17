@@ -230,3 +230,37 @@ Open:
 
 - Reduce expert-read or verification cost toward 20 TPS.
 - General serving requires an explicit subsequent-prefill storage lifecycle.
+
+## 2026-09-17 16:47 CDT [saved]
+
+Goal: Standardize whole-machine RAM at 110 decimal GB and add fixed Q8 KV.
+
+Decisions:
+
+- Use one 110,000,000,000-byte default across decimal/GiB interfaces and staged
+  capacity checks. Preserve host, allocator cache, copy and wired-memory bounds.
+- Install Q8 explicitly with `--kv-cache-bits 8 --kv-max-append 953`, max KV17664.
+  Fixed target/draft backings total112,503,168B; reserve503,316,480B before experts.
+- Keep compressor working arithmetic native and its history bounded. Avoid
+  owner cycles so cache teardown releases Metal without waiting for cyclic GC.
+- Preserve active Colima containers and editors; no abandoned DeepSeek process
+  was found. Guard-managed Qwen shutdown automatically reclaimed36.54GB pages.
+
+Verified:
+
+- Final small guarded probe: fixed16K storage, native compressor reference,
+  packed snapshots/rollback, draft seed/detach, tiny real-model verify/trim.
+- Peak274,186,240 allocator bytes;975,688 active after teardown; no new swapouts.
+- 45 focused CPU cases plus the legacy110GB default assertion, without real MLX.
+- Exact Qwen restoration, health/warmup and lock release; no remaining child.
+
+Rejected:
+
+- Three exact packed-geometry candidates were flat/slower; no full rerun.
+- Reusing native cache bounds or the native AR digest as Q8 full-model proof.
+
+Open:
+
+- Derive a new complete full-model Q8 envelope and measure Q8 quality/throughput.
+- Old full-run source proofs are stale after these implementation changes.
+- 20 TPS remains unmet; best complete result remains12.4439935TPS.
