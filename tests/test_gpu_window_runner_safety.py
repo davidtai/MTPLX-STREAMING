@@ -144,6 +144,46 @@ class GuardSafetyTests(unittest.TestCase):
         self.assertLess(call, baseline)
         self.assertIn('QWEN_PROCESS_IDS', source[start:call])
 
+    def test_shutdown_requires_observable_idle_service(self):
+        idle = {'ok': True, 'active_requests': 0,
+                'scheduler': {'active_requests': 0, 'telemetry': {
+                    'foreground_pending': 0, 'idle_pending': 0,
+                    'persistence_pending': 0, 'active_kind': None}},
+                'startup': {'warmup': {'background': {'state': 'done'}}}}
+        cases = [('idle', None, None, True),
+                 ('serving', ('active_requests',), 1, False),
+                 ('scheduler', ('scheduler', 'active_requests'), 1, False),
+                 ('queued', ('scheduler', 'telemetry', 'foreground_pending'), 1, False),
+                 ('persistence', ('scheduler', 'telemetry', 'persistence_pending'), 1, False),
+                 ('running', ('scheduler', 'telemetry', 'active_kind'), 'foreground', False),
+                 ('unknown', ('active_requests',), None, False),
+                 ('warming', ('startup', 'warmup', 'background', 'state'), 'running', False)]
+        for name, path, value, allowed in cases:
+            with self.subTest(name=name):
+                health = json.loads(json.dumps(idle))
+                if path:
+                    parent = health
+                    for key in path[:-1]:
+                        parent = parent[key]
+                    parent[path[-1]] = value
+                Path(self.env['FAKE_HEALTH']).write_text(json.dumps(health))
+                result = self.run_guard('--selftest', 'service-idle')
+                self.assertEqual(result.returncode == 0, allowed, result.stderr)
+
+    def test_busy_service_timeout_cannot_reach_bootout(self):
+        source = GUARD.read_text()
+        start = source.index('_wait_for_service_idle() {')
+        end = source.index('\n_reclaim_qwen_file_cache()', start)
+        script = 'STOP_TIMEOUT=0; _service_idle() { return 1; }; _check_abort() { :; }; err() { :; }; log() { :; };\n'
+        script += source[start:end]
+        call = source.index('  if ! _wait_for_service_idle; then', source.index('# ---------------- phase 3:'))
+        end_call = source.index('  log "phase 3: launchctl bootout', call)
+        script += '\n' + source[call:end_call] + '\nprintf BOOTOUT_REACHED\n'
+        result = subprocess.run(['/bin/bash', '-c', script], env=self.env,
+                                capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertNotIn('BOOTOUT_REACHED', result.stdout)
+
     def test_failed_reclamation_refuses_workload(self):
         source = GUARD.read_text()
         start = source.index('_reclaim_qwen_file_cache() {')

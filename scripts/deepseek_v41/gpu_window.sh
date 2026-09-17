@@ -496,6 +496,47 @@ except (OSError, KeyError, TypeError, ValueError):
 '
 }
 
+_service_idle() {
+  local raw
+  raw="$("${CURL_CMD}" --fail --silent --connect-timeout 2 --max-time 2 "${HEALTH_URL}")" || return 1
+  printf '%s' "${raw}" | /usr/bin/env python3 -c '
+import json, sys
+try:
+    health = json.load(sys.stdin)
+    scheduler = health["scheduler"]
+    telemetry = scheduler["telemetry"]
+    counts = [health["active_requests"], scheduler["active_requests"]]
+    counts += [telemetry[key] for key in ("foreground_pending", "idle_pending", "persistence_pending")]
+    if health.get("ok") is not True or any(type(n) is not int or n != 0 for n in counts):
+        raise ValueError("service is busy or activity is unavailable")
+    if telemetry["active_kind"] is not None:
+        raise ValueError("scheduler work is running")
+    warmup = (health.get("startup") or {}).get("warmup", health.get("warmup")) or {}
+    background = warmup.get("background")
+    if isinstance(background, dict) and background.get("state") not in ("done", "skipped", "disabled"):
+        raise ValueError("background warmup unfinished")
+except (KeyError, TypeError, ValueError):
+    sys.exit(1)
+'
+}
+
+_wait_for_service_idle() {
+  local deadline=$(( $(date +%s) + STOP_TIMEOUT )) waiting=0
+  while ! _service_idle; do
+    _check_abort
+    if (( $(date +%s) >= deadline )); then
+      err "phase 3: service did not become observably idle; leaving it loaded"
+      return 1
+    fi
+    if (( waiting == 0 )); then
+      log "phase 3: waiting for active/queued service work and warmup before shutdown"
+      waiting=1
+    fi
+    sleep 1
+  done
+  _check_abort
+}
+
 _reclaim_qwen_file_cache() {
   local before
   before="$(used_mem_bytes)" || return 1
@@ -658,6 +699,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
       ;;
     heavy-workers)  list_heavy_foreign_workers ;;
     model-path)    _read_model_path || exit 8 ;;
+    service-idle)  _service_idle || exit 8 ;;
     tree-pids)      _step_tree_pids "${2:-}" || exit 8; echo ;;   # W106 item 4: tree walk
     restore-plist)  _resolve_restore_plist "${2:-}" "${3:-}" ; echo ;;  # discovered, canonical
     restore-run)
@@ -1034,6 +1076,11 @@ fi  # end phases 1-2 (skipped whole in GPU_WINDOW_TEST_MODE=1; phase 3 below is
 if (( WAS_LOADED == 1 )); then
   AVAIL_BEFORE="$(avail_bytes)"
   log "phase 3: available memory before bootout: $(gib "${AVAIL_BEFORE}") GiB"
+  # The lock serializes benchmark windows; serving requests have their own
+  # scheduler. Observe that scheduler immediately before requesting shutdown.
+  if ! _wait_for_service_idle; then
+    exit 5
+  fi
   log "phase 3: launchctl bootout ${DOMAIN}/${QWEN_LABEL} (NO kickstart)"
   if ! /bin/launchctl bootout "${DOMAIN}/${QWEN_LABEL}" 2>/dev/null; then
     # Fall back to the domain + plist path spelling of bootout.
