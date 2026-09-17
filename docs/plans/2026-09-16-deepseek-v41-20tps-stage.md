@@ -132,6 +132,10 @@ the generic bounded-wave path that already submits shared work early.
   shared branch to every streamed target layer. Bind the routed/shared callable
   once after switch installation, fail if any routed layer cannot install it,
   and report the installed layer count instead of trusting the requested flag.
+- [x] Stage cap-95 M6 as a separate conditional 128-token arm. Require a
+  same-commit cap-95 control, the unchanged 89,424,018,248-byte engine geometry,
+  and exactly forty bound overlap routes. Permit the 1,023-token command only
+  after the M6 screen beats cap-95 control by decode wall time.
 - [x] Run syntax validation only before GPU evidence:
   `.venv/bin/python -m py_compile mtplx/models/expert_mlx.py`.
   Result: exit 0.

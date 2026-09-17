@@ -383,14 +383,15 @@ class MoE(nn.Module):
         # immutable runtime config selects verify_shared_overlap.  Keeping the
         # callable prebound avoids an environment read and invariant check in
         # every routed layer forward.
-        self._routed_shared_route = (
-            self._run_routed_shared_overlap
-            if os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1"
-            else self._run_routed_then_shared
-        )
-        self._shared_overlap_route_installed = (
+        legacy_shared_overlap = (
             os.environ.get("MTPLX_DSV41_SHARED_OVERLAP") == "1"
         )
+        self._routed_shared_route = (
+            self._run_routed_shared_overlap
+            if legacy_shared_overlap
+            else self._run_routed_then_shared
+        )
+        self._shared_overlap_route_installed = legacy_shared_overlap
 
     def install_streamed_shared_route(self, *, overlap: bool) -> None:
         """Bind the routed/shared execution order after switch installation."""

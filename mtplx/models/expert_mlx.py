@@ -3992,6 +3992,12 @@ def bind_streamed_switches(model: Any, runtime: ExpertStreamingRuntime) -> int:
                 overlap=verify_shared_overlap or legacy_shared_overlap
             )
             if verify_shared_overlap:
+                if not bool(
+                    getattr(mlp, "_shared_overlap_route_installed", False)
+                ):
+                    raise RuntimeError(
+                        f"layer {layer_index} rejected verify_shared_overlap"
+                    )
                 shared_overlap_bound += 1
         elif verify_shared_overlap:
             raise TypeError(
