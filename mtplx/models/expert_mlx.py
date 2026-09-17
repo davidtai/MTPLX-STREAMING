@@ -3119,7 +3119,30 @@ class HotExpertSwitchGLU(nn.Module):
                         ready.release(synchronize=False)
                 output = wave_output.reshape((*indices.shape, hidden_size))
                 if shared_work is not None and shared is None:
-                    shared = shared_work()
+                    if (
+                        pipeline_ledger is not None
+                        and shared_pipeline_work is not None
+                    ):
+                        _pipeline_work_call(
+                            pipeline_ledger,
+                            shared_pipeline_work,
+                            "claim",
+                            phase=phase,
+                        )
+                    try:
+                        shared = shared_work()
+                    finally:
+                        if (
+                            pipeline_ledger is not None
+                            and shared_pipeline_work is not None
+                        ):
+                            _pipeline_work_call(
+                                pipeline_ledger,
+                                shared_pipeline_work,
+                                "close",
+                                phase=phase,
+                            )
+                            shared_pipeline_work = None
                 # All-hit route: no demand misses were submitted, so ordering is
                 # vacuously satisfied -- issue the next layer's prefetch on the way
                 # out (W93 issue-order fix; guarded to fire once).
@@ -3304,7 +3327,30 @@ class HotExpertSwitchGLU(nn.Module):
                 joined = mx.take(joined, order, axis=0)
                 output = joined.reshape((*indices.shape, hidden_size))
                 if shared_work is not None and shared is None:
-                    shared = shared_work()
+                    if (
+                        pipeline_ledger is not None
+                        and shared_pipeline_work is not None
+                    ):
+                        _pipeline_work_call(
+                            pipeline_ledger,
+                            shared_pipeline_work,
+                            "claim",
+                            phase=phase,
+                        )
+                    try:
+                        shared = shared_work()
+                    finally:
+                        if (
+                            pipeline_ledger is not None
+                            and shared_pipeline_work is not None
+                        ):
+                            _pipeline_work_call(
+                                pipeline_ledger,
+                                shared_pipeline_work,
+                                "close",
+                                phase=phase,
+                            )
+                            shared_pipeline_work = None
                 # W93 issue-order fix: every wave's begin_split_route has now
                 # submitted this layer's demand misses; issue the next layer's
                 # speculative prefetch after them (guarded to fire once).

@@ -132,6 +132,9 @@ the generic bounded-wave path that already submits shared work early.
   shared branch to every streamed target layer. Bind the routed/shared callable
   once after switch installation, fail if any routed layer cannot install it,
   and report the installed layer count instead of trusting the requested flag.
+- [x] Close the optional shared-work attribution span on the all-hit and
+  completed split-verify early returns. These routes already ran the shared
+  branch once, but previously left resource telemetry reporting it as open.
 - [x] Stage cap-95 M6 as a separate conditional 128-token arm. Require a
   same-commit cap-95 control, the unchanged 89,424,018,248-byte engine geometry,
   and exactly forty bound overlap routes. Permit the 1,023-token command only
