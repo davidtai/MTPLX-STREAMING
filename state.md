@@ -60,9 +60,10 @@ shared overlap, maxKV17664. Only cache capacity changes after prefill.
 
 # Lifecycle
 
-All owned GPU jobs are terminal. Candidate restored/warmed/released14:21:02 UTC;
-control14:27:13 UTC. Live API health, exact model ID and warmup verified afterward.
-Last swap3085.44MiB; no increase. Another owner may acquire at any time.
+All owned GPU jobs are terminal. Growth/control restored and released14:21:02 /
+14:27:13 UTC. The HC follow-up exited4 on digest rejection, then restored, warmed
+and released14:40:47 UTC. Live health, exact identity and lock release verified.
+Last swap2693.44MiB; no increase. Another owner may acquire at any time.
 
 # Open Work
 
@@ -74,10 +75,16 @@ Last swap3085.44MiB; no increase. Another owner may acquire at any time.
 - Current sources/results are archived and under /tmp/dsv41-cache-growth-20260917.
   Source-pinned wrappers must be regenerated after commits; preserve measured
   wrapper versions. Future comparisons must fix actual flags and decode cap100.
-- Next candidate is the existing small-M HC compile lane, separately activated
-  at construction. Its weights are tape inputs, shared across layers; prefill
-  is excluded by the7-row cap. Native numerics still need the full output/tie
-  gate, and its compile/allocation bound must be explicit before a full run.
+- HC compile was screened at fixed93/100 and stays disabled. Native M6 probe
+  is not bit-exact; comments overstating row-cap parity are corrected with an
+  unchanged module AST. Full screen12.2191TPS changes tokens first at480 against
+  retained MTP control; that difference is unclassified. Its204 vs206 cycles
+  and nearly unchanged verify time/cycle do not support a useful HC speed claim.
+  Follow-up evidence is included with the growth receipt; original full sources
+  and logs remain under /tmp/dsv41-hc-decode-20260917.
+- Next inspect the native I/O scheduling/transfer boundaries and memory-cache
+  overshoot bound. Use existing full counters and static ownership first; do
+  not repeat the HC screen or equate isolated-kernel gains with decode gains.
 - Reject prior staged3+3, D3 on the full workload, retirement-only tiny wins,
   per-chunk fences, serial rANS, tuned full-M6 policy, and target-head non-tie drift.
   A depth>5 candidate must change actual DSpark block geometry, not only CLI depth.

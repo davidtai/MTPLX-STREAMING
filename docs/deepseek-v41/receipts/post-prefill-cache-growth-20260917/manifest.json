@@ -2,8 +2,8 @@
   "measurement_source_commit": "d4051aeccc938a65a71734f1379e00f69f0d1823",
   "files": {
     "README.md": {
-      "bytes": 6405,
-      "sha256": "ec1bf36300f1582c5f06aad9aed25159c709907d74fbfbb9e6c0fad3976a0e50"
+      "bytes": 7855,
+      "sha256": "c629822fd9be340fdf35060147018dfcccd3d7d224aab0b6c88142d8bfec2871"
     },
     "admission.py": {
       "bytes": 4653,
@@ -36,6 +36,26 @@
     "control.command.txt": {
       "bytes": 1571,
       "sha256": "c4fcb2a89fe1af32d36c246a6eb1ac1fe8b59a5cad59ea53ea411df927ac8988"
+    },
+    "followup-hc-full.guard.log": {
+      "bytes": 32476,
+      "sha256": "17bc3e062edcb61891047ff4ea4d274fc9c297d9af143b5b4466bc57843f3def"
+    },
+    "followup-hc-probe.guard.log": {
+      "bytes": 10501,
+      "sha256": "0da4410d25edefd55bdc82d7813c2e7fa452f5a4ee82f2a9494da332123de654"
+    },
+    "followup-hc-probe.py": {
+      "bytes": 3294,
+      "sha256": "1ca259376ced81281ca52b490910b3288e602bc77fb0c426b6ce77bdc42b0b77"
+    },
+    "followup-hc-rejected-output.json.gz": {
+      "bytes": 37985,
+      "sha256": "a6be3c6e17c8fc6064067c94065055fb40e80fdb15b2dde7f083a433f1139f9d"
+    },
+    "followup-hc-screen.json": {
+      "bytes": 6510,
+      "sha256": "bf790a2bd91e4b608b924695a6222c0ffbbdfdbfcbbf041d5bd0cd85eaa6f87f"
     },
     "full-cache-control-d405-20260917.bounds.json": {
       "bytes": 4595,
@@ -158,8 +178,8 @@
       "sha256": "80bd2d833709462e62b2824df97f22dbe1242b2b0865602d486ea4a7581c5fc2"
     },
     "summarize.py": {
-      "bytes": 2074,
-      "sha256": "71d2e1863b14fab78c3c9ad956d4c0bec6bd507e5b1b0604cdaaf3865ceb5686"
+      "bytes": 2250,
+      "sha256": "45c2134be95a0028a01c4de28abf40e04696b21ca301b3b4b080b8da692887fc"
     }
   }
 }

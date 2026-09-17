@@ -70,5 +70,16 @@ Rejected:
 - Inferring freed Metal backing solely from mx.eval and releasing a memoryview.
 - Promoting benchmark-only growth as general-serving memory management.
 Open:
-- Activate small-M HC compilation with explicit memory and full-output gates.
+- Assess native I/O scheduling and a tighter cache-retention bound.
 -20TPS remains open; exact receipts are preserved in the worktree.
+
+## 2026-09-17 14:43 UTC [saved]
+Goal: Preserve the validated cache-growth gain while pursuing20TPS.
+Decisions:
+- Keep HC compilation disabled: additional token divergence is unclassified and per-cycle verification does not show a useful improvement.
+- Treat the HC row cap as a workload bound, not native bit-identity proof.
+Rejected:
+- Using the AR tie at297 to classify candidate/control divergence at480.
+- Promoting an isolated HC kernel gain as end-to-end decode improvement.
+Open:
+- Native I/O scheduling and cache-retention accounting remain optimization candidates.

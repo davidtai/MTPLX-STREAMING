@@ -1,0 +1,115 @@
+{
+  "status": "not_promoted",
+  "reason": "Additional candidate/control token difference is unclassified; less than one percent apparent throughput change also has different output/cycle workload.",
+  "measurement_source_commit": "6815624836f5c1902fd64c9f740da82986b0d3cf",
+  "full_wrapper_sha256": "e2e89c9fa96e92e4809dcdc31bd57cf727df97e80d26f8855616b38e8f4ba688",
+  "full_command": "env DSV41_CACHE_GROWTH=1 DSV41_STAGE_AR_REFERENCE=/tmp/dsv41-110-stage/live-combined-depth3-reserve2-1023.jsonl GPU_WINDOW_LOCK_TIMEOUT=600 GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 GPU_WINDOW_MIN_AVAIL_GB=100 GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 GPU_WINDOW_CANDIDATE_MODEL_DIR=/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4 GPU_WINDOW_CANDIDATE_AUX_DIR=/tmp/dsv41-compact-residents MTPLX_DSV41_IO_READ_FANOUT=4 MTPLX_BELADY_ORACLE=0 PYTHONHASHSEED=0 PYTHONUNBUFFERED=1 PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41:/tmp/dsv41-hc-decode-20260917 scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-hc-decode-20260917/run_full.py --model /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4 --arms cell16k_ring_v2_draft_attn_pf0 --context-tokens 16384 --decode-tokens 1023 --decode-mode dspark --dspark-depth 5 --dspark-require-tie-class --max-kv 17664 --prompt-ids-file docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json --prompt-seed 20260829 --stop-on-eos --box-target-gb 110 --host-overhead-gib 2 --allocator-cache-gib 1 --runtime-reserve-gib 2 --transient-band-gib auto --expert-profile deepseek-v41-mxfp4-75 --slot-layout component-banks --transient-slots 48 --apply-memory-cap --cache-policy transition-window --verify-shared-overlap --out /tmp/dsv41-110-stage/full-cache-hc-681-20260917.jsonl --decode-miss-records-per-part 3 > /tmp/dsv41-110-stage/full-cache-hc-681-20260917.guard.log 2>&1",
+  "raw_rejected_receipt_path": "/tmp/dsv41-110-stage/full-cache-hc-681-20260917.rejected-output.json",
+  "raw_rejected_receipt_sha256": "a9db3804fa737976ed244b6e4aba7f8995f7cd77fa5f2698b5d4489669208b0d",
+  "decode_tok_s": 12.219080425839488,
+  "decode_wall_s": 83.72152112500044,
+  "cycles": 204,
+  "control_cycles": 206,
+  "candidate_verify_seconds_per_cycle": 0.3880346382651552,
+  "control_verify_seconds_per_cycle": 0.3882136949757199,
+  "first_candidate_control_difference": 480,
+  "control_token_at_difference": 944,
+  "candidate_token_at_difference": 45706,
+  "classification_at_480": null,
+  "existing_ar_tie_index": 297,
+  "existing_ar_tie_does_not_classify_candidate_control_difference": true,
+  "token_ids_sha256": "c18da3bd5d7de4fcf02ae8103383df4a14b0fcdae6ca36930f9ded575e0c48fb",
+  "allocator_peak_bytes": 95208119340,
+  "allocator_post_prefill_peak_bytes": 94016861498,
+  "external_sampled_machine_peak_bytes": 106848845824,
+  "external_sampled_process_peak_bytes": 96437672552,
+  "guard_exit": 4,
+  "guard_restored_exact_service_warm_and_released_utc": "2026-09-17 14:40:47 UTC",
+  "source_installation": {
+    "source_commit": "6815624836f5c1902fd64c9f740da82986b0d3cf",
+    "runtime_source_sha256": {
+      "mtplx/models/deepseek_v41.py": "308c4bffb10e742c611ea1a602bc64389640718f9a979add3bdaa7f744698d13",
+      "scripts/deepseek_v41/ab_decode_env_levers.py": "d540a77df3670786110aafd14d81a55e613aafae63e45b53cc58aaaf169e25da",
+      "scripts/deepseek_v41/bench_standard_shape.py": "6c235ac47fc4f447f3eb745195a6e337961570b4ba003d314698bf0d20e65fce"
+    },
+    "scope": "Exact 16K/1024 one-request benchmark, 93 prefill/100 decode slots; enable existing M<=7 HC compile only; native numerics gated against full prior output and indexed AR tie",
+    "explicit_bound_model_levers": {
+      "MTPLX_DSV41_HC_COMPILE": true,
+      "MTPLX_DSV41_ATTN_COMPILE": false,
+      "MTPLX_DSV41_ATTN_WIN_MEMO": false
+    },
+    "helper_sha256": {
+      "admission.py": "e4985490ca53fd1b0542b99329ed202b680aa27f0bf5ba3036bf572835468f41",
+      "phase_growth.py": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac",
+      "bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b"
+    },
+    "phase_memory_control_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+    "numeric_predecessor": "d4051aecc promotes the post-only compiled callable; its archived AST equivalence and strict prefill regression cover this unchanged prefill arithmetic",
+    "native_hc_probe_sha256": "e816d0c7464c3bdd535549ad2d07e7bc8fc4c5cd842e45897d5be1cdc27ea8ce",
+    "matched_cache_growth_receipt_sha256": "ec87b4802902d0c290bccaf4a72e1c271ee4c0a1a5733e77dcd680c5d1044bff"
+  },
+  "native_hc_probe": {
+    "scope": "Synthetic native M6 HC attention prep, FFN prep and post combine; exact functions/constants and K3 route; no model generation",
+    "shape": [
+      1,
+      6,
+      4,
+      5120
+    ],
+    "consts": [
+      4,
+      20,
+      1e-20,
+      1e-06
+    ],
+    "resident_inputs_bytes": 4690124,
+    "source_module_sha256": "308c4bffb10e742c611ea1a602bc64389640718f9a979add3bdaa7f744698d13",
+    "sinkhorn_kernel": true,
+    "premix_kernel": false,
+    "allocator_limit_bytes": 536870912,
+    "cache_limit_bytes": 67108864,
+    "results": {
+      "eager": {
+        "first_compile_and_eval_s": 0.008898832995328121,
+        "median_s": 0.0016269292005745228,
+        "samples_s": [
+          0.0018074958497891203,
+          0.0016269292005745228,
+          0.001380718750442611
+        ],
+        "input_active_bytes": 4718812,
+        "peak_first_bytes": 9446328,
+        "peak_all_bytes": 10200000,
+        "max_abs_by_output": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bit_exact": true
+      },
+      "compiled": {
+        "first_compile_and_eval_s": 0.2528782909939764,
+        "median_s": 0.0007167187497543637,
+        "samples_s": [
+          0.0013404124998487531,
+          0.0007167187497543637,
+          0.0005212249998294283
+        ],
+        "input_active_bytes": 6226140,
+        "peak_first_bytes": 9216952,
+        "peak_all_bytes": 9216952,
+        "max_abs_by_output": [
+          0.0,
+          4.76837158203125e-07,
+          0.00036972761154174805
+        ],
+        "bit_exact": false
+      }
+    }
+  },
+  "comment_correction_proof": {
+    "before_sha256": "308c4bffb10e742c611ea1a602bc64389640718f9a979add3bdaa7f744698d13",
+    "after_sha256": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "module_ast_unchanged": true
+  }
+}

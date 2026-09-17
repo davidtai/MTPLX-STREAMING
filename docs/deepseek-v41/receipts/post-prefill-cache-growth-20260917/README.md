@@ -102,3 +102,26 @@ restored the exact `mtplx-flash-next-optimized-speed` service. Candidate health,
 background warmup and lock release completed at 14:21:02 UTC; fresh control at
 14:27:13 UTC. Live API identity and warmup were checked afterward. No other GPU
 owner was interrupted. Swap did not increase during these runs.
+
+## HC follow-up: not promoted
+
+The existing small-M HC compilation lane was screened separately with exactly
+93 prefill/100 decode slots. A bounded native `[1,6,4,5120]` float32 probe showed
+1.6269ms eager versus0.7167ms compiled median, with10.20MB versus9.22MB allocator
+peak. It was not bit-exact: maximum post-output difference0.000369728. The source
+comments now correctly state that the seven-row cap does not guarantee native
+bit identity; an unchanged module AST proves this is only a comment correction.
+
+The full screen reports12.2191TPS versus12.1147TPS, but its first difference
+against the retained MTP control is at480 (tokens944 versus45706). The existing
+AR tie at297 does not classify that additional difference. No paired logit
+classification exists at480, so this is not evidence of either an allowed tie
+or a non-tie error. The candidate also uses204 versus206 cycles, and verification
+time per cycle is essentially unchanged. The apparent gain is insufficient to
+justify more diagnostic runs; HC compile remains disabled in the retained arm.
+
+`followup-hc-screen.json` records the exact sources, probe, rejected result and
+comparison limits. The full guard exited4 on output-digest rejection, restored
+and warmed the exact Qwen service, then released the lock at14:40:47 UTC. Live
+health, identity and lock release were verified. The immutable rejected output
+is included for audit; it is not a successful optimization receipt.

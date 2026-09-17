@@ -7,7 +7,10 @@ def summarize(stem):
     output=p.with_suffix('.jsonl')
     if not output.exists():
         return {'path':str(output),'complete_receipt':False}
-    row=json.loads(output.read_text()); d=row['dspark']; m=d['memory']
+    row=json.loads(output.read_text())
+    if row.get('aborted') or 'dspark' not in row:
+        return {'path':str(output),'complete_receipt':False,'aborted':row.get('aborted',False),'reason':row.get('reason')}
+    d=row['dspark']; m=d['memory']
     counters=d['serve_stream_counters']; io=counters['io']; cache=counters['expert_cache']
     samples=[json.loads(line)['snapshot'] for line in p.with_suffix('.os.jsonl').read_text().splitlines()]
     growth=row.get('post_prefill_growth',{})

@@ -498,3 +498,9 @@ already contains the correct100 slots. The immutable original, derived phase
 correction and CPU check of the actual reporting assignments are archived.
 See[the receipts](../deepseek-v41/receipts/post-prefill-cache-growth-20260917/README.md).
 Task4's20TPS acceptance remains unchecked.
+
+The subsequent native small-M HC screen is not promoted:12.2191TPS has204 vs206
+cycles and an additional unclassified control/candidate token difference at480.
+Native M6 synthetic outputs are not bit-exact despite the old row-cap comment;
+comments are corrected without changing the executable AST. Retained best remains
+12.1146645TPS. See the HC follow-up in the same receipt folder.

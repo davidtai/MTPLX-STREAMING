@@ -2766,14 +2766,13 @@ def _attn_out_prep(attn: "Attention"):
 # ``comb.reshape(*comb.shape[:-1], hc, hc)``; under a shapeless trace MLX raises
 # ``[Primitive::output_shapes] Slice cannot infer output shapes`` -- and that
 # function is the K3 worker's, not to be edited here.  (2) Even where a tape
-# traces shapeless, the batched matmul reassociates ~1e-6 at batch>1, and
-# ``mx.compile`` matches eager BIT-EXACTLY (``mx.array_equal``) only in the small
-# row regime (decode n=1 / verify n=K+1); at prefill-chunk row counts the
-# ``flat @ fn.T`` matmul and the RMS/HC-mix mean reductions reassociate.  So this
-# carries V4's fixed-shape + row-cap design (V4 uses no shapeless either): the
-# compiled path fires only for ``rows <= _HC_COMPILE_MAX_ROWS`` -- decode/verify,
-# where it is bit-exact and where the per-primitive host encode dominates -- and
-# prefill chunks fall through to the eager body (byte-identical either way).
+# traces shapeless, the batched matmul can reassociate at batch>1. Earlier
+# reduced-width checks matched eager, but the native [1,6,4,5120] float32 probe
+# also finds differences with fixed-shape compilation. The row cap bounds the
+# repeating decode/verify shapes; it is not a bit-identity guarantee. Large
+# prefill chunks retain the eager prep bodies. Native output/tie validation is
+# required separately before adopting this lane; see the post-prefill cache
+# growth receipt's HC follow-up for the native probe and rejected full screen.
 #: Env toggle for the K4 Hyper-Connection tape collapse.  Default OFF -- the
 #: decode/dispatch win is a GPU-window measurement (KERNEL_LEDGER KG-f), so the
 #: eager per-call graph stays the serving default until measured.  Read through
@@ -2786,18 +2785,13 @@ _HC_COMPILE = (os.environ.get(_HC_COMPILE_ENV) or "").strip().lower() not in (
     "", "0", "false", "no", "off", "auto",
 )
 #: Row count (``prod(x.shape[:-2])`` = ``b*s``) at or below which the compiled HC
-#: tape is used; above it the eager body runs.  Confines compile to the tiny,
-#: repeating decode/verify shapes -- where it is ``mx.array_equal`` with eager and
-#: where dispatch host-encode dominates -- and keeps prefill (large chunks, where
-#: the matmul/mean reductions reassociate ~1e-6 and per-primitive overhead is
-#: already amortised over real work) on the eager path.  Module global so tests
-#: can retarget it.
+#: tape is used; above it the eager body runs. Confines compile to repeating
+#: decode/verify shapes and keeps large prefill chunks on the eager prep path.
+#: Numerical behavior also depends on width and dtype, so this cap alone does
+#: not establish parity. Module global so tests can retarget it.
 #:
-#: K4 review (W91): the compiled HC segments are ``mx.array_equal`` with eager
-#: only at <= 7 rows; the ``flat @ fn.T`` matmul + RMS/HC-mix mean reductions
-#: reassociate ~1e-6 from 8 rows up.  So the cap is 7 (the same bit-exact ceiling
-#: W91 set for the K35 small-stage compile ``_SMALL_STAGES_MAX_ROWS``), NOT 32 --
-#: 32 admitted the non-bit-exact 8..32-row band.
+#: Retain W91's seven-row workload cap. Native-width measurements supersede
+#: its earlier claim that this was a universal bit-exact ceiling.
 _HC_COMPILE_MAX_ROWS = 7
 
 
