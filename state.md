@@ -138,6 +138,11 @@ Manifest SHA b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16.
   miss handling already overlaps hits/shared work and dispatches ready parts.
 - Further progress must reduce expert-read or verification cost materially.
   Small policy cleanup cannot bridge the remaining gap to 20TPS.
+- New CPU causal prefetch screen is rejected: cross-layer top1 has13.69%
+  precision, only3.54% optimistic earlier reads and22.30% extra traffic.
+  Other previous-route/same-layer/blended predictors also lose. No GPU run,
+  production change or new test;47.3MB predictor arrays,1.535s screen.
+  Receipt: receipts/causal-prefetch-screen-20260917. Do not rerun unchanged.
 - Do not repeat unchanged rejected fanout8, D7-full, staged3+3, D3-full, rANS,
   XOR/reference coding, cache-policy, prompt-lookup, confidence0.5, HC or q8-head
   candidates. Down-only specialization gives small larger-case MLP gains.

@@ -712,3 +712,14 @@ The user requires at least256K KV support, explicitly secondary to20TPS.
 - [ ] Reach20TPS on the unchanged16K-input/1024-output Python workload.
 - [ ] Establish and verify the complete256K prefill/rollover envelope, including
   retained chunk views and hidden states. The16K full bound does not cover it.
+
+### CPU causal prefetch screen, 2026-09-17
+
+Four causal route predictors were screened on the full206-cycle M6 trace,
+using the actual transition-window bank at102 slots and chronological103/103
+training/evaluation halves. The best nontrivial precision is13.69%: cross-layer
+top1 could move3.54% of physical reads earlier while adding22.30% traffic, even
+with unlimited lead time. No layers pass the training-half80% precision gate.
+Reject this family without GPU execution, production changes or new tests.
+The1.535-second CPU screen imports no MLX and uses47.3MB of predictor arrays.
+Evidence: `../deepseek-v41/receipts/causal-prefetch-screen-20260917/README.md`.

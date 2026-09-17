@@ -299,3 +299,19 @@ Open:
 - Secondary256K full-prefill bound/verification: retained per-chunk decoded
   views, hidden states, attention and draft seeding are not covered by the16K bound.
 - Receipt: docs/deepseek-v41/receipts/fixed-q8-full-20260917/README.md.
+
+## 2026-09-17 17:41 CDT [saved]
+
+Goal: Screen a new CPU-only causal read predictor toward20TPS.
+
+Result: Rejected previous-route, same-layer, cross-layer and blended predictors
+on the complete206-cycle M6 trace, with chronological103/103 train/eval halves
+and the actual transition-window bank at102 slots. Best nontrivial precision
+is13.69%;3.54% optimistic early-read coverage costs22.30% added traffic.
+No layer meets the training-half80% precision gate. The1.535-second screen
+uses47.3MB predictor arrays, imports no MLX, and leaves Qwen running.
+
+No production implementation, GPU benchmark, or optimization tests are justified
+for this candidate. Preserve the existing prefetch/policy construction guard.
+Evidence: docs/deepseek-v41/receipts/causal-prefetch-screen-20260917/README.md.
+Primary20TPS and secondary256K prefill verification remain open.
