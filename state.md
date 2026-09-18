@@ -101,6 +101,18 @@ with no owned child. Do not relax that loader cap. Variant2 under v2/ reads
 only12 validated native tensor ranges (89,224,192B) into final MLX owners with
 F_NOCACHE/preadv, bounded8MiB views and source identity checks. Same8GiB bound.
 Receipt:docs/deepseek-v41/receipts/tail-seed-20260917/README.md.
+Variant2 completed: native16K max allocator peak2,279,214,764B versus tail128
+142,877,484B; seed medians0.0711085s/0.0017979s. Final main row and all offsets
+match, but all three window byte sequences differ. Do not install as an exact
+replacement. Guard38266 terminal0, cleanup8 active bytes and74,366,976B file
+cache invalidated to0; exactQwen restored/released02:37:42UTC. An intervening
+foreign Bonsai guard51816/51826 owned the lane; no signal or shared-code edit
+occurred. After that job completed,02:42:32 check found Qwen healthy/idle/warmed
+and lock free. Next candidate v3/ retains2048rows to screen batch arithmetic
+while keeping most of the saving. It is staged only; no full model is ready.
+FixedQ8DraftCache._seed currently resets offset from supplied row count, so an
+eventual partial seed must explicitly preserve its absolute start too. Do not
+apply the native offset adjustment blindly to Q8 caches.
 
 # Latest Adaptive Draft Stage
 
