@@ -829,3 +829,14 @@ omitted CLI host reserve before model allocation. Guard77187 exits0; exact
 Qwen restoration/warmup and free lock are verified. The retained winner stays
 13.1509467TPS. Task4 and20TPS remain open;256K prefill remains secondary.
 See `../deepseek-v41/receipts/router-feature-20260918/README.md`.
+
+### Paired prefetch I/O screen, 2026-09-18
+
+Two-layer105/48/16 replay shows5.11% lower summed held-out pair latency with
+.93% control spread and exact128 outputs. This optimistic screen excludes live
+router computation/attention and leaves hashing/terminal drain outside timing.
+It does not establish full TPS or shared-ring behavior across adjacent sources.
+11GiB incremental bound; MLXpeak5.305GB, final8B. Guard40813 exits0; exactQwen
+restoration/warmup/free lock independently verified. Next is a continuous
+three-layer cost screen.20TPS stays open; retained full result13.1509467TPS.
+See `docs/deepseek-v41/receipts/lookahead-io-20260918/README.md`.

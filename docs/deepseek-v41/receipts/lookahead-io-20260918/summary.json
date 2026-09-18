@@ -1,0 +1,76 @@
+{
+  "complete": true,
+  "source_commit": "0f7146768f93423956ac6ce48ebe9b549cdde4a8",
+  "latency_ratio": 0.9488844115641026,
+  "control_spread_fraction": 0.009300807329470846,
+  "active_after_close_bytes": 8,
+  "arms": [
+    {
+      "mode": "native",
+      "sequence": 0,
+      "heldout_total_ns": 410970833,
+      "heldout_read_records": 247,
+      "all_outputs_exact": true,
+      "prefetch_issued": 0,
+      "prefetch_first_consumption_hits": 0,
+      "prefetch_hit_on_true_route": 0,
+      "records_read_all": 793,
+      "read_bytes_all": 14031912960,
+      "mlx_peak_bytes": 5304624137
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 1,
+      "heldout_total_ns": 395447872,
+      "heldout_read_records": 231,
+      "all_outputs_exact": true,
+      "prefetch_issued": 110,
+      "prefetch_first_consumption_hits": 101,
+      "prefetch_hit_on_true_route": 210,
+      "records_read_all": 762,
+      "read_bytes_all": 13483376640,
+      "mlx_peak_bytes": 5304624137
+    },
+    {
+      "mode": "native",
+      "sequence": 2,
+      "heldout_total_ns": 414805166,
+      "heldout_read_records": 247,
+      "all_outputs_exact": true,
+      "prefetch_issued": 0,
+      "prefetch_first_consumption_hits": 0,
+      "prefetch_hit_on_true_route": 0,
+      "records_read_all": 793,
+      "read_bytes_all": 14031912960,
+      "mlx_peak_bytes": 5304624137
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 3,
+      "heldout_total_ns": 386922665,
+      "heldout_read_records": 231,
+      "all_outputs_exact": true,
+      "prefetch_issued": 110,
+      "prefetch_first_consumption_hits": 101,
+      "prefetch_hit_on_true_route": 210,
+      "records_read_all": 762,
+      "read_bytes_all": 13483376640,
+      "mlx_peak_bytes": 5304624137
+    },
+    {
+      "mode": "native",
+      "sequence": 4,
+      "heldout_total_ns": 412258083,
+      "heldout_read_records": 247,
+      "all_outputs_exact": true,
+      "prefetch_issued": 0,
+      "prefetch_first_consumption_hits": 0,
+      "prefetch_hit_on_true_route": 0,
+      "records_read_all": 793,
+      "read_bytes_all": 14031912960,
+      "mlx_peak_bytes": 5304624137
+    }
+  ],
+  "scope": "Two real packed expert layers, native105 persistent+48 shared transient+16 shared prefetch slots; first64 exact native routes and recorded causal predictions. Cycles32..63 decide timing. Excludes live router evaluation and attention; an optimistic I/O screen only.",
+  "decision": "Promising optimistic paired I/O screen only; live router cost, adjacent layers sharing the ring, continuous timing and terminal speculative drain remain unmeasured. No full model/default promotion."
+}

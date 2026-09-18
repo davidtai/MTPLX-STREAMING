@@ -81,14 +81,22 @@ are complete; no new performance default is promoted.
   SHA5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e.
   Its /tmp path remains a symlink. Runtime source hashes still match strict.
 
-Next: bounded paired-layer packed I/O replay for the later-input predictor,
-before any full prefetch installation. The current packed reader requires a
-PlanePart thread-local witness; native speculative workers do not supply it.
-Preserve demand priority, full-record READY publication, slot generations and
-deferred GPU leases. Include predictor cost and a separately priced global
-prefetch ring. Existing packed installation rejects prefetched configurations.
-No prefetch implementation or paired-layer operator has been staged yet.
-Keep work inline, minimal checks and no new regression tests before a win.
+A bounded two-layer I/O screen is now complete at source0f7146768f93423956ac6ce48ebe9b549cdde4a8.
+Layers30/31,105 persistent each,48 shared transients,16 shared prefetch slots:
+median paired latency is5.11% lower with.93% control spread and exact128 layer
+outputs. This excludes live router cost and attention, uses per-call timers with
+unmeasured hash gaps and terminal drain, and cannot be promoted to full TPS.
+MLXpeak5,304,624,137B within11GiB incremental bound; final owners8B. Guard40813
+terminal0; Qwen restored/warmed/released08:46:12UTC and independently checked.
+Receipt:docs/deepseek-v41/receipts/lookahead-io-20260918/README.md.
+
+Next: bounded three-adjacent-layer replay with continuous timing through final
+drain and live gate-shaped computation. Captured router inputs were not saved;
+recorded-score replay plus synthetic-input gate cost is not live predictor
+parity. Preserve demand priority, native publication/tickets and GPU leases.
+The fixed experimental config leaves the public transition+prefetch ban intact.
+No full-model prefetch/default is promoted. Work inline, minimal checks and no
+new regression tests before a win.
 
 Strict allocator stage is complete at measured source5ba18552cb81f85793469a8d20fe2ff4af4f79d8.
 Receipt:docs/deepseek-v41/receipts/strict-cache-20260918/README.md.

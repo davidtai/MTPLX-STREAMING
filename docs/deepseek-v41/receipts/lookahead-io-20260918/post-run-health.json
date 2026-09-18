@@ -1,0 +1,14 @@
+{
+  "checked_at": 1789721439.861252,
+  "lock_free": true,
+  "guard_session": 40813,
+  "guard_exit_code": 0,
+  "ok": true,
+  "model": "mtplx-flash-next-optimized-speed",
+  "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+  "active_requests": 0,
+  "warmup_state": "done",
+  "models": [
+    "mtplx-flash-next-optimized-speed"
+  ]
+}
