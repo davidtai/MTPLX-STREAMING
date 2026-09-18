@@ -109,6 +109,13 @@ QWEN_LABEL="${GPU_WINDOW_QWEN_LABEL:-com.tea.qwen}"
 WIRED_CAP_MB="${GPU_WINDOW_WIRED_CAP_MB:-102400}"     # 100 GiB, never exceeded/raised
 STOP_TIMEOUT="${GPU_WINDOW_STOP_TIMEOUT:-180}"        # seconds to confirm the stop
 RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm restore
+# Explicit benchmark option for stale file cache outside the known model files.
+# It runs only after service shutdown and foreign-worker checks, before admission.
+PURGE_DISK_CACHE="${GPU_WINDOW_PURGE_DISK_CACHE:-0}"
+if [[ "${PURGE_DISK_CACHE}" != 0 && "${PURGE_DISK_CACHE}" != 1 ]]; then
+  printf 'ERROR: GPU_WINDOW_PURGE_DISK_CACHE must be 0 or 1\n' >&2
+  exit 2
+fi
 # W106 restore hardening (real-window incident, windows 42/43): the plist that
 # `launchctl print` reports for a running com.tea.qwen is often a TRANSIENT guard-dir
 # copy (~/.mtplx-qwen-guard-<rand>/com.tea.qwen.plist) written by mtplx.qwen_guard
@@ -1166,6 +1173,19 @@ for _candidate_aux_path in ${CANDIDATE_AUX_PATHS[@]+"${CANDIDATE_AUX_PATHS[@]}"}
     exit 8
   fi
 done
+if [[ "${PURGE_DISK_CACHE}" == 1 ]]; then
+  _purge_before="$(used_mem_bytes)" || exit 5
+  log "phase 4: flushing OS disk cache before admission (physical used ${_purge_before} bytes)"
+  # purge flushes file buffers; it does not release application allocations.
+  # Noninteractive sudo fails immediately if this command is not authorized.
+  if ! /usr/bin/sudo -n /usr/sbin/purge; then
+    err "phase 4: requested OS disk-cache purge failed; refusing the workload"
+    exit 5
+  fi
+  _check_abort
+  _purge_after="$(used_mem_bytes)" || exit 5
+  log "phase 4: OS disk-cache purge complete (physical used ${_purge_after} bytes; reduction $(( _purge_before - _purge_after )) bytes)"
+fi
 if ! USED_START="$(used_mem_bytes)"; then
   err "phase 4: baseline vm_stat unreadable or incomplete; refusing to start the step"
   exit 8
