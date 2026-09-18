@@ -71,13 +71,29 @@ Reject without runtime installation, full load or extra tests. Allocator peak
 released02:17:57UTC; independent02:19:39 healthy/idle/warmed/free, no child.
 Receipt:docs/deepseek-v41/receipts/fused-gate-up-20260917/README.md.
 
-Next diagnostic:/tmp/dsv41-transition-cost-20260917. Attribute the existing
+Completed diagnostic:/tmp/dsv41-transition-cost-20260917. Attribute the existing
 84-to-102 one-layer transition among raw-scale release, packed-scale load/hash
 and native weight copies, within8GiB. Three real old rows cover indices0/41/83.
 The full transition costs3.426s, but it is not all copying. At the best saved
 baseline, steady active bound exceeds resize by514,906,000B, so eliminating
 the copy peak alone does not admit more slots. Do not implement extension banks
 before establishing a worthwhile copy-time saving and unchanged decode cost.
+One-layer costs:0.039524s scale load/hash,0.039921s weight growth;0.079530s total.
+Copy-only saving scales to about1.60s, not all3.426s; no extension-bank code.
+Exact old rows; allocator peak2,483,786,252B; active after close8B. Guard76769
+terminal exit0; restored/warmed/released02:26:43UTC; independent02:32:16 check
+healthy/idle/warmed/free, no child. Receipt:receipts/transition-cost-20260917.
+
+Next bounded operator:/tmp/dsv41-tail-seed-20260917. DSpark seed_main projects
+every prompt hidden row, but its three caches retain only the last128 rows.
+Seed-only attention is pointwise projection/norm/RoPE before append; there is
+no compressed MTP history. Compare native full16K seeding to final128 rows with
+absolute offsets16256, using only the13 native dense/norm seed tensors and a
+synthetic16K sequence tiled from authentic saved target hiddens. Bound8GiB;
+controller reclaims source pages after actual child exit. No target generation.
+If useful, narrowing captures would also remove the8.053GB full main-hidden
+tensor at256K. The generic MTP history API still requires all rows, so any
+eventual change must be explicit to DSpark prefill. No production code changed.
 
 # Latest Adaptive Draft Stage
 
