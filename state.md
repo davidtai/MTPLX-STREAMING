@@ -35,6 +35,23 @@ The 37 CPU reporting cases and eight loader/budget cases pass with real MLX
 imports blocked. Both latest full arms exercise correct source/current record
 sizes and shared transient allocation bytes.
 
+# Current Draft-Width Screen
+
+CPU position-weighted retention is rejected: native held-out misses15,544;
+weighted frequency15,546; weighted predictor+frequency15,587. Unit weights
+reproduce every native per-cycle count. No GPU execution or tests followed.
+Receipt:docs/deepseek-v41/receipts/row-weighted-cache-20260917/README.md.
+
+Next bounded screen:/tmp/dsv41-even-depth-20260917. FixedD4, fixedD6 and aD7
+head with a constant six-proposal cut, versus exactD5 teacher control. The
+existing receipts contain noD4/D6 measurement. Four views share the native
+compact weights. Bound41GiB active+4GiB cache+4GiB host; current baseline and
+wired usage must fit before MLX import. The target trunk never runs. The
+stdlib controller waits for actual child exit, then reclaims source-file
+pages before the original guard restores Qwen. No new full model is staged.
+Teacher replay is acceptance evidence only; it cannot establish changed target
+arithmetic, physical reads or TPS. NativeD5 must reproduce every saved boundary.
+
 # Latest Adaptive Draft Stage
 
 20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;
