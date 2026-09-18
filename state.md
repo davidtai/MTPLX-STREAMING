@@ -2,7 +2,7 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
 TPS on exact 16,384-input / 1,024-output Python under 110 decimal GB.
-Best single complete candidate: **12.6731624 TPS; 20 TPS remains unmet.**
+Best single complete candidate: **12.8091055 TPS; 20 TPS remains unmet.**
 Latest full Q8 candidate: 10.7541904 TPS; keep native KV for the fastest route.
 At least 256K KV support is also required, secondary to reaching 20 TPS.
 
@@ -11,7 +11,8 @@ At least 256K KV support is also required, secondary to reaching 20 TPS.
 - Keep allocator, process phys_footprint and machine physical usage separate.
   Missing measurements stay null/n/a. Limits and plans are not measured usage.
 - Ceiling 110,000,000,000B includes baseline, Python, Metal, caches and peaks.
-  Keep 2 GiB host reserve and bounded allocator overshoot / copy / graph space.
+  Price the actual bounded Python capacity plus helper metadata: the latest
+  candidate reserves1,578,202,112B. Preserve allocator overshoot/copy/graph space.
 - Use scripts/deepseek_v41/gpu_window.sh directly, never nested; acquire the
   exclusive /tmp/mtplx-gpu-exclusive.lock before MLX or Qwen shutdown.
   Never steal another job's lane or shut down Qwen while requests are active.

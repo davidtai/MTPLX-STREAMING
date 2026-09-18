@@ -14,10 +14,13 @@ These are policy misses, not the physical reads of the latest grown cache.
 
 This identifies potential work that could reach the next layer before all
 current-layer reads finish. It does not establish an asynchronous decoder or
-a latency gain. Row-by-row execution expands199,773 unique batched expert
-requests into296,640 row requests, a48.49% increase before kernel and dispatch
-costs. Actual read ordering, shared transient ownership and native cache
-semantics are not simulated.
+a latency gain. The trace has199,773 unique batched expert requests and296,640
+row assignments, a48.49% difference. Source inspection of `PackedOps.gate_up`
+and `down` shows that the current packed kernel already launches work for all
+row assignments. This ratio is therefore **not an arithmetic amplification
+factor** for splitting rows. Extra kernel launches, synchronization and changes
+to GPU weight-cache reuse require measurement. Actual read ordering, shared
+transient ownership and native cache semantics are not simulated.
 
 The next useful gate is a bounded measurement of native block cost and state
 under partial-row execution. Establish the real attention, compressed/shared
