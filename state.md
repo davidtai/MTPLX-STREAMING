@@ -178,6 +178,30 @@ capacity discount. Next work needs materially less expert traffic or better
 overlap of verification with reads; the existing I/O path already reaches its
 observed~13GB/s payload rate. Keep Q8/256K work secondary and its caveats intact.
 
+# Current Projection Ownership Stage
+
+Previous turn made progress: full tail2048 captures save prefill memory while
+steady storage remains unchanged; combined GU reads are rejected. Current
+CPU reanalysis of12 archived samples gives only5.9408percent ideal weight-only
+order0 byte savings now that scales are resident; serial decode would need
+220.17GB/s before framing/dispatch to break even at13.08GB/s read throughput.
+This is not a universal compression bound. No codec or GPU run follows it.
+Receipt:docs/deepseek-v41/receipts/weight-only-compression-bound-20260917.
+
+Staged:/tmp/dsv41-woa-owner-20260917. All40 target fused output paths currently
+retain34,603,008bytes/layer of original MXFP8 wo_a plus67,108,864bytes/layer
+of BF16 transpose. Native fused engagement is8240/8240 calls in the best run.
+A construction-validated first-use callable invokes the original cache builder,
+then installs a BF16-only callable with identical operations and retires the
+packed holder/cache tuple. Lazy materialization order is preserved; no new
+steady eligibility checks, counters, parent-owner cycles or stock fallback.
+One real native layer0 output-projection screen loads only4 tensors/77,856,768B
+from the174,962,526B shard3 through bounded uncached ranges. Native M1/M6/M8
+outputs and exact physical release are checked. Bound4GiB (2GiB MLX plus2GiB
+host/cache/compiler); controller reclaims shard3 after actual child exit.
+No full model staged yet; do not subtract1.384GB from every phase before its
+ownership/transition envelope is established. Keep20TPS open.
+
 # Latest Adaptive Draft Stage
 
 20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;
