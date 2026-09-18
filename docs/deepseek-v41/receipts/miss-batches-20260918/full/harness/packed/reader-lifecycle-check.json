@@ -1,0 +1,17 @@
+{
+  "mlx_imported": false,
+  "cases": [
+    {
+      "injected_down_failure": false,
+      "early_gu_observed": true,
+      "full_record_waited_for_down": true,
+      "all_views_released": true
+    },
+    {
+      "injected_down_failure": true,
+      "early_gu_observed": true,
+      "full_record_waited_for_down": true,
+      "all_views_released": true
+    }
+  ]
+}

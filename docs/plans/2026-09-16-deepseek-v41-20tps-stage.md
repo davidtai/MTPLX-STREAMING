@@ -19,7 +19,23 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ---
 
-## Measured update, 2026-09-17
+## Current update, 2026-09-18
+
+Task4 remains open. The memory-composed full native run reaches12.8091055TPS
+at84->104 slots; all output IDs match. The subsequent one-record miss candidate
+reaches12.826718TPS /79.755398s at the same capacity, under a109,591,219,432B
+bound with107,051,008,000B sampled machine peak. Its0.1375% point difference is
+not a reliable full-model improvement; the default remains unchanged.
+Two bounded one-layer comparisons win before two focused CPU lifetime checks
+and that single full run. Full6 attention remains: prefix operators add too
+much cost to justify the proposed split decoder. See
+`../deepseek-v41/receipts/miss-batches-20260918/README.md` and
+`../deepseek-v41/receipts/prefix-operators-20260918/README.md`.
+Next, derive phase-specific inactive-cache bounds on CPU; do not reduce the
+existing reserve from endpoint measurements or repeat cache clearing already
+present in growth. ExactQwen restored/warmed and lock release verified.
+
+## Earlier measured update, 2026-09-17
 
 Task 4 has full-workload results; **20 TPS remains unmet**. The latest single
 complete candidate is 12.6731624 TPS at depth 5/cap 84->102, with

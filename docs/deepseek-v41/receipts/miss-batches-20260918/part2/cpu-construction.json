@@ -1,0 +1,384 @@
+{
+  "source_commit": "ac7a15c0dac9749531cc220270243064e7a356f1",
+  "mlx_imported": false,
+  "persistent_slots": 104,
+  "transient_slots": 48,
+  "raw_slot_bytes": 2857697280,
+  "packed_slot_bytes": 2689597440,
+  "incremental_bound_bytes": 8589934592,
+  "trace_policy_misses": 819,
+  "maximum_route_policy_misses": 15,
+  "per_cycle_policy_misses": [
+    15,
+    2,
+    6,
+    2,
+    7,
+    8,
+    3,
+    7,
+    7,
+    1,
+    4,
+    6,
+    5,
+    4,
+    6,
+    2,
+    4,
+    8,
+    2,
+    8,
+    4,
+    4,
+    5,
+    5,
+    5,
+    4,
+    2,
+    6,
+    4,
+    7,
+    2,
+    5,
+    3,
+    5,
+    2,
+    5,
+    5,
+    5,
+    3,
+    5,
+    5,
+    2,
+    2,
+    2,
+    0,
+    6,
+    2,
+    3,
+    5,
+    1,
+    4,
+    6,
+    4,
+    6,
+    4,
+    5,
+    11,
+    4,
+    3,
+    8,
+    10,
+    6,
+    4,
+    5,
+    5,
+    4,
+    0,
+    3,
+    3,
+    9,
+    8,
+    5,
+    4,
+    6,
+    5,
+    7,
+    9,
+    2,
+    0,
+    7,
+    7,
+    3,
+    4,
+    4,
+    5,
+    3,
+    2,
+    5,
+    1,
+    2,
+    3,
+    6,
+    2,
+    7,
+    5,
+    7,
+    5,
+    2,
+    4,
+    8,
+    3,
+    5,
+    3,
+    6,
+    4,
+    6,
+    5,
+    5,
+    4,
+    7,
+    2,
+    6,
+    4,
+    1,
+    5,
+    2,
+    8,
+    6,
+    3,
+    7,
+    2,
+    5,
+    3,
+    3,
+    5,
+    4,
+    4,
+    2,
+    5,
+    1,
+    1,
+    4,
+    5,
+    2,
+    0,
+    2,
+    1,
+    4,
+    1,
+    5,
+    6,
+    6,
+    3,
+    0,
+    4,
+    2,
+    5,
+    2,
+    3,
+    0,
+    2,
+    4,
+    4,
+    2,
+    5,
+    5,
+    0,
+    4,
+    4,
+    4,
+    0,
+    4,
+    2,
+    6,
+    3,
+    2,
+    2,
+    4,
+    3,
+    3,
+    3,
+    3,
+    0,
+    3,
+    1,
+    4,
+    3,
+    4,
+    5,
+    3,
+    4,
+    6,
+    5,
+    3,
+    3,
+    1,
+    1,
+    1,
+    4,
+    5,
+    2,
+    5,
+    2,
+    3,
+    6,
+    5,
+    1,
+    6,
+    3,
+    1,
+    3,
+    4,
+    2,
+    0,
+    0,
+    6
+  ],
+  "note": "CPU policy misses; real physical reuse is measured by the guarded probe. Syntax and construction only; no optimization test suite.",
+  "layer": 34,
+  "layer_selection": "Upper median layer by native104-slot policy miss count over all206 saved routes; selected on CPU before any candidate timing.",
+  "all_layer_policy_misses": [
+    {
+      "layer": 20,
+      "misses": 421
+    },
+    {
+      "layer": 24,
+      "misses": 441
+    },
+    {
+      "layer": 25,
+      "misses": 454
+    },
+    {
+      "layer": 26,
+      "misses": 468
+    },
+    {
+      "layer": 16,
+      "misses": 478
+    },
+    {
+      "layer": 21,
+      "misses": 483
+    },
+    {
+      "layer": 28,
+      "misses": 496
+    },
+    {
+      "layer": 14,
+      "misses": 515
+    },
+    {
+      "layer": 18,
+      "misses": 524
+    },
+    {
+      "layer": 6,
+      "misses": 567
+    },
+    {
+      "layer": 22,
+      "misses": 611
+    },
+    {
+      "layer": 9,
+      "misses": 623
+    },
+    {
+      "layer": 11,
+      "misses": 643
+    },
+    {
+      "layer": 17,
+      "misses": 662
+    },
+    {
+      "layer": 8,
+      "misses": 725
+    },
+    {
+      "layer": 10,
+      "misses": 732
+    },
+    {
+      "layer": 7,
+      "misses": 741
+    },
+    {
+      "layer": 29,
+      "misses": 757
+    },
+    {
+      "layer": 30,
+      "misses": 783
+    },
+    {
+      "layer": 12,
+      "misses": 806
+    },
+    {
+      "layer": 34,
+      "misses": 819
+    },
+    {
+      "layer": 3,
+      "misses": 830
+    },
+    {
+      "layer": 31,
+      "misses": 836
+    },
+    {
+      "layer": 32,
+      "misses": 875
+    },
+    {
+      "layer": 27,
+      "misses": 898
+    },
+    {
+      "layer": 33,
+      "misses": 900
+    },
+    {
+      "layer": 35,
+      "misses": 903
+    },
+    {
+      "layer": 5,
+      "misses": 923
+    },
+    {
+      "layer": 23,
+      "misses": 980
+    },
+    {
+      "layer": 36,
+      "misses": 1000
+    },
+    {
+      "layer": 13,
+      "misses": 1071
+    },
+    {
+      "layer": 15,
+      "misses": 1156
+    },
+    {
+      "layer": 4,
+      "misses": 1200
+    },
+    {
+      "layer": 19,
+      "misses": 1230
+    },
+    {
+      "layer": 37,
+      "misses": 1272
+    },
+    {
+      "layer": 2,
+      "misses": 1300
+    },
+    {
+      "layer": 38,
+      "misses": 1339
+    },
+    {
+      "layer": 39,
+      "misses": 1448
+    },
+    {
+      "layer": 1,
+      "misses": 1578
+    },
+    {
+      "layer": 0,
+      "misses": 1844
+    }
+  ]
+}

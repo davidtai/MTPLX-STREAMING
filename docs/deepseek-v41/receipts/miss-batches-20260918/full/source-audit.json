@@ -1,0 +1,52 @@
+{
+  "source_commit": "ac7a15c0dac9749531cc220270243064e7a356f1",
+  "predecessor": "/tmp/dsv41-memory-compose-20260918/full-v1",
+  "runtime_files_unchanged": [
+    {
+      "path": "mtplx/deepseek_v41_memory_profile.py",
+      "sha256": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399"
+    },
+    {
+      "path": "mtplx/expert_runtime.py",
+      "sha256": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe"
+    },
+    {
+      "path": "mtplx/expert_slots.py",
+      "sha256": "27084ec00f0040644ccc1c93ce4adbc78a65f3fb4b17670cd26d8fb43d75e887"
+    },
+    {
+      "path": "mtplx/models/deepseek_v41.py",
+      "sha256": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9"
+    },
+    {
+      "path": "mtplx/models/deepseek_v41_dspark.py",
+      "sha256": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d"
+    },
+    {
+      "path": "mtplx/models/deepseek_v41_dspark_decode.py",
+      "sha256": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1"
+    },
+    {
+      "path": "mtplx/models/deepseek_v41_loader.py",
+      "sha256": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386"
+    },
+    {
+      "path": "mtplx/models/expert_mlx.py",
+      "sha256": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc"
+    },
+    {
+      "path": "scripts/deepseek_v41/ab_decode_env_levers.py",
+      "sha256": "32d42a85ebe69ce986e6f8a7d0d20eb435ad70206c8fdc8649aa276043055963"
+    },
+    {
+      "path": "scripts/deepseek_v41/bench_standard_shape.py",
+      "sha256": "7a2c5873ac54d90b060ea32a6d0d7c5c395bdf2f19f67023dbed58341e4d70ac"
+    },
+    {
+      "path": "scripts/deepseek_v41/gpu_window.sh",
+      "sha256": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c"
+    }
+  ],
+  "lane_exact_operator_sha256": "e119d20bdfa785102518941d0ab9f0c01eb38724ce15c9a0315f5af4ff20787a",
+  "changes": "only helper path relocation and construction-bound miss part size1; native attention, model arithmetic, cache policy, ownership and budgets unchanged"
+}

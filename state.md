@@ -2,7 +2,9 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
 TPS on exact 16,384-input / 1,024-output Python under 110 decimal GB.
-Best single complete candidate: **12.8091055 TPS; 20 TPS remains unmet.**
+Best single point estimate: **12.826718 TPS; 20 TPS remains unmet.**
+The part1 candidate is only0.1375% above the12.8091055TPS part3 baseline;
+this is not a reliable full-model improvement and does not change the default.
 Latest full Q8 candidate: 10.7541904 TPS; keep native KV for the fastest route.
 At least 256K KV support is also required, secondary to reaching 20 TPS.
 
@@ -46,10 +48,31 @@ All3+3 outputs and canonical window suffixes match; layer2 index-cache values
 still differ. Full retained window lengths differ by native compaction and do
 not establish a ring defect. Do not implement a ring fix or split decoder from
 the prefix-hit histogram. Archive:receipts/prefix-operators-20260918.
-Latest operator guard76468 is terminal exit0. Independent05:18:54UTC check
-confirms exactQwen healthy/idle/warmed, no owned child, free GPU lock. No full
-model or new optimization tests ran. Next bounded candidate: native full6
-plane-overlap with two-record versus existing three-record miss batches.
+Those operators' guards are terminal and restored exactQwen. The follow-up
+read-batch stage is complete at sourceac7a15c0. CPU selected median-miss layer34;
+real104-slot/48-transient replay restores73 actual residents and all206 M6
+routes. Part3->2 improves2.45%, part2->1 improves1.11%, each with0.73% control
+spread and identical output bytes/physical reads. Both8GiB-bound operators
+peak at2,934,477,321 MLX bytes and release to8. Two existing CPU reader-lifetime
+checks pass after those wins. No broad suite.
+
+One full part1 run reaches12.8267179843TPS /79.755398166s, exact1024 native IDs,
+206cycles,84->104 slots. The previous part3 run is12.8091054919TPS /79.865061666s.
+The0.109664s difference is not a reliable full-model win; do not promote or
+repeat unchanged arms. Reads stay34,259 /606,203,412,480B; read union47.148010s.
+Baseline10,157,899,776B, bound109,591,219,432B, MLXpeak94,075,749,060B,
+guard machine107,051,008,000B. Full guard68394 terminalexit0,222samples,zero
+compressor growth, source cache0. Restored/warmed/released05:36:19UTC;
+independent05:36:51 healthy/idle/warmed/free check finds no owned child.
+Archive:receipts/miss-batches-20260918. Full stage:
+/tmp/dsv41-miss-part1-full-20260918; raw prefix:
+/tmp/dsv41-110-stage/full-miss-part1-20260918-v1.
+
+Next: CPU audit of phase-specific inactive allocator-cache bounds. The current
+decode allowance is3,331,897,468B. Growth already clears cache; do not add that
+again or infer a safe discount from endpoint readings. Derive allocator and
+allocation-lifetime bounds before a candidate or full model load. Native KV16
+and existing safety reserves stay in place until then.
 
 # Prior Draft-Width Screen
 
