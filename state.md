@@ -202,6 +202,22 @@ host/cache/compiler); controller reclaims shard3 after actual child exit.
 No full model staged yet; do not subtract1.384GB from every phase before its
 ownership/transition envelope is established. Keep20TPS open.
 
+Operator v2 completed at source72b0d219e. Exact M1/M6/M8 output bytes, including
+cold first use. Warm active145,952,648->111,349,640B releases exactly34,603,008B;
+40-layer static total1,384,120,320B. Both cold peaks213,061,512B: source remains
+live during materialization, so charge one layer's34,603,008B overlap beyond
+the native cold-to-warm envelope. Eight active bytes after close. Guard10513
+terminal0; source cache66,387,968->0B after child exit; process-tree403,309,816B,
+machine10,487,103,488B. ExactQwen restored/warmed/released03:55:19UTC; independent
+03:59:04 healthy/idle/warmed/free, no child. First flat-position harness error
+and success archived under receipts/woa-owner-20260917.
+Next:/tmp/dsv41-woa-owner-20260917/full. Clone the best native packed-plane
+candidate, preserve original prefill/copy bounds, and discount only steady
+projection storage by39*34,603,008B after pricing the one-layer cold overlap.
+Add16MiB host metadata consistently to CLI/admission. Keep resident plan reserve
+conservative, report actual module retirement separately, and retain strict
+full1024-ID digest. Do not add tail capture or a transition credit to this lane.
+
 # Latest Adaptive Draft Stage
 
 20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;
