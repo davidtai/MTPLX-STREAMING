@@ -74,9 +74,13 @@ and289 task-owned artifact files (13.576GB). A2MiB private-file positive control
 returned2MiB before and0 after invalidation, so no session/artifact cleanup is
 justified. Qwen remained healthy/idle/warmed; machine use133.107GB while serving,
 including37.497GB file-backed. sudo -n -v still requires a password. No GPU run
-or service restart occurred. This is the second consecutive goal turn with
-the external RAM-reclamation blocker; keep the goal active pending the strict
-three-turn blocked audit. Evidence:the receipt's ram-cache-audit subdirectory.
+or service restart occurred. A third consecutive goal turn revalidated the same
+condition:37.528GB file-backed RAM while Qwen was healthy/idle/warmed, no owned
+candidate, and sudo -n -v still requiring a password. The goal is now marked
+BLOCKED pending external RAM reclamation;20TPS remains unmet. After the user
+resumes, start a fresh blocked audit. Evidence:the receipt's ram-cache-audit
+subdirectory plus the final live tool observations. The stagedv3 source hashes
+are current and no additional GPU run was started.
 
 Receipt:docs/deepseek-v41/receipts/adaptive-draft-20260917/README.md.
 CPU ARC/S3-FIFO screens lost (heldout17411/17193 vs15544 demand misses), so no
