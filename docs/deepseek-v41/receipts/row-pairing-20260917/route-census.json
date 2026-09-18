@@ -1,0 +1,16 @@
+{
+  "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "assignments": 296640,
+  "paired_assignments": 139196,
+  "paired_fraction": 0.46924217907227617,
+  "multiplicity_histogram": {
+    "1": 141321,
+    "2": 35185,
+    "3": 13356,
+    "4": 5909,
+    "5": 2767,
+    "6": 1235
+  },
+  "maximum_pair_weight_decode_reduction": 0.23462108953613808,
+  "scope": "CPU count; no timing or physical expert-read reduction claim"
+}

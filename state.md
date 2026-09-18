@@ -112,14 +112,21 @@ Independent health/free-lock checks pass. Qwen model residency scan found36.05GB
 of cache covered by automatic shutdown reclamation; no new manual purge needed.
 Receipt:prefill-allocation-20260917/README.md. No further tests for this result.
 
-Next bounded operator:/tmp/dsv41-row-pairing-20260917. Exact native M6 routing
+Bounded operator:/tmp/dsv41-row-pairing-20260917. Exact native M6 routing
 census has296640 assignments, average24.2443 distinct experts/layer/cycle;
 139196 assignments (46.9242%) can pair with the same expert. Sharing FP4
 conversion across pairs could remove23.4621% of repeated weight decodes before
 overhead. Staged float2 dot retains native V16/V8, R4, 2-SIMD geometry and each
 row's accumulation order. CPU grouping routes remaining singles to the native
-operator. First measure a bounded three-expert MLP; no full-model run or claimed
-gain exists yet. This changes neither SSD bytes nor target model precision.
+operator. Three-expert MLP is bit-exact in all4 shapes: rows4 mixed loses14.15%,
+rows6 paired gains3.57%, rows9 mixed loses4.08%, rows18 paired gains21.40%.
+Allocator peak131,863,420B;8B afterclose. Guard9965 terminal exit0; Qwen restored
+healthy/warmed and lock released01:30:45UTC, independently verified. No full-model
+gain. Receipt:row-pairing-20260917/README.md. Next is its integration subdirectory:
+one-layer native vsM6-hit-pair lane,32persistent/48transient slots,4interleaved
+blocks and26experts/36assignments. Misses and other explicit M routes use native
+operators. No full model until this realistic grouping wins. SSD bytes and
+target precision stay native.
 
 # Latest Packed Plane Overlap
 

@@ -1,0 +1,427 @@
+{
+  "scope": "Three real layer20 experts; synthetic BF16 inputs; native and paired MLPs, including CPU grouping/gathers/restore order",
+  "construction": {
+    "source_commit": "f3fa434d778d795d370d8ebcd258743cce70440d",
+    "scope": "Three real experts; native FP4 5120x2304, V16/V8, R4 and two SIMD groups; pair two rows with identical slot/expert. No full model.",
+    "static_incremental_bound_bytes": 8589934592,
+    "active_allocator_limit_bytes": 2147483648,
+    "allocator_cache_limit_bytes": 268435456,
+    "bound_components": "3 native expert records plus one full packed-scale layer; small row/index/output tensors; separate 4GiB Python/compiler and 4GiB allocator/graph allowance.",
+    "experts": [
+      127,
+      200,
+      273
+    ],
+    "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "helper_sha256": {
+      "row_pair_kernels.py": "e6e202a51b2e6e31c4ad01c1410a039d00900ccf66cb2e153eca563f771ff85d",
+      "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+      "probe.py": "5361bae174e50c1285f88bf92ac62416ebf75961ffb0c57fd6ae243e16782139",
+      "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+      "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f"
+    }
+  },
+  "before": {
+    "sample_start_monotonic_ns": 160730222913333,
+    "sample_end_monotonic_ns": 160730225860375,
+    "process": {
+      "peak_maxrss_bytes": 25247744,
+      "resident_bytes": 25608192,
+      "phys_footprint_bytes": 14615008,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123848376320,
+      "wired_bytes": 3242344448,
+      "active_bytes": 2687238144,
+      "inactive_bytes": 2548858880,
+      "speculative_bytes": 112623616,
+      "anonymous_bytes": 3923755008,
+      "file_backed_bytes": 1424965632,
+      "compressor_bytes": 1898201088,
+      "compressed_bytes": 7538753536,
+      "used_bytes": 10376642560,
+      "non_file_used_bytes": 9064300544,
+      "swapins_pages": 4821672,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "source_commit": "f3fa434d778d795d370d8ebcd258743cce70440d",
+  "cases": [
+    {
+      "rows": 4,
+      "expert_multiplicities": [
+        1,
+        1,
+        2
+      ],
+      "exact_bytes": true,
+      "timings": [
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000769291,
+            0.0007605,
+            0.000815583,
+            0.000726208,
+            0.000837208
+          ],
+          "median_s": 0.000769291
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000884667,
+            0.000899459,
+            0.000942916,
+            0.000922958,
+            0.000926042
+          ],
+          "median_s": 0.000922958
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000858667,
+            0.000906375,
+            0.000857917,
+            0.000806,
+            0.000963
+          ],
+          "median_s": 0.000858667
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000855,
+            0.000899125,
+            0.000744833,
+            0.00075225,
+            0.000739667
+          ],
+          "median_s": 0.00075225
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000572,
+            0.000322834,
+            0.000360875,
+            0.000323917,
+            0.000329167
+          ],
+          "median_s": 0.000329167
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.00036925,
+            0.000368791,
+            0.000374584,
+            0.000359083,
+            0.000430583
+          ],
+          "median_s": 0.00036925
+        }
+      ],
+      "medians_s": {
+        "native": 0.00075225,
+        "paired": 0.000858667
+      },
+      "latency_reduction_pct": -14.146493851777997
+    },
+    {
+      "rows": 6,
+      "expert_multiplicities": [
+        2,
+        2,
+        2
+      ],
+      "exact_bytes": true,
+      "timings": [
+        {
+          "arm": "native",
+          "samples_s": [
+            0.00036625,
+            0.000399792,
+            0.000478292,
+            0.000377375,
+            0.000381958
+          ],
+          "median_s": 0.000381958
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000351208,
+            0.000372291,
+            0.00046425,
+            0.000378708,
+            0.000342625
+          ],
+          "median_s": 0.000372291
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000375375,
+            0.000350583,
+            0.000359417,
+            0.000359708,
+            0.000342667
+          ],
+          "median_s": 0.000359417
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000360792,
+            0.000368667,
+            0.0003445,
+            0.000369542,
+            0.000363292
+          ],
+          "median_s": 0.000363292
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000382584,
+            0.0003545,
+            0.000372709,
+            0.000374542,
+            0.000341833
+          ],
+          "median_s": 0.000372709
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.00034,
+            0.00037275,
+            0.000357375,
+            0.000391625,
+            0.000333292
+          ],
+          "median_s": 0.000357375
+        }
+      ],
+      "medians_s": {
+        "native": 0.000372709,
+        "paired": 0.000359417
+      },
+      "latency_reduction_pct": 3.566321178184584
+    },
+    {
+      "rows": 9,
+      "expert_multiplicities": [
+        3,
+        3,
+        3
+      ],
+      "exact_bytes": true,
+      "timings": [
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000395,
+            0.000460584,
+            0.000435334,
+            0.000406708,
+            0.000383916
+          ],
+          "median_s": 0.000406708
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000475042,
+            0.000457791,
+            0.000437792,
+            0.000429083,
+            0.000424833
+          ],
+          "median_s": 0.000437792
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000497625,
+            0.000481166,
+            0.000435125,
+            0.000495917,
+            0.000498833
+          ],
+          "median_s": 0.000495917
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000445584,
+            0.000462791,
+            0.000430458,
+            0.000424875,
+            0.000396417
+          ],
+          "median_s": 0.000430458
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000480333,
+            0.000468125,
+            0.00045975,
+            0.000415584,
+            0.000482541
+          ],
+          "median_s": 0.000468125
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000448,
+            0.000447291,
+            0.00052175,
+            0.0004225,
+            0.000458709
+          ],
+          "median_s": 0.000448
+        }
+      ],
+      "medians_s": {
+        "native": 0.000430458,
+        "paired": 0.000448
+      },
+      "latency_reduction_pct": -4.07519432790191
+    },
+    {
+      "rows": 18,
+      "expert_multiplicities": [
+        6,
+        6,
+        6
+      ],
+      "exact_bytes": true,
+      "timings": [
+        {
+          "arm": "native",
+          "samples_s": [
+            0.00208025,
+            0.002012,
+            0.001310917,
+            0.000967292,
+            0.001080125
+          ],
+          "median_s": 0.001310917
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000898292,
+            0.000815208,
+            0.000775,
+            0.000875125,
+            0.000875541
+          ],
+          "median_s": 0.000875125
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.000876875,
+            0.000848667,
+            0.000803959,
+            0.000814,
+            0.000775792
+          ],
+          "median_s": 0.000814
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.001040875,
+            0.000940292,
+            0.000923542,
+            0.00105625,
+            0.001035625
+          ],
+          "median_s": 0.001035625
+        },
+        {
+          "arm": "native",
+          "samples_s": [
+            0.000875334,
+            0.000612125,
+            0.000564375,
+            0.000576625,
+            0.000572041
+          ],
+          "median_s": 0.000576625
+        },
+        {
+          "arm": "paired",
+          "samples_s": [
+            0.00048625,
+            0.000458667,
+            0.000515125,
+            0.00047975,
+            0.000517541
+          ],
+          "median_s": 0.00048625
+        }
+      ],
+      "medians_s": {
+        "native": 0.001035625,
+        "paired": 0.000814
+      },
+      "latency_reduction_pct": 21.400120700060356
+    }
+  ],
+  "complete": true,
+  "record_sha256": {
+    "127": "b600cfe3fa9c1b6bb822426e351c2f2e2bdf9b74d3a02918e59ea31aa0169774",
+    "200": "d889e605101f85bd136188b0a8c7119946c77327855e280e5de54041ba66db38",
+    "273": "dda00a65c5f4c993a848f938d0fd44ad3345407d5b1707256ff466e628f7f3df"
+  },
+  "mlx_allocator_peak_bytes": 131863420,
+  "after": {
+    "sample_start_monotonic_ns": 160732155891833,
+    "sample_end_monotonic_ns": 160732159844166,
+    "process": {
+      "peak_maxrss_bytes": 470138880,
+      "resident_bytes": 470138880,
+      "phys_footprint_bytes": 565609528,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123158855680,
+      "wired_bytes": 3509977088,
+      "active_bytes": 2925281280,
+      "inactive_bytes": 2747170816,
+      "speculative_bytes": 152977408,
+      "anonymous_bytes": 4240211968,
+      "file_backed_bytes": 1585217536,
+      "compressor_bytes": 1898201088,
+      "compressed_bytes": 7538753536,
+      "used_bytes": 11080630272,
+      "non_file_used_bytes": 9648390144,
+      "swapins_pages": 4821672,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "active_after_close_bytes": 8,
+  "cleanup": {
+    "cached_page_bytes_before": 0,
+    "cached_page_bytes_after": 0
+  }
+}
