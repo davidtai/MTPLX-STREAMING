@@ -1,0 +1,757 @@
+{
+  "source_commit": "d10d40f673c76818be22770057bfb79ff48986d6",
+  "scope": "Policy demand misses only; excludes physical transient reuse; no throughput claim",
+  "selection": "Prefill frequencies only; no decode rows used to select capacities",
+  "initial_state": "Same captured 73 residents in every arm; extra slots start empty",
+  "minimum_capacity": 84,
+  "maximum_capacity": 192,
+  "average_capacity": 99,
+  "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "script_sha256": "145165ce09a2e7033261efb75291a7b12d03c6ba6a14e07ac83f4767800f8e1e",
+  "arms": {
+    "uniform": {
+      "first_half_misses": 20234,
+      "second_half_misses": 16187,
+      "total_misses": 36421,
+      "per_layer": {
+        "0": {
+          "capacity": 99,
+          "first_half_misses": 1036,
+          "second_half_misses": 915,
+          "total_misses": 1951
+        },
+        "1": {
+          "capacity": 99,
+          "first_half_misses": 879,
+          "second_half_misses": 769,
+          "total_misses": 1648
+        },
+        "2": {
+          "capacity": 99,
+          "first_half_misses": 725,
+          "second_half_misses": 642,
+          "total_misses": 1367
+        },
+        "3": {
+          "capacity": 99,
+          "first_half_misses": 460,
+          "second_half_misses": 415,
+          "total_misses": 875
+        },
+        "4": {
+          "capacity": 99,
+          "first_half_misses": 644,
+          "second_half_misses": 624,
+          "total_misses": 1268
+        },
+        "5": {
+          "capacity": 99,
+          "first_half_misses": 498,
+          "second_half_misses": 478,
+          "total_misses": 976
+        },
+        "6": {
+          "capacity": 99,
+          "first_half_misses": 353,
+          "second_half_misses": 248,
+          "total_misses": 601
+        },
+        "7": {
+          "capacity": 99,
+          "first_half_misses": 391,
+          "second_half_misses": 392,
+          "total_misses": 783
+        },
+        "8": {
+          "capacity": 99,
+          "first_half_misses": 425,
+          "second_half_misses": 359,
+          "total_misses": 784
+        },
+        "9": {
+          "capacity": 99,
+          "first_half_misses": 364,
+          "second_half_misses": 309,
+          "total_misses": 673
+        },
+        "10": {
+          "capacity": 99,
+          "first_half_misses": 483,
+          "second_half_misses": 300,
+          "total_misses": 783
+        },
+        "11": {
+          "capacity": 99,
+          "first_half_misses": 384,
+          "second_half_misses": 315,
+          "total_misses": 699
+        },
+        "12": {
+          "capacity": 99,
+          "first_half_misses": 490,
+          "second_half_misses": 364,
+          "total_misses": 854
+        },
+        "13": {
+          "capacity": 99,
+          "first_half_misses": 610,
+          "second_half_misses": 503,
+          "total_misses": 1113
+        },
+        "14": {
+          "capacity": 99,
+          "first_half_misses": 305,
+          "second_half_misses": 243,
+          "total_misses": 548
+        },
+        "15": {
+          "capacity": 99,
+          "first_half_misses": 619,
+          "second_half_misses": 595,
+          "total_misses": 1214
+        },
+        "16": {
+          "capacity": 99,
+          "first_half_misses": 300,
+          "second_half_misses": 211,
+          "total_misses": 511
+        },
+        "17": {
+          "capacity": 99,
+          "first_half_misses": 411,
+          "second_half_misses": 288,
+          "total_misses": 699
+        },
+        "18": {
+          "capacity": 99,
+          "first_half_misses": 321,
+          "second_half_misses": 243,
+          "total_misses": 564
+        },
+        "19": {
+          "capacity": 99,
+          "first_half_misses": 715,
+          "second_half_misses": 584,
+          "total_misses": 1299
+        },
+        "20": {
+          "capacity": 99,
+          "first_half_misses": 276,
+          "second_half_misses": 171,
+          "total_misses": 447
+        },
+        "21": {
+          "capacity": 99,
+          "first_half_misses": 309,
+          "second_half_misses": 210,
+          "total_misses": 519
+        },
+        "22": {
+          "capacity": 99,
+          "first_half_misses": 367,
+          "second_half_misses": 285,
+          "total_misses": 652
+        },
+        "23": {
+          "capacity": 99,
+          "first_half_misses": 603,
+          "second_half_misses": 435,
+          "total_misses": 1038
+        },
+        "24": {
+          "capacity": 99,
+          "first_half_misses": 299,
+          "second_half_misses": 175,
+          "total_misses": 474
+        },
+        "25": {
+          "capacity": 99,
+          "first_half_misses": 317,
+          "second_half_misses": 172,
+          "total_misses": 489
+        },
+        "26": {
+          "capacity": 99,
+          "first_half_misses": 322,
+          "second_half_misses": 187,
+          "total_misses": 509
+        },
+        "27": {
+          "capacity": 99,
+          "first_half_misses": 596,
+          "second_half_misses": 368,
+          "total_misses": 964
+        },
+        "28": {
+          "capacity": 99,
+          "first_half_misses": 329,
+          "second_half_misses": 194,
+          "total_misses": 523
+        },
+        "29": {
+          "capacity": 99,
+          "first_half_misses": 459,
+          "second_half_misses": 345,
+          "total_misses": 804
+        },
+        "30": {
+          "capacity": 99,
+          "first_half_misses": 513,
+          "second_half_misses": 321,
+          "total_misses": 834
+        },
+        "31": {
+          "capacity": 99,
+          "first_half_misses": 497,
+          "second_half_misses": 413,
+          "total_misses": 910
+        },
+        "32": {
+          "capacity": 99,
+          "first_half_misses": 555,
+          "second_half_misses": 368,
+          "total_misses": 923
+        },
+        "33": {
+          "capacity": 99,
+          "first_half_misses": 520,
+          "second_half_misses": 436,
+          "total_misses": 956
+        },
+        "34": {
+          "capacity": 99,
+          "first_half_misses": 502,
+          "second_half_misses": 364,
+          "total_misses": 866
+        },
+        "35": {
+          "capacity": 99,
+          "first_half_misses": 555,
+          "second_half_misses": 398,
+          "total_misses": 953
+        },
+        "36": {
+          "capacity": 99,
+          "first_half_misses": 597,
+          "second_half_misses": 456,
+          "total_misses": 1053
+        },
+        "37": {
+          "capacity": 99,
+          "first_half_misses": 687,
+          "second_half_misses": 659,
+          "total_misses": 1346
+        },
+        "38": {
+          "capacity": 99,
+          "first_half_misses": 726,
+          "second_half_misses": 692,
+          "total_misses": 1418
+        },
+        "39": {
+          "capacity": 99,
+          "first_half_misses": 792,
+          "second_half_misses": 741,
+          "total_misses": 1533
+        }
+      }
+    },
+    "prefill_frequency": {
+      "first_half_misses": 19970,
+      "second_half_misses": 15616,
+      "total_misses": 35586,
+      "per_layer": {
+        "0": {
+          "capacity": 140,
+          "first_half_misses": 715,
+          "second_half_misses": 563,
+          "total_misses": 1278
+        },
+        "1": {
+          "capacity": 130,
+          "first_half_misses": 669,
+          "second_half_misses": 556,
+          "total_misses": 1225
+        },
+        "2": {
+          "capacity": 118,
+          "first_half_misses": 603,
+          "second_half_misses": 500,
+          "total_misses": 1103
+        },
+        "3": {
+          "capacity": 98,
+          "first_half_misses": 466,
+          "second_half_misses": 423,
+          "total_misses": 889
+        },
+        "4": {
+          "capacity": 120,
+          "first_half_misses": 533,
+          "second_half_misses": 487,
+          "total_misses": 1020
+        },
+        "5": {
+          "capacity": 123,
+          "first_half_misses": 406,
+          "second_half_misses": 344,
+          "total_misses": 750
+        },
+        "6": {
+          "capacity": 95,
+          "first_half_misses": 367,
+          "second_half_misses": 260,
+          "total_misses": 627
+        },
+        "7": {
+          "capacity": 97,
+          "first_half_misses": 398,
+          "second_half_misses": 398,
+          "total_misses": 796
+        },
+        "8": {
+          "capacity": 94,
+          "first_half_misses": 454,
+          "second_half_misses": 392,
+          "total_misses": 846
+        },
+        "9": {
+          "capacity": 95,
+          "first_half_misses": 390,
+          "second_half_misses": 334,
+          "total_misses": 724
+        },
+        "10": {
+          "capacity": 99,
+          "first_half_misses": 483,
+          "second_half_misses": 300,
+          "total_misses": 783
+        },
+        "11": {
+          "capacity": 110,
+          "first_half_misses": 330,
+          "second_half_misses": 260,
+          "total_misses": 590
+        },
+        "12": {
+          "capacity": 101,
+          "first_half_misses": 483,
+          "second_half_misses": 350,
+          "total_misses": 833
+        },
+        "13": {
+          "capacity": 98,
+          "first_half_misses": 616,
+          "second_half_misses": 511,
+          "total_misses": 1127
+        },
+        "14": {
+          "capacity": 93,
+          "first_half_misses": 338,
+          "second_half_misses": 267,
+          "total_misses": 605
+        },
+        "15": {
+          "capacity": 118,
+          "first_half_misses": 505,
+          "second_half_misses": 482,
+          "total_misses": 987
+        },
+        "16": {
+          "capacity": 99,
+          "first_half_misses": 300,
+          "second_half_misses": 211,
+          "total_misses": 511
+        },
+        "17": {
+          "capacity": 90,
+          "first_half_misses": 459,
+          "second_half_misses": 336,
+          "total_misses": 795
+        },
+        "18": {
+          "capacity": 91,
+          "first_half_misses": 367,
+          "second_half_misses": 275,
+          "total_misses": 642
+        },
+        "19": {
+          "capacity": 110,
+          "first_half_misses": 639,
+          "second_half_misses": 524,
+          "total_misses": 1163
+        },
+        "20": {
+          "capacity": 89,
+          "first_half_misses": 301,
+          "second_half_misses": 207,
+          "total_misses": 508
+        },
+        "21": {
+          "capacity": 84,
+          "first_half_misses": 371,
+          "second_half_misses": 257,
+          "total_misses": 628
+        },
+        "22": {
+          "capacity": 84,
+          "first_half_misses": 423,
+          "second_half_misses": 345,
+          "total_misses": 768
+        },
+        "23": {
+          "capacity": 87,
+          "first_half_misses": 675,
+          "second_half_misses": 483,
+          "total_misses": 1158
+        },
+        "24": {
+          "capacity": 84,
+          "first_half_misses": 353,
+          "second_half_misses": 211,
+          "total_misses": 564
+        },
+        "25": {
+          "capacity": 84,
+          "first_half_misses": 382,
+          "second_half_misses": 232,
+          "total_misses": 614
+        },
+        "26": {
+          "capacity": 84,
+          "first_half_misses": 395,
+          "second_half_misses": 247,
+          "total_misses": 642
+        },
+        "27": {
+          "capacity": 99,
+          "first_half_misses": 596,
+          "second_half_misses": 368,
+          "total_misses": 964
+        },
+        "28": {
+          "capacity": 84,
+          "first_half_misses": 386,
+          "second_half_misses": 255,
+          "total_misses": 641
+        },
+        "29": {
+          "capacity": 86,
+          "first_half_misses": 529,
+          "second_half_misses": 409,
+          "total_misses": 938
+        },
+        "30": {
+          "capacity": 90,
+          "first_half_misses": 567,
+          "second_half_misses": 365,
+          "total_misses": 932
+        },
+        "31": {
+          "capacity": 101,
+          "first_half_misses": 480,
+          "second_half_misses": 396,
+          "total_misses": 876
+        },
+        "32": {
+          "capacity": 87,
+          "first_half_misses": 623,
+          "second_half_misses": 440,
+          "total_misses": 1063
+        },
+        "33": {
+          "capacity": 101,
+          "first_half_misses": 513,
+          "second_half_misses": 424,
+          "total_misses": 937
+        },
+        "34": {
+          "capacity": 84,
+          "first_half_misses": 602,
+          "second_half_misses": 441,
+          "total_misses": 1043
+        },
+        "35": {
+          "capacity": 87,
+          "first_half_misses": 631,
+          "second_half_misses": 470,
+          "total_misses": 1101
+        },
+        "36": {
+          "capacity": 90,
+          "first_half_misses": 667,
+          "second_half_misses": 510,
+          "total_misses": 1177
+        },
+        "37": {
+          "capacity": 113,
+          "first_half_misses": 607,
+          "second_half_misses": 539,
+          "total_misses": 1146
+        },
+        "38": {
+          "capacity": 115,
+          "first_half_misses": 639,
+          "second_half_misses": 575,
+          "total_misses": 1214
+        },
+        "39": {
+          "capacity": 108,
+          "first_half_misses": 709,
+          "second_half_misses": 669,
+          "total_misses": 1378
+        }
+      }
+    },
+    "independent_m6_union": {
+      "first_half_misses": 19970,
+      "second_half_misses": 15616,
+      "total_misses": 35586,
+      "per_layer": {
+        "0": {
+          "capacity": 140,
+          "first_half_misses": 715,
+          "second_half_misses": 563,
+          "total_misses": 1278
+        },
+        "1": {
+          "capacity": 130,
+          "first_half_misses": 669,
+          "second_half_misses": 556,
+          "total_misses": 1225
+        },
+        "2": {
+          "capacity": 118,
+          "first_half_misses": 603,
+          "second_half_misses": 500,
+          "total_misses": 1103
+        },
+        "3": {
+          "capacity": 98,
+          "first_half_misses": 466,
+          "second_half_misses": 423,
+          "total_misses": 889
+        },
+        "4": {
+          "capacity": 120,
+          "first_half_misses": 533,
+          "second_half_misses": 487,
+          "total_misses": 1020
+        },
+        "5": {
+          "capacity": 123,
+          "first_half_misses": 406,
+          "second_half_misses": 344,
+          "total_misses": 750
+        },
+        "6": {
+          "capacity": 95,
+          "first_half_misses": 367,
+          "second_half_misses": 260,
+          "total_misses": 627
+        },
+        "7": {
+          "capacity": 97,
+          "first_half_misses": 398,
+          "second_half_misses": 398,
+          "total_misses": 796
+        },
+        "8": {
+          "capacity": 94,
+          "first_half_misses": 454,
+          "second_half_misses": 392,
+          "total_misses": 846
+        },
+        "9": {
+          "capacity": 95,
+          "first_half_misses": 390,
+          "second_half_misses": 334,
+          "total_misses": 724
+        },
+        "10": {
+          "capacity": 99,
+          "first_half_misses": 483,
+          "second_half_misses": 300,
+          "total_misses": 783
+        },
+        "11": {
+          "capacity": 110,
+          "first_half_misses": 330,
+          "second_half_misses": 260,
+          "total_misses": 590
+        },
+        "12": {
+          "capacity": 101,
+          "first_half_misses": 483,
+          "second_half_misses": 350,
+          "total_misses": 833
+        },
+        "13": {
+          "capacity": 98,
+          "first_half_misses": 616,
+          "second_half_misses": 511,
+          "total_misses": 1127
+        },
+        "14": {
+          "capacity": 93,
+          "first_half_misses": 338,
+          "second_half_misses": 267,
+          "total_misses": 605
+        },
+        "15": {
+          "capacity": 118,
+          "first_half_misses": 505,
+          "second_half_misses": 482,
+          "total_misses": 987
+        },
+        "16": {
+          "capacity": 99,
+          "first_half_misses": 300,
+          "second_half_misses": 211,
+          "total_misses": 511
+        },
+        "17": {
+          "capacity": 90,
+          "first_half_misses": 459,
+          "second_half_misses": 336,
+          "total_misses": 795
+        },
+        "18": {
+          "capacity": 91,
+          "first_half_misses": 367,
+          "second_half_misses": 275,
+          "total_misses": 642
+        },
+        "19": {
+          "capacity": 110,
+          "first_half_misses": 639,
+          "second_half_misses": 524,
+          "total_misses": 1163
+        },
+        "20": {
+          "capacity": 89,
+          "first_half_misses": 301,
+          "second_half_misses": 207,
+          "total_misses": 508
+        },
+        "21": {
+          "capacity": 84,
+          "first_half_misses": 371,
+          "second_half_misses": 257,
+          "total_misses": 628
+        },
+        "22": {
+          "capacity": 84,
+          "first_half_misses": 423,
+          "second_half_misses": 345,
+          "total_misses": 768
+        },
+        "23": {
+          "capacity": 87,
+          "first_half_misses": 675,
+          "second_half_misses": 483,
+          "total_misses": 1158
+        },
+        "24": {
+          "capacity": 84,
+          "first_half_misses": 353,
+          "second_half_misses": 211,
+          "total_misses": 564
+        },
+        "25": {
+          "capacity": 84,
+          "first_half_misses": 382,
+          "second_half_misses": 232,
+          "total_misses": 614
+        },
+        "26": {
+          "capacity": 84,
+          "first_half_misses": 395,
+          "second_half_misses": 247,
+          "total_misses": 642
+        },
+        "27": {
+          "capacity": 99,
+          "first_half_misses": 596,
+          "second_half_misses": 368,
+          "total_misses": 964
+        },
+        "28": {
+          "capacity": 84,
+          "first_half_misses": 386,
+          "second_half_misses": 255,
+          "total_misses": 641
+        },
+        "29": {
+          "capacity": 86,
+          "first_half_misses": 529,
+          "second_half_misses": 409,
+          "total_misses": 938
+        },
+        "30": {
+          "capacity": 90,
+          "first_half_misses": 567,
+          "second_half_misses": 365,
+          "total_misses": 932
+        },
+        "31": {
+          "capacity": 101,
+          "first_half_misses": 480,
+          "second_half_misses": 396,
+          "total_misses": 876
+        },
+        "32": {
+          "capacity": 87,
+          "first_half_misses": 623,
+          "second_half_misses": 440,
+          "total_misses": 1063
+        },
+        "33": {
+          "capacity": 101,
+          "first_half_misses": 513,
+          "second_half_misses": 424,
+          "total_misses": 937
+        },
+        "34": {
+          "capacity": 84,
+          "first_half_misses": 602,
+          "second_half_misses": 441,
+          "total_misses": 1043
+        },
+        "35": {
+          "capacity": 87,
+          "first_half_misses": 631,
+          "second_half_misses": 470,
+          "total_misses": 1101
+        },
+        "36": {
+          "capacity": 90,
+          "first_half_misses": 667,
+          "second_half_misses": 510,
+          "total_misses": 1177
+        },
+        "37": {
+          "capacity": 113,
+          "first_half_misses": 607,
+          "second_half_misses": 539,
+          "total_misses": 1146
+        },
+        "38": {
+          "capacity": 115,
+          "first_half_misses": 639,
+          "second_half_misses": 575,
+          "total_misses": 1214
+        },
+        "39": {
+          "capacity": 108,
+          "first_half_misses": 709,
+          "second_half_misses": 669,
+          "total_misses": 1378
+        }
+      },
+      "identical_allocation_to": "prefill_frequency"
+    }
+  },
+  "elapsed_s": 1.443037082994124,
+  "complete": true
+}

@@ -1,0 +1,58 @@
+{
+  "qwen_ok": true,
+  "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "warmup": {
+    "enabled": true,
+    "ran": true,
+    "tokens": 16,
+    "elapsed_s": 1.6225255420140456,
+    "error": null,
+    "completion_tokens": 16,
+    "tok_s": 67.95923691108435,
+    "background": {
+      "mode": "background",
+      "state": "done",
+      "steps": [
+        {
+          "kind": "gqa_packed_pipelines",
+          "state": "ok",
+          "elapsed_s": 0.006,
+          "yields": 0
+        },
+        {
+          "kind": "ladder",
+          "context": 512,
+          "state": "ok",
+          "elapsed_s": 0.562,
+          "yields": 0,
+          "tok_s": 85.3
+        },
+        {
+          "kind": "ladder",
+          "context": 2560,
+          "state": "ok",
+          "elapsed_s": 2.36,
+          "yields": 0,
+          "tok_s": 100.44
+        }
+      ],
+      "started_at_s": 1789692986.7322829,
+      "finished_at_s": 1789692990.543356,
+      "elapsed_s": 3.811,
+      "resubmits": 0
+    },
+    "extended": {
+      "mode": "background",
+      "steps_planned": 3
+    }
+  },
+  "active_requests": 0,
+  "lock_lsof_stdout": "",
+  "owned_pids_stdout": "  PID  PPID ELAPSED STAT\n",
+  "guard_exit": 0,
+  "restored_utc": "2026-09-18T00:56:30Z",
+  "source": "guard terminal log plus independent post-run HTTP/process/lock observations"
+}

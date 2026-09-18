@@ -37,7 +37,10 @@ sizes and shared transient allocation bytes.
 
 # Latest Adaptive Draft Stage
 
-20 TPS remains open; no newer full throughput result than12.6731624TPS.
+20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;
+the best remains12.6731624TPS. All1024 native output IDs match. The run used
+84->99slots versus the earlier best's84->102, so the policy effect is not
+isolated. No throughput promotion or extra tests for this candidate.
 New draft-only policy: startD5, thenD7 after full acceptance orD3 otherwise.
 Exact teacher replay reduces206->195 cycles; verify rows1236->1242. D5 control
 reproduces all native commit boundaries. A three-way3/5/7 policy also takes195
@@ -47,7 +50,7 @@ Incremental bound52,613,349,376B; allocator peak21,299,586,448B; guard process
 Qwen restored23:49:22UTC, final independent health/warmup/free-lock check passes.
 
 Full staging: /tmp/dsv41-adaptive-depth-20260917/full, parameter-sharing views
-in adaptive_lane.py. No full-target execution yet. The existing nativeM8 bound
+in adaptive_lane.py. Full-target execution now completed. The existing nativeM8 bound
 is retained plus16MiB host metadata; native search floor96 is removed, allowing
 85..100 while preserving every memory inequality. CPU packed plans:102slots
 at9.955GB baseline;93 at15.745GB;92 at16.5GB.
@@ -63,10 +66,16 @@ Guard07998bbd6 waits for zero active/queued work before bootout. Guard233e344e3
 adds opt-in GPU_WINDOW_PURGE_DISK_CACHE=1 before fresh admission. The subsequent
 fix checks cached admin authentication before lock/service changes. Three
 focused CPU guard regressions pass. No unrelated application was terminated.
-User async request is pending:run sudo /usr/sbin/purge in their own terminal;
-never collect the password. After RAM reclamation, repin source/helper hashes
-and use a freshv3 prefix with optional purge OFF. Do not rerun against the same
-oversized baseline or claim the draft-only cycle gain is a TPS improvement.
+The user confirmed the OS file cache was purged. Source/helper hashes were
+repinned and fullv3 ran with optional purge OFF. Its fresh baseline11.518GB
+admitted99slots and a109,348,083,944B bound. Allocator peak91,931,939,555B;
+internal process93,697,472,216B; internal machine108,799,164,416B; guard machine
+108,678,807,552B. Whole-machine samples stayed below110GB. Read volume652.546GB,
+36,878records;196cycles; verification77.3694s; drafting2.0935s. Installation
+3.2996s is charged to decode. Same native-AR index297 tie classification.
+Guard parent27410/shell27429/child27599 are terminal; child exit0, exactQwen
+restored with warmup and lock released00:56:30UTC. Independent checks pass.
+Full harness/result/lifecycle:receipt full-v3 directory,30 hashed files.
 
 The next continuation revalidated the same RAM/admin-auth blocker. Read-only
 mincore audit found0 resident bytes across68,403 saved-session blobs (10.425GB)
@@ -76,15 +85,25 @@ justified. Qwen remained healthy/idle/warmed; machine use133.107GB while serving
 including37.497GB file-backed. sudo -n -v still requires a password. No GPU run
 or service restart occurred. A third consecutive goal turn revalidated the same
 condition:37.528GB file-backed RAM while Qwen was healthy/idle/warmed, no owned
-candidate, and sudo -n -v still requiring a password. The goal is now marked
-BLOCKED pending external RAM reclamation;20TPS remains unmet. After the user
-resumes, start a fresh blocked audit. Evidence:the receipt's ram-cache-audit
-subdirectory plus the final live tool observations. The stagedv3 source hashes
-are current and no additional GPU run was started.
+candidate, and sudo -n -v still requiring a password. The goal was marked
+blocked, then resumed after external reclamation. That blocker is cleared;
+fullv3 above is complete and20TPS remains open. Do not repeat the blocked
+status or relaunchv3. The negative RAM audit remains useful evidence against
+unnecessary saved-session or task-artifact cleanup.
 
 Receipt:docs/deepseek-v41/receipts/adaptive-draft-20260917/README.md.
 CPU ARC/S3-FIFO screens lost (heldout17411/17193 vs15544 demand misses), so no
 GPU tests followed. Raw CPU screens:/tmp/dsv41-cache-replacement-20260917.
+
+Next candidate:/tmp/dsv41-prefill-allocation-20260917/full. Prefill-only marginal
+frequency allocation, fixed total slots, min84/max128 per layer, selected once
+at the existing timed transition. CPU demand misses at average99 improve
+36421->35631 (2.17%); second half16187->15636 (3.41%). No decode rows select the
+vector; identical73-slot seed plus empty slots across CPU arms. This is not
+physical-read or TPS evidence. Admission charges the max128 component copy and
+16MiB metadata before model load. Layer vectors must drive plans, policy,
+physical owners and reports; do not call them99 uniform slots. Staged only;
+no full run yet. Receipt:prefill-allocation-20260917/README.md.
 
 # Latest Packed Plane Overlap
 

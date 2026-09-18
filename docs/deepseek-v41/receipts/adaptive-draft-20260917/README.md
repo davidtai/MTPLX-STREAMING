@@ -1,8 +1,10 @@
 # Adaptive draft acceptance screen and service guard fixes
 
-**20 TPS remains unmet.** The best completed 16,384-input / 1,024-output run
-remains 12.6731624 TPS. This receipt contains a promising draft-only result;
-the adaptive candidate has no full-target throughput measurement yet.
+**20 TPS remains unmet.** The adaptive full run completed at **12.3057465 TPS**
+(83.1318930 seconds), below the prior best of 12.6731624 TPS. All 1,024 output
+tokens match the previous native result. The full candidate used 99 expert
+slots per layer versus the best run's 102, so this does not isolate the draft
+policy's effect. It is not promoted as a throughput improvement.
 
 The selected policy starts at depth 5. After a completely accepted draft it
 uses depth 7; otherwise it uses depth 3. It selects the next width using only
@@ -55,7 +57,40 @@ changing the service when authentication is unavailable. The default remains
 the existing targeted model-file cleanup. Three focused CPU guard regressions
 pass; no unrelated application was terminated.
 
-## Retained staging and next step
+## Full adaptive result after RAM reclamation
+
+The user purged the OS file cache. The third attempt then measured a fresh
+11,518,132,224-byte post-shutdown baseline and admitted prefill 84 / decode 99
+slots with a 109,348,083,944-byte peak bound under the 110,000,000,000-byte cap.
+The optional purge flag was off. The full target needed 196 cycles versus the
+draft-only replay's 195; saved target states do not reproduce every arithmetic
+effect of a new verification schedule.
+
+The run read 652,545,884,160 weight bytes / 36,878 records, versus the best
+run's 620,943,114,240 bytes / 35,092 records. Read-union time was 50.9830782
+seconds, verification 77.3694152 seconds, and drafting 2.0935138 seconds.
+These scopes overlap. The 3.2995715-second cache installation is included in
+decode wall time. Capacity and schedule both differ from the earlier run.
+
+| Separate memory measure | Bytes |
+|---|---:|
+| MLX allocator peak | 91,931,939,555 |
+| Internal process footprint peak | 93,697,472,216 |
+| Guard process footprint peak | 93,730,879,384 |
+| Internal machine physical peak | 108,799,164,416 |
+| Guard machine physical peak | 108,678,807,552 |
+
+Both machine samplers stayed below 110 GB. The output SHA-256 is
+`0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac`.
+The fresh candidate's native-AR diagnostic remains the authorized index-297
+tie flip; cached AR throughput and memory remain null. The child exited 0,
+Qwen identity/health/warmup were restored, and the lock was released at
+00:56:30 UTC on September 18. Independent HTTP, process and lock observations
+confirmed restoration and no remaining candidate. `full-v3/sha256.json` binds
+the 30 preserved result, harness and lifecycle files. No additional tests
+were added for this unsuccessful throughput candidate.
+
+## Retained staging
 
 The complete candidate is staged at
 `/tmp/dsv41-adaptive-depth-20260917/full`. Its native admission search can use
@@ -64,12 +99,9 @@ copy and prefill bounds remain. The packed plan adds 16 MiB for draft-view
 metadata. CPU accounting admits 102 packed slots at the old 9.955 GB baseline,
 93 at 15.745 GB, and 92 at 16.5 GB. The live baseline remains authoritative.
 
-The user has been asked to run `sudo /usr/sbin/purge` in their own terminal;
-do not request or collect the password. After reclamation, refresh the staged
-commit and source hashes, use a new `v3` output prefix with the optional purge
-flag off, and run through the canonical guard. Require all 1,024 native output
-tokens or the authorized index-matched tie gate, complete cleanup, and a fresh
-throughput receipt before retaining this as a speed improvement.
+The complete v3 harness is now archived with the result. Do not rerun this
+unchanged candidate solely because the draft-only replay predicted fewer
+cycles. Further throughput work must reduce expert-read or verification cost.
 
 The earlier CPU cache replacement screen rejected both batch-pinned ARC and
 S3-FIFO: held-out policy demand misses were 17,411 and 17,193 versus 15,544
@@ -95,4 +127,5 @@ physical usage was 133,107,056,640 bytes with Qwen serving, including
 37,497,257,984 file-backed bytes. Noninteractive administrator validation still
 required a password. No service restart, application termination or GPU run
 occurred. `ram-cache-audit/sha256.json` separately binds these five evidence
-files; the OS cache flush remains the pending external step.
+files. This was the historical blocker; the user subsequently purged the
+cache and full v3 completed as recorded above.

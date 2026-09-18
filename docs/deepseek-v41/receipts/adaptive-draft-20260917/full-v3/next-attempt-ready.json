@@ -1,0 +1,8 @@
+{
+  "source_commit": "d10d40f673c76818be22770057bfb79ff48986d6",
+  "output_prefix": "full-adaptive-draft-20260917-v3",
+  "purge_flag": false,
+  "all_source_hashes_match": true,
+  "syntax": true,
+  "waiting_for": "external disk-cache reclamation before fresh guarded admission"
+}
