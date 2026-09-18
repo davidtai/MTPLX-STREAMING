@@ -1,0 +1,11 @@
+{
+  "native_model_sha256": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+  "native_method_sha256": "b0cc782462dbc8fb2cf5849f4f7f50d2697a2dc4457e9fca3a2b6685c7cac66e",
+  "modified_method_sha256": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2",
+  "changes": [
+    "Compute tail capture start once before prefill",
+    "Capture target-layer means only for intersecting rows; same mean/cast arithmetic",
+    "Concatenate only captured chunks"
+  ],
+  "unchanged": "All target attention, MoE, Hyper-Connection, final norm, cache, routing, synchronization and ordering statements"
+}

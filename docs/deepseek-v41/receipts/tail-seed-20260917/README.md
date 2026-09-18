@@ -65,3 +65,18 @@ stored bound-method ownership cycle. It is restricted to one 16K native-KV
 request. Q8 partial seeding needs its own offset handling. Initial full-run
 admission must keep the old allowances plus metadata; the operator saving
 alone is not evidence for more expert slots.
+
+The small integration check completes all four cases: FP32 and BF16 backbones,
+33 prompt rows in chunks of seven, and retained tails of seven and 17 rows.
+Logits, retained hiddens, cache bytes and offsets, and the next decode step all
+match exactly. Allocator peak is 1,591,702 bytes, with 28 active bytes after
+cleanup. The first attempt failed only because NumPy cannot directly convert
+BF16 cache arrays; the completed check compares raw byte views instead.
+Both attempts are preserved in `capture-check-refusal/` and `capture-check/`.
+
+Guard 32403 exits 0, restores exact Qwen identity, health and warmup, and
+releases at 02:59:14 UTC. Independent verification at 03:00:51 UTC finds
+healthy/idle/warmed Qwen, a free lock and no owned child. The next stage is one
+complete native D5/M6 16K/1K run with the best packed-plane lane. Its admission
+retains all original allowances and adds 16 MiB of host metadata reserve in
+every phase; no operator-derived capacity discount is applied.

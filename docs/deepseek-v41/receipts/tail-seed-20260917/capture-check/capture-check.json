@@ -1,0 +1,117 @@
+{
+  "scope": "Four small actual eight-layer native backbone cases after the successful real-weight seed memory screen; target logits/cache/next step and retained hiddens checked bytewise. No full-model throughput claim.",
+  "construction": {
+    "source_commit": "9e1cbafba41fbd2aedbd4fb093b227e38a3c510b",
+    "incremental_bound_bytes": 4294967296,
+    "scope": "Eight-layer32-wide synthetic native backbone; two dtypes and two chunk-crossing tails. All data/parameters/transients under64MiB,1GiB allocator limit plus64MiB cache and remaining host/compiler allowance. No artifact/model load.",
+    "helper_sha256": {
+      "check_capture.py": "00cb7c049186277106df6049d4019e950b4c407914128246e62eb278b7769a2f",
+      "tail_prefill_body.py": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2",
+      "tail_prefill.py": "bfa8f44d993987dbfc46181c1d377bafef08ae2909e1079d58a00a1a8d8cefde",
+      "native_prefill.py": "b0cc782462dbc8fb2cf5849f4f7f50d2697a2dc4457e9fca3a2b6685c7cac66e"
+    },
+    "runtime_source_sha256": {
+      "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+      "mtplx/models/deepseek_v41_cache.py": "2e2af380b2a587dcaf10bcac2a3608fd7933e763432a67dd24e57959cb8f317f",
+      "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+      "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+      "tests/models/test_deepseek_v41_layer_major_prefill.py": "0ffcd89b8b739493e63c0c3b9c0a70b296c6b3f75905a125d68dcede14eb5282",
+      "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c"
+    }
+  },
+  "before": {
+    "sample_start_monotonic_ns": 166044673201208,
+    "sample_end_monotonic_ns": 166044676488666,
+    "process": {
+      "peak_maxrss_bytes": 24117248,
+      "resident_bytes": 24543232,
+      "phys_footprint_bytes": 13566432,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 124104343552,
+      "wired_bytes": 3183640576,
+      "active_bytes": 2387329024,
+      "inactive_bytes": 2159902720,
+      "speculative_bytes": 216350720,
+      "anonymous_bytes": 3199959040,
+      "file_backed_bytes": 1563623424,
+      "compressor_bytes": 2253881344,
+      "compressed_bytes": 8257470464,
+      "used_bytes": 9984753664,
+      "non_file_used_bytes": 8637480960,
+      "swapins_pages": 4821899,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "cases": [
+    {
+      "dtype": "mlx.core.float32",
+      "prompt_rows": 33,
+      "chunk_rows": 7,
+      "keep_rows": 7,
+      "hidden_shape": [
+        1,
+        7,
+        96
+      ],
+      "exact_logits": true,
+      "exact_hidden_tail": true,
+      "exact_cache": true,
+      "exact_next_step": true
+    },
+    {
+      "dtype": "mlx.core.float32",
+      "prompt_rows": 33,
+      "chunk_rows": 7,
+      "keep_rows": 17,
+      "hidden_shape": [
+        1,
+        17,
+        96
+      ],
+      "exact_logits": true,
+      "exact_hidden_tail": true,
+      "exact_cache": true,
+      "exact_next_step": true
+    },
+    {
+      "dtype": "mlx.core.bfloat16",
+      "prompt_rows": 33,
+      "chunk_rows": 7,
+      "keep_rows": 7,
+      "hidden_shape": [
+        1,
+        7,
+        96
+      ],
+      "exact_logits": true,
+      "exact_hidden_tail": true,
+      "exact_cache": true,
+      "exact_next_step": true
+    },
+    {
+      "dtype": "mlx.core.bfloat16",
+      "prompt_rows": 33,
+      "chunk_rows": 7,
+      "keep_rows": 17,
+      "hidden_shape": [
+        1,
+        17,
+        96
+      ],
+      "exact_logits": true,
+      "exact_hidden_tail": true,
+      "exact_cache": true,
+      "exact_next_step": true
+    }
+  ],
+  "complete": true,
+  "allocator_peak_bytes": 1591702,
+  "active_after_close_bytes": 28
+}

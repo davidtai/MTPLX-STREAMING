@@ -130,6 +130,18 @@ FP32/BF16, two chunk-crossing tails, exact logits/hiddens/cache/next step.
 No full model staged yet. Keep old full-model memory allowances plus metadata
 until fresh full evidence supports a discount;20TPS remains unmet.
 
+Capture check v2 completes all four FP32/BF16 cases with exact logits, retained
+hiddens, cache state/offsets and next decode step. First attempt was a NumPy
+BF16 conversion error in the harness; v2 compares byte views. Peak1,591,702B;
+28 active bytes after close. Guard32403 terminal0; exactQwen restored/warmed
+and lock released02:59:14UTC; independent03:00:51 healthy/idle/warmed/free,
+no owned child. Both attempts are archived under tail-seed-20260917.
+Next:/tmp/dsv41-tail-seed-20260917/full, one nativeD5/M6 full16K/1K packed-plane
+candidate with tail2048 capture and absolute seed offset14336. Keep all old
+admission allowances plus16MiB host metadata in every phase. No operator-derived
+capacity discount; native capacity search may admit85..100 instead of96..100
+without relaxing any inequality. The full output digest remains mandatory.
+
 # Latest Adaptive Draft Stage
 
 20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;
