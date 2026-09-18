@@ -1,4 +1,4 @@
-# Bounded DSpark prefill seeding: 128-row memory result
+# Bounded DSpark prefill seeding: exact 2,048-row memory result
 
 The native DSpark seed projects all prompt hiddens, computes three pointwise
 KV projections/norms/RoPE, and retains only the last 128 rows in each draft
@@ -43,3 +43,25 @@ Another guarded benchmark then legitimately owns the lock and stops Qwen.
 Work stays on CPU during that window. Independent verification after its
 completion, at 02:42:32 UTC, finds Qwen healthy, idle and warmed and the lock
 free. `tail128/sha256.json` binds the completed memory/numeric evidence.
+
+The 2,048-row candidate matches the final main-hidden row, all three window
+byte sequences and all absolute offsets in both interleaved comparisons.
+Its maximum allocator peak is 416,511,276 bytes versus 2,279,214,764 bytes for
+the full seed: a saving of 1,862,703,488 bytes. Median seed time is 0.0086178
+seconds versus 0.0715489 seconds. This proves the bounded seed operator only;
+full prefill capture, cache capacity and decode TPS are not yet measured.
+
+The controller leaves eight active allocator bytes, reclaims 74,366,976 clean
+source-file bytes to zero, and exits 0. Guard 36042 restores exact Qwen
+identity, health and warmup and releases the lock at 02:44:16 UTC. Independent
+verification at 02:50:06 UTC finds Qwen healthy, idle and warmed, a free lock,
+and no owned child. `tail2048/sha256.json` preserves the complete result.
+
+The isolated integration at `/tmp/dsv41-tail-seed-20260917/integration` narrows
+only the native layer-major DSpark prefill captures and seeds native draft
+caches at absolute position 14,336. The target attention, MoE, HC, cache and
+verification code stays inherited. A construction-bound subclass avoids a
+stored bound-method ownership cycle. It is restricted to one 16K native-KV
+request. Q8 partial seeding needs its own offset handling. Initial full-run
+admission must keep the old allowances plus metadata; the operator saving
+alone is not evidence for more expert slots.

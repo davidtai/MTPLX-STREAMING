@@ -113,6 +113,22 @@ while keeping most of the saving. It is staged only; no full model is ready.
 FixedQ8DraftCache._seed currently resets offset from supplied row count, so an
 eventual partial seed must explicitly preserve its absolute start too. Do not
 apply the native offset adjustment blindly to Q8 caches.
+Variant3 completed at source8b4b44c622bf69ba189c430022c3c884f4cd548e. Retaining
+2048rows matches every final-row/window byte and all offsets in two interleaved
+controls. Peak416,511,276B vs2,279,214,764B saves1,862,703,488B; median seed
+0.0086178s vs0.0715489s. This is operator evidence only, not more slots or TPS.
+Guard36042 terminal0;8 active bytes after cleanup;74,366,976B file cache to0;
+exactQwen restored/warmed/released02:44:16UTC; independent02:50:06 healthy,
+idle,warmed,free check found no child. Archive:tail-seed-20260917/tail2048.
+
+Integration staged in /tmp/dsv41-tail-seed-20260917/integration. The isolated
+tail-prefill body changes only target hidden captures and their concatenation.
+Installer binds an explicit one-request16K native-KV backbone type and seeds
+fresh native caches at14336; no model/bound-method ownership cycle. It must
+not be applied to Q8 yet. Small actual eight-layer capture check is staged:
+FP32/BF16, two chunk-crossing tails, exact logits/hiddens/cache/next step.
+No full model staged yet. Keep old full-model memory allowances plus metadata
+until fresh full evidence supports a discount;20TPS remains unmet.
 
 # Latest Adaptive Draft Stage
 

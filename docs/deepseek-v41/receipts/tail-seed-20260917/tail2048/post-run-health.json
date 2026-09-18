@@ -1,0 +1,11 @@
+{
+  "at": "2026-09-18T02:50:06.828081+00:00",
+  "ok": true,
+  "active_requests": 0,
+  "warmup_state": "done",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "lock_free": true,
+  "remaining_owned_children": []
+}
