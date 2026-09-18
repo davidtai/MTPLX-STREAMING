@@ -116,3 +116,12 @@ releases at 03:16:02 UTC. Independent verification at 03:16:54 UTC finds
 healthy/idle/warmed Qwen, a free lock and no owned child. `full-host-refusal/`,
 `full-tail2048/`, and `full-summary.json` preserve both attempts and comparison.
 The helper stays isolated; no generic prefill or Q8 seeding API is changed.
+# Native full-run byte-field correction, September18
+
+The composed full run in `../memory-compose-20260918/` measures its retained
+`[1,2048,15360]` main hidden tensor as FP32 and125,829,120 bytes. The earlier
+tail helper's62,914,560-byte report field assumes BF16, as used in its synthetic
+operator. It is not the real full-run tensor size. The composed wrapper now
+reports actual dtype and nbytes at the existing seed boundary. Earlier full
+admission retained the original memory bounds and did not use this nominal
+field for credit. Historical receipts and hashes remain unchanged.

@@ -480,3 +480,25 @@ the independent04:18:49UTC check. Live state must be checked again before use.
 Next candidate combines the measured tail2048 and projection memory wins with
 a smaller hard-bounded Python row cache. Keep all110GB/wired/phase bounds,
 native arithmetic, exact output gate and minimal testing. Work inline.
+# Current checkpoint: 2026-09-18 04:34 UTC
+
+New single best exact16K-input/1K-output Python result:12.8091054919TPS /
+79.8650616660s,206cycles,all1024 native output IDs identical.20TPS remains unmet.
+Receipt:docs/deepseek-v41/receipts/memory-compose-20260918/README.md.
+Source5ab1776598; staged helpers:/tmp/dsv41-memory-compose-20260918/full-v1.
+Composes proved tail2048 and projection retirement with119,537,664B per Engram
+arena.84->104 slots;baseline10,467,377,152B;physical bound109,900,696,808B;
+guard peak107,546,591,232B. Both Python caches have zero evictions. No source
+or packed file cache remains. Guard54606 exits0, restores exact Qwen and
+releases04:31:30UTC; independent04:34:07UTC healthy/idle/warmed/free/nochild.
+The real retained main hidden is FP32/125,829,120B, now correctly reported.
+
+Next frontier: bounded native block cost/state measurement for partial-row
+execution before considering inter-layer read overlap. CPU route diagnostic
+shows first-row all-hit50.59%, but splitting all rows adds48.49% expert compute
+requests. No throughput claim or implementation follows from this histogram.
+Receipt:docs/deepseek-v41/receipts/prefix-readiness-20260918/README.md.
+Do not repeat unchanged rejected candidates or shrink unpriced allowances.
+Keep110GB/wired/phase constraints, exact native output gate, protected GPU lane,
+minimal testing and inline work. Live helpers need a verified source-proof
+refresh after documentation commits before another GPU run.

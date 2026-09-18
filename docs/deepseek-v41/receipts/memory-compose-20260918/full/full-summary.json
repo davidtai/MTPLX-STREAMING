@@ -1,0 +1,66 @@
+{
+  "source_commit": "5ab177659880abaed7c528e9ef1f65898ee7470b",
+  "decode_tok_s": 12.809105491938656,
+  "decode_wall_s": 79.86506166600157,
+  "speedup_vs_previous_best_percent": 1.0726851631170709,
+  "wall_reduction_vs_previous_best_s": 0.856700667005498,
+  "cycles": 206,
+  "all1024_native_ids_identical": true,
+  "prefill_slots_per_layer": 84,
+  "decode_slots_per_layer": 104,
+  "baseline_bytes": 10467377152,
+  "physical_bound_bytes": 109900696808,
+  "mlx_active_bound_bytes": 94523220076,
+  "mlx_peak_bytes": 94075778388,
+  "process_footprint_peak_bytes": 95852314944,
+  "system_used_peak_bytes": 107528060928,
+  "active_end_bytes": 93922915764,
+  "capacity_normalized_active_saving_bytes": 1384124416,
+  "read_bytes": 606203412480,
+  "read_records": 34259,
+  "read_union_s": 46.996676126,
+  "growth_seconds": 3.358248624979751,
+  "native_main_hidden_dtype": "mlx.core.float32",
+  "retained_main_hidden_bytes": 125829120,
+  "engram_banks": [
+    {
+      "layer": 1,
+      "budget_bytes": 119537664,
+      "row_bytes": 264,
+      "slot_count": 452794,
+      "arena_bytes": 119537616,
+      "resident_rows": 180226,
+      "stats": {
+        "hits": 74241,
+        "misses": 180226,
+        "evictions": 0,
+        "reads": 180218,
+        "rows_read": 180226,
+        "gathers": 224
+      }
+    },
+    {
+      "layer": 14,
+      "budget_bytes": 119537664,
+      "row_bytes": 264,
+      "slot_count": 452794,
+      "arena_bytes": 119537616,
+      "resident_rows": 180228,
+      "stats": {
+        "hits": 74241,
+        "misses": 180228,
+        "evictions": 0,
+        "reads": 180222,
+        "rows_read": 180228,
+        "gathers": 224
+      }
+    }
+  ],
+  "guard_session": 54606,
+  "guard_exit_code": 0,
+  "guard_process_tree_peak_bytes": 95824118080,
+  "guard_physical_peak_bytes": 107546591232,
+  "guard_samples": 221,
+  "compressor_growth_bytes": 0,
+  "performance_scope": "Single complete candidate versus previous best at different live baselines and capacities; no repeatability or isolated-kernel claim."
+}

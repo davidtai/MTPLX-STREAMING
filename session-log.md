@@ -332,3 +332,26 @@ Receipt:docs/deepseek-v41/receipts/woa-owner-20260917/README.md.
 Next:compose measured tail2048 and projection retirement with bounded Engram
 host storage. Best stays12.6731624TPS;20TPS remains unmet. No new agents,
 unrelated process termination, broad suites or general-serving defaults.
+# 2026-09-18 04:34 UTC: Composed memory candidate reaches12.8091055TPS
+
+One full16,384/1,024 run at source5ab1776598:79.8650616660s,206cycles,all native
+IDs identical.84->104 slots at10,467,377,152B baseline,109,900,696,808B bound,
+107,546,591,232B guard physical peak. Measured MLX94,075,778,388B stays within
+94,523,220,076B active bound. Compared with previous best,1.0727% faster and
+14,739,701,760 fewer expert-read bytes. Different live baseline/capacity;
+single best, not repeatability or isolated-kernel proof.20TPS remains unmet.
+
+Tail2048 phase saving, native projection-source retirement and truly bounded
+119,537,664B Engram arenas are composed without double-crediting phases.
+Zero Engram evictions. Corrected nominal BF16 hidden-byte reporting using the
+observed FP32 `[1,2048,15360]` tensor:125,829,120B. Historical receipts preserved.
+Guard54606 exit0,221samples,no compressor growth,cache ends0. Qwen healthy with
+exact model/warmup before04:31:30UTC release; independent04:34:07 healthy/free.
+Receipt:docs/deepseek-v41/receipts/memory-compose-20260918/README.md.
+
+CPU-only prefix diagnostic reproduces all35,164 native policy misses. First
+row needs no reads50.59% of layer calls, but row splitting adds48.49% expert
+compute requests. Partial-row native block cost/cache/ownership must be bounded
+before any asynchronous inter-layer implementation or full GPU run. CPU import
+path refusal fixed explicitly; no MLX execution or production changes.
+Receipt:docs/deepseek-v41/receipts/prefix-readiness-20260918/README.md.

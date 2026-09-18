@@ -1,0 +1,6 @@
+{
+  "script_sha256": "20e92508720e7db62e482d0a888e545a61c18abc79deb08381407a55f4ded90d",
+  "error": "LayerExpertSlotBank.__init__() got an unexpected keyword argument 'single_pool'",
+  "cause": "An absolute script path omitted the intended worktree from sys.path and resolved the environment editable checkout. Refused on the first bank constructor; no replay or MLX execution.",
+  "fix": "Put the explicit current worktree first in sys.path before importing the native replay helper."
+}
