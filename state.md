@@ -2,12 +2,13 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach20 decode
 TPS on exact16,384-input /1,024-output Python under110 decimal GB.
-Best single full result: **13.1509467 TPS;20TPS remains unmet.**
-The strict allocator run preserves all1024 native IDs at84->109 slots/layer,
-with109.672GB peak physical use. It saves2.076s versus the retained12.8091055TPS
-part3 result. Different baselines/capacities prevent isolated latency or
-repeatability claims. Latest fullQ8 result is10.7541904TPS; nativeKV16 stays the
-fastest route. FixedQ8 and at least256K KV support remain secondary to20TPS.
+Best single full result: **13.3195300 TPS; 20 TPS remains unmet.**
+The exact BF16 input-row cache run preserves all 1,024 native IDs at 84->110
+slots/layer, with 109.256 GB peak physical usage. Its 76.8045117 s decode is
+0.9845652 s faster than the previous strict allocator result. Background and
+capacity differ, so this is a best single result, not isolated/repeated evidence.
+Latest full Q8 remains 10.7541904 TPS; native KV16 stays fastest. Fixed Q8 and
+complete 256K prefill verification remain secondary to 20 TPS.
 
 # Decisions
 
@@ -15,7 +16,8 @@ fastest route. FixedQ8 and at least256K KV support remain secondary to20TPS.
   Missing measurements stay null/n/a. Limits and plans are not measured usage.
 - Ceiling 110,000,000,000B includes baseline, Python, Metal, caches and peaks.
   Price the actual bounded Python capacity plus helper metadata: the latest
-  candidate reserves1,371,664,384B. Preserve active/copy/graph/seed/KV space.
+  candidate reserves 1,405,218,816 B, including 32 MiB for the new input row
+  cache. Preserve active/copy/graph/seed/KV space.
   Only the attested strict allocator can remove the2,258,155,644B inactive-cache
   overshoot reserve; stockMLX keeps it. Cache limits are not usage measurements.
 - Use scripts/deepseek_v41/gpu_window.sh directly, never nested; acquire the
@@ -43,7 +45,47 @@ sizes and shared transient allocation bytes.
 
 # Current Optimization Stage
 
-The retained performance winner is still the strict allocator run below.
+Latest stage at measured source `575c3c8b3beb0420d16fc03c727f3a27c0f36edd`:
+
+- A coarse CPU diagnostic preserves all 1,024 IDs with no added GPU fences.
+  Decode cycles: 73.4290 s elapsed, 13.5526 s main CPU, 39.6364 s process CPU.
+  Expert entrypoints account for 66.0044 s elapsed / 10.3716 s main CPU.
+  Public timing fields are null; this is not a performance result. The older
+  decode-read-attribution-20260917 receipt is also valid and already isolates
+  waits. Elapsed-minus-CPU is not GPU idle; nested times must not be summed.
+  Receipt: docs/deepseek-v41/receipts/cpu-attribution-20260918/README.md.
+- The successful candidate retires the untied native BF16 input embedding
+  after prefill and uses a fixed 16 MiB exact row arena, with 32 MiB total host
+  allowance. Actual active release is 1,323,827,200 B; clean source pages are
+  separately reclaimed. Prefill gets no credit; resize/seed/steady do. Native
+  output head, Markov embedding and expert arithmetic stay unchanged.
+- Full result: 13.3195300354 TPS / 76.8045116670 s, 206 D5/M6 cycles, all
+  1,024 native IDs exact. 84->110 slots, 48 transients, native KV16. Baseline
+  10,681,696,256 B; physical bound 109,849,655,516 B. MLX peak 96,998,277,438 B;
+  process 98,018,134,304 B; machine 109,255,884,800 B. Host 1,405,218,816 B.
+  Expert reads 31,936 / 565,098,577,920 B, 380 records / 6.724 GB fewer than
+  strict. Read union 43.8395 s is not GPU idle. Row cache ends at 313/1,638 rows.
+- Operator guard 66617 exits 0 with exact BF16 rows and eviction ownership.
+  Full-v1 guard 9584 exits 1 on str-versus-Path reclamation arguments, before
+  bank growth; it is not an OOM. Both calls are fixed in full-v2. Guard 26008
+  exits 0, restores Qwen/health/warmup and releases at 10:11:42 UTC. Independent
+  healthy/idle/warmed/free check passes at 10:11:58 UTC. No owned GPU child.
+  Two focused host regressions pass with actual MLX imports blocked; added
+  only after the full win. No broad suite or repeated unchanged full control.
+- Receipt: docs/deepseek-v41/receipts/embedding-rows-20260918/README.md.
+  Live root: /tmp/dsv41-embedding-rows-20260918/full-v2.
+  Raw prefix: /tmp/dsv41-110-stage/full-embedding-rows-20260918-v2.
+  Parent guard selects the same attested strict allocator as the prior winner.
+  The first full attempt and all lifecycle evidence are preserved.
+
+Next work must remove about 25.65 s from this exact workload to reach 20 TPS.
+Prior prefetch, row-pair, fanout and policy rejections remain relevant. Favor
+material reductions in expert traffic or exposed verification; do not repeat
+unchanged controls or re-profile the newly measured CPU clocks. Work inline,
+no agents; minimal checks, tests only after wins. Full 256K prefill remains open.
+
+The exact input-row cache described above is the retained performance winner.
+Older stages follow as historical context.
 Follow-up operators and a router diagnostic at source013ba48db733659d287d40e7304e1683a0d7e179
 are complete; no new performance default is promoted.
 
@@ -119,13 +161,9 @@ The reader already uses directos.preadv into component destinations; enabling
 the scalar native extension will not change this path. Fanout8 was screened
 and not promoted (12.42GB/s versus12.38GB/s); do not repeat it. Prefill-derived
 nonuniform allocation and two-row splitting are also already covered above.
-Next: establish CPU-versus-wait attribution before another optimization guess.
-Existing cProfile data is invalid and existing full receipts do not contain CPU
-clocks. Prefer independently validated thread/process CPU clocks at existing
-coarse timing boundaries, with no added GPU fences and explicitly diagnostic
-reporting. Price any extra host/graph ownership and use the real CLI resolver
-before a guarded full load. Work inline; keep checks focused and do not repeat
-unchanged full controls.20TPS and full256K prefill remain open.
+That CPU attribution is now complete and archived above. The subsequent exact
+input-row cache is the new best single full result. Neither result reaches
+20 TPS; complete 256K prefill also remains open.
 
 Strict allocator stage is complete at measured source5ba18552cb81f85793469a8d20fe2ff4af4f79d8.
 Receipt:docs/deepseek-v41/receipts/strict-cache-20260918/README.md.

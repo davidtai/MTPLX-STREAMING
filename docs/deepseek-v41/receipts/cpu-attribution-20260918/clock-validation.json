@@ -1,0 +1,25 @@
+{
+  "cpu_only": true,
+  "python_executable": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python",
+  "python_version": "3.12.13 (main, Jun 11 2026, 03:55:21) [Clang 22.1.3 ]",
+  "main_spin": {
+    "calls": 1,
+    "wall_s": 0.030032708,
+    "main_thread_cpu_s": 0.030009,
+    "process_cpu_s": 0.030009,
+    "wall_minus_main_thread_cpu_s": 2.3708e-05,
+    "max_wall_s": 0.030032708
+  },
+  "worker_spin_and_main_join": {
+    "calls": 1,
+    "wall_s": 0.060111459,
+    "main_thread_cpu_s": 6.0709e-05,
+    "process_cpu_s": 0.060093,
+    "wall_minus_main_thread_cpu_s": 0.06005075,
+    "max_wall_s": 0.060111459
+  },
+  "empty_span_mean_ns": 1238.56875,
+  "all_clock_attribution_checks_pass": true,
+  "expected_full_span_count": 17717,
+  "estimated_empty_instrumentation_s": 0.02194372254375
+}

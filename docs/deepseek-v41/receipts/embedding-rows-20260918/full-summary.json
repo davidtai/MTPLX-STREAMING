@@ -1,0 +1,115 @@
+{
+  "source_commit": "575c3c8b3beb0420d16fc03c727f3a27c0f36edd",
+  "performance_claim": "New best single full result; changed capacity and background, no isolated/repeatability claim.",
+  "workload": {
+    "prompt_tokens": 16384,
+    "generated_ids": 1024,
+    "timed_decode_steps": 1023,
+    "depth": 5,
+    "cycles": 206,
+    "kv_bits": 16
+  },
+  "old_tps": 13.15094665792056,
+  "tps": 13.319530035363696,
+  "tps_change_percent": 1.2819105865782054,
+  "old_wall_s": 77.78907683302532,
+  "wall_s": 76.8045116669964,
+  "wall_saved_s": 0.984565166028915,
+  "all_native_output_ids_exact": true,
+  "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "baseline_bytes": 10681696256,
+  "capacity": 110,
+  "physical_bound_bytes": 109849655516,
+  "active_bound_bytes": 97494304988,
+  "allocator_limit_bytes": 97913084928,
+  "memory": {
+    "mlx_peak_bytes": 96998277438,
+    "process_footprint_peak_bytes": 98018134304,
+    "system_used_peak_bytes": 109255884800,
+    "mlx_active_bytes_at_decode_end": 96845841844,
+    "mlx_cache_bytes_at_decode_end": 256835618
+  },
+  "host_reserve_bytes": 1405218816,
+  "embedding": {
+    "phase": "decode_rows",
+    "source_bytes": 1323827200,
+    "arena_bytes": 16777216,
+    "host_allowance_bytes": 33554432,
+    "prefill_credit_bytes": 0,
+    "resident_plan_retains_source_reserve": true,
+    "active_before_bytes": 78847079668,
+    "active_after_bytes": 77523252468,
+    "released_active_bytes": 1323827200,
+    "source_file_cache": {
+      "file": "model-00002.safetensors",
+      "file_bytes": 1323858270,
+      "cached_page_bytes_before": 1320714240,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    "transition_seconds": 0.1317949999938719,
+    "module_ownership_verified": true,
+    "retained_metal_table_bytes": 0,
+    "cached_rows": 313,
+    "row_capacity": 1638
+  },
+  "growth": {
+    "phase": "decode",
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 110,
+    "growth_payload_bytes": 17719669500,
+    "resident_packed_scales_bytes": 3086136060,
+    "source_record_bytes": 18800640,
+    "decode_weight_record_bytes": 17694720,
+    "timing_scope": "scale installation, raw backing release and one weight resize are inside decode wall time",
+    "allocator_cache_phase_limits_bytes": {
+      "prefill": 1073741824,
+      "growth_decode": 268435456
+    },
+    "active_before_bytes": 77523252468,
+    "plane_readiness": "gate_up_then_complete_record",
+    "plane_layers": 40,
+    "growth_seconds": 3.624597999994876,
+    "active_after_bytes": 95243863284,
+    "cache_after_bytes": 0,
+    "transition_peak_bytes": 95892669688,
+    "raw_scale_backing_released_bytes": 3768975360,
+    "physical_allocated_bytes": 78706114560,
+    "plan_limit_bytes": 101146283588,
+    "plan_persistent_bytes": 77856768000
+  },
+  "io": {
+    "read_bytes": 565098577920,
+    "records_read": 31936,
+    "read_wall_ns": 43839536385,
+    "read_gb_per_s_window": 12.8902
+  },
+  "reads_saved": 380,
+  "read_bytes_saved": 6723993600,
+  "phase_time_s": {
+    "draft": 2.1114373378804885,
+    "verify": 70.63657695709844,
+    "accept": 0.06630571585264988,
+    "commit": 0.1616955831705127
+  },
+  "guard_session": 26008,
+  "guard_exit_code": 0,
+  "guard_tail": [
+    "PACKED_CACHE_RECLAIMED {\"cached_page_bytes_before\": 0, \"cached_page_bytes_after\": 0}",
+    "2026-09-18T10:11:25Z [gpu_window] phase 4: GPU step exited with code 0; sampled peak step footprint 91.3 GiB (98017167648 bytes), sampled peak guard accounted 101.7 GiB (109230161920 bytes), sampled peak physical used 101.7 GiB (109230161920 bytes), sampled peak compressor delta 0.0 GiB (0 bytes); complete step memory samples 218, poll interval 1s",
+    "2026-09-18T10:11:25Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist",
+    "2026-09-18T10:11:42Z [gpu_window] restore: com.tea.qwen healthy, model identity [\"mtplx-flash-next-optimized-speed\"] verified, background warmup ready",
+    "2026-09-18T10:11:42Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock"
+  ],
+  "failed_attempt_guard_session": 9584,
+  "failed_attempt_exit_code": 1,
+  "tests_added_after_full_win": {
+    "tests_run": 2,
+    "failures": 0,
+    "errors": 0,
+    "successful": true,
+    "real_mlx_imports_blocked": true,
+    "scope": "Host arena, duplicate ordering, eviction owners, close and short-read failure. Added after exact full candidate."
+  },
+  "goal_20tps_achieved": false
+}

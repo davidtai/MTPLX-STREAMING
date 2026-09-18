@@ -414,3 +414,31 @@ Best remains13.1509467TPS;20TPS is open. The directpreadv path already avoids
 a Python payload copy, and fanout8 is previously rejected. Next work should
 establish reliable coarse CPU/wait attribution, avoiding the invalid cProfile
 data and repeated unchanged full runs.256K prefill remains secondary.
+
+
+### CPU attribution and exact input-row cache, 2026-09-18
+
+A fixed coarse clock diagnostic preserves all 1,024 native IDs and seven native
+MLX calls, adding no GPU fences. Decode cycles take 73.4290 s elapsed versus
+13.5526 s main-thread CPU and 39.6364 s process CPU. Expert entrypoints dominate
+elapsed time. Public TPS fields are null, and elapsed-minus-CPU is not GPU idle.
+See the cpu-attribution-20260918 receipt; the older read-attribution receipt
+remains valid. No need to repeat this diagnostic.
+
+An exact BF16 input-row cache then frees 1,323,827,200 Metal bytes after prefill.
+The fixed 16 MiB arena receives 32 MiB host allowance; actual retirement and
+clean source-page reclamation precede expert-bank growth. No prefill credit.
+One successful full candidate reaches 13.3195300 TPS / 76.8045117 s, all 1,024
+native IDs identical, 84->110 slots, native KV16. Machine peak 109.255884800 GB
+fits its 109.849655516 GB bound. Expert reads fall by 380 records / 6.724 GB.
+It is 0.9845652 s faster than retained strict, but background/capacity differ;
+claim only a new best single result. 20 TPS and full 256K prefill remain open.
+
+The first full attempt stops before growth on two str-versus-Path reclamation
+calls. Both are fixed; failed evidence is retained. Final guard 26008 exits 0,
+restores exact Qwen and warmup, releases 10:11:42 UTC; independent healthy/free
+check passes 10:11:58 UTC. Two host-only resource regressions are added after
+the win and pass. No broad suite or unchanged full rerun. Runtime source is
+575c3c8b3beb0420d16fc03c727f3a27c0f36edd. See embedding-rows-20260918 receipt.
+Task 4 stays open. Next work needs material expert-I/O/verification improvement,
+not repeated cache or prefetch families already rejected. Work inline, no agents.
