@@ -1,0 +1,29 @@
+{
+  "source_root": "/tmp/dsv41-prelaunch-hits-20260918",
+  "raw_prefix": "/tmp/dsv41-110-stage/no-prelaunch-full-experiment",
+  "files": {
+    "installation.json": "36d7e542b45ebb8f942b585e7678822eb920c361da9eee47e728327567886279",
+    "prelaunch.py": "dd93de39b4b628c6cf281cd5e55a915b758c8eb22f5990c36318844c72797e28",
+    "prelaunch_kernels.py": "592e9e99fd44409156372e498619bc3030f37d5e236305cf8632d36b44fa2930",
+    "plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "README.md": "ebc9d6d8bb7acc471210cc54c0073217317b294821365c23ef1c0b211d855191",
+    "reclamation.json": "da06c5137ca2cb3a596b24b7a35437c68810331cbfd3ce4289c19b87af03e5a3",
+    "probe.json": "7319bf0f6791c0ec07448369ca7cc025404c1e6aa57df04c272ba8424a502704",
+    "restore_bank.py": "1ae63301433058fe491d229851e7638daf25300289af3106b0638b8c57103849",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "probe.py": "e434fd9bacd4f580b36d335d2d6d05a064e9ca4a3a6e340d27ea89555cd90c31",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "guard.log": "1d6cccb5824eb93ea0b499ea6015926b602a39d39472a2fb18c0a7a08a333d40",
+    "command.sh": "33eda89aa2a29f05e55f290177c0c7194bfdf4777dd9210d4aac80237166f51b",
+    "stage.py": "88d86f128018fe9fc8d58d3597f719ea70e17fe614d26ff327540dd1cfbdff52",
+    "construction.json": "2084b05228db40f04f02f86b51e19fe20adecab91088c828ef957e16d46d7a24",
+    "child.json": "42020ae0f33ccf1644c004f8c7ac9dba52447e32e021c84d14715b46ea1e21ed",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "routes.json": "5dd6c05ba96f9e4f829a372e25bbccb1197fd78031bf104f8bc99906a64a1cac",
+    "post-run-health.json": "f4d845c3c86c9bb7848d1ad63110849ef990043fd03c8237dfe2ac5b3bf9c602",
+    "run_screen.py": "e34840c5def4ad187b04b7fc6d7b2024f94d13e4339fcb7c8229ccc8cfa5d0bd"
+  },
+  "total_bytes": 607195,
+  "artifact_copies": false
+}

@@ -77,6 +77,33 @@ Latest stage at measured source `48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3`:
   Raw prefix: /tmp/dsv41-110-stage/full-hybrid-lookup-20260918-v1.
   Measured helpers and library remain pinned; production defaults are unchanged.
 
+Latest bounded screens at source `19ea3ac2f888edf5035e3a43bc314bea64f3cb6f`:
+
+- Early cached-expert submission is 1.21845% slower, despite exact outputs and
+  read counts for all 206 layer34 calls. Source-matched CPU read alignment is
+  flat: 0.15188% change inside 0.82697% control spread. Neither is promoted.
+- Draft aliases trained on the first 103 native cycles produce 198 calls with
+  80/40/24 experts, versus 198 for the original 93/58/32 hybrid bank. Boundaries
+  differ, so this is acceptance screening, not a target parity/TPS result.
+  The 64/28/12 cut needs 206 calls; global frequency 52/46/26 needs 200. No full
+  run follows those larger cuts. No new regression tests are added.
+- True 80/40/24 subset files are prepared and source-payload authenticated:
+  2,707,292,160 B payload, exactly 733,224,960 B less. The full candidate plans
+  84->111 target slots, preserving target arithmetic and all existing cache,
+  host, KV, compile/copy and wired allowances. The larger prefill bound stays.
+- Guard 85153 refuses that full run before model loading. Live background is
+  11,137,220,608 B; the 111-slot bound would be 110,308,317,404 B, over the hard
+  110 GB ceiling. No OOM, prefill, target output or new TPS measurement occurs.
+  The staged candidate is conditional and unpromoted; do not retry unchanged.
+- The first head attempt fails before MLX import on a duplicated path; v2 fixes
+  replacement order and validates generated paths before launch. All six guards
+  across these three receipts terminate and restore exact Qwen/warmup/free lock.
+  Final guard 27488 exits 0, releases at 11:42:08 UTC; independent healthy/idle/
+  warmed/free check passes at 11:43:05 UTC. No owned child or pending GPU run.
+- Receipts: `prelaunch-hits-20260918`, `read-alignment-20260918`, and
+  `draft-surrogates-20260918`. The latter retains source pins, both failed
+  attempts, subset provenance, allocation preflight and all head results.
+
 The reader-hop screen at source85c7a33fd9f171c3847d7e59f8566b8b72de7225
 is not promoted. Batching each native miss part and running its fill on the
 existing miss worker preserves all206 layer34 outputs/reads at110/48 slots.

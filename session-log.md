@@ -469,3 +469,32 @@ Median ratio0.9871322 is within1.4375% control spread; no full run or new tests.
 The9GiB bound covers3,047,281,161B MLX peak; final Metal8B. Guard33095 exits0,
 restores exactQwen/warmup/releases10:55:23UTC; independent healthy/idle/warmed/
 free check10:55:55UTC. Receipt:reader-hop-20260918. No owned child remains.
+
+## 2026-09-18 11:43 UTC [saved]
+
+Measured source:19ea3ac2f888edf5035e3a43bc314bea64f3cb6f. Three bounded receipts
+are archived; retained full performance remains13.4141517619TPS,20TPS open.
+
+- Cached-expert prelaunch is1.21845% slower in the exact206-call layer34 replay;
+  source-matched CPU reader alignment is within control spread. No promotion,
+  full runs or regression tests follow either screen.
+- Draft router-nearest aliases use only first-half training routes. The original
+  hybrid control reproduces198 boundaries;80/40/24 also takes198 calls but its
+  boundaries differ.64/28/12 takes206; global52/46/26 takes200. These are teacher
+  acceptance screens, not target parity or throughput results.
+- Actual80/40/24 subset files remove733,224,960B payload. MLX-blocked construction
+  checks admit111 target slots at the reference baseline. Guard85153 refuses
+  before model loading at11,137,220,608B live background: the111-slot bound would
+  total110,308,317,404B. Budget and allowances stay unchanged; no OOM occurs.
+- The initial head staging path error is retained, fixed with ordered path
+  replacement and AST path checks, then the head screen completes. Both head
+  screens remain within49GiB incremental; MLX peak21,299,586,448B. No broader
+  tests or new regressions are added because no full optimization is promoted.
+- All guards reach terminal status, restore exactQwen/warmup and release. Final
+  guard27488 exits0/releases11:42:08UTC; independent healthy/idle/warmed/free
+  verification passes11:43:05UTC. No child or GPU job is pending.
+
+Receipts: prelaunch-hits-20260918, read-alignment-20260918,
+draft-surrogates-20260918. Do not rerun unchanged rejected screens or the
+conditional111-slot candidate without a fresh source audit and fitting live
+bound. Task4 stays open; fixedQ8/full256K prefill remain secondary.

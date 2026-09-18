@@ -35,6 +35,15 @@ Both guards exit 0; exact Qwen restoration/warmup/free lock are independently
 verified at 10:39:43 UTC. See
 `../deepseek-v41/receipts/hybrid-lookup-20260918/README.md`.
 The current stack includes the strict allocator and exact input-row cache.
+Later bounded screens at source19ea3ac reject early-hit submission (1.21845%
+slower) and source-matched read alignment (flat within control spread). A true
+80/40/24 draft subset removes733,224,960B payload and retains198 target calls in
+head-only replay, with different boundaries. Its111-slot full candidate refuses
+loading at the live11,137,220,608B background because its bound is110,308,317,404B.
+The ceiling stays110GB. Larger draft cuts need206 or200 calls and do not justify
+full runs. There is no new TPS/output result or test suite. All guards restore
+exactQwen/warmup and release; final independent check11:43:05UTC succeeds.
+See prelaunch-hits-20260918, read-alignment-20260918 and draft-surrogates-20260918.
 Prior phase-lifetime audits are complete; do not repeat them. Next work needs
 material expert-I/O or verification reduction. Fixed Q8 and full 256K prefill
 remain secondary. Work inline, no agents, with minimal checks.

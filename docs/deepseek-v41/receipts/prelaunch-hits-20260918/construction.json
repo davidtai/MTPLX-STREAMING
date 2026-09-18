@@ -1,0 +1,10 @@
+{
+  "source_commit": "19ea3ac2f888edf5035e3a43bc314bea64f3cb6f",
+  "static_incremental_bound_bytes": 9663676416,
+  "native_kernel_sha256": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+  "masked_kernel_sha256": "592e9e99fd44409156372e498619bc3030f37d5e236305cf8632d36b44fa2930",
+  "arithmetic": "Only negative-slot early return and signed slot declaration added before unchanged dot body; miss kernels remain original.",
+  "ownership": "Fixed single-request layer cache; no ring or background policy mutation. Persistent map contains READY records. Native planner protects every requested resident hit from victims before issuing writes. Native full-record publication and deferred pins cover downstream results; outer failure handler drains early consumers even before a pending route exists.",
+  "synchronization": "MLX0.32.2 async_eval attaches an event to existing indices and finalizes that submission. Later early-hit async work does not replace the original array event. CPU reads original indices via buffer protocol, avoiding a new Metal reshape fence.",
+  "full_model_promotion": false
+}

@@ -1,0 +1,22 @@
+{
+  "source_commit": "19ea3ac2f888edf5035e3a43bc314bea64f3cb6f",
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "whole_machine_ceiling_bytes": 110000000000,
+  "incremental_allowance_bytes": 2147483648,
+  "scope": "CPU-only matched positional read alignment, native3-plane format, fanout4,128batches of3 records, five interleaved arms.2GiB complete envelope; 53,231,616 mmap destination bytes and18,800,640 native validation bytes; no model tensor load.",
+  "runtime_source_sha256": {
+    "mtplx/expert_io.py": "91b7aba10b8579166ea326225cfdce7d0969943cd0839ea960c4db702c32f06f",
+    "mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+    "mtplx/expert_shadow.py": "210304ae2d2dc75837acfbe490477a66df2d155ba841d50ba44b7609a993fa26",
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+    "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c"
+  },
+  "helper_sha256": {
+    "probe.py": "bdd331a3aa07d2fad715ff4fd42e5602756d501a2c0180e66d5ceac698a52595",
+    "native_reader.py": "c1d38200ed5eefa678d15d65d7a9671f72de2da6a4aeb96a56ab9cff5303e6a8",
+    "run_screen.py": "cd9343401923d00b87701f5279b851c34bf84e42ef2b9d20efc62efd2f5ca64b"
+  },
+  "harness_update": "Rebind the installed reader after replacing the metrics object outside timing; record and range counters now use the same owner.",
+  "runtime_refresh": {}
+}

@@ -1,0 +1,12 @@
+{
+  "cpu_only": true,
+  "complete": true,
+  "latency_ratio": 0.9984811782141478,
+  "control_spread_fraction": 0.008269677643810149,
+  "source_mod_page_counts": {
+    "0": 576,
+    "8192": 576
+  },
+  "candidate_extra_read_bytes_per_record": 0,
+  "decision": "No clear improvement; do not change GPU bank layout or stage a full run."
+}

@@ -1,0 +1,6310 @@
+{
+  "scope": "One head-only globally ranked124-expert draft bank, trained on first103 native cycles. Reuse the completed same-source hybrid control. Target states score proposals only; no target execution, physical compaction, or TPS claim.",
+  "library_identity": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "lookup_configuration": {
+    "minimum_context": 2,
+    "extra_tokens": 2,
+    "selection": "earliest_longest_context"
+  },
+  "teacher_sha256": "1826c18118b11ddddb75493f2cf03a12c63135855e089a3a5527a4ab8767c7d2",
+  "reference_receipt_sha256": "80eb7e701ccb5855ad20fb8ee779cdc1c476708f26749b2bbcfb5376e25ae9cb",
+  "source_commit": "19ea3ac2f888edf5035e3a43bc314bea64f3cb6f",
+  "script_sha256": "eecb35dd13f1bc93efee0e1a45ed50a7016056588b4fd0ba5ceebe98059a9be4",
+  "native_model_source_matches_teacher": true,
+  "reporting_runner_excluded": "ab_decode_env_levers.py is not imported by this head-only screen",
+  "runtime_source_sha256": {
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+  },
+  "static_active_bound_bytes": 44023414784,
+  "cache_allowance_bytes": 4294967296,
+  "host_allowance_bytes": 4294967296,
+  "baseline": {
+    "sample_start_monotonic_ns": 197413699995958,
+    "sample_end_monotonic_ns": 197413702615333,
+    "process": {
+      "peak_maxrss_bytes": 25919488,
+      "resident_bytes": 26378240,
+      "phys_footprint_bytes": 15417824,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123140702208,
+      "wired_bytes": 3360260096,
+      "active_bytes": 2827862016,
+      "inactive_bytes": 2493644800,
+      "speculative_bytes": 323551232,
+      "anonymous_bytes": 3283927040,
+      "file_backed_bytes": 2361131008,
+      "compressor_bytes": 2626273280,
+      "compressed_bytes": 8945139712,
+      "used_bytes": 11308040192,
+      "non_file_used_bytes": 9270460416,
+      "swapins_pages": 4826517,
+      "swapouts_pages": 7667614,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "arms": [
+    {
+      "mode": "one_band",
+      "cycles": 200,
+      "verify_rows": 1254,
+      "verify_width_counts": {
+        "6": 173,
+        "8": 27
+      },
+      "commit_lengths": [
+        3,
+        1,
+        2,
+        4,
+        6,
+        6,
+        3,
+        3,
+        3,
+        6,
+        6,
+        6,
+        4,
+        6,
+        6,
+        8,
+        6,
+        3,
+        8,
+        8,
+        8,
+        3,
+        6,
+        5,
+        8,
+        8,
+        8,
+        6,
+        6,
+        6,
+        8,
+        8,
+        6,
+        6,
+        8,
+        8,
+        8,
+        6,
+        6,
+        6,
+        8,
+        6,
+        8,
+        6,
+        8,
+        5,
+        3,
+        6,
+        3,
+        6,
+        6,
+        4,
+        2,
+        6,
+        1,
+        2,
+        3,
+        5,
+        3,
+        5,
+        1,
+        3,
+        4,
+        6,
+        6,
+        5,
+        6,
+        6,
+        1,
+        6,
+        6,
+        6,
+        3,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        2,
+        6,
+        6,
+        6,
+        5,
+        6,
+        6,
+        6,
+        6,
+        6,
+        3,
+        3,
+        6,
+        6,
+        2,
+        2,
+        2,
+        1,
+        3,
+        3,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        1,
+        6,
+        6,
+        6,
+        5,
+        6,
+        6,
+        3,
+        4,
+        5,
+        4,
+        5,
+        2,
+        8,
+        5,
+        5,
+        1,
+        4,
+        3,
+        3,
+        6,
+        3,
+        1,
+        2,
+        2,
+        1,
+        6,
+        6,
+        6,
+        6,
+        4,
+        6,
+        6,
+        6,
+        7,
+        6,
+        6,
+        3,
+        6,
+        6,
+        6,
+        1,
+        2,
+        5,
+        6,
+        6,
+        6,
+        5,
+        6,
+        4,
+        1,
+        6,
+        6,
+        6,
+        6,
+        6,
+        4,
+        6,
+        6,
+        6,
+        2,
+        5,
+        1,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        8,
+        6,
+        6,
+        8,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        8,
+        3,
+        6,
+        7,
+        6,
+        6,
+        6,
+        6,
+        6,
+        2,
+        6,
+        6,
+        1
+      ],
+      "head_replay_wall_s": 1.9270923750009388,
+      "rows": [
+        {
+          "position": 0,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8804983496665955,
+            0.8980541825294495,
+            0.6934118866920471,
+            0.5828852653503418,
+            0.2536391317844391
+          ],
+          "proposed_ids": [
+            43132,
+            201,
+            43132,
+            3820,
+            17930
+          ],
+          "native_proposed_ids": [
+            43132,
+            201,
+            43132,
+            3820,
+            17930
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 3,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.3129250407218933,
+            0.6611589193344116,
+            0.20523223280906677,
+            0.1834336370229721,
+            0.11368037760257721
+          ],
+          "proposed_ids": [
+            7854,
+            70925,
+            848,
+            17,
+            848
+          ],
+          "native_proposed_ids": [
+            7854,
+            70925,
+            848,
+            17,
+            848
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 4,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9150643348693848,
+            0.8825742602348328,
+            0.7688344717025757,
+            0.7507497072219849,
+            0.57740718126297
+          ],
+          "proposed_ids": [
+            2731,
+            90,
+            7755,
+            268,
+            13898
+          ],
+          "native_proposed_ids": [
+            2731,
+            90,
+            7755,
+            268,
+            13898
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 6,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9809163212776184,
+            0.9455476999282837,
+            0.5579484701156616,
+            0.8126027584075928,
+            0.654608964920044
+          ],
+          "proposed_ids": [
+            540,
+            90,
+            13898,
+            19303,
+            23042
+          ],
+          "native_proposed_ids": [
+            540,
+            90,
+            13898,
+            19303,
+            23042
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 10,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9554078578948975,
+            0.9921048283576965,
+            0.9196776151657104,
+            0.8188406825065613,
+            0.37730464339256287
+          ],
+          "proposed_ids": [
+            23042,
+            201,
+            3312,
+            13,
+            291
+          ],
+          "native_proposed_ids": [
+            23042,
+            201,
+            3312,
+            13,
+            291
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 16,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999933838844299,
+            0.9997648596763611,
+            0.9998080730438232,
+            0.9873285889625549,
+            0.9881801605224609
+          ],
+          "proposed_ids": [
+            86,
+            540,
+            90,
+            13898,
+            70311
+          ],
+          "native_proposed_ids": [
+            86,
+            540,
+            90,
+            13898,
+            70311
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 22,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9955228567123413,
+            0.9056602716445923,
+            0.7614805102348328,
+            0.31779295206069946,
+            0.6863061189651489
+          ],
+          "proposed_ids": [
+            201,
+            38835,
+            565,
+            19,
+            14
+          ],
+          "native_proposed_ids": [
+            201,
+            38835,
+            565,
+            19,
+            14
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 25,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6351079940795898,
+            0.4376299977302551,
+            0.2013845294713974,
+            0.11937146633863449,
+            0.14910554885864258
+          ],
+          "proposed_ids": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ],
+          "native_proposed_ids": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 28,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999170303344727,
+            0.6538716554641724,
+            0.5942167043685913,
+            0.7084453105926514,
+            0.8960506319999695
+          ],
+          "proposed_ids": [
+            341,
+            61391,
+            65,
+            93256,
+            5677
+          ],
+          "native_proposed_ids": [
+            341,
+            61391,
+            65,
+            93256,
+            5677
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 31,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9949930906295776,
+            0.9133853316307068,
+            0.7120180130004883,
+            0.85111004114151,
+            0.7897458076477051
+          ],
+          "proposed_ids": [
+            5677,
+            290,
+            982,
+            989,
+            290
+          ],
+          "native_proposed_ids": [
+            5677,
+            290,
+            982,
+            989,
+            290
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 37,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999994039535522,
+            0.9999896287918091,
+            0.999809205532074,
+            0.9987455606460571,
+            0.9942088723182678
+          ],
+          "proposed_ids": [
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ],
+          "native_proposed_ids": [
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 43,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999483227729797,
+            0.9997370839118958,
+            0.999772846698761,
+            0.9999865293502808,
+            0.9997103810310364
+          ],
+          "proposed_ids": [
+            71029,
+            4731,
+            28,
+            12249,
+            989
+          ],
+          "native_proposed_ids": [
+            71029,
+            4731,
+            28,
+            12249,
+            989
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 49,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999970197677612,
+            0.9991623163223267,
+            0.984554648399353,
+            0.8295047879219055,
+            0.95540851354599
+          ],
+          "proposed_ids": [
+            12275,
+            17856,
+            1879,
+            4731,
+            28
+          ],
+          "native_proposed_ids": [
+            12275,
+            17856,
+            1879,
+            4731,
+            28
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 53,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999996423721313,
+            0.9999951720237732,
+            0.9999969005584717,
+            0.9999495148658752,
+            0.9871534705162048
+          ],
+          "proposed_ids": [
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ],
+          "native_proposed_ids": [
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 59,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999982714653015,
+            0.9999955892562866,
+            0.999561607837677,
+            0.9874107837677002,
+            0.964020848274231
+          ],
+          "proposed_ids": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "native_proposed_ids": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 65,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999992251396179,
+            0.9999920129776001,
+            0.9999995827674866,
+            0.999998927116394,
+            0.999998152256012
+          ],
+          "proposed_ids": [
+            12249,
+            438,
+            223,
+            18,
+            16,
+            18,
+            989
+          ],
+          "native_proposed_ids": [
+            12249,
+            438,
+            223,
+            18,
+            16
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 73,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9891299605369568,
+            0.999481737613678,
+            0.999075174331665,
+            0.9991834759712219,
+            0.9398331046104431
+          ],
+          "proposed_ids": [
+            6248,
+            15932,
+            54361,
+            14,
+            12249
+          ],
+          "native_proposed_ids": [
+            6248,
+            15932,
+            54361,
+            14,
+            12249
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 79,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7984812259674072,
+            0.9678477644920349,
+            0.49498409032821655,
+            0.5035264492034912,
+            0.4755679666996002
+          ],
+          "proposed_ids": [
+            290,
+            1522,
+            3682,
+            58878,
+            438
+          ],
+          "native_proposed_ids": [
+            290,
+            1522,
+            3682,
+            58878,
+            438
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 82,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999412894248962,
+            0.9997923970222473,
+            0.9950445890426636,
+            0.993911862373352,
+            0.9847075939178467
+          ],
+          "proposed_ids": [
+            42616,
+            3682,
+            633,
+            4731,
+            438,
+            9846,
+            3682
+          ],
+          "native_proposed_ids": [
+            42616,
+            3682,
+            633,
+            4731,
+            438
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 90,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999991655349731,
+            0.9990830421447754,
+            0.9967443346977234,
+            0.9155590534210205,
+            0.8067031502723694
+          ],
+          "proposed_ids": [
+            1492,
+            71029,
+            4731,
+            855,
+            71029,
+            4731,
+            1955
+          ],
+          "native_proposed_ids": [
+            1492,
+            71029,
+            4731,
+            855,
+            71029
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 98,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999997019767761,
+            0.9999854564666748,
+            0.999975860118866,
+            0.9997969269752502,
+            0.998690664768219
+          ],
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ],
+          "native_proposed_ids": [
+            18,
+            16,
+            18,
+            3006,
+            223
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 106,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999938607215881,
+            0.9706812500953674,
+            0.5146425366401672,
+            0.34808793663978577,
+            0.6182830333709717
+          ],
+          "proposed_ids": [
+            201,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "native_proposed_ids": [
+            201,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 109,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.927480936050415,
+            0.9389945864677429,
+            0.9808127284049988,
+            0.9727999567985535,
+            0.9605777859687805
+          ],
+          "proposed_ids": [
+            119156,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "native_proposed_ids": [
+            119156,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 115,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999996423721313,
+            0.9999994039535522,
+            0.9994428157806396,
+            0.999992847442627,
+            0.8967252969741821
+          ],
+          "proposed_ids": [
+            1550,
+            5677,
+            385,
+            3979,
+            7093
+          ],
+          "native_proposed_ids": [
+            1550,
+            5677,
+            385,
+            3979,
+            7093
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 120,
+          "effective_draft_length": 7,
+          "confidence": [
+            1.0,
+            0.9999999403953552,
+            1.0,
+            0.9999999403953552,
+            0.9999989867210388
+          ],
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            14,
+            12275,
+            17856,
+            1879
+          ],
+          "native_proposed_ids": [
+            18,
+            16,
+            18,
+            14,
+            12275
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 128,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999953508377075,
+            0.9991517066955566,
+            0.9995360374450684,
+            0.9907429218292236,
+            0.9854403734207153
+          ],
+          "proposed_ids": [
+            4731,
+            11,
+            940,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "native_proposed_ids": [
+            4731,
+            11,
+            940,
+            3979,
+            10
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 136,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999997615814209,
+            0.9999829530715942,
+            0.9999983906745911,
+            0.999997615814209,
+            0.9999793171882629
+          ],
+          "proposed_ids": [
+            14,
+            23809,
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "native_proposed_ids": [
+            14,
+            23809,
+            65,
+            6333,
+            492
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 144,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999954700469971,
+            0.9999971389770508,
+            0.9998188018798828,
+            0.9997844696044922,
+            0.9999141693115234
+          ],
+          "proposed_ids": [
+            385,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "native_proposed_ids": [
+            385,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 150,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999995231628418,
+            0.9999881982803345,
+            0.9999967217445374,
+            0.9963213801383972,
+            0.9937809109687805
+          ],
+          "proposed_ids": [
+            14,
+            71029,
+            4731,
+            3872,
+            290
+          ],
+          "native_proposed_ids": [
+            14,
+            71029,
+            4731,
+            3872,
+            290
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 156,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9998892545700073,
+            0.9999271035194397,
+            0.9998400211334229,
+            0.9999223351478577,
+            0.9998566508293152
+          ],
+          "proposed_ids": [
+            290,
+            64285,
+            65,
+            317,
+            25763
+          ],
+          "native_proposed_ids": [
+            290,
+            64285,
+            65,
+            317,
+            25763
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 162,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.999997079372406,
+            0.7073961496353149,
+            0.675840437412262,
+            0.8547393083572388,
+            0.8167682886123657
+          ],
+          "proposed_ids": [
+            438,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ],
+          "native_proposed_ids": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 170,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999988079071045,
+            0.9999741911888123,
+            0.9998438954353333,
+            0.9996787309646606,
+            0.9987894296646118
+          ],
+          "proposed_ids": [
+            4731,
+            565,
+            2408,
+            119156,
+            65,
+            317,
+            25763
+          ],
+          "native_proposed_ids": [
+            4731,
+            565,
+            2408,
+            119156,
+            65
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 178,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999966025352478,
+            0.9991521239280701,
+            0.9371546506881714,
+            0.9113893508911133,
+            0.8506523966789246
+          ],
+          "proposed_ids": [
+            682,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "native_proposed_ids": [
+            682,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 184,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999995231628418,
+            0.9999514222145081,
+            0.9993614554405212,
+            0.9704646468162537,
+            0.9699870347976685
+          ],
+          "proposed_ids": [
+            438,
+            8825,
+            385,
+            9846,
+            3682
+          ],
+          "native_proposed_ids": [
+            438,
+            8825,
+            385,
+            9846,
+            3682
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 190,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999874234199524,
+            0.9999096989631653,
+            0.9992597103118896,
+            0.9996177554130554,
+            0.9981948137283325
+          ],
+          "proposed_ids": [
+            1492,
+            64285,
+            65,
+            317,
+            25763,
+            4731,
+            855
+          ],
+          "native_proposed_ids": [
+            1492,
+            64285,
+            65,
+            317,
+            25763
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 198,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999999403953552,
+            0.9999998211860657,
+            1.0,
+            0.9999995827674866,
+            0.9999879598617554
+          ],
+          "proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            1955,
+            223,
+            18
+          ],
+          "native_proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            1955
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 206,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999998807907104,
+            0.9999105930328369,
+            0.998721718788147,
+            0.99196457862854,
+            0.9596086144447327
+          ],
+          "proposed_ids": [
+            18,
+            3006,
+            223,
+            18,
+            16,
+            18,
+            201
+          ],
+          "native_proposed_ids": [
+            18,
+            3006,
+            223,
+            18,
+            16
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 214,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999845027923584,
+            0.9991397857666016,
+            0.9998425245285034,
+            0.9916061758995056,
+            0.9219886660575867
+          ],
+          "proposed_ids": [
+            10151,
+            290,
+            1354,
+            875,
+            385
+          ],
+          "native_proposed_ids": [
+            10151,
+            290,
+            1354,
+            875,
+            385
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 220,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999687671661377,
+            0.9999485611915588,
+            0.9996796250343323,
+            0.946743905544281,
+            0.9754856824874878
+          ],
+          "proposed_ids": [
+            77734,
+            4731,
+            3362,
+            64285,
+            3682
+          ],
+          "native_proposed_ids": [
+            77734,
+            4731,
+            3362,
+            64285,
+            3682
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 226,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999960064888,
+            0.9999995827674866,
+            0.9998692870140076,
+            0.9999868273735046,
+            0.8962420225143433
+          ],
+          "proposed_ids": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "native_proposed_ids": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 232,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999983310699463,
+            1.0,
+            0.999988853931427,
+            0.9999924898147583,
+            0.9958357810974121
+          ],
+          "proposed_ids": [
+            317,
+            25763,
+            4731,
+            3362,
+            64285,
+            65,
+            317
+          ],
+          "native_proposed_ids": [
+            317,
+            25763,
+            4731,
+            3362,
+            64285
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 240,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999866485595703,
+            0.9999952912330627,
+            0.9946665167808533,
+            0.9994866847991943,
+            0.975793182849884
+          ],
+          "proposed_ids": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "native_proposed_ids": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 246,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999949932098389,
+            0.9999974370002747,
+            0.999997615814209,
+            0.9998112916946411,
+            0.9998789429664612
+          ],
+          "proposed_ids": [
+            633,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ],
+          "native_proposed_ids": [
+            633,
+            4731,
+            3362,
+            64285,
+            3682
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 254,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9998911023139954,
+            0.9999874830245972,
+            0.9999707341194153,
+            0.9999939799308777,
+            0.9999375939369202
+          ],
+          "proposed_ids": [
+            385,
+            582,
+            523,
+            15093,
+            42616
+          ],
+          "native_proposed_ids": [
+            385,
+            582,
+            523,
+            15093,
+            42616
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 260,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999924898147583,
+            0.9999945163726807,
+            0.9999932050704956,
+            0.9980179071426392,
+            0.9649698138237
+          ],
+          "proposed_ids": [
+            633,
+            4731,
+            3362,
+            1522,
+            15093,
+            42616,
+            3682
+          ],
+          "native_proposed_ids": [
+            633,
+            4731,
+            3362,
+            1522,
+            15093
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 268,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999986290931702,
+            0.9999963641166687,
+            0.9962168335914612,
+            0.9997876882553101,
+            0.8522139191627502
+          ],
+          "proposed_ids": [
+            4731,
+            989,
+            290,
+            1554,
+            27344
+          ],
+          "native_proposed_ids": [
+            4731,
+            989,
+            290,
+            1554,
+            27344
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 273,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9960567355155945,
+            0.9914271235466003,
+            0.7239443063735962,
+            0.508989691734314,
+            0.7349887490272522
+          ],
+          "proposed_ids": [
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ],
+          "native_proposed_ids": [
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 276,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.779667317867279,
+            0.7658225297927856,
+            0.3117550015449524,
+            0.6512278318405151,
+            0.4678995609283447
+          ],
+          "proposed_ids": [
+            52287,
+            806,
+            88287,
+            28,
+            52013
+          ],
+          "native_proposed_ids": [
+            52287,
+            806,
+            88287,
+            28,
+            52013
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 282,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999917149543762,
+            0.9950820803642273,
+            0.6975452899932861,
+            0.9764728546142578,
+            0.9718637466430664
+          ],
+          "proposed_ids": [
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ],
+          "native_proposed_ids": [
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 285,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9910552501678467,
+            0.9990657567977905,
+            0.9956877827644348,
+            0.9946122765541077,
+            0.9824770092964172
+          ],
+          "proposed_ids": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ],
+          "native_proposed_ids": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 291,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9537889361381531,
+            0.9947493076324463,
+            0.9965916872024536,
+            0.9834017753601074,
+            0.8467572927474976
+          ],
+          "proposed_ids": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ],
+          "native_proposed_ids": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 297,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.4993387758731842,
+            0.8572997450828552,
+            0.4348365366458893,
+            0.2715725898742676,
+            0.24644780158996582
+          ],
+          "proposed_ids": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ],
+          "native_proposed_ids": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 301,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6396428346633911,
+            0.4901915192604065,
+            0.32215312123298645,
+            0.3424482047557831,
+            0.7427880764007568
+          ],
+          "proposed_ids": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ],
+          "native_proposed_ids": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 303,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9369452595710754,
+            0.682052493095398,
+            0.6167272329330444,
+            0.9394276738166809,
+            0.9245023727416992
+          ],
+          "proposed_ids": [
+            105080,
+            8205,
+            603,
+            27344,
+            13
+          ],
+          "native_proposed_ids": [
+            105080,
+            8205,
+            603,
+            27344,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 309,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.48944661021232605,
+            0.47902122139930725,
+            0.3030911684036255,
+            0.17580102384090424,
+            0.14290890097618103
+          ],
+          "proposed_ids": [
+            29617,
+            83,
+            5230,
+            344,
+            270
+          ],
+          "native_proposed_ids": [
+            29617,
+            83,
+            5230,
+            344,
+            270
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 310,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8501970767974854,
+            0.8502453565597534,
+            0.43095651268959045,
+            0.2320224940776825,
+            0.18702726066112518
+          ],
+          "proposed_ids": [
+            9952,
+            1082,
+            270,
+            71087,
+            344
+          ],
+          "native_proposed_ids": [
+            9952,
+            1082,
+            270,
+            71087,
+            344
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 312,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8157749772071838,
+            0.8668277263641357,
+            0.5146085023880005,
+            0.5430624485015869,
+            0.5992035865783691
+          ],
+          "proposed_ids": [
+            411,
+            11181,
+            8205,
+            832,
+            270
+          ],
+          "native_proposed_ids": [
+            411,
+            11181,
+            8205,
+            832,
+            270
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 315,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8312873840332031,
+            0.6131268739700317,
+            0.8508716821670532,
+            0.5169878005981445,
+            0.33143118023872375
+          ],
+          "proposed_ids": [
+            832,
+            1926,
+            387,
+            588,
+            2921
+          ],
+          "native_proposed_ids": [
+            832,
+            1926,
+            387,
+            588,
+            2921
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 320,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8215590715408325,
+            0.5686942338943481,
+            0.7431647777557373,
+            0.9694056510925293,
+            0.5878814458847046
+          ],
+          "proposed_ids": [
+            582,
+            3567,
+            201,
+            13,
+            361
+          ],
+          "native_proposed_ids": [
+            582,
+            3567,
+            201,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 323,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9155044555664062,
+            0.9892038106918335,
+            0.9966839551925659,
+            0.7244840264320374,
+            0.6579909324645996
+          ],
+          "proposed_ids": [
+            2701,
+            13,
+            361,
+            538,
+            582
+          ],
+          "native_proposed_ids": [
+            2701,
+            13,
+            361,
+            538,
+            582
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 328,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6515810489654541,
+            0.5722290277481079,
+            0.4792332947254181,
+            0.49749821424484253,
+            0.7382497191429138
+          ],
+          "proposed_ids": [
+            2041,
+            8390,
+            16,
+            6045,
+            2990
+          ],
+          "native_proposed_ids": [
+            2041,
+            8390,
+            16,
+            6045,
+            2990
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 329,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9087090492248535,
+            0.6567318439483643,
+            0.49549174308776855,
+            0.6941055655479431,
+            0.22050030529499054
+          ],
+          "proposed_ids": [
+            8390,
+            16,
+            6045,
+            2990,
+            270
+          ],
+          "native_proposed_ids": [
+            8390,
+            16,
+            6045,
+            2990,
+            270
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 332,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.957047164440155,
+            0.9681814908981323,
+            0.657068133354187,
+            0.3918313980102539,
+            0.5180095434188843
+          ],
+          "proposed_ids": [
+            83,
+            5230,
+            344,
+            295,
+            764
+          ],
+          "native_proposed_ids": [
+            83,
+            5230,
+            344,
+            295,
+            764
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 336,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8660013675689697,
+            0.8149310946464539,
+            0.8830828666687012,
+            0.9240248799324036,
+            0.8748669624328613
+          ],
+          "proposed_ids": [
+            9078,
+            295,
+            764,
+            18,
+            14
+          ],
+          "native_proposed_ids": [
+            9078,
+            295,
+            764,
+            18,
+            14
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 342,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999747276306152,
+            0.9343470931053162,
+            0.9336851239204407,
+            0.810792088508606,
+            0.9259078502655029
+          ],
+          "proposed_ids": [
+            19,
+            28881,
+            13,
+            361,
+            16786
+          ],
+          "native_proposed_ids": [
+            19,
+            28881,
+            13,
+            361,
+            16786
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 348,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999778270721436,
+            0.9998990297317505,
+            0.6488648653030396,
+            0.9263158440589905,
+            0.3628455698490143
+          ],
+          "proposed_ids": [
+            13,
+            361,
+            855,
+            554,
+            24216
+          ],
+          "native_proposed_ids": [
+            13,
+            361,
+            855,
+            554,
+            24216
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 353,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.999933660030365,
+            0.9999478459358215,
+            0.9999849796295166,
+            0.9995751976966858,
+            0.9949692487716675
+          ],
+          "proposed_ids": [
+            1137,
+            13,
+            528,
+            1354,
+            9952
+          ],
+          "native_proposed_ids": [
+            1137,
+            13,
+            528,
+            1354,
+            9952
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 359,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9998966455459595,
+            0.9998224377632141,
+            0.6576648354530334,
+            0.9481979608535767,
+            0.5484604835510254
+          ],
+          "proposed_ids": [
+            13,
+            361,
+            15320,
+            438,
+            24216
+          ],
+          "native_proposed_ids": [
+            13,
+            361,
+            15320,
+            438,
+            24216
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 365,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.5710166692733765,
+            0.9987315535545349,
+            0.9999418258666992,
+            0.8133798837661743,
+            0.9976798892021179
+          ],
+          "proposed_ids": [
+            14724,
+            11,
+            362,
+            374,
+            295
+          ],
+          "native_proposed_ids": [
+            14724,
+            11,
+            362,
+            374,
+            295
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 366,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999690651893616,
+            0.999991238117218,
+            0.9998902678489685,
+            0.9999848008155823,
+            0.9999053478240967
+          ],
+          "proposed_ids": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ],
+          "native_proposed_ids": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 372,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9998750686645508,
+            0.9999248385429382,
+            0.676917552947998,
+            0.896274745464325,
+            0.6776866912841797
+          ],
+          "proposed_ids": [
+            13,
+            361,
+            855,
+            9080,
+            10
+          ],
+          "native_proposed_ids": [
+            13,
+            361,
+            855,
+            9080,
+            10
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 378,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999996423721313,
+            0.9999616742134094,
+            0.9999961256980896,
+            0.9998705983161926,
+            0.9990274310112
+          ],
+          "proposed_ids": [
+            11,
+            2606,
+            223,
+            19,
+            1137
+          ],
+          "native_proposed_ids": [
+            11,
+            2606,
+            223,
+            19,
+            1137
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 384,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999997615814209,
+            0.9999751448631287,
+            0.7640957832336426,
+            0.9812343716621399,
+            0.9681024551391602
+          ],
+          "proposed_ids": [
+            528,
+            1354,
+            12249,
+            10,
+            28798
+          ],
+          "native_proposed_ids": [
+            528,
+            1354,
+            12249,
+            10,
+            28798
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 387,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.998600959777832,
+            0.9997535943984985,
+            0.999791145324707,
+            0.9998989105224609,
+            0.9998924732208252
+          ],
+          "proposed_ids": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ],
+          "native_proposed_ids": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 393,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999374747276306,
+            0.5106148719787598,
+            0.7124894857406616,
+            0.8027480840682983,
+            0.7274117469787598
+          ],
+          "proposed_ids": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "native_proposed_ids": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 399,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999950528144836,
+            0.9999316930770874,
+            0.978905200958252,
+            0.8881317377090454,
+            0.9858429431915283
+          ],
+          "proposed_ids": [
+            14,
+            1550,
+            10,
+            19,
+            16
+          ],
+          "native_proposed_ids": [
+            14,
+            1550,
+            10,
+            19,
+            16
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 405,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999057054519653,
+            0.7717722058296204,
+            0.9759207963943481,
+            0.9294527769088745,
+            0.9466716647148132
+          ],
+          "proposed_ids": [
+            14,
+            12249,
+            26253,
+            28474,
+            982
+          ],
+          "native_proposed_ids": [
+            14,
+            12249,
+            26253,
+            28474,
+            982
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 411,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9992102980613708,
+            0.9999322891235352,
+            0.9999741911888123,
+            0.9994540810585022,
+            0.9999082684516907
+          ],
+          "proposed_ids": [
+            6321,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "native_proposed_ids": [
+            6321,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 417,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999980926513672,
+            0.9999290108680725,
+            0.9999743103981018,
+            0.9999533891677856,
+            0.7697593569755554
+          ],
+          "proposed_ids": [
+            19,
+            682,
+            13,
+            361,
+            4263
+          ],
+          "native_proposed_ids": [
+            19,
+            682,
+            13,
+            361,
+            4263
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 423,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9783302545547485,
+            0.7516019940376282,
+            0.9928507804870605,
+            0.9589162468910217,
+            0.9205150008201599
+          ],
+          "proposed_ids": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203
+          ],
+          "native_proposed_ids": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 425,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9961894154548645,
+            0.9993950724601746,
+            0.996638834476471,
+            0.9446842670440674,
+            0.9875677824020386
+          ],
+          "proposed_ids": [
+            682,
+            13,
+            361,
+            9509,
+            438
+          ],
+          "native_proposed_ids": [
+            682,
+            13,
+            361,
+            9509,
+            438
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 431,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.97983717918396,
+            0.9949921369552612,
+            0.9911741018295288,
+            0.9926233291625977,
+            0.9706904292106628
+          ],
+          "proposed_ids": [
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ],
+          "native_proposed_ids": [
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 437,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999979734420776,
+            0.9999942183494568,
+            0.9999955892562866,
+            0.9999909400939941,
+            0.9999746680259705
+          ],
+          "proposed_ids": [
+            9080,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "native_proposed_ids": [
+            9080,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 443,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999985694885254,
+            0.9999951124191284,
+            0.9999998211860657,
+            0.9999861121177673,
+            0.567507266998291
+          ],
+          "proposed_ids": [
+            19,
+            682,
+            13,
+            361,
+            9078
+          ],
+          "native_proposed_ids": [
+            19,
+            682,
+            13,
+            361,
+            9078
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 448,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.99797523021698,
+            0.9626823663711548,
+            0.9908692836761475,
+            0.9939322471618652,
+            0.9700701236724854
+          ],
+          "proposed_ids": [
+            438,
+            3609,
+            565,
+            4263,
+            201
+          ],
+          "native_proposed_ids": [
+            438,
+            3609,
+            565,
+            4263,
+            201
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 454,
+          "effective_draft_length": 5,
+          "confidence": [
+            1.0,
+            0.9988240599632263,
+            0.770544171333313,
+            0.9597695469856262,
+            0.969537615776062
+          ],
+          "proposed_ids": [
+            361,
+            1354,
+            15320,
+            105099,
+            63
+          ],
+          "native_proposed_ids": [
+            361,
+            1354,
+            15320,
+            105099,
+            63
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 460,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9998620748519897,
+            0.9994738698005676,
+            0.9937452077865601,
+            0.9974899291992188,
+            0.9947103261947632
+          ],
+          "proposed_ids": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ],
+          "native_proposed_ids": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 466,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999991655349731,
+            0.999998927116394,
+            0.9999136924743652,
+            0.9990706443786621,
+            0.993723452091217
+          ],
+          "proposed_ids": [
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ],
+          "native_proposed_ids": [
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 472,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9980484843254089,
+            0.9998001456260681,
+            0.9995846152305603,
+            0.999683141708374,
+            0.9973347187042236
+          ],
+          "proposed_ids": [
+            982,
+            5288,
+            201,
+            27344,
+            27344
+          ],
+          "native_proposed_ids": [
+            982,
+            5288,
+            201,
+            27344,
+            27344
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 478,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9957466721534729,
+            0.8221864700317383,
+            0.6743823289871216,
+            0.3774964213371277,
+            0.54445481300354
+          ],
+          "proposed_ids": [
+            3465,
+            944,
+            24807,
+            15810,
+            19303
+          ],
+          "native_proposed_ids": [
+            3465,
+            944,
+            24807,
+            15810,
+            19303
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 481,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6395718455314636,
+            0.5727762579917908,
+            0.6061116456985474,
+            0.747888445854187,
+            0.7185822129249573
+          ],
+          "proposed_ids": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ],
+          "native_proposed_ids": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 484,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999470114707947,
+            0.9915037751197815,
+            0.8233534693717957,
+            0.9436521530151367,
+            0.888437807559967
+          ],
+          "proposed_ids": [
+            28,
+            10649,
+            11,
+            6248,
+            12249
+          ],
+          "native_proposed_ids": [
+            28,
+            10649,
+            11,
+            6248,
+            12249
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 490,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9738186001777649,
+            0.9998329281806946,
+            0.9994319081306458,
+            0.9999370574951172,
+            0.8158111572265625
+          ],
+          "proposed_ids": [
+            9952,
+            1137,
+            13,
+            361,
+            26495,
+            62596,
+            33240
+          ],
+          "native_proposed_ids": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 496,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9740049242973328,
+            0.5975067615509033,
+            0.3710595965385437,
+            0.2925168573856354,
+            0.3352075517177582
+          ],
+          "proposed_ids": [
+            31088,
+            260,
+            45442,
+            2994,
+            304
+          ],
+          "native_proposed_ids": [
+            31088,
+            260,
+            45442,
+            2994,
+            304
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 498,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7471253871917725,
+            0.4169628918170929,
+            0.36239495873451233,
+            0.437122642993927,
+            0.45731121301651
+          ],
+          "proposed_ids": [
+            28895,
+            17588,
+            304,
+            12249,
+            304
+          ],
+          "native_proposed_ids": [
+            28895,
+            17588,
+            304,
+            12249,
+            304
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 500,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7860163450241089,
+            0.7651222944259644,
+            0.6006253957748413,
+            0.6436788439750671,
+            0.4260219931602478
+          ],
+          "proposed_ids": [
+            17588,
+            304,
+            12249,
+            14,
+            469
+          ],
+          "native_proposed_ids": [
+            17588,
+            304,
+            12249,
+            14,
+            469
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 502,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.561149001121521,
+            0.6189941167831421,
+            0.396236389875412,
+            0.23491066694259644,
+            0.4380430281162262
+          ],
+          "proposed_ids": [
+            23476,
+            9952,
+            1082,
+            25892,
+            77319
+          ],
+          "native_proposed_ids": [
+            23476,
+            9952,
+            1082,
+            25892,
+            77319
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 503,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9996639490127563,
+            0.45054689049720764,
+            0.47554758191108704,
+            0.34418365359306335,
+            0.48139452934265137
+          ],
+          "proposed_ids": [
+            1217,
+            9952,
+            17,
+            111085,
+            77319
+          ],
+          "native_proposed_ids": [
+            1217,
+            9952,
+            17,
+            111085,
+            77319
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 506,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6368050575256348,
+            0.6439403891563416,
+            0.8846058249473572,
+            0.8145571947097778,
+            0.9965424537658691
+          ],
+          "proposed_ids": [
+            2408,
+            5611,
+            40560,
+            77319,
+            27344
+          ],
+          "native_proposed_ids": [
+            2408,
+            5611,
+            40560,
+            77319,
+            27344
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 509,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.958350419998169,
+            0.9963215589523315,
+            0.9988179802894592,
+            0.9994272589683533,
+            0.9981061816215515
+          ],
+          "proposed_ids": [
+            1219,
+            77319,
+            27344,
+            13,
+            361
+          ],
+          "native_proposed_ids": [
+            1219,
+            77319,
+            27344,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 515,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9988549947738647,
+            0.9996092319488525,
+            0.9999008774757385,
+            0.8287500739097595,
+            0.9568997621536255
+          ],
+          "proposed_ids": [
+            1990,
+            344,
+            9952,
+            1137,
+            13
+          ],
+          "native_proposed_ids": [
+            1990,
+            344,
+            9952,
+            1137,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 521,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.998426616191864,
+            0.9999173879623413,
+            0.9999213814735413,
+            0.9992377758026123,
+            0.8758096694946289
+          ],
+          "proposed_ids": [
+            1354,
+            9952,
+            201,
+            13,
+            361,
+            15320,
+            438
+          ],
+          "native_proposed_ids": [
+            1354,
+            9952,
+            201,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 527,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999964237213135,
+            0.9999982118606567,
+            0.9998296499252319,
+            0.6448160409927368,
+            0.9888318777084351
+          ],
+          "proposed_ids": [
+            1137,
+            13,
+            528,
+            1354,
+            12249
+          ],
+          "native_proposed_ids": [
+            1137,
+            13,
+            528,
+            1354,
+            12249
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 533,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999997019767761,
+            0.999998152256012,
+            0.9999979734420776,
+            0.9998547434806824,
+            0.9998992681503296
+          ],
+          "proposed_ids": [
+            682,
+            13,
+            361,
+            6816,
+            343
+          ],
+          "native_proposed_ids": [
+            682,
+            13,
+            361,
+            6816,
+            343
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 539,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999999403953552,
+            0.9999997615814209,
+            0.9999709725379944,
+            0.9998735785484314,
+            0.9997668266296387
+          ],
+          "proposed_ids": [
+            9000,
+            14,
+            74418,
+            3395,
+            13
+          ],
+          "native_proposed_ids": [
+            9000,
+            14,
+            74418,
+            3395,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 545,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999816417694092,
+            0.999976396560669,
+            0.999962329864502,
+            0.9999076128005981,
+            0.9985697269439697
+          ],
+          "proposed_ids": [
+            1354,
+            9952,
+            201,
+            27344,
+            27344
+          ],
+          "native_proposed_ids": [
+            1354,
+            9952,
+            201,
+            27344,
+            27344
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 551,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9979836344718933,
+            0.9078627824783325,
+            0.8000714778900146,
+            0.8485618233680725,
+            0.5234076976776123
+          ],
+          "proposed_ids": [
+            3465,
+            45706,
+            15810,
+            19303,
+            18499
+          ],
+          "native_proposed_ids": [
+            3465,
+            45706,
+            15810,
+            19303,
+            18499
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 557,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6411081552505493,
+            0.9654755592346191,
+            0.981286346912384,
+            0.6247432827949524,
+            0.7631076574325562
+          ],
+          "proposed_ids": [
+            61327,
+            85,
+            28,
+            52013,
+            28
+          ],
+          "native_proposed_ids": [
+            61327,
+            85,
+            28,
+            52013,
+            28
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 558,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999813437461853,
+            0.9998719096183777,
+            0.9963643550872803,
+            0.9966303706169128,
+            0.9799850583076477
+          ],
+          "proposed_ids": [
+            13,
+            361,
+            25798,
+            28,
+            52013
+          ],
+          "native_proposed_ids": [
+            13,
+            361,
+            25798,
+            28,
+            52013
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 564,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9925891757011414,
+            0.997821569442749,
+            0.9556512236595154,
+            0.9902364611625671,
+            0.9970061779022217
+          ],
+          "proposed_ids": [
+            100623,
+            17797,
+            46677,
+            46085,
+            6248
+          ],
+          "native_proposed_ids": [
+            100623,
+            17797,
+            46677,
+            46085,
+            6248
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 570,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999105930328369,
+            0.9999510049819946,
+            0.9998747110366821,
+            0.9997105598449707,
+            0.9993990063667297
+          ],
+          "proposed_ids": [
+            54361,
+            14,
+            10649,
+            23902,
+            13
+          ],
+          "native_proposed_ids": [
+            54361,
+            14,
+            10649,
+            23902,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 576,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999198317527771,
+            0.5515378713607788,
+            0.8476423025131226,
+            0.36611419916152954,
+            0.28882646560668945
+          ],
+          "proposed_ids": [
+            26495,
+            74181,
+            60231,
+            260,
+            13672
+          ],
+          "native_proposed_ids": [
+            26495,
+            74181,
+            60231,
+            260,
+            13672
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 581,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9809365272521973,
+            0.6028916835784912,
+            0.7838236689567566,
+            0.7404643893241882,
+            0.626762866973877
+          ],
+          "proposed_ids": [
+            294,
+            9353,
+            25798,
+            1055,
+            260
+          ],
+          "native_proposed_ids": [
+            294,
+            9353,
+            25798,
+            1055,
+            260
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 587,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7937005758285522,
+            0.9589220881462097,
+            0.9653967618942261,
+            0.7679010629653931,
+            0.8722649216651917
+          ],
+          "proposed_ids": [
+            1715,
+            27531,
+            21408,
+            13672,
+            603
+          ],
+          "native_proposed_ids": [
+            1715,
+            27531,
+            21408,
+            13672,
+            603
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 593,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999657869338989,
+            0.9999095797538757,
+            0.49431052803993225,
+            0.4016844630241394,
+            0.276426762342453
+          ],
+          "proposed_ids": [
+            13,
+            361,
+            455,
+            13672,
+            5118
+          ],
+          "native_proposed_ids": [
+            13,
+            361,
+            455,
+            13672,
+            5118
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 596,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7006548047065735,
+            0.6288087368011475,
+            0.6843628883361816,
+            0.3473861813545227,
+            0.2534264922142029
+          ],
+          "proposed_ids": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ],
+          "native_proposed_ids": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 600,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.982708752155304,
+            0.9898593425750732,
+            0.9866607189178467,
+            0.5368279218673706,
+            0.38677364587783813
+          ],
+          "proposed_ids": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ],
+          "native_proposed_ids": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 605,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9997281432151794,
+            0.7703508138656616,
+            0.8576565980911255,
+            0.400886595249176,
+            0.7941609025001526
+          ],
+          "proposed_ids": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ],
+          "native_proposed_ids": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 609,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.847467303276062,
+            0.9826698899269104,
+            0.9936608672142029,
+            0.8870086073875427,
+            0.846579909324646
+          ],
+          "proposed_ids": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ],
+          "native_proposed_ids": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 614,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7616824507713318,
+            0.5302760601043701,
+            0.28639426827430725,
+            0.19500695168972015,
+            0.16047970950603485
+          ],
+          "proposed_ids": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ],
+          "native_proposed_ids": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 616,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9672251343727112,
+            0.8471723794937134,
+            0.9191868901252747,
+            0.923298716545105,
+            0.518674373626709
+          ],
+          "proposed_ids": [
+            6072,
+            1014,
+            14,
+            305,
+            15011,
+            6464,
+            295
+          ],
+          "native_proposed_ids": [
+            6072,
+            1014,
+            14,
+            305,
+            15011
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 624,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999048113822937,
+            0.9958517551422119,
+            0.7095074653625488,
+            0.508536696434021,
+            0.49296408891677856
+          ],
+          "proposed_ids": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ],
+          "native_proposed_ids": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 629,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9719710946083069,
+            0.9998089671134949,
+            0.9996882081031799,
+            0.819896936416626,
+            0.4917953908443451
+          ],
+          "proposed_ids": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ],
+          "native_proposed_ids": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 634,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6491203904151917,
+            0.3260147273540497,
+            0.37058308720588684,
+            0.37135037779808044,
+            0.38174331188201904
+          ],
+          "proposed_ids": [
+            469,
+            260,
+            5118,
+            477,
+            80812
+          ],
+          "native_proposed_ids": [
+            469,
+            260,
+            5118,
+            477,
+            80812
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 635,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6869634389877319,
+            0.6554833650588989,
+            0.7669035196304321,
+            0.6744791269302368,
+            0.4953441619873047
+          ],
+          "proposed_ids": [
+            1117,
+            5238,
+            477,
+            80812,
+            4562
+          ],
+          "native_proposed_ids": [
+            1117,
+            5238,
+            477,
+            80812,
+            4562
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 639,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6977777481079102,
+            0.964482307434082,
+            0.18221703171730042,
+            0.18775708973407745,
+            0.8793054223060608
+          ],
+          "proposed_ids": [
+            4562,
+            1099,
+            56760,
+            4562,
+            1099
+          ],
+          "native_proposed_ids": [
+            4562,
+            1099,
+            56760,
+            4562,
+            1099
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 642,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.995171308517456,
+            0.5962785482406616,
+            0.4660942554473877,
+            0.85673588514328,
+            0.7607495784759521
+          ],
+          "proposed_ids": [
+            412,
+            8390,
+            603,
+            13,
+            361
+          ],
+          "native_proposed_ids": [
+            412,
+            8390,
+            603,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 645,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8634518384933472,
+            0.7116008400917053,
+            0.9996476173400879,
+            0.997626781463623,
+            0.9111146926879883
+          ],
+          "proposed_ids": [
+            305,
+            411,
+            201,
+            13,
+            361
+          ],
+          "native_proposed_ids": [
+            305,
+            411,
+            201,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 651,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9168773889541626,
+            0.7258939743041992,
+            0.6119451522827148,
+            0.6382724046707153,
+            0.34430092573165894
+          ],
+          "proposed_ids": [
+            8205,
+            22273,
+            411,
+            11181,
+            13672
+          ],
+          "native_proposed_ids": [
+            8205,
+            22273,
+            411,
+            11181,
+            13672
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 654,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.506005048751831,
+            0.44688913226127625,
+            0.37125083804130554,
+            0.3131643533706665,
+            0.9152647256851196
+          ],
+          "proposed_ids": [
+            8390,
+            284,
+            13672,
+            4562,
+            1099
+          ],
+          "native_proposed_ids": [
+            8390,
+            284,
+            13672,
+            4562,
+            1099
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 655,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7307629585266113,
+            0.624252200126648,
+            0.454639196395874,
+            0.40908122062683105,
+            0.2691296935081482
+          ],
+          "proposed_ids": [
+            111254,
+            8390,
+            13672,
+            418,
+            48861
+          ],
+          "native_proposed_ids": [
+            111254,
+            8390,
+            13672,
+            418,
+            48861
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 657,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8146766424179077,
+            0.5392476320266724,
+            0.4473080635070801,
+            0.33260205388069153,
+            0.4267888069152832
+          ],
+          "proposed_ids": [
+            418,
+            8390,
+            284,
+            513,
+            19810
+          ],
+          "native_proposed_ids": [
+            418,
+            8390,
+            284,
+            513,
+            19810
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 659,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.4757106900215149,
+            0.519145131111145,
+            0.5660619735717773,
+            0.47190144658088684,
+            0.662051796913147
+          ],
+          "proposed_ids": [
+            25240,
+            6240,
+            294,
+            19810,
+            201
+          ],
+          "native_proposed_ids": [
+            25240,
+            6240,
+            294,
+            19810,
+            201
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 660,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6973938941955566,
+            0.9259186387062073,
+            0.9741621017456055,
+            0.9405551552772522,
+            0.8824018239974976
+          ],
+          "proposed_ids": [
+            603,
+            13,
+            361,
+            16786,
+            27344
+          ],
+          "native_proposed_ids": [
+            603,
+            13,
+            361,
+            16786,
+            27344
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 666,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9992313981056213,
+            0.5047178864479065,
+            0.6258935928344727,
+            0.6799777746200562,
+            0.6608154773712158
+          ],
+          "proposed_ids": [
+            361,
+            5118,
+            19687,
+            438,
+            9080
+          ],
+          "native_proposed_ids": [
+            361,
+            5118,
+            19687,
+            438,
+            9080
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 672,
+          "effective_draft_length": 5,
+          "confidence": [
+            1.0,
+            0.9961006045341492,
+            0.9795586466789246,
+            0.9988778829574585,
+            0.6735484600067139
+          ],
+          "proposed_ids": [
+            85,
+            682,
+            13,
+            361,
+            3452
+          ],
+          "native_proposed_ids": [
+            85,
+            682,
+            13,
+            361,
+            3452
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 678,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999765157699585,
+            0.9991652369499207,
+            0.9999943375587463,
+            0.999180793762207,
+            0.9003751277923584
+          ],
+          "proposed_ids": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ],
+          "native_proposed_ids": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 684,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9987670183181763,
+            0.9572067260742188,
+            0.9998196363449097,
+            0.48244377970695496,
+            0.4114559292793274
+          ],
+          "proposed_ids": [
+            201,
+            13,
+            361,
+            6072,
+            3682
+          ],
+          "native_proposed_ids": [
+            201,
+            13,
+            361,
+            6072,
+            3682
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 688,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999893307685852,
+            0.8557472229003906,
+            0.7869700193405151,
+            0.7098456621170044,
+            0.8715261220932007
+          ],
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "native_proposed_ids": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 694,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999994039535522,
+            0.9999974370002747,
+            0.9999998211860657,
+            0.9999377131462097,
+            0.9998852610588074
+          ],
+          "proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ],
+          "native_proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 700,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9941882491111755,
+            0.97930908203125,
+            0.9136599898338318,
+            0.9301332831382751,
+            0.9381832480430603
+          ],
+          "proposed_ids": [
+            64285,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "native_proposed_ids": [
+            64285,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 706,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999967813491821,
+            0.9999769330024719,
+            0.9999959468841553,
+            0.9999826550483704,
+            0.9999515414237976
+          ],
+          "proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285
+          ],
+          "native_proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ],
+          "teacher_matched_prefix": 6,
+          "committed_tokens": 7
+        },
+        {
+          "position": 713,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8622493743896484,
+            0.9000699520111084,
+            0.9065066576004028,
+            0.9262404441833496,
+            0.9666795134544373
+          ],
+          "proposed_ids": [
+            3682,
+            1695,
+            28,
+            2310,
+            61
+          ],
+          "native_proposed_ids": [
+            3682,
+            1695,
+            28,
+            2310,
+            61
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 719,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999992251396179,
+            0.9999999403953552,
+            0.9999960660934448,
+            0.9990100264549255,
+            0.9999827146530151
+          ],
+          "proposed_ids": [
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285,
+            3682
+          ],
+          "native_proposed_ids": [
+            63,
+            438,
+            16461,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 725,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.90220707654953,
+            0.8550041913986206,
+            0.5054364204406738,
+            0.5868073105812073,
+            0.5128867626190186
+          ],
+          "proposed_ids": [
+            5864,
+            55699,
+            98268,
+            28,
+            2310
+          ],
+          "native_proposed_ids": [
+            5864,
+            55699,
+            98268,
+            28,
+            2310
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 728,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9260230660438538,
+            0.8157166838645935,
+            0.579380989074707,
+            0.841526985168457,
+            0.8405551910400391
+          ],
+          "proposed_ids": [
+            686,
+            28,
+            2310,
+            61,
+            15891
+          ],
+          "native_proposed_ids": [
+            686,
+            28,
+            2310,
+            61,
+            15891
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 734,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999485015869141,
+            0.9999333620071411,
+            0.9742382764816284,
+            0.999782383441925,
+            0.9721074104309082
+          ],
+          "proposed_ids": [
+            438,
+            16461,
+            27344,
+            13,
+            361
+          ],
+          "native_proposed_ids": [
+            438,
+            16461,
+            27344,
+            13,
+            361
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 740,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9618265628814697,
+            0.9971861243247986,
+            0.994584321975708,
+            0.9960660338401794,
+            0.9973626136779785
+          ],
+          "proposed_ids": [
+            5238,
+            295,
+            25798,
+            1137,
+            13
+          ],
+          "native_proposed_ids": [
+            5238,
+            295,
+            25798,
+            1137,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 746,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.673703670501709,
+            0.7874365448951721,
+            0.7736847400665283,
+            0.6719052791595459,
+            0.49522754549980164
+          ],
+          "proposed_ids": [
+            38701,
+            438,
+            1178,
+            36672,
+            61327
+          ],
+          "native_proposed_ids": [
+            38701,
+            438,
+            1178,
+            36672,
+            61327
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 747,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.7840578556060791,
+            0.6962178945541382,
+            0.7481861114501953,
+            0.5207173824310303,
+            0.6291003227233887
+          ],
+          "proposed_ids": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ],
+          "native_proposed_ids": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 749,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999586343765259,
+            0.995168149471283,
+            0.994242787361145,
+            0.9913540482521057,
+            0.879479706287384
+          ],
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            22724
+          ],
+          "native_proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            22724
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 754,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9996343851089478,
+            0.9901323914527893,
+            0.9839538335800171,
+            0.985454797744751,
+            0.9545587301254272
+          ],
+          "proposed_ids": [
+            638,
+            3682,
+            58878,
+            1760,
+            9952
+          ],
+          "native_proposed_ids": [
+            638,
+            3682,
+            58878,
+            1760,
+            9952
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 760,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999662637710571,
+            0.9998520016670227,
+            0.7148544192314148,
+            0.8366395235061646,
+            0.8081408739089966
+          ],
+          "proposed_ids": [
+            13,
+            528,
+            855,
+            9846,
+            344
+          ],
+          "native_proposed_ids": [
+            13,
+            528,
+            855,
+            9846,
+            344
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 766,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9389277696609497,
+            0.9709933400154114,
+            0.9558947682380676,
+            0.5289240479469299,
+            0.5865967273712158
+          ],
+          "proposed_ids": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ],
+          "native_proposed_ids": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 772,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.999998927116394,
+            0.9684882164001465,
+            0.9629359245300293,
+            0.9902474880218506,
+            0.5078068971633911
+          ],
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            86
+          ],
+          "native_proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            86
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 777,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.6632965207099915,
+            0.9700050354003906,
+            0.8579329252243042,
+            0.9673537015914917,
+            0.9314000010490417
+          ],
+          "proposed_ids": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ],
+          "native_proposed_ids": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 783,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999175071716309,
+            0.999941349029541,
+            0.9995599985122681,
+            0.7495605945587158,
+            0.7093136310577393
+          ],
+          "proposed_ids": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            344,
+            9952
+          ],
+          "native_proposed_ids": [
+            682,
+            13,
+            528,
+            855,
+            9846
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 787,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.4466938078403473,
+            0.9198897480964661,
+            0.8638598322868347,
+            0.7256876826286316,
+            0.7483155131340027
+          ],
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ],
+          "native_proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 788,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.999908983707428,
+            0.9952844381332397,
+            0.8441210389137268,
+            0.9444007277488708,
+            0.8717273473739624
+          ],
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "native_proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 794,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999996423721313,
+            0.9998372197151184,
+            0.9999566078186035,
+            0.9999536275863647,
+            0.992235541343689
+          ],
+          "proposed_ids": [
+            74368,
+            682,
+            13,
+            528,
+            855
+          ],
+          "native_proposed_ids": [
+            74368,
+            682,
+            13,
+            528,
+            855
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 800,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9997928738594055,
+            0.9929368495941162,
+            0.9977526664733887,
+            0.9974942207336426,
+            0.9651889801025391
+          ],
+          "proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "native_proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 806,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999893307685852,
+            0.9996857643127441,
+            0.9979951977729797,
+            0.9997837543487549,
+            0.9974007606506348
+          ],
+          "proposed_ids": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682
+          ],
+          "native_proposed_ids": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 812,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9974719882011414,
+            0.9026030898094177,
+            0.8449661731719971,
+            0.9700223803520203,
+            0.889670193195343
+          ],
+          "proposed_ids": [
+            7004,
+            688,
+            12542,
+            74368,
+            23028
+          ],
+          "native_proposed_ids": [
+            7004,
+            688,
+            12542,
+            74368,
+            23028
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 818,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9981136322021484,
+            0.9997588396072388,
+            0.9947575926780701,
+            0.6735584735870361,
+            0.6332142353057861
+          ],
+          "proposed_ids": [
+            27344,
+            13,
+            528,
+            38701,
+            438
+          ],
+          "native_proposed_ids": [
+            27344,
+            13,
+            528,
+            38701,
+            438
+          ],
+          "teacher_matched_prefix": 3,
+          "committed_tokens": 4
+        },
+        {
+          "position": 822,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999800324440002,
+            0.5532549023628235,
+            0.8670057654380798,
+            0.8815451264381409,
+            0.7861728668212891
+          ],
+          "proposed_ids": [
+            27472,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "native_proposed_ids": [
+            27472,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 828,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999969005584717,
+            0.8356460928916931,
+            0.9941003322601318,
+            0.975451648235321,
+            0.8249129056930542
+          ],
+          "proposed_ids": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ],
+          "native_proposed_ids": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 834,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9669522047042847,
+            0.9981288909912109,
+            0.9970925450325012,
+            0.9122925400733948,
+            0.949954092502594
+          ],
+          "proposed_ids": [
+            61327,
+            14,
+            582,
+            3548,
+            27472
+          ],
+          "native_proposed_ids": [
+            61327,
+            14,
+            582,
+            3548,
+            27472
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 840,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8317959904670715,
+            0.7632275819778442,
+            0.9449635148048401,
+            0.7436091303825378,
+            0.8896902799606323
+          ],
+          "proposed_ids": [
+            633,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "native_proposed_ids": [
+            633,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 842,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9991691708564758,
+            0.943605899810791,
+            0.8228848576545715,
+            0.9510676264762878,
+            0.8474202156066895
+          ],
+          "proposed_ids": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ],
+          "native_proposed_ids": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ],
+          "teacher_matched_prefix": 4,
+          "committed_tokens": 5
+        },
+        {
+          "position": 847,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8458247184753418,
+            0.9164995551109314,
+            0.9737440347671509,
+            0.9831415414810181,
+            0.9907333850860596
+          ],
+          "proposed_ids": [
+            855,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "native_proposed_ids": [
+            855,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "teacher_matched_prefix": 0,
+          "committed_tokens": 1
+        },
+        {
+          "position": 848,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9982390999794006,
+            0.9996260404586792,
+            0.9951391816139221,
+            0.9988284111022949,
+            0.9925517439842224
+          ],
+          "proposed_ids": [
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ],
+          "native_proposed_ids": [
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 854,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9996727705001831,
+            0.81295245885849,
+            0.6914224028587341,
+            0.5793086290359497,
+            0.8583419919013977
+          ],
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            1760,
+            9952
+          ],
+          "native_proposed_ids": [
+            27472,
+            3682,
+            1149,
+            1760,
+            9952
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 860,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999872446060181,
+            0.9842829704284668,
+            0.9867396950721741,
+            0.9903028607368469,
+            0.9761835932731628
+          ],
+          "proposed_ids": [
+            13,
+            528,
+            10151,
+            13,
+            528
+          ],
+          "native_proposed_ids": [
+            13,
+            528,
+            10151,
+            13,
+            528
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 866,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9996524453163147,
+            0.9999656677246094,
+            0.9998859167098999,
+            0.9973638653755188,
+            0.996775209903717
+          ],
+          "proposed_ids": [
+            852,
+            27472,
+            23028,
+            344,
+            554
+          ],
+          "native_proposed_ids": [
+            852,
+            27472,
+            23028,
+            344,
+            554
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 872,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9814744591712952,
+            0.9985414147377014,
+            0.996376097202301,
+            0.9353825449943542,
+            0.9163324236869812
+          ],
+          "proposed_ids": [
+            1137,
+            13,
+            775,
+            852,
+            27472
+          ],
+          "native_proposed_ids": [
+            1137,
+            13,
+            775,
+            852,
+            27472
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 878,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999966025352478,
+            0.9999637007713318,
+            0.9983636140823364,
+            0.9997292160987854,
+            0.9977514743804932
+          ],
+          "proposed_ids": [
+            1149,
+            10108,
+            89649,
+            27472,
+            23028
+          ],
+          "native_proposed_ids": [
+            1149,
+            10108,
+            89649,
+            27472,
+            23028
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 884,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999317526817322,
+            0.999993085861206,
+            0.9999664425849915,
+            0.9924647808074951,
+            0.992232084274292
+          ],
+          "proposed_ids": [
+            27344,
+            13,
+            528,
+            64285,
+            23028
+          ],
+          "native_proposed_ids": [
+            27344,
+            13,
+            528,
+            64285,
+            23028
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 890,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999843239784241,
+            0.9999785423278809,
+            0.999995231628418,
+            0.9999908208847046,
+            0.9479629993438721
+          ],
+          "proposed_ids": [
+            944,
+            41401,
+            65,
+            15891,
+            5677,
+            13,
+            775
+          ],
+          "native_proposed_ids": [
+            944,
+            41401,
+            65,
+            15891,
+            5677
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 898,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999999403953552,
+            0.9999896883964539,
+            0.9999991059303284,
+            0.9999859929084778,
+            0.9847307801246643
+          ],
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            111671
+          ],
+          "native_proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            111671
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 904,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9876762628555298,
+            0.9911322593688965,
+            0.9982795119285583,
+            0.9985060691833496,
+            0.997600793838501
+          ],
+          "proposed_ids": [
+            633,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "native_proposed_ids": [
+            633,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 910,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999192357063293,
+            0.9964406490325928,
+            0.99850994348526,
+            0.9991690516471863,
+            0.9996920228004456
+          ],
+          "proposed_ids": [
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ],
+          "native_proposed_ids": [
+            775,
+            469,
+            1178,
+            36672,
+            61327
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 918,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9988147020339966,
+            0.9956026673316956,
+            0.9636906981468201,
+            0.9985285997390747,
+            0.9934863448143005
+          ],
+          "proposed_ids": [
+            3682,
+            1149,
+            1760,
+            9952,
+            682
+          ],
+          "native_proposed_ids": [
+            3682,
+            1149,
+            1760,
+            9952,
+            682
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 924,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9560911655426025,
+            0.9756245613098145,
+            0.9989587664604187,
+            0.9905855059623718,
+            0.9694842100143433
+          ],
+          "proposed_ids": [
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852,
+            27472
+          ],
+          "native_proposed_ids": [
+            528,
+            10151,
+            13,
+            528,
+            855
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 930,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999954104423523,
+            0.9998942613601685,
+            0.9393275380134583,
+            0.9996428489685059,
+            0.9969440698623657
+          ],
+          "proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "native_proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 936,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999974966049194,
+            0.9999418258666992,
+            0.999987006187439,
+            0.999682605266571,
+            0.9999423623085022
+          ],
+          "proposed_ids": [
+            775,
+            64285,
+            3682,
+            1149,
+            10108
+          ],
+          "native_proposed_ids": [
+            775,
+            64285,
+            3682,
+            1149,
+            10108
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 942,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999998807907104,
+            0.9999997019767761,
+            0.9999940395355225,
+            0.9999905228614807,
+            0.9999883770942688
+          ],
+          "proposed_ids": [
+            8308,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "native_proposed_ids": [
+            8308,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 948,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9877100586891174,
+            0.8340838551521301,
+            0.922258734703064,
+            0.9555591940879822,
+            0.9822721481323242
+          ],
+          "proposed_ids": [
+            6072,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "native_proposed_ids": [
+            6072,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 954,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9999918341636658,
+            0.9411413073539734,
+            0.9996961951255798,
+            0.9989911913871765,
+            0.9630208015441895
+          ],
+          "proposed_ids": [
+            15891,
+            5677,
+            13,
+            775,
+            1178,
+            36672,
+            61327
+          ],
+          "native_proposed_ids": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ],
+          "teacher_matched_prefix": 7,
+          "committed_tokens": 8
+        },
+        {
+          "position": 962,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999933838844299,
+            0.7781491279602051,
+            0.9455451369285583,
+            0.6993013620376587,
+            0.7732236385345459
+          ],
+          "proposed_ids": [
+            582,
+            24358,
+            65,
+            28818,
+            1760
+          ],
+          "native_proposed_ids": [
+            582,
+            24358,
+            65,
+            28818,
+            1760
+          ],
+          "teacher_matched_prefix": 2,
+          "committed_tokens": 3
+        },
+        {
+          "position": 965,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9976044297218323,
+            0.999931812286377,
+            0.9994494915008545,
+            0.9836989641189575,
+            0.9942117929458618
+          ],
+          "proposed_ids": [
+            4731,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "native_proposed_ids": [
+            4731,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 971,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9049609303474426,
+            0.963951826095581,
+            0.9943218231201172,
+            0.9966171979904175,
+            0.9986606240272522
+          ],
+          "proposed_ids": [
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            3548
+          ],
+          "native_proposed_ids": [
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "teacher_matched_prefix": 6,
+          "committed_tokens": 7
+        },
+        {
+          "position": 978,
+          "effective_draft_length": 5,
+          "confidence": [
+            1.0,
+            0.9260985851287842,
+            0.9970648288726807,
+            0.9987115263938904,
+            0.9871909618377686
+          ],
+          "proposed_ids": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "native_proposed_ids": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 984,
+          "effective_draft_length": 7,
+          "confidence": [
+            0.9981595277786255,
+            0.9950475096702576,
+            0.9985804557800293,
+            0.9962331056594849,
+            0.9942194223403931
+          ],
+          "proposed_ids": [
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852,
+            27472
+          ],
+          "native_proposed_ids": [
+            528,
+            10151,
+            13,
+            528,
+            855
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 990,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999994039535522,
+            0.9999913573265076,
+            0.9999191164970398,
+            0.9999801516532898,
+            0.999850869178772
+          ],
+          "proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "native_proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 996,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999875426292419,
+            0.999885082244873,
+            0.9999474883079529,
+            0.9992082118988037,
+            0.994472324848175
+          ],
+          "proposed_ids": [
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ],
+          "native_proposed_ids": [
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 1002,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999998807907104,
+            0.9999997615814209,
+            0.999997079372406,
+            0.9999932050704956,
+            0.9999982714653015
+          ],
+          "proposed_ids": [
+            578,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "native_proposed_ids": [
+            578,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 1008,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.8242095112800598,
+            0.5221255421638489,
+            0.7716007828712463,
+            0.7238229513168335,
+            0.7425992488861084
+          ],
+          "proposed_ids": [
+            15011,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "native_proposed_ids": [
+            15011,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 2
+        },
+        {
+          "position": 1010,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9658432602882385,
+            0.7735797166824341,
+            0.911954939365387,
+            0.843670129776001,
+            0.8334340453147888
+          ],
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "native_proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 1016,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.9999999403953552,
+            0.9999963641166687,
+            0.9999995827674866,
+            0.999967098236084,
+            0.9953727126121521
+          ],
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ],
+          "native_proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ],
+          "teacher_matched_prefix": 5,
+          "committed_tokens": 6
+        },
+        {
+          "position": 1022,
+          "effective_draft_length": 5,
+          "confidence": [
+            0.999997615814209,
+            0.9799311757087708,
+            0.9971365928649902,
+            0.993662416934967,
+            0.9654597043991089
+          ],
+          "proposed_ids": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203
+          ],
+          "native_proposed_ids": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203
+          ],
+          "teacher_matched_prefix": 1,
+          "committed_tokens": 1
+        }
+      ],
+      "mlx_peak_bytes": 21299586448,
+      "host_memory": {
+        "sample_start_monotonic_ns": 197419783964875,
+        "sample_end_monotonic_ns": 197419787300583,
+        "process": {
+          "peak_maxrss_bytes": 18080333824,
+          "resident_bytes": 3706601472,
+          "phys_footprint_bytes": 14983450032,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 92671819776,
+          "wired_bytes": 10732060672,
+          "active_bytes": 10436984832,
+          "inactive_bytes": 2664300544,
+          "speculative_bytes": 15693266944,
+          "anonymous_bytes": 10917167104,
+          "file_backed_bytes": 17877385216,
+          "compressor_bytes": 2626273280,
+          "compressed_bytes": 8945090560,
+          "used_bytes": 26459619328,
+          "non_file_used_bytes": 24275501056,
+          "swapins_pages": 4826517,
+          "swapouts_pages": 7667614,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "heldout_cycles_starting_after_split": 101
+    }
+  ],
+  "draft_pruning": {
+    "one_band": {
+      "selected_experts_by_stage": [
+        [
+          3,
+          4,
+          5,
+          6,
+          8,
+          11,
+          14,
+          15,
+          17,
+          19,
+          24,
+          27,
+          33,
+          34,
+          36,
+          38,
+          43,
+          46,
+          47,
+          48,
+          53,
+          54,
+          60,
+          61,
+          63,
+          65,
+          66,
+          70,
+          72,
+          74,
+          76,
+          78,
+          79,
+          85,
+          88,
+          90,
+          92,
+          95,
+          97,
+          100,
+          101,
+          105,
+          106,
+          108,
+          109,
+          110,
+          115,
+          117,
+          118,
+          123,
+          124,
+          126
+        ],
+        [
+          1,
+          7,
+          11,
+          19,
+          20,
+          21,
+          23,
+          24,
+          25,
+          26,
+          27,
+          30,
+          37,
+          39,
+          41,
+          45,
+          47,
+          49,
+          53,
+          56,
+          58,
+          61,
+          62,
+          63,
+          64,
+          66,
+          68,
+          77,
+          78,
+          79,
+          82,
+          89,
+          90,
+          101,
+          102,
+          109,
+          110,
+          111,
+          113,
+          114,
+          115,
+          118,
+          121,
+          122,
+          123,
+          125
+        ],
+        [
+          6,
+          9,
+          13,
+          14,
+          17,
+          19,
+          21,
+          27,
+          49,
+          51,
+          53,
+          58,
+          59,
+          78,
+          81,
+          83,
+          84,
+          88,
+          93,
+          97,
+          98,
+          102,
+          103,
+          110,
+          120,
+          127
+        ]
+      ],
+      "projected_retired_payload_bytes": 1109237760,
+      "projected_target_bands": 1,
+      "training_removed_assignments": [
+        73,
+        23,
+        14
+      ],
+      "alias_experts_by_stage": [
+        [
+          126,
+          97,
+          72,
+          3,
+          4,
+          5,
+          6,
+          118,
+          8,
+          118,
+          97,
+          11,
+          97,
+          126,
+          14,
+          15,
+          70,
+          17,
+          34,
+          19,
+          108,
+          66,
+          110,
+          85,
+          24,
+          47,
+          95,
+          27,
+          43,
+          74,
+          17,
+          47,
+          34,
+          33,
+          34,
+          47,
+          36,
+          123,
+          38,
+          43,
+          97,
+          6,
+          47,
+          43,
+          85,
+          19,
+          46,
+          47,
+          48,
+          24,
+          46,
+          43,
+          108,
+          53,
+          54,
+          105,
+          47,
+          78,
+          92,
+          36,
+          60,
+          61,
+          97,
+          63,
+          53,
+          65,
+          66,
+          33,
+          33,
+          85,
+          70,
+          43,
+          72,
+          36,
+          74,
+          118,
+          76,
+          17,
+          78,
+          79,
+          15,
+          74,
+          72,
+          54,
+          14,
+          85,
+          36,
+          43,
+          88,
+          14,
+          90,
+          34,
+          92,
+          43,
+          97,
+          95,
+          36,
+          97,
+          72,
+          66,
+          100,
+          101,
+          43,
+          97,
+          60,
+          105,
+          106,
+          118,
+          108,
+          109,
+          110,
+          65,
+          97,
+          24,
+          38,
+          115,
+          47,
+          117,
+          118,
+          70,
+          70,
+          17,
+          118,
+          123,
+          124,
+          36,
+          126,
+          97
+        ],
+        [
+          121,
+          1,
+          121,
+          121,
+          58,
+          25,
+          121,
+          7,
+          121,
+          121,
+          78,
+          11,
+          115,
+          121,
+          121,
+          121,
+          121,
+          121,
+          39,
+          19,
+          20,
+          21,
+          23,
+          23,
+          24,
+          25,
+          26,
+          27,
+          45,
+          121,
+          30,
+          49,
+          58,
+          121,
+          121,
+          58,
+          118,
+          37,
+          121,
+          39,
+          121,
+          41,
+          115,
+          101,
+          78,
+          45,
+          121,
+          47,
+          121,
+          49,
+          125,
+          121,
+          113,
+          53,
+          123,
+          58,
+          56,
+          58,
+          58,
+          121,
+          114,
+          61,
+          62,
+          63,
+          64,
+          24,
+          66,
+          121,
+          68,
+          121,
+          58,
+          121,
+          121,
+          39,
+          121,
+          23,
+          45,
+          77,
+          78,
+          79,
+          82,
+          121,
+          82,
+          121,
+          121,
+          47,
+          121,
+          121,
+          121,
+          89,
+          90,
+          121,
+          121,
+          121,
+          7,
+          62,
+          82,
+          121,
+          58,
+          121,
+          78,
+          101,
+          102,
+          30,
+          121,
+          121,
+          121,
+          121,
+          39,
+          109,
+          110,
+          111,
+          109,
+          113,
+          114,
+          115,
+          114,
+          121,
+          118,
+          121,
+          79,
+          121,
+          122,
+          123,
+          79,
+          125,
+          121,
+          79
+        ],
+        [
+          17,
+          17,
+          98,
+          17,
+          17,
+          102,
+          6,
+          17,
+          17,
+          9,
+          97,
+          102,
+          97,
+          13,
+          14,
+          81,
+          17,
+          17,
+          17,
+          19,
+          127,
+          21,
+          98,
+          17,
+          9,
+          98,
+          17,
+          27,
+          17,
+          98,
+          17,
+          17,
+          17,
+          98,
+          98,
+          81,
+          98,
+          58,
+          98,
+          81,
+          127,
+          17,
+          17,
+          81,
+          81,
+          78,
+          84,
+          9,
+          127,
+          49,
+          98,
+          51,
+          81,
+          53,
+          103,
+          17,
+          17,
+          98,
+          58,
+          59,
+          98,
+          98,
+          17,
+          17,
+          17,
+          98,
+          98,
+          127,
+          98,
+          93,
+          17,
+          98,
+          98,
+          98,
+          53,
+          58,
+          98,
+          84,
+          78,
+          103,
+          81,
+          81,
+          9,
+          83,
+          84,
+          98,
+          17,
+          9,
+          88,
+          17,
+          17,
+          49,
+          17,
+          93,
+          127,
+          98,
+          84,
+          97,
+          98,
+          98,
+          17,
+          81,
+          102,
+          103,
+          98,
+          17,
+          98,
+          98,
+          98,
+          93,
+          110,
+          102,
+          21,
+          17,
+          81,
+          17,
+          58,
+          98,
+          81,
+          13,
+          120,
+          17,
+          58,
+          98,
+          17,
+          98,
+          17,
+          127
+        ]
+      ]
+    }
+  },
+  "physically_compacted": false,
+  "target_execution": false,
+  "training_cycles": 103,
+  "heldout_start_position": 507,
+  "reused_control": {
+    "path": "/private/tmp/dsv41-draft-surrogates-20260918/v2/head-screen.json",
+    "sha256": "5cc0b0c0ab07ba07918e78f27d33a68de36a041143fbc4b6ba662116abac23e9",
+    "mode": "hybrid_m8",
+    "cycles": 198,
+    "verify_rows": 1242,
+    "unchanged_runtime_and_full_physical_draft_bank": true
+  },
+  "complete": true
+}

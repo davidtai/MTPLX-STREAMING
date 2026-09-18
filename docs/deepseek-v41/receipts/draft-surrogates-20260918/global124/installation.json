@@ -1,0 +1,58 @@
+{
+  "source_commit": "19ea3ac2f888edf5035e3a43bc314bea64f3cb6f",
+  "scope": "One head-only globally ranked124-expert draft bank, trained on first103 native cycles. Reuse the completed same-source hybrid control. Target states score proposals only; no target execution, physical compaction, or TPS claim.",
+  "static_incremental_bound_bytes": 52613349376,
+  "bound_components": {
+    "active_bytes": 44023414784,
+    "cache_bytes": 4294967296,
+    "host_bytes": 4294967296,
+    "lookup_host_bytes_inside_host_reserve": 16777216,
+    "router_similarity_host_bytes_inside_host_reserve": 33554432
+  },
+  "native_draft_ast_matches_prior_except_unused_detach_method": true,
+  "prior_receipt_sha256": "03629c6090c3b2052c6f676dcc7cc787b7d0a8b7aec9707f134e0be0674bf6dc",
+  "lookup_config": {
+    "minimum_context": 2,
+    "extra_tokens": 2,
+    "selection": "earliest_longest_context"
+  },
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "strict_allocator": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "runtime_source_sha256": {
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+  },
+  "helper_sha256": {
+    "head_screen.py": "eecb35dd13f1bc93efee0e1a45ed50a7016056588b4fd0ba5ceebe98059a9be4",
+    "lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b",
+    "pruning.py": "9e61b88289d0a8b190c35a56704da627aae171cc7c6b669b28ea86273fe7a4a0",
+    "run_head.py": "c9fb044ee161d0fc49b243270351df07ab7b9c4b305117be55c4a634bcb1022f",
+    "stage.py": "d2382489add0dfa376c6c0d719840e30f095ea3b665ac2e7158329506f0b4b52",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32"
+  },
+  "training_cycles": 103,
+  "training_route_sha256": "6a90006c9c4829dac2a548298c1d237bfd1beb793c0bc6eaf99315fad8c9c3dd",
+  "compact_inventory_sha256": "8fc3afceedc6099b347bb70a8d951d8566a67c09ed737fb8ad0760d1f4d443de",
+  "prior_head_script_sha256": "7e1c8eb96aae985200618298f2c6891eb03b85daca62c2cb0c66b5ac35d4fae4",
+  "prior_head_result_sha256": "83b84e85fa6adebeb7cfd0500c8f1cd5131f7d7daed93c66bb1cdb7da61b664b",
+  "control_commit_lengths_sha256": "1bdc9433dcdffceaa6cb5b23559d5ad0f0754335740882e02f941630bc42bcc9",
+  "selection_sha256": "c3db3f761bfa8976a104c35c6e5e2513866befdc5fd682f791cf9642541282fa",
+  "selection_rule": "Global assignment frequency from cycles [0,103), ascending stage/expert ID tie; retain124 total and assert52/46/26 geometry. Removed experts alias nearest retained router vector; target acceptance stays native.",
+  "physically_compacted": false,
+  "reused_control": {
+    "path": "/private/tmp/dsv41-draft-surrogates-20260918/v2/head-screen.json",
+    "sha256": "5cc0b0c0ab07ba07918e78f27d33a68de36a041143fbc4b6ba662116abac23e9",
+    "mode": "hybrid_m8",
+    "cycles": 198,
+    "verify_rows": 1242,
+    "unchanged_runtime_and_full_physical_draft_bank": true
+  }
+}

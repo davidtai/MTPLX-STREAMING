@@ -1,0 +1,187 @@
+{
+  "scope": "16K/1024 native target D5 plus causal lookup; true144-expert draft bank with fixed router-nearest aliases;84->111 packed slots under110GB. Target arithmetic unchanged; draft quality screen198 calls but full parity and throughput remain unmeasured.",
+  "source_commit": "19ea3ac2f888edf5035e3a43bc314bea64f3cb6f",
+  "base_wrapper_sha256": "0c644e433d9735fcaeb56b6ec7995b02d380de870b7a966c80d4c193b0829e43",
+  "helper_sha256": {
+    "run_full.py": "05690f7c566750820b2d18d5648d86ea37ce99e2ca158e8065231f7cbd725489",
+    "packed_admission.py": "8db1be3149aa5f04e5dbcde72ba682797f7c65729b3f0f933ee127bd99d73b95",
+    "packed_phase.py": "0b3740cb492bdb7a7168b5e92553332beae00965e48cfe43f0024e9827f39c1e",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "storage-probe.json": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4",
+    "artifact/manifest.json": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "owned_projection.py": "df9e42df6dda252bb390756519d145fc3f2a614ca1903ab1437cfd7ca79c2396",
+    "projection_install.py": "bfd4b53aa0991733ec69fd6d35d28ac9c733ed620219760b87454c14e7d731c2",
+    "tail_prefill.py": "bfa8f44d993987dbfc46181c1d377bafef08ae2909e1079d58a00a1a8d8cefde",
+    "tail_prefill_body.py": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2",
+    "bounded_host.py": "f382e2c8d8e90e3107c0d47c9a8cd91573cecea0203c560e0181c18de94743ee",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "file_embedding.py": "cbd7b68c552c1e19066a4a94410ca1f51d18880a047319d8306245f132a0c9fb",
+    "embedding_install.py": "d0afcc51454cdf11d0f431a1abc1ff9587a55659d1750c28bd640f9f4c17fa31",
+    "embedding-probe.json": "501ac77bc454a917655e40f96a67d3d16550aa955dda8630a07b3c1527989846",
+    "lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b",
+    "hybrid_install.py": "1105b2a1e650fa2646faf0b0efcfdbd6145e3539b9b0dfbfcb28f78d1f7595be"
+  },
+  "packed_scales_bytes": 3086136060,
+  "startup_cache_cleanup": "export source pages were reclaimed after export; packed owner reads disable read-ahead and bypass file cache",
+  "note": "source record format remains native; decode physically retains/reads weights only and prices packed scale owners separately",
+  "cleanup": "Reclaim verified source and packed artifact clean file cache in the existing guarded finally, on success or failure, before Qwen restoration.",
+  "prefill_bound": "Previously measured cap84 prefill; exact native allocation envelope and all original KV/cache/compile margins retained.",
+  "native_admission_sha256": "3db2707eb1f6d78caef3ee8a0ed85343626a44259b68bb944cc63606e8f1f454",
+  "reporting_update": "b43f136cb corrects current slot/transient storage metadata; measured generation arithmetic unchanged",
+  "physical_ceiling_bytes": 110000000000,
+  "budget_update": "Use the user-authorized 110 decimal GB ceiling; retain all priced host, cache, KV, padding, compiler and wired allowances.",
+  "plane_overlap": {
+    "lane_sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "integration_probe": "/tmp/dsv41-plane-overlap-20260917/integration-probe-v2.json",
+    "integration_probe_sha256": "f1d91f1700f97006b6433b27ae1b073d39197adb0a079a4aadab1c578a65b292",
+    "incremental_live_allowance_bytes": 67108864,
+    "max_verify_rows": 8,
+    "maximum_assignments": 48,
+    "slot_ready_publication": "after all component writers finish",
+    "install_phase": "quiescent post-prefill only",
+    "cleanup": "clear bound runners after GPU/slot drain and before freeing packed scale owners"
+  },
+  "projection_ownership": {
+    "helper_sha256": "df9e42df6dda252bb390756519d145fc3f2a614ca1903ab1437cfd7ca79c2396",
+    "operator_receipt": "docs/deepseek-v41/receipts/woa-owner-20260917/operator/probe.json",
+    "operator_receipt_sha256": "157d5759fc84dd1d4a7423a6ea597ca746e30f54d3e4ef4913c8f897f1ae4e26",
+    "source_audit": "docs/deepseek-v41/receipts/woa-owner-20260917/operator/source-audit.json",
+    "source_audit_sha256": "86efbb279d9bb980581d9565fe0dd11142d7b240fd291d2a3c7dd82b89ce4292",
+    "source_packed_bytes": 1384120320,
+    "cold_source_overlap_bytes": 34603008,
+    "steady_credit_bytes": 1349517312,
+    "prefill_and_transition_credit_bytes": 0,
+    "extra_host_bytes": 16777216,
+    "capacity_search_ceiling": 110,
+    "capacity_geometry": "Page-aligned5898240-byte components; existing concatenate, pointer/row-index and int32 route arithmetic unchanged. Maximum110 persistent rows plus48 shared transients; every selected capacity still satisfies the original active/copy/seed/wired inequalities.",
+    "native_seed_control_sha256": "b071d2a4a812f1884f1c7bb637d8067b5e2ca8d7854f7815041c50151a43f829",
+    "native_seed_control_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.jsonl",
+    "seed_credit_bytes": 0,
+    "installation_phase": "After native expert-bank growth and before MTP seeding; the new first-use route cannot engage during prefill."
+  },
+  "tail_prefill": {
+    "retained_rows": 2048,
+    "prompt_tokens": 16384,
+    "absolute_seed_start": 14336,
+    "installer_sha256": "bfa8f44d993987dbfc46181c1d377bafef08ae2909e1079d58a00a1a8d8cefde",
+    "body_sha256": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2",
+    "seed_operator_receipt": "docs/deepseek-v41/receipts/tail-seed-20260917/tail2048/sha256.json",
+    "seed_operator_receipt_sha256": "83d45d45f3a8d5b34b4718039a1d7b7f2fde0968d9447353c22a8676f81e8adf",
+    "capture_receipt": "docs/deepseek-v41/receipts/tail-seed-20260917/capture-check/capture-check.json",
+    "capture_receipt_sha256": "c70d3d44aa565c468b0e6dc32213c06b34a56d86afccd0247cc9c6262b2dbdba",
+    "host_metadata_allowance_bytes": 16777216,
+    "admission_discount_bytes": 0,
+    "scope": "Native KV16 only; no Q8 partial seeding; seed timing saving is not decode TPS evidence."
+  },
+  "memory_composition": {
+    "native_owner_receipt": "/tmp/dsv41-110-stage/full-woa-owner-20260917-v1.jsonl",
+    "tail_receipt": "/tmp/dsv41-110-stage/full-tail2048-20260917-v2.jsonl",
+    "tail_growth_credit_bytes": 880803840,
+    "projection_growth_credit_bytes": 0,
+    "tail_steady_credit_bytes": 0,
+    "engram_bytes_per_bank": 67108864,
+    "python_capacity_reserve_bytes": 1338109952,
+    "extra_helper_host_bytes": 33554432,
+    "scope": "Original prefill bound; phase-specific full-run ownership deltas; no double counting of tail and projection credits.",
+    "native_owner_sha256": "a273265b7f932616d81268bc53852dc71e6913aa5218531de42835f00b2ead3c",
+    "tail_sha256": "143bd89b75ce5de2ea0ec14a6860fb208e7eb148a91ada333725aca3a0ed71aa"
+  },
+  "cache_budget_candidate": {
+    "prefill_allocator_cache_limit_bytes": 1073741824,
+    "growth_decode_allocator_cache_limit_bytes": 268435456,
+    "decode_cache_overshoot_allowance_bytes": 0,
+    "overshoot_credit_bytes": 2258155644,
+    "engram_bytes_per_bank": 67108864,
+    "python_capacity_reserve_bytes": 1338109952,
+    "host_with_helper_bytes": 1371664384,
+    "original_host_with_helper_bytes": 1578202112,
+    "slot_capacity_ceiling": 110,
+    "operator": "/tmp/dsv41-cache256-attention-20260918/probe.json",
+    "operator_sha256": "aea4d75614cf51c423dad7818108dcb97b26a2811d1c801ed16b9cfa0fc674dd",
+    "scope": "One complete native KV16 D5/M6 strict-cache allocator candidate. Exact native arithmetic and all active/copy/seed/prefill/KV/wired reserves retained; only the inactive-cache overshoot reserve is removed after loaded-library attestation."
+  },
+  "strict_allocator": {
+    "identity": {
+      "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+      "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    },
+    "source_archive_sha256": "bf892386ccac1d249acc9da21574fd7b95a995f4c58b03310105fe05f077b175",
+    "cache_invariant": "free and set_cache_limit hold the existing allocator mutex and evict before publishing an inactive-cache total above the configured limit. Oversized freed buffers are released directly.",
+    "decode_cache_limit_bytes": 268435456,
+    "overshoot_allowance_removed_bytes": 2258155644,
+    "capacity_search_ceiling": 111,
+    "capacity_geometry": "Page-aligned5898240B components,111 persistent rows plus48 shared transients; per-component654704640B fits prior signed32-bit offsets. Existing native M<=8 route/kernel geometry unchanged. All copy/seed/steady/wired inequalities still apply.",
+    "operators": {
+      "attention": {
+        "path": "/tmp/dsv41-strict-cache-20260918/attention-screen/summary.json",
+        "sha256": "8f297e46df154c1bb549b57064e7372b661786ee4f1b0845b9e2dc1cf0f8a06d",
+        "exact_field": "all_cross_binary_outputs_and_states_exact"
+      },
+      "expert": {
+        "path": "/tmp/dsv41-strict-cache-20260918/expert-screen/summary.json",
+        "sha256": "d32623b99b1011b7665a3d8b241183b656abc95fde92b15cbb8bd18e2ba03b4e",
+        "exact_field": "all206_cross_binary_reads_and_outputs_exact"
+      }
+    }
+  },
+  "embedding_optimization": {
+    "source": {
+      "path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00002.safetensors",
+      "tensor": "embed.weight",
+      "shape": [
+        129280,
+        5120
+      ],
+      "tensor_header": {
+        "data_offsets": [
+          30720,
+          1323857920
+        ],
+        "dtype": "BF16",
+        "shape": [
+          129280,
+          5120
+        ]
+      },
+      "header_sha256": "99d072cb0195663c32d891041bd77081eb18674103ae9fbf9a23c6d42e406aaa",
+      "offset": 31070,
+      "nbytes": 1323827200,
+      "identity": {
+        "st_dev": 16777231,
+        "st_ino": 256799459,
+        "st_size": 1323858270,
+        "st_mtime_ns": 1789090278149856135
+      }
+    },
+    "probe_sha256": "501ac77bc454a917655e40f96a67d3d16550aa955dda8630a07b3c1527989846",
+    "arena_bytes": 16777216,
+    "host_allowance_bytes": 33554432,
+    "post_prefill_credit_bytes": 1323827200,
+    "prefill_credit_bytes": 0,
+    "source_table_sha256": "78adec772ae091c82dc7fed0d7ca6cd534751cd42cc612a7e4b71a83166e1655"
+  },
+  "hybrid_lookup": {
+    "head_screen_path": "/private/tmp/dsv41-hybrid-lookup-20260918/head-screen.json",
+    "head_screen_sha256": "83b84e85fa6adebeb7cfd0500c8f1cd5131f7d7daed93c66bb1cdb7da61b664b",
+    "maximum_proposal_depth": 7,
+    "native_head_depth": 5,
+    "maximum_verify_rows": 8,
+    "host_allowance_bytes": 16777216,
+    "target_arithmetic": "Unchanged native accept/commit and M<=8 packed target; only proposal selection differs."
+  },
+  "draft_surrogates": {
+    "head_screen_path": "/private/tmp/dsv41-draft-surrogates-20260918/v2/head-screen.json",
+    "head_screen_sha256": "5cc0b0c0ab07ba07918e78f27d33a68de36a041143fbc4b6ba662116abac23e9",
+    "config_sha256": "480886ea7597ae4d31d83667d31f4260c6d60eadaa08939cca878f2cec8a544b",
+    "artifact_receipt_path": "/private/tmp/dsv41-draft-surrogates-20260918/artifact/receipt.json",
+    "artifact_receipt_sha256": "92a9b11cc324ad594de78e7bdaf69fdcd4c37ab0f3bb810a12d5c4163514d850",
+    "retired_payload_bytes": 733224960,
+    "target_band_bytes": 707788800,
+    "minimum_decode_capacity": 111,
+    "target_verification": "unchanged native",
+    "host_metadata": "Fixed384-entry alias mapping within existing32MiB helper allowance."
+  }
+}
