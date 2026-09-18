@@ -21,6 +21,14 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Current update, 2026-09-18
 
+**Shelved at user request.** Save the Q4 workspaces and open a draft PR on
+`davidtai/MTPLX-STREAMING`, then attempt the Q2 main model separately. Task 4
+remains incomplete; the 20 TPS goal is not achieved. The workspace checkpoint
+inventory is `../deepseek-v41/checkpoints/20260918-worktrees.json`. No Q2 target
+generation or fresh Q2 output sanity check was performed in the draft-only
+screens below. Later explicit Q2 main-model authorization supersedes the
+earlier unresolved scope question.
+
 Task 4 remains open. The native D5 plus two-token causal lookup run reaches
 **13.4141517619 TPS / 76.2627423750 s**, preserving all 1,024 native IDs.
 It uses 198 target calls rather than 206, at 84->110 slots and native KV16.
@@ -75,6 +83,24 @@ reduce verified draft/target cost. See receipts packed-reader-pool-20260918,
 completed-input-feature-20260918, fused-gu-r2-20260918,
 draft-conditioned-tail-20260918, prompt-router-adapter-20260918 and
 full-hidden-router-20260918. Do not repeat their rejected arms unchanged.
+
+The user subsequently asks to apply the Vontra strategy. Two bounded
+draft-only affine2/group64 screens follow, while target-weight scope remains
+unanswered. Expert payload falls from3,440,517,120 to2,023,833,600 B, but the
+teacher trajectory takes201 rather than198 calls and warmed head execution
+is22.83% longer. A mixed dense variant saves1,760,354,304 B total but takes233
+calls; reject it. KV-building projections stay native so saved cache state
+remains valid. No target execution, default change, export or regression tests.
+
+A CPU sensitivity check reproduces all53,999 historical physical reads with
+the original frequency policy and ordered resident-hit path. The current
+transition-window policy on fixed native routes uses32,033 reads at110 slots
+and31,274 at112, a2.3694% reduction. This is not the changed Q2 trajectory or
+a complete full-model admission proof. Expert-only Q2 stays conditional; the
+current evidence does not justify a full run. Best13.4141518TPS/20TPS status
+is unchanged. Both guards16023/48370 exit0, reclaim source cache and restore
+exactQwen/warmup before release; final independent healthy/free check succeeds
+15:59:42UTC. See `../deepseek-v41/receipts/q2-draft-20260918/README.md`.
 
 ## Historical cache-budget update, 2026-09-18
 

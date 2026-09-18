@@ -513,3 +513,43 @@ Rejected:
 Open:
 - Reach 20 TPS; verify complete 256K prefill second.
 - Measure compact learned prefetch economics before considering production integration.
+
+## 2026-09-18 Q2 draft follow-up [saved]
+
+Goal: Apply the requested 2-bit strategy toward DeepSeek's 20 TPS target.
+
+Decisions:
+
+- Screen draft weights first; target-Q2 scope remains unanswered and would change outputs beyond tie breakers.
+- Keep KV-building projections native in teacher replay; requantizing them requires rebuilding the initial cache.
+- Keep expert-only Q2 conditional: 1.42 GB payload saving comes with extra verification calls and slower head execution.
+
+Rejected:
+
+- Broader query/output/shared-FFN Q2: 233 calls versus 198 control.
+- Treating capacity-proxy traffic reduction as full-model throughput evidence.
+
+Open:
+
+- Reach 20 TPS; target quantization scope remains pending.
+- Measure compact learned prediction overlap; complete 256K prefill remains secondary.
+
+## 2026-09-18 Q4 shelved; Q2 next [saved]
+
+Goal: Preserve Q4 work, publish its checkpoint PR, then attempt the Q2 main model.
+
+Decisions:
+
+- Shelve Q4 optimization and preserve every DeepSeek V4.1 worktree, including unfinished worker changes, without resetting their indexes.
+- Open a draft PR on davidtai/MTPLX-STREAMING because the 20 TPS and complete 256K requirements remain unfinished.
+- Test Q2 target output separately; draft-only acceptance checks cannot establish main-model quality.
+
+Rejected:
+
+- Describing Q2 draft screens as a Q2 main-model benchmark.
+- Deleting worker workspaces or rewriting their history during checkpointing.
+
+Open:
+
+- Attempt Q2 main-model generation and inspect Python output.
+- Reach 20 TPS; verify complete 256K prefill second.

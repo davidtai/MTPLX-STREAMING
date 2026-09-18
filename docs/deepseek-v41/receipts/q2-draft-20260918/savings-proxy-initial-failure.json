@@ -1,0 +1,7 @@
+{
+  "returncode": 1,
+  "script_sha256": "61f66a3bb9198c6c12a6425c832c21de003bec39bdc30072fca21478782cdb4e",
+  "error": "original trace census differs: 50412",
+  "expected_original_reads": 53999,
+  "cause": "Initializer was forcibly changed from captured frequency policy to transition-window, so the supposed identity replay was a different policy. Retain captured frequency for the73-slot identity gate; evaluate110/112/113 separately with the current transition-window policy."
+}

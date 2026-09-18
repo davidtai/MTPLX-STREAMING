@@ -27,3 +27,17 @@ saving memory; this is an inference, not a tested optimization. Draft
 acceptance, block verification, kernel cost and complete memory accounting
 would determine whether it helps. No artifact or runtime substitution is
 authorized merely by this assessment request.
+
+The user subsequently asked to use the strategy. Bounded draft-only Q2
+experiments are recorded in
+[the Q2 draft receipt](receipts/q2-draft-20260918/README.md). Target-Q2 scope
+remains unanswered. The compact experts save1.42 GB of payload but increase
+head execution time and verification calls; extending Q2 to selected dense
+draft matrices further harms acceptance. These are not full-model results.
+
+The user then explicitly requested shelving Q4, preserving the workspaces and
+opening a PR on MTPLX-STREAMING, followed by work on the Q2 main model. This
+supersedes the earlier unresolved scope question. No Q2 target was loaded or
+generated fresh output before that checkpoint. The earlier local Q2 quality
+failure in `W9_REPORT.md` must be compared with the linked recipe, and fresh
+generated text must be checked before accepting a Q2 performance result.

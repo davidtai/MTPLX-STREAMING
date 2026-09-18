@@ -1,0 +1,7 @@
+{
+  "returncode": 1,
+  "script_sha256": "64d9770c3c565a7d2a87864b3e21eb9c6c3c244f644c95cc24d45e5a3aaff298",
+  "error": "original trace census differs: 54004",
+  "expected_original_reads": 53999,
+  "cause": "Native runtime probes try_plan_all_hits before plan; its ordered hit touches affect recency. The first helper omitted that established path. Corrected to the existing memory-budget-110/replay_route_policies.py sequence."
+}

@@ -1,7 +1,9 @@
 # Current Goal
 
-DeepSeek V4.1: accurate memory reporting and runner behavior, then 20 decode TPS
-on the exact 16,384-input / 1,024-output Python workload under 110 decimal GB.
+Q4 optimization is shelved at the user's request on 2026-09-18. Preserve all
+DeepSeek V4.1 workspaces and open a draft PR on davidtai/MTPLX-STREAMING, then
+attempt the Q2 main model separately. The eventual target remains 20 decode TPS
+on 16,384 input / 1,024 output Python tokens under 110 decimal GB.
 Best single full result: **13.4141517619 TPS / 76.2627423750 s; 20 TPS unmet.**
 All 1,024 native IDs match; 1,023 timed steps, 198 target calls, 84->110 slots.
 The result is not a matched/repeated speedup claim. Fixed Q8 and complete 256K
@@ -27,16 +29,17 @@ prefill verification remain secondary; the full Q8 candidate is 10.7541904 TPS.
   repeated hot-path metadata checks, environment reads or engagement counters.
 - Preserve Claude W126/W127/W128 worktrees. New fixed Q8 is separate from the
   old disabled bounded-KV lane. A 256K allocation is not a verified 256K prefill.
-- The Vontra link is an assessment request, not a target-weight substitution.
-  A separate 2-bit draft may be explored while retaining the original verifier.
+- User explicitly requests Q2 main-model work after the Q4 checkpoint PR.
+  Draft-only Q2 screens do not establish Q2 target output quality or throughput.
 
 # Plan Status
 
-Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 stays open.
+Shelved docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 is incomplete.
 Memory/reporting corrections and automatic shutdown reclamation are retained.
 Current stage adds diagnostic receipts only; production defaults are unchanged.
-Detailed earlier measurements and rejected families remain in that plan and
-its linked receipts; git history retains the superseded long state snapshot.
+Workspace inventory: docs/deepseek-v41/checkpoints/20260918-worktrees.json.
+All 140 worktrees and seven dirty snapshots are preserved under checkpoint refs;
+original indexes and working files remain intact. Ignored artifacts stay in place.
 
 # Evidence
 
@@ -47,7 +50,7 @@ its linked receipts; git history retains the superseded long state snapshot.
   bound109,631,928,540 B; machine peak109,238,927,360 B. Expert reads31,961
   records /565,540,945,920 B. Output SHA256:
   0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
-- Latest screens measured source61b6899f27fee89f63bf7eed9f1c8aa77e73a53a.
+- Earlier screens measured source61b6899f27fee89f63bf7eed9f1c8aa77e73a53a.
   Reader pool reduction and R2 GU fusion fail bounded performance selection.
   Completed-layer mean improves router recall only slightly with no early lead.
   Receipts: packed-reader-pool-20260918, fused-gu-r2-20260918,
@@ -68,28 +71,33 @@ its linked receipts; git history retains the superseded long state snapshot.
   Reject this variant; no full run/tests. Receipt: full-hidden-router-20260918.
   Static CPU bound1 GiB; sampled process333,365,968 B, machine12,367,265,792 B,
   six samples, zero compressor growth. Endpoint footprint333,431,504 B.
-- Final guard56562 is terminal exit0, released13:06:31UTC on2026-09-18.
-  Independent exact Qwen/healthy/idle/warmed/free-lock check13:06:45UTC passes.
-  No owned child/queued window remains. Live state must be checked before use.
-- Vontra review: docs/deepseek-v41/vontra-2bit-assessment-20260918.md. HF head
-  802f1a00982705d81b79ad1c83aa0ccc0b863ebc; resident runtime exceeds110 GB,
-  serial MTP is slower in tiny tests, runner context capped128. No weights
-  downloaded/executed. Smaller draft is only a proposed independent experiment.
+- Q2 draft screens at source4f3af25aeed6a37c7297db50d8987f214cc2ee37 are in
+  receipts/q2-draft-20260918. Affine2/64 compact experts save1,416,683,520 B
+  payload but need201 versus198 calls and22.83% longer warmed head execution.
+  Adding selected dense matrices saves1,760,354,304 B total but needs233 calls;
+  reject that variant. Expert-only remains conditional; no full run or tests.
+  Keep KV-building projections native: changing them invalidates saved KV.
+- Capacity sensitivity exactly replays historical53,999 reads before comparing
+  current110/112-slot policy on fixed native routes:2.3694% less traffic. It
+  does not predict Q2 routes, current full performance or complete admission.
+- Both49GiB-bound screens exit0, reclaim15,342,174,208 source-cache bytes each.
+  Final guard48370 releases15:58:15UTC; exactQwen/healthy/idle/warmed/free-lock
+  check15:59:42UTC passes. No owned child/queued window remains. Check live state.
 
 # Open Issues and Next Work
 
-- Need25.1127 s less decode time to reach20 TPS. Establish compact learned
-  prefetch economics under finite lead time, contention and full memory cost;
-  previous uncorrected three-layer prefetch was flat/slower. Quality is not TPS.
+- Q4 needs 25.1127 s less decode time to reach 20 TPS and is now shelved.
+  Start Q2 main-model work in a separate worktree after publishing the PR.
+  The old affine Q2 target failed output quality (W9_REPORT.md); compare the
+  linked Vontra recipe with that evidence before building or downloading it.
+  No fresh Q2 target generation or output sanity check has run in this stage.
 - Preserve arithmetic/layout/ownership while reducing expert I/O or verified
   target work. Do not repeat rejected cache-policy, fanout8, GU-gap reads,
   HC, D7/D9/D13, prefix1+5, alignment or unchanged small-kernel candidates.
 - Conditional80/40/24 draft saves733,224,960 B but111-slot full admission
   refused at11,137,220,608 B background. Do not retry without a fitting bound.
-- Full-hidden trace: .benchmark-artifacts/deepseek-v41/route-traces-w35.
-  Exact scores: .benchmark-artifacts/deepseek-v41/router-feature-20260918.
-  Exact capture has no full hidden inputs; W35 uses a different prompt/AR rows.
-  Teacher replay: /tmp/dsv41-depth-replay-20260917; do not recapture unchanged.
+- Traces remain in .benchmark-artifacts/deepseek-v41; teacher replay remains in
+  /tmp/dsv41-depth-replay-20260917. Preserve them for resuming the saved Q4 work.
 - Strict library: /private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib.
   SHA25632f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9.
   Production packages unchanged. Refresh live helper source pins after commits;
