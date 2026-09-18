@@ -1,0 +1,19 @@
+{
+  "source_commit": "dcbec19dc7d1949eddbb8cf1fcf07a1097f92aba",
+  "full_output_exact": true,
+  "n_generated": 1024,
+  "cycles": 206,
+  "decode_tps": 12.428996138712927,
+  "decode_wall_s": 82.30753220798215,
+  "prefill_slots": 84,
+  "decode_slots": 101,
+  "prefill_peak_saving_bytes": 591643308,
+  "prefill_boundary_active_saving_bytes": 1536180224,
+  "slot_normalization_bytes": 707788800,
+  "normalized_end_active_difference_bytes": 0,
+  "normalized_decode_peak_saving_bytes": 89924,
+  "candidate_allocator_peak_bytes": 93336409632,
+  "candidate_process_peak_bytes": 95127698216,
+  "candidate_machine_peak_bytes": 106151673856,
+  "scope": "Prefill memory improvement with exact full output. Not a measured throughput win; one fewer decode slot and a different live baseline. After exact slot-byte normalization, final active storage is identical and overall peak saving is negligible. Keep old steady admission."
+}

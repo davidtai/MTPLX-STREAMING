@@ -1,0 +1,5371 @@
+{
+  "format": "deepseek-v41-exact-row-scales-v1",
+  "scope": "complete target-scale inventory, CPU-only; no inference timing",
+  "source_commit": "4a5acf9d4776bbe2a6a0519a4f1fc4b8965274dc",
+  "script_sha256": "c09cd7f81f8aa58b9b0cbcafee7d34ea20c8b41219e8947d44dae51e2dadb849",
+  "codec_sha256": "8049a148ec7ae2717937276bed32145b7d7e5f943db487086b95048c4394281f",
+  "source_manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+  "source_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/experts.bin",
+  "source_bank_sha256_from_manifest": "a63aea1ad72f7ab5fee4db9ed7b996689bb9a95e02fb9687a6d953f75dc7bf19",
+  "source_bank_sha256_recomputed": false,
+  "source_verification": "all record SHA256 values verified; records cover every source byte exactly once",
+  "static_host_bound_bytes": 2147483648,
+  "static_machine_increment_bound_bytes": 21474836480,
+  "worst_case_packed_bytes": 17584803840,
+  "raw_scale_bytes": 16986931200,
+  "memory_before": {
+    "sample_start_monotonic_ns": 137777153119666,
+    "sample_end_monotonic_ns": 137777156240625,
+    "process": {
+      "peak_maxrss_bytes": 25083904,
+      "resident_bytes": 25493504,
+      "phys_footprint_bytes": 14500320,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 120524242944,
+      "wired_bytes": 3120103424,
+      "active_bytes": 4639342592,
+      "inactive_bytes": 2420064256,
+      "speculative_bytes": 2209153024,
+      "anonymous_bytes": 4337090560,
+      "file_backed_bytes": 4931469312,
+      "compressor_bytes": 1446477824,
+      "compressed_bytes": 6646628352,
+      "used_bytes": 11625988096,
+      "non_file_used_bytes": 8903671808,
+      "swapins_pages": 4808687,
+      "swapouts_pages": 7663546,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "disk_free_before_bytes": 47900028928,
+  "layers": [
+    {
+      "layer": 0,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer00-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "b8cc0b19aaeb9dee0680b1541ce87db5cf005156203a39435be27a699d12e63d",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer00-gate_proj-payload.bin",
+            "bytes": 19570340,
+            "sha256": "8550c07fcf03871920354d886a280979cfe423c2a3543e109de461b851029884",
+            "dtype": "uint32_le",
+            "shape": [
+              4892585
+            ]
+          },
+          "bases": {
+            "file": "layer00-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "b6ac2b86b4ae3206269f176f71cdbfa75af17ef32296c40c5390ee1dc58ec563",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 790957,
+            "2": 93778,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 23110820
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer00-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "92aeb83bfbd9506facbba71ae682407f40a2b0ccaa991b0b58915644fdee7ab5",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer00-up_proj-payload.bin",
+            "bytes": 19438800,
+            "sha256": "70171cdc19e9686f8b99f6b9703cd2056a2056a74a01a98835f47e2b9c3033a5",
+            "dtype": "uint32_le",
+            "shape": [
+              4859700
+            ]
+          },
+          "bases": {
+            "file": "layer00-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a1784142dfdb1b762b8ee055bfa8d58cf7c5fd7c6aa8d6df0d7296a73b6e0ea7",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 797532,
+            "2": 87204,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22979280
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer00-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "8a7d92cddfb4164011047fb4e7dae0a56d228ae29e28249f07c9a0b70cf09372",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer00-down_proj-payload.bin",
+            "bytes": 24043432,
+            "sha256": "a479b537fd31a465d8106ad785a2acc5bdcc3c87609d6c1967b326b189e7670a",
+            "dtype": "uint32_le",
+            "shape": [
+              6010858
+            ]
+          },
+          "bases": {
+            "file": "layer00-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "4bc529963ad87debc41d883a90646313e1fbd42b75bf5d53360c117478b5840f",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1909995,
+            "2": 55973,
+            "4": 112,
+            "8": 0
+          },
+          "packed_bytes": 31909288
+        }
+      },
+      "packed_bytes": 77999388
+    },
+    {
+      "layer": 1,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer01-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "7c55b420bdb7441a162f4b9eba04f8eff3aa6d181879df672c264056641ca703",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer01-gate_proj-payload.bin",
+            "bytes": 19014640,
+            "sha256": "9604e3ad614c810746652eacf55f7dacaccca3c3b843b7b7c1331b70938b86ec",
+            "dtype": "uint32_le",
+            "shape": [
+              4753660
+            ]
+          },
+          "bases": {
+            "file": "layer01-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "27344d196a44dba0d00cc1b658946db0d1d17cadaa8404c27cd5226eef69c14f",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 818750,
+            "2": 65981,
+            "4": 5,
+            "8": 0
+          },
+          "packed_bytes": 22555120
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer01-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "3a76d8d063966d59a1b3d46ea08848adc5681c1470270ccf4a561d0a3c344ab2",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer01-up_proj-payload.bin",
+            "bytes": 18947300,
+            "sha256": "96e0475aa2e3eb4d1f86fb8575aba00db40bffb61a99b855274e5aa913e96c13",
+            "dtype": "uint32_le",
+            "shape": [
+              4736825
+            ]
+          },
+          "bases": {
+            "file": "layer01-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "6a502809a485d42270ba69f28d0583a6f8c604f63a4be9df5c2ec4cac3aacf3e",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 822111,
+            "2": 62623,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 22487780
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer01-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "cbeb7b5ddd8c199e2f535da4b6449683c28ed44eb9612474b559a69cf38f10a0",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer01-down_proj-payload.bin",
+            "bytes": 24018872,
+            "sha256": "10c16c92a2321e1563f745feae7307036e582bc22bb3cb8da201a802626ad262",
+            "dtype": "uint32_le",
+            "shape": [
+              6004718
+            ]
+          },
+          "bases": {
+            "file": "layer01-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "d76475f8521592dd6df1bc679fb000dfd6002d93fc9361ead60e6e415b691cd7",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1912899,
+            "2": 53152,
+            "4": 29,
+            "8": 0
+          },
+          "packed_bytes": 31884728
+        }
+      },
+      "packed_bytes": 76927628
+    },
+    {
+      "layer": 2,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer02-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "9d2c7259e953121b4fed61337cd548e75afa3ad7e783cfa9896c9f9b748e311b",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer02-gate_proj-payload.bin",
+            "bytes": 18769240,
+            "sha256": "b9f7a585c5996032bd74c9ec20bc34b90b052084bf0e411599f191ca96486e42",
+            "dtype": "uint32_le",
+            "shape": [
+              4692310
+            ]
+          },
+          "bases": {
+            "file": "layer02-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "127a7263f5e26e1dca2c230e363e9a354af5a6a66742b906eb2e638e735dbeca",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 831014,
+            "2": 53720,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 22309720
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer02-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "f8ee92292532020485e1e6facf650ea97b365511e80895a17402433e6fcfe7f9",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer02-up_proj-payload.bin",
+            "bytes": 18680640,
+            "sha256": "5d8da93b58522c36b7e54bafd63d6462bbd2b56ea9a79abcdc08b3e88a6a4345",
+            "dtype": "uint32_le",
+            "shape": [
+              4670160
+            ]
+          },
+          "bases": {
+            "file": "layer02-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "cbbf5c20c21dc26708a834ed5da8074be33f49203ced69d0ecf57e999acb9777",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 835444,
+            "2": 49290,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 22221120
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer02-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "2b30d79999626a7b49db0803600f4f55fa9055ce3f4bcfc3cfc35003fa790f9f",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer02-down_proj-payload.bin",
+            "bytes": 23936320,
+            "sha256": "bd771317561248fa3ebd92e52d41062270bb60f6940b46c8f5d57b3e5ef15b6f",
+            "dtype": "uint32_le",
+            "shape": [
+              5984080
+            ]
+          },
+          "bases": {
+            "file": "layer02-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "d3f58982f54bfeab36f90629858be548d9735f2bf5e949a20e351eeebbae7c81",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1923172,
+            "2": 42902,
+            "4": 6,
+            "8": 0
+          },
+          "packed_bytes": 31802176
+        }
+      },
+      "packed_bytes": 76333016
+    },
+    {
+      "layer": 3,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer03-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "93bad412c97e64937678eb684862e968d87202f0c30ee59138521d6c8e6329fb",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer03-gate_proj-payload.bin",
+            "bytes": 18680900,
+            "sha256": "67cab79a056a9632551a6789e481044044b53a559afb2d332db148a535158b12",
+            "dtype": "uint32_le",
+            "shape": [
+              4670225
+            ]
+          },
+          "bases": {
+            "file": "layer03-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "98745051394d10ad91638d840ebf894297d4112dc3b132c7f1d5b14f68e4d0b8",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 835427,
+            "2": 49309,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22221380
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer03-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "ff6ee41dcd1e5f01f2d511eb4e16b5b002da61c45060804530933e46e69917fa",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer03-up_proj-payload.bin",
+            "bytes": 18624420,
+            "sha256": "0f2963b45c17f7aa11c04e3d29c20a3d8f2e18c735a10b21909c26252330743a",
+            "dtype": "uint32_le",
+            "shape": [
+              4656105
+            ]
+          },
+          "bases": {
+            "file": "layer03-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "56b152d7b557e7a8c137a013d24aa27bcc0531c1fb52b52df93257e8d2fe41c3",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 838251,
+            "2": 46485,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22164900
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer03-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "35d03d5e3a40e4a81950b58706c04ca6375adb435b0bdefaae436a503b3c5afc",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer03-down_proj-payload.bin",
+            "bytes": 23928296,
+            "sha256": "4143e16b966ab6ec72815e78cc095de751b6d01f126ad6450e19ccf8f2b381cd",
+            "dtype": "uint32_le",
+            "shape": [
+              5982074
+            ]
+          },
+          "bases": {
+            "file": "layer03-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "4a22b6ac79dcb1f4de4af4ebf97e3c27862e56f6d61afd504ad3f378eea97bfe",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1924173,
+            "2": 41902,
+            "4": 5,
+            "8": 0
+          },
+          "packed_bytes": 31794152
+        }
+      },
+      "packed_bytes": 76180432
+    },
+    {
+      "layer": 4,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer04-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "6bc798db69507d0246de024da9198e86b420fcf94faead50e27ee3d93f0728bc",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer04-gate_proj-payload.bin",
+            "bytes": 18716360,
+            "sha256": "e1a4bb151049b702ac6970c6686e52da490158f2737ff8f523187cd4bf292018",
+            "dtype": "uint32_le",
+            "shape": [
+              4679090
+            ]
+          },
+          "bases": {
+            "file": "layer04-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "c8d3b5c38c2ffa802997445a20d40a050c5e063e86a990658452841c0b2e9973",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 833654,
+            "2": 51082,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22256840
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer04-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "960817271fb13807ca00d307c96beedb308b8a11f39cdb37354477810ec6a833",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer04-up_proj-payload.bin",
+            "bytes": 18626800,
+            "sha256": "24799b74db716df05d116c5c9d6350227dedb5ca961645c4a99fcd9be3980f0e",
+            "dtype": "uint32_le",
+            "shape": [
+              4656700
+            ]
+          },
+          "bases": {
+            "file": "layer04-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "91f6cbcf7bfabcc99eb8b34c455dc9f61cd2883e2049350ad62650ed083a8687",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 838132,
+            "2": 46604,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22167280
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer04-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "0f37111f76c3e12984a4158583ad0687c7dbf0350ce5824e687b8fa779d1697a",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer04-down_proj-payload.bin",
+            "bytes": 23934264,
+            "sha256": "94a2b18d45d1ed15f6da6a387c6fb2615d64b33afdb71b1545bc0c0d15c62d12",
+            "dtype": "uint32_le",
+            "shape": [
+              5983566
+            ]
+          },
+          "bases": {
+            "file": "layer04-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "abc1b12115feb8019b0d244be48ce561ce86c0a9f227e47a2b535b67d0aa4653",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1923419,
+            "2": 42660,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 31800120
+        }
+      },
+      "packed_bytes": 76224240
+    },
+    {
+      "layer": 5,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer05-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "56e4d240ae04c5337ca270d404b667a13bffbea5ac553053331b1d64af3eba11",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer05-gate_proj-payload.bin",
+            "bytes": 18724800,
+            "sha256": "5896f4974dc62422a61266d2fa43dd37f4ae1ed3ef917d3b9e0ff0ce679c1c35",
+            "dtype": "uint32_le",
+            "shape": [
+              4681200
+            ]
+          },
+          "bases": {
+            "file": "layer05-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "885d838fecee0da7b67cc910d6e3d2eeb571ce076b8172b3a8319962591acbcc",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 833232,
+            "2": 51504,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22265280
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer05-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "b1868bf08e73b8fa7d3034bf99d102071b5bc14c4530ab37baea3fe2d5dac5ec",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer05-up_proj-payload.bin",
+            "bytes": 18622420,
+            "sha256": "8b3d8d6c8a8fa4eec5891e91c796d6c5cd1b178479196771714186d198a5e045",
+            "dtype": "uint32_le",
+            "shape": [
+              4655605
+            ]
+          },
+          "bases": {
+            "file": "layer05-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "1bfdd86a0a4faf4f2954763f2266f32a22ef011aa9ccd3eb6747bfa8811fe6ef",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 838351,
+            "2": 46385,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22162900
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer05-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "b52cf302e3507e84c8cb0a75e63d3b69e64dd5b7f3bdcffd1ce3a707bfc5d070",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer05-down_proj-payload.bin",
+            "bytes": 23941848,
+            "sha256": "61c74c21e25441d4e71e709371833441acd2113f0bf38a0205ff12602c97954a",
+            "dtype": "uint32_le",
+            "shape": [
+              5985462
+            ]
+          },
+          "bases": {
+            "file": "layer05-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "1a02050197ff13c672e0588ce5e8595bd50f301da00c3e21b386f25e38308e85",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1922471,
+            "2": 43608,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 31807704
+        }
+      },
+      "packed_bytes": 76235884
+    },
+    {
+      "layer": 6,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer06-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "9fd1d9135175f6c4c619ddbbb1d527b31647fd75f6ec8b2254789bab2d73c603",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer06-gate_proj-payload.bin",
+            "bytes": 18736600,
+            "sha256": "3f239453f4584fd6847db0621c9d9e27fa73fd5fd7d59c997abb5fdc0d0a687f",
+            "dtype": "uint32_le",
+            "shape": [
+              4684150
+            ]
+          },
+          "bases": {
+            "file": "layer06-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e0c16263bf7ae4838c6548bad6e7454542c9070fd224d1f66fa00e846e5dac2a",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 832642,
+            "2": 52094,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22277080
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer06-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "4ded16c12093a9114f204b946a06617188188d2be8e0c81b16c96e1a6810dd68",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer06-up_proj-payload.bin",
+            "bytes": 18639940,
+            "sha256": "1d2569b5eab46b7fd68c2a07fa361812f535eaf9b5f92d12c5628e77cde99059",
+            "dtype": "uint32_le",
+            "shape": [
+              4659985
+            ]
+          },
+          "bases": {
+            "file": "layer06-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "7ab2a53858fd13ce2cb925f441264b0997ce245759ef02f9db934c0d8c8b353d",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 837475,
+            "2": 47261,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22180420
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer06-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "8852e2f0ac5518aa1f9a24d3301018118d96fa699daf7790e8a1b08e63991f9f",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer06-down_proj-payload.bin",
+            "bytes": 23947888,
+            "sha256": "35e042bebde2ed6fb7160dbe232ee862d16ef48e70e5c453a7e871d29d5beb6f",
+            "dtype": "uint32_le",
+            "shape": [
+              5986972
+            ]
+          },
+          "bases": {
+            "file": "layer06-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "d97d05d77a9f05d703b19c8112dcbca0670f9cedcd0001aea31d64aac6c46b5e",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1921718,
+            "2": 44360,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 31813744
+        }
+      },
+      "packed_bytes": 76271244
+    },
+    {
+      "layer": 7,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer07-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "f30d92e032871b07854ce467011e3c3f1651efc3c924e2b72ad354d56b2e7fbf",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer07-gate_proj-payload.bin",
+            "bytes": 18727540,
+            "sha256": "c4cdb91b9859ffc50035b5c9922128bfcc94a1cd9f48c6e404db09262bb87dea",
+            "dtype": "uint32_le",
+            "shape": [
+              4681885
+            ]
+          },
+          "bases": {
+            "file": "layer07-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "7e7db376581ad6334a2027697e6660a1070cafcc868bafe19ad81d11925e92f5",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 833101,
+            "2": 51632,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 22268020
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer07-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "13979858de38403eeb05732075c299afb46f8f7d398cdad0ad8f5a1bb4d92899",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer07-up_proj-payload.bin",
+            "bytes": 18619800,
+            "sha256": "ce05629704a4c7dee20f5dc376a946c5eb37065e53798deeb8cec8e3e9b7482c",
+            "dtype": "uint32_le",
+            "shape": [
+              4654950
+            ]
+          },
+          "bases": {
+            "file": "layer07-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "44129d045de6edd4b98526d4d984c7e809068bbdf127f34d05a4de6cbb40dd38",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 838486,
+            "2": 46248,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 22160280
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer07-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "b0089702f39a5f2933ddea8e0db7f7fde749fbe016047202ac0421d35450509a",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer07-down_proj-payload.bin",
+            "bytes": 23932856,
+            "sha256": "e0c02c544cb42e8e08ead1d5604c9d680d3071466180870f58d662e54e262dd5",
+            "dtype": "uint32_le",
+            "shape": [
+              5983214
+            ]
+          },
+          "bases": {
+            "file": "layer07-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a4b140237741c8a45b40a8f3067cc0e6d97a4c03271aae6ea5ca5ece7a376c67",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1923617,
+            "2": 42451,
+            "4": 12,
+            "8": 0
+          },
+          "packed_bytes": 31798712
+        }
+      },
+      "packed_bytes": 76227012
+    },
+    {
+      "layer": 8,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer08-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "66ecd5e798d3271e7d7026be1d2973f38d141465a9fed32a0a19648a763d5a6b",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer08-gate_proj-payload.bin",
+            "bytes": 18778720,
+            "sha256": "172453624ea418b4ad271bb1bfe13589522840b657e9d0c8a4a18cc1e655445b",
+            "dtype": "uint32_le",
+            "shape": [
+              4694680
+            ]
+          },
+          "bases": {
+            "file": "layer08-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "691c037050c5b3ed92542ca749daff4983886ea0288591a2bf2ed914a5c64e3d",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 830538,
+            "2": 54197,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 22319200
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer08-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "1e325ec145bd2318be7b88bb915254c6a54e829721bac408511be7d3431c8132",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer08-up_proj-payload.bin",
+            "bytes": 18637900,
+            "sha256": "b3b72f9e94d2ea20dbcb3ddccc69fc60561e73790115b2fca9b2bbfe14f416e4",
+            "dtype": "uint32_le",
+            "shape": [
+              4659475
+            ]
+          },
+          "bases": {
+            "file": "layer08-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "1588a545484c3652c18b2e02e060cd043a973e22efe687b476cefd2efd4c7e82",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 837577,
+            "2": 47159,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22178380
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer08-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "14dbbffae0bb0635dfffdec6935486b3ed834d6b6ab61032919fa77fb504cb25",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer08-down_proj-payload.bin",
+            "bytes": 23939328,
+            "sha256": "a7194a56929d73edc94aea148c14de5d81c002694026a0fedb4292e92132caa1",
+            "dtype": "uint32_le",
+            "shape": [
+              5984832
+            ]
+          },
+          "bases": {
+            "file": "layer08-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a718c60fd691cf94ab93701988ec6fe1e9dc6f2153ae95cef539b0c5cd194c86",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1922790,
+            "2": 43287,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 31805184
+        }
+      },
+      "packed_bytes": 76302764
+    },
+    {
+      "layer": 9,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer09-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "52c898f081439fcf7506a45b33375963d589afc7c907593af9efd7ffca77c636",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer09-gate_proj-payload.bin",
+            "bytes": 18788420,
+            "sha256": "df9a3eff0b4d58c6760de9d0d8e3a79cdb2fc7c8927b69eeb56ff87c99720ef8",
+            "dtype": "uint32_le",
+            "shape": [
+              4697105
+            ]
+          },
+          "bases": {
+            "file": "layer09-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "40a01f59e0a016bd0a96899b94790fe248506e618c00b7041f9484bd54fdae6e",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 830051,
+            "2": 54685,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22328900
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer09-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "d332359f9e6c434766ec6e0ec26537056528a3b11d379dc253a0f42b62cad25a",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer09-up_proj-payload.bin",
+            "bytes": 18626040,
+            "sha256": "0ebfe53af1070b6f5a8881c06019bcd759c5021e44e0c76d8031c257d8c2912f",
+            "dtype": "uint32_le",
+            "shape": [
+              4656510
+            ]
+          },
+          "bases": {
+            "file": "layer09-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "892d150da113e4463a0a7dee07261c4104fffc70c66c00bf157f97b5a4e189fc",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 838170,
+            "2": 46566,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22166520
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer09-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "e210b9bdef4db85b7050e74c7408f8b5f734ec15145e12560feb75868a6dc16f",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer09-down_proj-payload.bin",
+            "bytes": 23944472,
+            "sha256": "d6fc6503b64ad3e002f9823cf96781ecb5a98af177bb97f26e0bfb67e2510d7f",
+            "dtype": "uint32_le",
+            "shape": [
+              5986118
+            ]
+          },
+          "bases": {
+            "file": "layer09-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "15ad8a92388a839004dc23f3035f9804c718106130b63632564d715fabe9ba4d",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1922141,
+            "2": 43939,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 31810328
+        }
+      },
+      "packed_bytes": 76305748
+    },
+    {
+      "layer": 10,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer10-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "6af07fb812a8a1fbfa28c492e5ce13aea29cafd0c42aa27939ef433a0f404abe",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer10-gate_proj-payload.bin",
+            "bytes": 18957060,
+            "sha256": "c48d9a6ee9037b197d4d3b6b673a3a23f8d214ceee542869ecbceae93cd6ab93",
+            "dtype": "uint32_le",
+            "shape": [
+              4739265
+            ]
+          },
+          "bases": {
+            "file": "layer10-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "f57def166cbb1bc77367d8590edb409b6537ece176b75c5b1e10bb0d042e836e",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 821619,
+            "2": 63117,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22497540
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer10-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "d84c0bc8b447f34b2e9640f00ff131ce07b0c401ec383443ba98808841ffff79",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer10-up_proj-payload.bin",
+            "bytes": 18710480,
+            "sha256": "d87d6c4ccda8742bc2b330beab8117e20f340400451b5320d8bdcbef6242e1f0",
+            "dtype": "uint32_le",
+            "shape": [
+              4677620
+            ]
+          },
+          "bases": {
+            "file": "layer10-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "0040f2f41c5b6e09f50fac3621b39a0895af80aa2edc4278e24fdb5c9aea81c9",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 833952,
+            "2": 50782,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 22250960
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer10-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "8a402fd5616daa142d12f00a7eabae29896134941f170286559e10f4c2d5ead0",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer10-down_proj-payload.bin",
+            "bytes": 23963908,
+            "sha256": "3bf53d7cf0243864d176a28b85905a52216283ff0920d534fe3923ddcc886b84",
+            "dtype": "uint32_le",
+            "shape": [
+              5990977
+            ]
+          },
+          "bases": {
+            "file": "layer10-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e2675ae1f3564c708a095851a8070e4720c0ee5f0cf6c1df0200d2f364102428",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 1,
+            "1": 1919711,
+            "2": 46367,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 31829764
+        }
+      },
+      "packed_bytes": 76578264
+    },
+    {
+      "layer": 11,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer11-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "4fd392af8db5d5842e759d23e00cb3d58036d222b04aae28974544f6fe3b3638",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer11-gate_proj-payload.bin",
+            "bytes": 19006780,
+            "sha256": "5be950e1123040e67af2cb7048a903be35274ddf6bf0d4d07051a0ea98d64a94",
+            "dtype": "uint32_le",
+            "shape": [
+              4751695
+            ]
+          },
+          "bases": {
+            "file": "layer11-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "2e3e46099b50bf6b2c9e358bb1a70d08d6485713df05faef2cdeb59849bd44d8",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 819133,
+            "2": 65603,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22547260
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer11-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "20024cc962dfa0d9f2ed9b40ecc5abb8026a2ff03a3dc66c460b2b0f47c3600e",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer11-up_proj-payload.bin",
+            "bytes": 18729140,
+            "sha256": "22acfb88cbf0724fba250033ee7867295c1ba17873b8d5b585a8137d2ba0b744",
+            "dtype": "uint32_le",
+            "shape": [
+              4682285
+            ]
+          },
+          "bases": {
+            "file": "layer11-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e632bdcaf93a47f03be50bd1bff5dfa25d3f56b12899d3c51592699809bf2c99",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 833015,
+            "2": 51721,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22269620
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer11-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "8465040ccc399d1f2ccd35770b1a8e317636cb2479868fbc3340b8d50a8ed382",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer11-down_proj-payload.bin",
+            "bytes": 23978136,
+            "sha256": "7ec1fc6f4578c2c193f03b2631d7589b6017907b42f6bf6159bdc61eb49b7a01",
+            "dtype": "uint32_le",
+            "shape": [
+              5994534
+            ]
+          },
+          "bases": {
+            "file": "layer11-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "5f4491947e73ff564770575f22302a48a2cc6ce682bf7649a4a8d9053dc352e1",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1917949,
+            "2": 48123,
+            "4": 8,
+            "8": 0
+          },
+          "packed_bytes": 31843992
+        }
+      },
+      "packed_bytes": 76660872
+    },
+    {
+      "layer": 12,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer12-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "760378a688698178977545b757ed79f249fb85678873b7a23459215a35da7c8f",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer12-gate_proj-payload.bin",
+            "bytes": 19275860,
+            "sha256": "e68c9565f11381bf54aebd36a4020aa0e965da1357e3a47848acf44afd575a2c",
+            "dtype": "uint32_le",
+            "shape": [
+              4818965
+            ]
+          },
+          "bases": {
+            "file": "layer12-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e9655928c36f9a388704848b3c7e4399ed7dcdecd02e48e8990623c331b4a208",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 805681,
+            "2": 79054,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 22816340
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer12-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "02a33261c94d8a17b0cca478e4f3d71284dc5fd44818eb7e26c25813bffe3606",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer12-up_proj-payload.bin",
+            "bytes": 18840760,
+            "sha256": "c140d62e72bd869db74b7c166cd5397e262c5ee19e90c63eeef495253b0aa845",
+            "dtype": "uint32_le",
+            "shape": [
+              4710190
+            ]
+          },
+          "bases": {
+            "file": "layer12-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "0cd927ee92031aef068db0d02c5e4b5b59918e647cbe0b6ad7fd154f97b1d7e6",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 827436,
+            "2": 57299,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 22381240
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer12-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "6133b7995b4d2f9414fb5f2b185a3e7362a8bb234e558def7a8e8b642b9e846c",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer12-down_proj-payload.bin",
+            "bytes": 23993244,
+            "sha256": "93987e2998732e1d58021c32664dbc36bab7bd4dff83b04b3f32d9932dc3a3a5",
+            "dtype": "uint32_le",
+            "shape": [
+              5998311
+            ]
+          },
+          "bases": {
+            "file": "layer12-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "7bca10da40d8c1b627e35b894be18070b28bcff6d1bc858e09720ec2901bff61",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 1,
+            "1": 1916052,
+            "2": 50022,
+            "4": 5,
+            "8": 0
+          },
+          "packed_bytes": 31859100
+        }
+      },
+      "packed_bytes": 77056680
+    },
+    {
+      "layer": 13,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer13-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "8b95e084297c130c9516d126041b2f629b906eb4709f8fd1e3352892fac9ccd5",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer13-gate_proj-payload.bin",
+            "bytes": 19743340,
+            "sha256": "13d4d6b26142b15986421dc98b7c9624f5fb6cc27e6297e7ba7d7c37f791464b",
+            "dtype": "uint32_le",
+            "shape": [
+              4935835
+            ]
+          },
+          "bases": {
+            "file": "layer13-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "fc36aca39b5b3b30c33f962826849be60c9f813c89949c394634aa372b6d8622",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 782327,
+            "2": 102398,
+            "4": 11,
+            "8": 0
+          },
+          "packed_bytes": 23283820
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer13-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "cda8056ad7b45a98f36c4b2584b2d97d93e11ef510139caa0d6adeb61b9f9a68",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer13-up_proj-payload.bin",
+            "bytes": 18953620,
+            "sha256": "e18c6f93e6c34b939a647e6c16bc76c39e407487b679f0ea792e7377662e7911",
+            "dtype": "uint32_le",
+            "shape": [
+              4738405
+            ]
+          },
+          "bases": {
+            "file": "layer13-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a263bd149096fe9ad15fa50ce93b63e13f421cf526a912c92f6aecb2901845a1",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 821817,
+            "2": 62906,
+            "4": 13,
+            "8": 0
+          },
+          "packed_bytes": 22494100
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer13-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "8d557fbd8d1db2c8b7339267edd50f5ec1b30783d3bb3896d73a2c6b0efe7bcf",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer13-down_proj-payload.bin",
+            "bytes": 24042128,
+            "sha256": "4dc0eda788489f08b22749ad2ea64e701689a656c7145f4fdc2210646047e021",
+            "dtype": "uint32_le",
+            "shape": [
+              6010532
+            ]
+          },
+          "bases": {
+            "file": "layer13-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "4986dcaeb779efb9a3c1293791b6e789e8daa74f4711a449591d73210daa9844",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1910376,
+            "2": 55483,
+            "4": 221,
+            "8": 0
+          },
+          "packed_bytes": 31907984
+        }
+      },
+      "packed_bytes": 77685904
+    },
+    {
+      "layer": 14,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer14-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "6a8c8371b08ca4ccd10795c36ac0f5ae03e8c5742c71d28a28b1171943bcf73e",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer14-gate_proj-payload.bin",
+            "bytes": 19670740,
+            "sha256": "7800b633cda07833a11810d00618b70ffe9ab2e199546596ee8cb694063d03c4",
+            "dtype": "uint32_le",
+            "shape": [
+              4917685
+            ]
+          },
+          "bases": {
+            "file": "layer14-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "2150ef4163b7d0e507b5c08ce1fbcdc8a0aec7f3dc7349bfcf9855e041ba9f9a",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 785971,
+            "2": 98747,
+            "4": 18,
+            "8": 0
+          },
+          "packed_bytes": 23211220
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer14-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "5c7a2cd80c0abc9f070faae70cd469fe5932c1719987bcdcb2730a60472c1b8c",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer14-up_proj-payload.bin",
+            "bytes": 18985080,
+            "sha256": "c5949c12a2ed1229ee9e7172ee327a36e15883e44912103e1c4f35966f3d708e",
+            "dtype": "uint32_le",
+            "shape": [
+              4746270
+            ]
+          },
+          "bases": {
+            "file": "layer14-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "d1611fae3c7045f1b40d2a1bcb29f9cd0d19f84844f2450efb4893bdbd468e58",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 820248,
+            "2": 64473,
+            "4": 15,
+            "8": 0
+          },
+          "packed_bytes": 22525560
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer14-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "e37b01faf5b9f7185046f04a26053bde3913bf0edcb2dccf4cb868a3a50a1781",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer14-down_proj-payload.bin",
+            "bytes": 24019584,
+            "sha256": "3e68ec16b3aeb3b0b591b2154b80a24f457e97c902050df446d86f83e925ec60",
+            "dtype": "uint32_le",
+            "shape": [
+              6004896
+            ]
+          },
+          "bases": {
+            "file": "layer14-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "225a0aa3252138dc352669ec68b7004a649b073b580d381bd12d9c486684c429",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1912864,
+            "2": 53160,
+            "4": 56,
+            "8": 0
+          },
+          "packed_bytes": 31885440
+        }
+      },
+      "packed_bytes": 77622220
+    },
+    {
+      "layer": 15,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer15-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "27f26fe8a8074f97472ac6192bea6e864d0703d3d8264d503547b176698f30d7",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer15-gate_proj-payload.bin",
+            "bytes": 19144620,
+            "sha256": "65f1f603f6d4e6a393fd400a18b03a9c91088185fb2345fe1616838425a19b3c",
+            "dtype": "uint32_le",
+            "shape": [
+              4786155
+            ]
+          },
+          "bases": {
+            "file": "layer15-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "d50c884da27f35c02b4544ccb5233379119da059d434f66e29495a867bc2b3a2",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 812281,
+            "2": 72435,
+            "4": 20,
+            "8": 0
+          },
+          "packed_bytes": 22685100
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer15-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "a64d1cc5ab9feaa045d0d82aa4563cf3baafaa52b820c685df61c373926c708a",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer15-up_proj-payload.bin",
+            "bytes": 19069660,
+            "sha256": "627b9324e8427847480440a321daf6a3c2cf72f5cde3c2da47507acfb94bcc67",
+            "dtype": "uint32_le",
+            "shape": [
+              4767415
+            ]
+          },
+          "bases": {
+            "file": "layer15-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a0898f0ef69c64f666d55d9d4ffe8859188c42cdcd6211e653e411135cd734d1",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 815999,
+            "2": 68732,
+            "4": 5,
+            "8": 0
+          },
+          "packed_bytes": 22610140
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer15-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "d470129cb6e63d4f84a05dd2cd16480912fe2cd6b76508a5d5b5ec468a84e8cf",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer15-down_proj-payload.bin",
+            "bytes": 24207032,
+            "sha256": "6d343d45daf98030c0ad6b2f569ddb6bdc00071dde3e9a213ec3f0f48880a43d",
+            "dtype": "uint32_le",
+            "shape": [
+              6051758
+            ]
+          },
+          "bases": {
+            "file": "layer15-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "0971b9801637a75f3b1544a038ec691b8467d96ab508aadeecac84be5977b718",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 30,
+            "1": 1889250,
+            "2": 76798,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 32072888
+        }
+      },
+      "packed_bytes": 77368128
+    },
+    {
+      "layer": 16,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer16-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "b65ded26ab4e332c47bafeb0ad9962e444762aaf93b7c8f104ce1c83090f0aa7",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer16-gate_proj-payload.bin",
+            "bytes": 19821740,
+            "sha256": "c82a5991efc76d2c8e0465caaae07a6b65cda78c123b5a96084aee482e90ffb0",
+            "dtype": "uint32_le",
+            "shape": [
+              4955435
+            ]
+          },
+          "bases": {
+            "file": "layer16-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "1d3bd4e8ffc1c0b5093aeb92748ff041b614eec3f289ea3c3edabf55ff805568",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 778423,
+            "2": 106294,
+            "4": 19,
+            "8": 0
+          },
+          "packed_bytes": 23362220
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer16-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "1e155480c22b482f132b150a1578aae7cb008f6946642ed3e7b2a191e47efbf5",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer16-up_proj-payload.bin",
+            "bytes": 19038680,
+            "sha256": "df6e2974df0ceafd95232eb3caec00d25bf5e21c70dace8e880b7b5fefe259aa",
+            "dtype": "uint32_le",
+            "shape": [
+              4759670
+            ]
+          },
+          "bases": {
+            "file": "layer16-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "9f72f16ba862cea1cebfe7c2f5ef13f2cfefc7c6332bb14dc97f9bdab3555018",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 817544,
+            "2": 67189,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 22579160
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer16-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "0ac282b2094f9da157599f0b55775de6c6ca58d3a342e4e94a52010cf9c5c992",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer16-down_proj-payload.bin",
+            "bytes": 24025436,
+            "sha256": "82d9bf5ce561f5e5ba66b62bbf5dbcc296154fb08b2b2d658c837f281ab83bc6",
+            "dtype": "uint32_le",
+            "shape": [
+              6006359
+            ]
+          },
+          "bases": {
+            "file": "layer16-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "809023f50f86aefa2c2fbc2147caa77d79726b8bc044ba947fb35537493bd285",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 1,
+            "1": 1912022,
+            "2": 54055,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 31891292
+        }
+      },
+      "packed_bytes": 77832672
+    },
+    {
+      "layer": 17,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer17-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "ed8d124e711824603c8d9748a71ddbfa15214a31b3bc82b83b8530002ea9cdd3",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer17-gate_proj-payload.bin",
+            "bytes": 19965660,
+            "sha256": "5fb44823e7ae3a41d72abaef3e3f52d337d942907c96091d0647839ea8df0802",
+            "dtype": "uint32_le",
+            "shape": [
+              4991415
+            ]
+          },
+          "bases": {
+            "file": "layer17-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "338a07b5422e71c598c29eca681e13bbdb81520ff802c0ae0b49cdb15c7e2dd3",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 771213,
+            "2": 113511,
+            "4": 12,
+            "8": 0
+          },
+          "packed_bytes": 23506140
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer17-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "9b2763fed1492dbf01aff7f994e69cc2082e91fbf90fc4e10b9397ccedb006a7",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer17-up_proj-payload.bin",
+            "bytes": 19145460,
+            "sha256": "f90cfc08695676d4715fb265993c6afc4c692c2356fd517d4e55e673f122673e",
+            "dtype": "uint32_le",
+            "shape": [
+              4786365
+            ]
+          },
+          "bases": {
+            "file": "layer17-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "76b983715e59806cf1463c0e5705595a37807398a8e3bde8a244516d9e7107ee",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 812215,
+            "2": 72513,
+            "4": 8,
+            "8": 0
+          },
+          "packed_bytes": 22685940
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer17-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "d1d5b310060138105554f3cc82affc08edd8f08c4ff9da530bd6dea154c07156",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer17-down_proj-payload.bin",
+            "bytes": 24073344,
+            "sha256": "10ecd043813b4d00665d6c2150f62b50a7155e56b977f828d59cd4e19f30a760",
+            "dtype": "uint32_le",
+            "shape": [
+              6018336
+            ]
+          },
+          "bases": {
+            "file": "layer17-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e58a9a6105a6538db6d528a9894204ffaab02072d3c160699a1e815c32c99467",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1906036,
+            "2": 60042,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 31939200
+        }
+      },
+      "packed_bytes": 78131280
+    },
+    {
+      "layer": 18,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer18-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "95021209ebdcca9a4f378104a410d827223c41a1d083f4c1f6db6bf1f0c74f8f",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer18-gate_proj-payload.bin",
+            "bytes": 19968140,
+            "sha256": "0145daff80216b9d247d122bdc250a4d86f5889b977aa8e66d7d68313ecdb2e4",
+            "dtype": "uint32_le",
+            "shape": [
+              4992035
+            ]
+          },
+          "bases": {
+            "file": "layer18-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "239f852bea9ab33847daf194dd5ee8b03a03defcd7e1653b465d3c03c69c0bd9",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 771109,
+            "2": 113605,
+            "4": 22,
+            "8": 0
+          },
+          "packed_bytes": 23508620
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer18-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "cbb1a4f74e94a771eab853033c5a2b08c88fc323d9adda8086185c4c7319544a",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer18-up_proj-payload.bin",
+            "bytes": 19193520,
+            "sha256": "2af462e30deb1d811429680c9a89e7e133fa7b808b2b4b8c9079c7e686c723bc",
+            "dtype": "uint32_le",
+            "shape": [
+              4798380
+            ]
+          },
+          "bases": {
+            "file": "layer18-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "d1e890f17468f82096ed1b3c7949b0307889cb93e64cb69b504e8421e9c4e61c",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 809832,
+            "2": 74886,
+            "4": 18,
+            "8": 0
+          },
+          "packed_bytes": 22734000
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer18-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "b06a2aa7d6b9b75daad12c7a31f983e8a9dd051846363ca9a3d09b60752c8c96",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer18-down_proj-payload.bin",
+            "bytes": 24125300,
+            "sha256": "2a2b90378b3221f7a3a6df5b594e1f6c9e10d86a6cad98edf81341cd0491c0e6",
+            "dtype": "uint32_le",
+            "shape": [
+              6031325
+            ]
+          },
+          "bases": {
+            "file": "layer18-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "9d7106a4d1a58370fb5007fb267a8ac843e13b43ff88c4211c141cb11df6e2ad",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 1,
+            "1": 1899543,
+            "2": 66532,
+            "4": 4,
+            "8": 0
+          },
+          "packed_bytes": 31991156
+        }
+      },
+      "packed_bytes": 78233776
+    },
+    {
+      "layer": 19,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer19-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "fac1e8ff3ada0a2a2147a8edc8c454eabe25aa07f4fa9d0e7368457491da17f6",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer19-gate_proj-payload.bin",
+            "bytes": 19657580,
+            "sha256": "4a062d6574cb478f9314be69dc1b327cbd28e5bb67279bca680a151c330aef93",
+            "dtype": "uint32_le",
+            "shape": [
+              4914395
+            ]
+          },
+          "bases": {
+            "file": "layer19-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "18b402d241aff228a52cf9345f883a232384d9f21c05ecbf3aec61d431d7bca7",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 786641,
+            "2": 98071,
+            "4": 24,
+            "8": 0
+          },
+          "packed_bytes": 23198060
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer19-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "14a9a274adf1f2a00061479b6d10ce4fc31ba1c8da975c8a9947df7be4d5a471",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer19-up_proj-payload.bin",
+            "bytes": 19033860,
+            "sha256": "a67ecbf3978f45ba385d50397f7c0d6044bbd194dc42dd2f7d5c89edfe30605b",
+            "dtype": "uint32_le",
+            "shape": [
+              4758465
+            ]
+          },
+          "bases": {
+            "file": "layer19-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "902ca10913edada0d140df05b11f9a86ff75b5da9138d7ce21822da5c7dc0fd5",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 817785,
+            "2": 66948,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 22574340
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer19-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "4d2a81781227cd994ad07530eeac6c47f0192c4dbefd8f52d9efb88da3c2a2e8",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer19-down_proj-payload.bin",
+            "bytes": 24100128,
+            "sha256": "b837f366a744a642d21547d60d4ffc6aed51a8ddaed3086fa76c861cb07908d2",
+            "dtype": "uint32_le",
+            "shape": [
+              6025032
+            ]
+          },
+          "bases": {
+            "file": "layer19-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "5c3730de6376a5aaad84a0c16c1ce8e0e565c6181c17e2dd0601638075737d6d",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1902686,
+            "2": 63393,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 31965984
+        }
+      },
+      "packed_bytes": 77738384
+    },
+    {
+      "layer": 20,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer20-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "a52be91ca21ca157a6e5cab9f9290a15ffc272eb9c3fec52a750bfdd0c4b798d",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer20-gate_proj-payload.bin",
+            "bytes": 19428060,
+            "sha256": "06d8887754679b1d9e4b1d582f5df7fa5717be9298f1624c6d654f27b6ec97f8",
+            "dtype": "uint32_le",
+            "shape": [
+              4857015
+            ]
+          },
+          "bases": {
+            "file": "layer20-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "d7f97d8a1dccbea93a8b5e9b30080344658087dcf30ca25e06cf10724b6c2d80",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 798099,
+            "2": 86622,
+            "4": 15,
+            "8": 0
+          },
+          "packed_bytes": 22968540
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer20-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "590c61e43000f2ed0a6ecaebf990e2f853da8a994b43b8bddf485b04a7630781",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer20-up_proj-payload.bin",
+            "bytes": 18909380,
+            "sha256": "d5ea5e5a18bd157a4757528bbc050175a97ee348d49db011a7298c4009f1af5c",
+            "dtype": "uint32_le",
+            "shape": [
+              4727345
+            ]
+          },
+          "bases": {
+            "file": "layer20-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "71a9d1115821bf26d12f0f778354497df0d829f89aaf8575e8bfc690e2b8a0ec",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 824035,
+            "2": 60685,
+            "4": 16,
+            "8": 0
+          },
+          "packed_bytes": 22449860
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer20-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "351c9a47ce2345d8017c1133a79096e3ee6ab37f129008568608d5a2d831dedb",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer20-down_proj-payload.bin",
+            "bytes": 23990968,
+            "sha256": "ea70b5116b714abacd1c81beece455d1f486eec42e27cebb12a01cef406ab82f",
+            "dtype": "uint32_le",
+            "shape": [
+              5997742
+            ]
+          },
+          "bases": {
+            "file": "layer20-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "87a1a17b1012d713e1032ef568db67c794c6ea413701066c512234680ce97b6c",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1916333,
+            "2": 49745,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 31856824
+        }
+      },
+      "packed_bytes": 77275224
+    },
+    {
+      "layer": 21,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer21-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "7eee3fc92fc1485d0199facc362956bba75a0c530b1a39be951f57303d4aecfd",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer21-gate_proj-payload.bin",
+            "bytes": 19352280,
+            "sha256": "6aab87f206c91444a8ae1354c74ecb2af6cdde53eed111833ac154db49f8a471",
+            "dtype": "uint32_le",
+            "shape": [
+              4838070
+            ]
+          },
+          "bases": {
+            "file": "layer21-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "7211e378c8f50cbaf1cec711ce0897f4ad2448dead9f34f17892798924816b48",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 802046,
+            "2": 82596,
+            "4": 94,
+            "8": 0
+          },
+          "packed_bytes": 22892760
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer21-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "89b819ee8ad960af870f594995b457108ea8dc7b6b771948d296b7011db6eee7",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer21-up_proj-payload.bin",
+            "bytes": 18860580,
+            "sha256": "13837ffcca262b14ea7a93912bf1b15a8717275ae2c9bf80db7170ad34de884d",
+            "dtype": "uint32_le",
+            "shape": [
+              4715145
+            ]
+          },
+          "bases": {
+            "file": "layer21-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "cc18ff95203ea2e1ce35cb85958f04ca4f4dcc4e95b51528d06bd67cedad197c",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 826533,
+            "2": 58158,
+            "4": 45,
+            "8": 0
+          },
+          "packed_bytes": 22401060
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer21-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "ac4d2b551c3e4b60aeba76b1354359a9b278fe005b61680120f42d17dc701da1",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer21-down_proj-payload.bin",
+            "bytes": 23976576,
+            "sha256": "63cd4a940f44aae5dd54524d99c9fd4e14e8e7302e97b1a8a8adf4f161a8f810",
+            "dtype": "uint32_le",
+            "shape": [
+              5994144
+            ]
+          },
+          "bases": {
+            "file": "layer21-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "62fa2cecf04c0fbc949c238674a50ffbea48af0b5c91679f306920efb9d3ca3e",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1918134,
+            "2": 47943,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 31842432
+        }
+      },
+      "packed_bytes": 77136252
+    },
+    {
+      "layer": 22,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer22-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "abdb1d17f66e1aaeca93661e14225aa5aa42a9bc339cbc1e8d6604ed8578d913",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer22-gate_proj-payload.bin",
+            "bytes": 19447720,
+            "sha256": "b3e9b6b367dfc69809f87e01363390283acb478e9670179da6ed6ac5f35b2a2e",
+            "dtype": "uint32_le",
+            "shape": [
+              4861930
+            ]
+          },
+          "bases": {
+            "file": "layer22-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e7adba4a1e6db6f558556e61fdacdf871ce0ce644a6864ed14002574f303e478",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 797134,
+            "2": 87578,
+            "4": 24,
+            "8": 0
+          },
+          "packed_bytes": 22988200
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer22-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "18c5318876a759735b6b18c26ec23e64958a589bcfcbc60443f76f0c28bf8db2",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer22-up_proj-payload.bin",
+            "bytes": 18940940,
+            "sha256": "5a7c158c097474e4d686f272c5f64610552aed626c3baa9c60bde20f4244f7c4",
+            "dtype": "uint32_le",
+            "shape": [
+              4735235
+            ]
+          },
+          "bases": {
+            "file": "layer22-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "ba5df361eca1a05c5e17bd69aba3efd9cea8ed1fbd0fcd4f1446fd41dacad368",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 822459,
+            "2": 62260,
+            "4": 17,
+            "8": 0
+          },
+          "packed_bytes": 22481420
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer22-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "bca46bc5dc9007ea263ef1ef16f9cfdc96ba8a62108d48d77654501003587b3b",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer22-down_proj-payload.bin",
+            "bytes": 23994528,
+            "sha256": "889262b701ac83cfc5337fbb5ee86c431717dcfa58673d1e530d06a05c498de8",
+            "dtype": "uint32_le",
+            "shape": [
+              5998632
+            ]
+          },
+          "bases": {
+            "file": "layer22-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "3299e32d1fc61074720f1813d174626a8e667bd37c01f28a5c5ed7541ec44e5b",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1915896,
+            "2": 50178,
+            "4": 6,
+            "8": 0
+          },
+          "packed_bytes": 31860384
+        }
+      },
+      "packed_bytes": 77330004
+    },
+    {
+      "layer": 23,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer23-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "6d07db4999e24807766040af4d0e02f9f1d77ec963513999cb2dd43cbb4f1160",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer23-gate_proj-payload.bin",
+            "bytes": 19132480,
+            "sha256": "47d05855ba48153f4cf99176f7c78146d42c874e12a56d3d062b1fb8fac93957",
+            "dtype": "uint32_le",
+            "shape": [
+              4783120
+            ]
+          },
+          "bases": {
+            "file": "layer23-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "5239b624ea288e64a67442822cd27326461a9f571d0274b8c00f2bbc7b4fd580",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 812902,
+            "2": 71807,
+            "4": 27,
+            "8": 0
+          },
+          "packed_bytes": 22672960
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer23-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "0ade8a369b7f95bdf0d6b685bd0067129e7602619418fe0932e3e2cf0b550d23",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer23-up_proj-payload.bin",
+            "bytes": 18851760,
+            "sha256": "57c4137c1aded07db5d2607b1d77809cc578c4979e8d7c5c085e3dbe9e1fb010",
+            "dtype": "uint32_le",
+            "shape": [
+              4712940
+            ]
+          },
+          "bases": {
+            "file": "layer23-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "ef1486205da656aa93dfaac307bf515a65df9851b3ff97bb264b06bc4129181c",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 826904,
+            "2": 57822,
+            "4": 10,
+            "8": 0
+          },
+          "packed_bytes": 22392240
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer23-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "5d7dc1c1db8692770e8ffd2c2ea9be36f1a777501c7e3e5b294dd84af076e7a2",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer23-down_proj-payload.bin",
+            "bytes": 23981912,
+            "sha256": "d14db588423a65484435b28dfcf0eacf2074ab8503bece7e309716e0a7e3809e",
+            "dtype": "uint32_le",
+            "shape": [
+              5995478
+            ]
+          },
+          "bases": {
+            "file": "layer23-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "8160c2e89bf2f6ae666c6df50a8b65ed287fefe47213fc4c9c92cf972e524ada",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1917467,
+            "2": 48610,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 31847768
+        }
+      },
+      "packed_bytes": 76912968
+    },
+    {
+      "layer": 24,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer24-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "112fd0adf8e717f1765b1fed101e0374ff7b47732423f79984a719404ea129cd",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer24-gate_proj-payload.bin",
+            "bytes": 19244080,
+            "sha256": "722e491b6fee1bfe16c55bad8918801326375bef7d6949225d566db0eb870494",
+            "dtype": "uint32_le",
+            "shape": [
+              4811020
+            ]
+          },
+          "bases": {
+            "file": "layer24-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "8b60405f765907ec6aac33ab7c9e21668b64336a7bb4f44df1a10fa894c4ed96",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 807338,
+            "2": 77363,
+            "4": 35,
+            "8": 0
+          },
+          "packed_bytes": 22784560
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer24-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "ce2dd4285a1ed7b90c5eca3aaa4dccd7b0cf1fbf7f3bfae68e44b1f89b43ff3c",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer24-up_proj-payload.bin",
+            "bytes": 18917780,
+            "sha256": "2f723a9a2438ba613ad0a6572d15db5b6acad54b5cda1c7856aeb71a3b9d125f",
+            "dtype": "uint32_le",
+            "shape": [
+              4729445
+            ]
+          },
+          "bases": {
+            "file": "layer24-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a5c2ee2d81591c55fed45facf672b39b465122c9bd29cba23fd09c00dd297af4",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 823613,
+            "2": 61108,
+            "4": 15,
+            "8": 0
+          },
+          "packed_bytes": 22458260
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer24-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "ad03c6ee6469ce82ef83dbc15753fda0319a1ace8b223ffe5b80b16b4477f4cf",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer24-down_proj-payload.bin",
+            "bytes": 23994376,
+            "sha256": "08f885bae289dd6932ef4981cf44899862f75891cec04a7f13396550de5575b2",
+            "dtype": "uint32_le",
+            "shape": [
+              5998594
+            ]
+          },
+          "bases": {
+            "file": "layer24-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "2685b1478d8d92d0128a0f827128af10c1fda6de5453d0ee464c1f8ef3123f11",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1915911,
+            "2": 50165,
+            "4": 4,
+            "8": 0
+          },
+          "packed_bytes": 31860232
+        }
+      },
+      "packed_bytes": 77103052
+    },
+    {
+      "layer": 25,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer25-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "6d2ec51f0be8955722263d58598b0f10870d8696bab8926ffa1af359192e6775",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer25-gate_proj-payload.bin",
+            "bytes": 18977160,
+            "sha256": "fb25f8971fb3649ab3883fe85560db7e616658665e016debec5d5d21029d5eb5",
+            "dtype": "uint32_le",
+            "shape": [
+              4744290
+            ]
+          },
+          "bases": {
+            "file": "layer25-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "476d8c4479c20a9c251e5d61966764c22da551a10ed4005ccffedcb2b18abb37",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 820630,
+            "2": 64098,
+            "4": 8,
+            "8": 0
+          },
+          "packed_bytes": 22517640
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer25-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "5996425deaaedaa9f777bfa67f8222137e0899b179bc636f1d7297412b80d38d",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer25-up_proj-payload.bin",
+            "bytes": 18762260,
+            "sha256": "dbce3bfb76476498ef004539368e5d50f09463e64279ffb32f19739541607a3c",
+            "dtype": "uint32_le",
+            "shape": [
+              4690565
+            ]
+          },
+          "bases": {
+            "file": "layer25-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "4bfaeee4ffbe804ad55a4022eae190a3296fd05a3134c760da6e968bc332da97",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 831365,
+            "2": 53368,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 22302740
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer25-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "b30e13a5424b3d4bf03829482397e5e37f0cd755264271dc95f2a6d9602d7e11",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer25-down_proj-payload.bin",
+            "bytes": 23927896,
+            "sha256": "d63234b672f1d48470e54e3e63abd508192b6f65046875f1c8230c510e352308",
+            "dtype": "uint32_le",
+            "shape": [
+              5981974
+            ]
+          },
+          "bases": {
+            "file": "layer25-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "96ae8706be5a7feaf7aafa8af500661b09dce51f506fc3852e130c1635084e71",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1924217,
+            "2": 41861,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 31793752
+        }
+      },
+      "packed_bytes": 76614132
+    },
+    {
+      "layer": 26,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer26-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "a29e9d274681e7cd72b830cc9880648dd64c670c025f8b767422f4a4d3f45736",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer26-gate_proj-payload.bin",
+            "bytes": 18905500,
+            "sha256": "d917e5131edbd1183798b4341fba6decb81f69488e3fb6e295ad2ec5d3333a57",
+            "dtype": "uint32_le",
+            "shape": [
+              4726375
+            ]
+          },
+          "bases": {
+            "file": "layer26-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "f5db547849735c786ce4d1a2e893ed0c07c733f277bbb2a996c575e317c961e6",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 824207,
+            "2": 60524,
+            "4": 5,
+            "8": 0
+          },
+          "packed_bytes": 22445980
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer26-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "320fd48e203e75ac6fe8e11d643181118cf02c0e6cdd885f676c89dfe247405d",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer26-up_proj-payload.bin",
+            "bytes": 18740680,
+            "sha256": "65a31fe62ab684e212cb78707084a07f0f615907ae1314d76aa8d726536f1ecb",
+            "dtype": "uint32_le",
+            "shape": [
+              4685170
+            ]
+          },
+          "bases": {
+            "file": "layer26-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "35428375da769e000cfdd63cdd3fe4537e9a7e46c073867f640207971444f572",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 832440,
+            "2": 52295,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 22281160
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer26-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "c8256aa7bf650a13a2b2472e877b7d2f3d5c80a28d196031699745bb0ed76081",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer26-down_proj-payload.bin",
+            "bytes": 23939672,
+            "sha256": "365c3adb959c631c75be61f73ddae78e8f7353a8bda711a4bcd6b53c0e64e1a1",
+            "dtype": "uint32_le",
+            "shape": [
+              5984918
+            ]
+          },
+          "bases": {
+            "file": "layer26-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "77273309e091edfab0925bc0fd1e1e3cbe7c67aaabef878e3616a6f0ea97b036",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1922749,
+            "2": 43327,
+            "4": 4,
+            "8": 0
+          },
+          "packed_bytes": 31805528
+        }
+      },
+      "packed_bytes": 76532668
+    },
+    {
+      "layer": 27,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer27-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "43a24225aabcf72f50dc7bd7725816d95f7487fbbe5caa1b6ab40fc4843678a8",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer27-gate_proj-payload.bin",
+            "bytes": 18851740,
+            "sha256": "62edb3b28de9e702aff754eeda4bd3223b4a75f57584810d0145f92af98120ac",
+            "dtype": "uint32_le",
+            "shape": [
+              4712935
+            ]
+          },
+          "bases": {
+            "file": "layer27-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "6fb90b4645d42ce678827b4d6119c7cd79d7d8c44d3d4df13fb66389ccc0ed0b",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 826917,
+            "2": 57803,
+            "4": 16,
+            "8": 0
+          },
+          "packed_bytes": 22392220
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer27-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "4a71688f1cd546c64f36c40f0013ca2062005564e4837a189e5a8c65c4511dcd",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer27-up_proj-payload.bin",
+            "bytes": 18676940,
+            "sha256": "d608541f87ea51e3831fb453147256272d92ece349b27fcc91828f15b9c9f0f9",
+            "dtype": "uint32_le",
+            "shape": [
+              4669235
+            ]
+          },
+          "bases": {
+            "file": "layer27-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "cb3aff0b67753de681a8bfb0c30417a69bf894e9a5cad82d4f5992f0961f5abb",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 835627,
+            "2": 49108,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 22217420
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer27-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "35170f3ba22d4698ed1693b03fe638da1b1ec775637e18d4e90fbc21331ba014",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer27-down_proj-payload.bin",
+            "bytes": 23941960,
+            "sha256": "a6e0554e64349bb7442b2716d4bd853749a8cd447d9615b609c76680b377c259",
+            "dtype": "uint32_le",
+            "shape": [
+              5985490
+            ]
+          },
+          "bases": {
+            "file": "layer27-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "2cdc5386c7e1d0feeac9273805f61973ac2006831cbc2fc40af957f44a46d475",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1922463,
+            "2": 43613,
+            "4": 4,
+            "8": 0
+          },
+          "packed_bytes": 31807816
+        }
+      },
+      "packed_bytes": 76417456
+    },
+    {
+      "layer": 28,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer28-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "7ac996adcc196c6b312ffeed7e90657f870fba7bab33010f21ae3ec44a63d054",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer28-gate_proj-payload.bin",
+            "bytes": 18815720,
+            "sha256": "5c2385e54265f2bc6f735ba985576718ed3ff9aa025dd98587939df9ccde36a9",
+            "dtype": "uint32_le",
+            "shape": [
+              4703930
+            ]
+          },
+          "bases": {
+            "file": "layer28-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "1ef0a6f5492037a630bbac2461f28ddba1980e524d03692b91acde410a7180df",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 828694,
+            "2": 56038,
+            "4": 4,
+            "8": 0
+          },
+          "packed_bytes": 22356200
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer28-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "2364cefb40dea6c5d71cbad0bf3475539bd2b7ff28c8f42a0e5c850e9ec18821",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer28-up_proj-payload.bin",
+            "bytes": 18680440,
+            "sha256": "67147cd60791e2f2dbeca85ffde1f293bb8305a3374f971f95e617ac23c253e8",
+            "dtype": "uint32_le",
+            "shape": [
+              4670110
+            ]
+          },
+          "bases": {
+            "file": "layer28-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "146a3ef753aa3038e0567fbf880f4c32116e534e1dcf1658f8db8d28d9451e8b",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 835450,
+            "2": 49286,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22220920
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer28-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "1b7dbd9b5bad92c4a28eb47d27a1c3ba9f42d155bb6d09193cccbbe6cc5d8b4c",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer28-down_proj-payload.bin",
+            "bytes": 23904596,
+            "sha256": "d973cca1f7d766f72cc07aef49d0df376eeb9fc32a63caaf0494fbbbf60a1bd8",
+            "dtype": "uint32_le",
+            "shape": [
+              5976149
+            ]
+          },
+          "bases": {
+            "file": "layer28-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "c92feac2ee2c7d1214e2b8ffdf6f28c630b929ff41b5496821573b9240e1bbdb",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 1,
+            "1": 1927131,
+            "2": 38944,
+            "4": 4,
+            "8": 0
+          },
+          "packed_bytes": 31770452
+        }
+      },
+      "packed_bytes": 76347572
+    },
+    {
+      "layer": 29,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer29-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "d173d74b074ec883b4c6effee8c8d5e526dbdd26cb4ebeef945c3684fe16b8d1",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer29-gate_proj-payload.bin",
+            "bytes": 18784880,
+            "sha256": "af9e8916957935587f66c15095ecbb1d9d90b1b1bc8083928ffc74fa4373c39f",
+            "dtype": "uint32_le",
+            "shape": [
+              4696220
+            ]
+          },
+          "bases": {
+            "file": "layer29-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e6443060903fd6f3ffb1824ced9734351f5dd170f98a13d439d9bd42c7a13572",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 830230,
+            "2": 54505,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 22325360
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer29-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "ff87139aba71fd694de4faa96be9c4e14b30239ada11238ae90048707e443a54",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer29-up_proj-payload.bin",
+            "bytes": 18652560,
+            "sha256": "c7b9527a2e11e8d2c77b1f0942d1a3c70c8736b8a5f7c71346090b2ebe086ed9",
+            "dtype": "uint32_le",
+            "shape": [
+              4663140
+            ]
+          },
+          "bases": {
+            "file": "layer29-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "64cd30dd808f355a2c85a05341bf98acf5920d3fb71f3e9ac4b2647838f5b4f7",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 836844,
+            "2": 47892,
+            "4": 0,
+            "8": 0
+          },
+          "packed_bytes": 22193040
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer29-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "05976b4094faaf160f12d23e5d1ead3c04218c0519f324e68943de0f7b57c175",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer29-down_proj-payload.bin",
+            "bytes": 23918360,
+            "sha256": "360b5a0a13e7380d8fe316079452045b0fb1e97b0dee87c9f73aca778e619c91",
+            "dtype": "uint32_le",
+            "shape": [
+              5979590
+            ]
+          },
+          "bases": {
+            "file": "layer29-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "2df77f7673e6bbb4b7bcb8a306161561eb95395d3ee5025ba33e1088679b7ce2",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1925415,
+            "2": 40660,
+            "4": 5,
+            "8": 0
+          },
+          "packed_bytes": 31784216
+        }
+      },
+      "packed_bytes": 76302616
+    },
+    {
+      "layer": 30,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer30-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "964baff349b3dfcd90857004de811f16b5b0a9dcd77034ca36e9eb1eb01b88fa",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer30-gate_proj-payload.bin",
+            "bytes": 18829680,
+            "sha256": "3a566d1fe3272831deecb3b3775ac579d259c18d5362a655c3805712af6f6c42",
+            "dtype": "uint32_le",
+            "shape": [
+              4707420
+            ]
+          },
+          "bases": {
+            "file": "layer30-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "bfad333ad54b4731a462c9eca59fcf46bf78a843472acc00f61a7befc6a2c875",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 827992,
+            "2": 56742,
+            "4": 2,
+            "8": 0
+          },
+          "packed_bytes": 22370160
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer30-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "fce4aab86f2292aaa96a07621622efbff0f528207b2891748b84c8903aa09a9f",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer30-up_proj-payload.bin",
+            "bytes": 18689180,
+            "sha256": "25230dcd94d4e37c9f58c42c3bf1d4f31a1959f88bd000a4ded8dc498f528e30",
+            "dtype": "uint32_le",
+            "shape": [
+              4672295
+            ]
+          },
+          "bases": {
+            "file": "layer30-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e38f0bdcd1068f85f4d5fde940c41ad66eb767f98cefe9a98c7f0312d665c401",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 835015,
+            "2": 49720,
+            "4": 1,
+            "8": 0
+          },
+          "packed_bytes": 22229660
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer30-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "5b915e0bebe553dd5dcd879035ca85036fc8380168b0619d3c9e49797d905e8b",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer30-down_proj-payload.bin",
+            "bytes": 23935120,
+            "sha256": "e33a7acc61978b31bac37ddbe75786df8664bb0ba2cfa259c5247a000247e9b6",
+            "dtype": "uint32_le",
+            "shape": [
+              5983780
+            ]
+          },
+          "bases": {
+            "file": "layer30-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "536b5b87ca1d3c4e9e9cb1cdb54a17b371faae9e5202ee9272c75257328df527",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 2,
+            "1": 1923319,
+            "2": 42752,
+            "4": 7,
+            "8": 0
+          },
+          "packed_bytes": 31800976
+        }
+      },
+      "packed_bytes": 76400796
+    },
+    {
+      "layer": 31,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer31-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "39ee99d51adf3e8cc5cd15b2fb754ce83f50993d3784a12ffd6d221d46d23f9b",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer31-gate_proj-payload.bin",
+            "bytes": 19019760,
+            "sha256": "b4a56397fc5997ec2a63fb32157cbc7dcd473522c237c43fa5bc1e6b27b7c97c",
+            "dtype": "uint32_le",
+            "shape": [
+              4754940
+            ]
+          },
+          "bases": {
+            "file": "layer31-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a618e0f5095e21b4b44622bb30e91303915eea69e666ae4e82af3c69cd3b9dbf",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 818490,
+            "2": 66243,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 22560240
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer31-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "9fe6d1bb2ce711e35259ad313e8b9cd40ed881796bc8caa873cc9c07752658c3",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer31-up_proj-payload.bin",
+            "bytes": 18818720,
+            "sha256": "2d51499c37f2affc5665d761ba1944a5da64f9f61543ee22ab70fd61c28b3e45",
+            "dtype": "uint32_le",
+            "shape": [
+              4704680
+            ]
+          },
+          "bases": {
+            "file": "layer31-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "17c33f4c6efea4e3d494bf546ac11c05a770b7e02cd493d95ddab876b5acaa78",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 828542,
+            "2": 56191,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 22359200
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer31-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "f2d98afcae7b51e2c4692a879cb54db4906a1a2439f1060d183c744b7b4a914c",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer31-down_proj-payload.bin",
+            "bytes": 23975360,
+            "sha256": "62dd0d8b4f824563ea4d2bb325ec2570d2598c61a5e515c33becf6039dfade5d",
+            "dtype": "uint32_le",
+            "shape": [
+              5993840
+            ]
+          },
+          "bases": {
+            "file": "layer31-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "cbc82fb6d6ee2395235101ea747abb95617cd24f8c7d8f67722e47396ce5c44b",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 2,
+            "1": 1918281,
+            "2": 47794,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 31841216
+        }
+      },
+      "packed_bytes": 76760656
+    },
+    {
+      "layer": 32,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer32-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "4ae1b9d09043d15aeee41d09c836bf1ecc032018d86105a0da8ba3e19c98f71c",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer32-gate_proj-payload.bin",
+            "bytes": 18900820,
+            "sha256": "9b2143c284a0bfcdb032c2295fb79d74c19e9789bf89342fd25a214a07bf7fe9",
+            "dtype": "uint32_le",
+            "shape": [
+              4725205
+            ]
+          },
+          "bases": {
+            "file": "layer32-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "5560feb4f3eb1fb67ff35a82ae407c94073849b85714f352df4b9c82e369a766",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 824449,
+            "2": 60278,
+            "4": 9,
+            "8": 0
+          },
+          "packed_bytes": 22441300
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer32-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "cb2d4c41d056f45092cf1c82a8cf0585dddbc18a504c5854d5b8f978cbfa00ed",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer32-up_proj-payload.bin",
+            "bytes": 18713680,
+            "sha256": "508397c40615bf795c865b9848587d0da781831f91a1788f1d1510bd4a91ff36",
+            "dtype": "uint32_le",
+            "shape": [
+              4678420
+            ]
+          },
+          "bases": {
+            "file": "layer32-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "0a6027b1ae3bb4e359212fa691ee4fa38c3ab06dd929a0e7bfed8cd4c70e905a",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 833794,
+            "2": 50939,
+            "4": 3,
+            "8": 0
+          },
+          "packed_bytes": 22254160
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer32-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "1c5735486dcc14f24e24d5040cc7f3b549920779576c873934050aefed902cf6",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer32-down_proj-payload.bin",
+            "bytes": 23942168,
+            "sha256": "fc29781606f8ac0953219f8b23f42e58501903b6f398acfab5eabb1b8d29467f",
+            "dtype": "uint32_le",
+            "shape": [
+              5985542
+            ]
+          },
+          "bases": {
+            "file": "layer32-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "2b42af0f77f4851af58a14ceb0055107e93c92b48d3237a2b6dfd0c095514c92",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1922453,
+            "2": 43615,
+            "4": 12,
+            "8": 0
+          },
+          "packed_bytes": 31808024
+        }
+      },
+      "packed_bytes": 76503484
+    },
+    {
+      "layer": 33,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer33-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "5a54672253ed0a9d9efb18b3dd1e03dc7665d4381083778ba7fa0dc0ede219dd",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer33-gate_proj-payload.bin",
+            "bytes": 18954420,
+            "sha256": "1758ccd1486eb06bdbc484ae704a8a3f15bb2a239b34d18c94853c6c0c8c25fb",
+            "dtype": "uint32_le",
+            "shape": [
+              4738605
+            ]
+          },
+          "bases": {
+            "file": "layer33-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "fd5859a3e16158161b7a6aace2713d489565f2a653883896784e64cfd39c9e98",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 821761,
+            "2": 62970,
+            "4": 5,
+            "8": 0
+          },
+          "packed_bytes": 22494900
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer33-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "ad4438be214af85a2c91284d17ba220d6d6007a4d2fa4feb6dc20c90b0d5c4ca",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer33-up_proj-payload.bin",
+            "bytes": 18749020,
+            "sha256": "139b3e363e048bde4240441c949923404daf63ba8d9675860281ac34ded1cd37",
+            "dtype": "uint32_le",
+            "shape": [
+              4687255
+            ]
+          },
+          "bases": {
+            "file": "layer33-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e6a13b2fc2ef23bb890e835a151365ad1bf2a90246b586aeb8bddb70d9363ee8",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 832029,
+            "2": 52703,
+            "4": 4,
+            "8": 0
+          },
+          "packed_bytes": 22289500
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer33-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "5aa03e770002f5d41ad3a0d78140d79a03538a53b0039985fcc37584af866b34",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer33-down_proj-payload.bin",
+            "bytes": 23986784,
+            "sha256": "d4d696e7d90d963317495773238f2b6dd8db3087b5104a70d2c9d8aa55beccf8",
+            "dtype": "uint32_le",
+            "shape": [
+              5996696
+            ]
+          },
+          "bases": {
+            "file": "layer33-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "26220ba37533a510b0fad44ce8222483571293294d976d6716fba7a7e79122f6",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1916872,
+            "2": 49198,
+            "4": 10,
+            "8": 0
+          },
+          "packed_bytes": 31852640
+        }
+      },
+      "packed_bytes": 76637040
+    },
+    {
+      "layer": 34,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer34-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "9ce43548c15a077237a5572377cd1405d0994c2eed28d69ddc34e27f60fdaed4",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer34-gate_proj-payload.bin",
+            "bytes": 19031820,
+            "sha256": "b1a27bec144d494a10dee3c44ac537e7b79591b97d97437009474eb3204b9a9b",
+            "dtype": "uint32_le",
+            "shape": [
+              4757955
+            ]
+          },
+          "bases": {
+            "file": "layer34-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "91924e123bc58470fa5c4b4c24355fa8970d1a933bce40954daf67698c5ecda6",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 817915,
+            "2": 66804,
+            "4": 17,
+            "8": 0
+          },
+          "packed_bytes": 22572300
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer34-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "efaceea937847ff2e1d72633c37bc8ab034419a95a932b8517a8a7d032fe7b75",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer34-up_proj-payload.bin",
+            "bytes": 18817460,
+            "sha256": "b2b0ec4ca6be1d4d8ffde88b58c64abbb254d69c9d0ec1001ae148130854676d",
+            "dtype": "uint32_le",
+            "shape": [
+              4704365
+            ]
+          },
+          "bases": {
+            "file": "layer34-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "b070a1c23df3919bbea33e8375453422dc0573bc7887e3e9cef4e15037ab0e92",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 828737,
+            "2": 55930,
+            "4": 69,
+            "8": 0
+          },
+          "packed_bytes": 22357940
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer34-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "a544ecfc39db8f1b1f8760ade3bd07fc1e9e453b13e67ff6168ea3cfbb6363b1",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer34-down_proj-payload.bin",
+            "bytes": 23955920,
+            "sha256": "dba3eee535033f978e0221b977c6bdc13a2168ff4f410813ef0ba98200ef1989",
+            "dtype": "uint32_le",
+            "shape": [
+              5988980
+            ]
+          },
+          "bases": {
+            "file": "layer34-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "473139dd6a5b93ebd06dc654471c7222e3ee9156668a309b370bdbd120654a7e",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1920738,
+            "2": 45328,
+            "4": 14,
+            "8": 0
+          },
+          "packed_bytes": 31821776
+        }
+      },
+      "packed_bytes": 76752016
+    },
+    {
+      "layer": 35,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer35-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "f5bb64721ba17f7a929c95f59e93a69703de306cb9c2c4c3db56467ff9208000",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer35-gate_proj-payload.bin",
+            "bytes": 19893160,
+            "sha256": "7a28f4f8e1d8e8d4f813f599333c49f0ce9dc1ff87ce9180ca740f400c4fdcdc",
+            "dtype": "uint32_le",
+            "shape": [
+              4973290
+            ]
+          },
+          "bases": {
+            "file": "layer35-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "4fb2e1126f60d4157e52148e4f6735d347bc80d53dc0d67e07596a5b2935c6f3",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 774834,
+            "2": 109892,
+            "4": 10,
+            "8": 0
+          },
+          "packed_bytes": 23433640
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer35-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "49d7b4a3ba2d94b97107b6215841cfc848f7789c922ab1020f37006cf22d615f",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer35-up_proj-payload.bin",
+            "bytes": 19472060,
+            "sha256": "f55af4ab9e4200153af142214ca1531f1ea2f4d000ca5c98d0572b43398be9fd",
+            "dtype": "uint32_le",
+            "shape": [
+              4868015
+            ]
+          },
+          "bases": {
+            "file": "layer35-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "61bf7de7d5b74723e1c3fd944569a8c30a430fedc5a62a0e55e6f43369abd640",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 795911,
+            "2": 88804,
+            "4": 21,
+            "8": 0
+          },
+          "packed_bytes": 23012540
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer35-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "bd6c0cb89b192b2677cc067d40c586cc02baf41699ac7ce049cae781e958259d",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer35-down_proj-payload.bin",
+            "bytes": 24262336,
+            "sha256": "9b51486c7483151e8cf06f0719467bedd8e9018d59129f986f9d7c4b3ddbf14b",
+            "dtype": "uint32_le",
+            "shape": [
+              6065584
+            ]
+          },
+          "bases": {
+            "file": "layer35-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "ad2bb2eedbadf024243aba629d8879aaa602949ea1f3c24af26aa1c965aa12ab",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1882440,
+            "2": 83624,
+            "4": 16,
+            "8": 0
+          },
+          "packed_bytes": 32128192
+        }
+      },
+      "packed_bytes": 78574372
+    },
+    {
+      "layer": 36,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer36-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "7f0bc5949ad4498b6e7204e87aa8301e266413db325fb3f602be9812f4e6c2da",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer36-gate_proj-payload.bin",
+            "bytes": 19370220,
+            "sha256": "66ed0d6581e29a63e3ba925e9de7a580c8a4eb048746490af822c5f6428983cf",
+            "dtype": "uint32_le",
+            "shape": [
+              4842555
+            ]
+          },
+          "bases": {
+            "file": "layer36-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "0492c94ef3b239c84c2c2823e2da645abe8ede78abd076101cb3300033334d3a",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 801007,
+            "2": 83706,
+            "4": 23,
+            "8": 0
+          },
+          "packed_bytes": 22910700
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer36-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "ebaaf02e49efbc48762c01136141f2b926349d5b9d09c1c051475e461dda654a",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer36-up_proj-payload.bin",
+            "bytes": 18998620,
+            "sha256": "f8ef9dd1908cbad5b31fa07941705f59e08aef3efacc48b767821924a3f37d5f",
+            "dtype": "uint32_le",
+            "shape": [
+              4749655
+            ]
+          },
+          "bases": {
+            "file": "layer36-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "5b690ed6bdeed1f971b99d6c37cfa68de823ef5e771969a2c91476a166eee9fe",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 819569,
+            "2": 65153,
+            "4": 14,
+            "8": 0
+          },
+          "packed_bytes": 22539100
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer36-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "c85dd3f46002920f962cd1c8d2fdfb65345b8213f5f58fe98f9f7b1948bcc226",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer36-down_proj-payload.bin",
+            "bytes": 24143456,
+            "sha256": "f5c737b7911d318758e71e85d3e29555e6020644ddcd9e6cde9bf41a9a45a5a8",
+            "dtype": "uint32_le",
+            "shape": [
+              6035864
+            ]
+          },
+          "bases": {
+            "file": "layer36-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "5f6cab192a7a547b0f9643498282e7b5fb5433c0c771b451b04c56871f41b890",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1897356,
+            "2": 68680,
+            "4": 44,
+            "8": 0
+          },
+          "packed_bytes": 32009312
+        }
+      },
+      "packed_bytes": 77459112
+    },
+    {
+      "layer": 37,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer37-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "4ab06565718e59623bb0712c416dd42c3168f3c1090b751c7b528a717fa0aa0d",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer37-gate_proj-payload.bin",
+            "bytes": 19434300,
+            "sha256": "5a16cbbc7c3810a917a6ff1af4bec5de9590ed4a8ead71f57362cc68f4ab4f38",
+            "dtype": "uint32_le",
+            "shape": [
+              4858575
+            ]
+          },
+          "bases": {
+            "file": "layer37-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "9b79726268b36010733c35a88e5acb56302a6b7d72b2faa0a28e760010a91eed",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 797917,
+            "2": 86739,
+            "4": 80,
+            "8": 0
+          },
+          "packed_bytes": 22974780
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer37-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "c1cbf391632f48bd0ce4222d74dc352f46a6f75e2a1acd8601cef15cd9bbe53e",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer37-up_proj-payload.bin",
+            "bytes": 19217520,
+            "sha256": "747f40a1d75a6110d7bab9a9c17c0f10bf46c35ccda70c65348ac90369144b58",
+            "dtype": "uint32_le",
+            "shape": [
+              4804380
+            ]
+          },
+          "bases": {
+            "file": "layer37-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "dbdab55580dd30ef9969aeec27f74b2cb1418d2a30c8bc7ae1dd818f7f9f70a2",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 808710,
+            "2": 75969,
+            "4": 57,
+            "8": 0
+          },
+          "packed_bytes": 22758000
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer37-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "a1f323511e977e5f7a48054c64c19ebaf95352f63a1955a154b2f26b9ea1b973",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer37-down_proj-payload.bin",
+            "bytes": 24373344,
+            "sha256": "c653dfc2e70b047045b7ccf1874d9a4916517c38745978cf8a0b860bc6f24bd1",
+            "dtype": "uint32_le",
+            "shape": [
+              6093336
+            ]
+          },
+          "bases": {
+            "file": "layer37-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "a62a3427c556632cc050426192fc6764687b25733d9553142e37ab56460dca90",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 1869144,
+            "2": 96630,
+            "4": 306,
+            "8": 0
+          },
+          "packed_bytes": 32239200
+        }
+      },
+      "packed_bytes": 77971980
+    },
+    {
+      "layer": 38,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer38-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "9c005aeb5c93ea594bbe11011a956ceee24fe97b72dad838f5a5f46ce5ba0c5d",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer38-gate_proj-payload.bin",
+            "bytes": 19556140,
+            "sha256": "749c8e086830e11cbc80725cee972a5492018ebb603937daa337995c5d1fb1fc",
+            "dtype": "uint32_le",
+            "shape": [
+              4889035
+            ]
+          },
+          "bases": {
+            "file": "layer38-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "9c077163e12076f1d1fac29da2868f065400e5fef9585a7db718e28d083be2ac",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 792003,
+            "2": 92564,
+            "4": 169,
+            "8": 0
+          },
+          "packed_bytes": 23096620
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer38-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "32c103db7f90d4515e23edb8702d06427ab27a2cafd511f57a0ebf94afce30d6",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer38-up_proj-payload.bin",
+            "bytes": 19563360,
+            "sha256": "c2693e3f36ce840332a90f812b45faaa36f4fa239b5794bdb82c085848c12ced",
+            "dtype": "uint32_le",
+            "shape": [
+              4890840
+            ]
+          },
+          "bases": {
+            "file": "layer38-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "cf827ea20ae784de4f117ba2586f83cce302f170ef4d379522ec776f95038107",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 791464,
+            "2": 93192,
+            "4": 80,
+            "8": 0
+          },
+          "packed_bytes": 23103840
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer38-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "f59bdf76e58424bb65e81819a094812dc89bafb83ab2fc7a9bcf92ac4247ba52",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer38-down_proj-payload.bin",
+            "bytes": 25063308,
+            "sha256": "83118c2f96ed4572ec207999baf2f80706dcfea92556f4e7d4b41af137ee43cf",
+            "dtype": "uint32_le",
+            "shape": [
+              6265827
+            ]
+          },
+          "bases": {
+            "file": "layer38-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "4b11071dc7b8e36a62699705ae395926c925685be45e6cead8f57f72a5010b96",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 5,
+            "1": 1784448,
+            "2": 180540,
+            "4": 1087,
+            "8": 0
+          },
+          "packed_bytes": 32929164
+        }
+      },
+      "packed_bytes": 79129624
+    },
+    {
+      "layer": 39,
+      "components": {
+        "gate_proj": {
+          "descriptors": {
+            "file": "layer39-gate_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "ac3cf05b0ba24c8fceab3dcf15040af0d0b0300d45dd580d685abd245b6c3b78",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer39-gate_proj-payload.bin",
+            "bytes": 20083860,
+            "sha256": "fdfad473af030918fb84bb6dee9e872ae708b2eb1d3e73768082428233d7fb19",
+            "dtype": "uint32_le",
+            "shape": [
+              5020965
+            ]
+          },
+          "bases": {
+            "file": "layer39-gate_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "befcf38f6192ec74d2cd56ebd733311b07f1b1409ce5dd545e7effbb564b93de",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 765475,
+            "2": 119163,
+            "4": 98,
+            "8": 0
+          },
+          "packed_bytes": 23624340
+        },
+        "up_proj": {
+          "descriptors": {
+            "file": "layer39-up_proj-descriptors.bin",
+            "bytes": 3538944,
+            "sha256": "cdae03bdae7e950745b6e52accf26b1e94cb653949d3b1ef0080af6f91d0e201",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              2304
+            ]
+          },
+          "payload": {
+            "file": "layer39-up_proj-payload.bin",
+            "bytes": 19969820,
+            "sha256": "5e30f1fbfec0d1aaae256144ea723a705a0a1ba807e423e49747d2c51fae204f",
+            "dtype": "uint32_le",
+            "shape": [
+              4992455
+            ]
+          },
+          "bases": {
+            "file": "layer39-up_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "81bee101607efe1f29e08aa591071e31b8f62bd21b874989f58ba7d811e793bb",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            2304,
+            160
+          ],
+          "width_row_counts": {
+            "0": 0,
+            "1": 771847,
+            "2": 112456,
+            "4": 433,
+            "8": 0
+          },
+          "packed_bytes": 23510300
+        },
+        "down_proj": {
+          "descriptors": {
+            "file": "layer39-down_proj-descriptors.bin",
+            "bytes": 7864320,
+            "sha256": "b316037d72217219186ab5b1e01f6f7f9dc681c5cb81513fcf3b7fb53194c5d8",
+            "dtype": "uint32_le",
+            "shape": [
+              384,
+              5120
+            ]
+          },
+          "payload": {
+            "file": "layer39-down_proj-payload.bin",
+            "bytes": 27059004,
+            "sha256": "a688f6efafb99ac62134908fdee9b40774d95c68744f53a754097ee2bc876b97",
+            "dtype": "uint32_le",
+            "shape": [
+              6764751
+            ]
+          },
+          "bases": {
+            "file": "layer39-down_proj-bases.bin",
+            "bytes": 1536,
+            "sha256": "e3e8d6247af5882880dea22f591d3483af14d4599f7a029f6fc11d72758866a2",
+            "dtype": "uint32_le",
+            "shape": [
+              384
+            ]
+          },
+          "scale_shape_per_expert": [
+            5120,
+            72
+          ],
+          "width_row_counts": {
+            "0": 1,
+            "1": 1546960,
+            "2": 412050,
+            "4": 7069,
+            "8": 0
+          },
+          "packed_bytes": 34924860
+        }
+      },
+      "packed_bytes": 82059500
+    }
+  ],
+  "read_bytes": 288777830400,
+  "verified_records": 15360,
+  "source_identity": {
+    "st_dev": 16777231,
+    "st_ino": 256779995,
+    "st_size": 288777830400,
+    "st_mtime_ns": 1789092717907406512
+  },
+  "packed_bytes": 3086136060,
+  "elapsed_s": 179.11294829199323,
+  "memory_after": {
+    "sample_start_monotonic_ns": 137956420840541,
+    "sample_end_monotonic_ns": 137956423782416,
+    "process": {
+      "peak_maxrss_bytes": 195411968,
+      "resident_bytes": 195428352,
+      "phys_footprint_bytes": 182289008,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 82411520,
+      "wired_bytes": 3071623168,
+      "active_bytes": 64878510080,
+      "inactive_bytes": 7142883328,
+      "speculative_bytes": 57787514880,
+      "anonymous_bytes": 4602609664,
+      "file_backed_bytes": 125206298624,
+      "compressor_bytes": 1432993792,
+      "compressed_bytes": 6613303296,
+      "used_bytes": 76526010368,
+      "non_file_used_bytes": 9107226624,
+      "swapins_pages": 4808707,
+      "swapouts_pages": 7663546,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "disk_free_after_bytes": 44690018304,
+  "complete": true
+}

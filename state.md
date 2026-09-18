@@ -142,6 +142,24 @@ admission allowances plus16MiB host metadata in every phase. No operator-derived
 capacity discount; native capacity search may admit85..100 instead of96..100
 without relaxing any inequality. The full output digest remains mandatory.
 
+Full tail2048 candidate completed at source dcbec19dc:12.4289961TPS/82.3075322s,
+1024 exact native IDs,206cycles,84->101slots; baseline10,603,659,264B and bound
+109,849,188,584B. Peak allocator93,336,409,632B, process95,127,698,216B,
+machine106,151,673,856B. Prefill peak saves591,643,308B and boundary active
+saves1,536,180,224B versus the best packed-plane run. After normalizing the
+one-slot difference (707,788,800B), final decode active bytes are identical;
+overall peak difference is only89,924B. No steady capacity discount or TPS win.
+Guard17051 terminal0; Qwen restored/warmed/released03:16:02UTC; independent
+03:16:54 healthy/idle/warmed/free, no child. Full-host-refusal archive retains
+the earlier preallocation mismatch; v2 fixes CLI host reserve to2.015625GiB
+and checks the actual CPU runtime resolver against admission with MLX blocked.
+Full receipts:tail-seed-20260917/{full-host-refusal,full-tail2048,full-summary.json}.
+Next small I/O screen compares native separate gate/up planes with a combined
+scatter read across their368640-byte scale gap; down and slot readiness stay
+separate. CPU destination buffers only, no model. Existing~13.1GB/s uncached
+receipts limit the possible gain; do not launch a full candidate without a
+clear end-to-end read-batch improvement. Keep the best12.6731624TPS baseline.
+
 # Latest Adaptive Draft Stage
 
 20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;

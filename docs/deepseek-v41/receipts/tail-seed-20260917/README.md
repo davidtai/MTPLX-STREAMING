@@ -80,3 +80,39 @@ healthy/idle/warmed Qwen, a free lock and no owned child. The next stage is one
 complete native D5/M6 16K/1K run with the best packed-plane lane. Its admission
 retains all original allowances and adds 16 MiB of host metadata reserve in
 every phase; no operator-derived capacity discount is applied.
+
+The first full attempt refuses before model allocation: the CLI still reserves
+2 GiB for the host while admission reserves 2 GiB plus 16 MiB. The derived
+engine is consequently 16 MiB too large. The retry passes `--host-overhead-gib
+2.015625` and checks that its byte value equals admission. A CPU check, with
+MLX imports blocked, verifies the actual runtime budget resolver and admission
+produce identical engine and allocator limits at both saved baselines.
+The refused guard exits 4, restores Qwen and releases at 03:09:30 UTC;
+independent verification at 03:10:00 UTC confirms healthy/idle/warmed/free.
+
+The completed full candidate at source `dcbec19dc` generates all 1,024 native
+output IDs exactly in 206 cycles. It measures **12.4289961 TPS / 82.3075322 s**,
+including 3.4589748 seconds of phase growth. The live baseline is
+10,603,659,264 bytes; admission allows 84 prefill and 101 decode slots at a
+109,849,188,584-byte bound. Allocator peak is 93,336,409,632 bytes, process
+footprint peak is 95,127,698,216 bytes, and internal sampled whole-machine
+peak is 106,151,673,856 bytes. These are overlapping measurements, not sums.
+
+Compared with the best packed-plane run, prefill peak decreases by
+591,643,308 bytes and boundary active allocation by 1,536,180,224 bytes.
+The best run has one more expert slot per layer, totaling 707,788,800 bytes.
+After that exact storage normalization, end-of-decode active allocation is
+identical and the overall allocator peak differs by only 89,924 bytes.
+Decode still determines peak capacity. This is a prefill memory improvement,
+not a measured throughput win or evidence for relaxing steady admission.
+The best full result remains 12.6731624 TPS; 20 TPS remains unmet.
+
+The candidate reads 35,494 weight records / 628,056,391,680 bytes, plus the
+existing packed-scale installation. The guard completes 224 samples, reports
+106,145,562,624 bytes of sampled physical use, and observes no compressor
+growth. Source and packed-file cleanup finds zero retained cached pages.
+Guard 17051 exits 0, restores exact Qwen identity, health and warmup, and
+releases at 03:16:02 UTC. Independent verification at 03:16:54 UTC finds
+healthy/idle/warmed Qwen, a free lock and no owned child. `full-host-refusal/`,
+`full-tail2048/`, and `full-summary.json` preserve both attempts and comparison.
+The helper stays isolated; no generic prefill or Q8 seeding API is changed.
