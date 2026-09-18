@@ -122,11 +122,16 @@ operator. Three-expert MLP is bit-exact in all4 shapes: rows4 mixed loses14.15%,
 rows6 paired gains3.57%, rows9 mixed loses4.08%, rows18 paired gains21.40%.
 Allocator peak131,863,420B;8B afterclose. Guard9965 terminal exit0; Qwen restored
 healthy/warmed and lock released01:30:45UTC, independently verified. No full-model
-gain. Receipt:row-pairing-20260917/README.md. Next is its integration subdirectory:
-one-layer native vsM6-hit-pair lane,32persistent/48transient slots,4interleaved
-blocks and26experts/36assignments. Misses and other explicit M routes use native
-operators. No full model until this realistic grouping wins. SSD bytes and
-target precision stay native.
+gain. Receipt:row-pairing-20260917/README.md. One-layer integration also completed:
+native vsM6-hit-pair lane,32persistent/48transient slots,4interleaved blocks,
+26experts/36assignments. All64 outputs bit-exact;134reads/arm. M6 median18.669354
+->18.527844ms (0.758%), below0.972% spread between native controls. M1 unchanged
+operator measures0.848% slower. No full-model run justified; do not promote the
+isolated21.40% case. Guard8711 terminal exit0; allocator1,581,355,529B,8B afterclose;
+guard machine12,985,729,024B. ExactQwen restored/healthy/warmed and lock released
+01:37:42UTC; independent checks found no owned candidate. Both new full candidates
+and both operator windows are terminal. Automatic Qwen cleanup is working;
+the earlier manual-purge blocker is cleared. Best remains12.6731624TPS.
 
 # Latest Packed Plane Overlap
 

@@ -34,11 +34,24 @@ peak of 336,479,168 bytes and machine peak of 10,855,268,352 bytes. Guard
 9965 exited 0; exact Qwen identity, health and warmup returned and the lock
 was released at 01:30:45 UTC on September 18. Independent checks passed.
 
-The next staged check is `.../row-pairing-20260917/integration`: one real
-runtime/slot-pool layer, with 32 persistent and 48 transient slots. It pairs
-only M6 cache-hit work; misses and the other explicit M routes remain native.
-Its stride-four route has 26 experts across 36 assignments, near the captured
-trace's 24.24-expert average. An unchanged native lane and the candidate will
-run in four interleaved blocks. No full-model run is justified yet.
+The one-layer integration completed with 32 persistent and 48 transient slots.
+It pairs only M6 cache-hit work; misses and other explicit M routes use native
+operators. Its stride-four route has 26 experts across 36 assignments, near
+the captured trace's 24.24-expert average. Four interleaved native/candidate
+blocks produced 64 bit-exact outputs and 134 reads per arm.
+
+The aggregate M6 median improved from 18.669354 to 18.527844 ms (0.758%),
+smaller than the 0.972% spread between the two native controls. M1, whose
+operator route stayed native, was 0.848% slower in the aggregate comparison.
+This weak integration result does not justify a full-model run. Retain the
+operator as an experiment; do not promote the 21.40% isolated case as a
+general decode improvement.
+
+Integration allocator peak was 1,581,355,529 bytes, with 8 bytes active after
+close. The guard separately sampled 1,956,251,712 process bytes and
+12,985,729,024 machine bytes. Guard 8711 exited 0; exact Qwen identity, health
+and warmup returned, and the lock was released at 01:37:42 UTC on September 18.
+Independent checks confirmed the service and absence of owned probe processes.
+`integration/sha256.json` binds the full harness, results and lifecycle.
 
 `sha256.json` binds the 12 operator, census, command and lifecycle files.
