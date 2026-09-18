@@ -42,7 +42,7 @@ weighted frequency15,546; weighted predictor+frequency15,587. Unit weights
 reproduce every native per-cycle count. No GPU execution or tests followed.
 Receipt:docs/deepseek-v41/receipts/row-weighted-cache-20260917/README.md.
 
-Next bounded screen:/tmp/dsv41-even-depth-20260917. FixedD4, fixedD6 and aD7
+Completed bounded screen:/tmp/dsv41-even-depth-20260917. FixedD4, fixedD6 and aD7
 head with a constant six-proposal cut, versus exactD5 teacher control. The
 existing receipts contain noD4/D6 measurement. Four views share the native
 compact weights. Bound41GiB active+4GiB cache+4GiB host; current baseline and
@@ -50,7 +50,21 @@ wired usage must fit before MLX import. The target trunk never runs. The
 stdlib controller waits for actual child exit, then reclaims source-file
 pages before the original guard restores Qwen. No new full model is staged.
 Teacher replay is acceptance evidence only; it cannot establish changed target
-arithmetic, physical reads or TPS. NativeD5 must reproduce every saved boundary.
+arithmetic, physical reads or TPS. NativeD5 reproduces every saved boundary.
+D4:238cycles/1190rows;D6:191/1337;D7cut6:189/1323 versus native206/1236.
+No full target run is justified by these cycle/row tradeoffs. Allocator peak
+21,299,586,448B; guard process15,197,695,592B; machine26,291,191,808B. Controller
+reclaimed15,348,088,832B of source cache to0 after child exit. Guard43111 is
+terminal exit0; exactQwen restored/warmed and lock released02:11:01UTC;
+independent02:11:48 healthy/idle/warmed/free check found no owned child.
+Receipt:docs/deepseek-v41/receipts/even-draft-width-20260917/README.md.
+
+Next operator screen:/tmp/dsv41-fused-gu-20260917. NativeV16/R4/SG2 gate and
+up reductions share the input load and one launch; each produces the original
+BF16 output, then uses unchanged clamp/SwiGLU and nativeV8 down. No weight
+layout or arithmetic change. Four real whole-MLP shapes, nonidentity slots,
+48-slot bank and6GiB incremental bound. Promote only after a measured gain;
+no full model is staged. Earlier row-pair integration was below control spread.
 
 # Latest Adaptive Draft Stage
 
