@@ -1,0 +1,26 @@
+{
+  "binary": "stock_source",
+  "library": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/control-lib/libmlx.dylib",
+    "sha256": "937954b01bb547298fd5c6d09a61e72ba41a3828296ae90617079c5eff72c89a"
+  },
+  "tests_run": 3,
+  "failures": [
+    [
+      "test_memory.TestMemory.test_cache_limit_releases_oversized_free",
+      "Traceback (most recent call last):\n  File \"/tmp/dsv41-strict-cache-20260918/mlx-0.32.2/python/tests/test_memory.py\", line 23, in test_cache_limit_releases_oversized_free\n    self.assertLessEqual(mx.get_cache_memory(), limit)\nAssertionError: 16777217 not less than or equal to 8388608\n"
+    ],
+    [
+      "test_memory.TestMemory.test_cache_limit_bounds_multiple_frees",
+      "Traceback (most recent call last):\n  File \"/tmp/dsv41-strict-cache-20260918/mlx-0.32.2/python/tests/test_memory.py\", line 44, in test_cache_limit_bounds_multiple_frees\n    self.assertLessEqual(mx.get_cache_memory(), limit)\nAssertionError: 10485760 not less than or equal to 8388608\n"
+    ],
+    [
+      "test_memory.TestMemory.test_lower_cache_limit_trims_immediately",
+      "Traceback (most recent call last):\n  File \"/tmp/dsv41-strict-cache-20260918/mlx-0.32.2/python/tests/test_memory.py\", line 59, in test_lower_cache_limit_trims_immediately\n    self.assertLessEqual(mx.get_cache_memory(), 8 * 1024**2)\nAssertionError: 16777217 not less than or equal to 8388608\n"
+    ]
+  ],
+  "errors": [],
+  "skipped": [],
+  "mlx_peak_bytes": 16777217,
+  "active_after_close_bytes": 0
+}

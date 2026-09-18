@@ -1,0 +1,58 @@
+{
+  "source_commit": "5ba18552cb81f85793469a8d20fe2ff4af4f79d8",
+  "complete": true,
+  "children": [
+    {
+      "case": "00-wheel",
+      "binary": "wheel",
+      "pid": 18810,
+      "started_at": 1789715305.39984,
+      "returncode": 0,
+      "exited_at": 1789715308.5728168,
+      "medians_ns": [
+        1489334,
+        2989667,
+        3253375
+      ]
+    },
+    {
+      "case": "01-stock_source",
+      "binary": "stock_source",
+      "pid": 18873,
+      "started_at": 1789715308.5742831,
+      "returncode": 0,
+      "exited_at": 1789715311.8530931,
+      "medians_ns": [
+        1454083,
+        3003500,
+        3250250
+      ]
+    },
+    {
+      "case": "02-strict",
+      "binary": "strict",
+      "pid": 18962,
+      "started_at": 1789715311.854615,
+      "returncode": 0,
+      "exited_at": 1789715315.109175,
+      "medians_ns": [
+        1479959,
+        2940500,
+        3257667
+      ]
+    },
+    {
+      "case": "03-stock_source",
+      "binary": "stock_source",
+      "pid": 19028,
+      "started_at": 1789715315.111122,
+      "returncode": 0,
+      "exited_at": 1789715317.809095,
+      "medians_ns": [
+        1054041,
+        2993791,
+        3254292
+      ]
+    }
+  ]
+}

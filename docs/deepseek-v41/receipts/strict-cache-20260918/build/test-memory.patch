@@ -1,0 +1,66 @@
+--- a/python/tests/test_memory.py
++++ b/python/tests/test_memory.py
+@@ -1,5 +1,6 @@
+ # Copyright © 2023-2024 Apple Inc.
+ 
++import gc
+ import unittest
+ 
+ import mlx.core as mx
+@@ -7,6 +8,56 @@
+ 
+ 
+ class TestMemory(mlx_tests.MLXTestCase):
++    @unittest.skipIf(not mx.metal.is_available(), "Metal is not available")
++    def test_cache_limit_releases_oversized_free(self):
++        limit = 8 * 1024**2
++        previous = mx.set_cache_limit(limit)
++        self.addCleanup(mx.set_cache_limit, previous)
++        self.addCleanup(mx.clear_cache)
++        mx.clear_cache()
++        value = mx.zeros((2 * limit,), dtype=mx.uint8)
++        mx.eval(value)
++        del value
++        gc.collect()
++        mx.synchronize()
++        self.assertLessEqual(mx.get_cache_memory(), limit)
++
++    @unittest.skipIf(not mx.metal.is_available(), "Metal is not available")
++    def test_cache_limit_bounds_multiple_frees(self):
++        limit = 8 * 1024**2
++        previous = mx.set_cache_limit(limit)
++        self.addCleanup(mx.set_cache_limit, previous)
++        self.addCleanup(mx.clear_cache)
++        mx.clear_cache()
++        first = mx.zeros((6 * 1024**2,), dtype=mx.uint8)
++        second = mx.zeros((4 * 1024**2,), dtype=mx.uint8)
++        mx.eval(first, second)
++        mx.synchronize()
++        mx.clear_cache()
++        del first
++        gc.collect()
++        mx.synchronize()
++        self.assertGreaterEqual(mx.get_cache_memory(), 6 * 1024**2)
++        del second
++        gc.collect()
++        mx.synchronize()
++        self.assertLessEqual(mx.get_cache_memory(), limit)
++
++    @unittest.skipIf(not mx.metal.is_available(), "Metal is not available")
++    def test_lower_cache_limit_trims_immediately(self):
++        previous = mx.set_cache_limit(32 * 1024**2)
++        self.addCleanup(mx.set_cache_limit, previous)
++        self.addCleanup(mx.clear_cache)
++        mx.clear_cache()
++        value = mx.zeros((16 * 1024**2,), dtype=mx.uint8)
++        mx.eval(value)
++        del value
++        gc.collect()
++        mx.synchronize()
++        self.assertGreaterEqual(mx.get_cache_memory(), 16 * 1024**2)
++        self.assertEqual(mx.set_cache_limit(8 * 1024**2), 32 * 1024**2)
++        self.assertLessEqual(mx.get_cache_memory(), 8 * 1024**2)
++
+     def test_memory_info(self):
+         old_limit = mx.set_cache_limit(0)
+ 

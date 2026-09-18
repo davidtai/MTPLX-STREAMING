@@ -1,0 +1,41 @@
+{
+  "files": [
+    {
+      "file": "model-00003.safetensors",
+      "file_bytes": 174962526,
+      "cached_page_bytes_before": 110493696,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00005.safetensors",
+      "file_bytes": 191315913,
+      "cached_page_bytes_before": 123076608,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00006.safetensors",
+      "file_bytes": 174962520,
+      "cached_page_bytes_before": 110493696,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00023.safetensors",
+      "file_bytes": 186072941,
+      "cached_page_bytes_before": 118915072,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    },
+    {
+      "file": "model-00027.safetensors",
+      "file_bytes": 180697321,
+      "cached_page_bytes_before": 114688000,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    }
+  ],
+  "cached_page_bytes_before": 577667072,
+  "cached_page_bytes_after": 0
+}

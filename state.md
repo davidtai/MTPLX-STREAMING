@@ -1,15 +1,13 @@
 # Current Goal
 
-DeepSeek V4.1: correct memory reporting and runner bugs, then reach 20 decode
-TPS on exact 16,384-input / 1,024-output Python under 110 decimal GB.
-Best single point estimate: **12.826718 TPS; 20 TPS remains unmet.**
-The part1 candidate is only0.1375% above the12.8091055TPS part3 baseline;
-this is not a reliable full-model improvement and does not change the default.
-Latest cache-budget candidate: **12.6712544 TPS**, exact native output, 103 slots
-per layer, and 107.034 GB sampled machine peak. It recovers one slot at the same
-live baseline; the different capacity prevents an isolated speed comparison.
-Latest full Q8 candidate: 10.7541904 TPS; keep native KV for the fastest route.
-At least 256K KV support is also required, secondary to reaching 20 TPS.
+DeepSeek V4.1: correct memory reporting and runner bugs, then reach20 decode
+TPS on exact16,384-input /1,024-output Python under110 decimal GB.
+Best single full result: **13.1509467 TPS;20TPS remains unmet.**
+The strict allocator run preserves all1024 native IDs at84->109 slots/layer,
+with109.672GB peak physical use. It saves2.076s versus the retained12.8091055TPS
+part3 result. Different baselines/capacities prevent isolated latency or
+repeatability claims. Latest fullQ8 result is10.7541904TPS; nativeKV16 stays the
+fastest route. FixedQ8 and at least256K KV support remain secondary to20TPS.
 
 # Decisions
 
@@ -17,7 +15,9 @@ At least 256K KV support is also required, secondary to reaching 20 TPS.
   Missing measurements stay null/n/a. Limits and plans are not measured usage.
 - Ceiling 110,000,000,000B includes baseline, Python, Metal, caches and peaks.
   Price the actual bounded Python capacity plus helper metadata: the latest
-  candidate reserves 1,371,664,384 B. Preserve allocator overshoot/copy/graph space.
+  candidate reserves1,371,664,384B. Preserve active/copy/graph/seed/KV space.
+  Only the attested strict allocator can remove the2,258,155,644B inactive-cache
+  overshoot reserve; stockMLX keeps it. Cache limits are not usage measurements.
 - Use scripts/deepseek_v41/gpu_window.sh directly, never nested; acquire the
   exclusive /tmp/mtplx-gpu-exclusive.lock before MLX or Qwen shutdown.
   Never steal another job's lane or shut down Qwen while requests are active.
@@ -43,60 +43,63 @@ sizes and shared transient allocation bytes.
 
 # Current Optimization Stage
 
-The cache-budget stage at source cb85fb3d is complete. One native expert operator
-finds zero allocator cache flat, but a native attention operator rejects it on
-latency. A separate 256 MiB attention operator preserves exact output/state and
-has a stable, flat Full/Reindex comparison; other controls contain noise. Do not
-infer a hard cache ceiling from the configured limit or endpoint measurements.
+Strict allocator stage is complete at measured source5ba18552cb81f85793469a8d20fe2ff4af4f79d8.
+Receipt:docs/deepseek-v41/receipts/strict-cache-20260918/README.md.
+Live root:/tmp/dsv41-strict-cache-20260918; full helpers:full-v1;
+raw prefix:/tmp/dsv41-110-stage/full-strict-cache-20260918-v1.
 
-The full candidate keeps 1 GiB cache through prefill, sets 256 MiB at the existing
-quiescent growth boundary, and uses two fixed 64 MiB Engram arenas. The configured
-saving is 1,011,844,096 B while retaining the entire 2,258,155,644 B cache-overshoot
-allowance and every prefill/KV/compiler/copy/wired margin. At baseline
-11,964,268,544 B, unchanged admission implementations calculate 102 slots for
-the prior configuration and 103 for this candidate. The full run uses 84->103,
-48 transients, native KV16, D5/M6 and part3 reads. Both Engram arenas retain
-180,226/180,228 rows with zero evictions within their 254,200-row capacities.
+The officialMLX0.32.2 archive and237 matching installed headers anchor matched
+stock/strict host builds. Only allocator free/set_cache_limit change; all Metal
+shader bytes match the installed wheel. Production packages are unchanged.
+DYLD_LIBRARY_PATH is selected only inside the guarded child; actual loaded
+libmlx path/hash is attested before allocation/admission credit. Strict binary:
+/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib,
+SHA32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9.
 
-Full result: 12.6712544463 TPS / 80.733916625 s, all 1,024 native IDs identical,
-206 cycles, 34,680 records / 613,652,889,600 B read, read union 47.418195512 s.
-Charged growth is 3.670029834 s. Bound 109,677,955,304 B; MLX peak 93,368,091,658 B;
-internal process peak 94,359,404,456 B; guard machine peak 107,034,165,248 B.
-The applied cache report correctly changes to 268,435,456 B for growth/decode.
-This does not establish a throughput improvement against the retained 104-slot
-part3 run. No broad suite, new optimization test, or default promotion follows.
+Strict eviction enforces inactive cache<=configured limit and trims immediately
+on reduction. Prefill stays1GiB; growth/decode256MiB. The2,258,155,644B inactive
+overshoot allowance alone is removed. Existing active/copy/seed/prefill/KV,
+compiler, Python and wired reserves remain. Capacity search extends through110
+with unchanged exact page-aligned bank geometry and full bound inequalities.
+CPU accounting at the actual10,240,868,352B baseline admits105 slots for stock
+and109 for strict; strict physical bound109,979,515,100B.
 
-Full guard12198 is terminal exit0 with 223 complete samples and zero compressor
-growth. Exact Qwen restored/warmed and lock released 06:15:55 UTC September18;
-independent 06:16:26 health check confirms healthy/idle/warmed/free, no owned
-child. All three bounded operator guards are also terminal and restored Qwen.
-Archive: receipts/cache-budget-20260918. Stage root:
-/tmp/dsv41-cache-budget-20260918/full-v1; raw prefix:
-/tmp/dsv41-110-stage/full-cache-budget-20260918-v1. No GPU child is running.
+Attention outputs, states, selected indices and metadata match all five layers
+across wheel/stock-source/strict binaries; stable Full/Reuse and Full/Reindex
+cases are flat. SWA controls are noisy. All206 expert replay reads/outputs
+match; strict/stock elapsed ratio.9960 with.324% control spread. After the full
+win, only3 targeted allocator regressions were added: all fail on stock and
+pass on strict. No broad suite or unchanged full rerun.
 
-That output-projection audit and one bounded operator are now complete at
-source 9835305c1. Fused MXFP8 decode/transpose retains the native grouped BF16
-matmul and wo_b. All five complete weight arrays and M1/M6 projection outputs
-match exactly. At M6 it improves the fresh-conversion path by 28.84%, but is
-45.71% slower than cached BF16, adding 0.2403166 ms/layer (1.9802 s projected
-over 40 layers x 206 cycles). M6 control spread is 1.87%. This change alone also
-cannot add a slot: the unchanged growth-copy envelope puts 104 slots at
-110,363,144,536 B. Reject without a full model run, default change or new test.
-Receipt: receipts/woa-fused-transpose-20260918. Temporary root:
-/tmp/dsv41-woa-fused-transpose-20260918. Static operator bound 8 GiB; measured
-MLX peak 861,863,936 B, active after close 0. Guard96675 terminal0, source cache
-331,923,456 B->0, exact Qwen restored/warmed/lock released 06:33:42 UTC.
-Independent 06:36:13 health/idle/warmup/free-lock/no-owned-child check passes.
+Full13.1509466579TPS /77.7890768330s,206cycles,all1024 native IDs identical,
+SHA0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
+NativeKV16,D5/M6,part3,48transients,84->109. Reads32,316 /571,822,571,520B;
+read union45.125601621s (not GPU-idle time), growth3.617399125s. MLX peak
+97,614,305,072B; process98,610,301,552B; machine109,671,972,864B; guard peak
+109,664,894,976B.219guard samples,zero compressor growth. Final inactive cache
+256,770,058B, separately reported from268,435,456B limit. Both64MiB Engram
+arenas retain180,226/180,228rows withzeroevictions. Full output keeps the
+existing allowed nativeAR tie flip at297; AR timing/memory is reference-only.
 
-Next: CPU audit of distinct growth, seed and steady-decode allocator lifetimes.
-The 2,258,155,644 B overshoot allowance is unchanged; do not lower it from
-endpoint readings. Growth already clears cache. A zero cache setting is only
-a possible quiescent copy-phase mechanism, not a decode setting (attention
-already rejected zero). Any smaller steady allowance requires a bounded
-allocation/lifetime inventory and a proved boundary after the seed. Preserve
-native KV16, exact arithmetic and all unrelated safety margins. Do not repeat
-direct gather_qmm, transient projection, cross-layer prefetch or cache arms
-unchanged. No new full-model candidate is staged.
+All guards are terminal0: build21259,attention69981,expert2430,full42497,
+regression15580. Final exactQwen restore/warmup/lock release07:24:09UTC;
+independent07:24:19UTC health confirms healthy/idle/warmed/free. No owned GPU
+child remains. Full source/packed clean-file cache is zero after reclamation.
+Measured helper source pins become stale after the documentation checkpoint;
+verify unchanged runtime hashes before refreshing pins, and use new prefixes.
+
+The prior cache-budget result12.6712544TPS and fused-transpose rejection remain
+archived at receipts/cache-budget-20260918 and receipts/woa-fused-transpose-20260918.
+Fused transpose is28.84% faster than fresh conversion but45.71% slower than
+retained BF16, and its unchanged growth envelope prevents an extra slot.
+Zero allocator cache loses on native attention. Do not repeat these arms,
+cache-policy/prefetch/width rejections, or the completed strict comparison.
+
+Next optimization must materially reduce expert traffic or exposed native
+verification cost. Another26.639s must be removed to reach20TPS on this exact
+workload. Keep the new strict memory bound as the baseline and establish any
+new phase/copy peak before another full load. Complete256K prefill/rollover
+remains unverified and secondary. Work inline with minimal testing.
 
 ## Previous prefix and read-batch stages
 

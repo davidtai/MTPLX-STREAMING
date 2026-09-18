@@ -1,0 +1,13 @@
+{
+  "binary": "strict",
+  "library": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "tests_run": 3,
+  "failures": [],
+  "errors": [],
+  "skipped": [],
+  "mlx_peak_bytes": 16777217,
+  "active_after_close_bytes": 0
+}

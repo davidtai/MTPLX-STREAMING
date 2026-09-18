@@ -1,0 +1,20 @@
+{
+  "source_archive_sha256": "bf892386ccac1d249acc9da21574fd7b95a995f4c58b03310105fe05f077b175",
+  "runtime_changes": [
+    "MetalAllocator::set_cache_limit trims existing inactive buffers under its mutex.",
+    "MetalAllocator::free releases oversized buffers, or evicts enough older buffers before caching a fitting buffer."
+  ],
+  "invariant": "With the allocator mutex held: after set_cache_limit, malloc, free, and clear_cache, inactive cached bytes are <= configured cache limit. New allocations cannot inherit an oversize cached pool.",
+  "unchanged": "GPU arithmetic, all Metal shader bytes, graph code, public headers and Python extension. Build is isolated under /tmp; installed environments are unchanged.",
+  "failure_checks": [
+    "Reject a loaded dylib or metallib whose hash differs from the pinned build.",
+    "Verify native outputs and attention/expert performance under the strict policy before any full-model admission credit.",
+    "Keep all existing active, host, compile, KV, padding and wired allowances; only free-cache overshoot is a candidate for removal."
+  ],
+  "stock_libmlx_sha256": "d24c7a9b9d55a76bfd3bbcd1d042251a185cbadcb6340c3244a6ffa3dcb7c7e8",
+  "stock_metallib_sha256": "dc59d1cceb1a5c7e578232e6e41e28e2c73c9463ac6dbc3886c3ee17ffc270ed",
+  "incremental_build_budget_bytes": 17179869184,
+  "disk_budget_bytes": 4294967296,
+  "max_parallel_compilers": 4,
+  "production_installation": false
+}

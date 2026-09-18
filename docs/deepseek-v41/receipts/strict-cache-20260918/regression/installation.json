@@ -1,0 +1,30 @@
+{
+  "incremental_bound_bytes": 2147483648,
+  "bound_scope": "512MiB allocator envelope including at most32MiB free cache and16MiB arrays;1.5GiB host/import/shader/compiler reserve. One child at a time.",
+  "test_source": "/tmp/dsv41-strict-cache-20260918/mlx-0.32.2/python/tests/test_memory.py",
+  "test_sha256": "ecd45f645eecf3dab57d4dcb4e42a01dceb1ab474a02f83677f17c7ee2094a62",
+  "tests": [
+    "test_cache_limit_releases_oversized_free",
+    "test_cache_limit_bounds_multiple_frees",
+    "test_lower_cache_limit_trims_immediately"
+  ],
+  "binary_choices": {
+    "wheel": {
+      "path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/mlx/lib/libmlx.dylib",
+      "sha256": "d24c7a9b9d55a76bfd3bbcd1d042251a185cbadcb6340c3244a6ffa3dcb7c7e8"
+    },
+    "stock_source": {
+      "path": "/tmp/dsv41-strict-cache-20260918/control-lib/libmlx.dylib",
+      "sha256": "937954b01bb547298fd5c6d09a61e72ba41a3828296ae90617079c5eff72c89a"
+    },
+    "strict": {
+      "path": "/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+      "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    }
+  },
+  "helper_sha256": {
+    "run_pair.py": "aeb3f2457b28165090e62386011a7c0bbe54b93c50c2c3f5d96e6f28f12cf7e7",
+    "run_checks.py": "f47fd0f4978a382dbbb7d6860d0d333032ab604c71f4f0a884813a3d6c77c814",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32"
+  }
+}

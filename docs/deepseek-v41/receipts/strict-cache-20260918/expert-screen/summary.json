@@ -1,0 +1,71 @@
+{
+  "complete": true,
+  "all206_cross_binary_reads_and_outputs_exact": true,
+  "binary_order": [
+    "wheel",
+    "stock_source",
+    "strict",
+    "stock_source"
+  ],
+  "warm_total_ns": [
+    1340111745,
+    1319673957,
+    1316572586,
+    1323960454
+  ],
+  "strict_over_matched_stock": 0.996032265673213,
+  "matched_stock_control_spread": 0.003242881831288131,
+  "cache_max_bytes": [
+    5656294,
+    5534364,
+    5564048,
+    5545104
+  ],
+  "mlx_peak_bytes": [
+    2934477321,
+    2934477321,
+    2934477321,
+    2934477321
+  ],
+  "active_after_close_bytes": [
+    8,
+    8,
+    8,
+    8
+  ],
+  "cache_policy_observations": [
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 16777217,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 16777217,
+      "previous_limit_bytes": 33554432
+    },
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 16777217,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 16777217,
+      "previous_limit_bytes": 33554432
+    },
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 1,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 0,
+      "previous_limit_bytes": 33554432
+    },
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 16777217,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 16777217,
+      "previous_limit_bytes": 33554432
+    }
+  ],
+  "interpretation": "Strict cache remains within256MiB and preserves every physical expert read and native output. Small matched replay screens allocator cost; this is not a full-model throughput result."
+}

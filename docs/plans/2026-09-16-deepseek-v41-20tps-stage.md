@@ -775,3 +775,28 @@ with unlimited lead time. No layers pass the training-half80% precision gate.
 Reject this family without GPU execution, production changes or new tests.
 The1.535-second CPU screen imports no MLX and uses47.3MB of predictor arrays.
 Evidence: `../deepseek-v41/receipts/causal-prefetch-screen-20260917/README.md`.
+
+### Strict allocator cache, 2026-09-18
+
+Matched MLX0.32.2 host builds retain byte-identical Metal shaders. Strict free
+and limit reduction enforce the configured inactive-cache capacity. Bounded
+native attention and206-route expert comparisons preserve exact outputs/state
+and show no material stable-case regression. The loaded library is attested
+before crediting the2,258,155,644B overshoot allowance; all other reserves stay.
+
+One complete16K/1024 run reaches13.1509467TPS /77.7890768s at84->109 slots,
+with all1024 native IDs identical. At the actual10.240868352GB baseline, stock
+accounting admits105 and strict109. Bound109.979515100GB; machine peak
+109.671972864GB. Expert reads fall to571.822571520GB. This is the best single
+result, not a matched-capacity/repeatability claim.20TPS remains unmet.
+
+Only after that improvement,3 targeted cache regressions were added; all fail
+on stock and pass on strict. Every guard is terminal0; exactQwen health/warmup
+and free lock were independently checked07:24:19UTC. No production package was
+replaced. Strict admission credit requires the pinned strict binary; stock
+keeps its overshoot allowance. No broad suite or unchanged full rerun.
+
+Task4 remains open. See
+`../deepseek-v41/receipts/strict-cache-20260918/README.md`. Preserve this result
+while reducing expert traffic or exposed verification time.256K KV prefill
+verification stays secondary to20TPS.
