@@ -921,3 +921,14 @@ peak remains under the 110 GB ceiling. This is a small single-run improvement;
 pass after the win. Longer extensions do not justify another GPU run based
 on added target work in a CPU-only screen. All lifecycle checks pass. See the
 hybrid-lookup-20260918 receipt for exact source, accounting and limitations.
+
+### Reader executor screen, 2026-09-18
+
+The reader-hop screen at source85c7a33fd9f171c3847d7e59f8566b8b72de7225
+is not promoted. Batching each native miss part and running its fill on the
+existing miss worker preserves all206 layer34 outputs/reads at110/48 slots.
+Median ratio0.9871322 is within1.4375% control spread; no full run or new tests.
+The9GiB bound covers3,047,281,161B MLX peak; final Metal8B. Guard33095 exits0,
+restores exactQwen/warmup/releases10:55:23UTC; independent healthy/idle/warmed/
+free check10:55:55UTC. Receipt:reader-hop-20260918. No owned child remains.
+Retained full result13.4141518TPS; Task4 and20TPS stay open.

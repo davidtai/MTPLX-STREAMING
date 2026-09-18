@@ -1,0 +1,27 @@
+{
+  "source_root": "/tmp/dsv41-reader-hop-20260918",
+  "source_commit": "85c7a33fd9f171c3847d7e59f8566b8b72de7225",
+  "artifact_copies": false,
+  "files": {
+    "reader_hop.py": "49c8e195092e88b571f929b613643e07161c64f1c82f1492bf91cfaac06eca51",
+    "installation.json": "e1a5511cb8d3258ea220bdd55f011bd30e5fb7e7e9309a6e8bef12a408784642",
+    "plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "README.md": "9bfc1c274bc2943cf6722ee370d324570695c6756fdf91174a9bb53025f071c7",
+    "reclamation.json": "4178f4a7785a15ab7bfe37e10f21cc2b338aeba35f68651cf92c800325c0c17f",
+    "probe.json": "bfedbdb0d79569b53856cab3550b91c68dec04f7fa80a2e4277b33eb927a04c1",
+    "restore_bank.py": "1ae63301433058fe491d229851e7638daf25300289af3106b0638b8c57103849",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "probe.py": "3429ff031d3bb5b921cc1fad09d57f33ff093b1b7fe2155571e50cf31c8d53ff",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "guard.log": "708fb68017b4063ee6ac3cee79df9d6cdbe391cffa550a60662cd318affe736d",
+    "command.sh": "918f36a878f13a311764e95ab8f991d29953bd1dade6a8b08663e96c2f93d228",
+    "stage.py": "713320915b804703055f3190fb3ccefb6e5909570cefcb13423c89b8163575ba",
+    "construction.json": "bcf445662a04cded4fedcdce7eafc4098accc83d48bf4603662a274139fcfc3d",
+    "child.json": "c8f92855f8e81d913f01f3f8820c9e765a1f24a9b1f4946461b899bcd69bfd0b",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "routes.json": "5dd6c05ba96f9e4f829a372e25bbccb1197fd78031bf104f8bc99906a64a1cac",
+    "post-run-health.json": "2e30a57a36bb4bda5a4b0cf94dac259421905eea1c66a40155f84420b1d11414",
+    "run_screen.py": "e34840c5def4ad187b04b7fc6d7b2024f94d13e4339fcb7c8229ccc8cfa5d0bd"
+  }
+}

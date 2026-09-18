@@ -77,6 +77,14 @@ Latest stage at measured source `48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3`:
   Raw prefix: /tmp/dsv41-110-stage/full-hybrid-lookup-20260918-v1.
   Measured helpers and library remain pinned; production defaults are unchanged.
 
+The reader-hop screen at source85c7a33fd9f171c3847d7e59f8566b8b72de7225
+is not promoted. Batching each native miss part and running its fill on the
+existing miss worker preserves all206 layer34 outputs/reads at110/48 slots.
+Median ratio0.9871322 is within1.4375% control spread; no full run or new tests.
+The9GiB bound covers3,047,281,161B MLX peak; final Metal8B. Guard33095 exits0,
+restores exactQwen/warmup/releases10:55:23UTC; independent healthy/idle/warmed/
+free check10:55:55UTC. Receipt:reader-hop-20260918. No owned child remains.
+
 Next work must remove about 25.11 s from this exact workload to reach 20 TPS.
 Prior prefetch, row-pair, fanout and policy rejections remain relevant. Favor
 material reductions in expert traffic or exposed verification; do not repeat

@@ -460,3 +460,12 @@ Open:
 - 20 TPS remains unmet by about 25.11 s decode wall. Full 256K prefill remains
   secondary. No agents, broad tests, unchanged full controls or default change.
 - Receipt: docs/deepseek-v41/receipts/hybrid-lookup-20260918/README.md.
+
+## 2026-09-18 10:56 UTC [saved]
+The reader-hop screen at source85c7a33fd9f171c3847d7e59f8566b8b72de7225
+is not promoted. Batching each native miss part and running its fill on the
+existing miss worker preserves all206 layer34 outputs/reads at110/48 slots.
+Median ratio0.9871322 is within1.4375% control spread; no full run or new tests.
+The9GiB bound covers3,047,281,161B MLX peak; final Metal8B. Guard33095 exits0,
+restores exactQwen/warmup/releases10:55:23UTC; independent healthy/idle/warmed/
+free check10:55:55UTC. Receipt:reader-hop-20260918. No owned child remains.
