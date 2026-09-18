@@ -1,0 +1,8 @@
+{
+  "cpu_only": true,
+  "rows_written_once": true,
+  "paired_assignments": 1702,
+  "single_assignments": 4012,
+  "incremental_bound_bytes": 9663676416,
+  "raw_bank_bytes": 2951700480
+}

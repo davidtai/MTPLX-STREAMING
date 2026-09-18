@@ -394,3 +394,23 @@ It does not establish full TPS or shared-ring behavior across adjacent sources.
 restoration/warmup/free lock independently verified. Next is a continuous
 three-layer cost screen.20TPS stays open; retained full result13.1509467TPS.
 See `docs/deepseek-v41/receipts/lookahead-io-20260918/README.md`.
+
+### Adjacent prefetch and mixed-row rejection, 2026-09-18
+
+Three continuous layer30/31/32 screens pay native gate-shaped cost on synthetic
+inputs while replaying exact-workload prediction scores. Last-GU issue loses
+2.27%; first-GU/demand-priority and NumPy ranking are flat. All192 outputs match
+per arm, memory fits14GiB incremental, final Metal16B. No full-prefetch/default
+or tests are promoted. See the lookahead-adjacent-20260918 receipt.
+
+A C109 census motivates one mixed pair/single kernel, preserving native dot
+order and removing the earlier pair/single dispatch split. All206 native layer34
+outputs/reads match, but ratio1.0038815 is within.6348% control spread. Reject;
+no full run or new tests.9GiB incremental bound; final Metal8B. See the
+mixed-row-pairing-20260918 receipt. Guards48399/99230/41743/58512 all exit0,
+reclaim source pages and restore exactQwen/warmup/free lock; checks are fresh.
+
+Best remains13.1509467TPS;20TPS is open. The directpreadv path already avoids
+a Python payload copy, and fanout8 is previously rejected. Next work should
+establish reliable coarse CPU/wait attribution, avoiding the invalid cProfile
+data and repeated unchanged full runs.256K prefill remains secondary.

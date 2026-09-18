@@ -90,13 +90,42 @@ MLXpeak5,304,624,137B within11GiB incremental bound; final owners8B. Guard40813
 terminal0; Qwen restored/warmed/released08:46:12UTC and independently checked.
 Receipt:docs/deepseek-v41/receipts/lookahead-io-20260918/README.md.
 
-Next: bounded three-adjacent-layer replay with continuous timing through final
-drain and live gate-shaped computation. Captured router inputs were not saved;
-recorded-score replay plus synthetic-input gate cost is not live predictor
-parity. Preserve demand priority, native publication/tickets and GPU leases.
-The fixed experimental config leaves the public transition+prefetch ban intact.
-No full-model prefetch/default is promoted. Work inline, minimal checks and no
-new regression tests before a win.
+The three-layer follow-up is complete and rejects the prefetch family at
+source039e3bd811c64aa645dd89b5b8c85e1c3cf5ab53. Layers30/31/32,105/48/16,
+continuous held-out timing through terminal drain and live gate-shaped cost:
+- Last-GU issue:2.27% slower; native spread.7514%.
+- First-GU issue plus demand-priority queue:ratio1.003543, no clear win.
+- The same queue plus NumPy ranking:ratio1.004293, no win.
+All192 outputs match in each arm. Gate computation uses synthetic inputs;
+rank selection uses captured exact-workload scores, so live predictor parity
+is unproved. Attention is excluded. Full14GiB incremental bounds cover
+MLXpeak7,364,297,233B; final owners16B. Guards48399/99230/41743 all terminal0,
+exactQwen restored/warmed and free locks independently verified. Last release
+09:10:02UTC. No full-model prefetch, defaults or regression tests follow.
+Receipt:docs/deepseek-v41/receipts/lookahead-adjacent-20260918/README.md.
+
+A nativeC109 CPU census finds31.58 cache-hit rows/call,16.06 pairable. The prior
+C32 synthetic row-pair screen is different. A new single mixed pair/single
+kernel removes its separate dispatches while keeping native dot order, geometry
+and BF16 boundaries. Layer34 replays all206 native routes with109/48 slots;
+all outputs/reads match, but ratio1.0038815 is flat within.6348% control spread.
+Reject it without a full run or new tests. Full9GiB incremental bound; guard
+process3,520,317,696B, machine14,080,950,272B, final Metal8B. Guard58512 terminal0;
+Qwen restored/warmed/released09:17:49UTC, independently healthy/idle/warmed/free.
+Receipt:docs/deepseek-v41/receipts/mixed-row-pairing-20260918/README.md.
+No owned GPU child remains. All task source file cache is reclaimed.
+
+The reader already uses directos.preadv into component destinations; enabling
+the scalar native extension will not change this path. Fanout8 was screened
+and not promoted (12.42GB/s versus12.38GB/s); do not repeat it. Prefill-derived
+nonuniform allocation and two-row splitting are also already covered above.
+Next: establish CPU-versus-wait attribution before another optimization guess.
+Existing cProfile data is invalid and existing full receipts do not contain CPU
+clocks. Prefer independently validated thread/process CPU clocks at existing
+coarse timing boundaries, with no added GPU fences and explicitly diagnostic
+reporting. Price any extra host/graph ownership and use the real CLI resolver
+before a guarded full load. Work inline; keep checks focused and do not repeat
+unchanged full controls.20TPS and full256K prefill remain open.
 
 Strict allocator stage is complete at measured source5ba18552cb81f85793469a8d20fe2ff4af4f79d8.
 Receipt:docs/deepseek-v41/receipts/strict-cache-20260918/README.md.

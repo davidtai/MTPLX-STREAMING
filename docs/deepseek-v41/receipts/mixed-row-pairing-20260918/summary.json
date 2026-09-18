@@ -1,0 +1,55 @@
+{
+  "source_commit": "039e3bd811c64aa645dd89b5b8c85e1c3cf5ab53",
+  "scope": "Layer34, all206 native M6 routes, actual73 warm residents expanded to109,48 shared transients. Mixed pair/single cache-hit kernel preserves native V16/V8,R4,two-SIMD geometry and float2 per-row dot order. One dispatch per bank; miss parts use unchanged native kernels.",
+  "complete": true,
+  "latency_ratio": 1.0038814835383303,
+  "control_spread_fraction": 0.006347958300007687,
+  "active_after_close_bytes": 8,
+  "arms": [
+    {
+      "mode": "native",
+      "sequence": 0,
+      "warm_total_ns": 1243575620,
+      "warm_read_records": 742,
+      "all_outputs_and_reads_exact": true,
+      "mlx_peak_bytes": 3028505097
+    },
+    {
+      "mode": "mixed",
+      "sequence": 1,
+      "warm_total_ns": 1244028370,
+      "warm_read_records": 742,
+      "all_outputs_and_reads_exact": true,
+      "mlx_peak_bytes": 3028505097
+    },
+    {
+      "mode": "native",
+      "sequence": 2,
+      "warm_total_ns": 1235777494,
+      "warm_read_records": 742,
+      "all_outputs_and_reads_exact": true,
+      "mlx_peak_bytes": 3028505097
+    },
+    {
+      "mode": "mixed",
+      "sequence": 3,
+      "warm_total_ns": 1237119918,
+      "warm_read_records": 742,
+      "all_outputs_and_reads_exact": true,
+      "mlx_peak_bytes": 3028505097
+    },
+    {
+      "mode": "native",
+      "sequence": 4,
+      "warm_total_ns": 1235730956,
+      "warm_read_records": 742,
+      "all_outputs_and_reads_exact": true,
+      "mlx_peak_bytes": 3028505097
+    }
+  ],
+  "guard_session": 58512,
+  "guard_exit_code": 0,
+  "guard_process_peak_bytes": 3520317696,
+  "guard_machine_peak_bytes": 14080950272,
+  "decision": "Reject: mixed-row dispatch remains flat within native control variation."
+}
