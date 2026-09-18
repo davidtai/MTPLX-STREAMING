@@ -1,0 +1,9 @@
+{
+  "routes": 206,
+  "assignments_per_route": 36,
+  "mean_unique_experts": 24.684466019417474,
+  "mean_repeated_assignments": 11.315533980582524,
+  "mean_adjacent_equal_experts": 0.09223300970873786,
+  "largest_reuse_count": 6,
+  "scope": "Actual layer34 nativeD5/M6 route IDs. Global duplicate counts only; persistent/transient and completion-part boundaries constrain the realized grouping. No speed claim."
+}

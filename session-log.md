@@ -355,3 +355,31 @@ compute requests. Partial-row native block cost/cache/ownership must be bounded
 before any asynchronous inter-layer implementation or full GPU run. CPU import
 path refusal fixed explicitly; no MLX execution or production changes.
 Receipt:docs/deepseek-v41/receipts/prefix-readiness-20260918/README.md.
+
+
+## [saved] 2026-09-18 — packed operator rejections and later router feature
+
+Measured source013ba48db733659d287d40e7304e1683a0d7e179. Retained best stays
+13.1509467TPS;20TPS remains unmet. Row grouping is1.72% slower; compiled clamps
+are flat. Both exact206-route operators are archived, without full runs/tests.
+
+Recovered W35 hidden trace under .benchmark-artifacts; its prompt differs from
+the acceptance workload. CPU screen selects the current post-attention router
+input for the next gate. One exact16K/1024 diagnostic captures64M6 cycles,
+then removes hooks. All1024 IDs and2368 layer routes match; no prefetch reads.
+Held-out later-feature coverage15.64% of4878physical misses at85.06% precision,
+with2.75% extra traffic; existing feature covers4.86%. Configurations are chosen
+on first32cycles; no tested global setting meets85% precision. This is an
+unlimited-lead-time screen, not a TPS result. Next is a bounded paired-layer
+I/O replay before any full prefetch lane. Native packed readers require a
+thread-local PlanePart witness that speculative workers currently lack.
+
+Diagnostic105slots adds384MiBhost+64MiBMetal; bound107.986800748GB,
+measuredmachine107.152556032GB. First setup refused an omitted CLI host reserve
+before allocation; v2 validates the CLI resolver. Guard77187 terminal0,
+221samples,zero compressor growth. Qwen restored/warmed/released08:21:52UTC;
+independent08:23:58 health/idle/warmup/free-lock check. No owned child.
+Receipts:packed-operators-20260918 and router-feature-20260918. NPZ45.6MB is
+pinned under .benchmark-artifacts/deepseek-v41/router-feature-20260918; /tmp
+path remains a symlink. All runtime source hashes are unchanged. Work inline;
+no new regression tests before a measured win;256K Q8 remains secondary.

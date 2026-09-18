@@ -800,3 +800,32 @@ Task4 remains open. See
 `../deepseek-v41/receipts/strict-cache-20260918/README.md`. Preserve this result
 while reducing expert traffic or exposed verification time.256K KV prefill
 verification stays secondary to20TPS.
+
+### Packed operators and causal router diagnostic, 2026-09-18
+
+Two bounded expert operators are rejected: grouping rows by physical slot is
+1.72% slower, and compiling the complete clamped activation is flat. All206
+outputs/reads match. No full-model runs or regression tests follow those arms.
+See `../deepseek-v41/receipts/packed-operators-20260918/README.md`.
+
+A CPU screen on the historical W35 hidden trace identifies a better causal
+feature: apply the next gate to the current native router input after attention.
+That trace uses a different16K prompt and256AR rows. One exact16K/1024 diagnostic
+then captures64 nativeM6 cycles without prefetching or changing cache policy.
+All1024 output IDs and2368 observed layer routes match the saved native trace.
+Diagnostic fences invalidate TPS comparisons; headline timing fields are null.
+
+With configurations chosen on the first32cycles and evaluated on the next32,
+the later feature predicts763/4878 physical misses(15.64%) while adding134reads
+(2.75%), at85.06% precision. The existing feature covers4.86%. Configurations
+vary by layer; no tested global setting meets the training precision threshold.
+This is an unlimited-lead-time estimate. A bounded paired-layer I/O experiment
+is justified before a full prefetch implementation or performance claim.
+
+The diagnostic reserves384MiBhost plus64MiBMetal and grows84->105slots. Its
+107.986800748GB bound covers the107.152556032GB machine peak. The corrected
+variant checks the real CLI budget resolver; the first launch refused an
+omitted CLI host reserve before model allocation. Guard77187 exits0; exact
+Qwen restoration/warmup and free lock are verified. The retained winner stays
+13.1509467TPS. Task4 and20TPS remain open;256K prefill remains secondary.
+See `../deepseek-v41/receipts/router-feature-20260918/README.md`.

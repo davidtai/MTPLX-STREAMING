@@ -43,6 +43,53 @@ sizes and shared transient allocation bytes.
 
 # Current Optimization Stage
 
+The retained performance winner is still the strict allocator run below.
+Follow-up operators and a router diagnostic at source013ba48db733659d287d40e7304e1683a0d7e179
+are complete; no new performance default is promoted.
+
+- Packed row grouping plus a CPU inverse permutation is1.72% slower; compiling
+  the full clamped activation is flat. Both preserve all206 operator outputs
+  and reads. No full runs or regression tests follow those rejected candidates.
+  Receipt:docs/deepseek-v41/receipts/packed-operators-20260918/README.md.
+- The historical hidden trace exists at
+  .benchmark-artifacts/deepseek-v41/route-traces-w35. It uses a DIFFERENT16K
+  prompt and256AR rows. Do not search for it again or treat it as the M6 workload.
+  CPU screening improves top-one prediction92.77%->95.55% by feeding the next
+  gate the current native router input AFTER attention instead of the mean
+  residual BEFORE attention. Normalization adjustment adds little and is omitted.
+- One exact16K/1024 diagnostic captures the first64M6 cycles, with no speculative
+  reads or policy changes. All1024 native IDs and all2368 observed layer routes
+  match. Hooks are removed after64cycles. Headline TPS/wall fields are null;
+  instrumented timing is not performance evidence. First32cycles select each
+  layer's width/margin/issue limit at85% precision; next32 are held out.
+  Later input covers763/4878physical misses(15.64%), adding134reads(2.75%),
+  precision85.06%, across28 selected layers. Existing input covers237(4.86%)
+  with52extra reads. No tested global setting passes the training precision threshold.
+  These are unlimited-lead-time estimates, not latency or full-prefetch results.
+- Diagnostic84->105slots adds384MiBhost+64MiBMetal; totalhost1,774,317,568B.
+  At10,645,929,984B baseline, physicalbound107,986,800,748B; measured machine
+  107,152,556,032B, process95,828,935,456B, MLX94,788,388,470B. Guard77187
+  terminal0,221samples,zero compressor growth. ExactQwen restored/released
+  08:21:52UTC; independent08:23:58 healthy/idle/warmed/free check. No owned child.
+  The first diagnostic launch omitted the extra host allowance from its CLI;
+  it refused BEFORE model allocation. Variant2 validates the real CLI resolver.
+- Receipt:docs/deepseek-v41/receipts/router-feature-20260918/README.md.
+  Live helpers:/tmp/dsv41-router-feature-20260918/full-v2;
+  raw prefix:/tmp/dsv41-110-stage/full-router-feature-20260918-v2.
+  NPZ:.benchmark-artifacts/deepseek-v41/router-feature-20260918/
+  full-router-feature-20260918-v2.router-capture.npz;45,592,534B,
+  SHA5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e.
+  Its /tmp path remains a symlink. Runtime source hashes still match strict.
+
+Next: bounded paired-layer packed I/O replay for the later-input predictor,
+before any full prefetch installation. The current packed reader requires a
+PlanePart thread-local witness; native speculative workers do not supply it.
+Preserve demand priority, full-record READY publication, slot generations and
+deferred GPU leases. Include predictor cost and a separately priced global
+prefetch ring. Existing packed installation rejects prefetched configurations.
+No prefetch implementation or paired-layer operator has been staged yet.
+Keep work inline, minimal checks and no new regression tests before a win.
+
 Strict allocator stage is complete at measured source5ba18552cb81f85793469a8d20fe2ff4af4f79d8.
 Receipt:docs/deepseek-v41/receipts/strict-cache-20260918/README.md.
 Live root:/tmp/dsv41-strict-cache-20260918; full helpers:full-v1;
