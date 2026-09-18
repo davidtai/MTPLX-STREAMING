@@ -1,769 +1,96 @@
 # Current Goal
 
-DeepSeek V4.1: correct memory reporting and runner bugs, then reach20 decode
-TPS on exact16,384-input /1,024-output Python under110 decimal GB.
-Best single full result: **13.4141518 TPS; 20 TPS remains unmet.**
-Native five-token MTP proposals with at most two causal lookup extensions retain
-all 1,024 native IDs at 84->110 slots/layer, with 109.239 GB machine peak.
-The 76.2627424 s decode saves 0.5417693 s versus the exact input-row result.
-This is a best single result, not an isolated/repeated speedup claim.
-Latest full Q8 remains 10.7541904 TPS; native KV16 stays fastest. Fixed Q8 and
-complete 256K prefill verification remain secondary to 20 TPS.
+DeepSeek V4.1: accurate memory reporting and runner behavior, then 20 decode TPS
+on the exact 16,384-input / 1,024-output Python workload under 110 decimal GB.
+Best single full result: **13.4141517619 TPS / 76.2627423750 s; 20 TPS unmet.**
+All 1,024 native IDs match; 1,023 timed steps, 198 target calls, 84->110 slots.
+The result is not a matched/repeated speedup claim. Fixed Q8 and complete 256K
+prefill verification remain secondary; the full Q8 candidate is 10.7541904 TPS.
 
 # Decisions
 
-- Keep allocator, process phys_footprint and machine physical usage separate.
-  Missing measurements stay null/n/a. Limits and plans are not measured usage.
-- Ceiling 110,000,000,000B includes baseline, Python, Metal, caches and peaks.
-  Price the actual bounded Python capacity plus helper metadata: the latest
-  candidate reserves 1,421,996,032 B, including 32 MiB for the exact input row
-  cache and 16 MiB for the causal lookup index. Preserve active/copy/graph/seed/KV space.
-  Only the attested strict allocator can remove the2,258,155,644B inactive-cache
-  overshoot reserve; stockMLX keeps it. Cache limits are not usage measurements.
-- Use scripts/deepseek_v41/gpu_window.sh directly, never nested; acquire the
-  exclusive /tmp/mtplx-gpu-exclusive.lock before MLX or Qwen shutdown.
-  Never steal another job's lane or shut down Qwen while requests are active.
-- Qwen shutdown reclaims its clean model-file cache automatically. Restore exact
-  identity, health and warmup before release; verify recovery after failed runs.
-- Work inline, no agents; minimal checks, optimization tests after wins.
-  Tie breakers are allowed; arbitrary or unclassified output drift is not.
-- Preserve Claude W126/W127/W128 worktrees; keep unvalidated bounded KV off.
-- User explicitly requested fixed Q8 KV. The new fixed Q8 factory is separate
-  from the old disabled bounded-KV lane; native 16-bit storage remains the control.
-- The 16K/1K throughput workload stays unchanged. A 256K store configuration
-  does not establish the memory envelope for a complete 256K prefill.
+- Separate MLX allocator, Darwin phys_footprint and whole-machine physical use.
+  Never substitute RSS, sum overlapping metrics, or replace unknown with zero.
+- Ceiling is 110,000,000,000 B including live baseline, Python, Metal, KV,
+  inactive cache, I/O, compile/copy and phase peaks. Preserve 100 GiB wired limit.
+  Latest full host reserve is 1,421,996,032 B. Only the attested strict allocator
+  may remove its proved 2,258,155,644 B overshoot allowance; stock keeps it.
+- Every MLX import/load/compile/run requires the parent-held exclusive lock
+  /tmp/mtplx-gpu-exclusive.lock. Use scripts/deepseek_v41/gpu_window.sh directly,
+  never nested. Wait for other jobs; never steal their lane or terminate them.
+- Acquire before idle/warm Qwen shutdown; reclaim its clean model pages
+  automatically. Restore exact service identity and warmup before release.
+  After terminal child/guard status independently verify health and lock.
+- Work inline, no agents. Minimal checks; add optimization tests only after
+  a measured win. Tie breakers are permitted; unclassified target drift is not.
+- Validate/install invariant routes once. No enabled-lane silent fallbacks,
+  repeated hot-path metadata checks, environment reads or engagement counters.
+- Preserve Claude W126/W127/W128 worktrees. New fixed Q8 is separate from the
+  old disabled bounded-KV lane. A 256K allocation is not a verified 256K prefill.
+- The Vontra link is an assessment request, not a target-weight substitution.
+  A separate 2-bit draft may be explored while retaining the original verifier.
 
 # Plan Status
 
-Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 remains open.
-Reporting fixes cover actual measured passes and phases, fresh Mach footprint
-reads, short-reply rejection, missing diagnostic logits, sampled guard peaks,
-and current slot/transient storage versus source_expert_record_bytes.
-The 37 CPU reporting cases and eight loader/budget cases pass with real MLX
-imports blocked. Both latest full arms exercise correct source/current record
-sizes and shared transient allocation bytes.
-
-# Current Optimization Stage
-
-Latest stage at measured source `48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3`:
-
-- Keep all five native MTP proposals, then append at most two tokens from known
-  prompt/committed text matching all five proposals and at least two preceding
-  context tokens. Target verification, acceptance, commit and seed arithmetic
-  stay native. Install once for this greedy request; no new hot-path proof
-  counters or GPU fences. Native M8 allocation envelope is retained.
-- One complete run reaches 13.4141517619 TPS / 76.2627423750 s, 198 cycles and
-  target calls versus 206 native, with all 1,024 native IDs identical. This saves
-  0.5417692920 s / adds 0.7104% TPS versus input-row caching. Background differs;
-  this is a best single result, not isolated/repeated evidence. Reads increase
-  by 25 to 31,961 / 565,540,945,920 B. It does not materially reduce expert I/O.
-- 84->110 slots, 48 transients, native KV16. Baseline 10,447,192,064 B; physical
-  bound 109,631,928,540 B; host reserve 1,421,996,032 B. MLX peak 97,006,846,938 B;
-  process 98,027,571,368 B; machine 109,238,927,360 B. Final inactive cache
-  239,688,936 B stays within the 256 MiB strict limit. Guard has 217 samples
-  and zero compressor growth. Accounting measures are separate, not summed.
-- Head-only replay reproduces the native 206 cycles, then follows 198 hybrid
-  boundaries within its 49 GiB incremental envelope. The full target run above
-  is the throughput/ID evidence. Two focused causal-lookup host regressions are
-  added only after that full run and pass with real MLX imports blocked.
-- Longer causal extensions in eight-row chunks add too much verification work
-  in an independent-boundary CPU screen to justify another GPU window. No new
-  trajectory or global upper bound is claimed; no longer candidate is installed.
-- Guards 7091 and 39139 exit 0; source caches are reclaimed, exact Qwen and
-  warmup restored. Final release 10:38:22 UTC; independent model/health/idle/
-  warmup/free-lock check 10:39:43 UTC. No owned GPU child is pending.
-- Receipt: docs/deepseek-v41/receipts/hybrid-lookup-20260918/README.md.
-  Live root: /tmp/dsv41-hybrid-lookup-20260918/full-v1.
-  Raw prefix: /tmp/dsv41-110-stage/full-hybrid-lookup-20260918-v1.
-  Measured helpers and library remain pinned; production defaults are unchanged.
-
-Latest bounded screens at source `19ea3ac2f888edf5035e3a43bc314bea64f3cb6f`:
-
-- Early cached-expert submission is 1.21845% slower, despite exact outputs and
-  read counts for all 206 layer34 calls. Source-matched CPU read alignment is
-  flat: 0.15188% change inside 0.82697% control spread. Neither is promoted.
-- Draft aliases trained on the first 103 native cycles produce 198 calls with
-  80/40/24 experts, versus 198 for the original 93/58/32 hybrid bank. Boundaries
-  differ, so this is acceptance screening, not a target parity/TPS result.
-  The 64/28/12 cut needs 206 calls; global frequency 52/46/26 needs 200. No full
-  run follows those larger cuts. No new regression tests are added.
-- True 80/40/24 subset files are prepared and source-payload authenticated:
-  2,707,292,160 B payload, exactly 733,224,960 B less. The full candidate plans
-  84->111 target slots, preserving target arithmetic and all existing cache,
-  host, KV, compile/copy and wired allowances. The larger prefill bound stays.
-- Guard 85153 refuses that full run before model loading. Live background is
-  11,137,220,608 B; the 111-slot bound would be 110,308,317,404 B, over the hard
-  110 GB ceiling. No OOM, prefill, target output or new TPS measurement occurs.
-  The staged candidate is conditional and unpromoted; do not retry unchanged.
-- The first head attempt fails before MLX import on a duplicated path; v2 fixes
-  replacement order and validates generated paths before launch. All six guards
-  across these three receipts terminate and restore exact Qwen/warmup/free lock.
-  Final guard 27488 exits 0, releases at 11:42:08 UTC; independent healthy/idle/
-  warmed/free check passes at 11:43:05 UTC. No owned child or pending GPU run.
-- Receipts: `prelaunch-hits-20260918`, `read-alignment-20260918`, and
-  `draft-surrogates-20260918`. The latter retains source pins, both failed
-  attempts, subset provenance, allocation preflight and all head results.
-
-The reader-hop screen at source85c7a33fd9f171c3847d7e59f8566b8b72de7225
-is not promoted. Batching each native miss part and running its fill on the
-existing miss worker preserves all206 layer34 outputs/reads at110/48 slots.
-Median ratio0.9871322 is within1.4375% control spread; no full run or new tests.
-The9GiB bound covers3,047,281,161B MLX peak; final Metal8B. Guard33095 exits0,
-restores exactQwen/warmup/releases10:55:23UTC; independent healthy/idle/warmed/
-free check10:55:55UTC. Receipt:reader-hop-20260918. No owned child remains.
-
-Next work must remove about 25.11 s from this exact workload to reach 20 TPS.
-Prior prefetch, row-pair, fanout and policy rejections remain relevant. Favor
-material reductions in expert traffic or exposed verification; do not repeat
-unchanged controls or re-profile the measured CPU clocks. Work inline, no
-agents; minimal checks, tests only after wins. Full 256K prefill remains open.
-
-The preceding input-row result is archived in embedding-rows-20260918. It
-released 1,323,827,200 active bytes after prefill, reached 13.3195300354 TPS /
-76.8045116670 s with exact IDs at 110 slots, and passed two focused host checks.
-Its first attempt failed on str-versus-Path cleanup arguments; both calls were
-fixed, and all guards restored the exact service. The coarse CPU diagnostic
-is archived in cpu-attribution-20260918: 73.4290 s cycles, 13.5526 s main CPU,
-39.6364 s process CPU; expert entrypoints dominate. Diagnostic TPS fields are
-null. Elapsed-minus-CPU is not GPU idle, and nested spans must not be summed.
-The existing decode-read-attribution-20260917 receipt is also valid.
-
-Older stages follow as historical context.
-Follow-up operators and a router diagnostic at source013ba48db733659d287d40e7304e1683a0d7e179
-are complete; no new performance default is promoted.
-
-- Packed row grouping plus a CPU inverse permutation is1.72% slower; compiling
-  the full clamped activation is flat. Both preserve all206 operator outputs
-  and reads. No full runs or regression tests follow those rejected candidates.
-  Receipt:docs/deepseek-v41/receipts/packed-operators-20260918/README.md.
-- The historical hidden trace exists at
-  .benchmark-artifacts/deepseek-v41/route-traces-w35. It uses a DIFFERENT16K
-  prompt and256AR rows. Do not search for it again or treat it as the M6 workload.
-  CPU screening improves top-one prediction92.77%->95.55% by feeding the next
-  gate the current native router input AFTER attention instead of the mean
-  residual BEFORE attention. Normalization adjustment adds little and is omitted.
-- One exact16K/1024 diagnostic captures the first64M6 cycles, with no speculative
-  reads or policy changes. All1024 native IDs and all2368 observed layer routes
-  match. Hooks are removed after64cycles. Headline TPS/wall fields are null;
-  instrumented timing is not performance evidence. First32cycles select each
-  layer's width/margin/issue limit at85% precision; next32 are held out.
-  Later input covers763/4878physical misses(15.64%), adding134reads(2.75%),
-  precision85.06%, across28 selected layers. Existing input covers237(4.86%)
-  with52extra reads. No tested global setting passes the training precision threshold.
-  These are unlimited-lead-time estimates, not latency or full-prefetch results.
-- Diagnostic84->105slots adds384MiBhost+64MiBMetal; totalhost1,774,317,568B.
-  At10,645,929,984B baseline, physicalbound107,986,800,748B; measured machine
-  107,152,556,032B, process95,828,935,456B, MLX94,788,388,470B. Guard77187
-  terminal0,221samples,zero compressor growth. ExactQwen restored/released
-  08:21:52UTC; independent08:23:58 healthy/idle/warmed/free check. No owned child.
-  The first diagnostic launch omitted the extra host allowance from its CLI;
-  it refused BEFORE model allocation. Variant2 validates the real CLI resolver.
-- Receipt:docs/deepseek-v41/receipts/router-feature-20260918/README.md.
-  Live helpers:/tmp/dsv41-router-feature-20260918/full-v2;
-  raw prefix:/tmp/dsv41-110-stage/full-router-feature-20260918-v2.
-  NPZ:.benchmark-artifacts/deepseek-v41/router-feature-20260918/
-  full-router-feature-20260918-v2.router-capture.npz;45,592,534B,
-  SHA5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e.
-  Its /tmp path remains a symlink. Runtime source hashes still match strict.
-
-A bounded two-layer I/O screen is now complete at source0f7146768f93423956ac6ce48ebe9b549cdde4a8.
-Layers30/31,105 persistent each,48 shared transients,16 shared prefetch slots:
-median paired latency is5.11% lower with.93% control spread and exact128 layer
-outputs. This excludes live router cost and attention, uses per-call timers with
-unmeasured hash gaps and terminal drain, and cannot be promoted to full TPS.
-MLXpeak5,304,624,137B within11GiB incremental bound; final owners8B. Guard40813
-terminal0; Qwen restored/warmed/released08:46:12UTC and independently checked.
-Receipt:docs/deepseek-v41/receipts/lookahead-io-20260918/README.md.
-
-The three-layer follow-up is complete and rejects the prefetch family at
-source039e3bd811c64aa645dd89b5b8c85e1c3cf5ab53. Layers30/31/32,105/48/16,
-continuous held-out timing through terminal drain and live gate-shaped cost:
-- Last-GU issue:2.27% slower; native spread.7514%.
-- First-GU issue plus demand-priority queue:ratio1.003543, no clear win.
-- The same queue plus NumPy ranking:ratio1.004293, no win.
-All192 outputs match in each arm. Gate computation uses synthetic inputs;
-rank selection uses captured exact-workload scores, so live predictor parity
-is unproved. Attention is excluded. Full14GiB incremental bounds cover
-MLXpeak7,364,297,233B; final owners16B. Guards48399/99230/41743 all terminal0,
-exactQwen restored/warmed and free locks independently verified. Last release
-09:10:02UTC. No full-model prefetch, defaults or regression tests follow.
-Receipt:docs/deepseek-v41/receipts/lookahead-adjacent-20260918/README.md.
-
-A nativeC109 CPU census finds31.58 cache-hit rows/call,16.06 pairable. The prior
-C32 synthetic row-pair screen is different. A new single mixed pair/single
-kernel removes its separate dispatches while keeping native dot order, geometry
-and BF16 boundaries. Layer34 replays all206 native routes with109/48 slots;
-all outputs/reads match, but ratio1.0038815 is flat within.6348% control spread.
-Reject it without a full run or new tests. Full9GiB incremental bound; guard
-process3,520,317,696B, machine14,080,950,272B, final Metal8B. Guard58512 terminal0;
-Qwen restored/warmed/released09:17:49UTC, independently healthy/idle/warmed/free.
-Receipt:docs/deepseek-v41/receipts/mixed-row-pairing-20260918/README.md.
-No owned GPU child remains. All task source file cache is reclaimed.
-
-The reader already uses directos.preadv into component destinations; enabling
-the scalar native extension will not change this path. Fanout8 was screened
-and not promoted (12.42GB/s versus12.38GB/s); do not repeat it. Prefill-derived
-nonuniform allocation and two-row splitting are also already covered above.
-That CPU attribution is now complete and archived above. The subsequent exact
-input-row cache is the new best single full result. Neither result reaches
-20 TPS; complete 256K prefill also remains open.
-
-Strict allocator stage is complete at measured source5ba18552cb81f85793469a8d20fe2ff4af4f79d8.
-Receipt:docs/deepseek-v41/receipts/strict-cache-20260918/README.md.
-Live root:/tmp/dsv41-strict-cache-20260918; full helpers:full-v1;
-raw prefix:/tmp/dsv41-110-stage/full-strict-cache-20260918-v1.
-
-The officialMLX0.32.2 archive and237 matching installed headers anchor matched
-stock/strict host builds. Only allocator free/set_cache_limit change; all Metal
-shader bytes match the installed wheel. Production packages are unchanged.
-DYLD_LIBRARY_PATH is selected only inside the guarded child; actual loaded
-libmlx path/hash is attested before allocation/admission credit. Strict binary:
-/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib,
-SHA32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9.
-
-Strict eviction enforces inactive cache<=configured limit and trims immediately
-on reduction. Prefill stays1GiB; growth/decode256MiB. The2,258,155,644B inactive
-overshoot allowance alone is removed. Existing active/copy/seed/prefill/KV,
-compiler, Python and wired reserves remain. Capacity search extends through110
-with unchanged exact page-aligned bank geometry and full bound inequalities.
-CPU accounting at the actual10,240,868,352B baseline admits105 slots for stock
-and109 for strict; strict physical bound109,979,515,100B.
-
-Attention outputs, states, selected indices and metadata match all five layers
-across wheel/stock-source/strict binaries; stable Full/Reuse and Full/Reindex
-cases are flat. SWA controls are noisy. All206 expert replay reads/outputs
-match; strict/stock elapsed ratio.9960 with.324% control spread. After the full
-win, only3 targeted allocator regressions were added: all fail on stock and
-pass on strict. No broad suite or unchanged full rerun.
-
-Full13.1509466579TPS /77.7890768330s,206cycles,all1024 native IDs identical,
-SHA0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
-NativeKV16,D5/M6,part3,48transients,84->109. Reads32,316 /571,822,571,520B;
-read union45.125601621s (not GPU-idle time), growth3.617399125s. MLX peak
-97,614,305,072B; process98,610,301,552B; machine109,671,972,864B; guard peak
-109,664,894,976B.219guard samples,zero compressor growth. Final inactive cache
-256,770,058B, separately reported from268,435,456B limit. Both64MiB Engram
-arenas retain180,226/180,228rows withzeroevictions. Full output keeps the
-existing allowed nativeAR tie flip at297; AR timing/memory is reference-only.
-
-All guards are terminal0: build21259,attention69981,expert2430,full42497,
-regression15580. Final exactQwen restore/warmup/lock release07:24:09UTC;
-independent07:24:19UTC health confirms healthy/idle/warmed/free. No owned GPU
-child remains. Full source/packed clean-file cache is zero after reclamation.
-Measured helper source pins become stale after the documentation checkpoint;
-verify unchanged runtime hashes before refreshing pins, and use new prefixes.
-
-The prior cache-budget result12.6712544TPS and fused-transpose rejection remain
-archived at receipts/cache-budget-20260918 and receipts/woa-fused-transpose-20260918.
-Fused transpose is28.84% faster than fresh conversion but45.71% slower than
-retained BF16, and its unchanged growth envelope prevents an extra slot.
-Zero allocator cache loses on native attention. Do not repeat these arms,
-cache-policy/prefetch/width rejections, or the completed strict comparison.
-
-Next optimization must materially reduce expert traffic or exposed native
-verification cost. Another26.639s must be removed to reach20TPS on this exact
-workload. Keep the new strict memory bound as the baseline and establish any
-new phase/copy peak before another full load. Complete256K prefill/rollover
-remains unverified and secondary. Work inline with minimal testing.
-
-## Previous prefix and read-batch stages
-
-Bounded prefix operators at source53277a85 are complete. Native packed MLP is
-byte-exact under1+5 and3+3 but costs15.7–20.2% more overall. Native attention
-costs56.9–80.0% more for1+5; stable3+3 Full/Reuse and Full/Reindex cases cost
-96.5% and67.6% more. The3+3 SWA control is unstable and is not usable evidence.
-All3+3 outputs and canonical window suffixes match; layer2 index-cache values
-still differ. Full retained window lengths differ by native compaction and do
-not establish a ring defect. Do not implement a ring fix or split decoder from
-the prefix-hit histogram. Archive:receipts/prefix-operators-20260918.
-Those operators' guards are terminal and restored exactQwen. The follow-up
-read-batch stage is complete at sourceac7a15c0. CPU selected median-miss layer34;
-real104-slot/48-transient replay restores73 actual residents and all206 M6
-routes. Part3->2 improves2.45%, part2->1 improves1.11%, each with0.73% control
-spread and identical output bytes/physical reads. Both8GiB-bound operators
-peak at2,934,477,321 MLX bytes and release to8. Two existing CPU reader-lifetime
-checks pass after those wins. No broad suite.
-
-One full part1 run reaches12.8267179843TPS /79.755398166s, exact1024 native IDs,
-206cycles,84->104 slots. The previous part3 run is12.8091054919TPS /79.865061666s.
-The0.109664s difference is not a reliable full-model win; do not promote or
-repeat unchanged arms. Reads stay34,259 /606,203,412,480B; read union47.148010s.
-Baseline10,157,899,776B, bound109,591,219,432B, MLXpeak94,075,749,060B,
-guard machine107,051,008,000B. Full guard68394 terminalexit0,222samples,zero
-compressor growth, source cache0. Restored/warmed/released05:36:19UTC;
-independent05:36:51 healthy/idle/warmed/free check finds no owned child.
-Archive:receipts/miss-batches-20260918. Full stage:
-/tmp/dsv41-miss-part1-full-20260918; raw prefix:
-/tmp/dsv41-110-stage/full-miss-part1-20260918-v1.
-
-The earlier allocator-cache investigation is completed by the current stage
-above. Growth already clears cache; do not add redundant per-token clearing or
-discount the retained overshoot allowance from endpoint observations.
-
-# Prior Draft-Width Screen
-
-CPU position-weighted retention is rejected: native held-out misses15,544;
-weighted frequency15,546; weighted predictor+frequency15,587. Unit weights
-reproduce every native per-cycle count. No GPU execution or tests followed.
-Receipt:docs/deepseek-v41/receipts/row-weighted-cache-20260917/README.md.
-
-Completed bounded screen:/tmp/dsv41-even-depth-20260917. FixedD4, fixedD6 and aD7
-head with a constant six-proposal cut, versus exactD5 teacher control. The
-existing receipts contain noD4/D6 measurement. Four views share the native
-compact weights. Bound41GiB active+4GiB cache+4GiB host; current baseline and
-wired usage must fit before MLX import. The target trunk never runs. The
-stdlib controller waits for actual child exit, then reclaims source-file
-pages before the original guard restores Qwen. No new full model is staged.
-Teacher replay is acceptance evidence only; it cannot establish changed target
-arithmetic, physical reads or TPS. NativeD5 reproduces every saved boundary.
-D4:238cycles/1190rows;D6:191/1337;D7cut6:189/1323 versus native206/1236.
-No full target run is justified by these cycle/row tradeoffs. Allocator peak
-21,299,586,448B; guard process15,197,695,592B; machine26,291,191,808B. Controller
-reclaimed15,348,088,832B of source cache to0 after child exit. Guard43111 is
-terminal exit0; exactQwen restored/warmed and lock released02:11:01UTC;
-independent02:11:48 healthy/idle/warmed/free check found no owned child.
-Receipt:docs/deepseek-v41/receipts/even-draft-width-20260917/README.md.
-
-Completed operator screen:/tmp/dsv41-fused-gu-20260917. NativeV16/R4/SG2 gate and
-up reductions share the input load and one launch; each produces the original
-BF16 output, then uses unchanged clamp/SwiGLU and nativeV8 down. No weight
-layout or arithmetic change. Four real whole-MLP shapes, nonidentity slots,
-48-slot bank and6GiB incremental bound. Exact outputs, but whole-MLP changes
-are-16.62%,+0.45%,-5.54%,+2.70% latency reduction at6/6,18/3,36/12,36/36.
-Reject without runtime installation, full load or extra tests. Allocator peak
-928,978,000B; active after close8B; guard process1,363,969,656B; machine
-11,578,392,576B. Guard87930 terminal exit0, exactQwen restored/warmed and lock
-released02:17:57UTC; independent02:19:39 healthy/idle/warmed/free, no child.
-Receipt:docs/deepseek-v41/receipts/fused-gate-up-20260917/README.md.
-
-Completed diagnostic:/tmp/dsv41-transition-cost-20260917. Attribute the existing
-84-to-102 one-layer transition among raw-scale release, packed-scale load/hash
-and native weight copies, within8GiB. Three real old rows cover indices0/41/83.
-The full transition costs3.426s, but it is not all copying. At the best saved
-baseline, steady active bound exceeds resize by514,906,000B, so eliminating
-the copy peak alone does not admit more slots. Do not implement extension banks
-before establishing a worthwhile copy-time saving and unchanged decode cost.
-One-layer costs:0.039524s scale load/hash,0.039921s weight growth;0.079530s total.
-Copy-only saving scales to about1.60s, not all3.426s; no extension-bank code.
-Exact old rows; allocator peak2,483,786,252B; active after close8B. Guard76769
-terminal exit0; restored/warmed/released02:26:43UTC; independent02:32:16 check
-healthy/idle/warmed/free, no child. Receipt:receipts/transition-cost-20260917.
-
-Next bounded operator:/tmp/dsv41-tail-seed-20260917. DSpark seed_main projects
-every prompt hidden row, but its three caches retain only the last128 rows.
-Seed-only attention is pointwise projection/norm/RoPE before append; there is
-no compressed MTP history. Compare native full16K seeding to final128 rows with
-absolute offsets16256, using only the12 native dense/norm seed tensors and a
-synthetic16K sequence tiled from authentic saved target hiddens. Bound8GiB;
-controller reclaims source pages after actual child exit. No target generation.
-If useful, narrowing captures would also remove the8.053GB full main-hidden
-tensor at256K. The generic MTP history API still requires all rows, so any
-eventual change must be explicit to DSpark prefill. No production code changed.
-First seed attempt refused at the standard eager loader's64MiB unselected
-tensor cap before any comparison. Guard49374 terminal exit1; Qwen restored,
-warmed and lock released02:34:21UTC; independent02:34:38 check healthy/free
-with no owned child. Do not relax that loader cap. Variant2 under v2/ reads
-only12 validated native tensor ranges (89,224,192B) into final MLX owners with
-F_NOCACHE/preadv, bounded8MiB views and source identity checks. Same8GiB bound.
-Receipt:docs/deepseek-v41/receipts/tail-seed-20260917/README.md.
-Variant2 completed: native16K max allocator peak2,279,214,764B versus tail128
-142,877,484B; seed medians0.0711085s/0.0017979s. Final main row and all offsets
-match, but all three window byte sequences differ. Do not install as an exact
-replacement. Guard38266 terminal0, cleanup8 active bytes and74,366,976B file
-cache invalidated to0; exactQwen restored/released02:37:42UTC. An intervening
-foreign Bonsai guard51816/51826 owned the lane; no signal or shared-code edit
-occurred. After that job completed,02:42:32 check found Qwen healthy/idle/warmed
-and lock free. Next candidate v3/ retains2048rows to screen batch arithmetic
-while keeping most of the saving. It is staged only; no full model is ready.
-FixedQ8DraftCache._seed currently resets offset from supplied row count, so an
-eventual partial seed must explicitly preserve its absolute start too. Do not
-apply the native offset adjustment blindly to Q8 caches.
-Variant3 completed at source8b4b44c622bf69ba189c430022c3c884f4cd548e. Retaining
-2048rows matches every final-row/window byte and all offsets in two interleaved
-controls. Peak416,511,276B vs2,279,214,764B saves1,862,703,488B; median seed
-0.0086178s vs0.0715489s. This is operator evidence only, not more slots or TPS.
-Guard36042 terminal0;8 active bytes after cleanup;74,366,976B file cache to0;
-exactQwen restored/warmed/released02:44:16UTC; independent02:50:06 healthy,
-idle,warmed,free check found no child. Archive:tail-seed-20260917/tail2048.
-
-Integration staged in /tmp/dsv41-tail-seed-20260917/integration. The isolated
-tail-prefill body changes only target hidden captures and their concatenation.
-Installer binds an explicit one-request16K native-KV backbone type and seeds
-fresh native caches at14336; no model/bound-method ownership cycle. It must
-not be applied to Q8 yet. Small actual eight-layer capture check is staged:
-FP32/BF16, two chunk-crossing tails, exact logits/hiddens/cache/next step.
-No full model staged yet. Keep old full-model memory allowances plus metadata
-until fresh full evidence supports a discount;20TPS remains unmet.
-
-Capture check v2 completes all four FP32/BF16 cases with exact logits, retained
-hiddens, cache state/offsets and next decode step. First attempt was a NumPy
-BF16 conversion error in the harness; v2 compares byte views. Peak1,591,702B;
-28 active bytes after close. Guard32403 terminal0; exactQwen restored/warmed
-and lock released02:59:14UTC; independent03:00:51 healthy/idle/warmed/free,
-no owned child. Both attempts are archived under tail-seed-20260917.
-Next:/tmp/dsv41-tail-seed-20260917/full, one nativeD5/M6 full16K/1K packed-plane
-candidate with tail2048 capture and absolute seed offset14336. Keep all old
-admission allowances plus16MiB host metadata in every phase. No operator-derived
-capacity discount; native capacity search may admit85..100 instead of96..100
-without relaxing any inequality. The full output digest remains mandatory.
-
-Full tail2048 candidate completed at source dcbec19dc:12.4289961TPS/82.3075322s,
-1024 exact native IDs,206cycles,84->101slots; baseline10,603,659,264B and bound
-109,849,188,584B. Peak allocator93,336,409,632B, process95,127,698,216B,
-machine106,151,673,856B. Prefill peak saves591,643,308B and boundary active
-saves1,536,180,224B versus the best packed-plane run. After normalizing the
-one-slot difference (707,788,800B), final decode active bytes are identical;
-overall peak difference is only89,924B. No steady capacity discount or TPS win.
-Guard17051 terminal0; Qwen restored/warmed/released03:16:02UTC; independent
-03:16:54 healthy/idle/warmed/free, no child. Full-host-refusal archive retains
-the earlier preallocation mismatch; v2 fixes CLI host reserve to2.015625GiB
-and checks the actual CPU runtime resolver against admission with MLX blocked.
-Full receipts:tail-seed-20260917/{full-host-refusal,full-tail2048,full-summary.json}.
-Next small I/O screen compares native separate gate/up planes with a combined
-scatter read across their368640-byte scale gap; down and slot readiness stay
-separate. CPU destination buffers only, no model. Existing~13.1GB/s uncached
-receipts limit the possible gain; do not launch a full candidate without a
-clear end-to-end read-batch improvement. Keep the best12.6731624TPS baseline.
-
-Combined-GU read screen completed and rejected at source db5f9dd0d. Native
-PlanePart/bind_reader extracted unchanged; candidate scatters across the gate
-scale gap, reading368640extra bytes/record into preallocated scratch. CPU-only,
-MLX blocked,2GiB allowance,128batches perarm at1/3/6records. Exact final weights
-and full native record digests; end-to-end wall changes+0.06%,+3.37%,+2.11%.
-First case is within control variance; relevant batches regress. No full run,
-runtime installation or added tests. Initial harness counter-reset failure is
-preserved; v2 rebinds the reader after replacing metrics outside timing.
-Guard50127 terminal0, source cache0 after child exit, process-tree peak
-372,606,368B, machine9,923,100,672B; exactQwen restored/warmed/released03:30:33UTC.
-Independent03:31:18 check healthy/idle/warmed/free, no child. Archive:
-docs/deepseek-v41/receipts/gu-combined-read-20260917. Do not repeat unchanged.
-No full candidate is currently staged or running. Best full remains12.6731624TPS;
-20TPS is open. The full tail2048 win concerns prefill memory only, with no steady
-capacity discount. Next work needs materially less expert traffic or better
-overlap of verification with reads; the existing I/O path already reaches its
-observed~13GB/s payload rate. Keep Q8/256K work secondary and its caveats intact.
-
-# Current Projection Ownership Stage
-
-Previous turn made progress: full tail2048 captures save prefill memory while
-steady storage remains unchanged; combined GU reads are rejected. Current
-CPU reanalysis of12 archived samples gives only5.9408percent ideal weight-only
-order0 byte savings now that scales are resident; serial decode would need
-220.17GB/s before framing/dispatch to break even at13.08GB/s read throughput.
-This is not a universal compression bound. No codec or GPU run follows it.
-Receipt:docs/deepseek-v41/receipts/weight-only-compression-bound-20260917.
-
-Staged:/tmp/dsv41-woa-owner-20260917. All40 target fused output paths currently
-retain34,603,008bytes/layer of original MXFP8 wo_a plus67,108,864bytes/layer
-of BF16 transpose. Native fused engagement is8240/8240 calls in the best run.
-A construction-validated first-use callable invokes the original cache builder,
-then installs a BF16-only callable with identical operations and retires the
-packed holder/cache tuple. Lazy materialization order is preserved; no new
-steady eligibility checks, counters, parent-owner cycles or stock fallback.
-One real native layer0 output-projection screen loads only4 tensors/77,856,768B
-from the174,962,526B shard3 through bounded uncached ranges. Native M1/M6/M8
-outputs and exact physical release are checked. Bound4GiB (2GiB MLX plus2GiB
-host/cache/compiler); controller reclaims shard3 after actual child exit.
-No full model staged yet; do not subtract1.384GB from every phase before its
-ownership/transition envelope is established. Keep20TPS open.
-
-Operator v2 completed at source72b0d219e. Exact M1/M6/M8 output bytes, including
-cold first use. Warm active145,952,648->111,349,640B releases exactly34,603,008B;
-40-layer static total1,384,120,320B. Both cold peaks213,061,512B: source remains
-live during materialization, so charge one layer's34,603,008B overlap beyond
-the native cold-to-warm envelope. Eight active bytes after close. Guard10513
-terminal0; source cache66,387,968->0B after child exit; process-tree403,309,816B,
-machine10,487,103,488B. ExactQwen restored/warmed/released03:55:19UTC; independent
-03:59:04 healthy/idle/warmed/free, no child. First flat-position harness error
-and success archived under receipts/woa-owner-20260917.
-Next:/tmp/dsv41-woa-owner-20260917/full. Clone the best native packed-plane
-candidate, preserve original prefill/copy bounds, and discount only steady
-projection storage by39*34,603,008B after pricing the one-layer cold overlap.
-Add16MiB host metadata consistently to CLI/admission. Keep resident plan reserve
-conservative, report actual module retirement separately, and retain strict
-full1024-ID digest. Do not add tail capture or a transition credit to this lane.
-
-# Latest Adaptive Draft Stage
-
-20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;
-the best remains12.6731624TPS. All1024 native output IDs match. The run used
-84->99slots versus the earlier best's84->102, so the policy effect is not
-isolated. No throughput promotion or extra tests for this candidate.
-New draft-only policy: startD5, thenD7 after full acceptance orD3 otherwise.
-Exact teacher replay reduces206->195 cycles; verify rows1236->1242. D5 control
-reproduces all native commit boundaries. A three-way3/5/7 policy also takes195
-cycles but1282 rows, so retain the two-way policy for the full screen.
-Incremental bound52,613,349,376B; allocator peak21,299,586,448B; guard process
-15,376,608,560B and physical31,218,286,592B. Guard26808 is terminal exit0;
-Qwen restored23:49:22UTC, final independent health/warmup/free-lock check passes.
-
-Full staging: /tmp/dsv41-adaptive-depth-20260917/full, parameter-sharing views
-in adaptive_lane.py. Full-target execution now completed. The existing nativeM8 bound
-is retained plus16MiB host metadata; native search floor96 is removed, allowing
-85..100 while preserving every memory inequality. CPU packed plans:102slots
-at9.955GB baseline;93 at15.745GB;92 at16.5GB.
-
-Fullv1 guard36864 exited1 before model loading: post-shutdown baseline28.6GB,
-including19.9GB file-backed. Fullv2 guard88353 exited5 before GPU child launch:
-optional OS disk-cache purge required an administrator password. Neither OOMed.
-Both restored exactQwen health/warmup and logged lock release (23:58:23 and
-00:05:37UTC). No live child remains. Read-only scan:experts.bin cache0B;
-Qwenngram22,790,144B; these do not identify the remaining file-backed memory.
-
-Guard07998bbd6 waits for zero active/queued work before bootout. Guard233e344e3
-adds opt-in GPU_WINDOW_PURGE_DISK_CACHE=1 before fresh admission. The subsequent
-fix checks cached admin authentication before lock/service changes. Three
-focused CPU guard regressions pass. No unrelated application was terminated.
-The user confirmed the OS file cache was purged. Source/helper hashes were
-repinned and fullv3 ran with optional purge OFF. Its fresh baseline11.518GB
-admitted99slots and a109,348,083,944B bound. Allocator peak91,931,939,555B;
-internal process93,697,472,216B; internal machine108,799,164,416B; guard machine
-108,678,807,552B. Whole-machine samples stayed below110GB. Read volume652.546GB,
-36,878records;196cycles; verification77.3694s; drafting2.0935s. Installation
-3.2996s is charged to decode. Same native-AR index297 tie classification.
-Guard parent27410/shell27429/child27599 are terminal; child exit0, exactQwen
-restored with warmup and lock released00:56:30UTC. Independent checks pass.
-Full harness/result/lifecycle:receipt full-v3 directory,30 hashed files.
-
-The next continuation revalidated the same RAM/admin-auth blocker. Read-only
-mincore audit found0 resident bytes across68,403 saved-session blobs (10.425GB)
-and289 task-owned artifact files (13.576GB). A2MiB private-file positive control
-returned2MiB before and0 after invalidation, so no session/artifact cleanup is
-justified. Qwen remained healthy/idle/warmed; machine use133.107GB while serving,
-including37.497GB file-backed. sudo -n -v still requires a password. No GPU run
-or service restart occurred. A third consecutive goal turn revalidated the same
-condition:37.528GB file-backed RAM while Qwen was healthy/idle/warmed, no owned
-candidate, and sudo -n -v still requiring a password. The goal was marked
-blocked, then resumed after external reclamation. That blocker is cleared;
-fullv3 above is complete and20TPS remains open. Do not repeat the blocked
-status or relaunchv3. The negative RAM audit remains useful evidence against
-unnecessary saved-session or task-artifact cleanup.
-
-Receipt:docs/deepseek-v41/receipts/adaptive-draft-20260917/README.md.
-CPU ARC/S3-FIFO screens lost (heldout17411/17193 vs15544 demand misses), so no
-GPU tests followed. Raw CPU screens:/tmp/dsv41-cache-replacement-20260917.
-
-Completed candidate:/tmp/dsv41-prefill-allocation-20260917/full. Prefill-only marginal
-frequency allocation, fixed total slots, min84/max128 per layer, selected once
-at the existing timed transition. CPU demand misses at average99 improve
-36421->35631 (2.17%); second half16187->15636 (3.41%). No decode rows select the
-vector; identical73-slot seed plus empty slots across CPU arms. This is not
-physical-read or TPS evidence. Admission charges the max128 component copy and
-16MiB metadata before model load. Layer vectors must drive plans, policy,
-physical owners and reports. Full run:12.5526155TPS/81.4969600s;84->4000total
-slots, actual layer capacities84..128, uniform-equivalent100. Same1024IDs and
-206cycles; same native-AR index297 tie. Reads35097/621.032GB vs best35092/620.943GB
-at4080slots; capacity/background differ, so no isolated throughput promotion.
-Baseline11,050,860,544B; bound109,588,601,064B; internal machine106,146,136,064B.
-Guard28436 terminal exit0, exactQwen restored/warmed and lock released01:19:26UTC.
-Independent health/free-lock checks pass. Qwen model residency scan found36.05GB
-of cache covered by automatic shutdown reclamation; no new manual purge needed.
-Receipt:prefill-allocation-20260917/README.md. No further tests for this result.
-
-Bounded operator:/tmp/dsv41-row-pairing-20260917. Exact native M6 routing
-census has296640 assignments, average24.2443 distinct experts/layer/cycle;
-139196 assignments (46.9242%) can pair with the same expert. Sharing FP4
-conversion across pairs could remove23.4621% of repeated weight decodes before
-overhead. Staged float2 dot retains native V16/V8, R4, 2-SIMD geometry and each
-row's accumulation order. CPU grouping routes remaining singles to the native
-operator. Three-expert MLP is bit-exact in all4 shapes: rows4 mixed loses14.15%,
-rows6 paired gains3.57%, rows9 mixed loses4.08%, rows18 paired gains21.40%.
-Allocator peak131,863,420B;8B afterclose. Guard9965 terminal exit0; Qwen restored
-healthy/warmed and lock released01:30:45UTC, independently verified. No full-model
-gain. Receipt:row-pairing-20260917/README.md. One-layer integration also completed:
-native vsM6-hit-pair lane,32persistent/48transient slots,4interleaved blocks,
-26experts/36assignments. All64 outputs bit-exact;134reads/arm. M6 median18.669354
-->18.527844ms (0.758%), below0.972% spread between native controls. M1 unchanged
-operator measures0.848% slower. No full-model run justified; do not promote the
-isolated21.40% case. Guard8711 terminal exit0; allocator1,581,355,529B,8B afterclose;
-guard machine12,985,729,024B. ExactQwen restored/healthy/warmed and lock released
-01:37:42UTC; independent checks found no owned candidate. Both new full candidates
-and both operator windows are terminal. Automatic Qwen cleanup is working;
-the earlier manual-purge blocker is cleared. Best remains12.6731624TPS.
-
-# Latest Packed Plane Overlap
-
-Source ee72b77e0: full native-KV D5/M6 candidate84->102 completes at
-12.6731624TPS/80.7217623s, including3.4263s phase installation. Same1024 native
-IDs and206 cycles, SHA0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
-Fresh candidate vs cached nativeAR297 passes the same index-matched tie gate.
-This is1.84% above the old12.4439935TPS single result; prefill84 vs91 and
-background differ, so no isolated/repeatable full-model gain is claimed.
-
-Gate/up computation starts after those planes finish; original full ReadyRoute
-publication, policy, leases and deferred releases still wait for down. The
-one-time post-prefill lane carries context through both split and I/O executors.
-One-layer real-runtime interleaving is exact for168 outputs,3.34%/2.05% lower
-M1/M6 medians; the original three-expert coupled probe was5.4-5.6% faster.
-Two focused CPU success/down-failure cases verify writer-view lifetime. First
-integration failure (missing thread context) is archived; no full load failed.
-
-Bound109,891,934,440B at baseline9,955,393,536B; original allowances plus64MiB
-for early roots. Allocator peak94,044,288,356B; internal process95,804,685,552B;
-internal physical106,288,578,560B; guard physical106,287,955,968B (223 samples).
-Full reads620,943,114,240B/35,092 records; read union47.9346s, verify74.8540s,
-draft2.0636s. No new swapouts;2,372 swapins in the wider sampled phase.
-Receipt: docs/deepseek-v41/receipts/plane-overlap-20260917/README.md.
-Live harness: /tmp/dsv41-plane-overlap-20260917/full; pinned to measuredHEAD.
-Lane is experimental and single-request; not a general serving default.
-
-Full guard exit0/restored23:19:34UTC, independently healthy/free23:19:54.
-A post-restore sample later reached132.913GB. An additional cleanup-only guard
-found ZERO residual DeepSeek resident/aux pages, reclaimed22.130GB Qwen cache,
-and measured10.303GB after shutdown. Restored exactQwen again23:25:05;
-23:25:58 healthy/idle/warmed/free, but machine use131.652GB. Thus110GB is
-verified for the DeepSeek run, not Qwen normal service. Do NOT infer a DeepSeek
-cleanup defect from this growth. No Qwen configuration or other job was changed.
-No live child remains (8306 full and30594 cleanup guard both terminal).
-
-# Latest Fixed Q8 and Budget Work
-
-All default budget interfaces and the staged native/packed admission helpers
-now use 110,000,000,000 bytes. On the recorded 11.2549 GB baseline, native-KV
-packed admission selects 100 slots/layer at bound109,708,761,320B. Exactly110GB
-admits; one byte over reduces slots. Existing host/cache/copy margins remain.
-
-Explicit settings: --box-target-gb 110 --max-kv 17664 --kv-cache-bits 8
---kv-max-append 953. Target window/compressed/index and draft storage is Q8,
-group64 with FP32 metadata; compressor working rows remain native FP32.
-Fixed backings total112,503,168B; loader reserves503,316,480B for all Q8
-backings/copies/views before expert allocation, keeping old native allowances.
-Packed snapshots/rollback preserve bytes; no cache owner bound-method cycles.
-
-The fresh Native/Q8/Native lifetime probe preserves every per-chunk shared
-compressed/index view as layer-major prefill does. Native peak669,729,292B
-in both arms; Q8 peak373,304,920B; all release to8 active bytes. Thus the full
-Q8 envelope retains native bounds and adds503,316,480B without native discounts.
-
-Source67c0906cbc658de6219d384cf94bbdbc0484efe2 full Q8 runs:
-- AR reference84->99, complete1024 tokens, full FP32 logits at every index.
-  Physical bound109,853,513,960B; internal machine peak104,161,181,696B.
-  AR7.005TPS includes logit capture and is diagnostic only.
-- MTP84->101:10.7541904TPS/95.1257102s, including3.3733s packed installation.
-  229 cycles; complete1024 tokens. First Q8-AR difference at53 passes the
-  index-matched tie gate (0.125 contested margins/deltas, band0.375).
-  Physical bound109,817,256,168B; guard physical peak106,263,920,640B.
-  Reads726,739,845,120B;56.658s read union;88.869s verification,2.405s draft.
-  Different trajectories/capacities prevent isolating Q8 overhead. Not a winner.
-Receipt: docs/deepseek-v41/receipts/fixed-q8-full-20260917/README.md.
-
-All guard children terminal with exit0. Final exact Qwen restore/warmup and
-lock release22:26:03UTC; independent22:26:42 healthy/idle/warmed/free, no child.
-Candidate shutdown reclamation removed35.83GB cached pages to zero. No new
-swapouts;8 swapins during candidate samples. Active other jobs were preserved.
-
-Live source-pinned Q8 harness: /tmp/dsv41-q8-full-20260917. Never overwrite used
-output prefixes. Logits also retained at ignored
-benchmarks/raw/deepseek-v41-fixed-q8-reference/20260917/ar-logits.f32,
-SHA c0cccefd38d50628259f2e72f671f1f4f78951244f24d1fb565a6470ff8ecc3e.
-The Q8 reference is specific to Q8; it cannot classify native-KV candidates.
-
-256K CPU geometry: max_kv262144, max_append953, fixed552,567,168B and additional
-reserve2,952,790,016B. Full256K prefill is unverified: retained per-chunk views,
-hidden states, attention and draft seeding need a complete bound first. This
-secondary task must not delay the20TPS work.
-
-Completed packed geometry screen: R8/SG2, R4/SG4 and FP4 float-bit conversion
-all exact but flat/slower across real shapes; no installation or full rerun.
-Receipt: docs/deepseek-v41/receipts/packed-geometry-screen-20260917/README.md.
-
-# Retained Native/Packed Full Workload Pair
-
-Measured source 170a576dc; one sequential native/packed full-workload batch.
-Both use native BF16 target arithmetic, compact MTP 93/58/32, D5/M6, 48 shared
-transients, pf0, transition-window, miss parts 3, shared overlap, max KV 17664.
-The measured 84-slot prefill replaces fixed 91; all original margins remain.
-Native grows 84->98; packed scales grow 84->99 at separate live baselines.
-
-Native: 11.7141788902 TPS / 87.3300646670s; baseline 10,974,773,248B;
-whole-machine bound 109,298,427,372B; external machine peak 105,846,996,992B.
-Packed: 12.2253796176 TPS / 83.6783831670s; baseline 11,254,906,880B;
-bound 109,000,972,520B; external machine peak 105,399,713,792B.
-Both produce 1,024 identical IDs in 206 cycles, SHA
-0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
-
-Native reads 691,543,941,120B /36,783 records; packed reads 643,326,935,040B /
-36,357 records plus 3,086,136,060B of scale installation. Read unions 53.9567s
-and 49.5391s are not GPU-idle measurements. Charged phase costs 1.8932s/3.3879s.
-Packed reports 17,694,720-byte weight records and 849,346,560 shared transient
-bytes; the original source record remains 18,800,640B. Scale owners are separate.
-This single pair includes capacity/baseline differences, not isolated kernel or
-repeatability proof. No new optimization tests or production defaults were added.
-Receipt: docs/deepseek-v41/receipts/resident-packed-scales-pair-20260917/README.md.
-
-# Retained Pair Lifecycle and Artifacts
-
-Guard child/guard exit 0; 462 complete samples; no compressor growth or new swapouts.
-Both model children are terminal. Each parent cleanup removed 12,416,466,944
-cached-page bytes to zero, separate from physical use. Exact Qwen restoration,
-health and warmup preceded lock release 20:42:03UTC; independent verification
-at 20:42:43UTC found healthy/idle/warmed Qwen, no owned children and a free lock.
-Earlier cap91 refusals at 28.35/10.71/11.13GB are retained; do not repeat them.
-
-Live pair helpers (now source-stale): /tmp/dsv41-prefill84-pair-20260917/{native,packed} plus
-run_pair.py; used output prefixes must not be overwritten. Helpers are one-request
-benchmarks and explicitly reject a second prefill. Update live source proofs
-only after verifying unchanged runtime hashes when committing documentation.
-Packed payload: ignored benchmarks/raw/deepseek-v41-resident-scales/20260917;
-360 files /3,086,136,060B, complete source SHA coverage and exact reconstruction.
-Manifest SHA b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16.
-
-# Retained Context and Next Work
-
-- Earlier best packed91->102 is12.4439935TPS at 106,215,473,152B sampled physical
-  use. See receipts/resident-packed-scales-20260917; do not rerun unchanged.
-- Latest sources /tmp/dsv41-resident-scales-20260917 remain cap91-specific.
-  Cap84 pair helpers solve current prefill admission without weakening budgets.
-- Valid native attribution: receipts/decode-read-attribution-20260917. Its loop
-  includes 52.271397s missing-read wait and 19.940574s Metal eval/encode. Existing
-  miss handling already overlaps hits/shared work and dispatches ready parts.
-- Further progress must reduce expert-read or verification cost materially.
-  Small policy cleanup cannot bridge the remaining gap to 20TPS.
-- New CPU causal prefetch screen is rejected: cross-layer top1 has13.69%
-  precision, only3.54% optimistic earlier reads and22.30% extra traffic.
-  Other previous-route/same-layer/blended predictors also lose. No GPU run,
-  production change or new test;47.3MB predictor arrays,1.535s screen.
-  Receipt: receipts/causal-prefetch-screen-20260917. Do not rerun unchanged.
-- Do not repeat unchanged rejected fanout8, D7-full, staged3+3, D3-full, rANS,
-  XOR/reference coding, cache-policy, prompt-lookup, confidence0.5, HC or q8-head
-  candidates. Down-only specialization gives small larger-case MLP gains.
-- Teacher: /tmp/dsv41-depth-replay-20260917 and ignored
-  benchmarks/raw/deepseek-v41-depth-teacher/20260917. Do not recapture.
-- AR cached logits cover only divergence 297; never reuse them for 376 or 480.
-  That restriction is for native KV. The new Q8 reference covers all1024 rows.
-- The CPU scale exporter accumulated source-file cache despite F_NOCACHE and
-  caused a restore timeout; recovery was verified. Do not rerun it unchanged.
-# Current checkpoint: 2026-09-18 04:18 UTC
-
-Best exact16K-input/1K-output Python result remains12.6731624TPS;20TPS unmet.
-Latest native projection-owner full run proves exactly1,384,120,320B less
-steady MLX memory after normalizing the single-slot capacity difference.
-Peak drops790,843,596B. Its12.4516125TPS is not a throughput win.
-Receipt:docs/deepseek-v41/receipts/woa-owner-20260917/README.md.
-No owned GPU child; guard38104 exit0; Qwen healthy/idle/warmed, lock free in
-the independent04:18:49UTC check. Live state must be checked again before use.
-Next candidate combines the measured tail2048 and projection memory wins with
-a smaller hard-bounded Python row cache. Keep all110GB/wired/phase bounds,
-native arithmetic, exact output gate and minimal testing. Work inline.
-# Current checkpoint: 2026-09-18 04:34 UTC
-
-New single best exact16K-input/1K-output Python result:12.8091054919TPS /
-79.8650616660s,206cycles,all1024 native output IDs identical.20TPS remains unmet.
-Receipt:docs/deepseek-v41/receipts/memory-compose-20260918/README.md.
-Source5ab1776598; staged helpers:/tmp/dsv41-memory-compose-20260918/full-v1.
-Composes proved tail2048 and projection retirement with119,537,664B per Engram
-arena.84->104 slots;baseline10,467,377,152B;physical bound109,900,696,808B;
-guard peak107,546,591,232B. Both Python caches have zero evictions. No source
-or packed file cache remains. Guard54606 exits0, restores exact Qwen and
-releases04:31:30UTC; independent04:34:07UTC healthy/idle/warmed/free/nochild.
-The real retained main hidden is FP32/125,829,120B, now correctly reported.
-
-Next frontier: bounded native block cost/state measurement for partial-row
-execution before considering inter-layer read overlap. CPU route diagnostic
-shows first-row all-hit50.59%, but splitting all rows adds48.49% expert compute
-requests. No throughput claim or implementation follows from this histogram.
-Receipt:docs/deepseek-v41/receipts/prefix-readiness-20260918/README.md.
-Do not repeat unchanged rejected candidates or shrink unpriced allowances.
-Keep110GB/wired/phase constraints, exact native output gate, protected GPU lane,
-minimal testing and inline work. Live helpers need a verified source-proof
-refresh after documentation commits before another GPU run.
+Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 stays open.
+Memory/reporting corrections and automatic shutdown reclamation are retained.
+Current stage adds diagnostic receipts only; production defaults are unchanged.
+Detailed earlier measurements and rejected families remain in that plan and
+its linked receipts; git history retains the superseded long state snapshot.
+
+# Evidence
+
+- Full winner: receipts/hybrid-lookup-20260918 under docs/deepseek-v41. Native
+  D5 plus at most two past-text lookup tokens, strict allocator and exact input
+  row cache. Decode source48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3, native KV16.
+  Root /tmp/dsv41-hybrid-lookup-20260918/full-v1. Baseline10,447,192,064 B;
+  bound109,631,928,540 B; machine peak109,238,927,360 B. Expert reads31,961
+  records /565,540,945,920 B. Output SHA256:
+  0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac.
+- Latest screens measured source61b6899f27fee89f63bf7eed9f1c8aa77e73a53a.
+  Reader pool reduction and R2 GU fusion fail bounded performance selection.
+  Completed-layer mean improves router recall only slightly with no early lead.
+  Receipts: packed-reader-pool-20260918, fused-gu-r2-20260918,
+  completed-input-feature-20260918. Do not rerun unchanged.
+- Conditioned suffix with confidence filter takes193 versus198 hybrid calls
+  in teacher/head replay but adds~0.48 s head work. Conditional, not a full
+  parity/TPS result. Longer/raw suffixes are rejected. Receipt:
+  draft-conditioned-tail-20260918; keep original target verification.
+- Compact prompt-trained score residual transfers to saved exact M6 capture:
+  1,062/4,878 useful physical misses at84.2189% precision versus763 at85.0613%
+  for direct control. Unlimited-lead-time quality only; no measured overlap.
+  Adapter21,399,552 B. Capture105 slots differs from full winner110.
+  Current-route features add too little and are not selected. Receipt:
+  prompt-router-adapter-20260918. Exact holdout reused during research.
+- Full-hidden raw-residual affine model loses its5.593 s CPU screen:
+  top-six75.0778% versus75.1736% compact; proxy miss coverage20.7820% versus
+  21.0863%, precision86.0202% versus87.0056%. It would need283,170,816 B.
+  Reject this variant; no full run/tests. Receipt: full-hidden-router-20260918.
+  Static CPU bound1 GiB; sampled process333,365,968 B, machine12,367,265,792 B,
+  six samples, zero compressor growth. Endpoint footprint333,431,504 B.
+- Final guard56562 is terminal exit0, released13:06:31UTC on2026-09-18.
+  Independent exact Qwen/healthy/idle/warmed/free-lock check13:06:45UTC passes.
+  No owned child/queued window remains. Live state must be checked before use.
+- Vontra review: docs/deepseek-v41/vontra-2bit-assessment-20260918.md. HF head
+  802f1a00982705d81b79ad1c83aa0ccc0b863ebc; resident runtime exceeds110 GB,
+  serial MTP is slower in tiny tests, runner context capped128. No weights
+  downloaded/executed. Smaller draft is only a proposed independent experiment.
+
+# Open Issues and Next Work
+
+- Need25.1127 s less decode time to reach20 TPS. Establish compact learned
+  prefetch economics under finite lead time, contention and full memory cost;
+  previous uncorrected three-layer prefetch was flat/slower. Quality is not TPS.
+- Preserve arithmetic/layout/ownership while reducing expert I/O or verified
+  target work. Do not repeat rejected cache-policy, fanout8, GU-gap reads,
+  HC, D7/D9/D13, prefix1+5, alignment or unchanged small-kernel candidates.
+- Conditional80/40/24 draft saves733,224,960 B but111-slot full admission
+  refused at11,137,220,608 B background. Do not retry without a fitting bound.
+- Full-hidden trace: .benchmark-artifacts/deepseek-v41/route-traces-w35.
+  Exact scores: .benchmark-artifacts/deepseek-v41/router-feature-20260918.
+  Exact capture has no full hidden inputs; W35 uses a different prompt/AR rows.
+  Teacher replay: /tmp/dsv41-depth-replay-20260917; do not recapture unchanged.
+- Strict library: /private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib.
+  SHA25632f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9.
+  Production packages unchanged. Refresh live helper source pins after commits;
+  never rewrite measured receipts. Native AR logits cover297, not376 or480.

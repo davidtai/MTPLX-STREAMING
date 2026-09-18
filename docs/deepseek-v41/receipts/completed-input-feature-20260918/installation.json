@@ -1,0 +1,10 @@
+{
+  "source_commit": "61b6899f27fee89f63bf7eed9f1c8aa77e73a53a",
+  "base_cpu_script_sha256": "fba4e1057aa7f2a8558c3c6be24a6f546c362d372811fb5321a5ba21e207e33a",
+  "script_sha256": "33da110728997a3fb2052acb93888034e9adfb9da1d07e05b242c1d8cec17e91",
+  "static_incremental_bound_bytes": 536870912,
+  "scope": "Model-native RMS normalization of completed-source mean; no actual partial-expert compute or GPU operations.",
+  "source_manifest_sha256": "058f188b1ebdac8a24815d3d207f72efdefad2bd691b9b43c19cd2087b0fc997",
+  "exact_acceptance_prompt": false,
+  "new_regression_tests": false
+}

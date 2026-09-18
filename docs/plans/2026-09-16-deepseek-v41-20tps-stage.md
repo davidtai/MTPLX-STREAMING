@@ -48,6 +48,34 @@ Prior phase-lifetime audits are complete; do not repeat them. Next work needs
 material expert-I/O or verification reduction. Fixed Q8 and full 256K prefill
 remain secondary. Work inline, no agents, with minimal checks.
 
+The 13:07 UTC follow-up keeps the same full result and Task 4 open. Smaller
+reader pools, R2 fused GU, and the completed-layer mean feature fail bounded
+selection. A conditioned draft suffix has a conditional 193-call trajectory
+versus the 198-call hybrid, but adds approximately 0.48 s of head work; no full
+candidate follows. Prompt-trained compact score corrections improve the saved
+exact M6 prediction opportunity from 15.64% to 21.77% of physical misses,
+at 84.22% held-out precision. That is unlimited-lead-time quality evidence,
+not measured prefetch latency or TPS. Current-route conditioning is not selected.
+
+A new full-hidden affine raw-residual predictor also loses its 5.593-second
+CPU screen: 75.0778% top-six recall versus 75.1736% for the compact adapter,
+20.7820% versus 21.0863% AR proxy miss coverage at two proposals, and 283.17 MB
+versus 21.40 MB of parameters. Reject this variant without a full run or new
+tests. All six new receipt directories retain source, metrics and lifecycle
+evidence. Final guard56562 exits0, restores exactQwen/warmup and releases at
+13:06:31UTC; independent healthy/idle/warmed/free check13:06:45UTC passes.
+
+The user's Vontra 2-bit link receives a separate read-only assessment:
+`../deepseek-v41/vontra-2bit-assessment-20260918.md`. Its resident runtime exceeds
+110 GB and caps context at128 tokens. Smaller draft weights are a possible
+separate experiment; changing target weights would exceed tie-breaker scope.
+No target/default change or weight download follows. Next performance work
+must establish useful read overlap with the compact predictor or materially
+reduce verified draft/target cost. See receipts packed-reader-pool-20260918,
+completed-input-feature-20260918, fused-gu-r2-20260918,
+draft-conditioned-tail-20260918, prompt-router-adapter-20260918 and
+full-hidden-router-20260918. Do not repeat their rejected arms unchanged.
+
 ## Historical cache-budget update, 2026-09-18
 
 Task 4 remains open. The cache-budget candidate completes at 12.6712544 TPS /

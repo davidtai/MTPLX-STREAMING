@@ -498,3 +498,18 @@ Receipts: prelaunch-hits-20260918, read-alignment-20260918,
 draft-surrogates-20260918. Do not rerun unchanged rejected screens or the
 conditional111-slot candidate without a fresh source audit and fitting live
 bound. Task4 stays open; fixedQ8/full256K prefill remain secondary.
+
+## 2026-09-18 13:07 UTC [saved]
+
+Goal: Reduce DeepSeek expert I/O and verification cost under 110 GB.
+Decisions:
+- Retain the 13.414 TPS full candidate; later head/CPU screens do not establish a throughput improvement.
+- Keep compact learned routing conditional: transferred prediction improves coverage, but finite lead time, contention and predictor cost remain unmeasured.
+- Assess Vontra 2-bit separately; its resident runtime exceeds budget, and changing target weights exceeds tie-breaker scope.
+Rejected:
+- Reader-pool reduction and R2 GU fusion: no robust integrated gain.
+- Long conditioned suffixes and current-route features: extra work outweighs limited opportunity.
+- Full-hidden raw-residual predictor: worse miss precision and coverage, much larger parameters.
+Open:
+- Reach 20 TPS; verify complete 256K prefill second.
+- Measure compact learned prefetch economics before considering production integration.

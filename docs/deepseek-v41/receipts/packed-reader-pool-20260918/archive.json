@@ -1,0 +1,27 @@
+{
+  "source_root": "/tmp/dsv41-packed-reader-pool-20260918",
+  "raw_prefix": "/tmp/dsv41-110-stage/no-packed-reader-pool-20260918",
+  "files": {
+    "installation.json": "1c33ef00a2af9c1a5796712f499b67d09c01798488239ffc4fb328d76c7ffb0e",
+    "plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "README.md": "2987c467e45f0b86cc21ff9e935837f113cfd471c379d5f00dd3a28ac78d8e98",
+    "reclamation.json": "d674f7ef132334e8aaba6716aaa4088f3f2a36cb45e09da3855bd1d8bccd5f91",
+    "probe.json": "ef264e1adc76bb365678f4e724a414eedba43231cb3172bfbae7bfd7b9c9b6aa",
+    "restore_bank.py": "1ae63301433058fe491d229851e7638daf25300289af3106b0638b8c57103849",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "probe.py": "b11181d2fdcb5f8e337030dc5fa81506a461d70242e68eda3b3ffd44c0f7d684",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "guard.log": "f64f13b3fb7298c279780e5d8f0055f096de2654d477c766e1736ec5bb609388",
+    "command.sh": "b2ecf73a69af6d1894bb71ff3f292414b258496213011bc3ebd28c460ead4942",
+    "stage.py": "c416c5a285b4e91f209d4f5fb20243bbb6252678c2903d3f0edfb074d51ae604",
+    "construction.json": "e0c47c43ca7580203902d0f2303c43b57b8735a7567da9f7d6c9c33c3667b180",
+    "child.json": "5ad5483d42cfb72acb9778255ce378782b201949bef7709ab8598ede99caf568",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "routes.json": "5dd6c05ba96f9e4f829a372e25bbccb1197fd78031bf104f8bc99906a64a1cac",
+    "post-run-health.json": "3bb232be25af60670b73d94d29a8179544fc520d6ad4aa183abcd554978a7e25",
+    "run_screen.py": "e34840c5def4ad187b04b7fc6d7b2024f94d13e4339fcb7c8229ccc8cfa5d0bd"
+  },
+  "total_bytes": 600058,
+  "artifact_copies": false
+}

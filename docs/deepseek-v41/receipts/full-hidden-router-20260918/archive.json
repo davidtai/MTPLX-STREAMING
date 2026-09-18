@@ -1,0 +1,17 @@
+{
+  "source_root": "/tmp/dsv41-full-hidden-router-20260918",
+  "raw_prefix": "/tmp/dsv41-110-stage/no-full-hidden-router",
+  "files": {
+    "screen.py": "d6cc99a7df0db4f702316f22816d60375d9446222cc750fe27de030f54519eb7",
+    "screen.json": "be7b84c344c7cedbc8f355218206a4a9027b9871bf90ea75976de5d7d415ea41",
+    "installation.json": "847cd517b2d75292f0884134f0b7bb0e4ddf78186bdb30a30220651dd0a01684",
+    "README.md": "85cb807f663f587ecb0353b7659fda4d6330f2ab213079eb4c3a46db36583c09",
+    "guard.log": "fdd7bbff0b82ab9d1d5b1b6b04e69aa6679e4bc2f54602c6f53cde2162bcf576",
+    "command.sh": "a4fe57ae5c3ff880d22565c6fbdee86dd7e21f35707c6c6641da35db89b439ad",
+    "stage.py": "60f78da4495789fa3b7a2b7835d19b2d0e1d18ca4fc938355c9ded16181424a2",
+    "screen_body.py": "7f69eca9fc5673cedacf8f2f22062b47c645246da6e644f5cd0eb80ab2d8576b",
+    "post-run-health.json": "5f88d9e13d651451b418d5bd2b4bd7c21c5205de8d422a47d501d0e0af8ffc3c"
+  },
+  "total_bytes": 409606,
+  "artifact_copies": false
+}
