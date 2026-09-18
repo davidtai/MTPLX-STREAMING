@@ -1,0 +1,83 @@
+{
+  "source_commit": "9835305c1f2a66b7ad4ef98fd877db81156cd3ae",
+  "complete": true,
+  "all_weight_bytes_exact": true,
+  "all_projection_outputs_exact": true,
+  "cases": [
+    {
+      "rows": 1,
+      "output_exact": {
+        "native_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "fused_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "five_layer_medians_ns": {
+        "cached": 1944042,
+        "native_fresh": 4749208.0,
+        "fused_fresh": 3041375.0
+      },
+      "fused_vs_cached_ratio": 1.5644595127060013,
+      "fused_vs_native_fresh_ratio": 0.6403962513328538,
+      "added_ns_per_layer": 219466.6,
+      "control_spread_fraction": 0.07977348226015693
+    },
+    {
+      "rows": 6,
+      "output_exact": {
+        "native_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "fused_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "five_layer_medians_ns": {
+        "cached": 2628500,
+        "native_fresh": 5382521.5,
+        "fused_fresh": 3830083.0
+      },
+      "fused_vs_cached_ratio": 1.4571363895758036,
+      "fused_vs_native_fresh_ratio": 0.7115778357782686,
+      "added_ns_per_layer": 240316.6,
+      "control_spread_fraction": 0.0187369221989728
+    }
+  ],
+  "mlx_peak_bytes": 861863936,
+  "active_after_close_bytes": 0,
+  "guard_exit_code": 0,
+  "guard_process_tree_peak_bytes": 789448240,
+  "guard_physical_peak_bytes": 12046860288,
+  "guard_samples": 2,
+  "compressor_growth_bytes": 0,
+  "full_decode_added_time_projection_s": 1.980208784,
+  "projection_scope": "Arithmetic multiplication of operator overhead by40 layers and206 cycles, not a full-model measurement.",
+  "memory_feasibility": {
+    "basis_full_source_commit": "cb85fb3d518e3a99a8b1e36b60afb9048f36e095",
+    "baseline_bytes": 11964268544,
+    "current_capacity": 103,
+    "current_resize_active_bound_bytes": 93781035228,
+    "one_capacity_increment_resize_bytes": 719585280,
+    "next_capacity_resize_physical_bound_bytes": 110363144536,
+    "reason": "Changing steady output-projection storage does not change the preceding bank-growth copy envelope. That envelope alone rejects104 slots at the current baseline with unchanged cache policy."
+  },
+  "decision": "Reject as full-model candidate: slower than retained cached BF16 projection and no additional admitted slot from this change alone. No full model run or new optimization test."
+}

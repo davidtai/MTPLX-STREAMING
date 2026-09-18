@@ -1,0 +1,20 @@
+{
+  "scope": "Five real native output projections, rows1/6: cached BF16 matmul versus native fresh conversion and one-pass MXFP8 decode/transpose plus identical matmul and wo_b. No full decoder or full-model memory/TPS claim.",
+  "shell_tokens": [
+    "env",
+    "GPU_WINDOW_LOCK_TIMEOUT=120",
+    "GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000",
+    "GPU_WINDOW_MIN_AVAIL_GB=10",
+    "GPU_WINDOW_RESTORE_QWEN_ALWAYS=1",
+    "PYTHONHASHSEED=0",
+    "PYTHONUNBUFFERED=1",
+    "PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41:/tmp/dsv41-woa-fused-transpose-20260918",
+    "scripts/deepseek_v41/gpu_window.sh",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python",
+    "/tmp/dsv41-woa-fused-transpose-20260918/run_screen.py",
+    ">",
+    "/tmp/dsv41-woa-fused-transpose-20260918/guard.log",
+    "2>&1"
+  ],
+  "command_sh_sha256": "4395d6403c355df4a21cd03762cddaadd0d8d4e9609e803e92d1ab83366e3bff"
+}

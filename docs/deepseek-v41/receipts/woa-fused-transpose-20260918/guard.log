@@ -1,0 +1,367 @@
+2026-09-18T06:33:19Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-18T06:33:19Z [gpu_window] abort: to abort this window cleanly, kill -TERM 14374 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-18T06:33:19Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-18T06:33:19Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-18T06:33:19Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-18T06:33:19Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-18T06:33:19Z [gpu_window] phase 2: com.tea.qwen loaded (pid=13707); plist=/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-18T06:33:19Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-18T06:33:19Z [gpu_window] phase 3: available memory before bootout: 45.3 GiB
+2026-09-18T06:33:19Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-18T06:33:20Z [gpu_window] phase 3: com.tea.qwen captured process tree is gone
+2026-09-18T06:33:20Z [gpu_window] phase 3: reclaiming stopped-service clean file cache from /Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+{"operation": "stopped_service_file_cache_reclamation", "layout": "model", "model_dir": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed", "files": [{"file": "model-00001-of-00019.safetensors", "file_bytes": 4613737928, "cached_page_bytes_before": 4576542720, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00002-of-00019.safetensors", "file_bytes": 4299165294, "cached_page_bytes_before": 955170816, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00003-of-00019.safetensors", "file_bytes": 4613737948, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00004-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00005-of-00019.safetensors", "file_bytes": 4613737941, "cached_page_bytes_before": 1560199168, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00006-of-00019.safetensors", "file_bytes": 4299165282, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00007-of-00019.safetensors", "file_bytes": 4613737956, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00008-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00009-of-00019.safetensors", "file_bytes": 4613737939, "cached_page_bytes_before": 1560182784, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00010-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00011-of-00019.safetensors", "file_bytes": 4613737944, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00012-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00013-of-00019.safetensors", "file_bytes": 4613737945, "cached_page_bytes_before": 1560215552, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00014-of-00019.safetensors", "file_bytes": 4299165290, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00015-of-00019.safetensors", "file_bytes": 4613737952, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00016-of-00019.safetensors", "file_bytes": 4299165265, "cached_page_bytes_before": 3640492032, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00017-of-00019.safetensors", "file_bytes": 4830006690, "cached_page_bytes_before": 4160438272, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00018-of-00019.safetensors", "file_bytes": 4307505704, "cached_page_bytes_before": 1510096896, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00019-of-00019.safetensors", "file_bytes": 20813169, "cached_page_bytes_before": 18317312, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-vision.safetensors", "file_bytes": 897899145, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "mtp.safetensors", "file_bytes": 1678147375, "cached_page_bytes_before": 1678147584, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "ngram-table.safetensors", "file_bytes": 32000154008, "cached_page_bytes_before": 14764179456, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}], "before": {"sample_start_monotonic_ns": 178909918186916, "sample_end_monotonic_ns": 178909920781958, "process": {"peak_maxrss_bytes": 23887872, "resident_bytes": 23822336, "phys_footprint_bytes": 14647752, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 86823452672, "wired_bytes": 3402252288, "active_bytes": 4517117952, "inactive_bytes": 37195137024, "speculative_bytes": 441597952, "anonymous_bytes": 3759751168, "file_backed_bytes": 38394101760, "compressor_bytes": 2174976000, "compressed_bytes": 8158707712, "used_bytes": 47289483264, "non_file_used_bytes": 9336979456, "swapins_pages": 4825826, "swapouts_pages": 7667614, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "after": {"sample_start_monotonic_ns": 178913038691750, "sample_end_monotonic_ns": 178913041112916, "process": {"peak_maxrss_bytes": 23953408, "resident_bytes": 23953408, "phys_footprint_bytes": 14778824, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 122761428992, "wired_bytes": 3402612736, "active_bytes": 3116630016, "inactive_bytes": 2494775296, "speculative_bytes": 607043584, "anonymous_bytes": 3797319680, "file_backed_bytes": 2421129216, "compressor_bytes": 2174976000, "compressed_bytes": 8158707712, "used_bytes": 11188994048, "non_file_used_bytes": 9374908416, "swapins_pages": 4825826, "swapouts_pages": 7667614, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "elapsed_s": 3.1203935419907793, "physical_used_reduction_bytes": 36100489216, "cached_page_bytes_before": 35983982592, "cached_page_bytes_after": 0, "semantics": "cached pages include speculative free pages; physical-used reduction is measured separately"}
+2026-09-18T06:33:23Z [gpu_window] phase 3: stop confirmed -- pid gone, 72.0 GiB freed, 117.2 GiB available (>= 10 GiB)
+2026-09-18T06:33:23Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-18T06:33:23Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 10.4 GiB (ceiling 102.445483 GiB); compressor at start 1.7 GiB
+2026-09-18T06:33:23Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-18T06:33:23Z [gpu_window] phase 4: exported exact 11176230912-byte baseline as MTPLX_DSV41_BOX_BASELINE_GB=11.176230911999999 (decimal GB; 10.4 GiB) to the step env
+2026-09-18T06:33:23Z [gpu_window] phase 4: effective child-tree footprint cap 92.0 GiB (lowered from 100.0 GiB: used_start 10.4 + cap would cross the 102.445483 GiB ceiling)
+2026-09-18T06:33:23Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 92.0 GiB (~99 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-18T06:33:23Z [gpu_window] phase 4: starting GPU step (tag gpuwin-14374-1789713203-1237122596) under child-tree footprint cap 92.0 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-woa-fused-transpose-20260918/run_screen.py
+2026-09-18T06:33:23Z [gpu_window] phase 4: mem sample -- baseline 10.4 GiB + step footprint 0.0 GiB, live physical used 10.4 GiB => guard accounted 10.4 GiB; compressor +0.0 GiB (trip 8 GiB)
+{
+  "source_commit": "9835305c1f2a66b7ad4ef98fd877db81156cd3ae",
+  "complete": true,
+  "weight_parity": [
+    {
+      "layer": 0,
+      "shape": [
+        8,
+        4096,
+        1024
+      ],
+      "bytes": 67108864,
+      "native_sha256": "85fdde960c03e1ac9802dff1e3825f4700fb24db3a42225f3ebae82218010170",
+      "fused_sha256": "85fdde960c03e1ac9802dff1e3825f4700fb24db3a42225f3ebae82218010170",
+      "exact": true
+    },
+    {
+      "layer": 2,
+      "shape": [
+        8,
+        4096,
+        1024
+      ],
+      "bytes": 67108864,
+      "native_sha256": "7bd7e1644c91101619f1844e803e32a351704fc47a12b4ee9ae4e4eff9409a88",
+      "fused_sha256": "7bd7e1644c91101619f1844e803e32a351704fc47a12b4ee9ae4e4eff9409a88",
+      "exact": true
+    },
+    {
+      "layer": 3,
+      "shape": [
+        8,
+        4096,
+        1024
+      ],
+      "bytes": 67108864,
+      "native_sha256": "e65319231c0c68ea3fa48f36be2ffa67830ff36446e397ebe1fc6e2d7852f125",
+      "fused_sha256": "e65319231c0c68ea3fa48f36be2ffa67830ff36446e397ebe1fc6e2d7852f125",
+      "exact": true
+    },
+    {
+      "layer": 20,
+      "shape": [
+        8,
+        4096,
+        1024
+      ],
+      "bytes": 67108864,
+      "native_sha256": "19038e88e93edd938421c04e0142ebeea58f8e9b27a0e3911d78675e085fe4a8",
+      "fused_sha256": "19038e88e93edd938421c04e0142ebeea58f8e9b27a0e3911d78675e085fe4a8",
+      "exact": true
+    },
+    {
+      "layer": 24,
+      "shape": [
+        8,
+        4096,
+        1024
+      ],
+      "bytes": 67108864,
+      "native_sha256": "bf3e20f18d0a78abacfb6e7e031cf6cc85da5fec2cf59cc17cc276d039bd2a25",
+      "fused_sha256": "bf3e20f18d0a78abacfb6e7e031cf6cc85da5fec2cf59cc17cc276d039bd2a25",
+      "exact": true
+    }
+  ],
+  "cases": [
+    {
+      "rows": 1,
+      "output_exact": {
+        "native_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "fused_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "blocks": [
+        {
+          "mode": "cached",
+          "samples_five_layers_ns": [
+            1957208,
+            1941875,
+            1867583,
+            2061750,
+            1957250,
+            1922458,
+            1741208,
+            1927334,
+            1880958
+          ],
+          "median_ns": 1927334
+        },
+        {
+          "mode": "fused_fresh",
+          "samples_five_layers_ns": [
+            3097375,
+            2891875,
+            2958667,
+            3046625,
+            2829208,
+            2871083,
+            3173042,
+            2974625,
+            3228000
+          ],
+          "median_ns": 2974625
+        },
+        {
+          "mode": "native_fresh",
+          "samples_five_layers_ns": [
+            4688375,
+            4785750,
+            4767666,
+            4811666,
+            4726208,
+            4715875,
+            4771084,
+            4693208,
+            4763250
+          ],
+          "median_ns": 4763250
+        },
+        {
+          "mode": "cached",
+          "samples_five_layers_ns": [
+            1835833,
+            2126708,
+            1866333,
+            1944042,
+            2078250,
+            2168875,
+            1899959,
+            1965083,
+            1856500
+          ],
+          "median_ns": 1944042
+        },
+        {
+          "mode": "native_fresh",
+          "samples_five_layers_ns": [
+            4709042,
+            4735166,
+            4796709,
+            4717041,
+            4752167,
+            4748375,
+            4688250,
+            4664500,
+            4812541
+          ],
+          "median_ns": 4735166
+        },
+        {
+          "mode": "fused_fresh",
+          "samples_five_layers_ns": [
+            3108125,
+            3065708,
+            3089166,
+            3135125,
+            2820375,
+            3255708,
+            3129083,
+            2998750,
+            3144375
+          ],
+          "median_ns": 3108125
+        },
+        {
+          "mode": "cached",
+          "samples_five_layers_ns": [
+            2120750,
+            1995416,
+            2140458,
+            2064708,
+            2082417,
+            2114709,
+            2107791,
+            1835833,
+            2004916
+          ],
+          "median_ns": 2082417
+        }
+      ],
+      "five_layer_medians_ns": {
+        "cached": 1944042,
+        "native_fresh": 4749208.0,
+        "fused_fresh": 3041375.0
+      },
+      "fused_vs_cached_ratio": 1.5644595127060013,
+      "fused_vs_native_fresh_ratio": 0.6403962513328538,
+      "added_ns_per_layer": 219466.6,
+      "control_spread_fraction": 0.07977348226015693
+    },
+    {
+      "rows": 6,
+      "output_exact": {
+        "native_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "fused_fresh": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "blocks": [
+        {
+          "mode": "cached",
+          "samples_five_layers_ns": [
+            2654875,
+            2544250,
+            2680750,
+            2755208,
+            2669708,
+            2624000,
+            2580583,
+            2507333,
+            2565666
+          ],
+          "median_ns": 2624000
+        },
+        {
+          "mode": "fused_fresh",
+          "samples_five_layers_ns": [
+            3989875,
+            3797458,
+            3836209,
+            3824208,
+            3652542,
+            3878708,
+            3742291,
+            3793333,
+            3813833
+          ],
+          "median_ns": 3813833
+        },
+        {
+          "mode": "native_fresh",
+          "samples_five_layers_ns": [
+            5380334,
+            5372833,
+            5394209,
+            5416417,
+            5338917,
+            5395250,
+            5396458,
+            5440583,
+            5373125
+          ],
+          "median_ns": 5394209
+        },
+        {
+          "mode": "cached",
+          "samples_five_layers_ns": [
+            2692791,
+            2690708,
+            2537709,
+            2605709,
+            2592125,
+            2673250,
+            2646708,
+            2811084,
+            2716750
+          ],
+          "median_ns": 2673250
+        },
+        {
+          "mode": "native_fresh",
+          "samples_five_layers_ns": [
+            5422250,
+            5290625,
+            5370834,
+            5294167,
+            5440625,
+            5346209,
+            5369916,
+            5450875,
+            5436375
+          ],
+          "median_ns": 5370834
+        },
+        {
+          "mode": "fused_fresh",
+          "samples_five_layers_ns": [
+            3887542,
+            3848791,
+            3846333,
+            3944166,
+            3666583,
+            3673750,
+            3800167,
+            3835875,
+            3898208
+          ],
+          "median_ns": 3846333
+        },
+        {
+          "mode": "cached",
+          "samples_five_layers_ns": [
+            2655083,
+            2628500,
+            2623875,
+            2600125,
+            2619917,
+            2637292,
+            2783500,
+            2693875,
+            2622416
+          ],
+          "median_ns": 2628500
+        }
+      ],
+      "five_layer_medians_ns": {
+        "cached": 2628500,
+        "native_fresh": 5382521.5,
+        "fused_fresh": 3830083.0
+      },
+      "fused_vs_cached_ratio": 1.4571363895758036,
+      "fused_vs_native_fresh_ratio": 0.7115778357782686,
+      "added_ns_per_layer": 240316.6,
+      "control_spread_fraction": 0.0187369221989728
+    }
+  ],
+  "mlx_peak_bytes": 861863936,
+  "active_after_close_bytes": 0
+}
+ATTENTION_SOURCE_CACHE_RECLAIMED {"child_terminal": true, "child_returncode": 0, "completed_at": "2026-09-18T06:33:25.529261+00:00", "cached_page_bytes_before": 331923456, "cached_page_bytes_after": 0}
+2026-09-18T06:33:25Z [gpu_window] phase 4: GPU step exited with code 0; sampled peak step footprint 0.7 GiB (789448240 bytes), sampled peak guard accounted 11.2 GiB (12046860288 bytes), sampled peak physical used 11.2 GiB (12046860288 bytes), sampled peak compressor delta 0.0 GiB (0 bytes); complete step memory samples 2, poll interval 1s
+2026-09-18T06:33:25Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-18T06:33:42Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-18T06:33:42Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

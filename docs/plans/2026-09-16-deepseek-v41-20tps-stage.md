@@ -39,11 +39,18 @@ All guards are terminal exit0 and exact Qwen restoration, warmup, health and loc
 release are verified. See
 `../deepseek-v41/receipts/cache-budget-20260918/README.md`.
 
-Next, audit native grouped BF16 projection reduction and weight loading on CPU
-before considering a packed-storage operator with identical arithmetic. The
-earlier direct gather_qmm and FP32-input variants failed their gates; do not
-repeat them. Cross-layer prefetch was also already rejected. This is an audit
-candidate, not a performance claim or a scheduled full-model run.
+The native grouped BF16 projection audit is also complete. One bounded fused
+decode/transpose operator has exact weight and output parity across five real
+layers, but is 45.71% slower than cached BF16 at M6. Its projected 1.98-second
+full-workload overhead and unchanged growth-copy limit reject it without a
+full-model run or new test. Guard96675 is terminal0 with restoration verified.
+See `../deepseek-v41/receipts/woa-fused-transpose-20260918/README.md`.
+
+Next, audit separate growth, seed and steady-decode allocator lifetimes on CPU.
+Do not discount the original overshoot allowance from endpoint readings. A
+growth-only zero cache setting may be considered separately from the rejected
+zero-cache attention route; steady-phase pricing still requires an allocation
+inventory and a proved boundary after seed. No new full-model run is staged.
 
 ## Earlier update, 2026-09-18
 

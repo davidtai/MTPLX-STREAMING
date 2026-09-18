@@ -74,12 +74,29 @@ Archive: receipts/cache-budget-20260918. Stage root:
 /tmp/dsv41-cache-budget-20260918/full-v1; raw prefix:
 /tmp/dsv41-110-stage/full-cache-budget-20260918-v1. No GPU child is running.
 
-Next is a CPU source audit of the native grouped BF16 output-projection reduction
-and weight loader. Determine whether packed storage can preserve that exact
-reduction before considering a bounded operator. Existing direct gather_qmm
-changed arithmetic beyond the tie allowance; its FP32-input variant also lost.
-Do not rerun those paths, cross-layer prefetch, or cache settings unchanged.
-This audit is a candidate investigation, not evidence of a speedup or 20 TPS.
+That output-projection audit and one bounded operator are now complete at
+source 9835305c1. Fused MXFP8 decode/transpose retains the native grouped BF16
+matmul and wo_b. All five complete weight arrays and M1/M6 projection outputs
+match exactly. At M6 it improves the fresh-conversion path by 28.84%, but is
+45.71% slower than cached BF16, adding 0.2403166 ms/layer (1.9802 s projected
+over 40 layers x 206 cycles). M6 control spread is 1.87%. This change alone also
+cannot add a slot: the unchanged growth-copy envelope puts 104 slots at
+110,363,144,536 B. Reject without a full model run, default change or new test.
+Receipt: receipts/woa-fused-transpose-20260918. Temporary root:
+/tmp/dsv41-woa-fused-transpose-20260918. Static operator bound 8 GiB; measured
+MLX peak 861,863,936 B, active after close 0. Guard96675 terminal0, source cache
+331,923,456 B->0, exact Qwen restored/warmed/lock released 06:33:42 UTC.
+Independent 06:36:13 health/idle/warmup/free-lock/no-owned-child check passes.
+
+Next: CPU audit of distinct growth, seed and steady-decode allocator lifetimes.
+The 2,258,155,644 B overshoot allowance is unchanged; do not lower it from
+endpoint readings. Growth already clears cache. A zero cache setting is only
+a possible quiescent copy-phase mechanism, not a decode setting (attention
+already rejected zero). Any smaller steady allowance requires a bounded
+allocation/lifetime inventory and a proved boundary after the seed. Preserve
+native KV16, exact arithmetic and all unrelated safety margins. Do not repeat
+direct gather_qmm, transient projection, cross-layer prefetch or cache arms
+unchanged. No new full-model candidate is staged.
 
 ## Previous prefix and read-batch stages
 

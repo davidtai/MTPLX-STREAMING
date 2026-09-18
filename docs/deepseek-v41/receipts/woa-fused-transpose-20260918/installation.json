@@ -1,0 +1,75 @@
+{
+  "source_commit": "9835305c1f2a66b7ad4ef98fd877db81156cd3ae",
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "model_manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+  "config_sha256": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d",
+  "incremental_bound_bytes": 8589934592,
+  "allocator_limit_bytes": 4294967296,
+  "allocator_cache_limit_bytes": 268435456,
+  "bound_components": {
+    "metal_and_allocator_cache_bytes": 4294967296,
+    "python_io_and_compiler_bytes": 4294967296
+  },
+  "resident_names": [
+    "layers.0.attn.wo_a.scales",
+    "layers.0.attn.wo_a.weight",
+    "layers.0.attn.wo_b.scales",
+    "layers.0.attn.wo_b.weight",
+    "layers.2.attn.wo_a.scales",
+    "layers.2.attn.wo_a.weight",
+    "layers.2.attn.wo_b.scales",
+    "layers.2.attn.wo_b.weight",
+    "layers.20.attn.wo_a.scales",
+    "layers.20.attn.wo_a.weight",
+    "layers.20.attn.wo_b.scales",
+    "layers.20.attn.wo_b.weight",
+    "layers.24.attn.wo_a.scales",
+    "layers.24.attn.wo_a.weight",
+    "layers.24.attn.wo_b.scales",
+    "layers.24.attn.wo_b.weight",
+    "layers.3.attn.wo_a.scales",
+    "layers.3.attn.wo_a.weight",
+    "layers.3.attn.wo_b.scales",
+    "layers.3.attn.wo_b.weight"
+  ],
+  "layers": [
+    0,
+    2,
+    3,
+    20,
+    24
+  ],
+  "shards": {
+    "model-00003.safetensors": 174962526,
+    "model-00005.safetensors": 191315913,
+    "model-00006.safetensors": 174962520,
+    "model-00023.safetensors": 186072941,
+    "model-00027.safetensors": 180697321
+  },
+  "payload_bytes": 389283840,
+  "bf16_cached_control_bytes": 335544320,
+  "one_fused_output_bytes": 67108864,
+  "largest_native_dequant_transpose_intermediate_allowance_bytes": 536870912,
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "mtplx/models/deepseek_v41_cache.py": "2e2af380b2a587dcaf10bcac2a3608fd7933e763432a67dd24e57959cb8f317f",
+    "mtplx/models/deepseek_v41_fused_proj_kernels.py": "6e769b53dfd4d45ddad4c43bd6cc84c77b0daeecebe794a02bcd88d85de6790a",
+    "mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c",
+    "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+  },
+  "scope": "Five real native output projections, rows1/6: cached BF16 matmul versus native fresh conversion and one-pass MXFP8 decode/transpose plus identical matmul and wo_b. No full decoder or full-model memory/TPS claim.",
+  "source_urls": [
+    "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/kernels/fp8.h",
+    "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/kernels/fp_quantized.h"
+  ],
+  "helper_sha256": {
+    "run_screen.py": "ba2cf3e2dcf6741e352013c980a95a482cdd8693c62481163e38e23865ebd291",
+    "probe.py": "e1eaf0867c55501219cb1644164c1a20fc2db22861924a084d46545deb673004",
+    "attention_reader.py": "a200dda92dba3bc19dd528221de47ca5f3ea4af5ffb13075e810d0c88e52f9ab",
+    "fused_transpose.py": "a21121fe16e572caaa1fd56751b306a299ede011a565929a5d3bd50d6c73c1ed",
+    "fp8.h": "3ee75c58a1e125ee9eaed3961ef89719d47ce4c8446bb930390d7a4579f08439",
+    "fp_quantized.h": "bdf6d419b623cdfd7493ff58fbf9c70b4a2c2c39511330d6a61646093148225e"
+  }
+}
