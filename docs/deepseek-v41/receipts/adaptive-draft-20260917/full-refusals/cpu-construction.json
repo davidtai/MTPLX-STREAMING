@@ -1,0 +1,33 @@
+{
+  "syntax": true,
+  "source_and_helper_hashes_match": true,
+  "mlx_imported": false,
+  "native_M8_bound_retained": true,
+  "extra_python_allowance_bytes": 16777216,
+  "admission": [
+    {
+      "baseline_bytes": 9955393536,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109908711656,
+      "active_bound_bytes": 94473937004,
+      "adaptive_draft_host_allowance_bytes": 16777216
+    },
+    {
+      "baseline_bytes": 15745040384,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 93,
+      "physical_bound_bytes": 109328259304,
+      "active_bound_bytes": 89965493340,
+      "adaptive_draft_host_allowance_bytes": 16777216
+    },
+    {
+      "baseline_bytes": 16500000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 92,
+      "physical_bound_bytes": 109773193028,
+      "active_bound_bytes": 89965493340,
+      "adaptive_draft_host_allowance_bytes": 16777216
+    }
+  ]
+}

@@ -184,6 +184,15 @@ class GuardSafetyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 5, result.stderr)
         self.assertNotIn('BOOTOUT_REACHED', result.stdout)
 
+    def test_unavailable_purge_auth_refuses_before_lock_or_service(self):
+        self.env['GPU_WINDOW_PURGE_DISK_CACHE'] = '1'
+        self.env['GPU_WINDOW_SUDO_CMD'] = self.command('sudo', 'exit 1\n')
+        result = self.run_guard('/usr/bin/true')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('before service shutdown', result.stderr)
+        self.assertFalse(Path(self.env['MTPLX_GPU_LOCK']).exists())
+        self.assertNotIn('bootout', result.stdout)
+
     def test_failed_reclamation_refuses_workload(self):
         source = GUARD.read_text()
         start = source.index('_reclaim_qwen_file_cache() {')

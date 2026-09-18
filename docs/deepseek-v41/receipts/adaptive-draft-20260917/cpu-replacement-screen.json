@@ -1,0 +1,37 @@
+{
+  "scope": "Policy-level unique demand misses; excludes physical transient reuse; no throughput claim",
+  "capacity": 102,
+  "initial_state": "Captured 73-slot residency plus 29 empty slots, identical residents across arms; candidate queue metadata starts cold in recorded recency order",
+  "selection": "103 chronological training cycles, then 103 heldout cycles; online updates use current and past routes only",
+  "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "script_sha256": "08015e8665d79e2b0d5d1618421ccefd115cbf030b748fcc5e7595266ddb1836",
+  "sources": [
+    "https://www2.cs.uh.edu/~paris/7360/PAPERS03/arcfast.pdf",
+    "https://raw.githubusercontent.com/cacheMon/libCacheSim/develop/libCacheSim/cache/eviction/S3FIFO.c"
+  ],
+  "token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "arms": [
+    {
+      "policy": "transition-window",
+      "elapsed_s": 0.6484920830116607,
+      "train_reads": 19620,
+      "heldout_reads": 15544,
+      "total_reads": 35164
+    },
+    {
+      "policy": "batch-arc",
+      "elapsed_s": 0.1581830409995746,
+      "train_reads": 20759,
+      "heldout_reads": 17411,
+      "total_reads": 38170
+    },
+    {
+      "policy": "batch-s3fifo",
+      "elapsed_s": 0.1498370409826748,
+      "train_reads": 20678,
+      "heldout_reads": 17193,
+      "total_reads": 37871
+    }
+  ],
+  "complete": true
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/experts.bin",
+    "size_bytes": 288777830400,
+    "cached_page_bytes": 0,
+    "elapsed_s": 4.22382495799684,
+    "operation": "read-only residency scan; no msync or payload reads"
+  },
+  {
+    "path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed/ngram-table.safetensors",
+    "size_bytes": 32000154008,
+    "cached_page_bytes": 22790144,
+    "elapsed_s": 0.5073807500011753,
+    "operation": "read-only residency scan; no msync or payload reads"
+  }
+]

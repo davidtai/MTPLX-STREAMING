@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "env",
+    "PYTHONPATH=.",
+    "GPU_WINDOW_MIN_AVAIL_GB=50",
+    "GPU_WINDOW_CHILD_RSS_CAP_BYTES=55834574848",
+    "GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000",
+    "GPU_WINDOW_LOCK_TIMEOUT=30",
+    "GPU_WINDOW_CANDIDATE_MODEL_DIR=/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "scripts/deepseek_v41/gpu_window.sh",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python",
+    "/tmp/dsv41-adaptive-depth-20260917/replay_adaptive.py"
+  ],
+  "cwd": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41",
+  "log": "/tmp/dsv41-adaptive-depth-20260917/guard.log"
+}

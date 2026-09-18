@@ -112,8 +112,13 @@ RESTORE_TIMEOUT="${GPU_WINDOW_RESTORE_TIMEOUT:-300}"  # seconds to confirm resto
 # Explicit benchmark option for stale file cache outside the known model files.
 # It runs only after service shutdown and foreign-worker checks, before admission.
 PURGE_DISK_CACHE="${GPU_WINDOW_PURGE_DISK_CACHE:-0}"
+SUDO_CMD="${GPU_WINDOW_SUDO_CMD:-/usr/bin/sudo}"
 if [[ "${PURGE_DISK_CACHE}" != 0 && "${PURGE_DISK_CACHE}" != 1 ]]; then
   printf 'ERROR: GPU_WINDOW_PURGE_DISK_CACHE must be 0 or 1\n' >&2
+  exit 2
+fi
+if [[ "${PURGE_DISK_CACHE}" == 1 ]] && ! "${SUDO_CMD}" -n -v; then
+  printf 'ERROR: OS disk-cache purge requires cached administrator authentication; refusing before service shutdown\n' >&2
   exit 2
 fi
 # W106 restore hardening (real-window incident, windows 42/43): the plist that
@@ -1178,7 +1183,7 @@ if [[ "${PURGE_DISK_CACHE}" == 1 ]]; then
   log "phase 4: flushing OS disk cache before admission (physical used ${_purge_before} bytes)"
   # purge flushes file buffers; it does not release application allocations.
   # Noninteractive sudo fails immediately if this command is not authorized.
-  if ! /usr/bin/sudo -n /usr/sbin/purge; then
+  if ! "${SUDO_CMD}" -n /usr/sbin/purge; then
     err "phase 4: requested OS disk-cache purge failed; refusing the workload"
     exit 5
   fi

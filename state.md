@@ -35,6 +35,43 @@ The 37 CPU reporting cases and eight loader/budget cases pass with real MLX
 imports blocked. Both latest full arms exercise correct source/current record
 sizes and shared transient allocation bytes.
 
+# Latest Adaptive Draft Stage
+
+20 TPS remains open; no newer full throughput result than12.6731624TPS.
+New draft-only policy: startD5, thenD7 after full acceptance orD3 otherwise.
+Exact teacher replay reduces206->195 cycles; verify rows1236->1242. D5 control
+reproduces all native commit boundaries. A three-way3/5/7 policy also takes195
+cycles but1282 rows, so retain the two-way policy for the full screen.
+Incremental bound52,613,349,376B; allocator peak21,299,586,448B; guard process
+15,376,608,560B and physical31,218,286,592B. Guard26808 is terminal exit0;
+Qwen restored23:49:22UTC, final independent health/warmup/free-lock check passes.
+
+Full staging: /tmp/dsv41-adaptive-depth-20260917/full, parameter-sharing views
+in adaptive_lane.py. No full-target execution yet. The existing nativeM8 bound
+is retained plus16MiB host metadata; native search floor96 is removed, allowing
+85..100 while preserving every memory inequality. CPU packed plans:102slots
+at9.955GB baseline;93 at15.745GB;92 at16.5GB.
+
+Fullv1 guard36864 exited1 before model loading: post-shutdown baseline28.6GB,
+including19.9GB file-backed. Fullv2 guard88353 exited5 before GPU child launch:
+optional OS disk-cache purge required an administrator password. Neither OOMed.
+Both restored exactQwen health/warmup and logged lock release (23:58:23 and
+00:05:37UTC). No live child remains. Read-only scan:experts.bin cache0B;
+Qwenngram22,790,144B; these do not identify the remaining file-backed memory.
+
+Guard07998bbd6 waits for zero active/queued work before bootout. Guard233e344e3
+adds opt-in GPU_WINDOW_PURGE_DISK_CACHE=1 before fresh admission. The subsequent
+fix checks cached admin authentication before lock/service changes. Three
+focused CPU guard regressions pass. No unrelated application was terminated.
+User async request is pending:run sudo /usr/sbin/purge in their own terminal;
+never collect the password. After RAM reclamation, repin source/helper hashes
+and use a freshv3 prefix with optional purge OFF. Do not rerun against the same
+oversized baseline or claim the draft-only cycle gain is a TPS improvement.
+
+Receipt:docs/deepseek-v41/receipts/adaptive-draft-20260917/README.md.
+CPU ARC/S3-FIFO screens lost (heldout17411/17193 vs15544 demand misses), so no
+GPU tests followed. Raw CPU screens:/tmp/dsv41-cache-replacement-20260917.
+
 # Latest Packed Plane Overlap
 
 Source ee72b77e0: full native-KV D5/M6 candidate84->102 completes at
