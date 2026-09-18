@@ -1,0 +1,16 @@
+{
+  "child_terminal": true,
+  "child_returncode": 1,
+  "completed_at": "2026-09-18T03:27:58.271978+00:00",
+  "files": [
+    {
+      "file": "experts.bin",
+      "file_bytes": 288777830400,
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    }
+  ],
+  "cached_page_bytes_before": 0,
+  "cached_page_bytes_after": 0
+}

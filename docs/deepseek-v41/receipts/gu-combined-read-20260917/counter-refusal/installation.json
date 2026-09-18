@@ -1,0 +1,21 @@
+{
+  "source_commit": "db5f9dd0dcfe536bce0edbf7ce59ff315b778631",
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "whole_machine_ceiling_bytes": 110000000000,
+  "incremental_allowance_bytes": 2147483648,
+  "scope": "CPU read-only plane versus combined-GU batches. Native artifact geometry, 15 worker capacity, 128 batches each at1/3/6 records. No MLX import or full-model load. At most108,380,160B destination buffers plus18,800,640B validation buffer; 2GiB allowance includes Python, manifest, thread stacks and all I/O state.",
+  "runtime_source_sha256": {
+    "mtplx/expert_io.py": "91b7aba10b8579166ea326225cfdce7d0969943cd0839ea960c4db702c32f06f",
+    "mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+    "mtplx/expert_shadow.py": "210304ae2d2dc75837acfbe490477a66df2d155ba841d50ba44b7609a993fa26",
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+    "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c"
+  },
+  "helper_sha256": {
+    "probe.py": "d29fb85bdb61bd925d4da8ede6c29c3f2e7b6beb3393af9d1e550f2ee53ee7c7",
+    "native_reader.py": "c1d38200ed5eefa678d15d65d7a9671f72de2da6a4aeb96a56ab9cff5303e6a8",
+    "combined_reader.py": "a12442b609633f36ff7b05e1078e27b91d846369d2246bf733d0749e508e97de",
+    "run_screen.py": "cd9343401923d00b87701f5279b851c34bf84e42ef2b9d20efc62efd2f5ca64b"
+  }
+}

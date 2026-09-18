@@ -1,0 +1,9 @@
+{
+  "native_source": "/tmp/dsv41-plane-overlap-20260917/full/packed/plane_lane.py",
+  "native_source_sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+  "extracted_unchanged_symbols": [
+    "PlanePart",
+    "bind_reader"
+  ],
+  "candidate_change": "Combine gate and up into one scatter range, landing the intervening 368640-byte gate scale payload in a separate preallocated CPU scratch. Down reads and gate/up publication remain separate. No runtime installation."
+}

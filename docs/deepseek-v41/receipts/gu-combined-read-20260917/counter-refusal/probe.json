@@ -1,0 +1,80 @@
+{
+  "scope": "CPU read-batch screen with native reader/fanout and gate/up readiness. No Metal owners, target model, cache pressure or decode TPS claim.",
+  "source_commit": "db5f9dd0dcfe536bce0edbf7ce59ff315b778631",
+  "manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+  "source_identity": {
+    "st_dev": 16777231,
+    "st_ino": 256779995,
+    "st_size": 288777830400,
+    "st_mtime_ns": 1789092717907406512,
+    "st_ctime_ns": 1789092717907406512
+  },
+  "whole_machine_ceiling_bytes": 110000000000,
+  "incremental_allowance_bytes": 2147483648,
+  "weight_buffer_bytes": 106168320,
+  "scratch_buffer_bytes": 2211840,
+  "candidate_extra_read_bytes_per_record": 368640,
+  "initial_memory": {
+    "sample_start_monotonic_ns": 167781946346416,
+    "sample_end_monotonic_ns": 167781948636666,
+    "process": {
+      "peak_maxrss_bytes": 70336512,
+      "resident_bytes": 70418432,
+      "phys_footprint_bytes": 57475576,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 124284518400,
+      "wired_bytes": 3175399424,
+      "active_bytes": 2236137472,
+      "inactive_bytes": 2017673216,
+      "speculative_bytes": 193708032,
+      "anonymous_bytes": 2898132992,
+      "file_backed_bytes": 1549385728,
+      "compressor_bytes": 2361573376,
+      "compressed_bytes": 8412037120,
+      "used_bytes": 9790783488,
+      "non_file_used_bytes": 8435105792,
+      "swapins_pages": 4822066,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "arms": [],
+  "complete": false,
+  "final_memory": {
+    "sample_start_monotonic_ns": 167782968610375,
+    "sample_end_monotonic_ns": 167782971190708,
+    "process": {
+      "peak_maxrss_bytes": 354156544,
+      "resident_bytes": 353042432,
+      "phys_footprint_bytes": 340230912,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 124005416960,
+      "wired_bytes": 3179675648,
+      "active_bytes": 2372648960,
+      "inactive_bytes": 2160508928,
+      "speculative_bytes": 193380352,
+      "anonymous_bytes": 3177136128,
+      "file_backed_bytes": 1549402112,
+      "compressor_bytes": 2361573376,
+      "compressed_bytes": 8412020736,
+      "used_bytes": 10074406912,
+      "non_file_used_bytes": 8718385152,
+      "swapins_pages": 4822066,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "mlx_imported": false
+}

@@ -160,6 +160,24 @@ separate. CPU destination buffers only, no model. Existing~13.1GB/s uncached
 receipts limit the possible gain; do not launch a full candidate without a
 clear end-to-end read-batch improvement. Keep the best12.6731624TPS baseline.
 
+Combined-GU read screen completed and rejected at source db5f9dd0d. Native
+PlanePart/bind_reader extracted unchanged; candidate scatters across the gate
+scale gap, reading368640extra bytes/record into preallocated scratch. CPU-only,
+MLX blocked,2GiB allowance,128batches perarm at1/3/6records. Exact final weights
+and full native record digests; end-to-end wall changes+0.06%,+3.37%,+2.11%.
+First case is within control variance; relevant batches regress. No full run,
+runtime installation or added tests. Initial harness counter-reset failure is
+preserved; v2 rebinds the reader after replacing metrics outside timing.
+Guard50127 terminal0, source cache0 after child exit, process-tree peak
+372,606,368B, machine9,923,100,672B; exactQwen restored/warmed/released03:30:33UTC.
+Independent03:31:18 check healthy/idle/warmed/free, no child. Archive:
+docs/deepseek-v41/receipts/gu-combined-read-20260917. Do not repeat unchanged.
+No full candidate is currently staged or running. Best full remains12.6731624TPS;
+20TPS is open. The full tail2048 win concerns prefill memory only, with no steady
+capacity discount. Next work needs materially less expert traffic or better
+overlap of verification with reads; the existing I/O path already reaches its
+observed~13GB/s payload rate. Keep Q8/256K work secondary and its caveats intact.
+
 # Latest Adaptive Draft Stage
 
 20 TPS remains open. Adaptive full v3 finished at12.3057465TPS/83.1318930s;
