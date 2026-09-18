@@ -88,12 +88,19 @@ Next bounded operator:/tmp/dsv41-tail-seed-20260917. DSpark seed_main projects
 every prompt hidden row, but its three caches retain only the last128 rows.
 Seed-only attention is pointwise projection/norm/RoPE before append; there is
 no compressed MTP history. Compare native full16K seeding to final128 rows with
-absolute offsets16256, using only the13 native dense/norm seed tensors and a
+absolute offsets16256, using only the12 native dense/norm seed tensors and a
 synthetic16K sequence tiled from authentic saved target hiddens. Bound8GiB;
 controller reclaims source pages after actual child exit. No target generation.
 If useful, narrowing captures would also remove the8.053GB full main-hidden
 tensor at256K. The generic MTP history API still requires all rows, so any
 eventual change must be explicit to DSpark prefill. No production code changed.
+First seed attempt refused at the standard eager loader's64MiB unselected
+tensor cap before any comparison. Guard49374 terminal exit1; Qwen restored,
+warmed and lock released02:34:21UTC; independent02:34:38 check healthy/free
+with no owned child. Do not relax that loader cap. Variant2 under v2/ reads
+only12 validated native tensor ranges (89,224,192B) into final MLX owners with
+F_NOCACHE/preadv, bounded8MiB views and source identity checks. Same8GiB bound.
+Receipt:docs/deepseek-v41/receipts/tail-seed-20260917/README.md.
 
 # Latest Adaptive Draft Stage
 
