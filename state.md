@@ -68,6 +68,16 @@ never collect the password. After RAM reclamation, repin source/helper hashes
 and use a freshv3 prefix with optional purge OFF. Do not rerun against the same
 oversized baseline or claim the draft-only cycle gain is a TPS improvement.
 
+The next continuation revalidated the same RAM/admin-auth blocker. Read-only
+mincore audit found0 resident bytes across68,403 saved-session blobs (10.425GB)
+and289 task-owned artifact files (13.576GB). A2MiB private-file positive control
+returned2MiB before and0 after invalidation, so no session/artifact cleanup is
+justified. Qwen remained healthy/idle/warmed; machine use133.107GB while serving,
+including37.497GB file-backed. sudo -n -v still requires a password. No GPU run
+or service restart occurred. This is the second consecutive goal turn with
+the external RAM-reclamation blocker; keep the goal active pending the strict
+three-turn blocked audit. Evidence:the receipt's ram-cache-audit subdirectory.
+
 Receipt:docs/deepseek-v41/receipts/adaptive-draft-20260917/README.md.
 CPU ARC/S3-FIFO screens lost (heldout17411/17193 vs15544 demand misses), so no
 GPU tests followed. Raw CPU screens:/tmp/dsv41-cache-replacement-20260917.

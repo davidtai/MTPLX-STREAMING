@@ -79,3 +79,20 @@ ledger is `cpu-replacement-screen.json`; no GPU testing followed those losses.
 
 `sha256.json` binds the 20 preserved evidence files. The existing teacher
 arrays remain in the previously verified ignored artifact directory.
+
+## Additional read-only RAM audit
+
+The next continuation checked two possible sources of reclaimable file pages.
+All 68,403 cold-session blobs (10,424,846,448 bytes on disk) had zero resident
+pages. The bounded inventory of 289 task-owned artifact files
+(13,576,497,432 bytes on disk) also had zero resident pages. A private 2 MiB
+buffered-file control reported exactly 2 MiB resident before the existing
+invalidation helper and zero afterward, with unchanged file size and mtime.
+These findings do not justify adding session or temporary-artifact cleanup.
+
+Qwen remained healthy, idle and warmed throughout this CPU-only audit. Machine
+physical usage was 133,107,056,640 bytes with Qwen serving, including
+37,497,257,984 file-backed bytes. Noninteractive administrator validation still
+required a password. No service restart, application termination or GPU run
+occurred. `ram-cache-audit/sha256.json` separately binds these five evidence
+files; the OS cache flush remains the pending external step.

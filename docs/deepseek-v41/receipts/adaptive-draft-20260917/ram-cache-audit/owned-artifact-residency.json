@@ -1,0 +1,8 @@
+{
+  "scope": "Read-only page residency of task-owned artifacts; no payload reads or invalidations",
+  "files": 289,
+  "file_bytes": 13576497432,
+  "cached_bytes": 0,
+  "elapsed_s": 0.21134291699854657,
+  "cached_files": []
+}
