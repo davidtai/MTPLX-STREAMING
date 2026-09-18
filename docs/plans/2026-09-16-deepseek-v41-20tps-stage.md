@@ -21,6 +21,32 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Current update, 2026-09-18
 
+Task 4 remains open. The cache-budget candidate completes at 12.6712544 TPS /
+80.7339166 s with exact 1,024 native output IDs and 84->103 slots. It keeps
+1 GiB allocator cache during prefill and sets 256 MiB at the existing quiescent
+growth boundary. Two fixed 64 MiB Engram arenas have zero full-run evictions.
+Pricing recovers 1,011,844,096 B while retaining all existing overshoot, compile,
+copy, KV and wired margins. At the actual 11,964,268,544 B baseline, the old
+configuration admits 102 slots and this candidate admits 103. Its different
+capacity prevents an isolated speed comparison with the retained 104-slot run.
+The physical bound is 109,677,955,304 B; independent machine peak is
+107,034,165,248 B. Headline cache reporting follows the installed phase.
+
+Three bounded operators precede that one full run: expert zero-cache is flat;
+attention zero-cache loses; the stable 256 MiB attention comparison is flat with
+exact output/state. No broad suite or further optimization test is justified.
+All guards are terminal exit0 and exact Qwen restoration, warmup, health and lock
+release are verified. See
+`../deepseek-v41/receipts/cache-budget-20260918/README.md`.
+
+Next, audit native grouped BF16 projection reduction and weight loading on CPU
+before considering a packed-storage operator with identical arithmetic. The
+earlier direct gather_qmm and FP32-input variants failed their gates; do not
+repeat them. Cross-layer prefetch was also already rejected. This is an audit
+candidate, not a performance claim or a scheduled full-model run.
+
+## Earlier update, 2026-09-18
+
 Task4 remains open. The memory-composed full native run reaches12.8091055TPS
 at84->104 slots; all output IDs match. The subsequent one-record miss candidate
 reaches12.826718TPS /79.755398s at the same capacity, under a109,591,219,432B
@@ -31,9 +57,8 @@ and that single full run. Full6 attention remains: prefix operators add too
 much cost to justify the proposed split decoder. See
 `../deepseek-v41/receipts/miss-batches-20260918/README.md` and
 `../deepseek-v41/receipts/prefix-operators-20260918/README.md`.
-Next, derive phase-specific inactive-cache bounds on CPU; do not reduce the
-existing reserve from endpoint measurements or repeat cache clearing already
-present in growth. ExactQwen restored/warmed and lock release verified.
+That phase-specific cache investigation is completed by the current update
+above. Exact Qwen restoration, warmup and lock release were verified.
 
 ## Earlier measured update, 2026-09-17
 

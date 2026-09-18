@@ -1,0 +1,19 @@
+{
+  "source_commit": "cb85fb3d518e3a99a8b1e36b60afb9048f36e095",
+  "original_full": "/tmp/dsv41-memory-compose-20260918/full-v1",
+  "runtime_source_sha256": {
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "mtplx/expert_slots.py": "27084ec00f0040644ccc1c93ce4adbc78a65f3fb4b17670cd26d8fb43d75e887",
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+    "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "mtplx/models/expert_mlx.py": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "32d42a85ebe69ce986e6f8a7d0d20eb435ad70206c8fdc8649aa276043055963",
+    "scripts/deepseek_v41/bench_standard_shape.py": "7a2c5873ac54d90b060ea32a6d0d7c5c395bdf2f19f67023dbed58341e4d70ac",
+    "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c"
+  },
+  "runtime_files_unchanged": true,
+  "changed_scope": "Construction host/cache budgets, one phase-boundary cache setter, matching phase reporting; model arithmetic and existing decoder unchanged."
+}

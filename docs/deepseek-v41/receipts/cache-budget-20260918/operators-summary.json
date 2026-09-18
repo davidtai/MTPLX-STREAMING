@@ -1,0 +1,162 @@
+{
+  "dsv41-allocator-cache-20260918": {
+    "source_commit": "cb85fb3d518e3a99a8b1e36b60afb9048f36e095",
+    "probe_sha256": "e25937a0c207e4cca05470898a02ff8b826defcbad6e48c408d9841a9facbcbd",
+    "complete": true,
+    "mlx_peak_bytes": 2934477321,
+    "active_after_close_bytes": 8,
+    "guard_exit_code": 0,
+    "guard_process_tree_peak_bytes": 3242921296,
+    "guard_physical_peak_bytes": 15263907840,
+    "guard_samples": 15,
+    "compressor_growth_bytes": 0,
+    "health": {
+      "checked_at_utc": "2026-09-18T05:52:58.184830+00:00",
+      "ok": true,
+      "active_requests": 0,
+      "warmup": "done",
+      "model_ids": [
+        "mtplx-flash-next-optimized-speed"
+      ],
+      "lock_free": true,
+      "owned_processes": [],
+      "guard_session": 20783,
+      "guard_exit_code": 0
+    },
+    "control_median_warm_total_ns": 1331960546,
+    "candidate_median_warm_total_ns": 1330895648.5,
+    "latency_ratio": 0.9992005037212266,
+    "control_spread_fraction": 0.008992376715638843,
+    "all_outputs_and_reads_exact": true
+  },
+  "dsv41-allocator-attention-20260918": {
+    "source_commit": "cb85fb3d518e3a99a8b1e36b60afb9048f36e095",
+    "probe_sha256": "0f23174f5e43b4711d116fd17093b758b17f426ff7c5fb06d118e8d9614fe295",
+    "complete": true,
+    "mlx_peak_bytes": 1155786464,
+    "active_after_close_bytes": 8,
+    "guard_exit_code": 0,
+    "guard_process_tree_peak_bytes": 2067351928,
+    "guard_physical_peak_bytes": 17816862720,
+    "guard_samples": 4,
+    "compressor_growth_bytes": 0,
+    "health": {
+      "checked_at_utc": "2026-09-18T05:58:56.163568+00:00",
+      "ok": true,
+      "active_requests": 0,
+      "warmup": "done",
+      "model_ids": [
+        "mtplx-flash-next-optimized-speed"
+      ],
+      "lock_free": true,
+      "owned_processes": [],
+      "guard_session": 1970,
+      "guard_exit_code": 0
+    },
+    "cases": [
+      {
+        "layers": [
+          0
+        ],
+        "medians_ns": {
+          "full6": 1526584,
+          "nocache": 1739771.0
+        },
+        "latency_ratio": 1.1396497015558922,
+        "control_spread_fraction": 0.12369643596421814,
+        "output_state_exact": true
+      },
+      {
+        "layers": [
+          2,
+          3
+        ],
+        "medians_ns": {
+          "full6": 3000625,
+          "nocache": 5216854.5
+        },
+        "latency_ratio": 1.7385892938971048,
+        "control_spread_fraction": 0.13824919808373257,
+        "output_state_exact": true
+      },
+      {
+        "layers": [
+          20,
+          24
+        ],
+        "medians_ns": {
+          "full6": 3277000,
+          "nocache": 5044354.0
+        },
+        "latency_ratio": 1.539320720170888,
+        "control_spread_fraction": 1.0921449496490692,
+        "output_state_exact": true
+      }
+    ]
+  },
+  "dsv41-cache256-attention-20260918": {
+    "source_commit": "cb85fb3d518e3a99a8b1e36b60afb9048f36e095",
+    "probe_sha256": "aea4d75614cf51c423dad7818108dcb97b26a2811d1c801ed16b9cfa0fc674dd",
+    "complete": true,
+    "mlx_peak_bytes": 1155786464,
+    "active_after_close_bytes": 8,
+    "guard_exit_code": 0,
+    "guard_process_tree_peak_bytes": 1579452504,
+    "guard_physical_peak_bytes": 14288355328,
+    "guard_samples": 3,
+    "compressor_growth_bytes": 0,
+    "health": {
+      "checked_at_utc": "2026-09-18T06:02:01.643715+00:00",
+      "ok": true,
+      "active_requests": 0,
+      "warmup": "done",
+      "model_ids": [
+        "mtplx-flash-next-optimized-speed"
+      ],
+      "lock_free": true,
+      "owned_processes": [],
+      "guard_session": 44380,
+      "guard_exit_code": 0
+    },
+    "cases": [
+      {
+        "layers": [
+          0
+        ],
+        "medians_ns": {
+          "full6": 1494333,
+          "cache256": 1456646.0
+        },
+        "latency_ratio": 0.9747800523711917,
+        "control_spread_fraction": 0.0957510809170379,
+        "output_state_exact": true
+      },
+      {
+        "layers": [
+          2,
+          3
+        ],
+        "medians_ns": {
+          "full6": 2975084,
+          "cache256": 2989895.5
+        },
+        "latency_ratio": 1.0049785148923527,
+        "control_spread_fraction": 0.6129517687567814,
+        "output_state_exact": true
+      },
+      {
+        "layers": [
+          20,
+          24
+        ],
+        "medians_ns": {
+          "full6": 3276750,
+          "cache256": 3267979.0
+        },
+        "latency_ratio": 0.9973232623788815,
+        "control_spread_fraction": 0.004043640802624552,
+        "output_state_exact": true
+      }
+    ]
+  }
+}
