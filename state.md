@@ -36,7 +36,22 @@ The 37 CPU reporting cases and eight loader/budget cases pass with real MLX
 imports blocked. Both latest full arms exercise correct source/current record
 sizes and shared transient allocation bytes.
 
-# Current Draft-Width Screen
+# Current Optimization Stage
+
+Bounded prefix operators at source53277a85 are complete. Native packed MLP is
+byte-exact under1+5 and3+3 but costs15.7–20.2% more overall. Native attention
+costs56.9–80.0% more for1+5; stable3+3 Full/Reuse and Full/Reindex cases cost
+96.5% and67.6% more. The3+3 SWA control is unstable and is not usable evidence.
+All3+3 outputs and canonical window suffixes match; layer2 index-cache values
+still differ. Full retained window lengths differ by native compaction and do
+not establish a ring defect. Do not implement a ring fix or split decoder from
+the prefix-hit histogram. Archive:receipts/prefix-operators-20260918.
+Latest operator guard76468 is terminal exit0. Independent05:18:54UTC check
+confirms exactQwen healthy/idle/warmed, no owned child, free GPU lock. No full
+model or new optimization tests ran. Next bounded candidate: native full6
+plane-overlap with two-record versus existing three-record miss batches.
+
+# Prior Draft-Width Screen
 
 CPU position-weighted retention is rejected: native held-out misses15,544;
 weighted frequency15,546; weighted predictor+frequency15,587. Unit weights

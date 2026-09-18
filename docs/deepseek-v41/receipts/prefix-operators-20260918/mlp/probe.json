@@ -1,0 +1,1475 @@
+{
+  "source_commit": "53277a85ceacfc999503cfbf343f68e79dc7c66c",
+  "scope": "One real layer20 routed MLP bank;36 assignments per six-token route, partitioned6 vs1+5 vs3+3. Synthetic BF16 inputs, unchanged native/packed arithmetic, explicit output fences. No target attention, model load or full TPS prediction.",
+  "construction": {
+    "source_commit": "53277a85ceacfc999503cfbf343f68e79dc7c66c",
+    "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "static_incremental_bound_bytes": 6442450944,
+    "allocator_limit_bytes": 2147483648,
+    "allocator_cache_limit_bytes": 268435456,
+    "bound_components": {
+      "native48_record_bank_bytes": 902430720,
+      "packed_scale_layer_max_bytes": 104857600,
+      "input_output_and_split_scratch_bytes": 33554432,
+      "allocator_cache_graph_envelope_bytes": 2147483648,
+      "python_compiler_reader_reserve_bytes": 4294967296
+    },
+    "trace_path": "docs/deepseek-v41/receipts/mtp-verify-routes-20260913/mtp-verify-routes-16k-1024-v2.json.gz",
+    "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+    "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "cases": [
+      {
+        "cycle": 3,
+        "route": [
+          135,
+          360,
+          121,
+          278,
+          218,
+          31,
+          15,
+          344,
+          31,
+          307,
+          357,
+          210,
+          15,
+          44,
+          309,
+          344,
+          67,
+          81,
+          15,
+          31,
+          344,
+          61,
+          341,
+          86,
+          15,
+          344,
+          61,
+          213,
+          31,
+          268,
+          15,
+          213,
+          360,
+          116,
+          268,
+          135
+        ],
+        "unique_experts": 21
+      },
+      {
+        "cycle": 198,
+        "route": [
+          116,
+          18,
+          335,
+          257,
+          285,
+          320,
+          370,
+          42,
+          359,
+          143,
+          340,
+          75,
+          370,
+          359,
+          42,
+          7,
+          75,
+          98,
+          42,
+          18,
+          257,
+          129,
+          210,
+          359,
+          42,
+          18,
+          129,
+          257,
+          177,
+          359,
+          42,
+          177,
+          359,
+          274,
+          143,
+          28
+        ],
+        "unique_experts": 19
+      }
+    ],
+    "selected_experts": [
+      7,
+      15,
+      18,
+      28,
+      31,
+      42,
+      44,
+      61,
+      67,
+      75,
+      81,
+      86,
+      98,
+      116,
+      121,
+      129,
+      135,
+      143,
+      177,
+      210,
+      213,
+      218,
+      257,
+      268,
+      274,
+      278,
+      285,
+      307,
+      309,
+      320,
+      335,
+      340,
+      341,
+      344,
+      357,
+      359,
+      360,
+      370
+    ],
+    "scope": "One real layer20 routed MLP bank;36 assignments per six-token route, partitioned6 vs1+5 vs3+3. Synthetic BF16 inputs, unchanged native/packed arithmetic, explicit output fences. No target attention, model load or full TPS prediction.",
+    "helper_sha256": {
+      "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+      "probe.py": "ee03ebf26167eec66f5fcde8e2e5880f509fbbef59c78e2b30efbc8482fb7906",
+      "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+      "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+      "run_screen.py": "fb33c7fdd11fbe8ca437886c1b67880ae4c8978f741964fb94886d26d0d7a1bf"
+    },
+    "runtime_source_sha256": {
+      "mtplx/models/expert_mlx.py": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc",
+      "mtplx/expert_io.py": "91b7aba10b8579166ea326225cfdce7d0969943cd0839ea960c4db702c32f06f",
+      "mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+      "mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+      "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+      "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c",
+      "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+    }
+  },
+  "before": {
+    "sample_start_monotonic_ns": 172544660092000,
+    "sample_end_monotonic_ns": 172544662203541,
+    "process": {
+      "peak_maxrss_bytes": 24969216,
+      "resident_bytes": 25313280,
+      "phys_footprint_bytes": 14320096,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123419754496,
+      "wired_bytes": 3347988480,
+      "active_bytes": 2800861184,
+      "inactive_bytes": 2682781696,
+      "speculative_bytes": 106283008,
+      "anonymous_bytes": 3966337024,
+      "file_backed_bytes": 1623588864,
+      "compressor_bytes": 2035056640,
+      "compressed_bytes": 7600439296,
+      "used_bytes": 10866688000,
+      "non_file_used_bytes": 9349382144,
+      "swapins_pages": 4823909,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "cases": [
+    {
+      "cycle": 3,
+      "route": [
+        135,
+        360,
+        121,
+        278,
+        218,
+        31,
+        15,
+        344,
+        31,
+        307,
+        357,
+        210,
+        15,
+        44,
+        309,
+        344,
+        67,
+        81,
+        15,
+        31,
+        344,
+        61,
+        341,
+        86,
+        15,
+        344,
+        61,
+        213,
+        31,
+        268,
+        15,
+        213,
+        360,
+        116,
+        268,
+        135
+      ],
+      "unique_experts": 21,
+      "timings": [
+        {
+          "arm": "full6",
+          "median_total_ns": 1184584,
+          "median_first_part_ns": 1183958,
+          "samples_total_ns": [
+            1222167,
+            1184584,
+            1189542,
+            1206417,
+            1202292,
+            1169333,
+            1168875,
+            1171208,
+            1218750,
+            1152500,
+            1178917
+          ],
+          "samples_parts_ns": [
+            [
+              1220708
+            ],
+            [
+              1183958
+            ],
+            [
+              1188500
+            ],
+            [
+              1205875
+            ],
+            [
+              1201500
+            ],
+            [
+              1169000
+            ],
+            [
+              1168250
+            ],
+            [
+              1170875
+            ],
+            [
+              1218333
+            ],
+            [
+              1152125
+            ],
+            [
+              1178333
+            ]
+          ]
+        },
+        {
+          "arm": "prefix1_tail5",
+          "median_total_ns": 1344333,
+          "median_first_part_ns": 373375,
+          "samples_total_ns": [
+            1374916,
+            1371333,
+            1329542,
+            1347625,
+            1344333,
+            1347083,
+            1314334,
+            1301667,
+            1339334,
+            1346708,
+            1308292
+          ],
+          "samples_parts_ns": [
+            [
+              391583,
+              982750
+            ],
+            [
+              385209,
+              985667
+            ],
+            [
+              375917,
+              953083
+            ],
+            [
+              372291,
+              975000
+            ],
+            [
+              392208,
+              951792
+            ],
+            [
+              391250,
+              955417
+            ],
+            [
+              373125,
+              940875
+            ],
+            [
+              360375,
+              940959
+            ],
+            [
+              367625,
+              971292
+            ],
+            [
+              373375,
+              972958
+            ],
+            [
+              370375,
+              937584
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1149333,
+          "median_first_part_ns": 1148833,
+          "samples_total_ns": [
+            1149333,
+            1113666,
+            1123666,
+            1135500,
+            1138375,
+            1134833,
+            1206208,
+            1180792,
+            1201459,
+            1170875,
+            1193708
+          ],
+          "samples_parts_ns": [
+            [
+              1148833
+            ],
+            [
+              1113375
+            ],
+            [
+              1123417
+            ],
+            [
+              1135250
+            ],
+            [
+              1138167
+            ],
+            [
+              1134375
+            ],
+            [
+              1205584
+            ],
+            [
+              1180292
+            ],
+            [
+              1200792
+            ],
+            [
+              1170375
+            ],
+            [
+              1193000
+            ]
+          ]
+        },
+        {
+          "arm": "prefix3_tail3",
+          "median_total_ns": 1395333,
+          "median_first_part_ns": 724541,
+          "samples_total_ns": [
+            1429792,
+            1409042,
+            1393500,
+            1395333,
+            1412459,
+            1382375,
+            1389417,
+            1376417,
+            1399458,
+            1363334,
+            1400583
+          ],
+          "samples_parts_ns": [
+            [
+              728417,
+              700541
+            ],
+            [
+              713000,
+              695417
+            ],
+            [
+              748375,
+              644541
+            ],
+            [
+              707833,
+              687041
+            ],
+            [
+              739209,
+              672708
+            ],
+            [
+              728167,
+              653666
+            ],
+            [
+              716958,
+              671959
+            ],
+            [
+              714875,
+              661000
+            ],
+            [
+              724541,
+              674459
+            ],
+            [
+              705042,
+              657791
+            ],
+            [
+              736834,
+              663375
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1155541,
+          "median_first_part_ns": 1155291,
+          "samples_total_ns": [
+            1150416,
+            1173584,
+            1165167,
+            1161875,
+            1168042,
+            1156833,
+            1152000,
+            1141458,
+            1136500,
+            1150500,
+            1155541
+          ],
+          "samples_parts_ns": [
+            [
+              1150042
+            ],
+            [
+              1173167
+            ],
+            [
+              1164834
+            ],
+            [
+              1161542
+            ],
+            [
+              1167750
+            ],
+            [
+              1156500
+            ],
+            [
+              1151625
+            ],
+            [
+              1141041
+            ],
+            [
+              1136208
+            ],
+            [
+              1150166
+            ],
+            [
+              1155291
+            ]
+          ]
+        },
+        {
+          "arm": "prefix3_tail3",
+          "median_total_ns": 1374917,
+          "median_first_part_ns": 707917,
+          "samples_total_ns": [
+            1403417,
+            1374583,
+            1371666,
+            1358542,
+            1334791,
+            1391709,
+            1370750,
+            1374917,
+            1416458,
+            1383917,
+            1407583
+          ],
+          "samples_parts_ns": [
+            [
+              741000,
+              661917
+            ],
+            [
+              709417,
+              664833
+            ],
+            [
+              707917,
+              663334
+            ],
+            [
+              699541,
+              658583
+            ],
+            [
+              693583,
+              640750
+            ],
+            [
+              727834,
+              663292
+            ],
+            [
+              700542,
+              669708
+            ],
+            [
+              703416,
+              670958
+            ],
+            [
+              717666,
+              698333
+            ],
+            [
+              702500,
+              680917
+            ],
+            [
+              740792,
+              666250
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1152208,
+          "median_first_part_ns": 1151875,
+          "samples_total_ns": [
+            1126750,
+            1133958,
+            1182750,
+            1150292,
+            1132750,
+            1126542,
+            1160125,
+            1152208,
+            1184541,
+            1158750,
+            1156500
+          ],
+          "samples_parts_ns": [
+            [
+              1126416
+            ],
+            [
+              1133667
+            ],
+            [
+              1182417
+            ],
+            [
+              1149958
+            ],
+            [
+              1132417
+            ],
+            [
+              1126084
+            ],
+            [
+              1159792
+            ],
+            [
+              1151875
+            ],
+            [
+              1184000
+            ],
+            [
+              1158083
+            ],
+            [
+              1155916
+            ]
+          ]
+        },
+        {
+          "arm": "prefix1_tail5",
+          "median_total_ns": 1404792,
+          "median_first_part_ns": 400167,
+          "samples_total_ns": [
+            1420667,
+            1419417,
+            1462750,
+            1453542,
+            1404792,
+            1391209,
+            1391500,
+            1330750,
+            1386667,
+            1438250,
+            1362166
+          ],
+          "samples_parts_ns": [
+            [
+              433125,
+              986375
+            ],
+            [
+              400167,
+              1018667
+            ],
+            [
+              459875,
+              1002250
+            ],
+            [
+              381708,
+              1071209
+            ],
+            [
+              406042,
+              998125
+            ],
+            [
+              404666,
+              985791
+            ],
+            [
+              416375,
+              974708
+            ],
+            [
+              372542,
+              957792
+            ],
+            [
+              392459,
+              993250
+            ],
+            [
+              392834,
+              1044709
+            ],
+            [
+              394333,
+              967292
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1128250,
+          "median_first_part_ns": 1128000,
+          "samples_total_ns": [
+            1137667,
+            1112167,
+            1213333,
+            1171791,
+            1121083,
+            1128250,
+            1112791,
+            1124750,
+            1110292,
+            1138500,
+            1162417
+          ],
+          "samples_parts_ns": [
+            [
+              1137333
+            ],
+            [
+              1111875
+            ],
+            [
+              1212792
+            ],
+            [
+              1171416
+            ],
+            [
+              1120875
+            ],
+            [
+              1128000
+            ],
+            [
+              1112542
+            ],
+            [
+              1124542
+            ],
+            [
+              1110084
+            ],
+            [
+              1138292
+            ],
+            [
+              1162167
+            ]
+          ]
+        }
+      ],
+      "parity": {
+        "full6": {
+          "exact_native_bytes": true,
+          "differing_elements": 0,
+          "sha256": "6cf5db61661e90c7aebf71d8ba3257d20d7b996ca9489f709e6f2c51e5d311ed"
+        },
+        "prefix1_tail5": {
+          "exact_native_bytes": true,
+          "differing_elements": 0,
+          "sha256": "6cf5db61661e90c7aebf71d8ba3257d20d7b996ca9489f709e6f2c51e5d311ed"
+        },
+        "prefix3_tail3": {
+          "exact_native_bytes": true,
+          "differing_elements": 0,
+          "sha256": "6cf5db61661e90c7aebf71d8ba3257d20d7b996ca9489f709e6f2c51e5d311ed"
+        }
+      },
+      "arm_median_ns": {
+        "full6": 1152208,
+        "prefix1_tail5": 1374562.5,
+        "prefix3_tail3": 1385125.0
+      },
+      "first_part_median_ns": {
+        "full6": 1151875,
+        "prefix1_tail5": 386771.0,
+        "prefix3_tail3": 716229.0
+      },
+      "total_cost_ratio": {
+        "full6": 1.0,
+        "prefix1_tail5": 1.192981215197256,
+        "prefix3_tail3": 1.2021483968172413
+      },
+      "prefix_available_earlier_ns": {
+        "prefix1_tail5": 765437.0,
+        "prefix3_tail3": 435979.0
+      },
+      "control_spread_fraction": 0.04889221390582256
+    },
+    {
+      "cycle": 198,
+      "route": [
+        116,
+        18,
+        335,
+        257,
+        285,
+        320,
+        370,
+        42,
+        359,
+        143,
+        340,
+        75,
+        370,
+        359,
+        42,
+        7,
+        75,
+        98,
+        42,
+        18,
+        257,
+        129,
+        210,
+        359,
+        42,
+        18,
+        129,
+        257,
+        177,
+        359,
+        42,
+        177,
+        359,
+        274,
+        143,
+        28
+      ],
+      "unique_experts": 19,
+      "timings": [
+        {
+          "arm": "full6",
+          "median_total_ns": 1132291,
+          "median_first_part_ns": 1132041,
+          "samples_total_ns": [
+            1144875,
+            1099084,
+            1114625,
+            1191125,
+            1158458,
+            1119500,
+            1170083,
+            1146375,
+            1132291,
+            1103791,
+            1104916
+          ],
+          "samples_parts_ns": [
+            [
+              1144375
+            ],
+            [
+              1098875
+            ],
+            [
+              1114458
+            ],
+            [
+              1190667
+            ],
+            [
+              1158166
+            ],
+            [
+              1119375
+            ],
+            [
+              1169542
+            ],
+            [
+              1145958
+            ],
+            [
+              1132041
+            ],
+            [
+              1103458
+            ],
+            [
+              1104708
+            ]
+          ]
+        },
+        {
+          "arm": "prefix1_tail5",
+          "median_total_ns": 1323875,
+          "median_first_part_ns": 383500,
+          "samples_total_ns": [
+            1333209,
+            1323125,
+            1366542,
+            1297000,
+            1359792,
+            1370250,
+            1291958,
+            1288166,
+            1318625,
+            1323875,
+            1332667
+          ],
+          "samples_parts_ns": [
+            [
+              400583,
+              932250
+            ],
+            [
+              384000,
+              938750
+            ],
+            [
+              402541,
+              963625
+            ],
+            [
+              369750,
+              926875
+            ],
+            [
+              376250,
+              983125
+            ],
+            [
+              426666,
+              943292
+            ],
+            [
+              368791,
+              922708
+            ],
+            [
+              361708,
+              926125
+            ],
+            [
+              383500,
+              934708
+            ],
+            [
+              372833,
+              950541
+            ],
+            [
+              386041,
+              946167
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1158875,
+          "median_first_part_ns": 1158500,
+          "samples_total_ns": [
+            1121542,
+            1189500,
+            1158875,
+            1170583,
+            1146333,
+            1198333,
+            1155708,
+            1191792,
+            1157042,
+            1216250,
+            1147125
+          ],
+          "samples_parts_ns": [
+            [
+              1121125
+            ],
+            [
+              1188709
+            ],
+            [
+              1158500
+            ],
+            [
+              1170125
+            ],
+            [
+              1145916
+            ],
+            [
+              1197875
+            ],
+            [
+              1155333
+            ],
+            [
+              1191125
+            ],
+            [
+              1156625
+            ],
+            [
+              1215791
+            ],
+            [
+              1146791
+            ]
+          ]
+        },
+        {
+          "arm": "prefix3_tail3",
+          "median_total_ns": 1358750,
+          "median_first_part_ns": 699584,
+          "samples_total_ns": [
+            1446208,
+            1358750,
+            1341708,
+            1350625,
+            1346792,
+            1401625,
+            1371917,
+            1392250,
+            1332000,
+            1362250,
+            1341083
+          ],
+          "samples_parts_ns": [
+            [
+              743875,
+              701750
+            ],
+            [
+              699584,
+              658709
+            ],
+            [
+              683542,
+              657708
+            ],
+            [
+              696833,
+              653208
+            ],
+            [
+              696208,
+              650166
+            ],
+            [
+              728333,
+              672750
+            ],
+            [
+              723750,
+              647667
+            ],
+            [
+              742208,
+              649708
+            ],
+            [
+              679709,
+              651834
+            ],
+            [
+              701709,
+              659959
+            ],
+            [
+              685292,
+              655375
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1152625,
+          "median_first_part_ns": 1152291,
+          "samples_total_ns": [
+            1102583,
+            1101500,
+            1191667,
+            1151375,
+            1135875,
+            1130750,
+            1178834,
+            1152625,
+            1164959,
+            1159167,
+            1184500
+          ],
+          "samples_parts_ns": [
+            [
+              1102375
+            ],
+            [
+              1101208
+            ],
+            [
+              1191209
+            ],
+            [
+              1151041
+            ],
+            [
+              1135500
+            ],
+            [
+              1130416
+            ],
+            [
+              1178125
+            ],
+            [
+              1152291
+            ],
+            [
+              1164458
+            ],
+            [
+              1158791
+            ],
+            [
+              1184000
+            ]
+          ]
+        },
+        {
+          "arm": "prefix3_tail3",
+          "median_total_ns": 1377875,
+          "median_first_part_ns": 726000,
+          "samples_total_ns": [
+            1331667,
+            1360291,
+            1377291,
+            1455791,
+            1346417,
+            1377875,
+            1405084,
+            1373000,
+            1400333,
+            1465125,
+            1387125
+          ],
+          "samples_parts_ns": [
+            [
+              691625,
+              639625
+            ],
+            [
+              685250,
+              674625
+            ],
+            [
+              723292,
+              653584
+            ],
+            [
+              771750,
+              683666
+            ],
+            [
+              689334,
+              656667
+            ],
+            [
+              730084,
+              647333
+            ],
+            [
+              738334,
+              666250
+            ],
+            [
+              701625,
+              670958
+            ],
+            [
+              729416,
+              670458
+            ],
+            [
+              788416,
+              676292
+            ],
+            [
+              726000,
+              660750
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1152333,
+          "median_first_part_ns": 1152083,
+          "samples_total_ns": [
+            1124208,
+            1134042,
+            1170250,
+            1165667,
+            1152333,
+            1122916,
+            1181292,
+            1154583,
+            1129334,
+            1185667,
+            1134250
+          ],
+          "samples_parts_ns": [
+            [
+              1123917
+            ],
+            [
+              1133791
+            ],
+            [
+              1169625
+            ],
+            [
+              1165333
+            ],
+            [
+              1152083
+            ],
+            [
+              1122625
+            ],
+            [
+              1180833
+            ],
+            [
+              1154291
+            ],
+            [
+              1129083
+            ],
+            [
+              1185167
+            ],
+            [
+              1133875
+            ]
+          ]
+        },
+        {
+          "arm": "prefix1_tail5",
+          "median_total_ns": 1343000,
+          "median_first_part_ns": 391500,
+          "samples_total_ns": [
+            1326958,
+            1377708,
+            1347417,
+            1317916,
+            1355167,
+            1323666,
+            1325250,
+            1351125,
+            1343000,
+            1349375,
+            1336584
+          ],
+          "samples_parts_ns": [
+            [
+              366667,
+              959834
+            ],
+            [
+              434000,
+              943125
+            ],
+            [
+              406625,
+              940250
+            ],
+            [
+              394000,
+              923417
+            ],
+            [
+              381042,
+              973708
+            ],
+            [
+              393875,
+              929208
+            ],
+            [
+              381125,
+              943583
+            ],
+            [
+              391500,
+              959167
+            ],
+            [
+              391083,
+              951416
+            ],
+            [
+              401292,
+              947625
+            ],
+            [
+              391334,
+              944792
+            ]
+          ]
+        },
+        {
+          "arm": "full6",
+          "median_total_ns": 1144958,
+          "median_first_part_ns": 1144625,
+          "samples_total_ns": [
+            1173167,
+            1146042,
+            1126417,
+            1132833,
+            1138125,
+            1183125,
+            1146708,
+            1126583,
+            1143250,
+            1190208,
+            1144958
+          ],
+          "samples_parts_ns": [
+            [
+              1172625
+            ],
+            [
+              1145625
+            ],
+            [
+              1126125
+            ],
+            [
+              1132541
+            ],
+            [
+              1137916
+            ],
+            [
+              1182667
+            ],
+            [
+              1146333
+            ],
+            [
+              1126333
+            ],
+            [
+              1143000
+            ],
+            [
+              1189750
+            ],
+            [
+              1144625
+            ]
+          ]
+        }
+      ],
+      "parity": {
+        "full6": {
+          "exact_native_bytes": true,
+          "differing_elements": 0,
+          "sha256": "1e772f01aa040ea067cfe67750a78a28a094a80d2a00c27f4db546e247ce926d"
+        },
+        "prefix1_tail5": {
+          "exact_native_bytes": true,
+          "differing_elements": 0,
+          "sha256": "1e772f01aa040ea067cfe67750a78a28a094a80d2a00c27f4db546e247ce926d"
+        },
+        "prefix3_tail3": {
+          "exact_native_bytes": true,
+          "differing_elements": 0,
+          "sha256": "1e772f01aa040ea067cfe67750a78a28a094a80d2a00c27f4db546e247ce926d"
+        }
+      },
+      "arm_median_ns": {
+        "full6": 1152333,
+        "prefix1_tail5": 1333437.5,
+        "prefix3_tail3": 1368312.5
+      },
+      "first_part_median_ns": {
+        "full6": 1152083,
+        "prefix1_tail5": 387500.0,
+        "prefix3_tail3": 712792.0
+      },
+      "total_cost_ratio": {
+        "full6": 1.0,
+        "prefix1_tail5": 1.157163337333913,
+        "prefix3_tail3": 1.1874280264472161
+      },
+      "prefix_available_earlier_ns": {
+        "prefix1_tail5": 764833.0,
+        "prefix3_tail3": 439541.0
+      },
+      "control_spread_fraction": 0.023069720297865286
+    }
+  ],
+  "complete": true,
+  "source_record_sha256": {
+    "7": "92ce56c76b4d7c3545b6aa02d98dfecb021efcdcdbedd20547172bd91994c97e",
+    "15": "ac95d708b867804d846168709c06f7b34be0fa560deceeafb47c817848ac8319",
+    "18": "977f5f7b54d8241ea442f75726b51fecf2cbdf67ecac7ea0e1a6cdaf2518d05d",
+    "28": "a775ffbc7c37507ccb90fec025e94eaea4fed30707a6e9aa9f4de46150b8a00d",
+    "31": "ac8ef57c7e58147f55d843bbe15049b1eb8f4b740e020cad32dcc39e88b9400f",
+    "42": "91f64581b6b3459270573a0d8b4379701a0ea66c7f5e8e1f80d363104727c0e2",
+    "44": "9f0148692b929e87634b64b0f9530219b90fc5d0628790ed5d472b9add68fd31",
+    "61": "6ee3fc4190e6c4806666dfe9f65ca5d7fd149b301ab7525eb2f388907b77d9c1",
+    "67": "7157f0e7f0bb7185d077a93c09f29fe7d9b796a257954156e75f6d2a3da87fd8",
+    "75": "2b035d6e6c83b3eea284b1b8aec475f98b1ff2015de1c9c2cb9ff7c50886f5c0",
+    "81": "b70a08e06a1f92e8a765e3a08fe4bf85535811976e82eb0aa41f1d05020b7e04",
+    "86": "1d2074d244bdb559be9c437b4f181a2d8b57cb64074a24412e8930a09aed1358",
+    "98": "7448cf5872d8dad6beaf390825c4b6ec49de799f13755ff725f91af1d4a39d1d",
+    "116": "69d93b76bf9ece9e07790c3e216486fced67744a0e1f101d01935513049c9f8e",
+    "121": "4d2d0a4ae038a3b423f98e415000f4e848e519e32bf0c243f5fe24858d48b553",
+    "129": "43f23ff3d37f8ba9043bfe327bda9a40d31596a7fec3f66abe8603997cdefebc",
+    "135": "a1e718b86b534a4b87b3ab882a002010cc7a795fabf4ad52b9554254e964f032",
+    "143": "d1c30a89ffa50fb23b397c9da6b5e3cb3a86c5b238d6f00b65423b78ea05a695",
+    "177": "177832bfebe82cbb19fb18afa720f94f7e5887e9c1075995f48d33419701f782",
+    "210": "98193717df5aecf9fa4e70a449fbe26584e8f9f81eb77f55f190bb5a1c32d695",
+    "213": "3c9631938dba6ee93f8fdcb32659a59b4dbeff0622ca882f4ca7c9b61251e25b",
+    "218": "dfdfb4faea08d5df50295bc5cb55e880b8849255ac41ecd967d9bee6012076b6",
+    "257": "a6120478532839d499736dc917b6491abe5f2d397b3f8131e16e416f96edcbe4",
+    "268": "4ecdb5b99e72c71ebe329aebe0a932d9f0b8006569611648a0c27327851df325",
+    "274": "5f390e0d41b76b7486ad707f257bf1b8bde2c412f1935307ad3a69556a3c91b8",
+    "278": "5722398d76c6f30e308f67aad155a87c29439f120d2aea15f548997e0767dd46",
+    "285": "aa2ee683c0db6ec60055552ee3d7d14028539bbe67c94aae049827c0f4a6d2e3",
+    "307": "2b0d996db809504f038c1c3d3e87608290303ad15652d05dc6e5eea5b4c2a9b9",
+    "309": "6ec2ec0a072f7aea6d9cbdf409574c2fa40c94ac1a80505bad70c59cbe01b49f",
+    "320": "6c44ce07c25ac76907b8f18ab6430aec6b511f5c93123f6ac6b0b9d6605b7880",
+    "335": "05ea4e22bd2f902df33a33ea7474630e5bb81aaea5cc22cb217d300c94795573",
+    "340": "559fb812b4a7a1063606bb623f9f723d53a1afa5ed873866d981cc4b31c39ff7",
+    "341": "81529bed5092c43b9548731748eda6069def4987705309e0dc1686da170cd7c3",
+    "344": "e35098aa0fe71de5ba3da11ee04456c988bde531fe4c4e3f6ac0ba75236e9cfc",
+    "357": "513390be21d9a221a642057c9c6b5d045518635b87531b0d94d13e0e3953a7b2",
+    "359": "a3fc66a0336cb8c2ac78851c592f9d401dba1ddf45ea94eef1a6d10cb4c33263",
+    "360": "08a8e878825a2a01e995bc3319321e5d4e34d16288e2eab1437b7bbaef96c90d",
+    "370": "ac969ec3c06f2b746e5c61f3779fceda231045a94b762459b106efeb9246888e"
+  },
+  "released_raw_scale_bytes": 53084160,
+  "resident_packed_scale_bytes": 77275224,
+  "mlx_peak_bytes": 928535386,
+  "after": {
+    "sample_start_monotonic_ns": 172546951139583,
+    "sample_end_monotonic_ns": 172546957305625,
+    "process": {
+      "peak_maxrss_bytes": 1089634304,
+      "resident_bytes": 1089634304,
+      "phys_footprint_bytes": 1363658336,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 121991790592,
+      "wired_bytes": 4418240512,
+      "active_bytes": 2999435264,
+      "inactive_bytes": 2850177024,
+      "speculative_bytes": 134643712,
+      "anonymous_bytes": 4239458304,
+      "file_backed_bytes": 1744797696,
+      "compressor_bytes": 2035056640,
+      "compressed_bytes": 7600422912,
+      "used_bytes": 12302909440,
+      "non_file_used_bytes": 10692755456,
+      "swapins_pages": 4823909,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "active_after_close_bytes": 8
+}

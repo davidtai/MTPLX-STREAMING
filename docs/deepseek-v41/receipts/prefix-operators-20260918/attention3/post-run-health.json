@@ -1,0 +1,13 @@
+{
+  "checked_at_utc": "2026-09-18T05:18:54.205065+00:00",
+  "ok": true,
+  "active_requests": 0,
+  "warmup": "done",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "lock_free": true,
+  "owned_processes": [],
+  "guard_session": 76468,
+  "guard_exit_code": 0
+}
