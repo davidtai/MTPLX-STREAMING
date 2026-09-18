@@ -1,0 +1,62 @@
+{
+  "scope": "CPU construction and static admission only",
+  "allocation_total_and_bounds": true,
+  "invalid_stats_refused": true,
+  "mlx_imported": false,
+  "plans": [
+    {
+      "baseline_bytes": 9955393536,
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109908711656,
+      "steady_decode_active_bound_bytes": 94473937004,
+      "resize_active_bound_bytes": 94265739484,
+      "maximum_layer_decode_capacity": 128
+    },
+    {
+      "baseline_bytes": 11518132224,
+      "decode_slots_per_layer": 99,
+      "physical_bound_bytes": 109348083944,
+      "steady_decode_active_bound_bytes": 92350570604,
+      "resize_active_bound_bytes": 92142373084,
+      "maximum_layer_decode_capacity": 128
+    },
+    {
+      "baseline_bytes": 15745040384,
+      "decode_slots_per_layer": 93,
+      "physical_bound_bytes": 109328259304,
+      "steady_decode_active_bound_bytes": 88103837804,
+      "resize_active_bound_bytes": 87895640284,
+      "maximum_layer_decode_capacity": 128
+    }
+  ],
+  "live_memory": {
+    "sample_start_monotonic_ns": 159680576165958,
+    "sample_end_monotonic_ns": 159680578594833,
+    "process": {
+      "peak_maxrss_bytes": 37027840,
+      "resident_bytes": 37109760,
+      "phys_footprint_bytes": 24117728,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 1667203072,
+      "wired_bytes": 88267341824,
+      "active_bytes": 5955076096,
+      "inactive_bytes": 37130043392,
+      "speculative_bytes": 152633344,
+      "anonymous_bytes": 5792055296,
+      "file_backed_bytes": 37445697536,
+      "compressor_bytes": 1424293888,
+      "compressed_bytes": 6780764160,
+      "used_bytes": 132776755200,
+      "non_file_used_bytes": 95483691008,
+      "swapins_pages": 4821568,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  }
+}

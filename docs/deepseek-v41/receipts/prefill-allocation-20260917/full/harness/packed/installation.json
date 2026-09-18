@@ -1,0 +1,44 @@
+{
+  "scope": "Native D5/M6 full16K/1024 with fixed total slots selected from prefill-only frequencies at the timed transition; 84..128 per layer.",
+  "source_commit": "7b80c09e6cbb2d7b386077dfd2792e06bca2fca8",
+  "base_wrapper_sha256": "aa9da6a9ea6e5c86e10409fdbfde04703926be4b27849e087ec7fdd04a8fddd3",
+  "helper_sha256": {
+    "run_full.py": "6b9f94782bd03f8f1a3e829d5128db7e26a4772ea3a74d2e14ff0e6a505403f5",
+    "packed_admission.py": "63113717bbe780705d82606e8e680a7e93ec6cacbe9ece6b8637f3c8a5d83e4b",
+    "packed_phase.py": "7af965f4e908c1dffa78e0e8c045a83c1277773dfbba97f920386b101b930a29",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "storage-probe.json": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4",
+    "artifact/manifest.json": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "prefill_allocation.py": "91bb29efde53b21c0ef16f64991d7486ad6b04efbc4acaaddb818bd55b191be7"
+  },
+  "packed_scales_bytes": 3086136060,
+  "startup_cache_cleanup": "export source pages were reclaimed after export; packed owner reads disable read-ahead and bypass file cache",
+  "note": "source record format remains native; decode physically retains/reads weights only and prices packed scale owners separately",
+  "cleanup": "Reclaim verified source and packed artifact clean file cache in the existing guarded finally, on success or failure, before Qwen restoration.",
+  "prefill_bound": "Previously measured cap84 prefill; exact native allocation envelope and all original KV/cache/compile margins retained.",
+  "native_admission_sha256": "26bb4614ac1a53a87ade5e3e8023edfd6569a08ed881a9c8da2dd5c5dc73b90a",
+  "reporting_update": "b43f136cb corrects current slot/transient storage metadata; measured generation arithmetic unchanged",
+  "physical_ceiling_bytes": 110000000000,
+  "budget_update": "Use the user-authorized 110 decimal GB ceiling; retain all priced host, cache, KV, padding, compiler and wired allowances.",
+  "plane_overlap": {
+    "lane_sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "integration_probe": "/tmp/dsv41-plane-overlap-20260917/integration-probe-v2.json",
+    "integration_probe_sha256": "f1d91f1700f97006b6433b27ae1b073d39197adb0a079a4aadab1c578a65b292",
+    "incremental_live_allowance_bytes": 67108864,
+    "max_verify_rows": 8,
+    "maximum_assignments": 48,
+    "slot_ready_publication": "after all component writers finish",
+    "install_phase": "quiescent post-prefill only",
+    "cleanup": "clear bound runners after GPU/slot drain and before freeing packed scale owners"
+  },
+  "prefill_allocation": {
+    "source": "live prefill counts only",
+    "max_capacity": 128,
+    "min_capacity": 84,
+    "metadata_allowance_bytes": 16777216,
+    "bound": "constant total; max128 one-component copy charged before loading; no decode policy branches added"
+  }
+}

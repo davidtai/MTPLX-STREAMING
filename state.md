@@ -95,15 +95,31 @@ Receipt:docs/deepseek-v41/receipts/adaptive-draft-20260917/README.md.
 CPU ARC/S3-FIFO screens lost (heldout17411/17193 vs15544 demand misses), so no
 GPU tests followed. Raw CPU screens:/tmp/dsv41-cache-replacement-20260917.
 
-Next candidate:/tmp/dsv41-prefill-allocation-20260917/full. Prefill-only marginal
+Completed candidate:/tmp/dsv41-prefill-allocation-20260917/full. Prefill-only marginal
 frequency allocation, fixed total slots, min84/max128 per layer, selected once
 at the existing timed transition. CPU demand misses at average99 improve
 36421->35631 (2.17%); second half16187->15636 (3.41%). No decode rows select the
 vector; identical73-slot seed plus empty slots across CPU arms. This is not
 physical-read or TPS evidence. Admission charges the max128 component copy and
 16MiB metadata before model load. Layer vectors must drive plans, policy,
-physical owners and reports; do not call them99 uniform slots. Staged only;
-no full run yet. Receipt:prefill-allocation-20260917/README.md.
+physical owners and reports. Full run:12.5526155TPS/81.4969600s;84->4000total
+slots, actual layer capacities84..128, uniform-equivalent100. Same1024IDs and
+206cycles; same native-AR index297 tie. Reads35097/621.032GB vs best35092/620.943GB
+at4080slots; capacity/background differ, so no isolated throughput promotion.
+Baseline11,050,860,544B; bound109,588,601,064B; internal machine106,146,136,064B.
+Guard28436 terminal exit0, exactQwen restored/warmed and lock released01:19:26UTC.
+Independent health/free-lock checks pass. Qwen model residency scan found36.05GB
+of cache covered by automatic shutdown reclamation; no new manual purge needed.
+Receipt:prefill-allocation-20260917/README.md. No further tests for this result.
+
+Next bounded operator:/tmp/dsv41-row-pairing-20260917. Exact native M6 routing
+census has296640 assignments, average24.2443 distinct experts/layer/cycle;
+139196 assignments (46.9242%) can pair with the same expert. Sharing FP4
+conversion across pairs could remove23.4621% of repeated weight decodes before
+overhead. Staged float2 dot retains native V16/V8, R4, 2-SIMD geometry and each
+row's accumulation order. CPU grouping routes remaining singles to the native
+operator. First measure a bounded three-expert MLP; no full-model run or claimed
+gain exists yet. This changes neither SSD bytes nor target model precision.
 
 # Latest Packed Plane Overlap
 
