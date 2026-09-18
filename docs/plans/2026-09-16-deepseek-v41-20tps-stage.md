@@ -21,6 +21,26 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Current update, 2026-09-18
 
+Task 4 remains open. The native D5 plus two-token causal lookup run reaches
+**13.4141517619 TPS / 76.2627423750 s**, preserving all 1,024 native IDs.
+It uses 198 target calls rather than 206, at 84->110 slots and native KV16.
+Machine peak 109,238,927,360 B fits the 109,631,928,540-byte bound, including
+1,421,996,032 B host reserve. This saves 0.5417692920 s versus input-row caching,
+a best single result rather than an isolated or repeated speedup. Expert reads
+increase by 25; this is not a material I/O reduction. 20 TPS remains unmet.
+
+Two host regressions pass after the full win. Longer extensions receive only
+an independent-boundary CPU screen; added target work rejects a GPU follow-up.
+Both guards exit 0; exact Qwen restoration/warmup/free lock are independently
+verified at 10:39:43 UTC. See
+`../deepseek-v41/receipts/hybrid-lookup-20260918/README.md`.
+The current stack includes the strict allocator and exact input-row cache.
+Prior phase-lifetime audits are complete; do not repeat them. Next work needs
+material expert-I/O or verification reduction. Fixed Q8 and full 256K prefill
+remain secondary. Work inline, no agents, with minimal checks.
+
+## Historical cache-budget update, 2026-09-18
+
 Task 4 remains open. The cache-budget candidate completes at 12.6712544 TPS /
 80.7339166 s with exact 1,024 native output IDs and 84->103 slots. It keeps
 1 GiB allocator cache during prefill and sets 256 MiB at the existing quiescent
@@ -46,7 +66,8 @@ full-workload overhead and unchanged growth-copy limit reject it without a
 full-model run or new test. Guard96675 is terminal0 with restoration verified.
 See `../deepseek-v41/receipts/woa-fused-transpose-20260918/README.md`.
 
-Next, audit separate growth, seed and steady-decode allocator lifetimes on CPU.
+The subsequent strict-allocator stage completes the separate growth, seed and
+steady-decode lifetime audit. The historical next-step proposal was:
 Do not discount the original overshoot allowance from endpoint readings. A
 growth-only zero cache setting may be considered separately from the rejected
 zero-cache attention route; steady-phase pricing still requires an allocation
@@ -888,3 +909,15 @@ the win and pass. No broad suite or unchanged full rerun. Runtime source is
 575c3c8b3beb0420d16fc03c727f3a27c0f36edd. See embedding-rows-20260918 receipt.
 Task 4 stays open. Next work needs material expert-I/O/verification improvement,
 not repeated cache or prefetch families already rejected. Work inline, no agents.
+
+### Native MTP plus causal lookup, 2026-09-18
+
+The complete candidate retains all native D5 proposals and adds up to two
+past-text continuations, verified by the unchanged native target path. The
+head-only replay predicts 198 rather than 206 cycles; one full run confirms
+198 calls, exact 1,024 IDs and 13.4141517619 TPS. The 109.238927360 GB machine
+peak remains under the 110 GB ceiling. This is a small single-run improvement;
+20 TPS and complete 256K prefill are still open. Two focused host regressions
+pass after the win. Longer extensions do not justify another GPU run based
+on added target work in a CPU-only screen. All lifecycle checks pass. See the
+hybrid-lookup-20260918 receipt for exact source, accounting and limitations.

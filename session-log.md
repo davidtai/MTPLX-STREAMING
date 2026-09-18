@@ -442,3 +442,21 @@ the win and pass. No broad suite or unchanged full rerun. Runtime source is
 575c3c8b3beb0420d16fc03c727f3a27c0f36edd. See embedding-rows-20260918 receipt.
 Task 4 stays open. Next work needs material expert-I/O/verification improvement,
 not repeated cache or prefetch families already rejected. Work inline, no agents.
+
+## 2026-09-18 10:48 UTC [saved]
+Goal: Reach 20 TPS on exact 16K/1024 Python within 110 decimal GB.
+Result:
+- Native five-token MTP plus at most two causal lookup tokens: 13.4141517619
+  TPS / 76.2627423750 s, 198 cycles, all 1,024 native IDs exact. This is 0.7104%
+  above input-row caching as a single result; no isolated/repeated claim.
+- Reads increase 25 records. Machine peak 109,238,927,360 B fits bound
+  109,631,928,540 B, with 1,421,996,032 B host reserve. 84->110 slots, KV16.
+- Two host regressions added after the win pass. Longer extensions only receive
+  a CPU opportunity screen; their added target work does not justify GPU work.
+Lifecycle:
+- Guards 7091/39139 terminal0; source cache cleanup and exact Qwen restoration
+  succeed. Final release 10:38:22 UTC; independent health/warmup/free 10:39:43.
+Open:
+- 20 TPS remains unmet by about 25.11 s decode wall. Full 256K prefill remains
+  secondary. No agents, broad tests, unchanged full controls or default change.
+- Receipt: docs/deepseek-v41/receipts/hybrid-lookup-20260918/README.md.

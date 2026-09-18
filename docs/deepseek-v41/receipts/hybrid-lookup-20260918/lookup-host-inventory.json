@@ -1,0 +1,11 @@
+{
+  "scope": "Maximum requested history, including conservative deep Python ownership of shared integers. Actual candidate keys can differ;16MiB covers the17,408-token fixed workload topology.",
+  "history_tokens": 17408,
+  "indexed_occurrences": 17403,
+  "unique_keys": 11499,
+  "python_deep_bytes": 3700278,
+  "host_allowance_bytes": 16777216,
+  "static_upper_bound_bytes": 10661888,
+  "budget_bytes": 110000000000,
+  "mlx_imported": false
+}

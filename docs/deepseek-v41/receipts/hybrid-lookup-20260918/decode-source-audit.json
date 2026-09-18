@@ -1,0 +1,6 @@
+{
+  "cpu_only": true,
+  "native_decode_sha256": "34d88a622e2ba8ddc6741022711cbdf89837ae7229624b98cdc005ea7afc1d5d",
+  "hybrid_decode_sha256": "f876da4d543a03fe6f6a94fd614f65c3ff9c1d0068cfae8d0cfe8f918a62c013",
+  "native_mlx_calls_unchanged": true
+}

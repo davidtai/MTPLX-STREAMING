@@ -2,11 +2,11 @@
 
 DeepSeek V4.1: correct memory reporting and runner bugs, then reach20 decode
 TPS on exact16,384-input /1,024-output Python under110 decimal GB.
-Best single full result: **13.3195300 TPS; 20 TPS remains unmet.**
-The exact BF16 input-row cache run preserves all 1,024 native IDs at 84->110
-slots/layer, with 109.256 GB peak physical usage. Its 76.8045117 s decode is
-0.9845652 s faster than the previous strict allocator result. Background and
-capacity differ, so this is a best single result, not isolated/repeated evidence.
+Best single full result: **13.4141518 TPS; 20 TPS remains unmet.**
+Native five-token MTP proposals with at most two causal lookup extensions retain
+all 1,024 native IDs at 84->110 slots/layer, with 109.239 GB machine peak.
+The 76.2627424 s decode saves 0.5417693 s versus the exact input-row result.
+This is a best single result, not an isolated/repeated speedup claim.
 Latest full Q8 remains 10.7541904 TPS; native KV16 stays fastest. Fixed Q8 and
 complete 256K prefill verification remain secondary to 20 TPS.
 
@@ -16,8 +16,8 @@ complete 256K prefill verification remain secondary to 20 TPS.
   Missing measurements stay null/n/a. Limits and plans are not measured usage.
 - Ceiling 110,000,000,000B includes baseline, Python, Metal, caches and peaks.
   Price the actual bounded Python capacity plus helper metadata: the latest
-  candidate reserves 1,405,218,816 B, including 32 MiB for the new input row
-  cache. Preserve active/copy/graph/seed/KV space.
+  candidate reserves 1,421,996,032 B, including 32 MiB for the exact input row
+  cache and 16 MiB for the causal lookup index. Preserve active/copy/graph/seed/KV space.
   Only the attested strict allocator can remove the2,258,155,644B inactive-cache
   overshoot reserve; stockMLX keeps it. Cache limits are not usage measurements.
 - Use scripts/deepseek_v41/gpu_window.sh directly, never nested; acquire the
@@ -45,46 +45,54 @@ sizes and shared transient allocation bytes.
 
 # Current Optimization Stage
 
-Latest stage at measured source `575c3c8b3beb0420d16fc03c727f3a27c0f36edd`:
+Latest stage at measured source `48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3`:
 
-- A coarse CPU diagnostic preserves all 1,024 IDs with no added GPU fences.
-  Decode cycles: 73.4290 s elapsed, 13.5526 s main CPU, 39.6364 s process CPU.
-  Expert entrypoints account for 66.0044 s elapsed / 10.3716 s main CPU.
-  Public timing fields are null; this is not a performance result. The older
-  decode-read-attribution-20260917 receipt is also valid and already isolates
-  waits. Elapsed-minus-CPU is not GPU idle; nested times must not be summed.
-  Receipt: docs/deepseek-v41/receipts/cpu-attribution-20260918/README.md.
-- The successful candidate retires the untied native BF16 input embedding
-  after prefill and uses a fixed 16 MiB exact row arena, with 32 MiB total host
-  allowance. Actual active release is 1,323,827,200 B; clean source pages are
-  separately reclaimed. Prefill gets no credit; resize/seed/steady do. Native
-  output head, Markov embedding and expert arithmetic stay unchanged.
-- Full result: 13.3195300354 TPS / 76.8045116670 s, 206 D5/M6 cycles, all
-  1,024 native IDs exact. 84->110 slots, 48 transients, native KV16. Baseline
-  10,681,696,256 B; physical bound 109,849,655,516 B. MLX peak 96,998,277,438 B;
-  process 98,018,134,304 B; machine 109,255,884,800 B. Host 1,405,218,816 B.
-  Expert reads 31,936 / 565,098,577,920 B, 380 records / 6.724 GB fewer than
-  strict. Read union 43.8395 s is not GPU idle. Row cache ends at 313/1,638 rows.
-- Operator guard 66617 exits 0 with exact BF16 rows and eviction ownership.
-  Full-v1 guard 9584 exits 1 on str-versus-Path reclamation arguments, before
-  bank growth; it is not an OOM. Both calls are fixed in full-v2. Guard 26008
-  exits 0, restores Qwen/health/warmup and releases at 10:11:42 UTC. Independent
-  healthy/idle/warmed/free check passes at 10:11:58 UTC. No owned GPU child.
-  Two focused host regressions pass with actual MLX imports blocked; added
-  only after the full win. No broad suite or repeated unchanged full control.
-- Receipt: docs/deepseek-v41/receipts/embedding-rows-20260918/README.md.
-  Live root: /tmp/dsv41-embedding-rows-20260918/full-v2.
-  Raw prefix: /tmp/dsv41-110-stage/full-embedding-rows-20260918-v2.
-  Parent guard selects the same attested strict allocator as the prior winner.
-  The first full attempt and all lifecycle evidence are preserved.
+- Keep all five native MTP proposals, then append at most two tokens from known
+  prompt/committed text matching all five proposals and at least two preceding
+  context tokens. Target verification, acceptance, commit and seed arithmetic
+  stay native. Install once for this greedy request; no new hot-path proof
+  counters or GPU fences. Native M8 allocation envelope is retained.
+- One complete run reaches 13.4141517619 TPS / 76.2627423750 s, 198 cycles and
+  target calls versus 206 native, with all 1,024 native IDs identical. This saves
+  0.5417692920 s / adds 0.7104% TPS versus input-row caching. Background differs;
+  this is a best single result, not isolated/repeated evidence. Reads increase
+  by 25 to 31,961 / 565,540,945,920 B. It does not materially reduce expert I/O.
+- 84->110 slots, 48 transients, native KV16. Baseline 10,447,192,064 B; physical
+  bound 109,631,928,540 B; host reserve 1,421,996,032 B. MLX peak 97,006,846,938 B;
+  process 98,027,571,368 B; machine 109,238,927,360 B. Final inactive cache
+  239,688,936 B stays within the 256 MiB strict limit. Guard has 217 samples
+  and zero compressor growth. Accounting measures are separate, not summed.
+- Head-only replay reproduces the native 206 cycles, then follows 198 hybrid
+  boundaries within its 49 GiB incremental envelope. The full target run above
+  is the throughput/ID evidence. Two focused causal-lookup host regressions are
+  added only after that full run and pass with real MLX imports blocked.
+- Longer causal extensions in eight-row chunks add too much verification work
+  in an independent-boundary CPU screen to justify another GPU window. No new
+  trajectory or global upper bound is claimed; no longer candidate is installed.
+- Guards 7091 and 39139 exit 0; source caches are reclaimed, exact Qwen and
+  warmup restored. Final release 10:38:22 UTC; independent model/health/idle/
+  warmup/free-lock check 10:39:43 UTC. No owned GPU child is pending.
+- Receipt: docs/deepseek-v41/receipts/hybrid-lookup-20260918/README.md.
+  Live root: /tmp/dsv41-hybrid-lookup-20260918/full-v1.
+  Raw prefix: /tmp/dsv41-110-stage/full-hybrid-lookup-20260918-v1.
+  Measured helpers and library remain pinned; production defaults are unchanged.
 
-Next work must remove about 25.65 s from this exact workload to reach 20 TPS.
+Next work must remove about 25.11 s from this exact workload to reach 20 TPS.
 Prior prefetch, row-pair, fanout and policy rejections remain relevant. Favor
 material reductions in expert traffic or exposed verification; do not repeat
-unchanged controls or re-profile the newly measured CPU clocks. Work inline,
-no agents; minimal checks, tests only after wins. Full 256K prefill remains open.
+unchanged controls or re-profile the measured CPU clocks. Work inline, no
+agents; minimal checks, tests only after wins. Full 256K prefill remains open.
 
-The exact input-row cache described above is the retained performance winner.
+The preceding input-row result is archived in embedding-rows-20260918. It
+released 1,323,827,200 active bytes after prefill, reached 13.3195300354 TPS /
+76.8045116670 s with exact IDs at 110 slots, and passed two focused host checks.
+Its first attempt failed on str-versus-Path cleanup arguments; both calls were
+fixed, and all guards restored the exact service. The coarse CPU diagnostic
+is archived in cpu-attribution-20260918: 73.4290 s cycles, 13.5526 s main CPU,
+39.6364 s process CPU; expert entrypoints dominate. Diagnostic TPS fields are
+null. Elapsed-minus-CPU is not GPU idle, and nested spans must not be summed.
+The existing decode-read-attribution-20260917 receipt is also valid.
+
 Older stages follow as historical context.
 Follow-up operators and a router diagnostic at source013ba48db733659d287d40e7304e1683a0d7e179
 are complete; no new performance default is promoted.
