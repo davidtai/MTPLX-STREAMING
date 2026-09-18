@@ -59,12 +59,25 @@ terminal exit0; exactQwen restored/warmed and lock released02:11:01UTC;
 independent02:11:48 healthy/idle/warmed/free check found no owned child.
 Receipt:docs/deepseek-v41/receipts/even-draft-width-20260917/README.md.
 
-Next operator screen:/tmp/dsv41-fused-gu-20260917. NativeV16/R4/SG2 gate and
+Completed operator screen:/tmp/dsv41-fused-gu-20260917. NativeV16/R4/SG2 gate and
 up reductions share the input load and one launch; each produces the original
 BF16 output, then uses unchanged clamp/SwiGLU and nativeV8 down. No weight
 layout or arithmetic change. Four real whole-MLP shapes, nonidentity slots,
-48-slot bank and6GiB incremental bound. Promote only after a measured gain;
-no full model is staged. Earlier row-pair integration was below control spread.
+48-slot bank and6GiB incremental bound. Exact outputs, but whole-MLP changes
+are-16.62%,+0.45%,-5.54%,+2.70% latency reduction at6/6,18/3,36/12,36/36.
+Reject without runtime installation, full load or extra tests. Allocator peak
+928,978,000B; active after close8B; guard process1,363,969,656B; machine
+11,578,392,576B. Guard87930 terminal exit0, exactQwen restored/warmed and lock
+released02:17:57UTC; independent02:19:39 healthy/idle/warmed/free, no child.
+Receipt:docs/deepseek-v41/receipts/fused-gate-up-20260917/README.md.
+
+Next diagnostic:/tmp/dsv41-transition-cost-20260917. Attribute the existing
+84-to-102 one-layer transition among raw-scale release, packed-scale load/hash
+and native weight copies, within8GiB. Three real old rows cover indices0/41/83.
+The full transition costs3.426s, but it is not all copying. At the best saved
+baseline, steady active bound exceeds resize by514,906,000B, so eliminating
+the copy peak alone does not admit more slots. Do not implement extension banks
+before establishing a worthwhile copy-time saving and unchanged decode cost.
 
 # Latest Adaptive Draft Stage
 

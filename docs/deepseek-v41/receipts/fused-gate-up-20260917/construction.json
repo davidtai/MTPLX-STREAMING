@@ -1,0 +1,17 @@
+{
+  "source_commit": "57fb1b2ac110e8deebbe02a19b659671165eac81",
+  "static_incremental_bound_bytes": 6442450944,
+  "active_allocator_limit_bytes": 2147483648,
+  "allocator_cache_limit_bytes": 268435456,
+  "bound_components": "48 native records =902430720B initially, packed scale layer under100MiB, small BF16 inputs/outputs, at most2GiB for allocator/cache/graphs and4GiB for Python/compiler. One combined GU pipeline replaces two native GU calls. No target trunk.",
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "unchanged_helpers_sha256": {
+    "fused_gu.py": "7988ea6315ce06fefe257ad2ab9bda01b49f3719b592de4dec427867b1493402",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "probe.py": "6ba5fc3e145668ec0b0f7f6854e8f703d92976d2ee17b90a8d9680a4001331f7"
+  },
+  "arithmetic": "Native V16, R4, two SIMD groups and per-row reduction order independently for gate/up; native BF16 outputs, clamp/SwiGLU and V8 down remain. Only input-vector loads and GU dispatch are shared.",
+  "measurement": "One bounded whole-MLP screen:6/6,18/3,36/12,36/36 rows/experts; native raw-scale baseline bits and interleaved packed controls. No isolated-kernel or TPS promotion."
+}
