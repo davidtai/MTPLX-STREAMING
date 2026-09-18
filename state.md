@@ -468,3 +468,15 @@ Manifest SHA b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16.
   That restriction is for native KV. The new Q8 reference covers all1024 rows.
 - The CPU scale exporter accumulated source-file cache despite F_NOCACHE and
   caused a restore timeout; recovery was verified. Do not rerun it unchanged.
+# Current checkpoint: 2026-09-18 04:18 UTC
+
+Best exact16K-input/1K-output Python result remains12.6731624TPS;20TPS unmet.
+Latest native projection-owner full run proves exactly1,384,120,320B less
+steady MLX memory after normalizing the single-slot capacity difference.
+Peak drops790,843,596B. Its12.4516125TPS is not a throughput win.
+Receipt:docs/deepseek-v41/receipts/woa-owner-20260917/README.md.
+No owned GPU child; guard38104 exit0; Qwen healthy/idle/warmed, lock free in
+the independent04:18:49UTC check. Live state must be checked again before use.
+Next candidate combines the measured tail2048 and projection memory wins with
+a smaller hard-bounded Python row cache. Keep all110GB/wired/phase bounds,
+native arithmetic, exact output gate and minimal testing. Work inline.

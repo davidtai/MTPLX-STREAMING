@@ -1,0 +1,60 @@
+{
+  "decode_tok_s": 12.451612518735757,
+  "decode_wall_s": 82.15803362501902,
+  "cycles": 206,
+  "decode_slots": 101,
+  "prefill_slots": 84,
+  "all_1024_ids_match_best": true,
+  "mlx_peak_bytes": 92545655960,
+  "process_footprint_peak_bytes": 93711383384,
+  "system_used_peak_bytes": 105971466240,
+  "active_end_bytes": 91799553460,
+  "active_end_native_capacity_normalized_saving_bytes": 1384120320,
+  "peak_native_capacity_normalized_saving_bytes": 790843596,
+  "prefill_boundary": {
+    "mlx_active_bytes": 80442078452,
+    "mlx_cache_bytes": 1089486848,
+    "mlx_peak_bytes": 88438908516
+  },
+  "seed_boundary": {
+    "before": {
+      "mlx_active_bytes": 91078395124,
+      "mlx_peak_bytes": 91674117368
+    },
+    "after": {
+      "mlx_active_bytes": 91217660664,
+      "mlx_peak_bytes": 92545655960
+    }
+  },
+  "growth": {
+    "growth_seconds": 3.425266209000256,
+    "active_before_bytes": 79727883508,
+    "active_after_bytes": 91078395124,
+    "cache_after_bytes": 0,
+    "transition_peak_bytes": 91674117368
+  },
+  "read_bytes": 628056391680,
+  "read_records": 35494,
+  "read_union_ns": 48687575574,
+  "projection_ownership": {
+    "target_layers": 40,
+    "source_packed_projection_bytes": 1384120320,
+    "cold_source_overlap_allowance_bytes": 34603008,
+    "prefill_and_growth_credit_bytes": 0,
+    "resident_plan_retains_source_reserve": true,
+    "scope": "One native KV16 D5/M6 request; native lazy BF16 materialization followed by packed-owner retirement. Module ownership and measured process/allocator bytes are separate.",
+    "module_ownership_verified": true,
+    "retired_module_source_bytes": 1384120320,
+    "retained_module_bf16_bytes": 2684354560
+  },
+  "source_commit": "2488ebf648f1447ad31cfa6344ba67e5f532dcf5",
+  "guard_session": 38104,
+  "guard_exit_code": 0,
+  "external_process_tree_peak_bytes": 93742431064,
+  "external_system_used_peak_bytes": 105996976128,
+  "external_samples": 225,
+  "compressor_growth_bytes": 0,
+  "guard_released_utc": "2026-09-18T04:17:52Z",
+  "baseline_bytes": 10881843200,
+  "physical_bound_bytes": 109600670040
+}

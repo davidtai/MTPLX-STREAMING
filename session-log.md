@@ -315,3 +315,20 @@ No production implementation, GPU benchmark, or optimization tests are justified
 for this candidate. Preserve the existing prefetch/policy construction guard.
 Evidence: docs/deepseek-v41/receipts/causal-prefetch-screen-20260917/README.md.
 Primary20TPS and secondary256K prefill verification remain open.
+# 2026-09-18 04:18 UTC: Full native projection-owner memory win
+
+Exact 16,384/1,024 native KV16 D5/M6 run at source2488ebf648 completes in
+82.1580336s /12.4516125TPS,206cycles,84->101slots. All output IDs match the
+best control. Capacity-normalized final MLX saving is exactly1,384,120,320B;
+peak saving790,843,596B, now limited by native full MTP seeding. No speed win.
+Live baseline10,881,843,200B; bound109,600,670,040B; external measured physical
+peak105,996,976,128B. Original prefill/growth/seed bounds and all allowances
+remain; projection retirement is credited only in steady decode.
+
+Guard38104 exit0;225samples;no compressor growth;source/packed cache ends0.
+Qwen restored healthy with exact identity and warmup before04:17:52 lock
+release. Independent04:18:49 check:healthy,idle,warmed,free,no owned child.
+Receipt:docs/deepseek-v41/receipts/woa-owner-20260917/README.md.
+Next:compose measured tail2048 and projection retirement with bounded Engram
+host storage. Best stays12.6731624TPS;20TPS remains unmet. No new agents,
+unrelated process termination, broad suites or general-serving defaults.
