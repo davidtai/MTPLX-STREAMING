@@ -57,6 +57,9 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +si : GIL switch interval MTPLX_DSV41_GIL_SWITCH_S=$F2_GIL_SWITCH_S (applied once at the
 #         F2b hook; the hook is staged but F2b itself stays off for control bases)
 #   +eg : F6 parallel Engram miss reads, decode-site install; +egl: load-site (prefill too)
+#   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
+#         EXACTNESS probe (digest decides whether a two-group verify pipeline is exact);
+#         slower by construction, never a throughput candidate
 F2_GIL_SWITCH_S="${F2_GIL_SWITCH_S:-0.00005}"
 F2_ENGRAM_WORKERS="${F2_ENGRAM_WORKERS:-16}"
 F6DIR="${F6DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f6-engram/scripts/deepseek_v41/f6}"
@@ -79,7 +82,7 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
 
 # --------------------------------------------------- 2. stage patched runner copies
 stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)  $5 charge the ring (0/1)
-  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}"
+  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}"
   local ring_arg=""
   [ "$ring" = "1" ] && ring_arg="--ring-bytes $((F2_RING_RECORDS * 3 * 5898240))"
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
@@ -119,6 +122,10 @@ ARTPY
   ln -s "$PACKED_ARTIFACT_REAL" "$dest/packed/artifact"
   nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
     --admission "$dest/packed/packed_admission.py" --max-rows "$rows" $ring_arg
+  if [ "$vc" != "0" ]; then
+    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
+      --hybrid-install "$dest/packed/hybrid_install.py" --verify-chunks "$(printf '%s' "$vc" | tr '-' ',')"
+  fi
   if [ "$F2_PROBE" = "1" ]; then
     nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
@@ -135,11 +142,12 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0
+  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
   case "$mods" in *"+eg+"*) A_ENG=decode ;; esac
   case "$mods" in *"+egl+"*) A_ENG=load ;; esac
+  case "$mods" in *"+vc"*) A_VC="${mods#*+vc}"; A_VC="${A_VC%%+*}" ;; esac
   case "$A_BASE" in
     control|control_a|control_b) A_ROWS="$F2_MAX_ROWS"; A_F2B=0 ;;
     control_low)                 A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0 ;;
@@ -148,17 +156,17 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
   A_ENGSTAGE=0; [ "$A_ENG" != "0" ] && A_ENGSTAGE=1
-  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_F2B}"   # g = host ring charged to admission
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_F2B}-v${A_VC}"   # g = host ring charged to admission
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
 ARMS="${F2_ARMS:-control_a candidate control_b}"
 echo "== stage retained sources -> $STAGE_ROOT (arms: $ARMS; probe=$F2_PROBE) =="
 for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first unload
   parse_arm "$arm"
-  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_F2B"
+  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_F2B" "$A_VC"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
-  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG)"; done
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC)"; done
   rmdir "$RECEIPTS" 2>/dev/null || true
   echo "STAGE ONLY: no GPU window opened"; exit 0
 fi

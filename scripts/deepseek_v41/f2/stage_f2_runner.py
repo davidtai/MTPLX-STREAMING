@@ -79,6 +79,28 @@ def stage_admission_ring(source_text: str, *, ring_bytes: int) -> str:
     return updated
 
 
+# Row-split exactness probe: the retained hybrid install hardcodes ONE verify chunk of up to
+# 8 rows. Staging a two-chunk schedule (e.g. 4+4) makes the target verify the same rows as
+# two causal forwards (the second attends to the first's KV) with the unchanged greedy
+# accept/commit path. Emitted tokens are identical IF AND ONLY IF the split-row arithmetic
+# is bit-stable in practice, so the run's output digest decides whether a two-group verify
+# pipeline would be an exact lever. (Sequential chunks are slower; this arm is not a
+# throughput candidate.)
+_VC_ANCHOR = "            '    verify_chunks = (8,)')"
+
+
+def stage_verify_chunks(source_text: str, *, chunks) -> str:
+    chunks = tuple(int(c) for c in chunks)
+    if len(chunks) < 2 or any(c < 1 for c in chunks) or sum(chunks) != 8:
+        raise RuntimeError("verify chunks must be >= 2 positive widths summing to 8")
+    _assert_once(source_text, _VC_ANCHOR, "hybrid verify_chunks")
+    new_line = _VC_ANCHOR.replace("(8,)", "(" + ", ".join(str(c) for c in chunks) + ")")
+    updated = source_text.replace(_VC_ANCHOR, new_line)
+    if updated.replace(new_line, _VC_ANCHOR) != source_text:
+        raise RuntimeError("verify-chunks edit changed more than the one tuple")
+    return updated
+
+
 def stage_run_full(source_text: str) -> str:
     _assert_once(source_text, _INSTALL_ANCHOR, "observe_seed_prefill prime_model")
     _assert_once(source_text, _TRACE_ANCHOR, "observe_prefill_boundary SystemExit")
@@ -97,6 +119,8 @@ def main(argv=None) -> int:
     ap.add_argument("--admission", default=None, help="STAGED packed_admission.py to cap in place")
     ap.add_argument("--max-rows", type=int, default=None, help="cap the decode capacity-search start")
     ap.add_argument("--run-full", default=None, help="STAGED run_full.py to patch in place (install + traceback)")
+    ap.add_argument("--hybrid-install", default=None, help="STAGED hybrid_install.py (with --verify-chunks)")
+    ap.add_argument("--verify-chunks", default=None, help="e.g. 4,4 : row-split exactness probe")
     ap.add_argument("--ring-bytes", type=int, default=None,
                     help="with --admission: charge the F2b host ring to the physical bound")
     args = ap.parse_args(argv)
@@ -110,6 +134,13 @@ def main(argv=None) -> int:
             print("staged_admission_ring_bytes", args.ring_bytes)
         p.write_text(out)
         print("staged_admission", "max_rows", args.max_rows, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
+    if (args.hybrid_install is None) != (args.verify_chunks is None):
+        raise SystemExit("--hybrid-install and --verify-chunks go together")
+    if args.hybrid_install is not None:
+        p = Path(args.hybrid_install)
+        out = stage_verify_chunks(p.read_text(), chunks=[int(x) for x in args.verify_chunks.split(",")])
+        p.write_text(out)
+        print("staged_verify_chunks", args.verify_chunks, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.run_full is not None:
         p = Path(args.run_full)
         out = stage_run_full(p.read_text())
