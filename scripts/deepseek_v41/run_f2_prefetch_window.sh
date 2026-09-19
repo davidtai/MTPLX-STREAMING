@@ -45,6 +45,12 @@ F2_MAX_ROWS="${F2_MAX_ROWS:-108}"
 PACKED_ARTIFACT_REAL="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917"
 F2_RING_RECORDS="${F2_RING_RECORDS:-32}"
 F2_WORKERS="${F2_WORKERS:-3}"
+# F2_PROBE=1 composes the F5 critical-path stamp probe (measured zero-cost in F5 windows 1-2)
+# under the F2b wrappers: the F5 stager edits the staged run_full FIRST (hook after
+# growth_transition), then the F2b stager adds its install after prime_model, so F2b wraps
+# the timed run (same runner instance, same executor/witness local).
+F2_PROBE="${F2_PROBE:-0}"
+F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile/scripts/deepseek_v41/f5_compile}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 STAGE_ROOT="/private/tmp/dsv41-f2b-${STAMP}"
 OUT_STAGE="/tmp/dsv41-110-stage"                     # run_full.py:330 requires --out here
@@ -102,6 +108,10 @@ ARTPY
   ln -s "$PACKED_ARTIFACT_REAL" "$dest/packed/artifact"
   nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
     --admission "$dest/packed/packed_admission.py" --max-rows "$rows"
+  if [ "$F2_PROBE" = "1" ]; then
+    nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
+      --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
+  fi
   [ "$f2b" = "1" ] && nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
     --run-full "$dest/packed/run_full.py"
   PYTHONPATH="$F2PKG" nice -n 19 "$PYBIN" -m f2.window_preflight --no-seams \
@@ -140,9 +150,14 @@ run_arm() {  # $1 arm  $2 staged tree  $3 f2b(0/1)
   local stem="$OUT_STAGE/f2b-${arm}-${STAMP}"
   local out="${stem}.jsonl"
   local pypath="$RUNWT:$tree/packed:$tree/compat:$F2PKG"
+  local probe_env=""
+  if [ "$F2_PROBE" = "1" ]; then
+    pypath="$pypath:$F5DIR"
+    probe_env="MTPLX_DSV41_F5_ENABLE= MTPLX_DSV41_F5_CAPS8=0 MTPLX_DSV41_F5_TIMED_PROBE=1 MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
+  fi
   local f2b_env=""
   [ "$f2b" = "1" ] && f2b_env="MTPLX_DSV41_F2B=1 MTPLX_DSV41_F2B_RECORDS=$F2_RING_RECORDS MTPLX_DSV41_F2B_WORKERS=$F2_WORKERS MTPLX_DSV41_F2B_COUNTERS=$dir/f2b_counters.json"
-  { echo "cd $RUNWT"; echo "PYTHONPATH=$pypath"; echo "$f2b_env gpu_window.sh $PYBIN $tree/launch_full.py $(retained_args "$out")"; } > "$dir/command.txt"
+  { echo "cd $RUNWT"; echo "PYTHONPATH=$pypath"; echo "$f2b_env $probe_env gpu_window.sh $PYBIN $tree/launch_full.py $(retained_args "$out")"; } > "$dir/command.txt"
   echo "== arm ${arm}: tree=$tree f2b=${f2b} out=${out} =="
   cd "$RUNWT"
   # shellcheck disable=SC2086
@@ -154,7 +169,7 @@ run_arm() {  # $1 arm  $2 staged tree  $3 f2b(0/1)
     GPU_WINDOW_MIN_AVAIL_GB=100 GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 \
     GPU_WINDOW_CANDIDATE_MODEL_DIR="$MODEL_DIR" GPU_WINDOW_CANDIDATE_AUX_DIR="$AUX_DIR" \
     MTPLX_DSV41_IO_READ_FANOUT=4 MTPLX_BELADY_ORACLE=0 \
-    PYTHONHASHSEED=0 PYTHONUNBUFFERED=1 $f2b_env \
+    PYTHONHASHSEED=0 PYTHONUNBUFFERED=1 $f2b_env $probe_env \
     PYTHONPATH="$pypath" \
     scripts/deepseek_v41/gpu_window.sh "$PYBIN" "$tree/launch_full.py" \
       $(retained_args "$out") > "$dir/guard.log" 2>&1 && rc=0 || rc=$?
