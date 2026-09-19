@@ -137,12 +137,38 @@ def _wrap_run(switch, pool, *, own, is_source, is_target, predictor, target_laye
     switch._run = wrapped
 
 
+def apply_switch_interval_from_env() -> dict:
+    """Optional GIL hand-off tuning, applied ONCE at install (never per call).
+
+    The retained lane issues every expert read from Python threads (part executors ->
+    fanout pool) that need the GIL to reach ``os.preadv``; the main thread holds the GIL
+    through its host work (hit-expert graph build) right after it submits the reads, and
+    CPython only forces a hand-off after ``sys.getswitchinterval()`` (default 5 ms -- longer
+    than a whole layer call). ``MTPLX_DSV41_GIL_SWITCH_S`` (seconds, e.g. 0.00005) lets the
+    reader threads issue their I/O while the main thread is still busy. Output-exact: it
+    changes thread scheduling only.
+    """
+    import sys
+
+    raw = os.environ.get("MTPLX_DSV41_GIL_SWITCH_S")
+    if not raw:
+        return {"gil_switch_interval_s": sys.getswitchinterval(), "gil_switch_interval_set": False}
+    value = float(raw)
+    if not 1e-6 <= value <= 0.005:
+        raise RuntimeError(f"MTPLX_DSV41_GIL_SWITCH_S out of range [1e-6, 0.005]: {value}")
+    sys.setswitchinterval(value)
+    return {"gil_switch_interval_s": sys.getswitchinterval(), "gil_switch_interval_set": True}
+
+
 def install_from_env(target) -> dict:
     """Called from the staged ``observe_seed_prefill`` after ``prime_model``. No-op unless
     ``MTPLX_DSV41_F2B == '1'``. Registers an atexit dump of the counters (once, after
     decode) to ``MTPLX_DSV41_F2B_COUNTERS``."""
+    gil = apply_switch_interval_from_env()
     if os.environ.get("MTPLX_DSV41_F2B") != "1":
-        return {"installed": False, "reason": "MTPLX_DSV41_F2B != 1"}
+        report = {"installed": False, "reason": "MTPLX_DSV41_F2B != 1", **gil}
+        _print_install_report(report)
+        return report
     report = install(
         target,
         ring_records=int(os.environ.get("MTPLX_DSV41_F2B_RECORDS", "32")),
@@ -153,7 +179,16 @@ def install_from_env(target) -> dict:
         import atexit
 
         atexit.register(dump_counters, target, counters_path)
+    report.update(gil)
+    _print_install_report(report)
     return report
+
+
+def _print_install_report(report: dict) -> None:
+    """One provenance line in the guard log, printed once at install."""
+    import json
+
+    print("F2B_INSTALL " + json.dumps(report, sort_keys=True, default=str), flush=True)
 
 
 def dump_counters(target, path) -> dict:

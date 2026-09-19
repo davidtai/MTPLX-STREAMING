@@ -51,6 +51,15 @@ F2_WORKERS="${F2_WORKERS:-3}"
 # the timed run (same runner instance, same executor/witness local).
 F2_PROBE="${F2_PROBE:-0}"
 F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile/scripts/deepseek_v41/f5_compile}"
+# Arm grammar: <base>[+si][+eg|+egl]   (arm dir = arm-<token with + -> _>)
+#   base: control|control_a|control_b (F2_MAX_ROWS, plain) | control_low (F2_MAX_ROWS-1, plain)
+#         | candidate (F2_MAX_ROWS-1, F2b prefetch)
+#   +si : GIL switch interval MTPLX_DSV41_GIL_SWITCH_S=$F2_GIL_SWITCH_S (applied once at the
+#         F2b hook; the hook is staged but F2b itself stays off for control bases)
+#   +eg : F6 parallel Engram miss reads, decode-site install; +egl: load-site (prefill too)
+F2_GIL_SWITCH_S="${F2_GIL_SWITCH_S:-0.00005}"
+F2_ENGRAM_WORKERS="${F2_ENGRAM_WORKERS:-16}"
+F6DIR="${F6DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f6-engram/scripts/deepseek_v41/f6}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 STAGE_ROOT="/private/tmp/dsv41-f2b-${STAMP}"
 OUT_STAGE="/tmp/dsv41-110-stage"                     # run_full.py:330 requires --out here
@@ -69,8 +78,8 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
   --dep "$STRICT_LIB" --dep "$RUNWT/$PROMPT_IDS" --dep "$MODEL_DIR"
 
 # --------------------------------------------------- 2. stage patched runner copies
-stage_tree() {  # $1 dest  $2 max_rows  $3 install_f2b(0/1)
-  local dest="$1" rows="$2" f2b="$3"
+stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)
+  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}"
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
   mkdir -p "$dest"; cp -R "$RETAINED_SRC/." "$dest/"
   # The receipt archives only artifact/manifest.json; the 3.09 GB packed-scale binaries live
@@ -112,18 +121,45 @@ ARTPY
     nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
   fi
-  [ "$f2b" = "1" ] && nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
-    --run-full "$dest/packed/run_full.py"
+  if [ "$eng" = "1" ]; then   # after F5 (shares its growth_transition anchor), before F2b
+    nice -n 19 "$PYBIN" "$F6DIR/stage_f6_runner.py" \
+      --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
+  fi
+  if [ "$f2b" = "1" ]; then
+    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"
+  fi
   PYTHONPATH="$F2PKG" nice -n 19 "$PYBIN" -m f2.window_preflight --no-seams \
     $(find "$dest" -maxdepth 2 -name '*.py' | sed 's/^/--compile /')
 }
-STAGE_CONTROL="$STAGE_ROOT/control"       # F2_MAX_ROWS, no F2b
-STAGE_CANDIDATE="$STAGE_ROOT/candidate"   # F2_MAX_ROWS-1, F2b install + traceback
-STAGE_CTRL_LOW="$STAGE_ROOT/control-low"  # F2_MAX_ROWS-1, no F2b (isolate the lost row)
-echo "== stage retained sources -> $STAGE_ROOT (control@${F2_MAX_ROWS}, candidate@$((F2_MAX_ROWS-1))+F2b) =="
-stage_tree "$STAGE_CONTROL" "$F2_MAX_ROWS" 0
-stage_tree "$STAGE_CANDIDATE" "$((F2_MAX_ROWS-1))" 1
-[ "${F2_INCLUDE_CONTROL_LOW:-0}" = "1" ] && stage_tree "$STAGE_CTRL_LOW" "$((F2_MAX_ROWS-1))" 0
+parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
+  local tok="$1" mods
+  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0
+  mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
+  case "$mods" in *"+si+"*) A_SI=1 ;; esac
+  case "$mods" in *"+eg+"*) A_ENG=decode ;; esac
+  case "$mods" in *"+egl+"*) A_ENG=load ;; esac
+  case "$A_BASE" in
+    control|control_a|control_b) A_ROWS="$F2_MAX_ROWS"; A_F2B=0 ;;
+    control_low)                 A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0 ;;
+    candidate)                   A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=1 ;;
+    *) echo "unknown arm base '$A_BASE' in '$tok'"; exit 2 ;;
+  esac
+  A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
+  A_ENGSTAGE=0; [ "$A_ENG" != "0" ] && A_ENGSTAGE=1
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}"
+  A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
+}
+ARMS="${F2_ARMS:-control_a candidate control_b}"
+echo "== stage retained sources -> $STAGE_ROOT (arms: $ARMS; probe=$F2_PROBE) =="
+for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first unload
+  parse_arm "$arm"
+  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE"
+done
+if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG)"; done
+  rmdir "$RECEIPTS" 2>/dev/null || true
+  echo "STAGE ONLY: no GPU window opened"; exit 0
+fi
 
 # ---------------------------------------------------------- retained arg list (fixed)
 retained_args() {  # $1 = absolute --out under /tmp/dsv41-110-stage
@@ -142,8 +178,8 @@ retained_args() {  # $1 = absolute --out under /tmp/dsv41-110-stage
 }
 
 # ------------------------------------------------------------------ per-arm launcher
-run_arm() {  # $1 arm  $2 staged tree  $3 f2b(0/1)
-  local arm="$1" tree="$2" f2b="$3"
+run_arm() {  # $1 arm token (parse_arm must have run for it)
+  local arm="$A_DIRNAME" tree="$A_TREE" f2b="$A_F2B"
   local dir="$RECEIPTS/arm-${arm}"
   if [ -e "$dir" ]; then echo "REFUSE: $dir exists (never overwrite a measurement)"; exit 2; fi
   mkdir -p "$dir"
@@ -157,6 +193,11 @@ run_arm() {  # $1 arm  $2 staged tree  $3 f2b(0/1)
   fi
   local f2b_env=""
   [ "$f2b" = "1" ] && f2b_env="MTPLX_DSV41_F2B=1 MTPLX_DSV41_F2B_RECORDS=$F2_RING_RECORDS MTPLX_DSV41_F2B_WORKERS=$F2_WORKERS MTPLX_DSV41_F2B_COUNTERS=$dir/f2b_counters.json"
+  [ "$A_SI" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_GIL_SWITCH_S=$F2_GIL_SWITCH_S"
+  if [ "$A_ENG" != "0" ]; then
+    pypath="$pypath:$F6DIR"
+    f2b_env="$f2b_env MTPLX_DSV41_F6_ENGRAM_PARALLEL=1 MTPLX_DSV41_F6_INSTALL=$A_ENG MTPLX_DSV41_F6_ENGRAM_WORKERS=$F2_ENGRAM_WORKERS"
+  fi
   { echo "cd $RUNWT"; echo "PYTHONPATH=$pypath"; echo "$f2b_env $probe_env gpu_window.sh $PYBIN $tree/launch_full.py $(retained_args "$out")"; } > "$dir/command.txt"
   echo "== arm ${arm}: tree=$tree f2b=${f2b} out=${out} =="
   cd "$RUNWT"
@@ -187,15 +228,9 @@ run_arm() {  # $1 arm  $2 staged tree  $3 f2b(0/1)
 }
 
 # ------------------------------------------------------------------------- the arms
-ARMS="${F2_ARMS:-control_a candidate control_b}"
 for arm in $ARMS; do
-  case "$arm" in
-    control_a)   run_arm control_a   "$STAGE_CONTROL"  0 ;;
-    candidate)   run_arm candidate   "$STAGE_CANDIDATE" 1 ;;
-    control_b)   run_arm control_b   "$STAGE_CONTROL"  0 ;;
-    control_low) run_arm control_low "$STAGE_CTRL_LOW" 0 ;;
-    *) echo "unknown arm '$arm'"; exit 2 ;;
-  esac
+  parse_arm "$arm"
+  run_arm "$arm"
 done
 
 # --------------------------------- readout: rows / digest / F2b counters
@@ -210,19 +245,19 @@ receipts, control_sha = Path(sys.argv[1]), sys.argv[2]
 rows_by_arm, ok = {}, True
 for arm_dir in sorted(p for p in receipts.iterdir() if p.is_dir()):
     arm = arm_dir.name.replace("arm-", "")
-    receipt = next(iter(arm_dir.glob("f2b-*.jsonl")), None)
+    receipt = next(iter(arm_dir.glob("f2b-*.passes.jsonl")), None)
     if receipt is None:
         print(f"  {arm}: NO RECEIPT (guard.exit={_read(arm_dir/'guard.exit')})"); ok = False; continue
     recs = [json.loads(l) for l in receipt.read_text().splitlines() if l.strip()]
-    rows = next((r.get("decode_slots_per_layer") or r.get("post_prefill_growth", {}).get("decode_slots_per_layer")
-                 for r in recs if r.get("decode_slots_per_layer") or r.get("post_prefill_growth")), None)
-    digest = next((r.get("token_ids_sha256") or r.get("output_ids_sha256") for r in recs
-                   if r.get("token_ids_sha256") or r.get("output_ids_sha256")), None)
+    dspark = next((r for r in recs if r.get("pass") == "dspark"), {})
+    rows = dspark.get("decode_slots_per_layer")
+    digest = dspark.get("output_ids_sha256")
+    tps = dspark.get("decode_tok_s"); wall = dspark.get("decode_wall_s")
     ctr_path = arm_dir / "f2b_counters.json"
     ctr = json.loads(ctr_path.read_text()) if ctr_path.exists() else {}
     rows_by_arm[arm] = rows
     match = (digest == control_sha); ok = ok and match
-    print(f"  {arm}: rows={rows} sha={'OK' if match else 'MISMATCH ' + str(digest)}"
+    print(f"  {arm}: rows={rows} decode_tok_s={tps} decode_wall_s={wall} sha={'OK' if match else 'MISMATCH ' + str(digest)}"
           + (f" f2b={ctr}" if ctr else ""))
 ctrl_rows = {a: r for a, r in rows_by_arm.items() if a.startswith("control")}
 if len(set(v for v in ctrl_rows.values() if v is not None)) > 1:
