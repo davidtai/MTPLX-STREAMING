@@ -1,0 +1,789 @@
+{
+  "purpose": "F1 stack-sim: four what-if knobs on the REAL 1-ahead predictor. CPU-only screen; no throughput claim, no production code, no GPU. All knob tables are HELD-OUT (capture cycles 32-63); fitted parameters chosen on cycles 0-31.",
+  "source_commit": "e49234aa69d0eb689f16d3b0fcd91ae764842fe7",
+  "capture_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/.benchmark-artifacts/deepseek-v41/router-feature-20260918/full-router-feature-20260918-v2.router-capture.npz",
+  "capture_sha256": "5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e",
+  "record_bytes": 17694720,
+  "plane_bytes": 5898240,
+  "n_planes": 3,
+  "held_out_cycles": [
+    32,
+    63
+  ],
+  "held_out_demand_records": 5030,
+  "predictor": {
+    "feature": "post_attention_router",
+    "merge_rule": "max"
+  },
+  "knob1_granularity": {
+    "control": {
+      "arm": "control",
+      "n_planes": 1,
+      "preempt": "record",
+      "budget_k": null,
+      "score_threshold": null,
+      "window_stop": false,
+      "ring_size": 32,
+      "rate_gbps": 12.9,
+      "compute_scale": 1.0,
+      "total_decode_s": 11.416348568025793,
+      "read_wait_exposed_s": 6.8995691162790855,
+      "demand_records": 5030,
+      "spec_issued": 0,
+      "spec_useful": 0,
+      "spec_wasted": 0,
+      "spec_precision": null,
+      "hidden_fraction": 0.0,
+      "spec_bytes_read": 0.0,
+      "useful_spec_planes": 0,
+      "extra_bytes_read": 0
+    },
+    "arms": [
+      {
+        "arm": "real",
+        "n_planes": 1,
+        "preempt": "record",
+        "budget_k": 3,
+        "score_threshold": null,
+        "window_stop": false,
+        "ring_size": 32,
+        "rate_gbps": 12.9,
+        "compute_scale": 1.0,
+        "total_decode_s": 10.317331139529688,
+        "read_wait_exposed_s": 5.800551687782982,
+        "demand_records": 5030,
+        "spec_issued": 3448,
+        "spec_useful": 1521,
+        "spec_wasted": 1927,
+        "spec_precision": 0.44112529002320183,
+        "hidden_fraction": 0.30238568588469183,
+        "spec_bytes_read": 61011394560.0,
+        "useful_spec_planes": 1521,
+        "extra_bytes_read": 34097725440,
+        "label": "baseline (record, no preempt)",
+        "readwait_reduction_vs_control": 0.15928783522191886
+      },
+      {
+        "arm": "real",
+        "n_planes": 3,
+        "preempt": "plane",
+        "budget_k": 3,
+        "score_threshold": null,
+        "window_stop": false,
+        "ring_size": 32,
+        "rate_gbps": 12.9,
+        "compute_scale": 1.0,
+        "total_decode_s": 9.955663865110226,
+        "read_wait_exposed_s": 5.438884413363518,
+        "demand_records": 5030,
+        "spec_issued": 3448,
+        "spec_useful": 1521,
+        "spec_wasted": 1927,
+        "spec_precision": 0.44112529002320183,
+        "hidden_fraction": 0.30238568588469183,
+        "spec_bytes_read": 54275604480.0,
+        "useful_spec_planes": 4210,
+        "extra_bytes_read": 34097725440,
+        "label": "plane preempt (<=1 plane wait)",
+        "readwait_reduction_vs_control": 0.2117066556329114
+      },
+      {
+        "arm": "real",
+        "n_planes": 3,
+        "preempt": "full",
+        "budget_k": 3,
+        "score_threshold": null,
+        "window_stop": false,
+        "ring_size": 32,
+        "rate_gbps": 12.9,
+        "compute_scale": 1.0,
+        "total_decode_s": 9.653277758723469,
+        "read_wait_exposed_s": 5.136498306976761,
+        "demand_records": 5030,
+        "spec_issued": 3448,
+        "spec_useful": 1521,
+        "spec_wasted": 1927,
+        "spec_precision": 0.44112529002320183,
+        "hidden_fraction": 0.30238568588469183,
+        "spec_bytes_read": 54287400960.0,
+        "useful_spec_planes": 3856,
+        "extra_bytes_read": 34097725440,
+        "label": "ideal full-preempt (0 delay)",
+        "readwait_reduction_vs_control": 0.2555334658714373
+      }
+    ]
+  },
+  "knob2_issue_policy": {
+    "arms": [
+      {
+        "arm": "real",
+        "n_planes": 3,
+        "preempt": "plane",
+        "budget_k": 1,
+        "score_threshold": null,
+        "window_stop": false,
+        "ring_size": 32,
+        "rate_gbps": 12.9,
+        "compute_scale": 1.0,
+        "total_decode_s": 10.415019451746716,
+        "read_wait_exposed_s": 5.8982400000000075,
+        "demand_records": 5030,
+        "spec_issued": 1113,
+        "spec_useful": 730,
+        "spec_wasted": 383,
+        "spec_precision": 0.655884995507637,
+        "hidden_fraction": 0.14512922465208747,
+        "spec_bytes_read": 19694223360.0,
+        "useful_spec_planes": 2190,
+        "extra_bytes_read": 6777077760,
+        "label": "k=1, fitted threshold",
+        "fitted_threshold": null,
+        "readwait_reduction_vs_control": 0.14512922465208836
+      },
+      {
+        "arm": "real",
+        "n_planes": 3,
+        "preempt": "plane",
+        "budget_k": 2,
+        "score_threshold": null,
+        "window_stop": false,
+        "ring_size": 32,
+        "rate_gbps": 12.9,
+        "compute_scale": 1.0,
+        "total_decode_s": 9.796390093607195,
+        "read_wait_exposed_s": 5.2796106418604865,
+        "demand_records": 5030,
+        "spec_issued": 2271,
+        "spec_useful": 1181,
+        "spec_wasted": 1090,
+        "spec_precision": 0.520035226772347,
+        "hidden_fraction": 0.23479125248508947,
+        "spec_bytes_read": 40184709120.0,
+        "useful_spec_planes": 3543,
+        "extra_bytes_read": 19287244800,
+        "label": "k=2, fitted threshold",
+        "fitted_threshold": null,
+        "readwait_reduction_vs_control": 0.23479125248508811
+      },
+      {
+        "arm": "real",
+        "n_planes": 3,
+        "preempt": "plane",
+        "budget_k": 3,
+        "score_threshold": null,
+        "window_stop": false,
+        "ring_size": 32,
+        "rate_gbps": 12.9,
+        "compute_scale": 1.0,
+        "total_decode_s": 9.955663865110226,
+        "read_wait_exposed_s": 5.438884413363518,
+        "demand_records": 5030,
+        "spec_issued": 3448,
+        "spec_useful": 1521,
+        "spec_wasted": 1927,
+        "spec_precision": 0.44112529002320183,
+        "hidden_fraction": 0.30238568588469183,
+        "spec_bytes_read": 54275604480.0,
+        "useful_spec_planes": 4210,
+        "extra_bytes_read": 34097725440,
+        "label": "k=3, fitted threshold",
+        "fitted_threshold": null,
+        "readwait_reduction_vs_control": 0.2117066556329114
+      },
+      {
+        "arm": "real",
+        "n_planes": 3,
+        "preempt": "plane",
+        "budget_k": 3,
+        "score_threshold": null,
+        "window_stop": true,
+        "ring_size": 32,
+        "rate_gbps": 12.9,
+        "compute_scale": 1.0,
+        "total_decode_s": 9.653277758723469,
+        "read_wait_exposed_s": 5.136498306976761,
+        "demand_records": 5030,
+        "spec_issued": 3448,
+        "spec_useful": 1521,
+        "spec_wasted": 1927,
+        "spec_precision": 0.44112529002320183,
+        "hidden_fraction": 0.30238568588469183,
+        "spec_bytes_read": 47528017920.0,
+        "useful_spec_planes": 3856,
+        "extra_bytes_read": 34097725440,
+        "label": "k=3, window-stop (refuse in-flight plane)",
+        "fitted_threshold": null,
+        "readwait_reduction_vs_control": 0.2555334658714373
+      }
+    ],
+    "selected_k": 3,
+    "selected_threshold": null,
+    "selected_window_stop": true,
+    "selection": "min TRAIN (0-31) read wait"
+  },
+  "knob3_recycle": {
+    "rings": {
+      "32": {
+        "ring_records": 32,
+        "ring_mem_mb": 566.2,
+        "horizon_cycles": 2,
+        "budget_k": 3,
+        "extra_hidden_reads_heldout": 8,
+        "heldout_demand_records": 5030,
+        "extra_hidden_fraction": 0.0015904572564612327
+      },
+      "64": {
+        "ring_records": 64,
+        "ring_mem_mb": 1132.5,
+        "horizon_cycles": 2,
+        "budget_k": 3,
+        "extra_hidden_reads_heldout": 35,
+        "heldout_demand_records": 5030,
+        "extra_hidden_fraction": 0.006958250497017893
+      },
+      "128": {
+        "ring_records": 128,
+        "ring_mem_mb": 2264.9,
+        "horizon_cycles": 2,
+        "budget_k": 3,
+        "extra_hidden_reads_heldout": 80,
+        "heldout_demand_records": 5030,
+        "extra_hidden_fraction": 0.015904572564612324
+      }
+    },
+    "stack_ring_used": 64,
+    "stack_bonus_fraction": 0.006958250497017893
+  },
+  "best_config": {
+    "n_planes": 3,
+    "preempt": "plane",
+    "window_stop": true,
+    "budget_k": 3,
+    "score_threshold": null
+  },
+  "stack_capacity_anchors": {
+    "105": {
+      "records": 33917,
+      "12.9|1.0": {
+        "control_total_s": 77.79585735848102,
+        "control_read_wait_s": 46.52339676279092
+      },
+      "12.9|0.8": {
+        "control_total_s": 72.43653684130115,
+        "control_read_wait_s": 46.52339676279077
+      },
+      "12.9|0.6": {
+        "control_total_s": 67.07721632414474,
+        "control_read_wait_s": 46.52339676279069
+      },
+      "18.0|1.0": {
+        "control_total_s": 64.61422827568751,
+        "control_read_wait_s": 33.34176767999988
+      },
+      "18.0|0.8": {
+        "control_total_s": 59.25490775850319,
+        "control_read_wait_s": 33.341767679999975
+      },
+      "18.0|0.6": {
+        "control_total_s": 53.89558724135743,
+        "control_read_wait_s": 33.34176768000003
+      }
+    },
+    "111": {
+      "records": 31636,
+      "12.9|1.0": {
+        "control_total_s": 74.66704679103854,
+        "control_read_wait_s": 43.394586195348865
+      },
+      "12.9|0.8": {
+        "control_total_s": 69.30772627385684,
+        "control_read_wait_s": 43.39458619534874
+      },
+      "12.9|0.6": {
+        "control_total_s": 63.94840575670606,
+        "control_read_wait_s": 43.394586195348545
+      },
+      "18.0|1.0": {
+        "control_total_s": 62.371914035687375,
+        "control_read_wait_s": 31.099453440000225
+      },
+      "18.0|0.8": {
+        "control_total_s": 57.01259351850358,
+        "control_read_wait_s": 31.09945344000022
+      },
+      "18.0|0.6": {
+        "control_total_s": 51.65327300135769,
+        "control_read_wait_s": 31.09945344000032
+      }
+    },
+    "119": {
+      "records": 28886,
+      "12.9|1.0": {
+        "control_total_s": 70.89491655848025,
+        "control_read_wait_s": 39.62245596279109
+      },
+      "12.9|0.8": {
+        "control_total_s": 65.53559604129534,
+        "control_read_wait_s": 39.622455962790696
+      },
+      "12.9|0.6": {
+        "control_total_s": 60.176275524147975,
+        "control_read_wait_s": 39.62245596279048
+      },
+      "18.0|1.0": {
+        "control_total_s": 59.66855403568714,
+        "control_read_wait_s": 28.396093440000573
+      },
+      "18.0|0.8": {
+        "control_total_s": 54.309233518504236,
+        "control_read_wait_s": 28.39609344000067
+      },
+      "18.0|0.6": {
+        "control_total_s": 48.94991300135809,
+        "control_read_wait_s": 28.396093440000758
+      }
+    }
+  },
+  "stack_fraction_by_rate_scale": {
+    "12.9|1.0": {
+      "f_sim": 0.2555334658714373,
+      "recycle_bonus": 0.006958250497017893,
+      "f_total": 0.2624917163684552,
+      "real_precision": 0.44112529002320183,
+      "real_hidden_fraction": 0.30238568588469183
+    },
+    "12.9|0.8": {
+      "f_sim": 0.20397614314115095,
+      "recycle_bonus": 0.006958250497017893,
+      "f_total": 0.21093439363816885,
+      "real_precision": 0.5156385751520417,
+      "real_hidden_fraction": 0.2359840954274354
+    },
+    "12.9|0.6": {
+      "f_sim": 0.1719681908548701,
+      "recycle_bonus": 0.006958250497017893,
+      "f_total": 0.178926441351888,
+      "real_precision": 0.5188762071992976,
+      "real_hidden_fraction": 0.23499005964214711
+    },
+    "18.0|1.0": {
+      "f_sim": 0.3023856858846873,
+      "recycle_bonus": 0.006958250497017893,
+      "f_total": 0.30934393638170515,
+      "real_precision": 0.44112529002320183,
+      "real_hidden_fraction": 0.30238568588469183
+    },
+    "18.0|0.8": {
+      "f_sim": 0.2555334658714353,
+      "recycle_bonus": 0.006958250497017893,
+      "f_total": 0.26249171636845314,
+      "real_precision": 0.44112529002320183,
+      "real_hidden_fraction": 0.30238568588469183
+    },
+    "18.0|0.6": {
+      "f_sim": 0.20397614314115642,
+      "recycle_bonus": 0.006958250497017893,
+      "f_total": 0.21093439363817432,
+      "real_precision": 0.5156385751520417,
+      "real_hidden_fraction": 0.2359840954274354
+    }
+  },
+  "extrapolation_rule": "Same as f1-real-predictor-20260919: measure the real predictor's read-wait-reduction fraction f on the capture (here HELD-OUT cycles 32-63), then apply f to the full 1,024-token control read wait at that cell's capacity/rate (from the 206-cycle trace replay, the f1 receipt's capacity method) and subtract from the full control total. This is an EXTRAPOLATION: it assumes the held-out hidden fraction holds across the run and holds the fraction constant across capacity (capacity enters only through the control anchor).",
+  "target_51_2_s": 51.197,
+  "stack": [
+    {
+      "persistent": 105,
+      "rate_gbps": 12.9,
+      "compute_scale": 1.0,
+      "control_total_s": 77.79585735848102,
+      "control_read_wait_s": 46.52339676279092,
+      "readwait_reduction_fraction": 0.2624917163684552,
+      "f_sim_planes_policy": 0.2555334658714373,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 12.21200626755562,
+      "real_implied_total_s": 65.58385109092539,
+      "real_implied_tps": 15.613599734793361,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 105,
+      "rate_gbps": 12.9,
+      "compute_scale": 0.8,
+      "control_total_s": 72.43653684130115,
+      "control_read_wait_s": 46.52339676279077,
+      "readwait_reduction_fraction": 0.21093439363816885,
+      "f_sim_planes_policy": 0.20397614314115095,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 9.813384486147218,
+      "real_implied_total_s": 62.623152355153934,
+      "real_implied_tps": 16.351779836834165,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 105,
+      "rate_gbps": 12.9,
+      "compute_scale": 0.6,
+      "control_total_s": 67.07721632414474,
+      "control_read_wait_s": 46.52339676279069,
+      "readwait_reduction_fraction": 0.178926441351888,
+      "f_sim_planes_policy": 0.1719681908548701,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.324265822368085,
+      "real_implied_total_s": 58.75295050177666,
+      "real_implied_tps": 17.42891193130862,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 105,
+      "rate_gbps": 18.0,
+      "compute_scale": 1.0,
+      "control_total_s": 64.61422827568751,
+      "control_read_wait_s": 33.34176767999988,
+      "readwait_reduction_fraction": 0.30934393638170515,
+      "f_sim_planes_policy": 0.3023856858846873,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 10.314073660055477,
+      "real_implied_total_s": 54.30015461563203,
+      "real_implied_tps": 18.858141514484913,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 105,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.8,
+      "control_total_s": 59.25490775850319,
+      "control_read_wait_s": 33.341767679999975,
+      "readwait_reduction_fraction": 0.26249171636845314,
+      "f_sim_planes_policy": 0.2555334658714353,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.751937825081411,
+      "real_implied_total_s": 50.502969933421774,
+      "real_implied_tps": 20.27603527772609,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 105,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.6,
+      "control_total_s": 53.89558724135743,
+      "control_read_wait_s": 33.34176768000003,
+      "readwait_reduction_fraction": 0.21093439363817432,
+      "f_sim_planes_policy": 0.20397614314115642,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 7.032925548405685,
+      "real_implied_total_s": 46.86266169295175,
+      "real_implied_tps": 21.851084915093757,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 12.9,
+      "compute_scale": 1.0,
+      "control_total_s": 74.66704679103854,
+      "control_read_wait_s": 43.394586195348865,
+      "readwait_reduction_fraction": 0.2624917163684552,
+      "f_sim_planes_policy": 0.2555334658714373,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 11.390719411515995,
+      "real_implied_total_s": 63.27632737952255,
+      "real_implied_tps": 16.182987262490624,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 12.9,
+      "compute_scale": 0.8,
+      "control_total_s": 69.30772627385684,
+      "control_read_wait_s": 43.39458619534874,
+      "readwait_reduction_fraction": 0.21093439363816885,
+      "f_sim_planes_policy": 0.20397614314115095,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 9.153410726295139,
+      "real_implied_total_s": 60.15431554756171,
+      "real_implied_tps": 17.02288506949036,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 12.9,
+      "compute_scale": 0.6,
+      "control_total_s": 63.94840575670606,
+      "control_read_wait_s": 43.394586195348545,
+      "readwait_reduction_fraction": 0.178926441351888,
+      "f_sim_planes_policy": 0.1719681908548701,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 7.764438881871481,
+      "real_implied_total_s": 56.18396687483458,
+      "real_implied_tps": 18.225840163284392,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 18.0,
+      "compute_scale": 1.0,
+      "control_total_s": 62.371914035687375,
+      "control_read_wait_s": 31.099453440000225,
+      "readwait_reduction_fraction": 0.30934393638170515,
+      "f_sim_planes_policy": 0.3023856858846873,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 9.620427346449231,
+      "real_implied_total_s": 52.75148668923814,
+      "real_implied_tps": 19.411775179578147,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.8,
+      "control_total_s": 57.01259351850358,
+      "control_read_wait_s": 31.09945344000022,
+      "readwait_reduction_fraction": 0.26249171636845314,
+      "f_sim_planes_policy": 0.2555334658714353,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.163348911586452,
+      "real_implied_total_s": 48.849244606917125,
+      "real_implied_tps": 20.962453119592357,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.6,
+      "control_total_s": 51.65327300135769,
+      "control_read_wait_s": 31.09945344000032,
+      "readwait_reduction_fraction": 0.21093439363817432,
+      "f_sim_planes_policy": 0.20397614314115642,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 6.559944353845102,
+      "real_implied_total_s": 45.093328647512585,
+      "real_implied_tps": 22.708458894317737,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 12.9,
+      "compute_scale": 1.0,
+      "control_total_s": 70.89491655848025,
+      "control_read_wait_s": 39.62245596279109,
+      "readwait_reduction_fraction": 0.2624917163684552,
+      "f_sim_planes_policy": 0.2555334658714373,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 10.400566472406567,
+      "real_implied_total_s": 60.49435008607368,
+      "real_implied_tps": 16.927200615313886,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 12.9,
+      "compute_scale": 0.8,
+      "control_total_s": 65.53559604129534,
+      "control_read_wait_s": 39.622455962790696,
+      "readwait_reduction_fraction": 0.21093439363816885,
+      "f_sim_planes_policy": 0.20397614314115095,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.357738722966303,
+      "real_implied_total_s": 57.17785731832903,
+      "real_implied_tps": 17.90903066372417,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 12.9,
+      "compute_scale": 0.6,
+      "control_total_s": 60.176275524147975,
+      "control_read_wait_s": 39.62245596279048,
+      "readwait_reduction_fraction": 0.178926441351888,
+      "f_sim_planes_policy": 0.1719681908548701,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 7.089505043043997,
+      "real_implied_total_s": 53.086770481103976,
+      "real_implied_tps": 19.289174887074523,
+      "reaches_51_2_real": false,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 18.0,
+      "compute_scale": 1.0,
+      "control_total_s": 59.66855403568714,
+      "control_read_wait_s": 28.396093440000573,
+      "readwait_reduction_fraction": 0.30934393638170515,
+      "f_sim_planes_policy": 0.3023856858846873,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.784159322592492,
+      "real_implied_total_s": 50.88439471309464,
+      "real_implied_tps": 20.124047967430823,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.8,
+      "control_total_s": 54.309233518504236,
+      "control_read_wait_s": 28.39609344000067,
+      "readwait_reduction_fraction": 0.26249171636845314,
+      "f_sim_planes_policy": 0.2555334658714353,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 7.453739305224748,
+      "real_implied_total_s": 46.855494213279485,
+      "real_implied_tps": 21.854427473092034,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.6,
+      "control_total_s": 48.94991300135809,
+      "control_read_wait_s": 28.396093440000758,
+      "readwait_reduction_fraction": 0.21093439363817432,
+      "f_sim_planes_policy": 0.20397614314115642,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 5.989712751459499,
+      "real_implied_total_s": 42.96020024989859,
+      "real_implied_tps": 23.83601552235356,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": true
+    }
+  ],
+  "cells_reaching_51_2": [
+    {
+      "persistent": 119,
+      "rate_gbps": 18.0,
+      "compute_scale": 1.0,
+      "control_total_s": 59.66855403568714,
+      "control_read_wait_s": 28.396093440000573,
+      "readwait_reduction_fraction": 0.30934393638170515,
+      "f_sim_planes_policy": 0.3023856858846873,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.784159322592492,
+      "real_implied_total_s": 50.88439471309464,
+      "real_implied_tps": 20.124047967430823,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 105,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.8,
+      "control_total_s": 59.25490775850319,
+      "control_read_wait_s": 33.341767679999975,
+      "readwait_reduction_fraction": 0.26249171636845314,
+      "f_sim_planes_policy": 0.2555334658714353,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.751937825081411,
+      "real_implied_total_s": 50.502969933421774,
+      "real_implied_tps": 20.27603527772609,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.8,
+      "control_total_s": 57.01259351850358,
+      "control_read_wait_s": 31.09945344000022,
+      "readwait_reduction_fraction": 0.26249171636845314,
+      "f_sim_planes_policy": 0.2555334658714353,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 8.163348911586452,
+      "real_implied_total_s": 48.849244606917125,
+      "real_implied_tps": 20.962453119592357,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.8,
+      "control_total_s": 54.309233518504236,
+      "control_read_wait_s": 28.39609344000067,
+      "readwait_reduction_fraction": 0.26249171636845314,
+      "f_sim_planes_policy": 0.2555334658714353,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 7.453739305224748,
+      "real_implied_total_s": 46.855494213279485,
+      "real_implied_tps": 21.854427473092034,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 105,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.6,
+      "control_total_s": 53.89558724135743,
+      "control_read_wait_s": 33.34176768000003,
+      "readwait_reduction_fraction": 0.21093439363817432,
+      "f_sim_planes_policy": 0.20397614314115642,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 7.032925548405685,
+      "real_implied_total_s": 46.86266169295175,
+      "real_implied_tps": 21.851084915093757,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 111,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.6,
+      "control_total_s": 51.65327300135769,
+      "control_read_wait_s": 31.09945344000032,
+      "readwait_reduction_fraction": 0.21093439363817432,
+      "f_sim_planes_policy": 0.20397614314115642,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 6.559944353845102,
+      "real_implied_total_s": 45.093328647512585,
+      "real_implied_tps": 22.708458894317737,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": false
+    },
+    {
+      "persistent": 119,
+      "rate_gbps": 18.0,
+      "compute_scale": 0.6,
+      "control_total_s": 48.94991300135809,
+      "control_read_wait_s": 28.396093440000758,
+      "readwait_reduction_fraction": 0.21093439363817432,
+      "f_sim_planes_policy": 0.20397614314115642,
+      "f_recycle_bonus": 0.006958250497017893,
+      "seconds_removed": 5.989712751459499,
+      "real_implied_total_s": 42.96020024989859,
+      "real_implied_tps": 23.83601552235356,
+      "reaches_51_2_real": true,
+      "reaches_51_2_control_alone": true
+    }
+  ],
+  "mlx_imported": false,
+  "anchors": {
+    "prefix_readiness_cap102": {
+      "misses": 35164,
+      "routes": 8240,
+      "expected": [
+        35164,
+        8240
+      ],
+      "exact": true
+    },
+    "mtp_verify_cap73": {
+      "records": 53999,
+      "expected": 53999,
+      "exact": true
+    }
+  }
+}

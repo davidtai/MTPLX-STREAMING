@@ -119,6 +119,88 @@ def test_capture_arm_control_real_oracle_ordering():
     assert 0.0 < e["seconds_removed_from_control"] < sim.FULL_CONTROL_READ_WAIT_S
 
 
+# ---------------------------------------------------------------------------
+# What-if knobs (f1-stack-sim-20260919): plane-granular DES core.  Hand-built
+# stream so the invariants are checked without MLX/mtplx/the capture.
+# ---------------------------------------------------------------------------
+CYC2 = 4
+# misses on layers >=3 (like the capture); two experts each so predictions can be
+# partly right and partly wrong, and the compute window leaves a plane in flight.
+MISSES2 = [[[100 + L, 200 + ((c + L) % 5)] if L >= 3 else [] for L in range(40)]
+           for c in range(CYC2)]
+
+
+def _preds():
+    """Predictions for window L -> target L+1: one true miss of L+1 plus one wrong
+    id, as both the id-list (for simulate) and the scored list (for planes)."""
+    ids, scored = {}, {}
+    for c in range(CYC2):
+        for L in range(3, 39):
+            true = MISSES2[c][L + 1][:1]
+            lst = true + [900 + L]                       # one correct, one wrong
+            ids[(c, L)] = lst
+            scored[(c, L)] = [(e, -float(i)) for i, e in enumerate(lst)]
+    return ids, scored
+
+
+def test_planes_reduce_to_record_model():
+    """n_planes=1, preempt='record' must reproduce simulate() bit-for-bit for both
+    control and the real arm at several ring sizes (locks the plane DES core)."""
+    ids, scored = _preds()
+    keys = ("total_decode_s", "read_wait_exposed_s", "demand_records",
+            "spec_issued", "spec_useful", "spec_wasted")
+    for ring in (8, 16, 32):
+        old_c = sim.simulate(MISSES2, CYC2, arm="control", width=0, ring_size=ring,
+                             pred_from=3, growth_s=0.0, **KW)
+        new_c = sim.simulate_planes(MISSES2, CYC2, arm="control", n_planes=1,
+                                    preempt="record", ring_size=ring, pred_from=3,
+                                    growth_s=0.0, **KW)
+        assert all(abs(old_c[k] - new_c[k]) < 1e-12 for k in keys)
+        old_r = sim.simulate(MISSES2, CYC2, arm="real", width=8, ring_size=ring,
+                             real=ids, pred_from=3, growth_s=0.0, **KW)
+        new_r = sim.simulate_planes(MISSES2, CYC2, arm="real", scored=scored,
+                                    n_planes=1, preempt="record", budget_k=None,
+                                    ring_size=ring, pred_from=3, growth_s=0.0, **KW)
+        assert all(abs(old_r[k] - new_r[k]) < 1e-12 for k in keys), (ring, old_r, new_r)
+
+
+def test_preempt_monotone_and_useful_invariant():
+    """Finer preemption never raises read wait (record >= plane >= full) and the
+    useful/issued counts are identical across preemption modes (only the demand
+    delay changes, not which speculative records land)."""
+    _, scored = _preds()
+    base = dict(scored=scored, n_planes=3, budget_k=3, ring_size=32,
+                pred_from=3, growth_s=0.0, **KW)
+    rec = sim.simulate_planes(MISSES2, CYC2, arm="real", preempt="record", **base)
+    pln = sim.simulate_planes(MISSES2, CYC2, arm="real", preempt="plane", **base)
+    ful = sim.simulate_planes(MISSES2, CYC2, arm="real", preempt="full", **base)
+    assert rec["read_wait_exposed_s"] >= pln["read_wait_exposed_s"] - 1e-12
+    assert pln["read_wait_exposed_s"] >= ful["read_wait_exposed_s"] - 1e-12
+    assert rec["spec_useful"] == pln["spec_useful"] == ful["spec_useful"]
+    assert rec["spec_issued"] == pln["spec_issued"] == ful["spec_issued"]
+
+
+def test_window_stop_kills_inflight_and_recycle_monotone():
+    """window_stop removes the in-flight-plane penalty (read wait <= plane preempt,
+    and no worse than the ideal full-preempt bound); recycle extra-hidden reads are
+    non-decreasing in ring size."""
+    _, scored = _preds()
+    base = dict(scored=scored, n_planes=3, budget_k=3, ring_size=32,
+                pred_from=3, growth_s=0.0, **KW)
+    pln = sim.simulate_planes(MISSES2, CYC2, arm="real", preempt="plane", **base)
+    ful = sim.simulate_planes(MISSES2, CYC2, arm="real", preempt="full", **base)
+    ws = sim.simulate_planes(MISSES2, CYC2, arm="real", preempt="plane",
+                             window_stop=True, **base)
+    assert ws["read_wait_exposed_s"] <= pln["read_wait_exposed_s"] + 1e-12
+    assert ws["read_wait_exposed_s"] >= ful["read_wait_exposed_s"] - 1e-9
+    # recycle counts rise (weakly) with a larger persistent per-layer ring
+    rec = sim.recycle_analysis(MISSES2, scored, ring_sizes=(2, 8, 64), horizon=2,
+                               budget_k=3, lo=0, hi=CYC2)
+    extra = [rec[r]["extra_hidden_reads_heldout"] for r in (2, 8, 64)]
+    assert extra == sorted(extra)
+    assert rec[64]["ring_mem_mb"] == round(64 * sim.RING_MEM_MB_PER_REC, 1)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

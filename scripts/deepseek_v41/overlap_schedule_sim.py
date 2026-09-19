@@ -235,7 +235,8 @@ def synthetic_predictions(misses, cyc):
 # Single-server SSD discrete-event model
 # ---------------------------------------------------------------------------
 def simulate(misses, cyc, *, arm, width, ring_size, rate_gbps, rec_bytes,
-             causal=None, synth=None, real=None, pred_from=0, growth_s=GROWTH_S):
+             causal=None, synth=None, real=None, pred_from=0, growth_s=GROWTH_S,
+             compute_scale=1.0):
     """One SSD server at `rate_gbps` (decimal GB/s), records of `rec_bytes`.
 
     Per layer call: (1) an in-flight speculative read is NOT preempted -- it
@@ -251,6 +252,7 @@ def simulate(misses, cyc, *, arm, width, ring_size, rate_gbps, rec_bytes,
     boundary cost (0 for the mid-stream 64-cycle capture replay).
     """
     rd = rec_bytes / (rate_gbps * 1e9)          # seconds per record
+    cl = C_LAYER * compute_scale                 # per-layer compute window (scaled)
     t = growth_s                                 # one-time boundary growth (if any)
     ring = {}                                    # (layer,expert) -> completion time
     fifo = deque()                               # eviction order of ring keys
@@ -333,8 +335,8 @@ def simulate(misses, cyc, *, arm, width, ring_size, rate_gbps, rec_bytes,
             read_wait += demand_end - arrive
             t = demand_end
             # compute window: SSD prefetches predicted target layer(s)
-            fill(demand_end, demand_end + C_LAYER, predict(c, L))
-            t = demand_end + C_LAYER
+            fill(demand_end, demand_end + cl, predict(c, L))
+            t = demand_end + cl
         t += T_ACCEPT + T_COMMIT
     total = t
     demand_records = sum(len(misses[c][L]) for c in range(cyc) for L in range(40))
@@ -440,6 +442,463 @@ def _print_capture(res):
                   f"-> {e['implied_full_total_s']:.2f} s / {e['implied_tps_1024']:.2f} TPS")
 
 
+# ===========================================================================
+# What-if knobs (f1-stack-sim-20260919).  All four knobs run on the captured
+# demand stream and the REAL post-attention-router / max 1-ahead predictor; no
+# production code, no GPU.  Every knob TABLE reports HELD-OUT numbers (capture
+# cycles 32-63); any fitted parameter is chosen on cycles 0-31.  The stack
+# (knob 4) borrows the f1-real-predictor receipt's extrapolation rule verbatim.
+# ===========================================================================
+N_PLANES = 3                        # a record is 3 weight planes: gate, up, down
+PLANE_BYTES = REC_BYTES // N_PLANES  # 5,898,240 B ~ 5.9 MB per plane
+RING_MEM_MB_PER_REC = REC_BYTES / 1e6   # 17.69 MB per resident record (decimal)
+STRIPED_RATE = 18.0                 # GB/s, a second striped SSD
+STACK_CAPACITIES = (105, 111, 119)  # captured 105, +6, +14 persistent rows/layer
+STACK_SCALES = (1.0, 0.8, 0.6)      # compute-window scale (faster compute -> smaller window)
+STACK_RATES = (DEFAULT_RATE, STRIPED_RATE)   # 12.9 (one drive), 18.0 (striped pair)
+ORACLE2_FULL_S = 51.197             # parent f1-overlap-sim oracle-2-ahead full total = the "51.2 s" target
+HELDOUT_LO, HELDOUT_HI = 32, 64     # held-out capture cycles
+TRAIN_LO, TRAIN_HI = 0, 32          # threshold-fitting cycles
+
+
+def scored_predictions(cap, feature=REAL_FEATURE, rule=REAL_MERGE, width=12):
+    """{(cycle, window-layer L): [(expert, merged_score), ...]} ranked desc, READY
+    residents excluded.  L = target-1 (the layer whose compute window issues the
+    prediction for target L+1).  Built from rescore's merge + rank helpers so the
+    ranked ids match real_predictions() exactly; scores are exposed for knob 2."""
+    merged = rrc.merged_scores(cap["scores"][feature], rule)
+    order, m = rrc._ranked(merged, cap["physical"])
+    top = order[..., :width]
+    pred = {}
+    for c in range(rrc.CYCLES):
+        for idx in range(rrc.N_TARGET):
+            L = idx + rrc.FIRST_TARGET - 1
+            row = top[c, idx]
+            vals = m[c, idx, row]
+            pred[(c, L)] = [(int(e), float(v)) for e, v in zip(row, vals)
+                            if np.isfinite(v)]
+    return pred
+
+
+def _slice_stream(cap_misses, scored, lo, hi):
+    """Sub-stream of cap_misses[lo:hi] with predictions re-keyed to 0-based cycles.
+    The real 1-ahead predictor is within-cycle (target L+1 from cycle c's own
+    features), so slicing cycles introduces no cross-cycle leakage."""
+    sub = cap_misses[lo:hi]
+    sscored = {(c - lo, L): v for (c, L), v in scored.items() if lo <= c < hi}
+    return sub, sscored, hi - lo
+
+
+def simulate_planes(misses, cyc, *, arm, scored=None, n_planes=1, preempt="record",
+                    budget_k=None, score_threshold=None, window_stop=False,
+                    ring_size=32, rate_gbps=DEFAULT_RATE, rec_bytes=REC_BYTES,
+                    pred_from=0, growth_s=0.0, compute_scale=1.0):
+    """Plane-granular single-server SSD DES for the REAL 1-ahead predictor.
+
+    A record is `n_planes` planes of rec_bytes/n_planes each.  `preempt` sets how a
+    demand read treats the one speculative plane in flight at a layer boundary:
+      'record' -- waits the whole record  (== the parent simulate() at n_planes=1),
+      'plane'  -- waits at most one plane (~0.46 ms), remaining planes deferred,
+      'full'   -- ideal zero-delay bound (the in-flight plane is abandoned).
+    A partially-read speculative record that becomes a demand hit reads only its
+    remaining planes.  Issue policy (knob 2): `budget_k` caps per-call issuance,
+    `score_threshold` gates on the merged predictor score, `window_stop` refuses to
+    start a plane that cannot finish inside the compute window.  arm='control'
+    issues nothing.  Held-out slicing is the caller's job (pass a sliced stream)."""
+    rd = rec_bytes / (rate_gbps * 1e9)
+    rp = rd / n_planes                  # seconds per plane
+    cl = C_LAYER * compute_scale
+    ring = {}                           # (layer,expert) -> planes_done (0 only transiently)
+    fifo = deque()                      # FIFO eviction order of ring keys
+    inflight = None                     # (key, planes_done_before_current, plane_fin)
+    issued = useful = 0
+    spec_planes = useful_spec_planes = 0
+    read_wait = 0.0
+    t = growth_s
+
+    def want(c, L):
+        if arm == "control" or L < pred_from or scored is None:
+            return []
+        if L + 1 >= 40 or (c, L) not in scored:
+            return []
+        lst = scored[(c, L)]
+        if score_threshold is not None:
+            lst = [(e, v) for (e, v) in lst if v >= score_threshold]
+        if budget_k is not None:
+            lst = lst[:budget_k]
+        return [(L + 1, [e for (e, _) in lst])]
+
+    def fill(start, end, targets):
+        nonlocal issued, inflight, spec_planes
+        s = start
+        for T, experts in targets:
+            for e in experts:
+                key = (T, e)
+                done = ring.get(key, 0)
+                if done >= n_planes:
+                    continue
+                if inflight is not None and inflight[0] == key:
+                    continue
+                if window_stop and (end - s) < rp:
+                    return s                       # cannot even start a plane
+                if key not in ring:
+                    if len(ring) + (1 if inflight else 0) >= ring_size:
+                        while fifo and fifo[0] not in ring:
+                            fifo.popleft()
+                        if not fifo:
+                            return s               # nothing evictable; ring all in use
+                        del ring[fifo.popleft()]
+                    ring[key] = 0
+                    fifo.append(key)
+                    done = 0
+                    issued += 1                    # a fresh speculative record
+                for _ in range(n_planes - done):
+                    if window_stop and (end - s) < rp:
+                        return s                   # refuse a plane that would go in-flight
+                    plane_fin = s + rp
+                    spec_planes += 1
+                    if plane_fin <= end:
+                        ring[key] += 1
+                        s = plane_fin
+                    else:
+                        inflight = (key, ring[key], plane_fin)
+                        return s
+        return s
+
+    for c in range(cyc):
+        t += T_DRAFT
+        for L in range(40):
+            arrive = t
+            boundary_wait = 0.0
+            if inflight is not None:
+                key, p_before, plane_fin = inflight
+                if preempt == "record":
+                    rec_fin = plane_fin + (n_planes - p_before - 1) * rp
+                    boundary_wait = max(0.0, rec_fin - arrive)
+                    ring[key] = n_planes
+                elif preempt == "plane":
+                    boundary_wait = max(0.0, plane_fin - arrive)
+                    ring[key] = p_before + 1
+                else:                              # 'full': zero demand delay
+                    if p_before > 0:
+                        ring[key] = p_before
+                    elif key in ring:              # nothing landed; drop transient entry
+                        del ring[key]
+                inflight = None
+            demand_start = arrive + boundary_wait
+            demand_time = 0.0
+            for e in misses[c][L]:
+                key = (L, e)
+                if key in ring:
+                    p = ring.pop(key)
+                    demand_time += (n_planes - p) * rp   # only the missing planes
+                    useful += 1
+                    useful_spec_planes += p
+                else:
+                    demand_time += rd
+            demand_end = demand_start + demand_time
+            read_wait += demand_end - arrive
+            t = demand_end
+            fill(demand_end, demand_end + cl, want(c, L))
+            t = demand_end + cl
+        t += T_ACCEPT + T_COMMIT
+    total = t
+    demand_records = sum(len(misses[c][L]) for c in range(cyc) for L in range(40))
+    wasted = issued - useful
+    return {
+        "arm": arm, "n_planes": n_planes, "preempt": preempt,
+        "budget_k": budget_k, "score_threshold": score_threshold,
+        "window_stop": window_stop, "ring_size": ring_size,
+        "rate_gbps": rate_gbps, "compute_scale": compute_scale,
+        "total_decode_s": total, "read_wait_exposed_s": read_wait,
+        "demand_records": demand_records,
+        "spec_issued": issued, "spec_useful": useful, "spec_wasted": wasted,
+        "spec_precision": (useful / issued) if issued else None,
+        "hidden_fraction": useful / demand_records if demand_records else 0.0,
+        "spec_bytes_read": spec_planes * (rec_bytes / n_planes),
+        "useful_spec_planes": useful_spec_planes,
+        "extra_bytes_read": wasted * rec_bytes,
+    }
+
+
+def recycle_analysis(cap_misses, scored, *, ring_sizes=(32, 64, 128), horizon=2,
+                     budget_k=3, lo=HELDOUT_LO, hi=HELDOUT_HI):
+    """Knob 3 -- waste recycling.  A wasted speculative record (issued for layer T
+    at cycle c but not a demand miss then) sits in a per-layer persistent ring
+    instead of being FIFO-evicted at the window.  Count how often it becomes a
+    demand hit for the SAME layer within the next `horizon` cycles.  These are
+    EXTRA hidden reads, disjoint from the 1-ahead same-cycle hits.  Ring capacity
+    is `ring_size` records (evict globally oldest); memory = ring_size x 17.7 MB.
+    Warm-up uses all earlier cycles; only hits in [lo,hi) are counted."""
+    out = {}
+    n_cyc = len(cap_misses)
+    for R in ring_sizes:
+        ring = {}                        # (layer,expert) -> issue_cycle
+        order = deque()
+        extra = 0
+        for c in range(n_cyc):
+            for T in range(rrc.FIRST_TARGET, 40):
+                pred = {e for e, _ in scored.get((c, T - 1), [])[:budget_k]}
+                dmiss = set(cap_misses[c][T])
+                for e in dmiss - pred:            # not predicted this cycle
+                    key = (T, e)
+                    if key in ring and 1 <= (c - ring[key]) <= horizon:
+                        if lo <= c < hi:
+                            extra += 1
+                        del ring[key]
+                for e in dmiss & pred:            # 1-ahead hit consumes its record
+                    ring.pop((T, e), None)
+                for e in pred - dmiss:            # wasted this cycle -> keep for recycling
+                    key = (T, e)
+                    if key not in ring and len(ring) >= R:
+                        while order and order[0] not in ring:
+                            order.popleft()
+                        if order:
+                            del ring[order.popleft()]
+                    ring[key] = c
+                    order.append(key)
+        recs = sum(len(cap_misses[c][T]) for c in range(lo, hi) for T in range(40))
+        out[R] = {"ring_records": R, "ring_mem_mb": round(R * RING_MEM_MB_PER_REC, 1),
+                  "horizon_cycles": horizon, "budget_k": budget_k,
+                  "extra_hidden_reads_heldout": extra,
+                  "heldout_demand_records": recs,
+                  "extra_hidden_fraction": (extra / recs) if recs else 0.0}
+    return out
+
+
+def _fit_threshold(cap_misses, scored, k, *, npl, pre, rate, rec_bytes, pred_from):
+    """Choose the merged-score threshold on TRAIN cycles 0-31 that minimises train
+    read wait for budget k; None (no gating) is always a candidate."""
+    tr_m, tr_s, tr_c = _slice_stream(cap_misses, scored, TRAIN_LO, TRAIN_HI)
+    vals = [v for lst in tr_s.values() for (_, v) in lst[:k]]
+    cands = [None]
+    if vals:
+        va = np.array(vals)
+        cands += [float(np.quantile(va, q)) for q in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)]
+    best_th, best_rw = None, None
+    for th in cands:
+        r = simulate_planes(tr_m, tr_c, arm="real", scored=tr_s, n_planes=npl,
+                            preempt=pre, budget_k=k, score_threshold=th,
+                            rate_gbps=rate, rec_bytes=rec_bytes, pred_from=pred_from)
+        if best_rw is None or r["read_wait_exposed_s"] < best_rw - 1e-12:
+            best_th, best_rw = th, r["read_wait_exposed_s"]
+    return best_th
+
+
+def run_stack_sim(restore, trace, cap, *, rec_bytes=REC_BYTES):
+    """Compute all four knobs and the stacked grid.  Needs the 206-cycle trace
+    (for the capacity control anchors, via the f1 receipt's trace-replay method)
+    and the capture NPZ (for the real predictor's held-out read-wait reduction)."""
+    cyc_all = trace["cycles"]
+    scored = scored_predictions(cap)
+    cap_misses = rrc.demand_misses(cap)
+    pred_from = rrc.FIRST_TARGET - 1
+    ho_m, ho_s, ho_c = _slice_stream(cap_misses, scored, HELDOUT_LO, HELDOUT_HI)
+    ho_records = sum(len(ho_m[c][L]) for c in range(ho_c) for L in range(40))
+    base = dict(scored=ho_s, ring_size=32, rec_bytes=rec_bytes, pred_from=pred_from)
+
+    def cap_control(rate):
+        return simulate_planes(ho_m, ho_c, arm="control", rate_gbps=rate, **base)
+
+    def real_arm(rate=DEFAULT_RATE, scale=1.0, **cfg):
+        return simulate_planes(ho_m, ho_c, arm="real", rate_gbps=rate,
+                               compute_scale=scale, **cfg, **base)
+
+    # ---- Knob 1: speculative read granularity / preemption (held-out, 12.9) ----
+    k1_ctrl = cap_control(DEFAULT_RATE)
+    knob1 = []
+    for label, npl, pre in (("baseline (record, no preempt)", 1, "record"),
+                            ("plane preempt (<=1 plane wait)", N_PLANES, "plane"),
+                            ("ideal full-preempt (0 delay)", N_PLANES, "full")):
+        r = real_arm(budget_k=3, n_planes=npl, preempt=pre)
+        r["label"] = label
+        r["readwait_reduction_vs_control"] = (
+            (k1_ctrl["read_wait_exposed_s"] - r["read_wait_exposed_s"])
+            / k1_ctrl["read_wait_exposed_s"])
+        knob1.append(r)
+
+    # ---- Knob 2: issue policy (plane base; threshold fit on 0-31, report 32-63) --
+    # Policy configs = k in {1,2,3} (fitted threshold, no stop) plus a window-stop
+    # arm at k=3 (where the window otherwise leaves a plane in flight).  The best
+    # config is chosen by TRAIN read wait (no held-out peeking); window-stop is a
+    # scheduling rule, not a fitted parameter, so selecting it is leak-free.
+    tr_m, tr_s, tr_c = _slice_stream(cap_misses, scored, TRAIN_LO, TRAIN_HI)
+
+    def _train_rw(k, th, ws):
+        return simulate_planes(tr_m, tr_c, arm="real", scored=tr_s, n_planes=N_PLANES,
+                               preempt="plane", budget_k=k, score_threshold=th,
+                               window_stop=ws, rate_gbps=DEFAULT_RATE,
+                               rec_bytes=rec_bytes, pred_from=pred_from)["read_wait_exposed_s"]
+
+    knob2 = []
+    train_best = None                                   # (train_rw, k, th, window_stop)
+    policy_arms = []
+    for k in (1, 2, 3):
+        th = _fit_threshold(cap_misses, scored, k, npl=N_PLANES, pre="plane",
+                            rate=DEFAULT_RATE, rec_bytes=rec_bytes, pred_from=pred_from)
+        policy_arms.append((f"k={k}, fitted threshold", k, th, False))
+    policy_arms.append(("k=3, window-stop (refuse in-flight plane)", 3, None, True))
+    for label, k, th, ws_flag in policy_arms:
+        r = real_arm(budget_k=k, n_planes=N_PLANES, preempt="plane",
+                     score_threshold=th, window_stop=ws_flag)
+        r["label"] = label
+        r["fitted_threshold"] = th
+        r["window_stop"] = ws_flag
+        r["readwait_reduction_vs_control"] = (
+            (k1_ctrl["read_wait_exposed_s"] - r["read_wait_exposed_s"])
+            / k1_ctrl["read_wait_exposed_s"])
+        knob2.append(r)
+        trw = _train_rw(k, th, ws_flag)
+        if train_best is None or trw < train_best[0] - 1e-12:
+            train_best = (trw, k, th, ws_flag)
+    sel_k, sel_th, sel_ws = train_best[1], train_best[2], train_best[3]
+
+    # ---- Knob 3: waste recycling (held-out extra hidden reads) ----
+    knob3 = recycle_analysis(cap_misses, scored, ring_sizes=(32, 64, 128),
+                             horizon=2, budget_k=sel_k)
+    recycle_ring = 64                                   # ring used for the stack bonus
+    recycle_bonus_frac = knob3[recycle_ring]["extra_hidden_fraction"]
+
+    # ---- Best real-predictor configuration for the stack ----
+    best_cfg = dict(n_planes=N_PLANES, preempt="plane", window_stop=sel_ws,
+                    budget_k=sel_k,
+                    score_threshold=sel_th)
+
+    # capacity control anchors via the f1 receipt's trace-replay method
+    cap_anchor = {}
+    for C in STACK_CAPACITIES:
+        m_cap, _, rec_cap = replay(trace, restore, C)
+        cell = {"records": rec_cap}
+        for R in STACK_RATES:
+            for s in STACK_SCALES:
+                ctl = simulate(m_cap, cyc_all, arm="control", width=0, ring_size=32,
+                               rate_gbps=R, rec_bytes=rec_bytes, compute_scale=s)
+                cell[f"{R}|{s}"] = {"control_total_s": ctl["total_decode_s"],
+                                    "control_read_wait_s": ctl["read_wait_exposed_s"]}
+        cap_anchor[C] = cell
+
+    # held-out real-predictor read-wait-reduction fraction per (rate, scale)
+    frac = {}
+    for R in STACK_RATES:
+        cc = cap_control(R)
+        for s in STACK_SCALES:
+            arm = real_arm(rate=R, scale=s, **best_cfg)
+            f_sim = ((cc["read_wait_exposed_s"] - arm["read_wait_exposed_s"])
+                     / cc["read_wait_exposed_s"])
+            frac[(R, s)] = {"f_sim": f_sim, "recycle_bonus": recycle_bonus_frac,
+                            "f_total": f_sim + recycle_bonus_frac,
+                            "real_precision": arm["spec_precision"],
+                            "real_hidden_fraction": arm["hidden_fraction"]}
+
+    # stacked grid + extrapolation (SAME RULE as f1-real-predictor receipt)
+    stack = []
+    for C in STACK_CAPACITIES:
+        for R in STACK_RATES:
+            for s in STACK_SCALES:
+                anc = cap_anchor[C][f"{R}|{s}"]
+                fr = frac[(R, s)]
+                removed = fr["f_total"] * anc["control_read_wait_s"]
+                implied_total = anc["control_total_s"] - removed
+                stack.append({
+                    "persistent": C, "rate_gbps": R, "compute_scale": s,
+                    "control_total_s": anc["control_total_s"],
+                    "control_read_wait_s": anc["control_read_wait_s"],
+                    "readwait_reduction_fraction": fr["f_total"],
+                    "f_sim_planes_policy": fr["f_sim"],
+                    "f_recycle_bonus": fr["recycle_bonus"],
+                    "seconds_removed": removed,
+                    "real_implied_total_s": implied_total,
+                    "real_implied_tps": 1024.0 / implied_total,
+                    "reaches_51_2_real": implied_total <= ORACLE2_FULL_S,
+                    "reaches_51_2_control_alone": anc["control_total_s"] <= ORACLE2_FULL_S,
+                })
+
+    reach = [c for c in stack if c["real_implied_total_s"] <= ORACLE2_FULL_S]
+    reach.sort(key=lambda c: (STACK_RATES.index(c["rate_gbps"]),   # 12.9 before 18.0
+                              STACK_SCALES.index(c["compute_scale"]),  # 1.0 first
+                              STACK_CAPACITIES.index(c["persistent"])))  # 105 first
+    return {
+        "purpose": "F1 stack-sim: four what-if knobs on the REAL 1-ahead predictor. "
+                   "CPU-only screen; no throughput claim, no production code, no GPU. "
+                   "All knob tables are HELD-OUT (capture cycles 32-63); fitted "
+                   "parameters chosen on cycles 0-31.",
+        "source_commit": _git_head(),
+        "capture_path": cap["path"], "capture_sha256": cap["sha256"],
+        "record_bytes": rec_bytes, "plane_bytes": PLANE_BYTES, "n_planes": N_PLANES,
+        "held_out_cycles": [HELDOUT_LO, HELDOUT_HI - 1],
+        "held_out_demand_records": ho_records,
+        "predictor": {"feature": rrc.FEATURES[REAL_FEATURE], "merge_rule": REAL_MERGE},
+        "knob1_granularity": {"control": k1_ctrl, "arms": knob1},
+        "knob2_issue_policy": {"arms": knob2, "selected_k": sel_k,
+                               "selected_threshold": sel_th,
+                               "selected_window_stop": sel_ws,
+                               "selection": "min TRAIN (0-31) read wait"},
+        "knob3_recycle": {"rings": knob3, "stack_ring_used": recycle_ring,
+                          "stack_bonus_fraction": recycle_bonus_frac},
+        "best_config": best_cfg,
+        "stack_capacity_anchors": cap_anchor,
+        "stack_fraction_by_rate_scale": {f"{R}|{s}": frac[(R, s)]
+                                         for R in STACK_RATES for s in STACK_SCALES},
+        "extrapolation_rule": (
+            "Same as f1-real-predictor-20260919: measure the real predictor's "
+            "read-wait-reduction fraction f on the capture (here HELD-OUT cycles "
+            "32-63), then apply f to the full 1,024-token control read wait at that "
+            "cell's capacity/rate (from the 206-cycle trace replay, the f1 receipt's "
+            "capacity method) and subtract from the full control total. This is an "
+            "EXTRAPOLATION: it assumes the held-out hidden fraction holds across the "
+            "run and holds the fraction constant across capacity (capacity enters "
+            "only through the control anchor)."),
+        "target_51_2_s": ORACLE2_FULL_S,
+        "stack": stack,
+        "cells_reaching_51_2": reach,
+        "mlx_imported": any(m == "mlx" or m.startswith("mlx.") for m in sys.modules),
+    }
+
+
+def _print_stack(res):
+    print("\nKNOB 1 (granularity/preemption, held-out 32-63, rate 12.9)")
+    c = res["knob1_granularity"]["control"]
+    print(f"  control read wait {c['read_wait_exposed_s']:.4f} s "
+          f"({c['demand_records']} demand records)")
+    for a in res["knob1_granularity"]["arms"]:
+        print(f"  {a['label']:<32} read_wait {a['read_wait_exposed_s']:.4f} s  "
+              f"hidden {a['hidden_fraction']*100:5.1f}%  prec {a['spec_precision']:.2f}  "
+              f"rw-reduction {a['readwait_reduction_vs_control']*100:5.1f}%")
+    print("\nKNOB 2 (issue policy, plane base; threshold fit 0-31, report 32-63)")
+    for a in res["knob2_issue_policy"]["arms"]:
+        th = a.get("fitted_threshold", None)
+        ths = "none" if th is None else f"{th:.3f}"
+        print(f"  {a['label']:<38} thr {ths:>6}  read_wait {a['read_wait_exposed_s']:.4f} s  "
+              f"hidden {a['hidden_fraction']*100:5.1f}%  prec {a['spec_precision']:.2f}  "
+              f"rw-red {a['readwait_reduction_vs_control']*100:5.1f}%")
+    print(f"  selected k={res['knob2_issue_policy']['selected_k']} "
+          f"threshold={res['knob2_issue_policy']['selected_threshold']} "
+          f"window_stop={res['knob2_issue_policy']['selected_window_stop']}")
+    print("\nKNOB 3 (waste recycling, held-out extra hidden reads)")
+    for R, d in res["knob3_recycle"]["rings"].items():
+        print(f"  ring {R:>3} recs ({d['ring_mem_mb']} MB): "
+              f"{d['extra_hidden_reads_heldout']} extra hidden "
+              f"({d['extra_hidden_fraction']*100:.2f}% of held-out demand)")
+    print("\nKNOB 4 STACK (cap x compute-scale x rate)  best cfg="
+          f"{res['best_config']}  recycle bonus "
+          f"{res['knob3_recycle']['stack_bonus_fraction']*100:.2f}%")
+    hdr = ("persist", "rate", "scale", "ctl_total", "ctl_rw", "f%", "real_total", "real_TPS", "<=51.2")
+    print(("{:>8}{:>6}{:>6}{:>11}{:>9}{:>7}{:>11}{:>9}{:>7}").format(*hdr))
+    for cell in res["stack"]:
+        print(("{:>8}{:>6}{:>6}{:>11.3f}{:>9.3f}{:>7.1f}{:>11.3f}{:>9.2f}{:>7}").format(
+            cell["persistent"], cell["rate_gbps"], cell["compute_scale"],
+            cell["control_total_s"], cell["control_read_wait_s"],
+            cell["readwait_reduction_fraction"] * 100, cell["real_implied_total_s"],
+            cell["real_implied_tps"], "Y" if cell["reaches_51_2_real"] else ""))
+    print(f"\ncells reaching <=51.2 s (real): {len(res['cells_reaching_51_2'])} "
+          f"of {len(res['stack'])}")
+    for cell in res["cells_reaching_51_2"]:
+        tag = " (control alone)" if cell["reaches_51_2_control_alone"] else ""
+        print(f"  persist {cell['persistent']}, rate {cell['rate_gbps']}, "
+              f"scale {cell['compute_scale']} -> {cell['real_implied_total_s']:.2f} s / "
+              f"{cell['real_implied_tps']:.2f} TPS{tag}")
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -455,6 +914,11 @@ def main():
                          "no mtplx, no 206-cycle trace) and write --capture-out.")
     ap.add_argument("--capture-out", type=Path,
                     default=Path("docs/deepseek-v41/receipts/f1-real-predictor-20260919/capture-sim.json"))
+    ap.add_argument("--stack", action="store_true",
+                    help="Run the four what-if knobs + stacked grid (needs the "
+                         "206-cycle trace AND the capture NPZ) and write --stack-out.")
+    ap.add_argument("--stack-out", type=Path,
+                    default=Path("docs/deepseek-v41/receipts/f1-stack-sim-20260919/stack-sim.json"))
     args = ap.parse_args()
 
     if any(m == "mlx" or m.startswith("mlx.") for m in sys.modules):
@@ -470,6 +934,19 @@ def main():
 
     restore = runpy.run_path(str(HELPER))["restore"]
     trace = load_trace()
+
+    if args.stack:
+        anchors = anchor_checks(trace, restore)
+        for name, a in anchors.items():
+            if not a["exact"]:
+                raise SystemExit(f"anchor {name} failed to reproduce: {a}")
+        cap = rrc.load_capture()
+        res = run_stack_sim(restore, trace, cap, rec_bytes=args.rec_bytes)
+        res["anchors"] = anchors
+        args.stack_out.parent.mkdir(parents=True, exist_ok=True)
+        args.stack_out.write_text(json.dumps(res, indent=2) + "\n")
+        _print_stack(res)
+        return
 
     t0 = time.perf_counter()
     anchors = anchor_checks(trace, restore)
