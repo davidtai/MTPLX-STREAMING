@@ -89,6 +89,44 @@ PINPY
 echo "== stage retained sources + apply the 2 F5 edits to run_full.py =="
 mkdir -p "$STAGE"
 cp -R "$RETAINED_SRC/." "$STAGE/"
+# The receipt archives only artifact/manifest.json; the 3.09 GB packed-scale binaries
+# live in the integration worktree and Codex's own staging symlinked them
+# (full-v1/packed/artifact -> .../benchmarks/raw/deepseek-v41-resident-scales/20260917).
+# packed_phase loads ROOT/artifact/<file> with O_NOFOLLOW on the FILE, so a directory
+# symlink is exactly the retained layout.  Read-only use.
+PACKED_ARTIFACT_REAL="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917"
+nice -n 19 "$PYBIN" - "$STAGE/packed/artifact/manifest.json" "$PACKED_ARTIFACT_REAL" <<'ARTPY'
+import hashlib, json, os, sys
+archived, real = sys.argv[1], sys.argv[2]
+if hashlib.sha256(open(archived, "rb").read()).hexdigest() != hashlib.sha256(open(os.path.join(real, "manifest.json"), "rb").read()).hexdigest():
+    sys.exit("REFUSE: packed artifact manifest differs from the archived receipt manifest")
+inventory = json.load(open(archived))
+missing, total = [], 0
+def walk(node):
+    global total
+    if isinstance(node, dict):
+        if "file" in node and isinstance(node["file"], str):
+            path = os.path.join(real, node["file"])
+            if not os.path.isfile(path) or os.path.islink(path):
+                missing.append(node["file"])
+            else:
+                total += os.path.getsize(path)
+                for key in ("bytes", "size", "nbytes", "file_bytes"):
+                    if key in node and isinstance(node[key], int) and node[key] != os.path.getsize(path):
+                        missing.append(node["file"] + f" (size {os.path.getsize(path)} != {node[key]})")
+                        break
+        for value in node.values():
+            walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            walk(value)
+walk(inventory)
+if missing:
+    sys.exit("REFUSE: packed artifact files missing/mismatched: " + ", ".join(missing[:8]))
+print(f"packed artifact OK: manifest identical, every listed file present ({total} bytes)")
+ARTPY
+rm -rf "$STAGE/packed/artifact"
+ln -s "$PACKED_ARTIFACT_REAL" "$STAGE/packed/artifact"
 nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
   --retained "$RETAINED_RUNNER" \
   --out "$STAGE/packed/run_full.py"
