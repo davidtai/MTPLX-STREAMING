@@ -32,6 +32,12 @@ set -euo pipefail
 
 # --------------------------------------------------------------------------- paths
 WT="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile"
+# The retained runner refuses unless `git rev-parse HEAD` in its CWD equals the measured
+# source commit and every pinned runtime source hashes identically (run_full.py ~L280).
+# So the guarded child runs from a DETACHED worktree at exactly that commit; the F5
+# helpers ride on PYTHONPATH and receipts are written back here by absolute path.
+RUNWT="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a"
+COMPAT_INSTALLATION="/private/tmp/dsv41-extension-bank-20260919/full-v1/compat/installation.json"
 PYBIN="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python"
 F5DIR="$WT/scripts/deepseek_v41/f5_compile"
 RETAINED_SRC="$WT/docs/deepseek-v41/receipts/extension-bank-20260919/full/sources"
@@ -61,6 +67,23 @@ PYTHONPATH="$WT" nice -n 19 "$PYBIN" "$F5DIR/f5_preflight.py" \
   --installation-json "$RETAINED_SRC/packed/installation.json" \
   --report "$RECEIPTS/preflight.json"
 # f5_preflight exits 3 on any failure; `set -e` aborts here BEFORE staging/unload.
+echo "== source pin preflight (the check that killed the first attempt, now BEFORE unload) =="
+nice -n 19 "$PYBIN" - "$RUNWT" "$COMPAT_INSTALLATION" <<'PINPY'
+import hashlib, json, subprocess, sys
+from pathlib import Path
+root, compat = Path(sys.argv[1]), json.loads(Path(sys.argv[2]).read_text())
+head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+if head != compat["source_commit"]:
+    sys.exit(f"REFUSE: run worktree HEAD {head} != pinned {compat['source_commit']}")
+dirty = subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"], text=True).strip()
+if dirty:
+    sys.exit("REFUSE: run worktree has tracked modifications:\n" + dirty)
+bad = [p for p, d in compat["runtime_source_sha256"].items()
+       if hashlib.sha256((root / p).read_bytes()).hexdigest() != d]
+if bad:
+    sys.exit(f"REFUSE: pinned runtime sources differ: {bad}")
+print("source pin OK:", head, f"({len(compat['runtime_source_sha256'])} runtime sources match)")
+PINPY
 
 # --------------------------------------------------- 2. stage the F5-patched runner
 echo "== stage retained sources + apply the 2 F5 edits to run_full.py =="
@@ -71,7 +94,13 @@ nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
   --out "$STAGE/packed/run_full.py"
 # f5_decode_levers + timed_plane_lane are imported by the staged runner at the
 # post-prefill boundary; expose them on PYTHONPATH alongside the staged helpers.
-PYPATH="$WT:$STAGE/packed:$STAGE/compat:$F5DIR"
+PYPATH="$RUNWT:$STAGE/packed:$STAGE/compat:$F5DIR"
+if [ -n "${F5_MAX_ROWS:-}" ]; then
+  echo "== equal-capacity staging: decode capacity search capped at ${F5_MAX_ROWS} rows/layer =="
+  nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
+    --retained "$RETAINED_RUNNER" --out "$STAGE/packed/run_full.py" \
+    --admission "$STAGE/packed/packed_admission.py" --max-rows "$F5_MAX_ROWS"
+fi
 
 # ---------------------------------------------------------- retained arg list (fixed)
 retained_args() {  # $1 = out path
@@ -101,6 +130,7 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
   local out="$dir/result.jsonl"
   local probe_out="$dir/timed_probe"
   echo "== arm ${arm}: F5_ENABLE='${enable}' CAPS8=${caps8} TIMED=${timed} =="
+  cd "$RUNWT"
   # Guard env is IDENTICAL to the retained command.sh; only the F5 arm env and --out
   # differ.  gpu_window.sh takes the lock, stops Qwen, sets _GPU_WINDOW_LOCKED=1,
   # runs the child, restores Qwen, releases the lock.

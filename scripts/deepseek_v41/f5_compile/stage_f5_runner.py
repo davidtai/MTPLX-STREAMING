@@ -66,11 +66,39 @@ def stage(source_text: str) -> str:
     return updated
 
 
+# Optional equal-capacity staging (review 2026-09-19): the retained admission takes the
+# LARGEST decode capacity <= 112 that fits the live post-unload baseline, so arms run
+# minutes apart can land on different row counts (each row/layer is ~1.1% of expert
+# reads).  ``--max-rows N`` caps the search start in the STAGED packed_admission.py so
+# every arm of a ladder runs the same capacity.  Unset -> the helper is untouched.
+_CAP_OLD = "    for capacity in range(112, old_capacity, -1):"
+
+
+def stage_admission(source_text: str, max_rows: int) -> str:
+    if not 85 <= int(max_rows) <= 112:
+        raise RuntimeError("max rows must be within 85..112")
+    if source_text.count(_CAP_OLD) != 1:
+        raise RuntimeError("admission capacity-search anchor not unique")
+    new = f"    for capacity in range({int(max_rows)}, old_capacity, -1):  # F5 equal-capacity cap"
+    updated = source_text.replace(_CAP_OLD, new)
+    if updated.replace(new, _CAP_OLD) != source_text:
+        raise RuntimeError("F5 admission staging changed more than the capacity-search start")
+    return updated
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Stage the F5-patched run_full.py copy")
     ap.add_argument("--retained", required=True, help="tracked retained run_full.py")
     ap.add_argument("--out", required=True, help="staged patched run_full.py path")
+    ap.add_argument("--admission", default=None, help="STAGED packed_admission.py to cap in place")
+    ap.add_argument("--max-rows", type=int, default=None, help="cap the decode capacity search start")
     args = ap.parse_args(argv)
+    if (args.admission is None) != (args.max_rows is None):
+        raise SystemExit("--admission and --max-rows go together")
+    if args.admission is not None:
+        ap_path = Path(args.admission)
+        ap_path.write_text(stage_admission(ap_path.read_text(), args.max_rows))
+        print("staged_admission_max_rows", args.max_rows)
     src = Path(args.retained).read_text()
     patched = stage(src)
     Path(args.out).write_text(patched)
