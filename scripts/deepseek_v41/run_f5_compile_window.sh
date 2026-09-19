@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# F5 compile-lever GPU window for the retained DeepSeek-V4.1 Q4 13.87-TPS cell.
+#
+# WRITE, DO NOT RUN blindly.  This script measures the dispatch-reduction compile
+# levers (HC_COMPILE / ATTN_COMPILE / SMALL_STAGES_FUSED) for the M<=8 DSpark verify
+# decode, which the retained run left OFF (bound false for prefill-memory provenance).
+#
+# Safety contract (AGENTS.md GPU-and-memory-safety; memory: guarded-window-launch):
+#   * The GPU lock (/tmp/mtplx-gpu-exclusive.lock) is taken ONLY by
+#     scripts/deepseek_v41/gpu_window.sh, which also stops+restores the Qwen service
+#     and enforces the 100 GiB wired cap.  This script NEVER touches Metal directly.
+#   * The CPU preflight below refuses BEFORE the service is unloaded if any
+#     dependency is missing or background memory makes 111 decode rows inadmissible.
+#   * Each arm runs the EXACT retained config/admission via a STAGED patched copy of
+#     run_full.py (two anchored, round-trip-checked edits; see stage_f5_runner.py) --
+#     the committed receipt is never modified.
+#   * Fresh receipt dir per arm; nothing is overwritten (an existing arm dir aborts).
+#   * The HEADLINE tok/s pass is UNTIMED (no --stage-timing): the stage recorder
+#     forces these levers eager, so a timed pass would measure them OFF.
+#   * Every arm's receipt carries engagement counters (fused vs eager) -- arm_env is
+#     NOT proof of engagement.  Each arm reports verify_ms/cycle AND cycles (a
+#     changed token stream changes the cycle count; TPS alone is not comparable).
+#   * On a digest change the receipt's W120 divergence classifier (kept LIVE by the
+#     staged runner) yields a tie_flip/divergent VERDICT with the contested-logit /
+#     tie-band keys, not a null (the HC-screen gap at index 480).
+#
+# Arms:  A  control (reproduce 0d54d9b2...)          F  control again (drift check)
+#        A2 control + TimedPackedDecode stamp probe (zero-distortion critical-path)
+#        B  +HC_COMPILE      C +HC_COMPILE+ATTN_COMPILE
+#        D  +SMALL_STAGES_FUSED (+ATTN_COMPILE)      E  best of B-D + caps@8 (optional)
+set -euo pipefail
+
+# --------------------------------------------------------------------------- paths
+WT="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile"
+PYBIN="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python"
+F5DIR="$WT/scripts/deepseek_v41/f5_compile"
+RETAINED_SRC="$WT/docs/deepseek-v41/receipts/extension-bank-20260919/full/sources"
+RETAINED_RUNNER="$RETAINED_SRC/packed/run_full.py"
+
+MODEL_DIR="/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
+AUX_DIR="/tmp/dsv41-compact-residents"
+PROMPT_IDS="docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json"
+AR_REFERENCE="${DSV41_STAGE_AR_REFERENCE:-/tmp/dsv41-110-stage/live-combined-depth3-reserve2-1023.jsonl}"
+CONTROL_SHA="0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac"
+
+STAMP="$(date +%Y%m%d-%H%M%S)"
+STAGE="/private/tmp/dsv41-f5-compile-${STAMP}"
+RECEIPTS="$WT/docs/deepseek-v41/receipts/f5-compile-levers-20260919/window-${STAMP}"
+
+cd "$WT"
+mkdir -p "$RECEIPTS"
+
+# --------------------------------------------------------- 1. CPU preflight (refuse)
+echo "== F5 preflight (CPU; before any service unload) =="
+PYTHONPATH="$WT" nice -n 19 "$PYBIN" "$F5DIR/f5_preflight.py" \
+  --retained-runner "$RETAINED_RUNNER" \
+  --ar-reference "$AR_REFERENCE" \
+  --prompt-ids "$WT/$PROMPT_IDS" \
+  --model-dir "$MODEL_DIR" \
+  --aux-dir "$AUX_DIR" \
+  --installation-json "$RETAINED_SRC/packed/installation.json" \
+  --report "$RECEIPTS/preflight.json"
+# f5_preflight exits 3 on any failure; `set -e` aborts here BEFORE staging/unload.
+
+# --------------------------------------------------- 2. stage the F5-patched runner
+echo "== stage retained sources + apply the 2 F5 edits to run_full.py =="
+mkdir -p "$STAGE"
+cp -R "$RETAINED_SRC/." "$STAGE/"
+nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
+  --retained "$RETAINED_RUNNER" \
+  --out "$STAGE/packed/run_full.py"
+# f5_decode_levers + timed_plane_lane are imported by the staged runner at the
+# post-prefill boundary; expose them on PYTHONPATH alongside the staged helpers.
+PYPATH="$WT:$STAGE/packed:$STAGE/compat:$F5DIR"
+
+# ---------------------------------------------------------- retained arg list (fixed)
+retained_args() {  # $1 = out path
+  printf '%s ' \
+    --model "$MODEL_DIR" \
+    --arms cell16k_ring_v2_draft_attn_pf0 \
+    --context-tokens 16384 --decode-tokens 1023 \
+    --decode-mode dspark --dspark-depth 5 --dspark-require-tie-class \
+    --max-kv 17664 --prompt-ids-file "$PROMPT_IDS" --prompt-seed 20260829 \
+    --stop-on-eos --box-target-gb 110 \
+    --host-overhead-gib 1.3399620056152344 --allocator-cache-gib 1 \
+    --runtime-reserve-gib 2 --transient-band-gib auto \
+    --expert-profile deepseek-v41-mxfp4-75 --slot-layout component-banks \
+    --transient-slots 48 --apply-memory-cap --cache-policy transition-window \
+    --verify-shared-overlap --decode-miss-records-per-part 3 --kv-cache-bits 16 \
+    --out "$1"
+}
+
+# ------------------------------------------------------------------ per-arm launcher
+run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
+  local arm="$1" enable="$2" caps8="$3" timed="$4"
+  local dir="$RECEIPTS/arm-${arm}"
+  if [ -e "$dir" ]; then
+    echo "REFUSE: $dir exists (never overwrite a measurement)"; exit 2
+  fi
+  mkdir -p "$dir"
+  local out="$dir/result.jsonl"
+  local probe_out="$dir/timed_probe"
+  echo "== arm ${arm}: F5_ENABLE='${enable}' CAPS8=${caps8} TIMED=${timed} =="
+  # Guard env is IDENTICAL to the retained command.sh; only the F5 arm env and --out
+  # differ.  gpu_window.sh takes the lock, stops Qwen, sets _GPU_WINDOW_LOCKED=1,
+  # runs the child, restores Qwen, releases the lock.
+  env \
+    MTPLX_ENGRAM_CACHE_LIMIT=67108864 \
+    DSV41_CACHE_GROWTH=1 \
+    DSV41_STAGE_AR_REFERENCE="$AR_REFERENCE" \
+    GPU_WINDOW_LOCK_TIMEOUT=600 \
+    GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 \
+    GPU_WINDOW_MIN_AVAIL_GB=100 \
+    GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 \
+    GPU_WINDOW_CANDIDATE_MODEL_DIR="$MODEL_DIR" \
+    GPU_WINDOW_CANDIDATE_AUX_DIR="$AUX_DIR" \
+    MTPLX_DSV41_IO_READ_FANOUT=4 \
+    MTPLX_BELADY_ORACLE=0 \
+    PYTHONHASHSEED=0 PYTHONUNBUFFERED=1 \
+    MTPLX_DSV41_F5_ENABLE="$enable" \
+    MTPLX_DSV41_F5_CAPS8="$caps8" \
+    MTPLX_DSV41_F5_TIMED_PROBE="$timed" \
+    MTPLX_DSV41_F5_TIMED_OUT="$probe_out" \
+    PYTHONPATH="$PYPATH" \
+    scripts/deepseek_v41/gpu_window.sh "$PYBIN" "$STAGE/launch_full.py" \
+      $(retained_args "$out") \
+      > "$dir/guard.log" 2>&1 || echo "  (guard exit $? -- digest change / tie-class gate is expected for a lever arm; readout classifies it)"
+
+  # readout: normal receipt if the digest matched, else the .rejected-output.json.
+  local receipt="$out"
+  [ -f "$receipt" ] || receipt="$dir/result.rejected-output.json"
+  local probe_summary=""
+  [ "$timed" = "1" ] && probe_summary="$probe_out.summary.json"
+  PYTHONPATH="$WT" nice -n 19 "$PYBIN" "$F5DIR/f5_readout.py" \
+    --receipt "$receipt" --arm "$arm" --control-sha "$CONTROL_SHA" \
+    ${probe_summary:+--probe-summary "$probe_summary"} \
+    --report "$dir/readout.json" || echo "  (readout could not parse a receipt for arm ${arm})"
+}
+
+# ------------------------------------------------------------------------- the arms
+run_arm A   ""                          0 0   # control: reproduce 0d54d9b2...
+run_arm A2  ""                          0 1   # control + TimedPackedDecode stamp probe
+run_arm B   "hc_compile"                0 0
+run_arm C   "hc_compile,attn_compile"   0 0
+run_arm D   "small_stages,attn_compile" 0 0
+# E is optional: set F5_RUN_E=1 and F5_E_ENABLE to the winning B-D lever set.
+if [ "${F5_RUN_E:-0}" = "1" ]; then
+  run_arm E "${F5_E_ENABLE:-hc_compile,attn_compile}" 1 0   # + caps@8 (rounding-class)
+fi
+run_arm F   ""                          0 0   # control again (session drift check)
+
+echo "== F5 window complete; receipts under $RECEIPTS =="
+echo "== compare per-arm readout.json: verify_ms/cycle, cycles, engagement, verdict =="
