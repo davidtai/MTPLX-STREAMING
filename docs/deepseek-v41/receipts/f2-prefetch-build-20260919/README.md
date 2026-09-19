@@ -1,263 +1,168 @@
-# F2 next-layer expert prefetch — build receipt (2026-09-19)
+# F2b next-layer expert prefetch — build receipt (2026-09-19)
 
-Next-layer expert prefetch for the DeepSeek-V4.1 Q4 D5/M≤8 verify decode, composed
-onto the exact configuration of the retained 13.87 TPS packed run. This receipt is the
-design + seam table + findings; the code lives in `scripts/deepseek_v41/f2/` (not here),
-and the CPU proofs are `tests/test_dsv41_f2_prefetch_lane.py` (new) and
-`tests/test_dsv41_f2_prefetch.py` (the retained offline-scorer / window-arithmetic core).
+Next-layer expert prefetch for the DeepSeek-V4.1 Q4 D5/M≤8 verify decode, composed onto
+the retained 13.87 TPS packed run. **F2b** design: a lane-private HOST ring plus
+reader-level interception — the runtime keeps `prefetch_slots == 0` and its packed_phase /
+packed_admission / config stay byte-for-byte retained (except the equal-capacity row cap);
+the runtime still sees an ordinary decode MISS, but the miss is fulfilled from RAM instead
+of the SSD. This supersedes the earlier runtime-ring design (deleted: FullPrefetchConfig,
+install_f2_growth, the ring-charge staging, the PrefetchDecode/PriorityReads lane), which
+`packed_phase.install_growth` refuses at construction (it rejects any ring; packed_phase.py:
+41-42/54/64-65).
 
-Branch `f2/next-layer-prefetch`. No GPU was touched building this; another session holds
-`/tmp/mtplx-gpu-exclusive.lock`.
+Code: `scripts/deepseek_v41/f2/` (host_ring, reader_intercept, predictor, speculative,
+install, stage_f2_runner, window_preflight). CPU proofs: `tests/test_dsv41_f2b.py`,
+`tests/test_dsv41_f2_stage.py`, kept `tests/test_dsv41_f2_prefetch.py`. Branch
+`f2/next-layer-prefetch`. No GPU touched.
 
 ## Design
 
-The candidate is the retained packed decode lane
-(`.../extension-bank-20260919/full/sources/packed/plane_lane.py` `PackedDecode`) with a
-next-layer speculative prefetch composed on. It reuses the GPU-proven ridge-prefetch v2
-lane (`.../ridge-prefetch-20260919/v2/plane_lane.py`) with its three flat-screen defects
-fixed:
+- **Host ring** (`host_ring.py`): R=32 records × 3 planes of page-aligned anonymous RAM
+  (`mmap.mmap(-1, n)` → `np.frombuffer`). Each entry is ONE plane, keyed by its ABSOLUTE
+  `experts.bin` offset (`record.sidecar_offset + {0, 6,266,880, 12,533,760}`) — no
+  layer/expert identity at the reader. Per-plane states QUEUED→READING→READY + a refcount
+  during a demand copy; FIFO recycling skips READING/referenced entries. Buffers are sized
+  to the max plane length; each entry carries its exact plane length (gate/up 6,266,880 vs
+  down 5,160,960) read at install from a live slot's `component_view` (weights only; scales
+  resident) — never hard-coded. One lock for metadata; byte copies (`np.copyto` on
+  `np.frombuffer` views, GIL released) happen outside it.
+- **Reader interception** (`reader_intercept.py`): the replacement for
+  `reader.read_record_into` / `read_component_records_into` is DERIVED from the retained
+  `plane_lane.bind_reader` source by a single anchored line insertion with a round-trip
+  check (the f5_compile/timed_plane_lane.py discipline; retained lane pinned to sha256
+  `1acad9e2…ba54`) and exec'd in `plane_lane`'s namespace, so it is byte-for-byte the
+  retained reader (job construction, gate/up-first/down-last, fanout submit, early gate/up
+  witness `publish_read_components`, error joining, metrics, view release) EXCEPT the
+  per-plane `read(job)` first tries the ring: READY → copy + `prefetch_plane_hits`; READING
+  → wait + copy + `prefetch_plane_waits`; QUEUED → mark cancelled + `prefetch_plane_cancelled`
+  → normal pread; absent → normal pread. It reuses the installed lane's `local` witness (via
+  `runner.executor.local`). No eligible-or-stock branch: the ring lookup IS the lane's work
+  on the enabled path (AGENTS.md).
+- **Speculative reads** (`speculative.py`): a private N-worker pool (default 3) calling the
+  SAME primitive the retained lane uses — `reader._readv_range_into('experts.bin', offset,
+  (view,))` — into ring buffers, gate/up/down order. A per-target "demand imminent" flag
+  stops workers from STARTING new planes for a target once its forward begins (in-flight
+  finish; unstarted dropped).
+- **Predictor + wrapper** (`predictor.py`, `install.py`): the parameter-free predictor is
+  reused — device `merged = max over rows of the next layer's native biased gate score`
+  (`_gate_prefix`/`_gate_prefix_impl`, exactly what `Gate.__call__` ranks). Each source
+  layer's `switch._run` is OUTER-wrapped: the wrapper computes `merged` for L+1 and evals it
+  on the SAME barrier as indices (`mx.eval(indices, merged)`; the original scheduled run's
+  `mx.eval(indices)` is then a no-op), sets the target's demand-imminent flag, calls the
+  original run, then ranks on the host (top k=3 of L+1 not resident in its bank and not
+  already in the ring) and enqueues those records' planes. Sources 3..38 → targets 4..39;
+  layers 0..3 unpredicted; layer 39 (target-only) still sets its demand-imminent flag.
 
-- **fix #1 — read with ≥ the control's parallelism.** v2 replaced the native 15-worker
-  fanout pool with a fixed **four**-worker `PriorityReads`, so its candidate arms read
-  with *less* parallelism than their controls. `f2/priority_reads.py` takes `workers` as
-  a constructor argument; `install` defaults it to the native pool's worker count read at
-  install (`reader._fanout_pool_workers`; fanout 4 → `max(4, (1+4)·3)` = 15,
-  `mtplx/expert_io.py:419-429`) and refuses an override below it. The control arm never
-  installs this reader — it stays on the untouched native `ThreadPoolExecutor`.
-- **fix #2 — keep the barrier count at 1 routing + 1 miss-drain.** v2 did the numpy
-  ranking inside `Issue.prepare`, on the critical path *before* the demand reads were
-  submitted. `f2/issue.py` splits it: `prepare` builds ONLY the device prediction and
-  evaluates it on the source route's existing indices barrier
-  (`mx.eval(indices, merged)`); all host ranking / READY filtering / issue happen in
-  `Issue.__call__`, which the runner calls *after* `begin_split_route` has submitted the
-  demand reads.
-- **fix #3 — parameter-free predictor.** v2 replayed saved scores through a learned ridge
-  adapter and issued only above an 85 %-precision margin (5–16 % coverage). `f2/issue.py`
-  is parameter-free: the device computes `merged = max over rows of the next layer's
-  native biased gate score` → `[384]` f32 (the model's own `_gate_prefix` /
-  `_gate_prefix_impl` on the source layer's post-attention router input — exactly the
-  transform `Gate.__call__` ranks, `deepseek_v41_moe.py:296/111`), the host takes the top
-  `k=3` experts that are not READY owners of the target layer (persistent, transient or
-  committed ring), and issues them via `runtime.prefetch_experts(target, ids,
-  verify=True)`. Target layers 4..39 from sources 3..38; layers 0..3 unpredicted, the
-  final layer has no successor (`run_full_install.select_prefetch_sources`).
+## Install-point analysis (file:line)
 
-The speculative reads are warmed entirely through the **shipped** runtime path —
-`prefetch_experts` → the shared `GlobalPrefetchRing` → `slots.load_speculative` — and the
-true route always gathers from the TRUE `indices`, so a mispredict only wastes a
-speculative read and can never change a logit. There is **no** eligible-or-stock /
-try-then-fallback branch in the enabled hot path: the lane is chosen once, at install, by
-which `switch._run` is bound (control = retained `plane_lane.install`; candidate =
-`f2.plane_lane_prefetch.install`).
+F2b installs as the LAST step of `observe_seed_prefill` (run_full.py:737, right after
+`projection_owner_report.update(prime_model(target))`), via one anchored, round-trip-checked
+staged edit of run_full.py calling `f2.install.install_from_env(target)` (no-op unless
+`MTPLX_DSV41_F2B=1`).
 
-### Package
-```
-scripts/deepseek_v41/f2/
-  priority_reads.py       N-worker demand-priority reader (fix #1); MLX-free
-  issue.py                live predictor (fix #2/#3): device biased-gate max, host top-3
-  plane_lane_prefetch.py  PrefetchDecode + install (mirrors plane_lane.install; requires prefetch_slots==R)
-  full_config.py          FullPrefetchConfig: transition-window + ring R (16/32); ring_reserve_bytes
-  run_full_install.py     stage-edit entrypoint install_f2_growth + select_prefetch_sources
-  window_preflight.py     CPU preflight: resolves every seam on the real classes + deps
-  gpu_smoke.py            WRITE-ONLY bounded 3-layer Metal parity smoke (guarded)
-```
+- `projection_install.install_model` (projection_install.py:63-121, runs during
+  growth_transition) validates `type(runner) is PackedDecode` and `switch._run.__func__ is
+  PackedDecode.run` (:92-96) then rebinds `switch._run = MethodType(scheduled_run, runner)`
+  (:108, `scheduled_run` = the `self.issue_next()` variant, scheduled_run_source :52-60) and
+  sets `runner.issue_next` (:107).
+- `prime_model` (projection_install.py:124-130, runs in observe_seed_prefill after
+  `grow_rows`) only calls `store.issue(0)` + `mx.eval` — it does **NOT** re-validate
+  `switch._run` or the reader.
+- `verify_retirement` (projection_install.py:133-151, runs AFTER the measured request) checks
+  only `attn._out_prep_fused_impl` (the ScheduledOutput lane) and the projection store — it
+  does **NOT** touch `switch._run` or the reader.
 
-## Seam table (every runtime/reader/slot/ring/gate name the lane touches)
+So nothing re-validates `switch._run` or the reader after `prime_model`. The wrapper is an
+outer wrap that CALLS the original scheduled `switch._run` (so `runner.issue_next` and the
+projection scheduling stay intact) and reuses the runner instance; the reader intercept
+reuses the lane's `local`. Compatible.
 
-Zero unresolved names: `window_preflight._seam_checks()` resolves every method/field
-below on the real classes on CPU (`test_window_preflight_resolves_every_seam`). "CPU" =
-executed on the real runtime in a CPU test; "smoke" = executed only in the guarded GPU
-smoke (the `PrefetchDecode.run` body needs the plane-split reader + Metal gather — see
-"What stays unverified"); the name itself is still CPU-resolved by the preflight.
+`observe_seed_prefill` has no hiding except; a failed F2b install propagates. The retained
+`observe_prefill_boundary` except (run_full.py:782-783) raises a bare `SystemExit` with no
+traceback — the stager inserts `traceback.print_exc()` there (failure path only) so a hidden
+transition/install error is visible.
 
-| Seam | Defining file:line | Lane use | Covered by |
-|---|---|---|---|
-| `ExpertStreamingRuntime.begin_split_route` | expert_runtime.py:4127 | open the demand route; runs the reconcile at :4168 | CPU (route) + smoke |
-| `ExpertStreamingRuntime.observe_route` | expert_runtime.py:4378 | `run()` route accounting | smoke; preflight |
-| `ExpertStreamingRuntime.flush_deferred_slot_releases` | expert_runtime.py:3601 | `run()` drain deferred releases | CPU (called) + smoke |
-| `ExpertStreamingRuntime.defer_slot_release` | expert_runtime.py:3586 | `run()` deferred split close | smoke; preflight |
-| `ExpertStreamingRuntime.prefetch_experts` | expert_runtime.py:5076 | `Issue.__call__` issues top-k | CPU `test_issue_ranking…`, `…_speculative_reads`, `…_wasted`, `…_failure_drain` |
-| `ExpertStreamingRuntime._reconcile_prefetch_for_route` | expert_runtime.py:4995 | await in-flight → commit hit (await :5044, commit :5052) | CPU `…_demanded_inflight_tenant_is_awaited_not_reread` |
-| `ExpertStreamingRuntime._run_speculative_load` | expert_runtime.py:5274 | ticket recycle-skip (:5297-5303); the read | CPU (via prefetch+settle); priority_reads cites it |
-| `ExpertStreamingRuntime._apply_prefetch_completions` | expert_runtime.py:5346 | publish/commit or invalidate settled reads | CPU `…_wasted`, `…_failure_drain` |
-| `runtime.slots / reader / spec / config / plan` | expert_runtime.py:2512-2513 etc. | install gate + wiring | CPU `test_install_accepts_and_wires` |
-| `runtime._split_executor / _prefetch_executor / _pipeline_ledger / _single_slot_pool` | expert_runtime.py:2743/2826/2516/2573 | install wraps / gate | CPU `test_install_accepts_and_wires` |
-| `PendingSplitRoute.iter_ready_misses` | expert_runtime.py:1235 | `run()` completion loop | smoke; preflight |
-| `PendingSplitRoute.hit_ready / abort / close` | expert_runtime.py:926 / 902-body | `run()` hit path + failure drain | smoke; preflight (`__init__` sig) |
-| `ExpertSlotPool.load_speculative` | expert_slots.py:1868 | ring read into a slot | CPU `…_demanded_inflight`, `…_failure_drain`, `…_speculative_reads` |
-| `ExpertSlotPool.ensure_route_part` | expert_slots.py:1810 | `run()` demand miss part | smoke; preflight |
-| `ExpertSlotPool._persistent / _transient / _prefetch` | expert_slots.py:776/847/852 | `Issue` READY-owner snapshot | CPU `…_issue_ranking`, `…_speculative_reads` |
-| `ExpertSlotPool._executor` | expert_slots.py:888 | install wraps (ReaderExecutor) | CPU `test_install_accepts_and_wires` |
-| `PositionalExpertReader._readv_range_into` | expert_io.py:1049 | plane read (bind_priority_reader) | smoke; preflight |
-| `PositionalExpertReader._fanout_executor` | expert_io.py:430 | replaced by `PriorityReads` | CPU `test_install_accepts_and_wires` |
-| `PositionalExpertReader._fanout_pool_workers` | expert_io.py:419 | fix #1 default worker count | CPU `test_install_accepts_and_wires` (==15) |
-| `reader.read_record_into / read_component_records_into` | expert_io.py (rebound) | plane-split reads; `_fill` calls (expert_slots.py:1424/1485) | smoke; preflight |
-| `LayerExpertSlotBank.plan` | expert_streaming.py:1528 | resolves committed ring hits in place (:1553-1589) | CPU `…_ring_hit_excluded_from_pool…` |
-| `LayerExpertSlotBank.plan_prefetch` | expert_streaming.py:854 | ring slot assignment | CPU `…_speculative_reads`, `…_wasted` |
-| `LayerExpertSlotBank.prefetch_ticket / commit_prefetch / invalidate_prefetch` | expert_streaming.py:870/877/891 | ticketed publish/forget | CPU `…_demanded_inflight`, `…_failure_drain` |
-| `LayerExpertSlotBank.published_experts / _prefetch_expert_to_slot / resident_experts` | expert_streaming.py:757/918/(bank) | hit/tenancy introspection | CPU `…_ring_hit_…`, `…_speculative_reads`, `…_failure_drain` |
-| `GlobalPrefetchRing.plan_prefetch` | expert_streaming.py:341 | round-robin, target-1, embargo | CPU `…_wasted` |
-| `GlobalPrefetchRing.published / first_consumption / mark_used / note_decode` | expert_streaming.py:476/494/486/334 | in-place hit resolution | CPU `…_ring_hit_…` |
-| `GlobalPrefetchRing.commit_prefetch / invalidate_prefetch / consume_wasted_by_layer` | expert_streaming.py:436/452/523 | publish / forget / waste drain | CPU `…_ring_hit`, `…_failure_drain`, `…_wasted` |
-| `deepseek_v41_moe._gate_prefix / _gate_prefix_impl / _attn_compile_gate` | deepseek_v41_moe.py:114/101/85 | predictor scoring (biased) | CPU `test_gate_predictor_merged…` |
-| `Gate.weight / e_score_correction_bias / gate_temp / score_func` | deepseek_v41_moe.py:266/269/261/260 | predictor gate | CPU `test_gate_predictor_merged…` |
-| `biased = scores + e_score_correction_bias` | deepseek_v41_moe.py:296 (`_gate_prefix_impl` :111) | the "native biased gate score" | CPU `test_gate_predictor_merged…` |
-| `ExpertSlotState.READY` | expert_slots.py:71 | READY-owner exclusion | CPU `…_issue_ranking…` |
-| `expert_mlx._clamped_swiglu / _DeferredSplitClose` | expert_mlx.py:1603 / 318 | PackedOps swiglu / deferred close | smoke; preflight |
-| `HotExpertSwitchGLU._run` | expert_mlx.py:2533 | `switch._run` rebind target | CPU `test_install_accepts_and_wires` |
-| `CacheCounters.prefetch_{issued,committed,awaited_inflight,wasted,bytes,hit_on_true_route,first_consumption_hits}` | expert_streaming.py:156/157/182/181/183/180/191 | window receipt counters (read once) | CPU `…_speculative_reads`, `…_demanded_inflight`, `…_wasted`, `…_ring_hit`; window post-run |
-| `ExpertStreamingConfig.{prefetch_slots,transient_slots,slot_layout,cache_scope,cache_policy,decode_miss_records_per_part,split_route_release,overlap_miss_reads,resource_telemetry,io_read_fanout}` | expert_runtime.py:250/176/197/200/199/244/233/238/202/(field) | install gate + FullPrefetchConfig | CPU `test_full_config_*`, `test_install_refuses_*` |
-| `plan.prefetch_ring_slots / transient_slots` | expert_runtime.py:756 / 176 | install gate (ring==R, ≥48) | CPU `test_install_*` |
+## Memory arithmetic
 
-## Ring tenancy finding (does prefetch turn cache hits back into reads?)
+The ring is HOST memory, not MLX, and is NOT admitted through packed_admission. At R=32 the
+ring reserves `32 × 3` plane buffers sized to the max plane (6,266,880 B) = **601,620,480 B**
+of host RAM (the record's weight bytes are 17,694,720; the ring holds ~566–602 MB depending
+on whether down planes use the full max buffer). One decode row per layer is
+`40 × 17,694,720 = 707,788,800 B` of **MLX active** memory. The candidate arm runs
+`F2_MAX_ROWS-1` rows and the controls `F2_MAX_ROWS`, so the candidate frees 707,788,800 B of
+MLX active — larger than the host ring — hence
 
-**A hit ring tenant stays a ring tenant — it is read in place, NOT promoted into the
-persistent pool.** When a true route at layer L+1 needs a committed ring entry,
-`LayerExpertSlotBank.plan` (`expert_streaming.py:1553-1589`) resolves it via
-`GlobalPrefetchRing.published(...)` (`:476`) and maps the expert to its **ring slot** —
-the comment at `:1556-1558` is explicit: *"resolve as hits reading the ring slot in place
-(no re-read, no copy)."* The expert is added to `hit_set` (`:1589`) for the gather but is
-**not** in `self._expert_to_slot`, so the pool promotion block (`:1603-1615`, which only
-touches `expert in self._expert_to_slot`) never promotes it, and it is excluded from
-`miss_order` / transition-window admission (`:1569-1573`, `:1597-1602`). `mark_used`
-(`:1588`) records the consumption so a later recycle is not miscounted as wasted.
+    physical = baseline + host + MLX_active
+    candidate_total = baseline + (host + ring) + (MLX_active − 707,788,800)  ≤  control_total
 
-Consequences, decided by test `test_ring_hit_excluded_from_pool_and_stays_a_ring_tenant`
-(asserts the hit expert remains in `bank._prefetch_expert_to_slot` and stays out of
-`bank.resident_experts`):
+i.e. the candidate's total physical footprint is ≤ a control's despite the ring (no admission
+edit; the ring lives in host RAM under the 110 GB whole-machine budget, not the MLX cap).
 
-- **Within a token:** a ring hit is never re-read (resolved in place, excluded from pool
-  loads). No cache hit becomes a read.
-- **Across tokens:** the shared ring (R slots across all 40 layers) can recycle a
-  *consumed* tenant on a later `plan_prefetch` round-robin (`:414-422`), subject only to
-  target-1 protection (layer L-1) and the 2-epoch re-eviction embargo. If it is recycled
-  before the next token routes that layer, the expert is re-predicted and re-issued as a
-  **speculative** read during the previous layer's forward (off the demand path), then
-  re-commits and re-hits. It degrades to a demand read only when the ring is too pressured
-  to hold/re-commit it in time — and even then the demand route *awaits* the in-flight
-  speculative read (`_reconcile_prefetch_for_route`) rather than issuing a duplicate.
-- **So prefetch does not silently turn cache hits back into demand reads.** The ring is a
-  one-step lookahead reserve, not the cache; the persistent pool remains the stable
-  residency for the hottest experts. A reliably ring-hit expert is *shadowed* from pool
-  admission (it never appears in `miss_order`), so it lives only in the ring and is
-  re-prefetched each token.
+## Counter schema (`<arm>/f2b_counters.json`, dumped once after decode via atexit)
 
-**Smallest change if that cross-token re-prefetch churn proves costly** (not implemented
-— it changes the retained pool's admission arithmetic and needs its own measurement): on a
-first-consumption ring hit (`GlobalPrefetchRing.first_consumption`, `:494`, already
-computed at `plan` :1585), admit the expert into the transition-window pool via a slot
-exchange, so a persistently-hot lookahead expert graduates to stable pool residency and
-stops churning the ring. The window's `prefetch_first_consumption_hits / prefetch_issued`
-ratio (both existing counters) measures whether this churn is worth the change.
+Plain ints updated off the measured main thread (reader + speculative worker threads):
+`planes_issued` (enqueued), `planes_completed` (speculative reads that reached READY),
+`planes_hits` (demand plane served from a READY entry), `planes_waits` (demand plane that
+waited on an in-flight READING entry then copied), `planes_cancelled` (demand plane that hit
+a QUEUED entry → cancelled + preaded), `planes_wasted` (a READY entry recycled unread/
+unconsumed), `bytes_speculative` (bytes read speculatively), `records_full` /
+`records_partial` (records whose 3 / 1–2 planes reached READY). Not per-token proof counters
+— aggregate engagement, AGENTS.md.
 
-## Memory arithmetic (derived through the retained admission code)
+## Barrier count
 
-The ring is a resident reserve of R weight records
-(`packed_admission.py WEIGHTS = 17,694,720` = `f2_predictor.EXPERT_RECORD_BYTES`;
-verified equal in `test_ring_reserve_bytes`):
+Per source layer-call, unchanged at 1 routing + 1 miss-drain: the wrapper's
+`mx.eval(indices, merged)` IS the routing barrier (forces indices + the prediction), and the
+original scheduled run's `mx.eval(indices)` becomes a no-op. The host ranking + enqueue after
+the run add no `mx` op; the speculative reads are on worker threads. Proven:
+`test_wrapper_barrier_parity_one_eval`.
 
-- R=32 ring = 32 × 17,694,720 = **566,231,040 B**; R=16 = 283,115,520 B.
-- Retained 111-row launch estimate = **109,745,344,620 B**.
-- 111 rows + R=32 = **110,311,575,660 B > 110e9** (overflow 311,575,660) → does NOT fit.
-- 110 rows frees 40 × 17,694,720 = 707,788,800 B, so 110 rows + R=32 =
-  **109,603,786,860 B ≤ 110e9** (headroom 396,213,140) → fits. R=16 also needs 110 rows
-  (111 + R16 = 110,028,460,140 > 110e9).
+## CPU proofs (green this build)
 
-So the candidate is **110 persistent rows + R=32** (R=16 supported). This is derived
-through the SAME admission code the retained run uses, not a parallel formula: the ring
-reserve `full_config.ring_reserve_bytes(R)` is charged into `packed_admission.resolve_admission`'s
-capacity search at `sources/packed/packed_admission.py:126-131` (add it to `active` /
-`physical` / the `wired + … + 1 GiB ≤ 100 GiB` checks), and the loop `range(112,
-old_capacity, -1)` then breaks at 110 instead of 111. `f2.full_config.ring_reserve_bytes`
-is the reserve only; the row count comes from that admission loop, and the window
-preflight re-checks the constants (`test_ring_reserve_bytes`,
-`f2_predictor.admits_with_ring` cross-check in `tests/test_dsv41_f2_prefetch.py`).
+`tests/test_dsv41_f2b.py` (15) + `tests/test_dsv41_f2_stage.py` (10) +
+`tests/test_dsv41_f2_prefetch.py` (12) = **37 passed** (`PYTHONPATH=<worktree> nice -n 19
+.venv/bin/python3 -m pytest …`). Coverage: ring READY-hit/QUEUED-cancel/READING-wait/
+failure-evict/recycle-under-refcount; the derived reader == the retained reader when the ring
+is empty (byte-identical destinations + identical metrics + identical early-witness ordering,
+on a fake reader with the real offsets + tiny plane lengths); a READY plane serves from RAM
+with NO pread; QUEUED → cancel + pread; the speculative pool fills the ring + window-stop
+drops unstarted planes; the derivation round-trips and pins the retained lane sha; predictor
+ranking == the offline scorer `f2_predictor.merge_rank_exclude`; wrapper barrier parity; and
+end-to-end reader lane-on (ring pre-filled) vs lane-off (retained) → identical routed bytes.
 
-## Barrier count before / after
-
-Per source layer-call, unchanged at **1 routing barrier + 1 miss-drain**:
-
-- Control `PackedDecode.run`: `mx.eval(indices)` (routing) + the completion loop
-  (`part.gate_up_ready.result()` / `next(iter_ready_misses)` — miss-drain).
-- Candidate `PrefetchDecode.run`: `Issue.prepare` replaces `mx.eval(indices)` with
-  `mx.eval(indices, merged)` — the SAME single barrier, now also forcing the device
-  prediction (fix #2). `Issue.__call__` reads the settled prediction with `.tolist()` (no
-  new barrier) and calls `prefetch_experts`, which submits async reads and adds no
-  `mx.eval` / `mx.synchronize`. `_reconcile_prefetch_for_route`'s bounded await is an I/O
-  join on a prefetch worker's future, not a Metal barrier. CPU proof:
-  `test_issue_prepare_adds_no_host_sync` (exactly one main-thread `mx.eval` in `prepare`);
-  the full-lane per-call parity is a GPU-smoke assertion.
+The full preflight ran green (exit 0) against the REAL run worktree
+(`.worktrees/dsv41-run-d5f15e7a`, HEAD == pin) + the archived sources: source pin (11 runtime
+sources match), archived-helper shas vs the packed/compat `installation.json`, seam
+resolution against the run worktree's classes, and the reader-intercept derivation +
+`projection_install` resolution.
 
 ## AGENTS.md compliance
 
-- Construction-time install, fixed-shape entrypoints: `install` validates the geometry /
-  codec contract against the ops object (`PackedOps.contract` = 5120/2304/6/mxfp4/32/4/10.0,
-  pinned where the Metal kernels are built) and every config/plan/runtime invariant once,
-  then binds one runner per layer. Invalid states cannot reach execution.
-- No eligible-or-stock / try-then-fallback in the hot path: control vs candidate is a
-  construction-time route (which `switch._run` is bound); a mispredict only wastes a
-  speculative read.
-- No per-token/per-layer proof counters: engagement is read ONCE after decode from the
-  runtime's existing `prefetch_*` statistics (`CacheCounters`); the CPU tests read the
-  same counters.
-- Fail once, clearly, before measured generation: `window_preflight` resolves every seam +
-  dependency on CPU before the service is unloaded; `install` refuses loudly on any
-  violated invariant; `FullPrefetchConfig` refuses any off-geometry field.
-- Preserved the retained path's arithmetic / ownership / tiling / layout: the gather math,
-  plane offsets and swiglu clamp are the retained lane's, unchanged; the prefetch reuses
-  the shipped ring/reader/slot state machine rather than a parallel one.
+Construction-time install once (the lane is selected by which `switch._run`/reader is bound,
+never a per-call check); the ring lookup is the lane's actual work, not an eligible-or-stock
+fallback; engagement is read once after decode from aggregate ring counters; the pinned
+runtime sources are untouched (the reader intercept is a derived-source rebind; the predictor
+is an outer wrap); the retained reader logic cannot drift (anchored round-trip + sha pin).
 
 ## What stays unverified until the guarded window
 
-The CPU tests exercise the whole runtime/slot/ring/reconcile machinery, the live
-predictor, the priority reader, the config and the install wiring on the real classes. The
-following execute only on Metal and are asserted by `f2/gpu_smoke.py` (write-only; run
-under the guard before any full window):
+The ring/reader/predictor/pool run on real objects on CPU. Only the full in-process run under
+Metal is a window measurement: that the ring bytes read via `_readv_range_into` from the real
+`experts.bin` equal the demand bytes (so the digest stays `0d54d9b2…417ac`), the throughput/
+peak-GB/TTFT deltas, and the hit/wait/cancel/wasted mix on the real routing. Because the ring
+serves the SAME bytes the pread would (proven byte-identical on CPU with a fake reader), the
+digest must equal the control's; a mismatch is a bug, not a tie.
 
-- `PrefetchDecode.run`'s execution body with the plane-split `bind_priority_reader`
-  (reads three weight planes of the production `experts.bin` at offsets 0 / 6,266,880 /
-  12,533,760 — out of bounds for a 6,912-byte tiny record) and the Metal `PackedOps`
-  gather (`paired_kernels.make_projection` is `mx.fast.metal_kernel`, geometry-locked to
-  2304/5120). No tiny CPU artifact can drive these; materialising production-geometry
-  records is impossible without Metal and CPU/IO-heavy enough to perturb the concurrent
-  measurement window.
-- The end-to-end output identity through the packed body, the aggregate prefetch counter
-  deltas on the real experts.bin, and throughput/latency (prefill tok/s, decode tok/s,
-  peak GB, wall, TTFT) — all window measurements.
-
-The GPU smoke asserts, on 3 routed layers with attention at the M≤8 verify shape: (1)
-byte-identical routed output lane on vs off, (2) the prefetch counters move, (3) the
-generation-thread `mx.eval` count per source layer-call is unchanged.
-
-## Exact launch command (guarded window — orchestrator runs, not the author)
+## Launch (orchestrator, under the guard — not the author)
 
 ```
 bash /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f2-prefetch/scripts/deepseek_v41/run_f2_prefetch_window.sh
 ```
 
-The window runs from the DETACHED run worktree `.../.worktrees/dsv41-run-d5f15e7a`
-(HEAD == the pinned `source_commit` d5f15e7a), so the retained runner's source pin passes;
-the F2 package rides on PYTHONPATH and receipts are written back here. It: (1) runs
-`f2/window_preflight.py` BEFORE the service is unloaded (source pin + 11 runtime-source
-hashes + archived-helper `helper_sha256` + seam resolution against the run worktree's classes
-+ staged-file `py_compile`); (2) copies the receipt-archived sources into a fresh
-`/private/tmp/dsv41-f2-prefetch-<stamp>/` (never the pinned original) and applies anchored,
-round-trip-checked edits via `f2/stage_f2_runner.py`; (3) runs the equal-capacity ladder
-`control_a`@`F2_MAX_ROWS`(108) / `candidate`@`F2_MAX_ROWS-1` + R=32 ring / `control_b`@108,
-optional `control_low`@107 via `F2_INCLUDE_CONTROL_LOW=1`, each in its own guarded window
-with a fresh receipt dir, `guard.exit` handling (0 continue; 4 = digest-mismatch FAILURE
-since prefetch is exact; else abort), `GPU_WINDOW_LOCK_TIMEOUT=${F2_LOCK_TIMEOUT:-7200}`,
-`F2_ARMS` selection, the token-id sha256 gated to `0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac`,
-the admitted rows recorded per arm (unequal control rows flagged), the once-read prefetch
-counters, and each arm's exact expanded command line in `command.txt`. `F2_RING_RECORDS=16`
-selects the R=16 ring.
-
-**Ring-enable gap (control arms runnable now; candidate needs a decision).** The candidate
-ring is a construction-time geometry change that `packed_phase.install_growth` refuses
-(packed_phase.py:41-42/54/64-65) and whose byte accounting assumes no ring (:78-93); the
-runtime must also be built with `prefetch_slots=R` (a config-swap monkeypatch on the pinned
-`deepseek_v41_loader._component_bank_allocator_for`, installed from the staged run_full —
-**no pinned-source edit**). Enabling it is a staged-helper change to `install_growth`'s ring
-acceptance + memory reconciliation that cannot be validated on CPU. See
-`/Users/davidtai/projects/OpenSourceWTF/reports/dsv41-f2-prefetch-build-report.md` "Ring-enable
-feasibility gap" for the exact anchors and the recommended path.
+Runs the CPU preflight, then the equal-capacity ladder `control_a`@`F2_MAX_ROWS`(108) /
+`candidate`@`F2_MAX_ROWS-1`+F2b / `control_b`@108 (optional `control_low`@107 via
+`F2_INCLUDE_CONTROL_LOW=1`), each from the detached run worktree with a fresh
+`/tmp/dsv41-110-stage/<stem>.jsonl` (sidecars copied into the arm dir), `guard.exit` handling
+(0 continue; 4 = digest-mismatch FAILURE; else abort), `GPU_WINDOW_LOCK_TIMEOUT=${F2_LOCK_TIMEOUT:-7200}`,
+the token-id sha256 gate, the per-arm `f2b_counters.json`, and each arm's exact expanded
+command in `command.txt`. `F2_RING_RECORDS`/`F2_WORKERS`/`F2_ARMS` are overridable.

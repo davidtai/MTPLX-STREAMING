@@ -83,60 +83,46 @@ def _compile_files(paths):
     return problems
 
 
-# (class-or-module, name, kind) the lane resolves. kind: "attr" = hasattr on the object.
+# Resolve every F2b lane seam against the real classes (hasattr / dataclass fields).
 def _seam_checks():
     import mlx.core as mx
 
     mx.set_default_device(mx.cpu)
 
-    from mtplx.expert_runtime import ExpertStreamingConfig, ExpertStreamingRuntime, PendingSplitRoute
-    from mtplx.expert_slots import ExpertSlotPool, ExpertSlotState
+    from mtplx.expert_runtime import ExpertStreamingConfig
     from mtplx.expert_io import PositionalExpertReader
-    from mtplx.expert_streaming import CacheCounters, GlobalPrefetchRing, LayerExpertSlotBank
+    from mtplx.expert_streaming import LayerExpertSlotBank
+    from mtplx.expert_manifest import ExpertManifest, ExpertRecord
     from mtplx.models import deepseek_v41_moe as moe
-    from mtplx.models.expert_mlx import HotExpertSwitchGLU, _clamped_swiglu, _DeferredSplitClose
 
-    # f2 package modules (import proves the lane + config + reader + predictor load).
-    import f2.full_config as full_config
-    import f2.issue as issue
-    import f2.plane_lane_prefetch as plane_lane_prefetch
-    import f2.priority_reads as priority_reads
-    import f2.run_full_install as run_full_install
+    # F2b package modules (import proves the lane loads with its deps).
+    import f2.host_ring as host_ring
+    import f2.reader_intercept as reader_intercept
+    import f2.predictor as predictor
+    import f2.speculative as speculative
+    import f2.install as f2b_install
+    import f2.stage_f2_runner as stage
 
+    # Only CLASS-resolvable seams are hasattr-checked here (methods, dataclass fields);
+    # runtime/reader/pool INSTANCE attributes (runtime.reader/slots/manifest, reader.metrics,
+    # pool._persistent) are resolved at install on the real runtime, and the retained reader
+    # API is exercised below via the build_bind_reader derivation.
     checks: list[tuple[str, object, tuple[str, ...]]] = [
-        ("ExpertStreamingRuntime", ExpertStreamingRuntime, (
-            "begin_split_route", "observe_route", "flush_deferred_slot_releases",
-            "defer_slot_release", "prefetch_experts", "_reconcile_prefetch_for_route",
-            "_run_speculative_load", "_apply_prefetch_completions",
-        )),
-        ("PendingSplitRoute", PendingSplitRoute, (
-            "iter_ready_misses", "abort", "close",
-        )),
-        ("ExpertSlotPool", ExpertSlotPool, (
-            "load_speculative", "ensure_route_part", "ensure_route", "reset",
-        )),
         ("PositionalExpertReader", PositionalExpertReader, (
             "_readv_range_into", "read_record_into", "read_component_records_into",
         )),
-        ("LayerExpertSlotBank", LayerExpertSlotBank, (
-            "plan", "plan_prefetch", "prefetch_ticket", "commit_prefetch",
-            "invalidate_prefetch", "published_experts",
-            "resident_experts", "_prefetch_expert_to_slot",
-        )),
-        ("GlobalPrefetchRing", GlobalPrefetchRing, (
-            "plan_prefetch", "commit_prefetch", "invalidate_prefetch", "published",
-            "first_consumption", "mark_used", "note_decode", "consume_wasted_by_layer",
-        )),
+        ("LayerExpertSlotBank", LayerExpertSlotBank, ("resident_experts",)),
+        ("ExpertManifest", ExpertManifest, ("record",)),
         ("deepseek_v41_moe", moe, ("_gate_prefix", "_gate_prefix_impl", "_attn_compile_gate", "Gate")),
-        ("expert_mlx", HotExpertSwitchGLU, ("_run",)),
-        ("issue", issue, ("Issue", "GatePredictor")),
-        ("plane_lane_prefetch", plane_lane_prefetch, (
-            "install", "PrefetchDecode", "PackedDecode", "PackedOps", "OpsContract",
-            "bind_priority_reader", "PartExecutor", "ReaderExecutor", "SpeculativeExecutor",
+        ("host_ring", host_ring, ("HostRing", "F2bCounters", "PLANE_OFFSETS")),
+        ("reader_intercept", reader_intercept, (
+            "derive_bind_reader_source", "build_bind_reader", "install_intercept",
+            "RETAINED_PLANE_LANE_SHA256",
         )),
-        ("priority_reads", priority_reads, ("PriorityReads", "native_worker_count")),
-        ("full_config", full_config, ("FullPrefetchConfig", "ring_reserve_bytes", "ADMITTED_RING_SLOTS")),
-        ("run_full_install", run_full_install, ("install_f2_growth", "select_prefetch_sources")),
+        ("predictor", predictor, ("GatePredictor", "rank_targets", "select_prefetch_sources")),
+        ("speculative", speculative, ("SpeculativePool",)),
+        ("install", f2b_install, ("install", "install_from_env", "dump_counters")),
+        ("stage_f2_runner", stage, ("stage_admission", "stage_run_full")),
     ]
     missing = []
     for owner_name, owner, names in checks:
@@ -144,43 +130,36 @@ def _seam_checks():
             if not hasattr(owner, name):
                 missing.append(f"{owner_name}.{name}")
 
-    # ``pending.hit_ready`` is a live instance attribute the runner reads; resolve it
-    # through the PendingSplitRoute constructor signature (it is set in __init__).
-    import inspect
-
-    if "hit_ready" not in inspect.signature(PendingSplitRoute.__init__).parameters:
-        missing.append("PendingSplitRoute.__init__(hit_ready=...)")
-
-    # Dataclass FIELDS the lane's config gate + counter snapshot read.
-    config_fields = set(getattr(ExpertStreamingConfig, "__dataclass_fields__", {}))
-    for field in ("prefetch_slots", "transient_slots", "slot_layout", "cache_scope",
-                  "cache_policy", "decode_miss_records_per_part", "split_route_release",
-                  "overlap_miss_reads", "resource_telemetry", "io_read_fanout"):
-        if field not in config_fields:
-            missing.append(f"ExpertStreamingConfig.{field}")
-    counter_fields = set(getattr(CacheCounters, "__dataclass_fields__", {}))
-    for field in ("prefetch_issued", "prefetch_issued_verify", "prefetch_committed",
-                  "prefetch_awaited_inflight", "prefetch_wasted", "prefetch_bytes",
-                  "prefetch_hit_on_true_route", "prefetch_first_consumption_hits"):
-        if field not in counter_fields:
-            missing.append(f"CacheCounters.{field}")
-    for member in ("READY", "LOADING", "FAILED"):
-        if not hasattr(ExpertSlotState, member):
-            missing.append(f"ExpertSlotState.{member}")
-    for attr in ("weight", "e_score_correction_bias", "gate_temp", "score_func"):
-        if attr not in set(dir(moe.Gate)) and attr not in getattr(moe.Gate, "__annotations__", {}):
-            # Gate sets these in __init__; check the class defines the constructor.
-            pass
+    # ExpertStreamingRuntime.reader is an instance attr; class hasattr misses it -- resolve
+    # via the constructor's assignment set is fragile, so trust the reader/slots class
+    # attrs above and the config field here. F2b requires prefetch_slots (must be 0).
+    if "prefetch_slots" not in set(getattr(ExpertStreamingConfig, "__dataclass_fields__", {})):
+        missing.append("ExpertStreamingConfig.prefetch_slots")
+    if "sidecar_offset" not in set(getattr(ExpertRecord, "__dataclass_fields__", {})):
+        missing.append("ExpertRecord.sidecar_offset")
     if not callable(getattr(moe.Gate, "__call__", None)):
         missing.append("Gate.__call__")
 
-    # The lane's production geometry contract must be the retained (5120/2304/6/mxfp4).
-    if plane_lane_prefetch.PRODUCTION_CONTRACT != plane_lane_prefetch.OpsContract(
-        5120, 2304, 6, 4, 32, "mxfp4", 10.0
-    ):
-        missing.append("plane_lane_prefetch.PRODUCTION_CONTRACT!=(5120,2304,6,4,32,mxfp4,10.0)")
-    if full_config.EXPERT_WEIGHT_RECORD_BYTES != 17_694_720:
-        missing.append("full_config.EXPERT_WEIGHT_RECORD_BYTES!=17694720")
+    # The retained reader intercept: verify the pinned lane hasn't drifted and the
+    # derivation round-trips, and the install-point module resolves -- when the packed
+    # helpers are on PYTHONPATH (the window preflight puts the staged packed dir there).
+    try:
+        import plane_lane  # noqa: F401
+    except Exception:
+        pass
+    else:
+        try:
+            reader_intercept.build_bind_reader(lambda offset, view: False)
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"reader_intercept.build_bind_reader failed: {exc}")
+        try:
+            import projection_install
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"projection_install not importable: {exc}")
+        else:
+            for name in ("prime_model", "scheduled_run_source", "install_model"):
+                if not hasattr(projection_install, name):
+                    missing.append(f"projection_install.{name}")
 
     return missing
 
