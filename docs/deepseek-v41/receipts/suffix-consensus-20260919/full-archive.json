@@ -1,0 +1,177 @@
+{
+  "source_root": "/tmp/dsv41-q4-suffix-consensus-20260919",
+  "files": {
+    "full-v1/launch_full.py": {
+      "bytes": 678,
+      "sha256": "bbee45827668f288e878525bab72b3e0b6d002a0ced240a26ec8e3db5176fca9"
+    },
+    "full-v1/composition_audit.py": {
+      "bytes": 2662,
+      "sha256": "5973e4d436dabdce27648483b047fef7811562687c9e085133babd8e9348ca5d"
+    },
+    "full-v1/pre-run-health.json": {
+      "bytes": 57449,
+      "sha256": "630261094bc0445c43f88140c2e5ed3f25471926d7352627b83a50940293c050"
+    },
+    "full-v1/source-audit.json": {
+      "bytes": 3446,
+      "sha256": "bd2d5e23c33d80a2c10106acedafd7d1d97e2a0fc715c7f287d17e99b700b0ad"
+    },
+    "full-v1/command.sh": {
+      "bytes": 1762,
+      "sha256": "42710c32f3fd533be8687b0274912851742a1153b59e58d2c8fc216a12ae4e70"
+    },
+    "full-v1/consensus-admission.json": {
+      "bytes": 5585,
+      "sha256": "a9748be15a6ab74a42bf63238d20e77d2f01bb2f1cb0f63de703cb91b3330796"
+    },
+    "full-v1/wait_and_run.py": {
+      "bytes": 1788,
+      "sha256": "2a0e02f026bbf23a220b153244d6932dfe337bc424f0ae496e1074277688f4af"
+    },
+    "full-v1/composition-audit.json": {
+      "bytes": 488,
+      "sha256": "5159c5c0ce226a4cf921953a0fedecf4c0b934e78f6e42ed3603e4f89d26f014"
+    },
+    "full-v1/preflight.py": {
+      "bytes": 2724,
+      "sha256": "0c9322cbace0e64ef61fe6452f1b9a966b32830df6671fff04bf0f4e276bb219"
+    },
+    "full-v1/compat/installation.json": {
+      "bytes": 4356,
+      "sha256": "9a8f1d3ddee1be370fa0b6b0550d9e6f11f4c5220e302dc30b44b21f5192ea20"
+    },
+    "full-v1/compat/bank_growth_final.py": {
+      "bytes": 1784,
+      "sha256": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b"
+    },
+    "full-v1/compat/phase_growth.py": {
+      "bytes": 9369,
+      "sha256": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac"
+    },
+    "full-v1/compat/admission.py": {
+      "bytes": 4653,
+      "sha256": "08a5093c8d7db1d4367098b0d1b2d4c6f9711fdcf907e58b316c02e7e29c77f8"
+    },
+    "full-v1/native/installation.json": {
+      "bytes": 5179,
+      "sha256": "32e4cbb742170484244a53fd41913cb64482df430e2d38d8b67c5de12c82cf17"
+    },
+    "full-v1/native/bank_growth_final.py": {
+      "bytes": 1784,
+      "sha256": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b"
+    },
+    "full-v1/native/phase_growth.py": {
+      "bytes": 9425,
+      "sha256": "09fd764fd7e3a76cd40e1bd44b632e42d6126909dd015a66a7d10ececb8d5e57"
+    },
+    "full-v1/native/admission.py": {
+      "bytes": 7199,
+      "sha256": "61e1e7e29f7715602e70e4f85f5cd47dd5c3d32b9723ada3c01fcc6ff55ed14a"
+    },
+    "full-v1/native/probe-final-results.json": {
+      "bytes": 888,
+      "sha256": "2eeb958ee45f43dee7f4517f8138515d194aacec87f39963b531bb5c28ce52cb"
+    },
+    "full-v1/packed/hybrid_install.py": {
+      "bytes": 4857,
+      "sha256": "bfb0da1d67112a2294f59a7f7abb12bb7b3b3515713c196830d678a185344992"
+    },
+    "full-v1/packed/projection_install.py": {
+      "bytes": 2308,
+      "sha256": "76baac7fe5c9b89e6bc1898d09e9601207b7aff737f2b1f1f0c20b40c8880141"
+    },
+    "full-v1/packed/installation.json": {
+      "bytes": 11365,
+      "sha256": "945b1ab8c6d3324f9d7572f36955c6b641a56cf7ecf0937cd249d7f49946c532"
+    },
+    "full-v1/packed/file_embedding.py": {
+      "bytes": 3873,
+      "sha256": "cbd7b68c552c1e19066a4a94410ca1f51d18880a047319d8306245f132a0c9fb"
+    },
+    "full-v1/packed/tail_prefill_body.py": {
+      "bytes": 8401,
+      "sha256": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2"
+    },
+    "full-v1/packed/bounded_host.py": {
+      "bytes": 1549,
+      "sha256": "f382e2c8d8e90e3107c0d47c9a8cd91573cecea0203c560e0181c18de94743ee"
+    },
+    "full-v1/packed/run_full.py": {
+      "bytes": 45798,
+      "sha256": "f03eabd3a64820ad34d47c2a788f4acaa6ba4366d036c2ba16584beb857c0d75"
+    },
+    "full-v1/packed/storage-probe.json": {
+      "bytes": 3662,
+      "sha256": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4"
+    },
+    "full-v1/packed/lookup.py": {
+      "bytes": 1462,
+      "sha256": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b"
+    },
+    "full-v1/packed/owned_projection.py": {
+      "bytes": 3264,
+      "sha256": "df9e42df6dda252bb390756519d145fc3f2a614ca1903ab1437cfd7ca79c2396"
+    },
+    "full-v1/packed/packed_phase.py": {
+      "bytes": 13976,
+      "sha256": "0b3740cb492bdb7a7168b5e92553332beae00965e48cfe43f0024e9827f39c1e"
+    },
+    "full-v1/packed/plane_lane.py": {
+      "bytes": 12962,
+      "sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54"
+    },
+    "full-v1/packed/consensus.py": {
+      "bytes": 1586,
+      "sha256": "ad6d265ac38005d2416fc01e669ae4d2a137a5d9244579c84b13b7b123f9f984"
+    },
+    "full-v1/packed/paired_kernels.py": {
+      "bytes": 2028,
+      "sha256": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4"
+    },
+    "full-v1/packed/kernels.py": {
+      "bytes": 2788,
+      "sha256": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf"
+    },
+    "full-v1/packed/tail_prefill.py": {
+      "bytes": 3958,
+      "sha256": "bfa8f44d993987dbfc46181c1d377bafef08ae2909e1079d58a00a1a8d8cefde"
+    },
+    "full-v1/packed/embedding_install.py": {
+      "bytes": 4236,
+      "sha256": "d0afcc51454cdf11d0f431a1abc1ff9587a55659d1750c28bd640f9f4c17fa31"
+    },
+    "full-v1/packed/storage_probe.py": {
+      "bytes": 7373,
+      "sha256": "a94263c67868fa811186fc5f99df7ad1e0307aec24e2307d12388927592c35d3"
+    },
+    "full-v1/packed/embedding-probe.json": {
+      "bytes": 7746,
+      "sha256": "501ac77bc454a917655e40f96a67d3d16550aa955dda8630a07b3c1527989846"
+    },
+    "full-v1/packed/library_identity.py": {
+      "bytes": 2064,
+      "sha256": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32"
+    },
+    "full-v1/packed/packed_storage.py": {
+      "bytes": 6538,
+      "sha256": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f"
+    },
+    "full-v1/packed/packed_admission.py": {
+      "bytes": 11570,
+      "sha256": "d62b09f664954946db53c2b092c267fc48eb81924d329847882785497d9577b0"
+    },
+    "full-v1/full-suffix-consensus-20260919-v1.jsonl": {
+      "bytes": 244167,
+      "sha256": "95252fd1462ec99df247b97a214fe09f99b265d7fff2f16b6da53a6b8b766614"
+    },
+    "full-v1/full-suffix-consensus-20260919-v1.bounds.json": {
+      "bytes": 26862,
+      "sha256": "f65479297815f2fdc407ae8d33a64f88dfdc41fd4f4d144d5057093c9fd33bdf"
+    },
+    "full-v1/full-suffix-consensus-20260919-v1.guard.log": {
+      "bytes": 53606,
+      "sha256": "58e801b5286d081e83003dec463181d5e53695e844ae293cadb7076d8461668c"
+    }
+  }
+}

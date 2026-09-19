@@ -21,6 +21,18 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Current update, 2026-09-18
 
+**Superseded scope, 2026-09-19:** The user has stopped Q2 and resumed Q4.
+The predictable two-buffer dense-query experiment is exact but 50.07% slower
+in its bounded component comparison. The later causal consensus suffix
+completes the exact 16K/1K workload at 13.3997126089 TPS with 195 target calls
+and all native IDs exact. It uses 109 slots at the fresh 11.05 GB baseline;
+machine peak 109.273 GB fits the 109.546 GB bound. The historical 110-slot best
+remains 13.4141517619 TPS. Neither candidate is promoted. Task 4 and 20 TPS remain
+open; fixed Q8/full 256K remain secondary. See the dated `q4-dense-prefetch` and
+`suffix-consensus` receipt directories. Guard 1944 restores exact Qwen/warmup
+and releases at 12:45:47 UTC; later independent checks encounter foreign jobs.
+No owned GPU work or waiter remains.
+
 **Shelved at user request.** Save the Q4 workspaces and open a draft PR on
 `davidtai/MTPLX-STREAMING`, then attempt the Q2 main model separately. Task 4
 remains incomplete; the 20 TPS goal is not achieved. The workspace checkpoint

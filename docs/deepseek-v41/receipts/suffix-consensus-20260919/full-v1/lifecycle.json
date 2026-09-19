@@ -1,0 +1,15 @@
+{
+  "checked_at": "2026-09-19T12:48:32.106877+00:00",
+  "guard_session": 1944,
+  "guard_exit_code": 0,
+  "child_exit_code": 0,
+  "guard_verified_exact_service_health_and_warmup": true,
+  "guard_released_at": "2026-09-19T12:45:47Z",
+  "guard_process_peak_bytes": 97328039744,
+  "guard_physical_peak_bytes": 109272825856,
+  "guard_compressor_growth_bytes": 0,
+  "guard_sample_count": 217,
+  "independent_post_health": "connection_refused_during_later_foreign_window",
+  "foreign_lock_descriptors": "p5839\nf3\np6449\nf3\n",
+  "scope": "Own guard terminal. Later external GPU windows are preserved; current independent idle health is not claimed."
+}

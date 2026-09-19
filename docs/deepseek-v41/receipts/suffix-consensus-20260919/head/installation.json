@@ -1,0 +1,65 @@
+{
+  "source_commit": "4b5591e8245addba2c96105cc37c34e8a63233a5",
+  "scope": "Independent hybrid-control and consensus candidate trajectories using the authenticated M6 teacher states. Five native proposals and original lookup preserved. Consensus uses committed history only; min suffix3, two unanimous sources, native min confidence0.9, at most two extra tokens. Fixed maximum target width8; no target execution or throughput claim. First-half CPU selection is frozen before this replay.",
+  "static_incremental_bound_bytes": 52613349376,
+  "bound_components": {
+    "active_bytes": 44023414784,
+    "cache_bytes": 4294967296,
+    "host_bytes": 4294967296,
+    "lookup_host_bytes_inside_host_reserve": 16777216,
+    "tail_logits_and_inputs_inside_workspace_bytes": 33554432,
+    "consensus_index_inside_host_reserve_bytes": 33554432
+  },
+  "native_draft_ast_matches_prior_except_unused_detach_method": true,
+  "prior_receipt_sha256": "03629c6090c3b2052c6f676dcc7cc787b7d0a8b7aec9707f134e0be0674bf6dc",
+  "lookup_config": {
+    "minimum_context": 2,
+    "extra_tokens": 2,
+    "selection": "earliest_longest_context"
+  },
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "strict_allocator": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "runtime_source_sha256": {
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+  },
+  "helper_sha256": {
+    "head_screen.py": "c5d91f988d8ff1b0d8d72b8534fa0dd684cd7b9050fa6ea050cd2f062dacb6ce",
+    "lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b",
+    "run_head.py": "c9fb044ee161d0fc49b243270351df07ab7b9c4b305117be55c4a634bcb1022f",
+    "consensus.py": "ad6d265ac38005d2416fc01e669ae4d2a137a5d9244579c84b13b7b123f9f984",
+    "stage.py": "61f54d4c74f925e5828c942900d991055589eb2f6619e3a420932d9c9bffeaa0",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "screen_body.py": "87dec368a8f77aa3289008987fa116ae3ae9aa1b857c7a41b408969a99c84a7c"
+  },
+  "control_proposal_receipt": "/private/tmp/dsv41-hybrid-lookup-20260918/head-screen.json",
+  "control_proposal_sha256": "83b84e85fa6adebeb7cfd0500c8f1cd5131f7d7daed93c66bb1cdb7da61b664b",
+  "native_prefix_length": 5,
+  "suffix_gate": {
+    "feature": "minimum native sigmoid confidence",
+    "threshold": 0.9,
+    "rule": "Broadest tested min-confidence threshold with no native-prefix failures in first103 archived boundaries; selected before this suffix screen.",
+    "training_selected": 44,
+    "training_correct": 44,
+    "heldout_selected": 42,
+    "heldout_correct": 40
+  },
+  "bound_scope": "Same49GiB complete head-only bound:41GiB active,4GiB cache,4GiB host. One D5 owner shares authenticated arrays. A <=17408-token consensus index adds at most four n-gram entries per history token;32MiB fits inside host reserve. No target bank. All GPU shapes and arithmetic match the unchanged hybrid control.",
+  "arithmetic_scope": "Native draft and target arithmetic unchanged; only pure Python causal proposal extension differs.",
+  "prior_head_script_sha256": "7e1c8eb96aae985200618298f2c6891eb03b85daca62c2cb0c66b5ac35d4fae4",
+  "consensus_config": {
+    "min_suffix": 3,
+    "min_count": 2,
+    "max_extra": 2,
+    "minimum_confidence": 0.9
+  },
+  "cpu_selection_sha256": "a65afc2c20615417bc5544f5b4664fb51866dc77f098f10cd0b2f3d6121a6f8f"
+}

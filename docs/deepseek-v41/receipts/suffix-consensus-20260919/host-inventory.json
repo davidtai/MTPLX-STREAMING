@@ -1,0 +1,74 @@
+{
+  "complete": true,
+  "cpu_only": true,
+  "history_tokens": 17408,
+  "baseline_deep_bytes": 4760446,
+  "consensus_incremental_deep_bytes": 15215316,
+  "combined_deep_bytes": 19975762,
+  "extra_host_allowance_bytes": 33554432,
+  "consensus_key_count": 69614,
+  "consensus_entries": 69614,
+  "before": {
+    "sample_start_monotonic_ns": 286002385903541,
+    "sample_end_monotonic_ns": 286002389578625,
+    "process": {
+      "peak_maxrss_bytes": 20791296,
+      "resident_bytes": 21413888,
+      "phys_footprint_bytes": 12566984,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 113646682112,
+      "wired_bytes": 3499966464,
+      "active_bytes": 3941433344,
+      "inactive_bytes": 10833199104,
+      "speculative_bytes": 42795008,
+      "anonymous_bytes": 3068788736,
+      "file_backed_bytes": 11748638720,
+      "compressor_bytes": 2776088576,
+      "compressed_bytes": 9258729472,
+      "used_bytes": 21050687488,
+      "non_file_used_bytes": 9344843776,
+      "swapins_pages": 4836460,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "after": {
+    "sample_start_monotonic_ns": 286002519461333,
+    "sample_end_monotonic_ns": 286002521968208,
+    "process": {
+      "peak_maxrss_bytes": 65880064,
+      "resident_bytes": 60686336,
+      "phys_footprint_bytes": 51855840,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 116836876288,
+      "wired_bytes": 3499982848,
+      "active_bytes": 3981295616,
+      "inactive_bytes": 7611973632,
+      "speculative_bytes": 43220992,
+      "anonymous_bytes": 3108175872,
+      "file_backed_bytes": 8528314368,
+      "compressor_bytes": 2776088576,
+      "compressed_bytes": 9258680320,
+      "used_bytes": 17869340672,
+      "non_file_used_bytes": 9384247296,
+      "swapins_pages": 4836460,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "incremental_screen_bound_bytes": 536870912,
+  "scope": "Python object payload inventory on unique-token maximum history. Interpreter, allocator arenas and temporary sets remain covered by separate host reserve; this is not total process usage.",
+  "mlx_imported": false
+}

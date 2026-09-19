@@ -534,7 +534,7 @@ Open:
 - Reach 20 TPS; target quantization scope remains pending.
 - Measure compact learned prediction overlap; complete 256K prefill remains secondary.
 
-## 2026-09-18 Q4 shelved; Q2 next [saved]
+## 2026-09-18 Q4 shelved; Q2 next [saved] [superseded by 2026-09-19]
 
 Goal: Preserve Q4 work, publish its checkpoint PR, then attempt the Q2 main model.
 
@@ -579,3 +579,16 @@ Rejected:
 Open:
 - Materially reduce expert traffic or target work within110GB.
 - Reach20TPS on the exact16K/1K workload.
+
+## 2026-09-19 consensus suffix [saved]
+Goal: Reduce expensive Q4 target calls without changing target arithmetic.
+Decisions:
+- Keep the original hybrid default; consensus reduces calls but has no absolute full-run speed win.
+- Charge the additional consensus index 32 MiB in every phase; live admission remains authoritative.
+- Preserve the guarded full result and causal proposal construction for future composition.
+Rejected:
+- Treating 109-versus-110-slot runs as an isolated speed regression.
+- Adding regression tests or promoting a candidate without a measured win.
+Open:
+- Materially reduce expert I/O or verified target work.
+- Reach 20 TPS while retaining the 110 GB whole-machine ceiling.

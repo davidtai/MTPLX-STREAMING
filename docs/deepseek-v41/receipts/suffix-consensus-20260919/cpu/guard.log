@@ -1,0 +1,1 @@
+2026-09-19T12:07:06Z [gpu_window] ERROR: GPU_WINDOW_CHILD_RSS_CAP_BYTES=536870912 is invalid (must be >= 1073741824); refusing to open a GPU window
