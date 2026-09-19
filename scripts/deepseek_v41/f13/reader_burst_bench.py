@@ -42,6 +42,7 @@ import json
 import mmap
 import os
 import random
+import resource
 import subprocess
 import sys
 import threading
@@ -84,9 +85,11 @@ MEAS = 300                          # >=300 bursts; 310 total ~= 21.9 GB/variant
 
 
 # --- GPU-window gate --------------------------------------------------------
-# A run is blocked while EITHER Fable's active-window flag file exists OR any
-# process holds the GPU exclusive lock (the lsof check alone races the ~17 s
-# gaps between GPU arms). Checked immediately before every variant.
+# Gate (coordinator, 2026-09-19): run whenever Fable's active-window flag file
+# is ABSENT. The GPU lock is intentionally ignored -- another session's trainer
+# holds it almost continuously but is GPU-bound / not SSD-sensitive, and Fable's
+# own windows always set the flag. Checked immediately before every variant;
+# the series stops as soon as the flag appears.
 def lock_held() -> bool:
     if not os.path.exists(LOCK_PATH):
         return False
@@ -94,15 +97,13 @@ def lock_held() -> bool:
         r = subprocess.run(["lsof", LOCK_PATH], capture_output=True, text=True,
                             timeout=30)
     except Exception:
-        return True  # fail safe: treat an unknown lsof result as held
+        return True
     return r.returncode == 0 and bool(r.stdout.strip())
 
 
 def window_blocked() -> str:
     if os.path.exists(FLAG_PATH):
         return "fable-window-flag"
-    if lock_held():
-        return "gpu-lock"
     return ""
 
 
@@ -503,40 +504,43 @@ def run_steady(h: Harness, name, *, nthreads, budget_bytes=None,
 
 
 # --- variant table ----------------------------------------------------------
+def _si_name(si):
+    return f"B_switch_{si:.0e}".replace("e-0", "e-")
+
+
 def build_variants(subset=None):
-    v = []
-    # A: baseline structure
-    v.append(("python", "A0_block_now",
-              dict(spin_ns=0, switch_interval=DEFAULT_SWITCH_INTERVAL)))
-    v.append(("python", "A1_spin_0p30ms",
-              dict(spin_ns=SPIN_NS, switch_interval=DEFAULT_SWITCH_INTERVAL)))
-    # B: A1 with switchinterval sweep (5e-3 == A1)
-    for si in (5e-4, 5e-5, 1e-5):
-        v.append(("python", f"B_switch_{si:.0e}".replace("e-0", "e-"),
-                  dict(spin_ns=SPIN_NS, switch_interval=si)))
-    # C: A1 + main-thread yield nudges right after submit
-    v.append(("python", "C_yield_x1",
-              dict(spin_ns=SPIN_NS, switch_interval=DEFAULT_SWITCH_INTERVAL,
-                   yield_mode="yield", yield_count=1)))
-    v.append(("python", "C_sleep0_x1",
-              dict(spin_ns=SPIN_NS, switch_interval=DEFAULT_SWITCH_INTERVAL,
-                   yield_mode="sleep0", yield_count=1)))
-    v.append(("python", "C_yield_x8",
-              dict(spin_ns=SPIN_NS, switch_interval=DEFAULT_SWITCH_INTERVAL,
-                   yield_mode="yield", yield_count=8)))
-    # D: plane split factors (split==1 == A1)
-    for k in (2, 4):
-        v.append(("python", f"D_split{k}",
-                  dict(spin_ns=SPIN_NS, switch_interval=DEFAULT_SWITCH_INTERVAL,
-                       split=k)))
-    # E: native pthread reader, N x split, A1 main-thread behavior
-    for n in (8, 12, 16):
-        for k in (1, 2, 4):
-            v.append(("native", f"E_native_n{n}_s{k}",
-                      dict(nthreads=n, split=k, spin_ns=SPIN_NS)))
-    # F: steady-state ceiling
-    v.append(("steady", "F_steady_8", dict(nthreads=8)))
-    v.append(("steady", "F_steady_12", dict(nthreads=12)))
+    DS = DEFAULT_SWITCH_INTERVAL
+    # Priority order (coordinator): A0, A1, B, E native N=12 s1/s2, F, then rest.
+    # A run may be cut short when Fable's flag reappears, so the highest-value
+    # variants come first.
+    v = [
+        # --- priority head ---
+        ("python", "A0_block_now", dict(spin_ns=0, switch_interval=DS)),
+        ("python", "A1_spin_0p30ms", dict(spin_ns=SPIN_NS, switch_interval=DS)),
+        ("python", _si_name(5e-4), dict(spin_ns=SPIN_NS, switch_interval=5e-4)),
+        ("python", _si_name(5e-5), dict(spin_ns=SPIN_NS, switch_interval=5e-5)),
+        ("python", _si_name(1e-5), dict(spin_ns=SPIN_NS, switch_interval=1e-5)),
+        ("native", "E_native_n12_s1", dict(nthreads=12, split=1, spin_ns=SPIN_NS)),
+        ("native", "E_native_n12_s2", dict(nthreads=12, split=2, spin_ns=SPIN_NS)),
+        ("steady", "F_steady_8", dict(nthreads=8)),
+        ("steady", "F_steady_12", dict(nthreads=12)),
+        # --- the rest ---
+        ("python", "C_yield_x1",
+         dict(spin_ns=SPIN_NS, switch_interval=DS, yield_mode="yield", yield_count=1)),
+        ("python", "C_sleep0_x1",
+         dict(spin_ns=SPIN_NS, switch_interval=DS, yield_mode="sleep0", yield_count=1)),
+        ("python", "C_yield_x8",
+         dict(spin_ns=SPIN_NS, switch_interval=DS, yield_mode="yield", yield_count=8)),
+        ("python", "D_split2", dict(spin_ns=SPIN_NS, switch_interval=DS, split=2)),
+        ("python", "D_split4", dict(spin_ns=SPIN_NS, switch_interval=DS, split=4)),
+        ("native", "E_native_n12_s4", dict(nthreads=12, split=4, spin_ns=SPIN_NS)),
+        ("native", "E_native_n8_s1", dict(nthreads=8, split=1, spin_ns=SPIN_NS)),
+        ("native", "E_native_n8_s2", dict(nthreads=8, split=2, spin_ns=SPIN_NS)),
+        ("native", "E_native_n8_s4", dict(nthreads=8, split=4, spin_ns=SPIN_NS)),
+        ("native", "E_native_n16_s1", dict(nthreads=16, split=1, spin_ns=SPIN_NS)),
+        ("native", "E_native_n16_s2", dict(nthreads=16, split=2, spin_ns=SPIN_NS)),
+        ("native", "E_native_n16_s4", dict(nthreads=16, split=4, spin_ns=SPIN_NS)),
+    ]
     if subset:
         wanted = set(subset)
         v = [x for x in v if x[1] in wanted]
@@ -649,9 +653,13 @@ def main():
                       f"(wall {r['run_wall_s']:.1f}s)", flush=True)
     finally:
         results["meta"]["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # macOS ru_maxrss is in bytes; confirms the <=300 MB peak-RSS budget.
+        results["meta"]["peak_rss_mb"] = round(
+            resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6, 1)
         flush()
         h.close()
-    print(f"[out] {out_path}", flush=True)
+    print(f"[out] {out_path}  peak_rss_mb={results['meta']['peak_rss_mb']}",
+          flush=True)
 
 
 if __name__ == "__main__":
