@@ -42,6 +42,7 @@ AR_REFERENCE="${DSV41_STAGE_AR_REFERENCE:-/tmp/dsv41-110-stage/live-combined-dep
 CONTROL_SHA="${CONTROL_SHA:-0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac}"
 
 F2_MAX_ROWS="${F2_MAX_ROWS:-108}"
+PACKED_ARTIFACT_REAL="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917"
 F2_RING_RECORDS="${F2_RING_RECORDS:-32}"
 F2_WORKERS="${F2_WORKERS:-3}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -66,6 +67,39 @@ stage_tree() {  # $1 dest  $2 max_rows  $3 install_f2b(0/1)
   local dest="$1" rows="$2" f2b="$3"
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
   mkdir -p "$dest"; cp -R "$RETAINED_SRC/." "$dest/"
+  # The receipt archives only artifact/manifest.json; the 3.09 GB packed-scale binaries live
+  # in the integration worktree and Codex's staging symlinked the DIRECTORY (load_layer uses
+  # O_NOFOLLOW on the file only). Without this the prefill->decode transition dies with
+  # FileNotFoundError after a full prefill (measured 2026-09-19). Read-only use.
+  nice -n 19 "$PYBIN" - "$dest/packed/artifact/manifest.json" "$PACKED_ARTIFACT_REAL" <<'ARTPY'
+import hashlib, json, os, sys
+archived, real = sys.argv[1], sys.argv[2]
+if hashlib.sha256(open(archived, "rb").read()).hexdigest() != hashlib.sha256(open(os.path.join(real, "manifest.json"), "rb").read()).hexdigest():
+    sys.exit("REFUSE: packed artifact manifest differs from the archived receipt manifest")
+missing, total = [], 0
+def walk(node):
+    global total
+    if isinstance(node, dict):
+        if isinstance(node.get("file"), str):
+            path = os.path.join(real, node["file"])
+            if not os.path.isfile(path) or os.path.islink(path):
+                missing.append(node["file"])
+            else:
+                size = os.path.getsize(path); total += size
+                if isinstance(node.get("bytes"), int) and node["bytes"] != size:
+                    missing.append(f"{node['file']} (size {size} != {node['bytes']})")
+        for value in node.values():
+            walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            walk(value)
+walk(json.load(open(archived)))
+if missing:
+    sys.exit("REFUSE: packed artifact files missing/mismatched: " + ", ".join(missing[:8]))
+print(f"packed artifact OK: manifest identical, every listed file present ({total} bytes)")
+ARTPY
+  rm -rf "$dest/packed/artifact"
+  ln -s "$PACKED_ARTIFACT_REAL" "$dest/packed/artifact"
   nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
     --admission "$dest/packed/packed_admission.py" --max-rows "$rows"
   [ "$f2b" = "1" ] && nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
