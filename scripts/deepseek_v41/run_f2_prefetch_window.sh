@@ -70,6 +70,11 @@ RECEIPTS="$WT/docs/deepseek-v41/receipts/f2-prefetch-build-20260919/window-${STA
 
 cd "$WT"
 mkdir -p "$RECEIPTS" "$OUT_STAGE"
+# Advisory flag for Fable's CPU/SSD workers: while it exists they must not run SSD or
+# memory-heavy benches (an overlapping 3 GB microbench pushed the box over the 110e9
+# ceiling on 2026-09-19 and the guard killed an arm; `lsof` on the GPU lock races with the
+# ~17 s gaps between arms). The launcher only SETS it; Fable removes it when pausing.
+touch /tmp/dsv41-fable-window.active
 
 # --------------------------------------------------- 1. CPU preflight (before unload)
 echo "== F2b preflight (CPU; MLX pinned; before any service unload) =="
