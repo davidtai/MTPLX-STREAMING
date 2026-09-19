@@ -27,7 +27,9 @@ RETAINED_PLANE_LANE_SHA256 = (
 # it. The ring lookup is the lane's actual work on the enabled path, not a fallback
 # check (AGENTS.md): _f2b_serve is bound once at install and never None on this path.
 _ANCHOR = "read_range('experts.bin', offset, (view,), cancel_event=cancel_event,"
-_INSERT = "if _f2b_serve is not None and _f2b_serve(offset, view): return  # F2b ring intercept"
+# The serve callable is bound once at install and is never None on the enabled path, so
+# there is NO eligibility check here (AGENTS.md: no eligible-or-stock branch in the hot path).
+_INSERT = "if _f2b_serve(offset, view): return  # F2b ring intercept"
 
 
 def derive_bind_reader_source(source: str) -> str:

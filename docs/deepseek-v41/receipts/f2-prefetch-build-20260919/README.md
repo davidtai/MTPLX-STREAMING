@@ -21,11 +21,16 @@ install, stage_f2_runner, window_preflight). CPU proofs: `tests/test_dsv41_f2b.p
   (`mmap.mmap(-1, n)` → `np.frombuffer`). Each entry is ONE plane, keyed by its ABSOLUTE
   `experts.bin` offset (`record.sidecar_offset + {0, 6,266,880, 12,533,760}`) — no
   layer/expert identity at the reader. Per-plane states QUEUED→READING→READY + a refcount
-  during a demand copy; FIFO recycling skips READING/referenced entries. Buffers are sized
-  to the max plane length; each entry carries its exact plane length (gate/up 6,266,880 vs
-  down 5,160,960) read at install from a live slot's `component_view` (weights only; scales
-  resident) — never hard-coded. One lock for metadata; byte copies (`np.copyto` on
-  `np.frombuffer` views, GIL released) happen outside it.
+  during a demand copy; FIFO recycling skips READING/referenced entries. Each record slot is
+  6,266,880 B = weight 5,898,240 + scale 368,640, so the packed source record is 3 ×
+  6,266,880 = 18,800,640 B; the decode reader fills only the three **equal-length**
+  5,898,240-byte WEIGHT views (scales resident), summing to 3 × 5,898,240 = 17,694,720 B.
+  Buffers are sized to that (equal) plane length, read at install from a live slot's
+  `component_view`, and install ASSERTS the three lengths are equal and sum to the decode
+  record bytes (fix 2). `try_serve` refuses (→ pread, counts `planes_length_mismatch`)
+  unless the demand view length equals the entry length, decided under the lock before the
+  copy. One lock for metadata; byte copies (`np.copyto` on `np.frombuffer` views, GIL
+  released) happen outside it.
 - **Reader interception** (`reader_intercept.py`): the replacement for
   `reader.read_record_into` / `read_component_records_into` is DERIVED from the retained
   `plane_lane.bind_reader` source by a single anchored line insertion with a round-trip
@@ -85,9 +90,8 @@ transition/install error is visible.
 ## Memory arithmetic
 
 The ring is HOST memory, not MLX, and is NOT admitted through packed_admission. At R=32 the
-ring reserves `32 × 3` plane buffers sized to the max plane (6,266,880 B) = **601,620,480 B**
-of host RAM (the record's weight bytes are 17,694,720; the ring holds ~566–602 MB depending
-on whether down planes use the full max buffer). One decode row per layer is
+ring reserves `32 × 3` weight-plane buffers of 5,898,240 B = **566,231,040 B** of host RAM.
+One decode row per layer is
 `40 × 17,694,720 = 707,788,800 B` of **MLX active** memory. The candidate arm runs
 `F2_MAX_ROWS-1` rows and the controls `F2_MAX_ROWS`, so the candidate frees 707,788,800 B of
 MLX active — larger than the host ring — hence
@@ -100,14 +104,17 @@ edit; the ring lives in host RAM under the 110 GB whole-machine budget, not the 
 
 ## Counter schema (`<arm>/f2b_counters.json`, dumped once after decode via atexit)
 
-Plain ints updated off the measured main thread (reader + speculative worker threads):
+Plain ints updated off the measured main thread (reader + coordinator + worker threads):
 `planes_issued` (enqueued), `planes_completed` (speculative reads that reached READY),
 `planes_hits` (demand plane served from a READY entry), `planes_waits` (demand plane that
 waited on an in-flight READING entry then copied), `planes_cancelled` (demand plane that hit
-a QUEUED entry → cancelled + preaded), `planes_wasted` (a READY entry recycled unread/
-unconsumed), `bytes_speculative` (bytes read speculatively), `records_full` /
-`records_partial` (records whose 3 / 1–2 planes reached READY). Not per-token proof counters
-— aggregate engagement, AGENTS.md.
+a QUEUED entry → cancelled + preaded), `planes_wasted` (a READY entry recycled without a
+demand read consuming it), `planes_length_mismatch` (a demand view whose length disagreed
+with the cached plane → refused → pread), `planes_epoch_skipped` (a window-stopped plane a
+worker skipped by epoch mismatch and discarded), `coordinator_batches` (predictions the
+coordinator thread ranked), `ready_reading_hwm` (high-water mark of READY+READING entries),
+`bytes_speculative`, `records_full` / `records_partial` (records whose 3 / 1–2 planes
+reached READY). Aggregate engagement, not per-token proof counters (AGENTS.md).
 
 ## Barrier count
 
