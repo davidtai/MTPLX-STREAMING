@@ -295,3 +295,169 @@ byte-lever thinning.
   `tests/test_dsv41_scripts_no_undefined_names.py` fails on 3 F821 `Undefined name
   'sys'` in `ab_decode_env_levers.py`. This sim and its test are F821- and
   full-ruff-clean.
+
+---
+
+# Round 2: better schedules, splits, policy fix, host cost, lower bound
+
+Same inputs/rules (CPU-only, numpy, `nice -n 19`, no MLX/GPU). Round 1 is
+unchanged and still reproduces. A NEW event-driven engine (`simulate2`) replaces
+the fixed alternation with a single host thread, one FIFO GPU queue, and a
+plane-granular SSD (plane = 1/3 record). Run: same command as Round 1 (the full
+sim now also prints and stores the `round2` block; ~16 CPU s).
+
+## Correction (carried in)
+
+The row-group lever is **NOT bit-identical**. The routed per-expert gather is
+M-invariant, but the gate (`xf @ weight.T`) and the shared expert are **not
+invariant to the row batch size M** (`mtplx/models/deepseek_v41_moe.py`
+`combine_routed` docstring L446-449: "NOT invariant to the row (M) batch size, so
+batching them ... reassociates their fp32 reductions and flips greedy argmax";
+`deepseek_v41.py` `_layer_major_moe`). Splitting M=6 into 3+3 changes M per gate/
+shared-expert call, so the lever is **rounding-class (tie-flip audit required)** —
+greedy argmax can flip. Round 1's "outputs identical by construction" is withdrawn.
+
+## Engine validation
+
+`simulate2` in fixed/FIFO mode reproduces the control **74.992 s exactly** and the
+Round-1 fixed pipeline to **<0.05%** (G1.5 64.690 vs 64.72; the 0.03 s is corrected
+empty-batch semantics — an empty read batch now completes immediately instead of
+waiting for the SSD to drain). Every arm is asserted `>=` its analytic lower bound.
+
+## Schedules at the primary cell (G_half 1.5, 12.9 GB/s, cap 111, c_assign 0.035; control 74.99 s, LB 49.75 s, binding SSD)
+
+| Schedule | sec/run | removed | TPS | SSD% | GPU% | host% | period ms | slack vs LB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| S0 fixed / FIFO (= Round 1) | 64.69 | **+10.30** | 15.83 | 69 | 54 | 27 | 7.23 | 14.94 |
+| S1 fixed / leader-priority | 69.50 | +5.50 | 14.73 | 64 | 51 | 25 | 7.82 | 19.74 |
+| S2 wc / FIFO / blocking | 66.83 | +8.16 | 15.32 | 67 | 53 | 26 | 7.49 | 17.08 |
+| **S2i wc / FIFO / interruptible** | **62.73** | **+12.26** | **16.32** | 71 | 56 | 28 | 6.99 | 12.98 |
+| S3 wc / leader / blocking | 69.97 | +5.02 | 14.63 | 64 | 50 | 25 | 7.87 | 20.21 |
+| S3i wc / leader / interruptible | 66.83 | +8.16 | 15.32 | 67 | 53 | 26 | 7.49 | 17.08 |
+| (bonus) wc / trailer / blocking | 71.79 | +3.20 | 14.26 | 62 | 49 | 24 | 8.09 | 22.03 |
+| (bonus) wc / trailer / interruptible | 69.71 | +5.28 | 14.69 | 64 | 50 | 25 | 7.84 | 19.95 |
+
+Binding is analytic (schedule-independent): at G1.5 the components are SSD 44.66,
+chain-B 44.50, chain-A 43.42, GPU 35.10, host 17.32 s — **SSD-bound, but the two
+group chains are within 0.3% of it** (the 3:3 split is near-perfectly balanced).
+
+## Schedule totals across G_half (removed vs 74.99 s in parens)
+
+| Schedule | G_half 1.2 (LB 49.75, SSD) | 1.5 (LB 49.75, SSD) | 1.8 (LB 52.07, chain-B) |
+| --- | ---: | ---: | ---: |
+| S0 fixed / FIFO | 62.29 (+12.70) | 64.69 (+10.30) | 67.69 (+7.30) |
+| S1 fixed / leader | 67.79 (+7.20) | 69.50 (+5.50) | 72.81 (+2.19) |
+| S2 wc / FIFO / block | 63.81 (+11.18) | 66.83 (+8.16) | 70.16 (+4.84) |
+| **S2i wc / FIFO / intr** | **60.41 (+14.59)** | **62.73 (+12.26)** | **65.93 (+9.06)** |
+| S3i wc / leader / intr | 64.35 (+10.65) | 66.83 (+8.16) | 70.20 (+4.79) |
+
+As G_half grows, the binding shifts from the SSD (44.66 s, fixed) to group B's
+dependency chain (G+route+read+E_miss+host), which passes the SSD at G1.8 — more
+GPU per layer lengthens each group's serial path.
+
+## S4 — row splits (best schedule wc/FIFO/interruptible @ G1.5)
+
+| Split (A:B rows) | records (vs 31,636) | miss share A/B | zero-miss A/B | either-zero | best sched s (removed) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2 : 4 | 32,536 (+2.84%) | 0.33 / 0.67 | 0.34 / 0.14 | 0.41 | 64.67 (+10.32) |
+| **3 : 3** | 32,559 (+2.92%) | 0.49 / 0.51 | 0.22 / 0.20 | **0.35** | **62.73 (+12.26)** |
+| 4 : 2 | 32,581 (+2.99%) | 0.65 / 0.35 | 0.15 / 0.31 | 0.39 | 63.73 (+11.26) |
+
+The balanced 3:3 split minimises either-group-zero (0.35) and is fastest; skewed
+splits create a zero-miss-heavy small group and a read-heavy large one — but
+because the SSD is shared, the imbalance does not buy overlap (priority does not
+help either group, below).
+
+## S5 — policy-observation fix (feed one union route observation/layer)
+
+Keeping per-group admission but feeding the transition-window **one union
+observation per layer** (instead of two): records **31,672 — +0.11% vs the 31,636
+single-route control** (naive two-route 32,559, +2.92%). It recovers ~97% of the
+split's read penalty. Schedule effect at G1.5: S0 64.69 -> 63.87 s; S2i 62.73 ->
+61.68 s (~0.8-1.0 s). The residual +36 records is the doubled decode-epoch/recency
+touches, which this fix leaves per-group by design.
+
+## S6 — host-cost sensitivity (host_pre + host_post at 100% / 50%, G1.5)
+
+| host cost | S0 fixed/FIFO | S2i wc/FIFO/intr |
+| --- | ---: | ---: |
+| 100% (0.35 / 0.701 ms) | 64.69 s (+10.30) | 62.73 s (+12.26) |
+| 50% | 61.62 s (+13.37) | 60.50 s (+14.49) |
+
+Halving the per-group host cost buys ~2-3 s (host busy 27% -> 14%) — a real lever
+because the host work is doubled by the split and sits partly on each group's chain.
+
+## Analytic lower bound and remaining slack
+
+The schedule-independent lower bound is `per-cycle fixed + max(SSD, GPU, host,
+chain-A, chain-B)`. At G1.5 = **49.75 s** (SSD-bound). The best realistic schedule
+(64.69 s) leaves **14.9 s of slack**; the best idealised (62.73 s) leaves 13.0 s.
+That slack is **SSD under-utilisation** (SSD busy only 69-71%): the demand-read
+dependency (G -> routing sync -> read -> E_miss) keeps the SSD from saturating, and
+**no host schedule or SSD priority closes it** — only prefetch (the rejected f1
+lane) or an interruptible barrier can. Best-idealised (S2i) sensitivity: capacity
+115 -> 61.25 s; byte-thin -10% -> 59.45 s; -20% -> 56.29 s.
+
+## Can 3 groups beat 2? No.
+
+Three groups (2:2:2, G_third = G_half = 1.5 ms — an optimistic UNDER-estimate;
+a third batch is even more launch-bound): wc/FIFO/blocking **81.79 s (-6.80, worse
+than the control)**; wc/FIFO/interruptible 66.08 s (+8.91) — both lose to the
+2-group best (62.73 s). Three G stages/layer plus a deeper A->B->C dependency chain
+and more zero-miss groups outweigh the finer read overlap. Records rise to 32,835.
+
+## Round 2 findings
+
+1. **Leader-priority SSD (S1) HURTS at every G_half** (G1.5: +5.50 vs S0 +10.30).
+   A already leads, so the trailing group B is the critical path; serving A first
+   starves the bottleneck. **Trailer-priority is worse still** (+3.20), and with
+   the balanced 3:3 split neither chain has slack to trade, so **FIFO is optimal**.
+2. **Work-conserving with blocking barriers (S2) is worse than the fixed schedule**
+   (66.83 vs 64.69) under the specified preference (A.finish > A.barrier > B.finish):
+   the host commits to A's blocking barrier when it could run B. A finish-first
+   preference recovers only ~0.7 s. **The fixed Round-1 schedule is the best
+   realistic (blocking-barrier) schedule.**
+3. **The one real lever is the interruptible barrier** (S2i): +12.26 s / 16.32 TPS,
+   ~+2 s over the fixed schedule. That is a **runtime change** (make the
+   routing-index sync non-blocking so the host can react to reads during a G stage),
+   not a schedule change — it is the "non-blocking eval" bound.
+4. **The 3:3 split is near-optimally balanced** (chains within 0.3% of the SSD),
+   which is why priority and skewed splits do not help; the +2.9% read penalty is
+   almost fully removed by the S5 union-observation fix (+0.11% vs control).
+5. **~13-15 s of slack above the LB is unrecoverable by scheduling** — it is SSD
+   under-utilisation from the demand-read dependency chain; the byte levers and host
+   trim chip at it, but only prefetch or an interruptible barrier reaches the SSD floor.
+
+## Round 2 verdict
+
+**At G_half = 1.5 ms the best REALISTIC schedule is still the fixed Round-1
+alternation (S0 fixed/FIFO): 64.69 s / 15.83 TPS (+10.30 s). Leader-priority (the
+S1 hypothesis) and work-conserving-with-blocking both do worse; the only schedule
+lever that beats it is an INTERRUPTIBLE routing-sync barrier (S2i wc/FIFO/interruptible:
+62.73 s / 16.32 TPS, +12.26 s), a runtime change. All schedules sit 13-15 s above
+the 49.75 s analytic lower bound (SSD-bound, chains balanced within 0.3%); that slack
+is SSD under-utilisation from the demand-read dependency and is not closed by host
+scheduling or SSD priority. 3 groups lose to 2 (66.08 s best). The row-group lever
+is rounding-class (tie-flip audit required), not bit-identical.**
+
+## Round 2 assumptions (additional)
+
+- **R1.** `simulate2` resources: one host thread; one FIFO GPU queue (stage starts at
+  max(queue-free, submit, deps); G(g,L) after G(g-1,L) by submission order = KV
+  order); one plane-granular SSD (plane = rd/3). Empty read batch completes
+  immediately (corrected vs Round 1's drain-wait; control unaffected, pipeline <0.05%).
+- **R2.** Work-conserving host picks the highest-preference ENABLED action
+  (A.finish, A.barrier, B.finish, B.barrier); a group opens its route on L only after
+  the previous group closed L (its barrier on L+1, or forward-end at L=39). A blocking
+  barrier commits the host until that G stage ends (it cannot react to reads meanwhile);
+  the interruptible variant enables a barrier only once its G stage is already done.
+- **R3.** leader/trailer-priority preempt only at plane boundaries (an in-flight plane
+  is never cut); FIFO never preempts. trailer-priority is a bonus corrective, not in
+  the brief.
+- **R4.** S5 suppresses the per-group transition-window OBSERVATION and feeds one union
+  observation/layer; all other per-group state (decode epoch, touch, recency, admission)
+  is unchanged — hence the +0.11% residual, not exactly 0.
+- **R5.** 3-group uses G_third = G_half = 1.5 ms, a lower bound on its true (more
+  launch-bound) cost; the 3-group verdict therefore holds a fortiori.
+- **R6.** The analytic lower bound assumes E_hit fully hidden (optimistic) and treats
+  per-cycle fixed as non-overlappable; it is a valid lower bound on the two-group total.

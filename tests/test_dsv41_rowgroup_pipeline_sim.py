@@ -144,6 +144,73 @@ def test_control_reconciles_f1_anchor_within_2pct():
     assert abs(ctrl["host_blocked_finish_s"] - 43.395) < 0.1   # == f1 read wait
 
 
+# ---------------------------------------------------------------------------
+# Round 2: event-driven engine (simulate2) + analytic lower bound
+# ---------------------------------------------------------------------------
+def _rng_groups(ng, rec=2, ma=2, nassign=18):
+    return [{"rec": np.full((CYC, 40), rec, np.int32),
+             "ma": np.full((CYC, 40), ma, np.int32), "nassign": nassign}
+            for _ in range(ng)]
+
+
+def _sim2(groups, **kw):
+    base = dict(g_dur_ms=1.5, c_assign_ms=0.035, rate=RATE, rec_bytes=RB,
+                host_pre_ms=0.35, host_post_ms=0.70, extra_per_cycle_ms=3.0, growth_s=0.0)
+    base.update(kw)
+    return sim.simulate2(groups, CYC, **base)
+
+
+def test_engine_records_and_ssd_busy_exact():
+    r = _sim2(_rng_groups(2, rec=3), host_mode="fixed", ssd_mode="fifo")
+    assert r["read_records"] == CYC * 40 * 2 * 3
+    assert abs(r["ssd_busy_s"] - r["read_records"] * RD) < 1e-9
+
+
+def test_engine_interruptible_never_worse_than_blocking():
+    g = _rng_groups(2)
+    for sm in ("fifo", "leader_priority", "trailer_priority"):
+        blk = _sim2(g, host_mode="work_conserving", ssd_mode=sm,
+                    barrier_interruptible=False)["total_decode_s"]
+        itr = _sim2(g, host_mode="work_conserving", ssd_mode=sm,
+                    barrier_interruptible=True)["total_decode_s"]
+        assert itr <= blk + 1e-9
+
+
+def test_engine_at_or_above_analytic_lower_bound():
+    g = _rng_groups(2)
+    lb = sim.analytic_lower_bound(g, CYC, g_dur_ms=1.5, c_assign_ms=0.035, rate=RATE,
+                                  rec_bytes=RB, host_pre_ms=0.35, host_post_ms=0.70,
+                                  extra_per_cycle_ms=3.0, growth_s=0.0)["lower_bound_s"]
+    for hm, sm, ib in [("fixed", "fifo", False), ("work_conserving", "fifo", True),
+                       ("work_conserving", "leader_priority", False),
+                       ("work_conserving", "trailer_priority", True)]:
+        assert _sim2(g, host_mode=hm, ssd_mode=sm,
+                     barrier_interruptible=ib)["total_decode_s"] >= lb - 1e-6
+
+
+@needs_trace
+def test_engine_reproduces_control_and_split_replay():
+    single = sim.replay(_trace, _restore, 111, n_groups=1)
+    hp = sim.calibrate_host_post(single)
+    cg = [{"rec": single["rec"][0], "ma": single["ma"][0], "nassign": 36}]
+    ctl = sim.simulate2(cg, _trace["cycles"], g_dur_ms=2.05, c_assign_ms=0.035, rate=12.9,
+                        rec_bytes=RB, host_pre_ms=0.35, host_post_ms=hp,
+                        extra_per_cycle_ms=0.0, growth_s=sim.GROWTH_S,
+                        host_mode="fixed", ssd_mode="fifo")
+    assert abs(ctl["total_decode_s"] - 74.992) / 74.992 < 0.01
+    rep = sim.replay_split(_trace, _restore, 111, [3, 3])
+    assert rep["total_records"] == 32559 == sim.replay(
+        _trace, _restore, 111, n_groups=2)["total_records"]
+
+
+@needs_trace
+def test_union_observation_recovers_read_penalty():
+    naive = sim.replay_split(_trace, _restore, 111, [3, 3])["total_records"]
+    union = sim.replay_split(_trace, _restore, 111, [3, 3],
+                             union_observation=True)["total_records"]
+    assert union < naive and abs(union - 31636) / 31636 < 0.01     # ~ single-route
+
+
 def test_no_mlx_imported():
     assert not any(m == "mlx" or m.startswith("mlx.") for m in sys.modules)
 

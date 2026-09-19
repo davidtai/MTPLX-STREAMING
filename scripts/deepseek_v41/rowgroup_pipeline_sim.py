@@ -332,6 +332,525 @@ def control_and_pipeline(single, two, *, g_half_ms, c_assign_ms, rate, rec_bytes
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+# ===========================================================================
+# ROUND 2: better schedules (leader/trailer-priority SSD, work-conserving host),
+# row-splits, the policy-observation fix, host-cost sensitivity, the analytic
+# lower bound, and the 3-group check.  A NEW event-driven engine (`simulate2`);
+# the Round-1 `simulate()` above is untouched and still reproduces its arms.
+# ===========================================================================
+STACK_CAP2 = 115                     # capacity sensitivity for the best combo
+HALF_STEP_HOST = 0.5                 # S6: host_pre/host_post trimmed to 50%
+
+
+class _SSD:
+    """Single server, plane-granular (plane = 1/3 record).  ``fifo`` serves in
+    submission order (no preemption); ``leader_priority`` serves group A before
+    B's QUEUED reads and ``trailer_priority`` serves the trailing group first --
+    both preempt only at plane boundaries (an in-flight plane is never cut)."""
+
+    def __init__(self, rd, mode):
+        self.rd = rd
+        self.rp = rd / 3.0
+        self.mode = mode
+        self.free = 0.0
+        self.busy = 0.0
+        self.reads_done = {}
+        self.q = {}
+        self.order = {}
+        self.seq = 0
+        self.inflight = None
+        self.left = 0
+        self.plane_end = None
+
+    def submit(self, g, L, n, now):
+        if self.mode != "fifo":
+            self.advance_to(now)
+        if n <= 0:
+            self.reads_done[(g, L)] = now          # empty batch: nothing to read
+            return
+        if self.mode == "fifo":
+            start = max(self.free, now)
+            self.free = start + n * self.rd
+            self.busy += n * self.rd
+            self.reads_done[(g, L)] = self.free
+            return
+        self.seq += 1
+        self.q[(g, L)] = 3 * n
+        self.order[(g, L)] = self.seq
+        if self.inflight is None:
+            self._start(now)
+
+    def _rank(self, k):
+        if self.mode == "leader_priority":
+            return (k[0], self.order[k])
+        if self.mode == "trailer_priority":
+            return (-k[0], self.order[k])
+        return (self.order[k],)
+
+    def _start(self, t):
+        if not self.q:
+            self.inflight = None
+            self.plane_end = None
+            return
+        k = min(self.q, key=self._rank)
+        self.inflight = k
+        self.left = self.q.pop(k)
+        self.plane_end = t + self.rp
+
+    def next_event(self):
+        return self.plane_end if self.inflight is not None else None
+
+    def advance_to(self, t):
+        while self.inflight is not None and self.plane_end <= t + 1e-12:
+            self.busy += self.rp
+            self.left -= 1
+            done = self.plane_end
+            if self.left == 0:
+                self.reads_done[self.inflight] = done
+                self._start(done)
+            else:                                  # plane boundary: re-select (preempt)
+                self.q[self.inflight] = self.left
+                k = min(self.q, key=self._rank)
+                self.inflight = k
+                self.left = self.q.pop(k)
+                self.plane_end = done + self.rp
+
+
+def replay_split(trace, restore, persistent, group_rows, *, union_observation=False,
+                 transient=TRANSIENT, policy="transition-window"):
+    """Generalised replay for arbitrary contiguous row groups (S4).  With
+    ``union_observation`` (S5) the per-group transition-window OBSERVATION is
+    suppressed and one union-route observation is fed per layer per cycle, so the
+    learned transitions/window-frequency match the single-route control while
+    admission stays per-group.  Returns per-group demand records + miss
+    assignments, miss-share, and zero-miss rates."""
+    routes = {int(lk): trace["target_routes_by_layer"][lk]
+              for lk in trace["target_routes_by_layer"]}
+    banks = {L: osim.make_bank(restore, trace["initial_banks"][str(L)], persistent,
+                               transient, policy) for L in range(40)}
+    cyc = trace["cycles"]
+    G = len(group_rows)
+    bounds = (np.cumsum([0] + list(group_rows)) * EXPERTS_PER_ROW).tolist()
+    rec = [np.zeros((cyc, 40), np.int32) for _ in range(G)]
+    ma = [np.zeros((cyc, 40), np.int32) for _ in range(G)]
+    zero = [0] * G
+    either = 0
+    total = 0
+    for c in range(cyc):
+        for L in range(40):
+            raw = routes[L][c]
+            subs = [raw[bounds[g]:bounds[g + 1]] for g in range(G)]
+            bank = banks[L]
+            if union_observation and G > 1:
+                orig = bank._observe_transition_window
+                bank._observe_transition_window = lambda cur: None
+                orig(tuple(dict.fromkeys(raw)))            # one union observation
+                plans = [bank.plan(s, phase="decode") for s in subs]
+                bank._observe_transition_window = orig
+            else:
+                plans = [bank.plan(s, phase="decode") for s in subs]
+            zhere = False
+            for g, (s, plan) in enumerate(zip(subs, plans)):
+                mset = set(plan.misses)
+                nrec = len(plan.misses)
+                rec[g][c, L] = nrec
+                ma[g][c, L] = sum(1 for e in s if e in mset)
+                total += nrec
+                if nrec == 0:
+                    zero[g] += 1
+                    zhere = True
+            if zhere:
+                either += 1
+    calls = cyc * 40
+    return {
+        "group_rows": list(group_rows), "cycles": cyc, "rec": rec, "ma": ma,
+        "nassign": [r * EXPERTS_PER_ROW for r in group_rows],
+        "total_records": total,
+        "miss_share": [int(rec[g].sum()) / total for g in range(G)],
+        "zero_frac": [zero[g] / calls for g in range(G)],
+        "either_zero_fraction": either / calls,
+        "union_observation": union_observation,
+    }
+
+
+def _groups(rep, thin_frac=0.0):
+    rec = thin_records(rep["rec"], thin_frac, THIN_SEED)
+    return [{"rec": rec[g], "ma": rep["ma"][g], "nassign": rep["nassign"][g]}
+            for g in range(len(rep["nassign"]))]
+
+
+def simulate2(groups, cyc, *, g_dur_ms, c_assign_ms, rate, rec_bytes,
+              host_pre_ms, host_post_ms, extra_per_cycle_ms, growth_s,
+              host_mode, ssd_mode, barrier_interruptible=False, pref="spec"):
+    """Event-driven schedule engine (Round 2).  host_mode in {fixed,
+    work_conserving}; ssd_mode in {fifo, leader_priority, trailer_priority}.
+    In work-conserving mode the host picks, at each decision point, the
+    highest-preference ENABLED action; a blocking barrier commits the host until
+    the group's G stage completes (``barrier_interruptible`` models the idealised
+    non-blocking eval).  Enabling: group g opens its route on L only after g-1's
+    route on L is closed (g-1's barrier on L+1, or forward-end at L=39); G(g,L)
+    is submitted only after G(g-1,L) (KV order); the GPU queue is FIFO across
+    groups.  fixed mode replays the Round-1 A-then-B alternation (reproduces
+    Round 1 under fifo)."""
+    rd = rec_bytes / (rate * 1e9)
+    g_dur = g_dur_ms / 1e3
+    ca = c_assign_ms / 1e3
+    hpre = host_pre_ms / 1e3
+    hpost = host_post_ms / 1e3
+    extra = extra_per_cycle_ms / 1e3
+    G = len(groups)
+    NA = [gg["nassign"] for gg in groups]
+    acc = {"gpu_busy": 0.0, "host_busy": 0.0, "blk_bar": 0.0, "blk_fin": 0.0,
+           "idle": 0.0, "records": 0}
+    periods = []
+    now = growth_s
+    gpu_free = [0.0]
+
+    for c in range(cyc):
+        now += T_DRAFT
+        gpu_free[0] = now
+        gsd = {}
+        ssd = _SSD(rd, ssd_mode)
+        submitted_G = {g: -1 for g in range(G)}
+        barriered = {g: -1 for g in range(G)}
+        finished = {g: -1 for g in range(G)}
+
+        def gpu(dur, key=None):
+            s = max(gpu_free[0], now)
+            gpu_free[0] = s + dur
+            acc["gpu_busy"] += dur
+            if key is not None:
+                gsd[key] = gpu_free[0]
+            return gpu_free[0]
+
+        layer_start = now
+        for g in range(G):
+            gpu(g_dur, ("G", g, 0))
+            submitted_G[g] = 0
+
+        if host_mode == "fixed":
+            def barrier(g, L):
+                nonlocal now
+                acc["blk_bar"] += max(0.0, gsd[("G", g, L)] - now)
+                now = max(now, gsd[("G", g, L)])
+                now += hpre
+                acc["host_busy"] += hpre
+                n = int(groups[g]["rec"][c, L])
+                acc["records"] += n
+                ssd.submit(g, L, n, now)
+                gpu((NA[g] - int(groups[g]["ma"][c, L])) * ca)     # E_hit
+                barriered[g] = L
+
+            def finish(g, L):
+                nonlocal now
+                ssd.advance_to(now)
+                while (g, L) not in ssd.reads_done:
+                    te = ssd.next_event()
+                    if te is None:
+                        break
+                    ssd.advance_to(te)
+                acc["blk_fin"] += max(0.0, ssd.reads_done[(g, L)] - now)
+                now = max(now, ssd.reads_done[(g, L)])
+                now += hpost
+                acc["host_busy"] += hpost
+                gpu(int(groups[g]["ma"][c, L]) * ca)               # E_miss(L)
+                if L + 1 < 40:
+                    gpu(g_dur, ("G", g, L + 1))
+                    submitted_G[g] = L + 1
+                finished[g] = L
+
+            for g in range(G):
+                barrier(g, 0)
+            for L in range(1, 40):
+                for g in range(G):
+                    finish(g, L - 1)
+                    barrier(g, L)
+            for g in range(G):
+                finish(g, 39)
+        else:                                                      # work_conserving
+            blocked = None
+
+            def enabled_finish(g):
+                L = barriered[g]
+                if not (L >= 0 and finished[g] == L - 1):
+                    return None
+                if (g, L) not in ssd.reads_done or ssd.reads_done[(g, L)] > now + 1e-12:
+                    return None
+                if g > 0 and L + 1 < 40 and submitted_G[g - 1] < L + 1:
+                    return None                                    # (ii) KV order
+                return L
+
+            def enabled_barrier(g):
+                L = finished[g] + 1
+                if L > 39 or not (barriered[g] == L - 1 and submitted_G[g] >= L):
+                    return None
+                if g > 0:                                          # (i) route closed
+                    if L < 39 and barriered[g - 1] < L + 1:
+                        return None
+                    if L == 39 and finished[g - 1] < 39:
+                        return None
+                if barrier_interruptible and (("G", g, L) not in gsd
+                                              or gsd[("G", g, L)] > now + 1e-12):
+                    return None
+                return L
+
+            while not all(finished[g] == 39 for g in range(G)):
+                ssd.advance_to(now)
+                if blocked is not None:
+                    g, L = blocked
+                    tb = gsd[("G", g, L)]
+                    acc["blk_bar"] += max(0.0, tb - now)
+                    ssd.advance_to(tb)
+                    now = max(now, tb)
+                    now += hpre
+                    acc["host_busy"] += hpre
+                    n = int(groups[g]["rec"][c, L])
+                    acc["records"] += n
+                    ssd.submit(g, L, n, now)
+                    gpu((NA[g] - int(groups[g]["ma"][c, L])) * ca)
+                    barriered[g] = L
+                    blocked = None
+                    continue
+                act = None
+                if pref == "finish_first":
+                    scan = ([("f", g) for g in range(G)]
+                            + [("b", g) for g in range(G)])
+                else:
+                    scan = []
+                    for g in range(G):
+                        scan.append(("f", g))
+                        scan.append(("b", g))
+                for kind, g in scan:
+                    L = enabled_finish(g) if kind == "f" else enabled_barrier(g)
+                    if L is not None:
+                        act = (kind, g, L)
+                        break
+                if act is None:
+                    cand = []
+                    for g in range(G):
+                        L = barriered[g]
+                        if (L >= 0 and finished[g] == L - 1 and (g, L) in ssd.reads_done
+                                and ssd.reads_done[(g, L)] > now):
+                            cand.append(ssd.reads_done[(g, L)])
+                        Lb = finished[g] + 1
+                        if (Lb <= 39 and barriered[g] == Lb - 1 and submitted_G[g] >= Lb
+                                and ("G", g, Lb) in gsd and gsd[("G", g, Lb)] > now):
+                            cand.append(gsd[("G", g, Lb)])
+                    ne = ssd.next_event()
+                    if ne is not None and ne > now:
+                        cand.append(ne)
+                    if not cand:
+                        raise RuntimeError(f"deadlock c{c} {barriered} {finished}")
+                    t = min(cand)
+                    acc["idle"] += t - now
+                    ssd.advance_to(t)
+                    now = t
+                    continue
+                kind, g, L = act
+                if kind == "f":
+                    now += hpost
+                    acc["host_busy"] += hpost
+                    gpu(int(groups[g]["ma"][c, L]) * ca)
+                    if L + 1 < 40:
+                        gpu(g_dur, ("G", g, L + 1))
+                        submitted_G[g] = L + 1
+                    finished[g] = L
+                elif barrier_interruptible:
+                    now += hpre
+                    acc["host_busy"] += hpre
+                    n = int(groups[g]["rec"][c, L])
+                    acc["records"] += n
+                    ssd.submit(g, L, n, now)
+                    gpu((NA[g] - int(groups[g]["ma"][c, L])) * ca)
+                    barriered[g] = L
+                else:
+                    blocked = (g, L)
+        now = max(now, gpu_free[0])                    # head waits for last MoE output
+        periods.append((now - layer_start) / 40.0)
+        now += T_ACCEPT + T_COMMIT + extra
+    total = now
+    ssd_busy = acc["records"] * rd
+    return {
+        "total_decode_s": total, "tps_1024": 1024.0 / total, "read_records": acc["records"],
+        "ssd_busy_s": ssd_busy, "gpu_busy_s": acc["gpu_busy"], "host_busy_s": acc["host_busy"],
+        "ssd_busy_frac": ssd_busy / total, "gpu_busy_frac": acc["gpu_busy"] / total,
+        "host_busy_frac": acc["host_busy"] / total, "idle_s": acc["idle"],
+        "blk_barrier_s": acc["blk_bar"], "blk_finish_s": acc["blk_fin"],
+        "mean_period_ms": float(np.mean(periods)) * 1e3,
+    }
+
+
+def analytic_lower_bound(groups, cyc, *, g_dur_ms, c_assign_ms, rate, rec_bytes,
+                         host_pre_ms, host_post_ms, extra_per_cycle_ms, growth_s):
+    """Schedule-independent lower bound = per-cycle fixed + max(SSD total, GPU
+    total, host total, each group's dependency chain).  chain-g = g's serial
+    G->route->read->E_miss path (E_hit assumed hidden -- optimistic)."""
+    rd = rec_bytes / (rate * 1e9)
+    g_dur = g_dur_ms / 1e3
+    ca = c_assign_ms / 1e3
+    hpre = host_pre_ms / 1e3
+    hpost = host_post_ms / 1e3
+    G = len(groups)
+    rec_tot = sum(int(gg["rec"].sum()) for gg in groups)
+    comps = {"SSD": rec_tot * rd,
+             "GPU": cyc * 40 * G * g_dur + cyc * 40 * 36 * ca,
+             "host": cyc * 40 * G * (hpre + hpost)}
+    for i, gg in enumerate(groups):
+        comps[f"chain-{chr(65 + i)}"] = (cyc * 40 * (g_dur + hpre + hpost)
+                                         + int(gg["rec"].sum()) * rd
+                                         + int(gg["ma"].sum()) * ca)
+    fixed = growth_s + cyc * (T_DRAFT + T_ACCEPT + T_COMMIT + extra_per_cycle_ms / 1e3)
+    binder = max(comps, key=comps.get)
+    return {"lower_bound_s": fixed + comps[binder], "binding": binder,
+            "components_s": comps, "fixed_s": fixed}
+
+
+CORRECTION = (
+    "The routed per-expert gather is M-invariant, but the gate (xf @ weight.T) and "
+    "the shared expert are NOT invariant to the row batch size M on Metal "
+    "(mtplx/models/deepseek_v41_moe.py combine_routed docstring L446-449; "
+    "deepseek_v41.py _layer_major_moe): splitting M into row groups reassociates "
+    "their fp32 reductions and can flip greedy argmax. The row-group lever is "
+    "therefore ROUNDING-CLASS (tie-flip audit required), NOT bit-identical.")
+
+ARMS2 = [
+    ("S0 fixed/fifo (baseline)", "fixed", "fifo", False),
+    ("S1 fixed/leader-priority", "fixed", "leader_priority", False),
+    ("S2 wc/fifo blocking", "work_conserving", "fifo", False),
+    ("S2i wc/fifo interruptible", "work_conserving", "fifo", True),
+    ("S3 wc/leader blocking", "work_conserving", "leader_priority", False),
+    ("S3i wc/leader interruptible", "work_conserving", "leader_priority", True),
+    ("Bt wc/trailer blocking", "work_conserving", "trailer_priority", False),
+    ("Bti wc/trailer interruptible", "work_conserving", "trailer_priority", True),
+]
+
+
+def run_round2(trace, restore, single111, host_post):
+    """All Round-2 arms: schedule grid + LB, S4 splits, S5 union-observation,
+    S6 host-cost, best-combo sensitivity, and the 3-group check.  cap 111,
+    12.9 GB/s, c_assign 0.035 unless noted."""
+    cyc = trace["cycles"]
+    base = dict(c_assign_ms=C_ASSIGN_CENTRAL, rate=DEFAULT_RATE, rec_bytes=REC_BYTES,
+                host_pre_ms=HOST_PRE_MS, host_post_ms=host_post, growth_s=GROWTH_S)
+
+    def sim(g, gh, hm, sm, ib, extra=PIPE_EXTRA_MS, **over):
+        kw = dict(base, **over)
+        return simulate2(g, cyc, g_dur_ms=gh, extra_per_cycle_ms=extra,
+                         host_mode=hm, ssd_mode=sm, barrier_interruptible=ib, **kw)
+
+    control_groups = [{"rec": single111["rec"][0], "ma": single111["ma"][0],
+                       "nassign": single111["nassign_per_group"]}]
+    control_total = sim(control_groups, G_FULL_MS, "fixed", "fifo", False,
+                        extra=0.0)["total_decode_s"]
+
+    rep33 = replay_split(trace, restore, 111, [3, 3])
+    g33 = _groups(rep33)
+
+    schedules = []
+    for gh in (1.2, 1.5, 1.8):
+        lb = analytic_lower_bound(g33, cyc, g_dur_ms=gh, extra_per_cycle_ms=PIPE_EXTRA_MS,
+                                  **base)
+        rows = []
+        for label, hm, sm, ib in ARMS2:
+            r = sim(g33, gh, hm, sm, ib)
+            if r["total_decode_s"] < lb["lower_bound_s"] - 1e-6:
+                raise SystemExit(f"{label} G{gh} below LB {lb['lower_bound_s']}")
+            rows.append({"label": label, "host_mode": hm, "ssd_mode": sm,
+                         "interruptible": ib, "total_decode_s": r["total_decode_s"],
+                         "removed_s": control_total - r["total_decode_s"],
+                         "tps_1024": r["tps_1024"], "ssd_busy_frac": r["ssd_busy_frac"],
+                         "gpu_busy_frac": r["gpu_busy_frac"], "host_busy_frac": r["host_busy_frac"],
+                         "mean_period_ms": r["mean_period_ms"], "idle_s": r["idle_s"],
+                         "blk_barrier_s": r["blk_barrier_s"],
+                         "slack_s": r["total_decode_s"] - lb["lower_bound_s"]})
+        schedules.append({"g_half_ms": gh, "lower_bound": lb, "arms": rows})
+
+    # S4 row splits (best schedule = wc/fifo/interruptible at G1.5)
+    row_splits = []
+    for rows_k in ([2, 4], [3, 3], [4, 2]):
+        rep = rep33 if rows_k == [3, 3] else replay_split(trace, restore, 111, rows_k)
+        best = sim(_groups(rep), 1.5, "work_conserving", "fifo", True)
+        row_splits.append({"group_rows": rows_k, "records": rep["total_records"],
+                           "records_delta_vs_control_frac": (rep["total_records"] - 31636) / 31636,
+                           "miss_share": rep["miss_share"], "zero_frac": rep["zero_frac"],
+                           "either_zero_fraction": rep["either_zero_fraction"],
+                           "best_sched_total_s": best["total_decode_s"],
+                           "best_sched_removed_s": control_total - best["total_decode_s"]})
+
+    # S5 union-observation policy fix
+    rep_u = replay_split(trace, restore, 111, [3, 3], union_observation=True)
+    gu = _groups(rep_u)
+    s5_sched = {}
+    for label, hm, sm, ib in [("S0 fixed/fifo", "fixed", "fifo", False),
+                              ("S2i wc/fifo intr", "work_conserving", "fifo", True)]:
+        s5_sched[label] = {
+            "naive_total_s": sim(g33, 1.5, hm, sm, ib)["total_decode_s"],
+            "union_total_s": sim(gu, 1.5, hm, sm, ib)["total_decode_s"]}
+    union_obs = {"records_single_route_control": 31636,
+                 "records_naive_two_route": rep33["total_records"],
+                 "records_union_observation": rep_u["total_records"],
+                 "delta_vs_control_frac": (rep_u["total_records"] - 31636) / 31636,
+                 "delta_vs_naive_frac": (rep_u["total_records"] - rep33["total_records"])
+                 / rep33["total_records"], "schedule_totals": s5_sched}
+
+    # S6 host-cost sensitivity (100% and 50% of host_pre/host_post)
+    host_cost = []
+    for scale in (1.0, HALF_STEP_HOST):
+        for label, hm, sm, ib in [("S0 fixed/fifo", "fixed", "fifo", False),
+                                  ("S2i wc/fifo intr", "work_conserving", "fifo", True)]:
+            r = sim(g33, 1.5, hm, sm, ib, host_pre_ms=HOST_PRE_MS * scale,
+                    host_post_ms=host_post * scale)
+            host_cost.append({"host_scale": scale, "label": label,
+                              "total_s": r["total_decode_s"],
+                              "removed_s": control_total - r["total_decode_s"],
+                              "host_busy_frac": r["host_busy_frac"]})
+
+    # best realistic (blocking) vs best idealised (any); + sensitivity of the
+    # best idealised config to capacity 115 and to -10/-20% byte thinning
+    g15 = next(s for s in schedules if s["g_half_ms"] == 1.5)["arms"]
+    best_real = min((a for a in g15 if not a["interruptible"]),
+                    key=lambda a: a["total_decode_s"])
+    best_ideal = min(g15, key=lambda a: a["total_decode_s"])
+    bi = next((hm, sm, ib) for (lbl, hm, sm, ib) in ARMS2 if lbl == best_ideal["label"])
+    rep33_115 = replay_split(trace, restore, STACK_CAP2, [3, 3])
+    sens = [{"case": "capacity 115", "records": rep33_115["total_records"],
+             "total_s": sim(_groups(rep33_115), 1.5, *bi)["total_decode_s"]}]
+    for f in (0.10, 0.20):
+        r = sim(_groups(rep33, f), 1.5, *bi)
+        sens.append({"case": f"byte-thin -{int(f*100)}%", "records": r["read_records"],
+                     "total_s": r["total_decode_s"], "ssd_busy_frac": r["ssd_busy_frac"],
+                     "gpu_busy_frac": r["gpu_busy_frac"]})
+
+    # 3-group check (G_third = G_half = 1.5, an optimistic lower bound on its cost)
+    rep222 = replay_split(trace, restore, 111, [2, 2, 2])
+    three = []
+    for label, ib in [("3g wc/fifo blocking", False), ("3g wc/fifo interruptible", True)]:
+        r = sim(_groups(rep222), 1.5, "work_conserving", "fifo", ib)
+        three.append({"label": label, "records": rep222["total_records"],
+                      "total_s": r["total_decode_s"],
+                      "removed_s": control_total - r["total_decode_s"]})
+
+    return {
+        "correction": CORRECTION,
+        "note": "Event-driven engine simulate2 (Round 1 simulate() untouched). Control "
+                "reproduces 74.99 s and S0 fixed/fifo reproduces Round 1 to <0.05%. "
+                "Every arm >= its analytic lower bound.",
+        "control_total_s": control_total,
+        "schedules": schedules,
+        "row_splits_S4": row_splits,
+        "union_observation_S5": union_obs,
+        "host_cost_S6": host_cost,
+        "best_realistic": best_real,
+        "best_idealised": best_ideal,
+        "best_combo_sensitivity": sens,
+        "three_group": {
+            "assumption": "G_third = G_half = 1.5 ms (a third batch is even more "
+                          "launch-bound, so this UNDER-states 3-group GPU cost).",
+            "two_group_best_idealised_total_s": best_ideal["total_decode_s"],
+            "arms": three},
+    }
+
+
 def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -408,6 +927,8 @@ def main():
             thin.append({"g_half_ms": gh, "thin_frac": f,
                          "control": ctrl, "pipeline": pipe})
 
+    round2 = run_round2(trace, restore, single[111], host_post)
+
     result = {
         "purpose": "F10 row-group pipeline DES screen; no throughput claim, no "
                    "production code, no GPU/service touched. Control reproduces the "
@@ -459,6 +980,7 @@ def main():
         "grid": grid,
         "c_assign_sensitivity_primary_cell": c_sens,
         "byte_lever_thinning_primary_cell": thin,
+        "round2": round2,
         "variants_skipped": {
             "half_step_B_lags": "B.barrier(L) before A.finish(L) opens B's route on "
                                 "L before A's route on L closes -> >1 open decode "
@@ -519,6 +1041,49 @@ def _print(r):
               f"removed {p['seconds_removed_vs_control']:+.2f}  records {p['read_records']}  "
               f"GPU {p['gpu_busy_frac']*100:.0f}% SSD {p['ssd_busy_frac']*100:.0f}% "
               f"{'GPU-bound' if p['gpu_bound'] else 'SSD-bound'}")
+    if "round2" in r:
+        _print_round2(r["round2"])
+
+
+def _print_round2(r2):
+    print("\n" + "=" * 70 + "\nROUND 2 (schedules; cap 111, 12.9 GB/s, c_assign 0.035, "
+          f"control {r2['control_total_s']:.2f} s)")
+    for s in r2["schedules"]:
+        lb = s["lower_bound"]
+        print(f"\nG_half {s['g_half_ms']}  LB {lb['lower_bound_s']:.2f}s (binding {lb['binding']}): "
+              "arm | total removed TPS | SSD% GPU% host% | period slack")
+        for a in s["arms"]:
+            print(f"  {a['label']:<30} | {a['total_decode_s']:.2f} {a['removed_s']:+.2f} "
+                  f"{a['tps_1024']:.2f} | {a['ssd_busy_frac']*100:.0f} {a['gpu_busy_frac']*100:.0f} "
+                  f"{a['host_busy_frac']*100:.0f} | {a['mean_period_ms']:.2f} {a['slack_s']:.2f}")
+    print("\nS4 row-splits (best sched wc/fifo/intr @G1.5):")
+    for x in r2["row_splits_S4"]:
+        print(f"  rows {x['group_rows']}: records {x['records']} "
+              f"({x['records_delta_vs_control_frac']*100:+.2f}%) missShare "
+              f"{[round(v,3) for v in x['miss_share']]} zeroFrac {[round(v,3) for v in x['zero_frac']]} "
+              f"either {x['either_zero_fraction']:.3f} -> {x['best_sched_total_s']:.2f}s "
+              f"({x['best_sched_removed_s']:+.2f})")
+    u = r2["union_observation_S5"]
+    print(f"\nS5 union-observation: records {u['records_union_observation']} "
+          f"(control {u['records_single_route_control']}, naive {u['records_naive_two_route']}; "
+          f"{u['delta_vs_control_frac']*100:+.2f}% vs control)")
+    for lbl, d in u["schedule_totals"].items():
+        print(f"  {lbl}: naive {d['naive_total_s']:.2f}s -> union {d['union_total_s']:.2f}s")
+    print("\nS6 host-cost (G1.5):")
+    for x in r2["host_cost_S6"]:
+        print(f"  host x{x['host_scale']} {x['label']}: {x['total_s']:.2f}s "
+              f"({x['removed_s']:+.2f}) host% {x['host_busy_frac']*100:.0f}")
+    print(f"\nBEST realistic: {r2['best_realistic']['label']} {r2['best_realistic']['total_decode_s']:.2f}s "
+          f"({r2['best_realistic']['removed_s']:+.2f}, {r2['best_realistic']['tps_1024']:.2f} TPS)")
+    print(f"BEST idealised: {r2['best_idealised']['label']} {r2['best_idealised']['total_decode_s']:.2f}s "
+          f"({r2['best_idealised']['removed_s']:+.2f}, {r2['best_idealised']['tps_1024']:.2f} TPS)")
+    print("  best-idealised sensitivity:")
+    for x in r2["best_combo_sensitivity"]:
+        print(f"    {x['case']}: {x['total_s']:.2f}s")
+    t = r2["three_group"]
+    print(f"\n3-group ({t['assumption']}) vs 2-group best {t['two_group_best_idealised_total_s']:.2f}s:")
+    for a in t["arms"]:
+        print(f"  {a['label']}: {a['total_s']:.2f}s ({a['removed_s']:+.2f}), records {a['records']}")
 
 
 if __name__ == "__main__":

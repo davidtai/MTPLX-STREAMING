@@ -1,7 +1,7 @@
 {
   "purpose": "F10 row-group pipeline DES screen; no throughput claim, no production code, no GPU/service touched. Control reproduces the f1 74.667 s anchor; the two-group split is replayed through the real transition-window cache with two route observations/layer.",
-  "source_commit": "631fc856f660b1da8a75efe3c9a82f96bae8827f",
-  "elapsed_s": 5.624104459013324,
+  "source_commit": "722726f286fc750c8b3a65ead7e6ec76aef8cb18",
+  "elapsed_s": 15.963042957999278,
   "mlx_imported": false,
   "inputs": {
     "trace": "docs/deepseek-v41/receipts/mtp-verify-routes-20260913/mtp-verify-routes-16k-1024-v2.json.gz",
@@ -1380,6 +1380,625 @@
       }
     }
   ],
+  "round2": {
+    "correction": "The routed per-expert gather is M-invariant, but the gate (xf @ weight.T) and the shared expert are NOT invariant to the row batch size M on Metal (mtplx/models/deepseek_v41_moe.py combine_routed docstring L446-449; deepseek_v41.py _layer_major_moe): splitting M into row groups reassociates their fp32 reductions and can flip greedy argmax. The row-group lever is therefore ROUNDING-CLASS (tie-flip audit required), NOT bit-identical.",
+    "note": "Event-driven engine simulate2 (Round 1 simulate() untouched). Control reproduces 74.99 s and S0 fixed/fifo reproduces Round 1 to <0.05%. Every arm >= its analytic lower bound.",
+    "control_total_s": 74.99245100156095,
+    "schedules": [
+      {
+        "g_half_ms": 1.2,
+        "lower_bound": {
+          "lower_bound_s": 49.754508279640284,
+          "binding": "SSD",
+          "components_s": {
+            "SSD": 44.66065026976744,
+            "GPU": 30.1584,
+            "host": 17.31860517159865,
+            "chain-A": 40.94630032998538,
+            "chain-B": 42.02860011138071
+          },
+          "fixed_s": 5.093858009872845
+        },
+        "arms": [
+          {
+            "label": "S0 fixed/fifo (baseline)",
+            "host_mode": "fixed",
+            "ssd_mode": "fifo",
+            "interruptible": false,
+            "total_decode_s": 62.28818460765773,
+            "removed_s": 12.704266393903218,
+            "tps_1024": 16.439714954770235,
+            "ssd_busy_frac": 0.7170003516891201,
+            "gpu_busy_frac": 0.48417529247278746,
+            "host_busy_frac": 0.2780399730812835,
+            "mean_period_ms": 6.941059053129206,
+            "idle_s": 0.0,
+            "blk_barrier_s": 20.87464888507231,
+            "slack_s": 12.53367632801745
+          },
+          {
+            "label": "S1 fixed/leader-priority",
+            "host_mode": "fixed",
+            "ssd_mode": "leader_priority",
+            "interruptible": false,
+            "total_decode_s": 67.79281979631175,
+            "removed_s": 7.199631205249204,
+            "tps_1024": 15.10484448171177,
+            "ssd_busy_frac": 0.6587814226337461,
+            "gpu_busy_frac": 0.4448612713060863,
+            "host_busy_frac": 0.25546370874718194,
+            "mean_period_ms": 7.6090973041794605,
+            "idle_s": 0.0,
+            "blk_barrier_s": 20.874648885067945,
+            "slack_s": 18.038311516671463
+          },
+          {
+            "label": "S2 wc/fifo blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "fifo",
+            "interruptible": false,
+            "total_decode_s": 63.81257235914791,
+            "removed_s": 11.179878642413044,
+            "tps_1024": 16.046994536386272,
+            "ssd_busy_frac": 0.6998722762406407,
+            "gpu_busy_frac": 0.47260906252572155,
+            "host_busy_frac": 0.2713980103187683,
+            "mean_period_ms": 7.126057566659567,
+            "idle_s": 21.031071340997777,
+            "blk_barrier_s": 20.342367836708803,
+            "slack_s": 14.058064079507623
+          },
+          {
+            "label": "S2i wc/fifo interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "fifo",
+            "interruptible": true,
+            "total_decode_s": 60.406942920727644,
+            "removed_s": 14.585508080833307,
+            "tps_1024": 16.951693803538454,
+            "ssd_busy_frac": 0.7393297543359519,
+            "gpu_busy_frac": 0.4992538695359686,
+            "host_busy_frac": 0.2866989179426357,
+            "mean_period_ms": 6.712753023161963,
+            "idle_s": 37.9678097392845,
+            "blk_barrier_s": 0.0,
+            "slack_s": 10.65243464108736
+          },
+          {
+            "label": "S3 wc/leader blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "leader_priority",
+            "interruptible": false,
+            "total_decode_s": 67.68675567412167,
+            "removed_s": 7.305695327439281,
+            "tps_1024": 15.128513544511643,
+            "ssd_busy_frac": 0.6598137231571037,
+            "gpu_busy_frac": 0.4455583621884536,
+            "host_busy_frac": 0.2558640165141865,
+            "mean_period_ms": 7.596225444690373,
+            "idle_s": 24.717545327097802,
+            "blk_barrier_s": 20.530077165578607,
+            "slack_s": 17.932247394481386
+          },
+          {
+            "label": "S3i wc/leader interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "leader_priority",
+            "interruptible": true,
+            "total_decode_s": 64.34518418399523,
+            "removed_s": 10.647266817565722,
+            "tps_1024": 15.914166895099239,
+            "ssd_busy_frac": 0.6940791426140018,
+            "gpu_busy_frac": 0.46869708094662754,
+            "host_busy_frac": 0.26915153622177185,
+            "mean_period_ms": 7.190694924043951,
+            "idle_s": 41.90605100255449,
+            "blk_barrier_s": 0.0,
+            "slack_s": 14.590675904354946
+          },
+          {
+            "label": "Bt wc/trailer blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "trailer_priority",
+            "interruptible": false,
+            "total_decode_s": 69.26059020069741,
+            "removed_s": 5.731860800863544,
+            "tps_1024": 14.784742622503511,
+            "ssd_busy_frac": 0.6448205269454624,
+            "gpu_busy_frac": 0.43543377139324446,
+            "host_busy_frac": 0.25004992191678993,
+            "mean_period_ms": 7.78722478043986,
+            "idle_s": 30.836946577669465,
+            "blk_barrier_s": 15.984510441581042,
+            "slack_s": 19.506081921057124
+          },
+          {
+            "label": "Bti wc/trailer interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "trailer_priority",
+            "interruptible": true,
+            "total_decode_s": 66.98817880586995,
+            "removed_s": 8.004272195691001,
+            "tps_1024": 15.286279135420685,
+            "ssd_busy_frac": 0.6666944984307287,
+            "gpu_busy_frac": 0.4502048053494624,
+            "host_busy_frac": 0.25853225868080476,
+            "mean_period_ms": 7.5114466985433195,
+            "idle_s": 44.54904562442589,
+            "blk_barrier_s": 0.0,
+            "slack_s": 17.233670526229666
+          }
+        ]
+      },
+      {
+        "g_half_ms": 1.5,
+        "lower_bound": {
+          "lower_bound_s": 49.754508279640284,
+          "binding": "SSD",
+          "components_s": {
+            "SSD": 44.66065026976744,
+            "GPU": 35.1024,
+            "host": 17.31860517159865,
+            "chain-A": 43.41830032998537,
+            "chain-B": 44.50060011138072
+          },
+          "fixed_s": 5.093858009872845
+        },
+        "arms": [
+          {
+            "label": "S0 fixed/fifo (baseline)",
+            "host_mode": "fixed",
+            "ssd_mode": "fifo",
+            "interruptible": false,
+            "total_decode_s": 64.68997077127568,
+            "removed_s": 10.30248023028527,
+            "tps_1024": 15.829347081026773,
+            "ssd_busy_frac": 0.690379818344239,
+            "gpu_busy_frac": 0.5426250712666651,
+            "host_busy_frac": 0.26771700412152855,
+            "mean_period_ms": 7.232537956480902,
+            "idle_s": 0.0,
+            "blk_barrier_s": 25.82017227527006,
+            "slack_s": 14.935462491635398
+          },
+          {
+            "label": "S1 fixed/leader-priority",
+            "host_mode": "fixed",
+            "ssd_mode": "leader_priority",
+            "interruptible": false,
+            "total_decode_s": 69.49636332575733,
+            "removed_s": 5.496087675803622,
+            "tps_1024": 14.734583955135916,
+            "ssd_busy_frac": 0.6426329110262224,
+            "gpu_busy_frac": 0.5050969334246013,
+            "host_busy_frac": 0.24920160340500014,
+            "mean_period_ms": 7.815838023772375,
+            "idle_s": 0.0,
+            "blk_barrier_s": 25.820172275258994,
+            "slack_s": 19.741855046117045
+          },
+          {
+            "label": "S2 wc/fifo blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "fifo",
+            "interruptible": false,
+            "total_decode_s": 66.83349209090717,
+            "removed_s": 8.15895891065378,
+            "tps_1024": 15.321659365145118,
+            "ssd_busy_frac": 0.6682375688078643,
+            "gpu_busy_frac": 0.5252216950186522,
+            "host_busy_frac": 0.25913063390490415,
+            "mean_period_ms": 7.492674038960457,
+            "idle_s": 19.193642953805433,
+            "blk_barrier_s": 25.200715955656683,
+            "slack_s": 17.078983811266887
+          },
+          {
+            "label": "S2i wc/fifo interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "fifo",
+            "interruptible": true,
+            "total_decode_s": 62.730173921411755,
+            "removed_s": 12.262277080149197,
+            "tps_1024": 16.323882686549943,
+            "ssd_busy_frac": 0.7119484528405455,
+            "gpu_busy_frac": 0.5595775972816235,
+            "host_busy_frac": 0.2760809366365202,
+            "mean_period_ms": 6.994698532953723,
+            "idle_s": 40.2910407399699,
+            "blk_barrier_s": 0.0,
+            "slack_s": 12.97566564177147
+          },
+          {
+            "label": "S3 wc/leader blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "leader_priority",
+            "interruptible": false,
+            "total_decode_s": 69.96944237775463,
+            "removed_s": 5.023008623806319,
+            "tps_1024": 14.63496013690628,
+            "ssd_busy_frac": 0.6382879261585539,
+            "gpu_busy_frac": 0.5016818600681324,
+            "host_busy_frac": 0.2475166956182757,
+            "mean_period_ms": 7.873250530082731,
+            "idle_s": 22.15224850631322,
+            "blk_barrier_s": 25.37806068999363,
+            "slack_s": 20.214934098114348
+          },
+          {
+            "label": "S3i wc/leader interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "leader_priority",
+            "interruptible": true,
+            "total_decode_s": 66.83214599379902,
+            "removed_s": 8.160305007761934,
+            "tps_1024": 15.321967965760239,
+            "ssd_busy_frac": 0.6682510280892558,
+            "gpu_busy_frac": 0.525232273751301,
+            "host_busy_frac": 0.2591358531746395,
+            "mean_period_ms": 7.492510677660924,
+            "idle_s": 44.393012812354954,
+            "blk_barrier_s": 0.0,
+            "slack_s": 17.077637714158733
+          },
+          {
+            "label": "Bt wc/trailer blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "trailer_priority",
+            "interruptible": false,
+            "total_decode_s": 71.78920633286972,
+            "removed_s": 3.2032446686912266,
+            "tps_1024": 14.263982739298607,
+            "ssd_busy_frac": 0.6221081489978656,
+            "gpu_busy_frac": 0.48896487080857737,
+            "host_busy_frac": 0.24124246605113392,
+            "mean_period_ms": 8.094095670266606,
+            "idle_s": 28.634709250629193,
+            "blk_barrier_s": 20.715363900791097,
+            "slack_s": 22.03469805322944
+          },
+          {
+            "label": "Bti wc/trailer interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "trailer_priority",
+            "interruptible": true,
+            "total_decode_s": 69.70949150478742,
+            "removed_s": 5.282959496773529,
+            "tps_1024": 14.689534780635647,
+            "ssd_busy_frac": 0.6406681401011265,
+            "gpu_busy_frac": 0.5035526618005989,
+            "host_busy_frac": 0.24843970021508172,
+            "mean_period_ms": 7.841703094043019,
+            "idle_s": 47.27035832334024,
+            "blk_barrier_s": 0.0,
+            "slack_s": 19.95498322514714
+          }
+        ]
+      },
+      {
+        "g_half_ms": 1.8,
+        "lower_bound": {
+          "lower_bound_s": 52.06645812125356,
+          "binding": "chain-B",
+          "components_s": {
+            "SSD": 44.66065026976744,
+            "GPU": 40.0464,
+            "host": 17.31860517159865,
+            "chain-A": 45.89030032998538,
+            "chain-B": 46.972600111380714
+          },
+          "fixed_s": 5.093858009872845
+        },
+        "arms": [
+          {
+            "label": "S0 fixed/fifo (baseline)",
+            "host_mode": "fixed",
+            "ssd_mode": "fifo",
+            "interruptible": false,
+            "total_decode_s": 67.69306088003002,
+            "removed_s": 7.299390121530934,
+            "tps_1024": 15.127104413475976,
+            "ssd_busy_frac": 0.6597522654340879,
+            "gpu_busy_frac": 0.5915879630701745,
+            "host_busy_frac": 0.2558401843032082,
+            "mean_period_ms": 7.596990639582164,
+            "idle_s": 0.0,
+            "blk_barrier_s": 30.764172275293035,
+            "slack_s": 15.626602758776457
+          },
+          {
+            "label": "S1 fixed/leader-priority",
+            "host_mode": "fixed",
+            "ssd_mode": "leader_priority",
+            "interruptible": false,
+            "total_decode_s": 72.80628305970477,
+            "removed_s": 2.1861679418561835,
+            "tps_1024": 14.064720199495271,
+            "ssd_busy_frac": 0.6134175292693281,
+            "gpu_busy_frac": 0.5500404404268548,
+            "host_busy_frac": 0.23787239842189248,
+            "mean_period_ms": 8.2175273118728,
+            "idle_s": 0.0,
+            "blk_barrier_s": 30.764172275294058,
+            "slack_s": 20.739824938451207
+          },
+          {
+            "label": "S2 wc/fifo blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "fifo",
+            "interruptible": false,
+            "total_decode_s": 70.15675968201616,
+            "removed_s": 4.835691319544793,
+            "tps_1024": 14.595885052862412,
+            "ssd_busy_frac": 0.636583708714467,
+            "gpu_busy_frac": 0.5708131359189281,
+            "host_busy_frac": 0.2468558304301872,
+            "mean_period_ms": 7.895983212638741,
+            "idle_s": 17.39141974502784,
+            "blk_barrier_s": 30.326206755539726,
+            "slack_s": 18.090301560762597
+          },
+          {
+            "label": "S2i wc/fifo interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "fifo",
+            "interruptible": true,
+            "total_decode_s": 65.93269595773955,
+            "removed_s": 9.059755043821397,
+            "tps_1024": 15.530989369164375,
+            "ssd_busy_frac": 0.6773672700778576,
+            "gpu_busy_frac": 0.6073830201888082,
+            "host_busy_frac": 0.2626709695398436,
+            "mean_period_ms": 7.3833541198867145,
+            "idle_s": 43.493562776295754,
+            "blk_barrier_s": 0.0,
+            "slack_s": 13.866237836485993
+          },
+          {
+            "label": "S3 wc/leader blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "leader_priority",
+            "interruptible": false,
+            "total_decode_s": 73.97485595609119,
+            "removed_s": 1.0175950454697613,
+            "tps_1024": 13.842541317117394,
+            "ssd_busy_frac": 0.603727438094322,
+            "gpu_busy_frac": 0.5413515103533608,
+            "host_busy_frac": 0.23411475355727457,
+            "mean_period_ms": 8.359344410948825,
+            "idle_s": 21.093369145338826,
+            "blk_barrier_s": 30.442353629300683,
+            "slack_s": 21.90839783483763
+          },
+          {
+            "label": "S3i wc/leader interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "leader_priority",
+            "interruptible": true,
+            "total_decode_s": 70.20493744708769,
+            "removed_s": 4.787513554473264,
+            "tps_1024": 14.58586870434536,
+            "ssd_busy_frac": 0.6361468565288223,
+            "gpu_busy_frac": 0.5704214184391887,
+            "host_busy_frac": 0.24668642692898804,
+            "mean_period_ms": 7.901830028788198,
+            "idle_s": 47.76580426563972,
+            "blk_barrier_s": 0.0,
+            "slack_s": 18.138479325834126
+          },
+          {
+            "label": "Bt wc/trailer blocking",
+            "host_mode": "work_conserving",
+            "ssd_mode": "trailer_priority",
+            "interruptible": false,
+            "total_decode_s": 75.43200717703634,
+            "removed_s": -0.4395561754753885,
+            "tps_1024": 13.575139232298394,
+            "ssd_busy_frac": 0.5920649859541776,
+            "gpu_busy_frac": 0.5308939997581495,
+            "host_busy_frac": 0.2295922622203198,
+            "mean_period_ms": 8.536183151354795,
+            "idle_s": 27.58433265683049,
+            "blk_barrier_s": 25.408541338752766,
+            "slack_s": 23.36554905578278
+          },
+          {
+            "label": "Bti wc/trailer interruptible",
+            "host_mode": "work_conserving",
+            "ssd_mode": "trailer_priority",
+            "interruptible": true,
+            "total_decode_s": 73.0565902629676,
+            "removed_s": 1.9358607385933482,
+            "tps_1024": 14.016531517746808,
+            "ssd_busy_frac": 0.6113158321379519,
+            "gpu_busy_frac": 0.5481558864964137,
+            "host_busy_frac": 0.23705739768659825,
+            "mean_period_ms": 8.24790439964742,
+            "idle_s": 50.617457081517124,
+            "blk_barrier_s": 0.0,
+            "slack_s": 20.990132141714042
+          }
+        ]
+      }
+    ],
+    "row_splits_S4": [
+      {
+        "group_rows": [
+          2,
+          4
+        ],
+        "records": 32536,
+        "records_delta_vs_control_frac": 0.02844860285750411,
+        "miss_share": [
+          0.3281595770838456,
+          0.6718404229161544
+        ],
+        "zero_frac": [
+          0.3370145631067961,
+          0.14126213592233008
+        ],
+        "either_zero_fraction": 0.40946601941747574,
+        "best_sched_total_s": 64.66938742602288,
+        "best_sched_removed_s": 10.323063575538072
+      },
+      {
+        "group_rows": [
+          3,
+          3
+        ],
+        "records": 32559,
+        "records_delta_vs_control_frac": 0.02917562270830699,
+        "miss_share": [
+          0.4881906692465985,
+          0.5118093307534015
+        ],
+        "zero_frac": [
+          0.21929611650485437,
+          0.20279126213592233
+        ],
+        "either_zero_fraction": 0.35436893203883496,
+        "best_sched_total_s": 62.730173921411755,
+        "best_sched_removed_s": 12.262277080149197
+      },
+      {
+        "group_rows": [
+          4,
+          2
+        ],
+        "records": 32581,
+        "records_delta_vs_control_frac": 0.029871033000379316,
+        "miss_share": [
+          0.6458979159632915,
+          0.3541020840367085
+        ],
+        "zero_frac": [
+          0.15012135922330097,
+          0.3074029126213592
+        ],
+        "either_zero_fraction": 0.38907766990291265,
+        "best_sched_total_s": 63.72877247623652,
+        "best_sched_removed_s": 11.26367852532443
+      }
+    ],
+    "union_observation_S5": {
+      "records_single_route_control": 31636,
+      "records_naive_two_route": 32559,
+      "records_union_observation": 31672,
+      "delta_vs_control_frac": 0.0011379441143001643,
+      "delta_vs_naive_frac": -0.02724285143892626,
+      "schedule_totals": {
+        "S0 fixed/fifo": {
+          "naive_total_s": 64.68997077127568,
+          "union_total_s": 63.872396918112834
+        },
+        "S2i wc/fifo intr": {
+          "naive_total_s": 62.730173921411755,
+          "union_total_s": 61.68082694696424
+        }
+      }
+    },
+    "host_cost_S6": [
+      {
+        "host_scale": 1.0,
+        "label": "S0 fixed/fifo",
+        "total_s": 64.68997077127568,
+        "removed_s": 10.30248023028527,
+        "host_busy_frac": 0.26771700412152855
+      },
+      {
+        "host_scale": 1.0,
+        "label": "S2i wc/fifo intr",
+        "total_s": 62.730173921411755,
+        "removed_s": 12.262277080149197,
+        "host_busy_frac": 0.2760809366365202
+      },
+      {
+        "host_scale": 0.5,
+        "label": "S0 fixed/fifo",
+        "total_s": 61.619532722686785,
+        "removed_s": 13.372918278874167,
+        "host_busy_frac": 0.14052853378113084
+      },
+      {
+        "host_scale": 0.5,
+        "label": "S2i wc/fifo intr",
+        "total_s": 60.50243385106893,
+        "removed_s": 14.490017150492022,
+        "host_busy_frac": 0.14312321066476566
+      }
+    ],
+    "best_realistic": {
+      "label": "S0 fixed/fifo (baseline)",
+      "host_mode": "fixed",
+      "ssd_mode": "fifo",
+      "interruptible": false,
+      "total_decode_s": 64.68997077127568,
+      "removed_s": 10.30248023028527,
+      "tps_1024": 15.829347081026773,
+      "ssd_busy_frac": 0.690379818344239,
+      "gpu_busy_frac": 0.5426250712666651,
+      "host_busy_frac": 0.26771700412152855,
+      "mean_period_ms": 7.232537956480902,
+      "idle_s": 0.0,
+      "blk_barrier_s": 25.82017227527006,
+      "slack_s": 14.935462491635398
+    },
+    "best_idealised": {
+      "label": "S2i wc/fifo interruptible",
+      "host_mode": "work_conserving",
+      "ssd_mode": "fifo",
+      "interruptible": true,
+      "total_decode_s": 62.730173921411755,
+      "removed_s": 12.262277080149197,
+      "tps_1024": 16.323882686549943,
+      "ssd_busy_frac": 0.7119484528405455,
+      "gpu_busy_frac": 0.5595775972816235,
+      "host_busy_frac": 0.2760809366365202,
+      "mean_period_ms": 6.994698532953723,
+      "idle_s": 40.2910407399699,
+      "blk_barrier_s": 0.0,
+      "slack_s": 12.97566564177147
+    },
+    "best_combo_sensitivity": [
+      {
+        "case": "capacity 115",
+        "records": 31053,
+        "total_s": 61.25132078083991
+      },
+      {
+        "case": "byte-thin -10%",
+        "records": 29350,
+        "total_s": 59.454998700272284,
+        "ssd_busy_frac": 0.6771325891748434,
+        "gpu_busy_frac": 0.5904028385731206
+      },
+      {
+        "case": "byte-thin -20%",
+        "records": 26097,
+        "total_s": 56.29032541090377,
+        "ssd_busy_frac": 0.6359321926780374,
+        "gpu_busy_frac": 0.623595613344996
+      }
+    ],
+    "three_group": {
+      "assumption": "G_third = G_half = 1.5 ms (a third batch is even more launch-bound, so this UNDER-states 3-group GPU cost).",
+      "two_group_best_idealised_total_s": 62.730173921411755,
+      "arms": [
+        {
+          "label": "3g wc/fifo blocking",
+          "records": 32835,
+          "total_s": 81.79147792440995,
+          "removed_s": -6.799026922848995
+        },
+        {
+          "label": "3g wc/fifo interruptible",
+          "records": 32835,
+          "total_s": 66.08261826180659,
+          "removed_s": 8.909832739754364
+        }
+      ]
+    }
+  },
   "variants_skipped": {
     "half_step_B_lags": "B.barrier(L) before A.finish(L) opens B's route on L before A's route on L closes -> >1 open decode route/layer; the runtime forbids it. Not simulated.",
     "three_group": "Not a trivial generalisation: 3 groups touching layer L per iteration need >1 open route (same runtime limit) and an unmeasured G_third launch-bound cost. Skipped."

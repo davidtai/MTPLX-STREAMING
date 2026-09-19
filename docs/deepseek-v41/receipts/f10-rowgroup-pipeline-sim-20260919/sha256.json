@@ -3,12 +3,13 @@
     "docs/deepseek-v41/receipts/mtp-verify-routes-20260913/mtp-verify-routes-16k-1024-v2.json.gz": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
     "docs/deepseek-v41/receipts/memory-budget-110/replay_route_policies.py": "7be3475934f5d2b6049d046afb30c64024aab595225bc0d8f28fd49fc03fdccc",
     "mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+    "mtplx/models/deepseek_v41_moe.py": "946cd0e78a0fe95cedbd7ec0983042413955095c4a799af7f130267256446a9d",
     "scripts/deepseek_v41/overlap_schedule_sim.py": "5e0cc019cba173bb5454350dc9ab00d54e9322739ece86f7596899ec13a0e695"
   },
   "artifacts": {
-    "scripts/deepseek_v41/rowgroup_pipeline_sim.py": "2ca4c2cf9d79681a2ebf6f2c93291364a8d44249fec8b663e9da5854e82b64a0",
-    "tests/test_dsv41_rowgroup_pipeline_sim.py": "0c801a17113f245ae29d98c6e55f6657e65339731c66f0bac7f93c9e0b72ca41",
-    "docs/deepseek-v41/receipts/f10-rowgroup-pipeline-sim-20260919/README.md": "c483bf36d362f70bf18fe5ed423fe264650b27ca8e987e42fa2224a052c35d8d",
-    "docs/deepseek-v41/receipts/f10-rowgroup-pipeline-sim-20260919/results.json": "1f032815a13571c46e18e4edce1a015edb8faa59e689bfab8c0bfbddf90cc923"
+    "scripts/deepseek_v41/rowgroup_pipeline_sim.py": "1d734cdae70a8d9a9ea68dbc07c0ca5e3bd071bfd728099b78a508a222190fd7",
+    "tests/test_dsv41_rowgroup_pipeline_sim.py": "9902f2c828b19c1285ceef87131d80be50aa330ce4738c02adcd5af5d13ba069",
+    "docs/deepseek-v41/receipts/f10-rowgroup-pipeline-sim-20260919/README.md": "00ff00aa617f8b3580bd064bc2b4dd76a0c7195fc0d41a1639411ea74848452e",
+    "docs/deepseek-v41/receipts/f10-rowgroup-pipeline-sim-20260919/results.json": "e00fc734a5c975a9c5d1dbb65d599841ec7e80055239dd16531c6355cfbfdfa3"
   }
 }
