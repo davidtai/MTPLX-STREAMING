@@ -62,7 +62,21 @@ more traffic, so begin with one uniform family.
    admission from actual retirement and fresh baseline, then inspect output.
    Add focused regressions only after successful optimization.
 
-Risks to resolve are buffer reuse before Metal completion, retained graph or
-module references defeating retirement, source file-cache duplication, and
-shared-SSD contention. No production route, GPU experiment, or new test has
-been installed for this candidate yet. Q2 remains stopped.
+## Bounded outcome, 2026-09-19
+
+The prototype is measured in one guarded A/B/A/B/A batch. Native query/expert
+outputs remain exact for all206 calls; two-buffer wraparound retains86,507,520B
+versus1,730,150,400B resident. Demand expert submissions precede the next dense
+read, and the existing query-dependent router evaluation covers retirement.
+
+The streamed112-slot arm takes1.920236479s steady versus1.279569542s for the
+resident110-slot control,50.0689% longer with2.3706% control spread. It saves
+336,199,680 expert-read bytes but adds8,910,274,560 query-read bytes. This
+component omits attention, uses synthetic query inputs and replays one layer's
+real expert routes. It establishes feasibility and a losing component schedule;
+it is not a full-model TPS measurement or a rejection of every offload design.
+
+Do not promote this version or repeat it unchanged. No production route or new
+regression test is justified. Preserve the complete receipt in
+`../deepseek-v41/receipts/q4-dense-prefetch-20260919/README.md`. Q2 remains stopped;
+the Q4 full-workload20TPS goal remains open.

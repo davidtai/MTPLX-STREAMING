@@ -566,3 +566,16 @@ Rejected:
 Open:
 - Safe buffer retirement, actual overlap and complete admission.
 - Reach 20 TPS on the unchanged 16K/1K workload.
+
+## 2026-09-19 11:51 UTC [saved]
+Goal: Measure predictable Q4 dense prefetch against real expert-read contention.
+Decisions:
+- Retain resident query weights; two-buffer streaming loses despite the two additional expert slots.
+- Preserve the bounded prototype and output digests so later schedules can reuse its native arithmetic and retirement boundary.
+- Treat demand-first submission as ordering, not a guarantee of SSD priority.
+Rejected:
+- Promoting predictable scheduling or reduced resident bytes as a throughput win.
+- Extrapolating the component's omitted attention into a universal offload verdict.
+Open:
+- Materially reduce expert traffic or target work within110GB.
+- Reach20TPS on the exact16K/1K workload.

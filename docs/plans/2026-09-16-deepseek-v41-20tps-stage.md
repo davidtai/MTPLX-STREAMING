@@ -1006,6 +1006,18 @@ The CPU inventory and native-route sensitivity are preserved in
 `../deepseek-v41/receipts/q4-dense-prefetch-20260919`. Two query-weight buffers
 would free 1.644 GB of payload, enough for two uniform expert slots per layer
 before complete admission. The old native route saves 13.430 GB of expert
-reads but adds 356.411 GB of dense reads; real overlap and demand-I/O priority
-must be measured. No new Q4 GPU run or production route exists yet. Follow
-`../specs/2026-09-19-deepseek-v41-q4-dense-prefetch.md` for the bounded next stage.
+reads but adds356.411GB of dense reads.
+
+The bounded A/B/A/B/A now completes: streamed112 takes1.920236479s steady
+versus1.279569542s for resident110,50.0689% longer with2.3706% control spread.
+All206 query and expert outputs remain exact; buffer storage falls to86.508MB.
+Its336.200MB reduction in expert reads cannot offset8.910GB extra query reads
+in this component. It omits attention and uses synthetic query inputs, so this
+is not full-model TPS or a universal offload verdict. Reject promotion of the
+two-buffer version without a full-model run or additional regressions.
+
+Guard37741 exits0; sampled machine peak21.431GB fits the24GiB incremental bound
+plus live baseline and110GB ceiling. Qwen identity/health/warmup and free lock
+are independently verified11:50:33UTC. Task4 and20TPS remain open; the best
+full result is unchanged. See the receipt README and
+`../specs/2026-09-19-deepseek-v41-q4-dense-prefetch.md`.

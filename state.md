@@ -1,8 +1,8 @@
 # Current Goal
 
 Q4 optimization resumed at the user's request on 2026-09-19; Q2 is stopped.
-Investigate streaming predictable non-MoE weights ahead of use, recycling a
-bounded buffer ring and assigning freed RAM to expert cache. The target remains
+The bounded predictable query-weight prototype is output-exact but50.07% slower
+than resident weights in its component comparison, so it is not promoted. The target remains
 20 decode TPS on 16,384 input / 1,024 output Python tokens under 110 decimal GB.
 Best single full result: **13.4141517619 TPS / 76.2627423750 s; 20 TPS unmet.**
 All 1,024 native IDs match; 1,023 timed steps, 198 target calls, 84->110 slots.
@@ -44,7 +44,20 @@ original indexes and working files remain intact. Ignored artifacts stay in plac
 
 # Evidence
 
-- **Current CPU inventory, 2026-09-19:** all 40 wq_b query projections total
+- **Current guarded component, 2026-09-19:** two query buffers preserve all206
+  query and expert-output digests in A/B/A/B/A. Resident110 takes1.279569542s
+  steady versus streamed112 at1.920236479s,50.0689% longer with2.3706% control
+  spread. It saves336,199,680 expert-read bytes but adds8,910,274,560 query-read
+  bytes. Query storage falls1,730,150,400->86,507,520B. This is a one-layer
+  expert replay with40 real query layers and synthetic query inputs; attention
+  is omitted. Reject promotion of this version, not every possible schedule.
+  Incremental static bound24GiB; sampled machine peak21,430,992,896B and
+  child-tree footprint5,198,615,040B overlap. MLXpeak4,765,497,916B; cleanup8B.
+  Guard37741 exits0, reclaims1,479,802,880 cached bytes, restores exactQwen/
+  warmup and releases11:49:16UTC. Independent healthy/idle/warmed/free check
+  11:50:33UTC passes. No owned child remains. Receipt:
+  `docs/deepseek-v41/receipts/q4-dense-prefetch-20260919/probe-v1`.
+- **CPU inventory, 2026-09-19:** all 40 wq_b query projections total
   1,730,150,400 B with uniform MXFP8 shapes. Two rotating buffers need
   86,507,520 B, freeing 1,643,642,880 B of payload: two extra packed experts per
   layer before staging/padding/growth costs. Historical 110-to-112 capacity
@@ -53,10 +66,8 @@ original indexes and working files remain intact. Ignored artifacts stay in plac
   candidate, not a bandwidth saving or measured speedup. Existing input-row
   retirement already frees 1,323,827,200 B after prefill. The historical
   73-slot replay still matches all 53,999 reads; no MLX import occurred.
-  Root: `/tmp/dsv41-q4-dense-prefetch-20260919`. No new Q4 GPU run has launched.
-  Next: establish real overlap and safe buffer retirement for one fixed dense
-  family before integrating a full-model route. Preserve quantized values and
-  original kernels; avoid global fences and expert-I/O starvation.
+  Root: `/tmp/dsv41-q4-dense-prefetch-20260919`. The guarded component above
+  follows this inventory and measures the actual read-contention tradeoff.
 - Q4 was clean at d8f49e853 before resumption. Draft PR #4 remains open at that
   exact head, checked 2026-09-19. The saved native response was inspected: a
   coherent beginning of the requested helper diff, cut at the 1,024-token cap.
@@ -103,10 +114,11 @@ original indexes and working files remain intact. Ignored artifacts stay in plac
 
 # Open Issues and Next Work
 
-- Q4 needs 25.1127 s less decode time to reach 20 TPS. The active candidate
-  streams fixed-order dense weights with bounded lookahead and reuses their
-  buffers. Capacity benefit is priced; real SSD/compute overlap and complete
-  110 GB admission remain unproven. Q2 is stopped and preserved separately.
+- Q4 needs25.1127s less decode time to reach20TPS. Fixed-order query streaming
+  is feasible but this two-buffer schedule loses despite the two extra expert
+  slots. Do not repeat it unchanged or run the full model on capacity savings
+  alone. Materially less read traffic or verified target work is still needed.
+  Q2 is stopped and preserved separately.
 - Preserve arithmetic/layout/ownership while reducing expert I/O or verified
   target work. Do not repeat rejected cache-policy, fanout8, GU-gap reads,
   HC, D7/D9/D13, prefix1+5, alignment or unchanged small-kernel candidates.
