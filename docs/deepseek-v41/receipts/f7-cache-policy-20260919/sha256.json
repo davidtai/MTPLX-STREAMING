@@ -1,0 +1,38 @@
+{
+  "inputs": {
+    "router_capture_npz": {
+      "path": ".worktrees/deepseek-v41/.benchmark-artifacts/deepseek-v41/router-feature-20260918/full-router-feature-20260918-v2.router-capture.npz",
+      "sha256": "5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e"
+    },
+    "verify_route_trace": {
+      "path": "docs/deepseek-v41/receipts/mtp-verify-routes-20260913/mtp-verify-routes-16k-1024-v2.json.gz",
+      "sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da"
+    },
+    "expert_streaming_py": {
+      "path": "mtplx/expert_streaming.py",
+      "sha256": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39"
+    },
+    "replay_route_policies_py": {
+      "path": "docs/deepseek-v41/receipts/memory-budget-110/replay_route_policies.py",
+      "sha256": "7be3475934f5d2b6049d046afb30c64024aab595225bc0d8f28fd49fc03fdccc"
+    },
+    "analyze_route_cache_py": {
+      "path": "scripts/deepseek_v41/analyze_route_cache.py",
+      "sha256": "92f715389d0ab7c6edfe4043e8a5dd6fee495344aa6027f3caa2c20016de71f3"
+    },
+    "rescore_router_capture_py": {
+      "path": "scripts/deepseek_v41/rescore_router_capture.py",
+      "sha256": "aefdedd0d1fbb5b081395e40f554a458710a5c76f408f813cc911bd1bcb251af"
+    },
+    "overlap_schedule_sim_py": {
+      "path": "scripts/deepseek_v41/overlap_schedule_sim.py",
+      "sha256": "5e0cc019cba173bb5454350dc9ab00d54e9322739ece86f7596899ec13a0e695"
+    }
+  },
+  "produced": {
+    "score_aware_cache_sim_py": {
+      "path": "scripts/deepseek_v41/score_aware_cache_sim.py",
+      "sha256": "249b72ec349be3c82d919e2404f5d4877531298a2a2ac9f5504c3b1d2cc6701a"
+    }
+  }
+}
