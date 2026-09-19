@@ -1,6 +1,6 @@
 """CPU preflight for the F5 compile window -- refuse BEFORE the production service
-is unloaded if any dependency is missing or background memory makes 111 decode
-rows inadmissible.
+is unloaded if any dependency is missing.  Background memory is reported as an
+advisory only (see check 6).
 
 Mirrors the retained runner's construction-boundary checks, but runs entirely on
 the CPU (no Metal, no lock) so a refusal never disturbs the live Qwen service.
@@ -130,17 +130,21 @@ def main(argv=None) -> int:
         except Exception as exc:
             ok &= _check(report, "strict_lib_sha256", False, repr(exc))
 
-    # 6. background memory admits 111 decode rows (else 110e9 ceiling can't hold
-    #    engine + 111 slots).  Conservative headroom gate; runner re-derives exactly.
+    # 6. background memory: ADVISORY ONLY (review 2026-09-19).  Before the guard runs,
+    #    the production Qwen service (or another GPU job) is still resident, so wired
+    #    memory here is ~80-100 GB and says nothing about the post-unload baseline the
+    #    runner admits against.  The authoritative gate is the runner's own admission,
+    #    which executes inside the guarded child AFTER the service is unloaded and
+    #    BEFORE the model loads, and refuses there if 111 rows do not fit.
     bg, src = _background_bytes(report)
-    report["background_bytes"] = bg
+    report["background_bytes_advisory"] = bg
     report["background_source"] = src
-    if bg is None:
-        ok &= _check(report, "background_admits_111", False, "memory snapshot unavailable")
-    else:
-        ok &= _check(report, "background_admits_111", bg <= MAX_BACKGROUND_BYTES_FOR_111,
-                     f"{bg} <= {MAX_BACKGROUND_BYTES_FOR_111} "
-                     f"(headroom {(BOX_TARGET_BYTES - bg) / 1e9:.2f} GB of 110)")
+    report["background_note"] = (
+        "advisory: measured with the production service possibly resident; "
+        "the guarded runner re-derives admission after unload"
+    )
+    _check(report, "background_advisory_recorded", True,
+           f"{bg} B wired now; 111 rows need a post-unload baseline <= ~{MAX_BACKGROUND_BYTES_FOR_111} B")
 
     report["preflight_ok"] = bool(ok)
     text = json.dumps(report, indent=2)

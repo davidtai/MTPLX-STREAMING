@@ -1,19 +1,24 @@
 """Stage a patched copy of the retained ``run_full.py`` for the F5 compile window.
 
 The window runs the EXACT retained runner (extension-bank-20260919
-full/sources/packed/run_full.py) with two surgical, anchored edits -- applied to a
+full/sources/packed/run_full.py) with ONE surgical, anchored edit -- applied to a
 STAGED COPY, never the committed receipt -- so the measured config/admission/installs
 are otherwise byte-for-byte the retained ones:
 
-  EDIT 1 (classify any divergence, addendum point b): drop the cache-only
-    ``ab._ar_logits_row_at_index = cached_ar_logits_row`` monkeypatch so the AB
-    driver's LIVE ``_ar_logits_row_at_index`` (M=1 forwards + one prefill on the AR
-    reference prefix, provenance-clean -- it never replays candidate arithmetic)
-    computes the AR reference logits at WHATEVER index a compile arm first diverges,
-    yielding a W120 tie_flip/divergent verdict instead of the HC-screen's null-at-480.
-    The AB classifier still runs by default (it does not require --dspark-require-tie
-    -class), so each arm's receipt carries dspark.divergence with the contested
-    margins + tie_band the classifier needs.
+  (REMOVED by review, 2026-09-19) An earlier draft dropped the retained
+    cache-only ``ab._ar_logits_row_at_index = cached_ar_logits_row`` override so the
+    AB driver's LIVE replay would classify a divergence at any index.  That is unsafe
+    and invalid here: the live replay re-prefills 16,384 tokens INSIDE the candidate
+    process after decode (111 expert rows already resident -> the prefill envelope
+    no longer fits the 110e9 budget) and it computes the "reference" with the
+    candidate's own levers enabled (the retained runner refuses exactly this: "no
+    replay through candidate arithmetic").  The retained cache-only override stays.
+    A divergence at the known index 297 is classified from the cache as before; a
+    divergence at a NEW index raises inside the override, which the AB driver already
+    catches (``ar_replay_error``), so the receipt keeps both token streams, timing and
+    engagement with the divergence left UNCLASSIFIED.  Classifying a new index needs
+    a separate control-arithmetic reference run (teacher-forced M=1 logits along the
+    control stream), built only if an arm shows a real gain.
 
   EDIT 2 (decode-only lever enable + A2 probe, Task 1 / arms B-F / A2): at the
     post-prefill quiescent boundary (observe_prefill_boundary, AFTER growth_transition
@@ -23,8 +28,8 @@ are otherwise byte-for-byte the retained ones:
     TimedPackedDecode probe.  Prefill already completed with the retained (all-off)
     state, so the 84-row / 110e9-budget prefill is unchanged.
 
-Both edits are anchored to unique lines and the transform asserts that reversing
-them recovers the retained source byte-for-byte (the hybrid_install.py/projection_
+The edit is anchored to a unique line and the transform asserts that reversing
+it recovers the retained source byte-for-byte (the hybrid_install.py/projection_
 install.py discipline), so the staged runner is a provable minimal delta.  This
 script does NO MLX work and is CPU-safe.
 """
@@ -35,14 +40,6 @@ import hashlib
 import sys
 from pathlib import Path
 
-
-# EDIT 1: a single-line replacement (drop the cache-only AR-logits override).
-_E1_OLD = "    ab._ar_logits_row_at_index = cached_ar_logits_row"
-_E1_NEW = (
-    "    # F5: keep the AB driver's LIVE _ar_logits_row_at_index so a divergence at\n"
-    "    # ANY index is classified from the AR reference prefix (not candidate replay).\n"
-    "    _ = cached_ar_logits_row  # retained builder kept for provenance; not installed"
-)
 
 # EDIT 2: an insertion after the growth transition inside observe_prefill_boundary.
 # ``target`` (the model) is captured by that closure (dspark_with_boundary_observation).
@@ -57,17 +54,15 @@ _E2_INSERT = (
 
 
 def stage(source_text: str) -> str:
-    if source_text.count(_E1_OLD) != 1:
-        raise RuntimeError("EDIT 1 anchor (cached_ar_logits_row install) not unique")
+    if source_text.count("    ab._ar_logits_row_at_index = cached_ar_logits_row") != 1:
+        raise RuntimeError("retained cache-only AR-logits override not found exactly once")
     if source_text.count(_E2_ANCHOR) != 1:
         raise RuntimeError("EDIT 2 anchor (growth_transition call) not unique")
-    updated = source_text.replace(_E1_OLD, _E1_NEW)
-    updated = updated.replace(_E2_ANCHOR, _E2_ANCHOR + "\n" + _E2_INSERT)
-    # round-trip: reversing both edits must recover the retained source exactly.
+    updated = source_text.replace(_E2_ANCHOR, _E2_ANCHOR + "\n" + _E2_INSERT)
+    # round-trip: reversing the edit must recover the retained source exactly.
     recovered = updated.replace(_E2_ANCHOR + "\n" + _E2_INSERT, _E2_ANCHOR)
-    recovered = recovered.replace(_E1_NEW, _E1_OLD)
     if recovered != source_text:
-        raise RuntimeError("F5 staging changed the retained runner beyond the 2 edits")
+        raise RuntimeError("F5 staging changed the retained runner beyond the one edit")
     return updated
 
 
