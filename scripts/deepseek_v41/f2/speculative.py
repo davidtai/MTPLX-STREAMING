@@ -13,13 +13,23 @@ plane is DISCARDED from the ring so it does not linger as a phantom hit (fix 3).
 """
 from __future__ import annotations
 
+import os
 import queue
 import threading
 
 
 class SpeculativePool:
-    def __init__(self, reader, ring, *, plane_specs, plan_fn, workers: int = 3):
+    def __init__(self, reader, ring, *, plane_specs, plan_fn, workers: int = 3,
+                 direct_fd: int | None = None):
         self.reader = reader
+        # Read primitive bound ONCE (no per-plane branch). ``direct_fd`` = a private
+        # F_NOCACHE descriptor on experts.bin: one bare ``os.preadv`` per plane. The retained
+        # ``reader._readv_range_into`` costs two passes through the reader's shared Condition
+        # (fd lease) plus locked metrics per call -- tens of microseconds of GIL-holding Python
+        # per plane that contend with the demand readers AND with the measured main thread
+        # while it builds the next layer's graph (the probe charged +0.26 ms/call to that gap).
+        self._fd = direct_fd
+        self._read_plane = self._read_direct if direct_fd is not None else self._read_via_reader
         self.ring = ring
         self.counters = ring.counters
         self.plane_specs = tuple((int(d), int(n)) for d, n in plane_specs)  # (offset_delta, length)
@@ -105,16 +115,31 @@ class SpeculativePool:
                     continue
                 ok = True
                 try:
-                    self.reader._readv_range_into(
-                        "experts.bin", offset, (view,),
-                        cancel_event=None, deadline_ns=None, pipeline_phase=None,
-                    )
+                    self._read_plane(offset, view)
                 except BaseException:
                     ok = False
                 self.ring.end_read(offset, ok=ok)
                 self._settle_record(rec_key, ok=ok, started=True)
             finally:
                 self._work_q.task_done()
+
+    def _read_via_reader(self, offset: int, view) -> None:
+        self.reader._readv_range_into(
+            "experts.bin", offset, (view,),
+            cancel_event=None, deadline_ns=None, pipeline_phase=None,
+        )
+
+    def _read_direct(self, offset: int, view) -> None:
+        fd = self._fd
+        total = len(view)
+        done = os.preadv(fd, (view,), offset)
+        while done < total:                                # short read: resume the remainder
+            if done <= 0:
+                raise OSError("short speculative plane read")
+            got = os.preadv(fd, (view[done:],), offset + done)
+            if got <= 0:
+                raise OSError("short speculative plane read")
+            done += got
 
     def _settle_record(self, rec_key: int, *, ok: bool, started: bool) -> None:
         with self._lock:

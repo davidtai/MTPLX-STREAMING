@@ -59,6 +59,9 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +eg : F6 parallel Engram miss reads, decode-site install; +egl: load-site (prefill too)
 #   +gt : F12 parallel packed-scale load in the growth transition (read + sha256 on a pool,
 #         joined before first use); +pn : F2b predictor 'native' (default is the F2c 'lean' tape)
+#   +k0 : F2b evaluates the predictor but issues NO speculative reads (isolates predictor cost)
+#   +ftN : F2b first target layer N (default 4; +ft1 adds targets 1-3 from sources 0-2)
+#   +rio : F2b speculative reads go through the retained reader (default: private fd, bare preadv)
 #   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
 #         EXACTNESS probe (digest decides whether a two-group verify pipeline is exact);
 #         slower by construction, never a throughput candidate
@@ -154,13 +157,16 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0
+  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
   case "$mods" in *"+eg+"*) A_ENG=decode ;; esac
   case "$mods" in *"+egl+"*) A_ENG=load ;; esac
   case "$mods" in *"+gt+"*) A_GT=1 ;; esac
   case "$mods" in *"+pn+"*) A_PN=1 ;; esac
+  case "$mods" in *"+k0+"*) A_K0=1 ;; esac
+  case "$mods" in *"+rio+"*) A_RIO=1 ;; esac
+  case "$mods" in *"+ft"*) A_FT="${mods#*+ft}"; A_FT="${A_FT%%+*}" ;; esac
   case "$mods" in *"+vc"*) A_VC="${mods#*+vc}"; A_VC="${A_VC%%+*}" ;; esac
   case "$A_BASE" in
     control|control_a|control_b) A_ROWS="$F2_MAX_ROWS"; A_F2B=0 ;;
@@ -180,7 +186,7 @@ for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first
   [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_F2B" "$A_VC" "$A_GT"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
-  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN)"; done
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO)"; done
   rmdir "$RECEIPTS" 2>/dev/null || true
   echo "STAGE ONLY: no GPU window opened"; exit 0
 fi
@@ -219,6 +225,9 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   [ "$f2b" = "1" ] && f2b_env="MTPLX_DSV41_F2B=1 MTPLX_DSV41_F2B_RECORDS=$F2_RING_RECORDS MTPLX_DSV41_F2B_WORKERS=$F2_WORKERS MTPLX_DSV41_F2B_COUNTERS=$dir/f2b_counters.json"
   [ "$A_SI" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_GIL_SWITCH_S=$F2_GIL_SWITCH_S"
   [ "$A_PN" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_PREDICTOR=native"
+  [ "$A_K0" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_K=0"
+  [ "$A_RIO" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_DIRECT_IO=0"
+  [ "$A_FT" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_FIRST_TARGET=$A_FT"
   if [ "$A_GT" = "1" ]; then
     pypath="$pypath:$F12DIR"
     f2b_env="$f2b_env MTPLX_DSV41_F12_PARALLEL_SCALES=1 MTPLX_DSV41_F12_WORKERS=$F2_GROWTH_WORKERS"

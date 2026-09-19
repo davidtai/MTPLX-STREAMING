@@ -46,8 +46,24 @@ def _live_plane_length(runtime, layers) -> int:
     return length
 
 
+def _open_direct_fd(reader) -> int:
+    """A private descriptor on experts.bin with the retained reader's own flags
+    (O_RDONLY | O_CLOEXEC | O_NOFOLLOW, F_NOCACHE). Kept open for the process lifetime."""
+    import fcntl
+    from pathlib import Path
+
+    if not getattr(reader, "bypass_page_cache", False):
+        raise RuntimeError("F2b direct I/O requires the F_NOCACHE reader (bypass_page_cache)")
+    path = Path(reader.root) / "experts.bin"
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
+    return fd
+
+
 def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
-            first_target: int = FIRST_TARGET_LAYER, predictor_mode: str | None = None):
+            first_target: int = FIRST_TARGET_LAYER, predictor_mode: str | None = None,
+            direct_io: bool = True):
     runtime = target._mtplx_expert_runtime
     if runtime.config.prefetch_slots != 0:
         raise RuntimeError("F2b requires the runtime's own prefetch ring OFF (prefetch_slots==0)")
@@ -90,10 +106,15 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
                 return True
             return ring.has(base[(target_layer, expert)])
 
+        if k == 0:                       # predictor-cost isolation arm: evaluate, issue nothing
+            return []
         return [base[(target_layer, e)] for e in rank_targets(scores, skip, k)]
 
+    if not 1 <= int(first_target) <= max(layers) or not 0 <= int(k) <= 8:
+        raise RuntimeError(f"F2b first_target/k out of range: first_target={first_target} k={k}")
+    direct_fd = _open_direct_fd(runtime.reader) if direct_io else None
     pool = SpeculativePool(runtime.reader, ring, plane_specs=plane_specs,
-                           plan_fn=plan_fn, workers=workers)
+                           plan_fn=plan_fn, workers=workers, direct_fd=direct_fd)
 
     # The shared witness threading.local lives on any runner's PartExecutor; grab it
     # BEFORE wrapping switch._run (the wrapper replaces switch._run.__self__).
@@ -116,7 +137,8 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
     return {
         "installed": True, "ring_records": int(ring_records), "workers": int(workers),
         "plane_length": int(plane_len), "sources": sorted(sources),
-        "wrapped_layers": wrapped_layers, "predictor_mode": predictor_mode, **intercept,
+        "wrapped_layers": wrapped_layers, "predictor_mode": predictor_mode,
+        "k": int(k), "first_target": int(first_target), "direct_io": bool(direct_io), **intercept,
     }
 
 
@@ -182,6 +204,9 @@ def install_from_env(target) -> dict:
         target,
         ring_records=int(os.environ.get("MTPLX_DSV41_F2B_RECORDS", "32")),
         workers=int(os.environ.get("MTPLX_DSV41_F2B_WORKERS", "3")),
+        k=int(os.environ.get("MTPLX_DSV41_F2B_K", "3")),
+        first_target=int(os.environ.get("MTPLX_DSV41_F2B_FIRST_TARGET", str(FIRST_TARGET_LAYER))),
+        direct_io=os.environ.get("MTPLX_DSV41_F2B_DIRECT_IO", "1") != "0",
     )
     counters_path = os.environ.get("MTPLX_DSV41_F2B_COUNTERS")
     if counters_path:

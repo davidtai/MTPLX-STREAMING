@@ -464,3 +464,41 @@ def test_counters_schema_present():
     for k in ("planes_length_mismatch", "planes_epoch_skipped", "coordinator_batches",
               "ready_reading_hwm", "planes_wasted", "records_full", "records_partial"):
         assert k in c
+
+
+# --------------------------------------------------------------------------- direct I/O
+def test_direct_plane_read_matches_file_bytes_and_refuses_short_reads(tmp_path):
+    """The speculative pool's direct read primitive (one bare os.preadv on a private fd)
+    fills the ring view with exactly the file bytes and raises on a short read."""
+    import os
+
+    from f2.host_ring import HostRing
+    from f2.speculative import SpeculativePool
+
+    payload = bytes((i * 31 + 7) % 251 for i in range(64 * 1024))
+    path = tmp_path / "experts.bin"
+    path.write_bytes(payload)
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        ring = HostRing(records=1, planes=3, plane_bytes=4096)
+        pool = SpeculativePool(object(), ring, plane_specs=((0, 4096),), plan_fn=lambda t, s: [],
+                               workers=1, direct_fd=fd)
+        try:
+            assert ring.enqueue(8192, 4096)
+            view = ring.begin_read(8192)
+            pool._read_direct(8192, view)
+            assert bytes(view) == payload[8192:8192 + 4096]
+            ring.end_read(8192, ok=True)
+            # a plane that runs past EOF must raise (never a silently short buffer)
+            assert ring.enqueue(len(payload) - 1024, 4096)
+            tail = ring.begin_read(len(payload) - 1024)
+            try:
+                pool._read_direct(len(payload) - 1024, tail)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("short speculative read did not raise")
+        finally:
+            pool.shutdown(wait=True)
+    finally:
+        os.close(fd)
