@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/tmp/dsv41-q4-dense-prefetch-20260919/inventory.py", line 123, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/dsv41-q4-dense-prefetch-20260919/inventory.py", line 70, in main
+    from restore import restore
+  File "/private/tmp/dsv41-q4-dense-prefetch-20260919/restore.py", line 2, in <module>
+    from mtplx.expert_streaming import LayerExpertSlotBank, _ExpertHistory
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_streaming.py", line 18, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'

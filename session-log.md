@@ -553,3 +553,16 @@ Open:
 
 - Attempt Q2 main-model generation and inspect Python output.
 - Reach 20 TPS; verify complete 256K prefill second.
+
+## 2026-09-19 11:30 UTC [saved]
+Goal: Resume Q4 and evaluate predictable dense prefetch within 110 GB.
+Decisions:
+- Stop Q2; preserve its branch and unverified final correction separately.
+- Start with fixed-order Q4 query projections and bounded rotating buffers; preserve quantized values and native matmuls.
+- Measure overlap against expert-read contention; reclaimed capacity alone does not prove a throughput gain.
+Rejected:
+- Moving Metal arrays into Python memory as a whole-machine RAM saving.
+- Double-counting embedding retirement or retired packed output projections.
+Open:
+- Safe buffer retirement, actual overlap and complete admission.
+- Reach 20 TPS on the unchanged 16K/1K workload.

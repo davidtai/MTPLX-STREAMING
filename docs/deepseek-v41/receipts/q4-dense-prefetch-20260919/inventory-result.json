@@ -1,0 +1,4791 @@
+{
+  "complete": true,
+  "cpu_only": true,
+  "elapsed_s": 2.630984166986309,
+  "manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+  "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "baseline_sha256": "d6556be903ed5868acd0eaacf51ea4783edebfaab1836785d8e6d416dfa49670",
+  "source_sha256": {
+    "inventory.py": "b4f76d8268be09f340369c5515fdf6243a8dd806577e7541d661d0990b0067ff",
+    "restore.py": "974ff9f0065e362add1b3fa997ab8b7de3ed771a25dad45440dab086e8d608f0",
+    "expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39"
+  },
+  "historical_best": {
+    "tps": 13.414151761941186,
+    "wall_s": 76.26274237499456,
+    "cycles": 198,
+    "capacity": 110,
+    "io": {
+      "records_read": 31961,
+      "read_bytes": 565540945920,
+      "read_wall_ns": 44111376676,
+      "read_gb_per_s_window": 12.8208
+    }
+  },
+  "candidates": {
+    "wkv": {
+      "uniform_layers": true,
+      "source_layer0_signature": [
+        [
+          "scales",
+          "U8",
+          [
+            512,
+            160
+          ],
+          81920
+        ],
+        [
+          "weight",
+          "U32",
+          [
+            512,
+            1280
+          ],
+          2621440
+        ]
+      ],
+      "source_bytes": 108134400,
+      "resident_bytes": 108134400,
+      "two_buffer_bytes": 5406720,
+      "payload_freed_bytes": 102727680,
+      "additional_uniform_expert_slots_payload_only": 0,
+      "payload_projection_slots_per_layer": 110,
+      "bytes_per_verify_if_streaming_resident_representation": 108134400,
+      "additional_dense_bytes_for_historical_198_calls": 21410611200,
+      "sources": [
+        {
+          "tensor": "layers.0.attn.wkv.scales",
+          "shard": "model-00003.safetensors",
+          "offset": 5993470,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.0.attn.wkv.weight",
+          "shard": "model-00003.safetensors",
+          "offset": 113043550,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wkv.scales",
+          "shard": "model-00004.safetensors",
+          "offset": 42051162,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wkv.weight",
+          "shard": "model-00004.safetensors",
+          "offset": 130398054,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wkv.scales",
+          "shard": "model-00013.safetensors",
+          "offset": 131886204,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wkv.weight",
+          "shard": "model-00013.safetensors",
+          "offset": 129264764,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wkv.scales",
+          "shard": "model-00014.safetensors",
+          "offset": 159413114,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wkv.weight",
+          "shard": "model-00014.safetensors",
+          "offset": 159495034,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wkv.scales",
+          "shard": "model-00015.safetensors",
+          "offset": 54447118,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wkv.weight",
+          "shard": "model-00015.safetensors",
+          "offset": 130396686,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wkv.scales",
+          "shard": "model-00016.safetensors",
+          "offset": 174511988,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wkv.weight",
+          "shard": "model-00016.safetensors",
+          "offset": 33534484,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wkv.scales",
+          "shard": "model-00017.safetensors",
+          "offset": 158574055,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wkv.weight",
+          "shard": "model-00017.safetensors",
+          "offset": 106921447,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wkv.scales",
+          "shard": "model-00018.safetensors",
+          "offset": 130635394,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wkv.weight",
+          "shard": "model-00018.safetensors",
+          "offset": 172340866,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wkv.scales",
+          "shard": "model-00019.safetensors",
+          "offset": 167587198,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wkv.weight",
+          "shard": "model-00019.safetensors",
+          "offset": 164965758,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wkv.scales",
+          "shard": "model-00020.safetensors",
+          "offset": 121766530,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wkv.weight",
+          "shard": "model-00020.safetensors",
+          "offset": 172337538,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wkv.scales",
+          "shard": "model-00021.safetensors",
+          "offset": 92459548,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wkv.weight",
+          "shard": "model-00021.safetensors",
+          "offset": 89835548,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wkv.scales",
+          "shard": "model-00022.safetensors",
+          "offset": 130310946,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wkv.weight",
+          "shard": "model-00022.safetensors",
+          "offset": 172340110,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wkv.scales",
+          "shard": "model-00005.safetensors",
+          "offset": 90087881,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wkv.weight",
+          "shard": "model-00005.safetensors",
+          "offset": 142969545,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wkv.scales",
+          "shard": "model-00023.safetensors",
+          "offset": 51987725,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wkv.weight",
+          "shard": "model-00023.safetensors",
+          "offset": 169515277,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wkv.scales",
+          "shard": "model-00024.safetensors",
+          "offset": 154563112,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wkv.weight",
+          "shard": "model-00024.safetensors",
+          "offset": 76444200,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wkv.scales",
+          "shard": "model-00025.safetensors",
+          "offset": 74750836,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wkv.weight",
+          "shard": "model-00025.safetensors",
+          "offset": 126620532,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wkv.scales",
+          "shard": "model-00026.safetensors",
+          "offset": 174880626,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wkv.weight",
+          "shard": "model-00026.safetensors",
+          "offset": 116826386,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wkv.scales",
+          "shard": "model-00027.safetensors",
+          "offset": 165267337,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wkv.weight",
+          "shard": "model-00027.safetensors",
+          "offset": 170495369,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wkv.scales",
+          "shard": "model-00028.safetensors",
+          "offset": 54612094,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wkv.weight",
+          "shard": "model-00028.safetensors",
+          "offset": 130398078,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wkv.scales",
+          "shard": "model-00029.safetensors",
+          "offset": 133255812,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wkv.weight",
+          "shard": "model-00029.safetensors",
+          "offset": 172341136,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wkv.scales",
+          "shard": "model-00030.safetensors",
+          "offset": 1969178,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wkv.weight",
+          "shard": "model-00030.safetensors",
+          "offset": 49933946,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wkv.scales",
+          "shard": "model-00031.safetensors",
+          "offset": 132934073,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wkv.weight",
+          "shard": "model-00031.safetensors",
+          "offset": 129943993,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wkv.scales",
+          "shard": "model-00032.safetensors",
+          "offset": 174510626,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wkv.weight",
+          "shard": "model-00032.safetensors",
+          "offset": 44696098,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wkv.scales",
+          "shard": "model-00006.safetensors",
+          "offset": 50954316,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wkv.weight",
+          "shard": "model-00006.safetensors",
+          "offset": 172122456,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wkv.scales",
+          "shard": "model-00033.safetensors",
+          "offset": 77097070,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wkv.weight",
+          "shard": "model-00033.safetensors",
+          "offset": 77178990,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wkv.scales",
+          "shard": "model-00034.safetensors",
+          "offset": 22772600,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wkv.weight",
+          "shard": "model-00034.safetensors",
+          "offset": 172341112,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wkv.scales",
+          "shard": "model-00035.safetensors",
+          "offset": 131626959,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wkv.weight",
+          "shard": "model-00035.safetensors",
+          "offset": 117204931,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wkv.scales",
+          "shard": "model-00036.safetensors",
+          "offset": 76205094,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wkv.weight",
+          "shard": "model-00036.safetensors",
+          "offset": 77599270,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wkv.scales",
+          "shard": "model-00037.safetensors",
+          "offset": 172259206,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wkv.weight",
+          "shard": "model-00037.safetensors",
+          "offset": 172341126,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wkv.scales",
+          "shard": "model-00038.safetensors",
+          "offset": 118145934,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wkv.weight",
+          "shard": "model-00038.safetensors",
+          "offset": 172340110,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wkv.scales",
+          "shard": "model-00039.safetensors",
+          "offset": 158171585,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wkv.weight",
+          "shard": "model-00039.safetensors",
+          "offset": 160229825,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wkv.scales",
+          "shard": "model-00040.safetensors",
+          "offset": 32985604,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wkv.weight",
+          "shard": "model-00040.safetensors",
+          "offset": 128431716,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wkv.scales",
+          "shard": "model-00041.safetensors",
+          "offset": 129253528,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wkv.weight",
+          "shard": "model-00041.safetensors",
+          "offset": 129338008,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wkv.scales",
+          "shard": "model-00042.safetensors",
+          "offset": 172259194,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wkv.weight",
+          "shard": "model-00042.safetensors",
+          "offset": 172341114,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wkv.scales",
+          "shard": "model-00007.safetensors",
+          "offset": 174878808,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wkv.weight",
+          "shard": "model-00007.safetensors",
+          "offset": 134851672,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wkv.scales",
+          "shard": "model-00008.safetensors",
+          "offset": 174880592,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wkv.weight",
+          "shard": "model-00008.safetensors",
+          "offset": 138703696,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wkv.scales",
+          "shard": "model-00009.safetensors",
+          "offset": 46842354,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wkv.weight",
+          "shard": "model-00009.safetensors",
+          "offset": 171971410,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wkv.scales",
+          "shard": "model-00010.safetensors",
+          "offset": 167276652,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wkv.weight",
+          "shard": "model-00010.safetensors",
+          "offset": 172339308,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wkv.scales",
+          "shard": "model-00011.safetensors",
+          "offset": 151535203,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wkv.weight",
+          "shard": "model-00011.safetensors",
+          "offset": 188693443,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wkv.scales",
+          "shard": "model-00012.safetensors",
+          "offset": 4303874,
+          "length": 81920,
+          "dtype": "U8",
+          "shape": [
+            512,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wkv.weight",
+          "shard": "model-00012.safetensors",
+          "offset": 148746338,
+          "length": 2621440,
+          "dtype": "U32",
+          "shape": [
+            512,
+            1280
+          ]
+        }
+      ],
+      "trace206_saved_expert_read_bytes": 0,
+      "trace206_added_dense_read_bytes": 22275686400,
+      "trace206_net_added_read_bytes": 22275686400
+    },
+    "wo_a": {
+      "uniform_layers": true,
+      "source_layer0_signature": [
+        [
+          "scales",
+          "U8",
+          [
+            8192,
+            128
+          ],
+          1048576
+        ],
+        [
+          "weight",
+          "U32",
+          [
+            8192,
+            1024
+          ],
+          33554432
+        ]
+      ],
+      "source_bytes": 1384120320,
+      "resident_bytes": 2684354560,
+      "two_buffer_bytes": 134217728,
+      "payload_freed_bytes": 2550136832,
+      "additional_uniform_expert_slots_payload_only": 3,
+      "payload_projection_slots_per_layer": 113,
+      "bytes_per_verify_if_streaming_resident_representation": 2684354560,
+      "additional_dense_bytes_for_historical_198_calls": 531502202880,
+      "sources": [
+        {
+          "tensor": "layers.0.attn.wo_a.scales",
+          "shard": "model-00003.safetensors",
+          "offset": 173912670,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.0.attn.wo_a.weight",
+          "shard": "model-00003.safetensors",
+          "offset": 17871870,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wo_a.scales",
+          "shard": "model-00004.safetensors",
+          "offset": 50574938,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wo_a.weight",
+          "shard": "model-00004.safetensors",
+          "offset": 53589594,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wo_a.scales",
+          "shard": "model-00013.safetensors",
+          "offset": 173913724,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wo_a.weight",
+          "shard": "model-00013.safetensors",
+          "offset": 94399600,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wo_a.scales",
+          "shard": "model-00014.safetensors",
+          "offset": 173912954,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wo_a.weight",
+          "shard": "model-00014.safetensors",
+          "offset": 124547866,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wo_a.scales",
+          "shard": "model-00015.safetensors",
+          "offset": 53398542,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wo_a.weight",
+          "shard": "model-00015.safetensors",
+          "offset": 54530574,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wo_a.scales",
+          "shard": "model-00016.safetensors",
+          "offset": 96653940,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wo_a.weight",
+          "shard": "model-00016.safetensors",
+          "offset": 99014260,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wo_a.scales",
+          "shard": "model-00017.safetensors",
+          "offset": 112164327,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wo_a.weight",
+          "shard": "model-00017.safetensors",
+          "offset": 113223143,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wo_a.scales",
+          "shard": "model-00018.safetensors",
+          "offset": 129586818,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wo_a.weight",
+          "shard": "model-00018.safetensors",
+          "offset": 138786434,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wo_a.scales",
+          "shard": "model-00019.safetensors",
+          "offset": 130362738,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wo_a.weight",
+          "shard": "model-00019.safetensors",
+          "offset": 131411326,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wo_a.scales",
+          "shard": "model-00020.safetensors",
+          "offset": 121848450,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wo_a.weight",
+          "shard": "model-00020.safetensors",
+          "offset": 33161858,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wo_a.scales",
+          "shard": "model-00021.safetensors",
+          "offset": 4672540,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wo_a.weight",
+          "shard": "model-00021.safetensors",
+          "offset": 141039132,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wo_a.scales",
+          "shard": "model-00022.safetensors",
+          "offset": 95339298,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wo_a.weight",
+          "shard": "model-00022.safetensors",
+          "offset": 96387874,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wo_a.scales",
+          "shard": "model-00005.safetensors",
+          "offset": 99486409,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wo_a.weight",
+          "shard": "model-00005.safetensors",
+          "offset": 152515785,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wo_a.scales",
+          "shard": "model-00023.safetensors",
+          "offset": 45696269,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wo_a.weight",
+          "shard": "model-00023.safetensors",
+          "offset": 135960845,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wo_a.scales",
+          "shard": "model-00024.safetensors",
+          "offset": 48224784,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wo_a.weight",
+          "shard": "model-00024.safetensors",
+          "offset": 79065640,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wo_a.scales",
+          "shard": "model-00025.safetensors",
+          "offset": 72022900,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wo_a.weight",
+          "shard": "model-00025.safetensors",
+          "offset": 141408116,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wo_a.scales",
+          "shard": "model-00026.safetensors",
+          "offset": 82223378,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wo_a.weight",
+          "shard": "model-00026.safetensors",
+          "offset": 83271954,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wo_a.scales",
+          "shard": "model-00027.safetensors",
+          "offset": 165349257,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wo_a.weight",
+          "shard": "model-00027.safetensors",
+          "offset": 74438941,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wo_a.scales",
+          "shard": "model-00028.safetensors",
+          "offset": 53563518,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wo_a.weight",
+          "shard": "model-00028.safetensors",
+          "offset": 54898814,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wo_a.scales",
+          "shard": "model-00029.safetensors",
+          "offset": 131838596,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wo_a.weight",
+          "shard": "model-00029.safetensors",
+          "offset": 133542544,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wo_a.scales",
+          "shard": "model-00030.safetensors",
+          "offset": 14584858,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wo_a.weight",
+          "shard": "model-00030.safetensors",
+          "offset": 141408122,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wo_a.scales",
+          "shard": "model-00031.safetensors",
+          "offset": 94972345,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wo_a.weight",
+          "shard": "model-00031.safetensors",
+          "offset": 96020921,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wo_a.scales",
+          "shard": "model-00032.safetensors",
+          "offset": 43267106,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wo_a.weight",
+          "shard": "model-00032.safetensors",
+          "offset": 140956194,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wo_a.scales",
+          "shard": "model-00006.safetensors",
+          "offset": 48593484,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wo_a.weight",
+          "shard": "model-00006.safetensors",
+          "offset": 136601688,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wo_a.scales",
+          "shard": "model-00033.safetensors",
+          "offset": 32782958,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wo_a.weight",
+          "shard": "model-00033.safetensors",
+          "offset": 141404526,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wo_a.scales",
+          "shard": "model-00034.safetensors",
+          "offset": 5993592,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wo_a.weight",
+          "shard": "model-00034.safetensors",
+          "offset": 126986616,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wo_a.scales",
+          "shard": "model-00035.safetensors",
+          "offset": 75678659,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wo_a.weight",
+          "shard": "model-00035.safetensors",
+          "offset": 76728259,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wo_a.scales",
+          "shard": "model-00036.safetensors",
+          "offset": 74951718,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wo_a.weight",
+          "shard": "model-00036.safetensors",
+          "offset": 14513178,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wo_a.scales",
+          "shard": "model-00037.safetensors",
+          "offset": 137655942,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wo_a.weight",
+          "shard": "model-00037.safetensors",
+          "offset": 138704518,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wo_a.scales",
+          "shard": "model-00038.safetensors",
+          "offset": 117097358,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wo_a.weight",
+          "shard": "model-00038.safetensors",
+          "offset": 46257294,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wo_a.scales",
+          "shard": "model-00039.safetensors",
+          "offset": 179320769,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wo_a.weight",
+          "shard": "model-00039.safetensors",
+          "offset": 57022913,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wo_a.scales",
+          "shard": "model-00040.safetensors",
+          "offset": 3085316,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wo_a.weight",
+          "shard": "model-00040.safetensors",
+          "offset": 94877284,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wo_a.scales",
+          "shard": "model-00041.safetensors",
+          "offset": 131959448,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wo_a.weight",
+          "shard": "model-00041.safetensors",
+          "offset": 3935276,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wo_a.scales",
+          "shard": "model-00042.safetensors",
+          "offset": 124546170,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wo_a.weight",
+          "shard": "model-00042.safetensors",
+          "offset": 125595002,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wo_a.scales",
+          "shard": "model-00007.safetensors",
+          "offset": 91860056,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wo_a.weight",
+          "shard": "model-00007.safetensors",
+          "offset": 139358296,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wo_a.scales",
+          "shard": "model-00008.safetensors",
+          "offset": 82389584,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wo_a.weight",
+          "shard": "model-00008.safetensors",
+          "offset": 141325136,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wo_a.scales",
+          "shard": "model-00009.safetensors",
+          "offset": 53479410,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wo_a.weight",
+          "shard": "model-00009.safetensors",
+          "offset": 96471122,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wo_a.scales",
+          "shard": "model-00010.safetensors",
+          "offset": 171290732,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wo_a.weight",
+          "shard": "model-00010.safetensors",
+          "offset": 16315392,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wo_a.scales",
+          "shard": "model-00011.safetensors",
+          "offset": 157485155,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wo_a.weight",
+          "shard": "model-00011.safetensors",
+          "offset": 117980771,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wo_a.scales",
+          "shard": "model-00012.safetensors",
+          "offset": 114143330,
+          "length": 1048576,
+          "dtype": "U8",
+          "shape": [
+            8192,
+            128
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wo_a.weight",
+          "shard": "model-00012.safetensors",
+          "offset": 115191906,
+          "length": 33554432,
+          "dtype": "U32",
+          "shape": [
+            8192,
+            1024
+          ]
+        }
+      ],
+      "trace206_saved_expert_read_bytes": 19676528640,
+      "trace206_added_dense_read_bytes": 552977039360,
+      "trace206_net_added_read_bytes": 533300510720
+    },
+    "wo_b": {
+      "uniform_layers": true,
+      "source_layer0_signature": [
+        [
+          "scales",
+          "U8",
+          [
+            5120,
+            256
+          ],
+          1310720
+        ],
+        [
+          "weight",
+          "U32",
+          [
+            5120,
+            2048
+          ],
+          41943040
+        ]
+      ],
+      "source_bytes": 1730150400,
+      "resident_bytes": 1730150400,
+      "two_buffer_bytes": 86507520,
+      "payload_freed_bytes": 1643642880,
+      "additional_uniform_expert_slots_payload_only": 2,
+      "payload_projection_slots_per_layer": 112,
+      "bytes_per_verify_if_streaming_resident_representation": 1730150400,
+      "additional_dense_bytes_for_historical_198_calls": 342569779200,
+      "sources": [
+        {
+          "tensor": "layers.0.attn.wo_b.scales",
+          "shard": "model-00003.safetensors",
+          "offset": 3945470,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.0.attn.wo_b.weight",
+          "shard": "model-00003.safetensors",
+          "offset": 131969630,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wo_b.scales",
+          "shard": "model-00004.safetensors",
+          "offset": 129087066,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wo_b.weight",
+          "shard": "model-00004.safetensors",
+          "offset": 133019494,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wo_b.scales",
+          "shard": "model-00013.safetensors",
+          "offset": 127954032,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wo_b.weight",
+          "shard": "model-00013.safetensors",
+          "offset": 131970684,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wo_b.scales",
+          "shard": "model-00014.safetensors",
+          "offset": 78753050,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wo_b.weight",
+          "shard": "model-00014.safetensors",
+          "offset": 80270106,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wo_b.scales",
+          "shard": "model-00015.safetensors",
+          "offset": 45534222,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wo_b.weight",
+          "shard": "model-00015.safetensors",
+          "offset": 88085006,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wo_b.scales",
+          "shard": "model-00016.safetensors",
+          "offset": 97703540,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wo_b.weight",
+          "shard": "model-00016.safetensors",
+          "offset": 54710900,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wo_b.scales",
+          "shard": "model-00017.safetensors",
+          "offset": 109542887,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wo_b.weight",
+          "shard": "model-00017.safetensors",
+          "offset": 4316647,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wo_b.scales",
+          "shard": "model-00018.safetensors",
+          "offset": 128276098,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wo_b.weight",
+          "shard": "model-00018.safetensors",
+          "offset": 26314882,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wo_b.scales",
+          "shard": "model-00019.safetensors",
+          "offset": 61549938,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wo_b.weight",
+          "shard": "model-00019.safetensors",
+          "offset": 88419698,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wo_b.scales",
+          "shard": "model-00020.safetensors",
+          "offset": 31851138,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wo_b.weight",
+          "shard": "model-00020.safetensors",
+          "offset": 130024066,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wo_b.scales",
+          "shard": "model-00021.safetensors",
+          "offset": 88524828,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wo_b.weight",
+          "shard": "model-00021.safetensors",
+          "offset": 34775068,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wo_b.scales",
+          "shard": "model-00022.safetensors",
+          "offset": 94028578,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wo_b.weight",
+          "shard": "model-00022.safetensors",
+          "offset": 130394414,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wo_b.scales",
+          "shard": "model-00005.safetensors",
+          "offset": 87466441,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wo_b.weight",
+          "shard": "model-00005.safetensors",
+          "offset": 100862665,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wo_b.scales",
+          "shard": "model-00023.safetensors",
+          "offset": 179017997,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wo_b.weight",
+          "shard": "model-00023.safetensors",
+          "offset": 94017805,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wo_b.scales",
+          "shard": "model-00024.safetensors",
+          "offset": 62965776,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wo_b.weight",
+          "shard": "model-00024.safetensors",
+          "offset": 112620072,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wo_b.scales",
+          "shard": "model-00025.safetensors",
+          "offset": 81386356,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wo_b.weight",
+          "shard": "model-00025.safetensors",
+          "offset": 84677492,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wo_b.scales",
+          "shard": "model-00026.safetensors",
+          "offset": 173558642,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wo_b.weight",
+          "shard": "model-00026.safetensors",
+          "offset": 27530002,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wo_b.scales",
+          "shard": "model-00027.safetensors",
+          "offset": 108525853,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wo_b.weight",
+          "shard": "model-00027.safetensors",
+          "offset": 109836573,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wo_b.scales",
+          "shard": "model-00028.safetensors",
+          "offset": 52247666,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wo_b.weight",
+          "shard": "model-00028.safetensors",
+          "offset": 133019518,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wo_b.scales",
+          "shard": "model-00029.safetensors",
+          "offset": 167097232,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wo_b.weight",
+          "shard": "model-00029.safetensors",
+          "offset": 40077956,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wo_b.scales",
+          "shard": "model-00030.safetensors",
+          "offset": 52555386,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wo_b.weight",
+          "shard": "model-00030.safetensors",
+          "offset": 54234746,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wo_b.scales",
+          "shard": "model-00031.safetensors",
+          "offset": 51349945,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wo_b.weight",
+          "shard": "model-00031.safetensors",
+          "offset": 133511353,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wo_b.scales",
+          "shard": "model-00032.safetensors",
+          "offset": 133089314,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wo_b.weight",
+          "shard": "model-00032.safetensors",
+          "offset": 48628258,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wo_b.scales",
+          "shard": "model-00006.safetensors",
+          "offset": 51036236,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wo_b.weight",
+          "shard": "model-00006.safetensors",
+          "offset": 94658648,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wo_b.scales",
+          "shard": "model-00033.safetensors",
+          "offset": 86354030,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wo_b.weight",
+          "shard": "model-00033.safetensors",
+          "offset": 99461486,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wo_b.scales",
+          "shard": "model-00034.safetensors",
+          "offset": 4314232,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wo_b.weight",
+          "shard": "model-00034.safetensors",
+          "offset": 36342136,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wo_b.scales",
+          "shard": "model-00035.safetensors",
+          "offset": 14513603,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wo_b.weight",
+          "shard": "model-00035.safetensors",
+          "offset": 33735619,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wo_b.scales",
+          "shard": "model-00036.safetensors",
+          "offset": 76287014,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wo_b.weight",
+          "shard": "model-00036.safetensors",
+          "offset": 129087014,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wo_b.scales",
+          "shard": "model-00037.safetensors",
+          "offset": 45683738,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wo_b.weight",
+          "shard": "model-00037.safetensors",
+          "offset": 46997530,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wo_b.scales",
+          "shard": "model-00038.safetensors",
+          "offset": 115786638,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wo_b.weight",
+          "shard": "model-00038.safetensors",
+          "offset": 130397070,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wo_b.scales",
+          "shard": "model-00039.safetensors",
+          "offset": 97868225,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wo_b.weight",
+          "shard": "model-00039.safetensors",
+          "offset": 104421825,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wo_b.scales",
+          "shard": "model-00040.safetensors",
+          "offset": 31674884,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wo_b.weight",
+          "shard": "model-00040.safetensors",
+          "offset": 51623428,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wo_b.scales",
+          "shard": "model-00041.safetensors",
+          "offset": 115941516,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wo_b.weight",
+          "shard": "model-00041.safetensors",
+          "offset": 133008036,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wo_b.scales",
+          "shard": "model-00042.safetensors",
+          "offset": 121257594,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wo_b.weight",
+          "shard": "model-00042.safetensors",
+          "offset": 72555130,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wo_b.scales",
+          "shard": "model-00007.safetensors",
+          "offset": 137842776,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wo_b.weight",
+          "shard": "model-00007.safetensors",
+          "offset": 92908632,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wo_b.scales",
+          "shard": "model-00008.safetensors",
+          "offset": 95439696,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wo_b.weight",
+          "shard": "model-00008.safetensors",
+          "offset": 96750416,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wo_b.scales",
+          "shard": "model-00009.safetensors",
+          "offset": 16110482,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wo_b.weight",
+          "shard": "model-00009.safetensors",
+          "offset": 54527986,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wo_b.scales",
+          "shard": "model-00010.safetensors",
+          "offset": 110901772,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wo_b.weight",
+          "shard": "model-00010.safetensors",
+          "offset": 68957196,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wo_b.scales",
+          "shard": "model-00011.safetensors",
+          "offset": 69484131,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wo_b.weight",
+          "shard": "model-00011.safetensors",
+          "offset": 76037731,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wo_b.scales",
+          "shard": "model-00012.safetensors",
+          "offset": 112832514,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            5120,
+            256
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wo_b.weight",
+          "shard": "model-00012.safetensors",
+          "offset": 70510594,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            5120,
+            2048
+          ]
+        }
+      ],
+      "trace206_saved_expert_read_bytes": 13430292480,
+      "trace206_added_dense_read_bytes": 356410982400,
+      "trace206_net_added_read_bytes": 342980689920
+    },
+    "wq_a": {
+      "uniform_layers": true,
+      "source_layer0_signature": [
+        [
+          "scales",
+          "U8",
+          [
+            1280,
+            160
+          ],
+          204800
+        ],
+        [
+          "weight",
+          "U32",
+          [
+            1280,
+            1280
+          ],
+          6553600
+        ]
+      ],
+      "source_bytes": 270336000,
+      "resident_bytes": 270336000,
+      "two_buffer_bytes": 13516800,
+      "payload_freed_bytes": 256819200,
+      "additional_uniform_expert_slots_payload_only": 0,
+      "payload_projection_slots_per_layer": 110,
+      "bytes_per_verify_if_streaming_resident_representation": 270336000,
+      "additional_dense_bytes_for_historical_198_calls": 53526528000,
+      "sources": [
+        {
+          "tensor": "layers.0.attn.wq_a.scales",
+          "shard": "model-00003.safetensors",
+          "offset": 131393630,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.0.attn.wq_a.weight",
+          "shard": "model-00003.safetensors",
+          "offset": 106488414,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wq_a.scales",
+          "shard": "model-00004.safetensors",
+          "offset": 43813978,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wq_a.weight",
+          "shard": "model-00004.safetensors",
+          "offset": 44018778,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wq_a.scales",
+          "shard": "model-00013.safetensors",
+          "offset": 32209520,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wq_a.weight",
+          "shard": "model-00013.safetensors",
+          "offset": 44210800,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wq_a.scales",
+          "shard": "model-00014.safetensors",
+          "offset": 80063770,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wq_a.weight",
+          "shard": "model-00014.safetensors",
+          "offset": 72196890,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wq_a.scales",
+          "shard": "model-00015.safetensors",
+          "offset": 33522702,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wq_a.weight",
+          "shard": "model-00015.safetensors",
+          "offset": 46844942,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wq_a.scales",
+          "shard": "model-00016.safetensors",
+          "offset": 36155924,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wq_a.weight",
+          "shard": "model-00016.safetensors",
+          "offset": 36360724,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wq_a.scales",
+          "shard": "model-00017.safetensors",
+          "offset": 172953831,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wq_a.weight",
+          "shard": "model-00017.safetensors",
+          "offset": 100367847,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wq_a.scales",
+          "shard": "model-00018.safetensors",
+          "offset": 132028034,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wq_a.weight",
+          "shard": "model-00018.safetensors",
+          "offset": 132232834,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wq_a.scales",
+          "shard": "model-00019.safetensors",
+          "offset": 49548402,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wq_a.weight",
+          "shard": "model-00019.safetensors",
+          "offset": 167669118,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wq_a.scales",
+          "shard": "model-00020.safetensors",
+          "offset": 122897026,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wq_a.weight",
+          "shard": "model-00020.safetensors",
+          "offset": 123470466,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wq_a.scales",
+          "shard": "model-00021.safetensors",
+          "offset": 22773788,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wq_a.weight",
+          "shard": "model-00021.safetensors",
+          "offset": 134485532,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wq_a.scales",
+          "shard": "model-00022.safetensors",
+          "offset": 75463446,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wq_a.weight",
+          "shard": "model-00022.safetensors",
+          "offset": 87464738,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wq_a.scales",
+          "shard": "model-00005.safetensors",
+          "offset": 82018761,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wq_a.weight",
+          "shard": "model-00005.safetensors",
+          "offset": 145962185,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wq_a.scales",
+          "shard": "model-00023.safetensors",
+          "offset": 180623629,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wq_a.weight",
+          "shard": "model-00023.safetensors",
+          "offset": 172464397,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wq_a.scales",
+          "shard": "model-00024.safetensors",
+          "offset": 62759440,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wq_a.weight",
+          "shard": "model-00024.safetensors",
+          "offset": 166442632,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wq_a.scales",
+          "shard": "model-00025.safetensors",
+          "offset": 2337908,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wq_a.weight",
+          "shard": "model-00025.safetensors",
+          "offset": 74832756,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wq_a.scales",
+          "shard": "model-00026.safetensors",
+          "offset": 82018578,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wq_a.weight",
+          "shard": "model-00026.safetensors",
+          "offset": 75464978,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wq_a.scales",
+          "shard": "model-00027.safetensors",
+          "offset": 107993373,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wq_a.weight",
+          "shard": "model-00027.safetensors",
+          "offset": 25931037,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wq_a.scales",
+          "shard": "model-00028.safetensors",
+          "offset": 54694014,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wq_a.weight",
+          "shard": "model-00028.safetensors",
+          "offset": 28275814,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wq_a.scales",
+          "shard": "model-00029.safetensors",
+          "offset": 133337732,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wq_a.weight",
+          "shard": "model-00029.safetensors",
+          "offset": 125284996,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wq_a.scales",
+          "shard": "model-00030.safetensors",
+          "offset": 43165210,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wq_a.weight",
+          "shard": "model-00030.safetensors",
+          "offset": 43370010,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wq_a.scales",
+          "shard": "model-00031.safetensors",
+          "offset": 25574329,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wq_a.weight",
+          "shard": "model-00031.safetensors",
+          "offset": 40853945,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wq_a.scales",
+          "shard": "model-00032.safetensors",
+          "offset": 90571298,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wq_a.weight",
+          "shard": "model-00032.safetensors",
+          "offset": 134402594,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wq_a.scales",
+          "shard": "model-00006.safetensors",
+          "offset": 174754136,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wq_a.weight",
+          "shard": "model-00006.safetensors",
+          "offset": 23976428,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wq_a.scales",
+          "shard": "model-00033.safetensors",
+          "offset": 20411502,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wq_a.weight",
+          "shard": "model-00033.safetensors",
+          "offset": 79800430,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wq_a.scales",
+          "shard": "model-00034.safetensors",
+          "offset": 126781816,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wq_a.weight",
+          "shard": "model-00034.safetensors",
+          "offset": 78285176,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wq_a.scales",
+          "shard": "model-00035.safetensors",
+          "offset": 33530819,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wq_a.weight",
+          "shard": "model-00035.safetensors",
+          "offset": 110282691,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wq_a.scales",
+          "shard": "model-00036.safetensors",
+          "offset": 76000294,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wq_a.weight",
+          "shard": "model-00036.safetensors",
+          "offset": 122533414,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wq_a.scales",
+          "shard": "model-00037.safetensors",
+          "offset": 130883706,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wq_a.weight",
+          "shard": "model-00037.safetensors",
+          "offset": 131102342,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wq_a.scales",
+          "shard": "model-00038.safetensors",
+          "offset": 109026446,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wq_a.weight",
+          "shard": "model-00038.safetensors",
+          "offset": 109231246,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wq_a.scales",
+          "shard": "model-00039.safetensors",
+          "offset": 179115969,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wq_a.weight",
+          "shard": "model-00039.safetensors",
+          "offset": 90577345,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wq_a.scales",
+          "shard": "model-00040.safetensors",
+          "offset": 33067524,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wq_a.weight",
+          "shard": "model-00040.safetensors",
+          "offset": 33272324,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wq_a.scales",
+          "shard": "model-00041.safetensors",
+          "offset": 117252236,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wq_a.weight",
+          "shard": "model-00041.safetensors",
+          "offset": 37858348,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wq_a.scales",
+          "shard": "model-00042.safetensors",
+          "offset": 114498170,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wq_a.weight",
+          "shard": "model-00042.safetensors",
+          "offset": 114702970,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wq_a.scales",
+          "shard": "model-00007.safetensors",
+          "offset": 139153496,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wq_a.weight",
+          "shard": "model-00007.safetensors",
+          "offset": 85306456,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wq_a.scales",
+          "shard": "model-00008.safetensors",
+          "offset": 83438160,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wq_a.weight",
+          "shard": "model-00008.safetensors",
+          "offset": 4684368,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wq_a.scales",
+          "shard": "model-00009.safetensors",
+          "offset": 33161714,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wq_a.weight",
+          "shard": "model-00009.safetensors",
+          "offset": 46925810,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wq_a.scales",
+          "shard": "model-00010.safetensors",
+          "offset": 16110592,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wq_a.weight",
+          "shard": "model-00010.safetensors",
+          "offset": 50607116,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wq_a.scales",
+          "shard": "model-00011.safetensors",
+          "offset": 20413795,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wq_a.weight",
+          "shard": "model-00011.safetensors",
+          "offset": 20618595,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wq_a.scales",
+          "shard": "model-00012.safetensors",
+          "offset": 70305794,
+          "length": 204800,
+          "dtype": "U8",
+          "shape": [
+            1280,
+            160
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wq_a.weight",
+          "shard": "model-00012.safetensors",
+          "offset": 16184834,
+          "length": 6553600,
+          "dtype": "U32",
+          "shape": [
+            1280,
+            1280
+          ]
+        }
+      ],
+      "trace206_saved_expert_read_bytes": 0,
+      "trace206_added_dense_read_bytes": 55689216000,
+      "trace206_net_added_read_bytes": 55689216000
+    },
+    "wq_b": {
+      "uniform_layers": true,
+      "source_layer0_signature": [
+        [
+          "scales",
+          "U8",
+          [
+            32768,
+            40
+          ],
+          1310720
+        ],
+        [
+          "weight",
+          "U32",
+          [
+            32768,
+            320
+          ],
+          41943040
+        ]
+      ],
+      "source_bytes": 1730150400,
+      "resident_bytes": 1730150400,
+      "two_buffer_bytes": 86507520,
+      "payload_freed_bytes": 1643642880,
+      "additional_uniform_expert_slots_payload_only": 2,
+      "payload_projection_slots_per_layer": 112,
+      "bytes_per_verify_if_streaming_resident_representation": 1730150400,
+      "additional_dense_bytes_for_historical_198_calls": 342569779200,
+      "sources": [
+        {
+          "tensor": "layers.0.attn.wq_b.scales",
+          "shard": "model-00003.safetensors",
+          "offset": 51438174,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.0.attn.wq_b.weight",
+          "shard": "model-00003.safetensors",
+          "offset": 64545374,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wq_b.scales",
+          "shard": "model-00004.safetensors",
+          "offset": 42133082,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.1.attn.wq_b.weight",
+          "shard": "model-00004.safetensors",
+          "offset": 87144026,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wq_b.scales",
+          "shard": "model-00013.safetensors",
+          "offset": 50776176,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.10.attn.wq_b.weight",
+          "shard": "model-00013.safetensors",
+          "offset": 52455536,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wq_b.scales",
+          "shard": "model-00014.safetensors",
+          "offset": 158102394,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.11.attn.wq_b.weight",
+          "shard": "model-00014.safetensors",
+          "offset": 30253850,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wq_b.scales",
+          "shard": "model-00015.safetensors",
+          "offset": 32211982,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.12.attn.wq_b.weight",
+          "shard": "model-00015.safetensors",
+          "offset": 133019150,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wq_b.scales",
+          "shard": "model-00016.safetensors",
+          "offset": 32221204,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.13.attn.wq_b.weight",
+          "shard": "model-00016.safetensors",
+          "offset": 132568948,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wq_b.scales",
+          "shard": "model-00017.safetensors",
+          "offset": 110853607,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.14.attn.wq_b.weight",
+          "shard": "model-00017.safetensors",
+          "offset": 46259687,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wq_b.scales",
+          "shard": "model-00018.safetensors",
+          "offset": 130717314,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.15.attn.wq_b.weight",
+          "shard": "model-00018.safetensors",
+          "offset": 80434818,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wq_b.scales",
+          "shard": "model-00019.safetensors",
+          "offset": 2352146,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.16.attn.wq_b.weight",
+          "shard": "model-00019.safetensors",
+          "offset": 7605266,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wq_b.scales",
+          "shard": "model-00020.safetensors",
+          "offset": 78512770,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.17.attn.wq_b.weight",
+          "shard": "model-00020.safetensors",
+          "offset": 79823490,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wq_b.scales",
+          "shard": "model-00021.safetensors",
+          "offset": 21463068,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.18.attn.wq_b.weight",
+          "shard": "model-00021.safetensors",
+          "offset": 92541468,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wq_b.scales",
+          "shard": "model-00022.safetensors",
+          "offset": 32209430,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.19.attn.wq_b.weight",
+          "shard": "model-00022.safetensors",
+          "offset": 33520150,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wq_b.scales",
+          "shard": "model-00005.safetensors",
+          "offset": 88777161,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.2.attn.wq_b.weight",
+          "shard": "model-00005.safetensors",
+          "offset": 40074697,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wq_b.scales",
+          "shard": "model-00023.safetensors",
+          "offset": 44375309,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.20.attn.wq_b.weight",
+          "shard": "model-00023.safetensors",
+          "offset": 52074765,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wq_b.scales",
+          "shard": "model-00024.safetensors",
+          "offset": 61448720,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.21.attn.wq_b.weight",
+          "shard": "model-00024.safetensors",
+          "offset": 6280208,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wq_b.scales",
+          "shard": "model-00025.safetensors",
+          "offset": 73440116,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.22.attn.wq_b.weight",
+          "shard": "model-00025.safetensors",
+          "offset": 18271604,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wq_b.scales",
+          "shard": "model-00026.safetensors",
+          "offset": 73785618,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.23.attn.wq_b.weight",
+          "shard": "model-00026.safetensors",
+          "offset": 119447826,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wq_b.scales",
+          "shard": "model-00027.safetensors",
+          "offset": 163956605,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.24.attn.wq_b.weight",
+          "shard": "model-00027.safetensors",
+          "offset": 32494877,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wq_b.scales",
+          "shard": "model-00028.safetensors",
+          "offset": 50568306,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.25.attn.wq_b.weight",
+          "shard": "model-00028.safetensors",
+          "offset": 88454782,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wq_b.scales",
+          "shard": "model-00029.safetensors",
+          "offset": 82020996,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.26.attn.wq_b.weight",
+          "shard": "model-00029.safetensors",
+          "offset": 83331716,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wq_b.scales",
+          "shard": "model-00030.safetensors",
+          "offset": 96177786,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.27.attn.wq_b.weight",
+          "shard": "model-00030.safetensors",
+          "offset": 99454842,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wq_b.scales",
+          "shard": "model-00031.safetensors",
+          "offset": 37577145,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.28.attn.wq_b.weight",
+          "shard": "model-00031.safetensors",
+          "offset": 52660665,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wq_b.scales",
+          "shard": "model-00032.safetensors",
+          "offset": 47317538,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.29.attn.wq_b.weight",
+          "shard": "model-00032.safetensors",
+          "offset": 91144738,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wq_b.scales",
+          "shard": "model-00006.safetensors",
+          "offset": 49643596,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.3.attn.wq_b.weight",
+          "shard": "model-00006.safetensors",
+          "offset": 52715608,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wq_b.scales",
+          "shard": "model-00033.safetensors",
+          "offset": 33841774,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.30.attn.wq_b.weight",
+          "shard": "model-00033.safetensors",
+          "offset": 35152494,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wq_b.scales",
+          "shard": "model-00034.safetensors",
+          "offset": 35031416,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.31.attn.wq_b.weight",
+          "shard": "model-00034.safetensors",
+          "offset": 84838776,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wq_b.scales",
+          "shard": "model-00035.safetensors",
+          "offset": 179222747,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.32.attn.wq_b.weight",
+          "shard": "model-00035.safetensors",
+          "offset": 131708879,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wq_b.scales",
+          "shard": "model-00036.safetensors",
+          "offset": 73628198,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.33.attn.wq_b.weight",
+          "shard": "model-00036.safetensors",
+          "offset": 80589350,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wq_b.scales",
+          "shard": "model-00037.safetensors",
+          "offset": 44004378,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.34.attn.wq_b.weight",
+          "shard": "model-00037.safetensors",
+          "offset": 88940570,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wq_b.scales",
+          "shard": "model-00038.safetensors",
+          "offset": 103783566,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.35.attn.wq_b.weight",
+          "shard": "model-00038.safetensors",
+          "offset": 3945614,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wq_b.scales",
+          "shard": "model-00039.safetensors",
+          "offset": 13767617,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.36.attn.wq_b.weight",
+          "shard": "model-00039.safetensors",
+          "offset": 15079873,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wq_b.scales",
+          "shard": "model-00040.safetensors",
+          "offset": 93566468,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.37.attn.wq_b.weight",
+          "shard": "model-00040.safetensors",
+          "offset": 133019236,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wq_b.scales",
+          "shard": "model-00041.safetensors",
+          "offset": 114630796,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.38.attn.wq_b.weight",
+          "shard": "model-00041.safetensors",
+          "offset": 56209964,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wq_b.scales",
+          "shard": "model-00042.safetensors",
+          "offset": 159151994,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.39.attn.wq_b.weight",
+          "shard": "model-00042.safetensors",
+          "offset": 30612090,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wq_b.scales",
+          "shard": "model-00007.safetensors",
+          "offset": 38110296,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.4.attn.wq_b.weight",
+          "shard": "model-00007.safetensors",
+          "offset": 43363416,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wq_b.scales",
+          "shard": "model-00008.safetensors",
+          "offset": 27336784,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.5.attn.wq_b.weight",
+          "shard": "model-00008.safetensors",
+          "offset": 40443984,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wq_b.scales",
+          "shard": "model-00009.safetensors",
+          "offset": 33366514,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.6.attn.wq_b.weight",
+          "shard": "model-00009.safetensors",
+          "offset": 130028370,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wq_b.scales",
+          "shard": "model-00010.safetensors",
+          "offset": 112222732,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.7.attn.wq_b.weight",
+          "shard": "model-00010.safetensors",
+          "offset": 113536108,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wq_b.scales",
+          "shard": "model-00011.safetensors",
+          "offset": 158533987,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.8.attn.wq_b.weight",
+          "shard": "model-00011.safetensors",
+          "offset": 27540835,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wq_b.scales",
+          "shard": "model-00012.safetensors",
+          "offset": 27052034,
+          "length": 1310720,
+          "dtype": "U8",
+          "shape": [
+            32768,
+            40
+          ]
+        },
+        {
+          "tensor": "layers.9.attn.wq_b.weight",
+          "shard": "model-00012.safetensors",
+          "offset": 28362754,
+          "length": 41943040,
+          "dtype": "U32",
+          "shape": [
+            32768,
+            320
+          ]
+        }
+      ],
+      "trace206_saved_expert_read_bytes": 13430292480,
+      "trace206_added_dense_read_bytes": 356410982400,
+      "trace206_net_added_read_bytes": 342980689920
+    }
+  },
+  "capacity_replay": {
+    "73": {
+      "reads": 53999,
+      "reads_by_layer": [
+        2735,
+        2332,
+        1939,
+        1323,
+        1733,
+        1360,
+        899,
+        1175,
+        1236,
+        1132,
+        1165,
+        1065,
+        1339,
+        1640,
+        913,
+        1761,
+        851,
+        1070,
+        896,
+        1942,
+        627,
+        780,
+        929,
+        1435,
+        709,
+        774,
+        797,
+        1396,
+        783,
+        1163,
+        1214,
+        1344,
+        1395,
+        1462,
+        1323,
+        1441,
+        1590,
+        1956,
+        2092,
+        2283
+      ]
+    },
+    "110": {
+      "reads": 32033,
+      "reads_by_layer": [
+        1738,
+        1480,
+        1211,
+        777,
+        1127,
+        867,
+        530,
+        687,
+        673,
+        576,
+        674,
+        590,
+        738,
+        979,
+        472,
+        1075,
+        436,
+        620,
+        485,
+        1163,
+        394,
+        451,
+        577,
+        930,
+        418,
+        423,
+        430,
+        840,
+        455,
+        714,
+        734,
+        770,
+        811,
+        848,
+        759,
+        848,
+        926,
+        1188,
+        1269,
+        1350
+      ]
+    },
+    "112": {
+      "reads": 31274,
+      "reads_by_layer": [
+        1701,
+        1451,
+        1183,
+        758,
+        1106,
+        847,
+        518,
+        665,
+        650,
+        559,
+        658,
+        576,
+        716,
+        960,
+        461,
+        1053,
+        423,
+        597,
+        473,
+        1135,
+        386,
+        443,
+        563,
+        908,
+        400,
+        419,
+        419,
+        818,
+        437,
+        699,
+        719,
+        746,
+        784,
+        829,
+        740,
+        832,
+        908,
+        1164,
+        1246,
+        1324
+      ]
+    },
+    "113": {
+      "reads": 30921,
+      "reads_by_layer": [
+        1684,
+        1438,
+        1164,
+        750,
+        1098,
+        834,
+        511,
+        655,
+        640,
+        551,
+        655,
+        574,
+        705,
+        956,
+        454,
+        1038,
+        416,
+        589,
+        467,
+        1121,
+        382,
+        438,
+        555,
+        898,
+        395,
+        415,
+        415,
+        811,
+        434,
+        691,
+        713,
+        732,
+        776,
+        820,
+        730,
+        819,
+        900,
+        1146,
+        1237,
+        1314
+      ]
+    }
+  },
+  "scope": "Metadata and fixed native206-cycle route sensitivity only. The full winner has198 hybrid cycles. No measured streaming, overlap, fresh admission, or throughput prediction. Staging/padding/growth copies must be priced separately.",
+  "mlx_imported": false
+}

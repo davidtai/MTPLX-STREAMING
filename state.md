@@ -1,9 +1,9 @@
 # Current Goal
 
-Q4 optimization is shelved at the user's request on 2026-09-18. Preserve all
-DeepSeek V4.1 workspaces and open a draft PR on davidtai/MTPLX-STREAMING, then
-attempt the Q2 main model separately. The eventual target remains 20 decode TPS
-on 16,384 input / 1,024 output Python tokens under 110 decimal GB.
+Q4 optimization resumed at the user's request on 2026-09-19; Q2 is stopped.
+Investigate streaming predictable non-MoE weights ahead of use, recycling a
+bounded buffer ring and assigning freed RAM to expert cache. The target remains
+20 decode TPS on 16,384 input / 1,024 output Python tokens under 110 decimal GB.
 Best single full result: **13.4141517619 TPS / 76.2627423750 s; 20 TPS unmet.**
 All 1,024 native IDs match; 1,023 timed steps, 198 target calls, 84->110 slots.
 The result is not a matched/repeated speedup claim. Fixed Q8 and complete 256K
@@ -29,12 +29,13 @@ prefill verification remain secondary; the full Q8 candidate is 10.7541904 TPS.
   repeated hot-path metadata checks, environment reads or engagement counters.
 - Preserve Claude W126/W127/W128 worktrees. New fixed Q8 is separate from the
   old disabled bounded-KV lane. A 256K allocation is not a verified 256K prefill.
-- User explicitly requests Q2 main-model work after the Q4 checkpoint PR.
-  Draft-only Q2 screens do not establish Q2 target output quality or throughput.
+- User explicitly stops Q2 and returns to Q4. Q2 is saved separately at
+  2c9393fec, including an unverified final prefill correction. No Q2 process or
+  waiter remains. Do not resume Q2 experiments.
 
 # Plan Status
 
-Shelved docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 is incomplete.
+Resumed docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 is incomplete.
 Memory/reporting corrections and automatic shutdown reclamation are retained.
 Current stage adds diagnostic receipts only; production defaults are unchanged.
 Workspace inventory: docs/deepseek-v41/checkpoints/20260918-worktrees.json.
@@ -43,6 +44,22 @@ original indexes and working files remain intact. Ignored artifacts stay in plac
 
 # Evidence
 
+- **Current CPU inventory, 2026-09-19:** all 40 wq_b query projections total
+  1,730,150,400 B with uniform MXFP8 shapes. Two rotating buffers need
+  86,507,520 B, freeing 1,643,642,880 B of payload: two extra packed experts per
+  layer before staging/padding/growth costs. Historical 110-to-112 capacity
+  replay saves 13,430,292,480 B of expert reads on 206 native cycles, while
+  rereading these dense weights adds 356,410,982,400 B. This is an overlap
+  candidate, not a bandwidth saving or measured speedup. Existing input-row
+  retirement already frees 1,323,827,200 B after prefill. The historical
+  73-slot replay still matches all 53,999 reads; no MLX import occurred.
+  Root: `/tmp/dsv41-q4-dense-prefetch-20260919`. No new Q4 GPU run has launched.
+  Next: establish real overlap and safe buffer retirement for one fixed dense
+  family before integrating a full-model route. Preserve quantized values and
+  original kernels; avoid global fences and expert-I/O starvation.
+- Q4 was clean at d8f49e853 before resumption. Draft PR #4 remains open at that
+  exact head, checked 2026-09-19. The saved native response was inspected: a
+  coherent beginning of the requested helper diff, cut at the 1,024-token cap.
 - Full winner: receipts/hybrid-lookup-20260918 under docs/deepseek-v41. Native
   D5 plus at most two past-text lookup tokens, strict allocator and exact input
   row cache. Decode source48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3, native KV16.
@@ -86,11 +103,10 @@ original indexes and working files remain intact. Ignored artifacts stay in plac
 
 # Open Issues and Next Work
 
-- Q4 needs 25.1127 s less decode time to reach 20 TPS and is now shelved.
-  Start Q2 main-model work in a separate worktree after publishing the PR.
-  The old affine Q2 target failed output quality (W9_REPORT.md); compare the
-  linked Vontra recipe with that evidence before building or downloading it.
-  No fresh Q2 target generation or output sanity check has run in this stage.
+- Q4 needs 25.1127 s less decode time to reach 20 TPS. The active candidate
+  streams fixed-order dense weights with bounded lookahead and reuses their
+  buffers. Capacity benefit is priced; real SSD/compute overlap and complete
+  110 GB admission remain unproven. Q2 is stopped and preserved separately.
 - Preserve arithmetic/layout/ownership while reducing expert I/O or verified
   target work. Do not repeat rejected cache-policy, fanout8, GU-gap reads,
   HC, D7/D9/D13, prefix1+5, alignment or unchanged small-kernel candidates.

@@ -995,3 +995,17 @@ The9GiB bound covers3,047,281,161B MLX peak; final Metal8B. Guard33095 exits0,
 restores exactQwen/warmup/releases10:55:23UTC; independent healthy/idle/warmed/
 free check10:55:55UTC. Receipt:reader-hop-20260918. No owned child remains.
 Retained full result13.4141518TPS; Task4 and20TPS stay open.
+
+
+## Q4 resumed: predictable dense prefetch, 2026-09-19
+
+The user stops Q2 and returns to Q4. Resume Task 4 from the saved 13.4142 TPS
+native-output result. Investigate fixed-order non-MoE weight streaming with
+bounded lookahead, GPU-safe buffer reuse, and reclaimed capacity for experts.
+The CPU inventory and native-route sensitivity are preserved in
+`../deepseek-v41/receipts/q4-dense-prefetch-20260919`. Two query-weight buffers
+would free 1.644 GB of payload, enough for two uniform expert slots per layer
+before complete admission. The old native route saves 13.430 GB of expert
+reads but adds 356.411 GB of dense reads; real overlap and demand-I/O priority
+must be measured. No new Q4 GPU run or production route exists yet. Follow
+`../specs/2026-09-19-deepseek-v41-q4-dense-prefetch.md` for the bounded next stage.
