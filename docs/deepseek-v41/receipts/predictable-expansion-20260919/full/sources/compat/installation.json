@@ -1,0 +1,54 @@
+{
+  "source_commit": "d569990aa606bb86c877645f8d10f1d0d1450c58",
+  "runtime_source_sha256": {
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "mtplx/expert_slots.py": "27084ec00f0040644ccc1c93ce4adbc78a65f3fb4b17670cd26d8fb43d75e887",
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+    "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "mtplx/models/expert_mlx.py": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "32d42a85ebe69ce986e6f8a7d0d20eb435ad70206c8fdc8649aa276043055963",
+    "scripts/deepseek_v41/bench_standard_shape.py": "7a2c5873ac54d90b060ea32a6d0d7c5c395bdf2f19f67023dbed58341e4d70ac",
+    "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c"
+  },
+  "scope": "Exact16K/1024 Q4 nativeKV16, retained D5 plus original lookup. Packed target output weights remain resident; exact next-layer BF16 expansion overlaps expert reads. One independent packed expert row per layer added after native seed; no second bank copy. All transition time charged; additional16MiB host reserve.",
+  "explicit_bound_model_levers": {
+    "MTPLX_DSV41_HC_COMPILE": false,
+    "MTPLX_DSV41_ATTN_COMPILE": false,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": false
+  },
+  "helper_sha256": {
+    "admission.py": "08a5093c8d7db1d4367098b0d1b2d4c6f9711fdcf907e58b316c02e7e29c77f8",
+    "phase_growth.py": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac",
+    "bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b"
+  },
+  "phase_memory_control_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+  "numeric_predecessor": "d4051aecc promotes the post-only compiled callable; its archived AST equivalence and strict prefill regression cover this unchanged prefill arithmetic",
+  "runner_failure_policy": "Critical prefill/cache transition exceptions escape telemetry suppression and reach runtime cleanup; completed phase/capacity checked before publishing receipt.",
+  "reporting_update": "8f30fc002 selects actual measured pass and phase budget; model-loading and generation function ASTs unchanged from measured7537ead7.",
+  "process_reader_update": "7953020cd caches only process-reader bindings and rejects short TASK_VM_INFO replies. Whole-machine vm_stat and generation arithmetic unchanged; no full-run speedup claimed.",
+  "diagnostic_reporting_update": {
+    "source_commit": "8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5",
+    "numeric_effect": "none: generation arithmetic AST and tie acceptance gate unchanged",
+    "source_audit": "docs/deepseek-v41/receipts/decode-read-attribution-20260917/confidence-full/diagnostic-source-audit.json",
+    "source_audit_sha256": "c25e7502d469efcbc3afc825e285796a1ab2eba34c3412b2f43bbdabd84ce724"
+  },
+  "guard_reporting_update": {
+    "source_commit": "4a5acf9d4776bbe2a6a0519a4f1fc4b8965274dc",
+    "numeric_effect": "none; memory-reader, admission, sampling cadence and generation arithmetic unchanged",
+    "receipt": "docs/deepseek-v41/receipts/read-kernel-screen-20260917/README.md"
+  },
+  "phase_storage_reporting_update": {
+    "source_commit": "b43f136cbe1e6a7c2c849d10e668dfc85b6ad63f",
+    "scope": "resolved-plan reporting only; generation ASTs unchanged",
+    "receipt": "docs/deepseek-v41/receipts/resident-packed-scales-20260917/reporting-verification.json"
+  },
+  "native_current_source_audit": {
+    "diff_sha256": "1f8aa65bf0544800668f6156628cc5fc3725b86b93e88d7d59c1db38694af51e",
+    "native_kv_bits": 16,
+    "note": "Inspected full changes: native arithmetic and allocations preserved; default110GB is explicit; Q8 factory is excluded at construction; native draft window gather moved unchanged into detach_prefill_backings."
+  },
+  "source_update": "Since ee72b77e0, native model/runtime/benchmark files unchanged; guard observes idle service and supports an opt-in disk purge (disabled here)."
+}

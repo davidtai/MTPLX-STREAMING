@@ -603,3 +603,16 @@ Rejected:
 - Repeating either one-layer-ahead schedule unchanged.
 Open:
 - Material expert traffic or verified target-work reduction.
+
+## 2026-09-19 predictable projection expansion [saved]
+Goal: Reclaim predictable non-MoE storage within the Q4 110 GB budget.
+Decisions:
+- Keep packed projection weights resident and expand ahead; recurring dense SSD traffic was too expensive.
+- Add independent expert rows after native seed; second full-bank copies erase the component benefit.
+- Preserve the memory-saving candidate without claiming an isolated throughput win; source, outputs and every memory phase stay attributable.
+Rejected:
+- Applying late projection savings to unchanged prefill or first-growth peaks.
+- Treating compact storage alone as evidence of 20 TPS.
+Open:
+- Measure whether avoiding the first bank copy pays for extra grouping.
+- Reach 20 TPS on the exact 16K/1K workload.

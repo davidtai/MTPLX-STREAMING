@@ -21,6 +21,19 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Current update, 2026-09-18
 
+**2026-09-19 predictable projection expansion:** Keep all packed target `wo_a`
+weights resident and expand the next BF16 layer during current expert I/O.
+Two exact-output component A/B/A comparisons gain 1.65% and 1.41%; the latter
+charges a separate extra-row bank and avoids a projected 1.798 s second resize.
+The full 16K/1K candidate runs at 13.3988661661 TPS / 76.3497438750 s with all
+1,024 native IDs exact, 198 calls and 31,961 reads. Capacity is 84→109→110 at
+11.483 GB background. Bound 109.965 GB, guard machine peak 108.679 GB, no
+compressor growth. Process and MLX peaks are about 1.17 GB below the historical
+110-slot best. Its wall time is 0.1141% longer, so this is a memory-saving
+candidate, not an isolated speed win or promoted default. Guard restores exact
+Qwen/warmup and releases at 14:33:10 UTC; later inspection finds a foreign owner
+and no owned child/waiter. Task 4 remains open. See predictable-expansion-20260919.
+
 **2026-09-19 finite-lead-time follow-up:** Compact ridge predictions receive
 two bounded three-layer A/B/A comparisons at source 3dcc16054. First-GU issue
 is 1.0988% slower. Earlier issue after demand and resident/shared submission

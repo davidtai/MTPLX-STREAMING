@@ -1,0 +1,228 @@
+{
+  "complete": true,
+  "construction": {
+    "source_commit": "d569990aa606bb86c877645f8d10f1d0d1450c58",
+    "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "strict_allocator": {
+      "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+      "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    },
+    "static_incremental_bound_bytes": 8589934592,
+    "bound_components": {
+      "metal_cache_compiler_bytes": 4294967296,
+      "host_reader_compiler_bytes": 4294967296,
+      "raw_initial_bank_bytes": 2068070400,
+      "final_packed_bank_bytes": 1964113920,
+      "copy_overlap_allowance_bytes": 660602880,
+      "inactive_cache_inside_metal_bytes": 268435456,
+      "compiler_extra_metal_headroom_bytes": 536870912
+    },
+    "touched_files": [],
+    "component_result_sha256": "af4c649638833ff62eecb0244c480d0eab8bf2eb263062a2f92d62e37cc84035",
+    "scope": "No model weight reads or target execution. Synthetic marker data in the exact native packed bank shapes; existing growth helper unchanged.",
+    "sha256": {
+      "/private/tmp/dsv41-predictable-expansion-20260919/growth/bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b",
+      "/private/tmp/dsv41-predictable-expansion-20260919/growth/probe.py": "1bdc6e29bb2020a203e459a9c9a9a9feacc09e4599b889ae468bd3dddcfac8f2",
+      "/private/tmp/dsv41-predictable-expansion-20260919/growth/stage.py": "47f35b0113907603803f1e3f5c3089978ebca32b00d233861138b8078d07d16f",
+      "/private/tmp/dsv41-predictable-expansion-20260919/growth/wait_and_run.py": "c7b1461aa25abbf655b7cab4e142f8ffe49d36425f08e5d7d27bc630b71ea7f0",
+      "/private/tmp/dsv41-predictable-expansion-20260919/growth/library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+      "/private/tmp/dsv41-predictable-expansion-20260919/growth/packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+      "/private/tmp/dsv41-predictable-expansion-20260919/growth/run_screen.py": "eedb8e7d9e7cdd907745ca2c8702460cc17ab4eaaa64e6a9be4e72dfcf3318a3",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/expert_mlx.py": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+      "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/expert-manifest.json": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+      "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    }
+  },
+  "before": {
+    "sample_start_monotonic_ns": 292075047861958,
+    "sample_end_monotonic_ns": 292075050332833,
+    "process": {
+      "peak_maxrss_bytes": 24690688,
+      "resident_bytes": 25001984,
+      "phys_footprint_bytes": 14025184,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123429519360,
+      "wired_bytes": 3514417152,
+      "active_bytes": 2433105920,
+      "inactive_bytes": 2313306112,
+      "speculative_bytes": 109461504,
+      "anonymous_bytes": 2785705984,
+      "file_backed_bytes": 2070167552,
+      "compressor_bytes": 2981953536,
+      "compressed_bytes": 9540911104,
+      "used_bytes": 11242782720,
+      "non_file_used_bytes": 9282076672,
+      "swapins_pages": 4836579,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "library": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "trials": [
+    {
+      "trial": -1,
+      "old_capacity": 2,
+      "capacity": 3,
+      "elapsed_ns": 2874334,
+      "initial_active_bytes": 35389448,
+      "active_bytes": 53084168,
+      "peak_bytes": 70778892,
+      "added_payload_bytes": 17694720,
+      "copy_allowance_bytes": 23592960,
+      "old_payload_exact": true,
+      "new_rows_zero": true,
+      "digests": [
+        {
+          "component": "gate_proj.weight",
+          "old_prefix_sha256": "47176032f3f772802c6d81c04d27a8361e95ec315c18563696b3b1869f5456a2",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "up_proj.weight",
+          "old_prefix_sha256": "928a6cc7e0e0ce412a3e800fb76cc7e914ddabaf098b8f64c103a16619b92637",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "down_proj.weight",
+          "old_prefix_sha256": "537f41dc62b570ec5bc2ea6116516f04b90115ae4bdb072bbc51860ee335786a",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        }
+      ]
+    },
+    {
+      "trial": 0,
+      "old_capacity": 110,
+      "capacity": 111,
+      "elapsed_ns": 44480792,
+      "initial_active_bytes": 1946419208,
+      "active_bytes": 1964113928,
+      "peak_bytes": 2618818572,
+      "added_payload_bytes": 17694720,
+      "copy_allowance_bytes": 660602880,
+      "old_payload_exact": true,
+      "new_rows_zero": true,
+      "digests": [
+        {
+          "component": "gate_proj.weight",
+          "old_prefix_sha256": "dcfe49192e316b1d4b52c456c4d46ed3e5a524ce19085c163c29e2ff459e3636",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "up_proj.weight",
+          "old_prefix_sha256": "be50ef646c866dc859b017964e9a5ea68f6bc68b42d31882e7a25186c78bbfd7",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "down_proj.weight",
+          "old_prefix_sha256": "3d52c32e156e11c22a875e4d0d99566cb1e50bbc077167c9d67f050d3e6e5c41",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        }
+      ]
+    },
+    {
+      "trial": 1,
+      "old_capacity": 110,
+      "capacity": 111,
+      "elapsed_ns": 46886708,
+      "initial_active_bytes": 1946419208,
+      "active_bytes": 1964113928,
+      "peak_bytes": 2618818572,
+      "added_payload_bytes": 17694720,
+      "copy_allowance_bytes": 660602880,
+      "old_payload_exact": true,
+      "new_rows_zero": true,
+      "digests": [
+        {
+          "component": "gate_proj.weight",
+          "old_prefix_sha256": "dcfe49192e316b1d4b52c456c4d46ed3e5a524ce19085c163c29e2ff459e3636",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "up_proj.weight",
+          "old_prefix_sha256": "be50ef646c866dc859b017964e9a5ea68f6bc68b42d31882e7a25186c78bbfd7",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "down_proj.weight",
+          "old_prefix_sha256": "3d52c32e156e11c22a875e4d0d99566cb1e50bbc077167c9d67f050d3e6e5c41",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        }
+      ]
+    },
+    {
+      "trial": 2,
+      "old_capacity": 110,
+      "capacity": 111,
+      "elapsed_ns": 44943833,
+      "initial_active_bytes": 1946419208,
+      "active_bytes": 1964113928,
+      "peak_bytes": 2618818572,
+      "added_payload_bytes": 17694720,
+      "copy_allowance_bytes": 660602880,
+      "old_payload_exact": true,
+      "new_rows_zero": true,
+      "digests": [
+        {
+          "component": "gate_proj.weight",
+          "old_prefix_sha256": "dcfe49192e316b1d4b52c456c4d46ed3e5a524ce19085c163c29e2ff459e3636",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "up_proj.weight",
+          "old_prefix_sha256": "be50ef646c866dc859b017964e9a5ea68f6bc68b42d31882e7a25186c78bbfd7",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        },
+        {
+          "component": "down_proj.weight",
+          "old_prefix_sha256": "3d52c32e156e11c22a875e4d0d99566cb1e50bbc077167c9d67f050d3e6e5c41",
+          "zero_tail_sha256": "91e0c31eb2d6776a903dc5456c5e72e1e447c2d835cebbcde87581738cac735b"
+        }
+      ]
+    }
+  ],
+  "median_one_layer_growth_ns": 44943833,
+  "projected_40_layer_growth_s": 1.79775332,
+  "scope": "Real packed bank geometry and preserved prefix/zero tail; no full model.40-layer time is a projection, not a measured full transition.",
+  "after": {
+    "sample_start_monotonic_ns": 292080708696333,
+    "sample_end_monotonic_ns": 292080715569583,
+    "process": {
+      "peak_maxrss_bytes": 2315812864,
+      "resident_bytes": 2315812864,
+      "phys_footprint_bytes": 2418690304,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 120931975168,
+      "wired_bytes": 5618188288,
+      "active_bytes": 2648080384,
+      "inactive_bytes": 2484895744,
+      "speculative_bytes": 146702336,
+      "anonymous_bytes": 3116777472,
+      "file_backed_bytes": 2162900992,
+      "compressor_bytes": 2981150720,
+      "compressed_bytes": 9538011136,
+      "used_bytes": 13732315136,
+      "non_file_used_bytes": 11716116480,
+      "swapins_pages": 4836579,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "active_after_close_bytes": 8
+}

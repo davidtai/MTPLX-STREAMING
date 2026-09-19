@@ -4,10 +4,10 @@ Q4 resumed at the user's request; Q2 is stopped and preserved separately.
 Target: 20 decode TPS on 16,384 Python prompt / 1,024 output tokens under 110,000,000,000 whole-machine bytes. The target remains unmet.
 Best single full result: 13.4141517619 TPS / 76.2627423750 s, 198 target calls,
 84→110 slots, all 1,024 native IDs exact. This is not an isolated repeated win.
-Latest consensus candidate: 13.3997126089 TPS / 76.3449209590 s, 195 calls,
-84→109 slots, all native IDs exact. Different capacity prevents attribution;
-it is not promoted. Dense-query streaming is 50.07% slower; compact ridge
-prefetch is slower or flat. Neither component justifies full integration.
+Latest packed-projection candidate: 13.3988661661 TPS / 76.3497438750 s,
+84→109→110 slots, all native IDs exact. It saves about 1.17 GB of sampled
+process/MLX peak memory but has no absolute speed win; it is not promoted.
+Q4 only. The dense SSD and ridge-prefetch schedules remain rejected.
 
 # Decisions
 
@@ -47,30 +47,24 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 
 # Evidence
 
-- Ridge receipt: docs/deepseek-v41/receipts/ridge-prefetch-20260919.
-  Scratch /tmp/dsv41-ridge-prefetch-20260919; source 3dcc16054. Three real layers,
-  synthetic predictor inputs, saved routes, no attention.
-  First-GU issue loses 1.0988%; earlier issue gains 0.3085% held-out but its
-  whole replay loses 0.0236%. All outputs exact. Late reads fall 128→117/209;
-  traffic stays 1250 versus 1214 control records. Neither is promoted.
-  Actual 379-slot geometry fits 14 GiB incremental (10 Metal + 4 host).
-  Summary explicitly corrects stale copied descriptions, leaving raw intact.
-  Both guards exit 0 and restore exact Qwen/warmup before release; latest is
-  13:26:40 UTC. Later independent check finds foreign guard 55556 and no owned
-  child/waiter. Local q4-ridge-prefetch-inputs.tar.gz preserves 61 exact files.
-- Consensus receipt: docs/deepseek-v41/receipts/suffix-consensus-20260919.
-  Scratch: /tmp/dsv41-q4-suffix-consensus-20260919; measured source 4b5591e82.
-  Native D5 and lookup plus unanimous repeated suffix, at confidence ≥0.9;
-  32 MiB extra host reserve. Full baseline 11,047,714,816 B admits 109 slots;
-  bound 109,546,420,444 B; guard peak 109,272,825,856 B. Reads 32,357 /
-  572,548,055,040 B. Same coherent Python diff beginning, truncated at 1,024.
-  Guard restores exact Qwen/warmup and releases at 12:45:47 UTC.
-- Dense receipt: docs/deepseek-v41/receipts/q4-dense-prefetch-20260919.
-  Real query weights plus expert I/O, synthetic query inputs, attention omitted.
-  A/B/A/B/A outputs are exact. Resident110 median 1.279569542 s; streamed112
-  1.920236479 s. Savings: 0.336 GB expert reads; added query reads: 8.910 GB.
-  Two buffers free 1.64364288 GB payload. Reject this schedule, not all offload.
-  Guard 37741 restores Qwen; independent healthy/free check passes 11:50:33 UTC.
+- Predictable projection receipt: docs/deepseek-v41/receipts/predictable-expansion-20260919.
+  Scratch /tmp/dsv41-predictable-expansion-20260919; measured source d569990aa.
+  Native packed wo_a remains resident; next exact BF16 transpose is issued
+  during current expert demand. Two buffers plus a priced replacement save
+  1,098,907,648 B conservatively. One extra expert row/layer costs707,788,800 B.
+  Full84→109→110: baseline11,483,348,992 B; bound109,965,277,404 B;
+  guard machine peak108,678,955,008 B, process96,860,719,488 B, MLX95,840,954,166 B.
+  198 calls /31,961 reads /565,540,945,920 B; all1024 native IDs match.
+  40 overflow rows install in54.731209ms without moving existing owners.
+  An unset expert-cache limit is preserved in the full plan/config.
+  Output inspected: coherent Python diff opening, truncated at1024 tokens.
+  Guard5388 exits0, restores exactQwen/warmup, releases14:33:10UTC; later
+  independent check finds foreign owner28587 and no owned child or waiter.
+  Component A/B/A gains1.65%; separate-row variant gains1.41% with allocation
+  charged. A native second resize projects1.798s and is rejected.
+- Earlier ridge, consensus and dense schedules are preserved in their dated
+  20260919 receipts. Ridge is slower/flat; consensus13.3997126089TPS at109 slots
+  is not an isolated comparison; query SSD offload is50.07% slower. No repeats.
 - Retained full winner: docs/deepseek-v41/receipts/hybrid-lookup-20260918.
   Native D5 plus up to two lookup tokens, strict allocator, exact embedding-row
   cache, packed expert scales, native KV16. Scratch full-v1 under
@@ -86,11 +80,14 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 
 # Open Issues and Next Work
 
-- Q4 needs 25.1127 s less decode time to reach 20 TPS. Neither current candidate
-  supplies that reduction. Seek material expert-I/O or verified-target savings.
-  Do not promote consensus or call its 109/110-slot comparison a regression.
-- Compact correction's unlimited-lead-time quality does not produce a material
-  gain in either measured one-layer-ahead schedule. Do not repeat unchanged.
+- Q4 needs25.1127s less decode time to reach20TPS. The projection candidate
+  saves memory with wall time0.1141% longer than the historical best; no
+  isolated/repeated throughput gain. Preserve it for possible composition.
+- Next unmeasured hypothesis: avoid the FIRST84→decode bank copy by keeping
+  old84 rows and adding an extension bank. Extra bank grouping may erase its
+  one-time growth saving. First measure the real two-bank layout and charge
+  allocation; re-derive seed/steady/growth bounds before any full request.
+  Details: scratch next-bank-layout-hypothesis.md. Do not extrapolate one-row.
 - The 80/40/24 draft subset saves 733,224,960 B but its 111-slot full bound
   refused at 11.137 GB background. Do not retry without fresh fitting admission.
 - Strict library: /tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib;
