@@ -653,3 +653,17 @@ Rejected:
 Open:
 - Compose the packed draft route with phase-correct admission, then verify full output and wall time.
 - Material expert traffic or verification reduction to reach20TPS.
+
+## 2026-09-19 17:04 packed draft composition [saved]
+Goal: Schedule non-MoE ownership within110GB while pursuing20TPS on Q4.
+Decisions:
+- Keep native93/58/32 experts; the combined smaller alias table adds a target call.
+- Prime the target projection at84 rows; retain phase-specific credits and256MiB background allowance.
+- Preserve the111-row refusal at12.160GB background; do not weaken admission or retry unchanged.
+Rejected:
+- Promoting indexed input's gain below control variation.
+- Counting prompt-hidden release before the seed hook returns.
+- Treating packed draft head timing as full-model evidence.
+Open:
+- Material I/O or verification savings toward20TPS.
+- Full packed-draft output and timing within fresh memory admission.

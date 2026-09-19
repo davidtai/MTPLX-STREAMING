@@ -1094,3 +1094,26 @@ Next: compose the packed draft route at construction, derive phase-specific
 memory credits, then require fresh full output and timing evidence. Do not
 credit caches during a phase that never owned them or extrapolate the roughly
 0.119-second head saving into closure of the22.61-second gap to20TPS.
+
+## Packed draft composition and rejected components, 2026-09-19
+
+The native93/58/32 packed-draft projection is integrated with target projection
+priming at84 rows before independent extension. Static phase accounting keeps
+403MB draft credit only in steady decode, adds128MiB GPU workspace,16MiB host
+and256MiB background, and preserves110GB/100GiB limits. CPU source/seed/CLI
+checks pass. Fresh12,160,188,416B background refuses the minimum111 rows before
+model loading. The111-row physical counterfactual is111,073,252,600B even with
+zero wired pressure. No full output/TPS result or unchanged retry follows.
+Guard restores exactQwen/warmup/releases17:04:14UTC; independent check sees a
+subsequent foreign window and no owned process.
+See `../deepseek-v41/receipts/packed-draft-composition-20260919` and
+`../specs/2026-09-19-deepseek-v41-packed-draft-composition.md`.
+
+The combined smaller80/40/24 draft alias table plus packed projection adds one
+target call (199 versus198), despite lower head wall; no target runs in that
+component. Direct expert token addressing is0.7377% shorter within0.8438% control
+spread, with206 exact outputs perarm and unchanged759 reads. Neither is promoted
+or sent to full generation. Original staging-pin failure and correctedv2 are
+preserved. No new regression tests are added to these unsuccessful candidates.
+Receipts: `packed-draft-subset-20260919`, `indexed-expert-input-20260919`.
+Task4 remains incomplete; the best full result remains13.8688167379TPS.

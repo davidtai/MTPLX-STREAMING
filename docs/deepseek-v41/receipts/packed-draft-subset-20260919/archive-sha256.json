@@ -1,0 +1,26 @@
+{
+  "source_root": "/private/tmp/dsv41-packed-subset-20260919",
+  "files": {
+    "head/child.json": "c9a13594cb8716e1521adbebb20951947659c5ccce26088525bfb1c3be8ebe5c",
+    "head/command.sh": "47523f35b42da5fbbbcf7d07764940247d4584191e7a6625c082e654fad2b0e8",
+    "head/control-commit-lengths.json": "1bdc9433dcdffceaa6cb5b23559d5ad0f0754335740882e02f941630bc42bcc9",
+    "head/cpu-preflight.json": "853a626cc678833174ce648260d27521124a78d0110e9d3beeca7e0d66dd48e2",
+    "head/draft-config.json": "480886ea7597ae4d31d83667d31f4260c6d60eadaa08939cca878f2cec8a544b",
+    "head/head-screen.json": "45f8e4b4a988976bf87eb75e6854fcc55e8deedb71b2d3c4cb756993a03f7089",
+    "head/head.guard.log": "9b36f5ecc9b5e46228729b5a75dab503569ecc7f57cc4ce5e16437cc7ae87f6a",
+    "head/head_screen.py": "47096c7694e244061819eb8df9e371aa02d1cb0d2f644e909ec45873130ebfc2",
+    "head/installation.json": "5ee48db8bf61d847f6955da475d2b2c0902a113f64fb19cfe736719f5f243840",
+    "head/library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "head/lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b",
+    "head/post-run-health.json": "ec987775795853929bb01e215518a2e940e7607ba6d540ae1a8b48170356136f",
+    "head/pre-run-health.json": "49a4f9d9fe2a959c685ed0cfb80f4cf26bbae30127cba65955772faf4c45ac96",
+    "head/projection.py": "0e85cd5d5e1e517981678ff3df2b5c781de1fc0afd5fc4491bb7fae6710cbbb9",
+    "head/reclamation.json": "c27b96bdbd73401ac841dcf580315b1bb12f7744f74b2ef9ab5d39caec505647",
+    "head/run_head.py": "c9fb044ee161d0fc49b243270351df07ab7b9c4b305117be55c4a634bcb1022f",
+    "head/selection.json": "0186a08a275624b71ea2757b5c1df984bac0044b1cb4fb50713c55ce7912e8aa",
+    "head/wait_and_run.py": "c7b1461aa25abbf655b7cab4e142f8ffe49d36425f08e5d7d27bc630b71ea7f0",
+    "stage_head.py": "070e300d12a6d0a36595e6d07af3f8ba67c4e8be04ae3822f2c178778c70d967"
+  },
+  "external_symlinks_not_copied": {},
+  "scope": "Original diagnostic bytes preserved; paths in source proofs refer to the measured scratch tree."
+}

@@ -1,0 +1,17 @@
+{
+  "cpu_only": true,
+  "source_commit": "b5f41c51d74a770069048dddd0a644f07886a999",
+  "scope": "Composition qualification: native/packed-plus-80-40-24-aliases/native. Original183 physical expert owners remain for comparison; only proposals use the144-expert subset. No target execution or full TPS. Fresh causal lookup per arm, original target teacher only scores proposals.",
+  "static_incremental_bound_bytes": 52613349376,
+  "runtime_source_pins_verified": 7,
+  "helper_pins": {
+    "head_screen.py": "47096c7694e244061819eb8df9e371aa02d1cb0d2f644e909ec45873130ebfc2",
+    "lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b",
+    "run_head.py": "c9fb044ee161d0fc49b243270351df07ab7b9c4b305117be55c4a634bcb1022f",
+    "wait_and_run.py": "c7b1461aa25abbf655b7cab4e142f8ffe49d36425f08e5d7d27bc630b71ea7f0",
+    "projection.py": "0e85cd5d5e1e517981678ff3df2b5c781de1fc0afd5fc4491bb7fae6710cbbb9",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "draft-config.json": "480886ea7597ae4d31d83667d31f4260c6d60eadaa08939cca878f2cec8a544b"
+  },
+  "stage_sha256": "070e300d12a6d0a36595e6d07af3f8ba67c4e8be04ae3822f2c178778c70d967"
+}
