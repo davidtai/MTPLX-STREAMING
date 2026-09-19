@@ -1,0 +1,356 @@
+{
+  "purpose": "REAL-predictor arm: replay the 64 captured D5/M6 verify cycles with the actual ranked 1-ahead predictions; no throughput claim, no production code changed.",
+  "source_commit": "88f599e848be72a035284e828552412e4f75cdb0",
+  "capture_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/.benchmark-artifacts/deepseek-v41/router-feature-20260918/full-router-feature-20260918-v2.router-capture.npz",
+  "capture_sha256": "5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e",
+  "captured_slots_per_layer": 105,
+  "predictor": {
+    "feature": "post_attention_router",
+    "merge_rule": "max",
+    "ranked_width": 8,
+    "note": "window-limited: the compute window admits ~2.37 records, so budget k>~3 is inert in the sim."
+  },
+  "cycles": 64,
+  "record_bytes": 17694720,
+  "rate_gbps": 12.9,
+  "seconds_per_record": 0.0013716837209302325,
+  "c_layer_ms": 3.2520148769173938,
+  "records_per_compute_window": 2.370819765005289,
+  "scope_note": "Layers 0-2 were not instrumented in the capture (0 demand reads modelled there); layer 3 carries its 279 captured reads but is unpredicted. Layers 0-3 are unpredicted and identical across arms, so they do not bias the control-vs-arm delta.",
+  "arms": [
+    {
+      "arm": "control",
+      "width": 8,
+      "ring_size": 16,
+      "rate_gbps": 12.9,
+      "total_decode_s": 23.98765482907466,
+      "tps_1024": 42.68862493213979,
+      "read_wait_exposed_s": 14.95409592558124,
+      "demand_records": 10902,
+      "spec_issued": 0,
+      "spec_useful": 0,
+      "spec_wasted": 0,
+      "spec_precision": null,
+      "hidden_fraction": 0.0,
+      "extra_bytes_read": 0
+    },
+    {
+      "arm": "real",
+      "width": 8,
+      "ring_size": 16,
+      "rate_gbps": 12.9,
+      "total_decode_s": 21.629224720095557,
+      "tps_1024": 47.34335202725084,
+      "read_wait_exposed_s": 12.595665816602143,
+      "demand_records": 10902,
+      "spec_issued": 6912,
+      "spec_useful": 3169,
+      "spec_wasted": 3743,
+      "spec_precision": 0.45847800925925924,
+      "hidden_fraction": 0.2906806090625573,
+      "extra_bytes_read": 66231336960
+    },
+    {
+      "arm": "oracle1",
+      "width": 8,
+      "ring_size": 16,
+      "rate_gbps": 12.9,
+      "total_decode_s": 17.228704210199634,
+      "tps_1024": 59.43569449603631,
+      "read_wait_exposed_s": 8.195145306706241,
+      "demand_records": 10902,
+      "spec_issued": 6021,
+      "spec_useful": 6021,
+      "spec_wasted": 0,
+      "spec_precision": 1.0,
+      "hidden_fraction": 0.5522839845899835,
+      "extra_bytes_read": 0
+    },
+    {
+      "arm": "control",
+      "width": 8,
+      "ring_size": 32,
+      "rate_gbps": 12.9,
+      "total_decode_s": 23.98765482907466,
+      "tps_1024": 42.68862493213979,
+      "read_wait_exposed_s": 14.95409592558124,
+      "demand_records": 10902,
+      "spec_issued": 0,
+      "spec_useful": 0,
+      "spec_wasted": 0,
+      "spec_precision": null,
+      "hidden_fraction": 0.0,
+      "extra_bytes_read": 0
+    },
+    {
+      "arm": "real",
+      "width": 8,
+      "ring_size": 32,
+      "rate_gbps": 12.9,
+      "total_decode_s": 21.61825125032812,
+      "tps_1024": 47.36738361223634,
+      "read_wait_exposed_s": 12.584692346834707,
+      "demand_records": 10902,
+      "spec_issued": 6912,
+      "spec_useful": 3177,
+      "spec_wasted": 3735,
+      "spec_precision": 0.4596354166666667,
+      "hidden_fraction": 0.29141441937259216,
+      "extra_bytes_read": 66089779200
+    },
+    {
+      "arm": "oracle1",
+      "width": 8,
+      "ring_size": 32,
+      "rate_gbps": 12.9,
+      "total_decode_s": 17.228704210199634,
+      "tps_1024": 59.43569449603631,
+      "read_wait_exposed_s": 8.195145306706241,
+      "demand_records": 10902,
+      "spec_issued": 6021,
+      "spec_useful": 6021,
+      "spec_wasted": 0,
+      "spec_precision": 1.0,
+      "hidden_fraction": 0.5522839845899835,
+      "extra_bytes_read": 0
+    },
+    {
+      "arm": "control",
+      "width": 8,
+      "ring_size": 64,
+      "rate_gbps": 12.9,
+      "total_decode_s": 23.98765482907466,
+      "tps_1024": 42.68862493213979,
+      "read_wait_exposed_s": 14.95409592558124,
+      "demand_records": 10902,
+      "spec_issued": 0,
+      "spec_useful": 0,
+      "spec_wasted": 0,
+      "spec_precision": null,
+      "hidden_fraction": 0.0,
+      "extra_bytes_read": 0
+    },
+    {
+      "arm": "real",
+      "width": 8,
+      "ring_size": 64,
+      "rate_gbps": 12.9,
+      "total_decode_s": 21.490684664281638,
+      "tps_1024": 47.64855173283186,
+      "read_wait_exposed_s": 12.457125760788223,
+      "demand_records": 10902,
+      "spec_issued": 6912,
+      "spec_useful": 3270,
+      "spec_wasted": 3642,
+      "spec_precision": 0.4730902777777778,
+      "hidden_fraction": 0.2999449642267474,
+      "extra_bytes_read": 64444170240
+    },
+    {
+      "arm": "oracle1",
+      "width": 8,
+      "ring_size": 64,
+      "rate_gbps": 12.9,
+      "total_decode_s": 17.228704210199634,
+      "tps_1024": 59.43569449603631,
+      "read_wait_exposed_s": 8.195145306706241,
+      "demand_records": 10902,
+      "spec_issued": 6021,
+      "spec_useful": 6021,
+      "spec_wasted": 0,
+      "spec_precision": 1.0,
+      "hidden_fraction": 0.5522839845899835,
+      "extra_bytes_read": 0
+    }
+  ],
+  "primary_ring": 32,
+  "extrapolation_anchor": {
+    "full_control_total_s": 74.667,
+    "full_control_read_wait_s": 43.395,
+    "source": "f1-overlap-sim-20260919 control @ 111+48, rate 12.9"
+  },
+  "extrapolation": {
+    "real": {
+      "ring16": {
+        "arm": "real",
+        "ring_size": 16,
+        "read_wait_reduction_fraction": 0.15771131338970795,
+        "seconds_removed_from_control": 6.843882444546377,
+        "implied_full_total_s": 67.82311755545362,
+        "implied_tps_1024": 15.098096886548394
+      },
+      "ring32": {
+        "arm": "real",
+        "ring_size": 32,
+        "read_wait_reduction_fraction": 0.1584451236997424,
+        "seconds_removed_from_control": 6.875726142950322,
+        "implied_full_total_s": 67.79127385704967,
+        "implied_tps_1024": 15.105188938613127
+      },
+      "ring64": {
+        "arm": "real",
+        "ring_size": 64,
+        "read_wait_reduction_fraction": 0.16697566855389584,
+        "seconds_removed_from_control": 7.24590913689631,
+        "implied_full_total_s": 67.42109086310369,
+        "implied_tps_1024": 15.188125657580926
+      }
+    },
+    "oracle1": {
+      "ring16": {
+        "arm": "oracle1",
+        "ring_size": 16,
+        "read_wait_reduction_fraction": 0.4519798891561738,
+        "seconds_removed_from_control": 19.613667289932163,
+        "implied_full_total_s": 55.053332710067835,
+        "implied_tps_1024": 18.60014552420978
+      },
+      "ring32": {
+        "arm": "oracle1",
+        "ring_size": 32,
+        "read_wait_reduction_fraction": 0.4519798891561738,
+        "seconds_removed_from_control": 19.613667289932163,
+        "implied_full_total_s": 55.053332710067835,
+        "implied_tps_1024": 18.60014552420978
+      },
+      "ring64": {
+        "arm": "oracle1",
+        "ring_size": 64,
+        "read_wait_reduction_fraction": 0.4519798891561738,
+        "seconds_removed_from_control": 19.613667289932163,
+        "implied_full_total_s": 55.053332710067835,
+        "implied_tps_1024": 18.60014552420978
+      }
+    }
+  },
+  "curve": {
+    "post_attention_router": {
+      "max": {
+        "feature": "post_attention_router",
+        "merge_rule": "max",
+        "budgets": [
+          {
+            "k": 1,
+            "all": {
+              "issued": 2304,
+              "useful": 1416,
+              "actual_misses": 10623,
+              "precision": 0.6145833333333334,
+              "miss_coverage": 0.13329567918667043
+            },
+            "heldout": {
+              "issued": 1152,
+              "useful": 692,
+              "actual_misses": 4878,
+              "precision": 0.6006944444444444,
+              "miss_coverage": 0.14186141861418614
+            }
+          },
+          {
+            "k": 2,
+            "all": {
+              "issued": 4608,
+              "useful": 2426,
+              "actual_misses": 10623,
+              "precision": 0.5264756944444444,
+              "miss_coverage": 0.2283723995104961
+            },
+            "heldout": {
+              "issued": 2304,
+              "useful": 1162,
+              "actual_misses": 4878,
+              "precision": 0.5043402777777778,
+              "miss_coverage": 0.23821238212382123
+            }
+          },
+          {
+            "k": 3,
+            "all": {
+              "issued": 6912,
+              "useful": 3168,
+              "actual_misses": 10623,
+              "precision": 0.4583333333333333,
+              "miss_coverage": 0.2982208415701779
+            },
+            "heldout": {
+              "issued": 3456,
+              "useful": 1514,
+              "actual_misses": 4878,
+              "precision": 0.4380787037037037,
+              "miss_coverage": 0.3103731037310373
+            }
+          },
+          {
+            "k": 4,
+            "all": {
+              "issued": 9216,
+              "useful": 3764,
+              "actual_misses": 10623,
+              "precision": 0.4084201388888889,
+              "miss_coverage": 0.3543255200979008
+            },
+            "heldout": {
+              "issued": 4608,
+              "useful": 1790,
+              "actual_misses": 4878,
+              "precision": 0.3884548611111111,
+              "miss_coverage": 0.3669536695366954
+            }
+          },
+          {
+            "k": 6,
+            "all": {
+              "issued": 13824,
+              "useful": 4590,
+              "actual_misses": 10623,
+              "precision": 0.33203125,
+              "miss_coverage": 0.43208133295679185
+            },
+            "heldout": {
+              "issued": 6912,
+              "useful": 2179,
+              "actual_misses": 4878,
+              "precision": 0.3152488425925926,
+              "miss_coverage": 0.44669946699466995
+            }
+          },
+          {
+            "k": 8,
+            "all": {
+              "issued": 18432,
+              "useful": 5229,
+              "actual_misses": 10623,
+              "precision": 0.28369140625,
+              "miss_coverage": 0.4922338322507766
+            },
+            "heldout": {
+              "issued": 9216,
+              "useful": 2485,
+              "actual_misses": 4878,
+              "precision": 0.2696397569444444,
+              "miss_coverage": 0.509430094300943
+            }
+          },
+          {
+            "k": 12,
+            "all": {
+              "issued": 27648,
+              "useful": 6053,
+              "actual_misses": 10623,
+              "precision": 0.2189308449074074,
+              "miss_coverage": 0.5698013743763531
+            },
+            "heldout": {
+              "issued": 13824,
+              "useful": 2864,
+              "actual_misses": 4878,
+              "precision": 0.20717592592592593,
+              "miss_coverage": 0.5871258712587126
+            }
+          }
+        ]
+      }
+    }
+  },
+  "mlx_imported": false
+}

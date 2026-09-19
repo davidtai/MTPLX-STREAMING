@@ -1,0 +1,2035 @@
+{
+  "capture_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/.benchmark-artifacts/deepseek-v41/router-feature-20260918/full-router-feature-20260918-v2.router-capture.npz",
+  "capture_sha256": "5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e",
+  "cycles": 64,
+  "target_layers": [
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+  ],
+  "held_out_cycles": [
+    32,
+    63
+  ],
+  "budgets": [
+    1,
+    2,
+    3,
+    4,
+    6,
+    8,
+    12
+  ],
+  "merge_rules": [
+    "max",
+    "sum"
+  ],
+  "merge_rule_definition": "Per-expert merged score = max (resp. sum) of the per-row predicted gate score over the 6 verify rows; experts ranked by merged score descending; READY physical residents excluded; top-k issued. This is the rank-ordered union of the per-row candidate experts.",
+  "coverage_ceiling_heldout": {
+    "actual_misses": 4878,
+    "predictable_misses": 4863,
+    "excluded_resident_misses": 15,
+    "ceiling_coverage": 0.9969249692496925
+  },
+  "coverage_ceiling_all": {
+    "actual_misses": 10623,
+    "predictable_misses": 10591,
+    "excluded_resident_misses": 32,
+    "ceiling_coverage": 0.9969876682669679
+  },
+  "families": {
+    "existing_pre_attention_mean": {
+      "max": {
+        "feature": "existing_pre_attention_mean",
+        "merge_rule": "max",
+        "budgets": [
+          {
+            "k": 1,
+            "all": {
+              "issued": 2304,
+              "useful": 1232,
+              "actual_misses": 10623,
+              "precision": 0.5347222222222222,
+              "miss_coverage": 0.11597477172173586
+            },
+            "heldout": {
+              "issued": 1152,
+              "useful": 612,
+              "actual_misses": 4878,
+              "precision": 0.53125,
+              "miss_coverage": 0.12546125461254612
+            }
+          },
+          {
+            "k": 2,
+            "all": {
+              "issued": 4608,
+              "useful": 2118,
+              "actual_misses": 10623,
+              "precision": 0.4596354166666667,
+              "miss_coverage": 0.19937870658006213
+            },
+            "heldout": {
+              "issued": 2304,
+              "useful": 1048,
+              "actual_misses": 4878,
+              "precision": 0.4548611111111111,
+              "miss_coverage": 0.21484214842148422
+            }
+          },
+          {
+            "k": 3,
+            "all": {
+              "issued": 6912,
+              "useful": 2767,
+              "actual_misses": 10623,
+              "precision": 0.40031828703703703,
+              "miss_coverage": 0.26047255954061943
+            },
+            "heldout": {
+              "issued": 3456,
+              "useful": 1365,
+              "actual_misses": 4878,
+              "precision": 0.3949652777777778,
+              "miss_coverage": 0.27982779827798276
+            }
+          },
+          {
+            "k": 4,
+            "all": {
+              "issued": 9216,
+              "useful": 3274,
+              "actual_misses": 10623,
+              "precision": 0.3552517361111111,
+              "miss_coverage": 0.30819919043584676
+            },
+            "heldout": {
+              "issued": 4608,
+              "useful": 1612,
+              "actual_misses": 4878,
+              "precision": 0.3498263888888889,
+              "miss_coverage": 0.33046330463304635
+            }
+          },
+          {
+            "k": 6,
+            "all": {
+              "issued": 13824,
+              "useful": 4001,
+              "actual_misses": 10623,
+              "precision": 0.2894241898148148,
+              "miss_coverage": 0.37663560199566976
+            },
+            "heldout": {
+              "issued": 6912,
+              "useful": 1959,
+              "actual_misses": 4878,
+              "precision": 0.2834201388888889,
+              "miss_coverage": 0.4015990159901599
+            }
+          },
+          {
+            "k": 8,
+            "all": {
+              "issued": 18432,
+              "useful": 4522,
+              "actual_misses": 10623,
+              "precision": 0.2453342013888889,
+              "miss_coverage": 0.42568012802409866
+            },
+            "heldout": {
+              "issued": 9216,
+              "useful": 2212,
+              "actual_misses": 4878,
+              "precision": 0.2400173611111111,
+              "miss_coverage": 0.4534645346453465
+            }
+          },
+          {
+            "k": 12,
+            "all": {
+              "issued": 27648,
+              "useful": 5265,
+              "actual_misses": 10623,
+              "precision": 0.1904296875,
+              "miss_coverage": 0.49562270545043774
+            },
+            "heldout": {
+              "issued": 13824,
+              "useful": 2559,
+              "actual_misses": 4878,
+              "precision": 0.1851128472222222,
+              "miss_coverage": 0.52460024600246
+            }
+          }
+        ]
+      },
+      "sum": {
+        "feature": "existing_pre_attention_mean",
+        "merge_rule": "sum",
+        "budgets": [
+          {
+            "k": 1,
+            "all": {
+              "issued": 2304,
+              "useful": 844,
+              "actual_misses": 10623,
+              "precision": 0.3663194444444444,
+              "miss_coverage": 0.07945024945872164
+            },
+            "heldout": {
+              "issued": 1152,
+              "useful": 399,
+              "actual_misses": 4878,
+              "precision": 0.3463541666666667,
+              "miss_coverage": 0.08179581795817958
+            }
+          },
+          {
+            "k": 2,
+            "all": {
+              "issued": 4608,
+              "useful": 1453,
+              "actual_misses": 10623,
+              "precision": 0.3153211805555556,
+              "miss_coverage": 0.1367786877529888
+            },
+            "heldout": {
+              "issued": 2304,
+              "useful": 686,
+              "actual_misses": 4878,
+              "precision": 0.2977430555555556,
+              "miss_coverage": 0.14063140631406315
+            }
+          },
+          {
+            "k": 3,
+            "all": {
+              "issued": 6912,
+              "useful": 1886,
+              "actual_misses": 10623,
+              "precision": 0.2728587962962963,
+              "miss_coverage": 0.1775393015155794
+            },
+            "heldout": {
+              "issued": 3456,
+              "useful": 884,
+              "actual_misses": 4878,
+              "precision": 0.25578703703703703,
+              "miss_coverage": 0.18122181221812217
+            }
+          },
+          {
+            "k": 4,
+            "all": {
+              "issued": 9216,
+              "useful": 2252,
+              "actual_misses": 10623,
+              "precision": 0.2443576388888889,
+              "miss_coverage": 0.21199284571213406
+            },
+            "heldout": {
+              "issued": 4608,
+              "useful": 1048,
+              "actual_misses": 4878,
+              "precision": 0.22743055555555555,
+              "miss_coverage": 0.21484214842148422
+            }
+          },
+          {
+            "k": 6,
+            "all": {
+              "issued": 13824,
+              "useful": 2891,
+              "actual_misses": 10623,
+              "precision": 0.20912905092592593,
+              "miss_coverage": 0.2721453450061188
+            },
+            "heldout": {
+              "issued": 6912,
+              "useful": 1383,
+              "actual_misses": 4878,
+              "precision": 0.20008680555555555,
+              "miss_coverage": 0.2835178351783518
+            }
+          },
+          {
+            "k": 8,
+            "all": {
+              "issued": 18432,
+              "useful": 3382,
+              "actual_misses": 10623,
+              "precision": 0.18348524305555555,
+              "miss_coverage": 0.3183658100348301
+            },
+            "heldout": {
+              "issued": 9216,
+              "useful": 1604,
+              "actual_misses": 4878,
+              "precision": 0.1740451388888889,
+              "miss_coverage": 0.3288232882328823
+            }
+          },
+          {
+            "k": 12,
+            "all": {
+              "issued": 27648,
+              "useful": 4153,
+              "actual_misses": 10623,
+              "precision": 0.1502097800925926,
+              "miss_coverage": 0.39094417772757223
+            },
+            "heldout": {
+              "issued": 13824,
+              "useful": 1959,
+              "actual_misses": 4878,
+              "precision": 0.14171006944444445,
+              "miss_coverage": 0.4015990159901599
+            }
+          }
+        ]
+      }
+    },
+    "post_attention_router": {
+      "max": {
+        "feature": "post_attention_router",
+        "merge_rule": "max",
+        "budgets": [
+          {
+            "k": 1,
+            "all": {
+              "issued": 2304,
+              "useful": 1416,
+              "actual_misses": 10623,
+              "precision": 0.6145833333333334,
+              "miss_coverage": 0.13329567918667043
+            },
+            "heldout": {
+              "issued": 1152,
+              "useful": 692,
+              "actual_misses": 4878,
+              "precision": 0.6006944444444444,
+              "miss_coverage": 0.14186141861418614
+            }
+          },
+          {
+            "k": 2,
+            "all": {
+              "issued": 4608,
+              "useful": 2426,
+              "actual_misses": 10623,
+              "precision": 0.5264756944444444,
+              "miss_coverage": 0.2283723995104961
+            },
+            "heldout": {
+              "issued": 2304,
+              "useful": 1162,
+              "actual_misses": 4878,
+              "precision": 0.5043402777777778,
+              "miss_coverage": 0.23821238212382123
+            }
+          },
+          {
+            "k": 3,
+            "all": {
+              "issued": 6912,
+              "useful": 3168,
+              "actual_misses": 10623,
+              "precision": 0.4583333333333333,
+              "miss_coverage": 0.2982208415701779
+            },
+            "heldout": {
+              "issued": 3456,
+              "useful": 1514,
+              "actual_misses": 4878,
+              "precision": 0.4380787037037037,
+              "miss_coverage": 0.3103731037310373
+            }
+          },
+          {
+            "k": 4,
+            "all": {
+              "issued": 9216,
+              "useful": 3764,
+              "actual_misses": 10623,
+              "precision": 0.4084201388888889,
+              "miss_coverage": 0.3543255200979008
+            },
+            "heldout": {
+              "issued": 4608,
+              "useful": 1790,
+              "actual_misses": 4878,
+              "precision": 0.3884548611111111,
+              "miss_coverage": 0.3669536695366954
+            }
+          },
+          {
+            "k": 6,
+            "all": {
+              "issued": 13824,
+              "useful": 4590,
+              "actual_misses": 10623,
+              "precision": 0.33203125,
+              "miss_coverage": 0.43208133295679185
+            },
+            "heldout": {
+              "issued": 6912,
+              "useful": 2179,
+              "actual_misses": 4878,
+              "precision": 0.3152488425925926,
+              "miss_coverage": 0.44669946699466995
+            }
+          },
+          {
+            "k": 8,
+            "all": {
+              "issued": 18432,
+              "useful": 5229,
+              "actual_misses": 10623,
+              "precision": 0.28369140625,
+              "miss_coverage": 0.4922338322507766
+            },
+            "heldout": {
+              "issued": 9216,
+              "useful": 2485,
+              "actual_misses": 4878,
+              "precision": 0.2696397569444444,
+              "miss_coverage": 0.509430094300943
+            }
+          },
+          {
+            "k": 12,
+            "all": {
+              "issued": 27648,
+              "useful": 6053,
+              "actual_misses": 10623,
+              "precision": 0.2189308449074074,
+              "miss_coverage": 0.5698013743763531
+            },
+            "heldout": {
+              "issued": 13824,
+              "useful": 2864,
+              "actual_misses": 4878,
+              "precision": 0.20717592592592593,
+              "miss_coverage": 0.5871258712587126
+            }
+          }
+        ]
+      },
+      "sum": {
+        "feature": "post_attention_router",
+        "merge_rule": "sum",
+        "budgets": [
+          {
+            "k": 1,
+            "all": {
+              "issued": 2304,
+              "useful": 900,
+              "actual_misses": 10623,
+              "precision": 0.390625,
+              "miss_coverage": 0.08472182999152782
+            },
+            "heldout": {
+              "issued": 1152,
+              "useful": 406,
+              "actual_misses": 4878,
+              "precision": 0.3524305555555556,
+              "miss_coverage": 0.08323083230832308
+            }
+          },
+          {
+            "k": 2,
+            "all": {
+              "issued": 4608,
+              "useful": 1433,
+              "actual_misses": 10623,
+              "precision": 0.3109809027777778,
+              "miss_coverage": 0.13489598041984374
+            },
+            "heldout": {
+              "issued": 2304,
+              "useful": 657,
+              "actual_misses": 4878,
+              "precision": 0.28515625,
+              "miss_coverage": 0.13468634686346864
+            }
+          },
+          {
+            "k": 3,
+            "all": {
+              "issued": 6912,
+              "useful": 1876,
+              "actual_misses": 10623,
+              "precision": 0.27141203703703703,
+              "miss_coverage": 0.17659794784900687
+            },
+            "heldout": {
+              "issued": 3456,
+              "useful": 836,
+              "actual_misses": 4878,
+              "precision": 0.24189814814814814,
+              "miss_coverage": 0.17138171381713818
+            }
+          },
+          {
+            "k": 4,
+            "all": {
+              "issued": 9216,
+              "useful": 2277,
+              "actual_misses": 10623,
+              "precision": 0.2470703125,
+              "miss_coverage": 0.2143462298785654
+            },
+            "heldout": {
+              "issued": 4608,
+              "useful": 998,
+              "actual_misses": 4878,
+              "precision": 0.2165798611111111,
+              "miss_coverage": 0.2045920459204592
+            }
+          },
+          {
+            "k": 6,
+            "all": {
+              "issued": 13824,
+              "useful": 2910,
+              "actual_misses": 10623,
+              "precision": 0.2105034722222222,
+              "miss_coverage": 0.2739339169726066
+            },
+            "heldout": {
+              "issued": 6912,
+              "useful": 1286,
+              "actual_misses": 4878,
+              "precision": 0.18605324074074073,
+              "miss_coverage": 0.26363263632636325
+            }
+          },
+          {
+            "k": 8,
+            "all": {
+              "issued": 18432,
+              "useful": 3374,
+              "actual_misses": 10623,
+              "precision": 0.1830512152777778,
+              "miss_coverage": 0.31761272710157207
+            },
+            "heldout": {
+              "issued": 9216,
+              "useful": 1501,
+              "actual_misses": 4878,
+              "precision": 0.1628689236111111,
+              "miss_coverage": 0.3077080770807708
+            }
+          },
+          {
+            "k": 12,
+            "all": {
+              "issued": 27648,
+              "useful": 4141,
+              "actual_misses": 10623,
+              "precision": 0.14977575231481483,
+              "miss_coverage": 0.3898145533276852
+            },
+            "heldout": {
+              "issued": 13824,
+              "useful": 1835,
+              "actual_misses": 4878,
+              "precision": 0.13274016203703703,
+              "miss_coverage": 0.3761787617876179
+            }
+          }
+        ]
+      }
+    }
+  },
+  "best_feature": "post_attention_router",
+  "best_merge_rule": "max",
+  "per_layer_best_heldout": {
+    "k1": [
+      {
+        "layer": 4,
+        "issued": 32,
+        "useful": 17,
+        "actual_misses": 195,
+        "precision": 0.53125,
+        "miss_coverage": 0.08717948717948718
+      },
+      {
+        "layer": 5,
+        "issued": 32,
+        "useful": 21,
+        "actual_misses": 163,
+        "precision": 0.65625,
+        "miss_coverage": 0.12883435582822086
+      },
+      {
+        "layer": 6,
+        "issued": 32,
+        "useful": 15,
+        "actual_misses": 93,
+        "precision": 0.46875,
+        "miss_coverage": 0.16129032258064516
+      },
+      {
+        "layer": 7,
+        "issued": 32,
+        "useful": 18,
+        "actual_misses": 118,
+        "precision": 0.5625,
+        "miss_coverage": 0.15254237288135594
+      },
+      {
+        "layer": 8,
+        "issued": 32,
+        "useful": 24,
+        "actual_misses": 133,
+        "precision": 0.75,
+        "miss_coverage": 0.18045112781954886
+      },
+      {
+        "layer": 9,
+        "issued": 32,
+        "useful": 25,
+        "actual_misses": 104,
+        "precision": 0.78125,
+        "miss_coverage": 0.2403846153846154
+      },
+      {
+        "layer": 10,
+        "issued": 32,
+        "useful": 21,
+        "actual_misses": 153,
+        "precision": 0.65625,
+        "miss_coverage": 0.13725490196078433
+      },
+      {
+        "layer": 11,
+        "issued": 32,
+        "useful": 23,
+        "actual_misses": 134,
+        "precision": 0.71875,
+        "miss_coverage": 0.17164179104477612
+      },
+      {
+        "layer": 12,
+        "issued": 32,
+        "useful": 26,
+        "actual_misses": 157,
+        "precision": 0.8125,
+        "miss_coverage": 0.16560509554140126
+      },
+      {
+        "layer": 13,
+        "issued": 32,
+        "useful": 23,
+        "actual_misses": 196,
+        "precision": 0.71875,
+        "miss_coverage": 0.11734693877551021
+      },
+      {
+        "layer": 14,
+        "issued": 32,
+        "useful": 19,
+        "actual_misses": 80,
+        "precision": 0.59375,
+        "miss_coverage": 0.2375
+      },
+      {
+        "layer": 15,
+        "issued": 32,
+        "useful": 10,
+        "actual_misses": 173,
+        "precision": 0.3125,
+        "miss_coverage": 0.057803468208092484
+      },
+      {
+        "layer": 16,
+        "issued": 32,
+        "useful": 12,
+        "actual_misses": 85,
+        "precision": 0.375,
+        "miss_coverage": 0.1411764705882353
+      },
+      {
+        "layer": 17,
+        "issued": 32,
+        "useful": 14,
+        "actual_misses": 110,
+        "precision": 0.4375,
+        "miss_coverage": 0.12727272727272726
+      },
+      {
+        "layer": 18,
+        "issued": 32,
+        "useful": 16,
+        "actual_misses": 106,
+        "precision": 0.5,
+        "miss_coverage": 0.1509433962264151
+      },
+      {
+        "layer": 19,
+        "issued": 32,
+        "useful": 20,
+        "actual_misses": 221,
+        "precision": 0.625,
+        "miss_coverage": 0.09049773755656108
+      },
+      {
+        "layer": 20,
+        "issued": 32,
+        "useful": 18,
+        "actual_misses": 80,
+        "precision": 0.5625,
+        "miss_coverage": 0.225
+      },
+      {
+        "layer": 21,
+        "issued": 32,
+        "useful": 14,
+        "actual_misses": 92,
+        "precision": 0.4375,
+        "miss_coverage": 0.15217391304347827
+      },
+      {
+        "layer": 22,
+        "issued": 32,
+        "useful": 23,
+        "actual_misses": 112,
+        "precision": 0.71875,
+        "miss_coverage": 0.20535714285714285
+      },
+      {
+        "layer": 23,
+        "issued": 32,
+        "useful": 23,
+        "actual_misses": 157,
+        "precision": 0.71875,
+        "miss_coverage": 0.1464968152866242
+      },
+      {
+        "layer": 24,
+        "issued": 32,
+        "useful": 17,
+        "actual_misses": 85,
+        "precision": 0.53125,
+        "miss_coverage": 0.2
+      },
+      {
+        "layer": 25,
+        "issued": 32,
+        "useful": 11,
+        "actual_misses": 101,
+        "precision": 0.34375,
+        "miss_coverage": 0.10891089108910891
+      },
+      {
+        "layer": 26,
+        "issued": 32,
+        "useful": 14,
+        "actual_misses": 78,
+        "precision": 0.4375,
+        "miss_coverage": 0.1794871794871795
+      },
+      {
+        "layer": 27,
+        "issued": 32,
+        "useful": 25,
+        "actual_misses": 180,
+        "precision": 0.78125,
+        "miss_coverage": 0.1388888888888889
+      },
+      {
+        "layer": 28,
+        "issued": 32,
+        "useful": 14,
+        "actual_misses": 89,
+        "precision": 0.4375,
+        "miss_coverage": 0.15730337078651685
+      },
+      {
+        "layer": 29,
+        "issued": 32,
+        "useful": 21,
+        "actual_misses": 118,
+        "precision": 0.65625,
+        "miss_coverage": 0.17796610169491525
+      },
+      {
+        "layer": 30,
+        "issued": 32,
+        "useful": 26,
+        "actual_misses": 134,
+        "precision": 0.8125,
+        "miss_coverage": 0.19402985074626866
+      },
+      {
+        "layer": 31,
+        "issued": 32,
+        "useful": 23,
+        "actual_misses": 113,
+        "precision": 0.71875,
+        "miss_coverage": 0.20353982300884957
+      },
+      {
+        "layer": 32,
+        "issued": 32,
+        "useful": 21,
+        "actual_misses": 152,
+        "precision": 0.65625,
+        "miss_coverage": 0.13815789473684212
+      },
+      {
+        "layer": 33,
+        "issued": 32,
+        "useful": 21,
+        "actual_misses": 152,
+        "precision": 0.65625,
+        "miss_coverage": 0.13815789473684212
+      },
+      {
+        "layer": 34,
+        "issued": 32,
+        "useful": 15,
+        "actual_misses": 139,
+        "precision": 0.46875,
+        "miss_coverage": 0.1079136690647482
+      },
+      {
+        "layer": 35,
+        "issued": 32,
+        "useful": 20,
+        "actual_misses": 147,
+        "precision": 0.625,
+        "miss_coverage": 0.1360544217687075
+      },
+      {
+        "layer": 36,
+        "issued": 32,
+        "useful": 22,
+        "actual_misses": 150,
+        "precision": 0.6875,
+        "miss_coverage": 0.14666666666666667
+      },
+      {
+        "layer": 37,
+        "issued": 32,
+        "useful": 17,
+        "actual_misses": 188,
+        "precision": 0.53125,
+        "miss_coverage": 0.09042553191489362
+      },
+      {
+        "layer": 38,
+        "issued": 32,
+        "useful": 22,
+        "actual_misses": 194,
+        "precision": 0.6875,
+        "miss_coverage": 0.1134020618556701
+      },
+      {
+        "layer": 39,
+        "issued": 32,
+        "useful": 21,
+        "actual_misses": 196,
+        "precision": 0.65625,
+        "miss_coverage": 0.10714285714285714
+      }
+    ],
+    "k2": [
+      {
+        "layer": 4,
+        "issued": 64,
+        "useful": 34,
+        "actual_misses": 195,
+        "precision": 0.53125,
+        "miss_coverage": 0.17435897435897435
+      },
+      {
+        "layer": 5,
+        "issued": 64,
+        "useful": 35,
+        "actual_misses": 163,
+        "precision": 0.546875,
+        "miss_coverage": 0.2147239263803681
+      },
+      {
+        "layer": 6,
+        "issued": 64,
+        "useful": 20,
+        "actual_misses": 93,
+        "precision": 0.3125,
+        "miss_coverage": 0.21505376344086022
+      },
+      {
+        "layer": 7,
+        "issued": 64,
+        "useful": 28,
+        "actual_misses": 118,
+        "precision": 0.4375,
+        "miss_coverage": 0.23728813559322035
+      },
+      {
+        "layer": 8,
+        "issued": 64,
+        "useful": 41,
+        "actual_misses": 133,
+        "precision": 0.640625,
+        "miss_coverage": 0.3082706766917293
+      },
+      {
+        "layer": 9,
+        "issued": 64,
+        "useful": 37,
+        "actual_misses": 104,
+        "precision": 0.578125,
+        "miss_coverage": 0.3557692307692308
+      },
+      {
+        "layer": 10,
+        "issued": 64,
+        "useful": 33,
+        "actual_misses": 153,
+        "precision": 0.515625,
+        "miss_coverage": 0.21568627450980393
+      },
+      {
+        "layer": 11,
+        "issued": 64,
+        "useful": 35,
+        "actual_misses": 134,
+        "precision": 0.546875,
+        "miss_coverage": 0.26119402985074625
+      },
+      {
+        "layer": 12,
+        "issued": 64,
+        "useful": 42,
+        "actual_misses": 157,
+        "precision": 0.65625,
+        "miss_coverage": 0.267515923566879
+      },
+      {
+        "layer": 13,
+        "issued": 64,
+        "useful": 43,
+        "actual_misses": 196,
+        "precision": 0.671875,
+        "miss_coverage": 0.2193877551020408
+      },
+      {
+        "layer": 14,
+        "issued": 64,
+        "useful": 31,
+        "actual_misses": 80,
+        "precision": 0.484375,
+        "miss_coverage": 0.3875
+      },
+      {
+        "layer": 15,
+        "issued": 64,
+        "useful": 16,
+        "actual_misses": 173,
+        "precision": 0.25,
+        "miss_coverage": 0.09248554913294797
+      },
+      {
+        "layer": 16,
+        "issued": 64,
+        "useful": 19,
+        "actual_misses": 85,
+        "precision": 0.296875,
+        "miss_coverage": 0.2235294117647059
+      },
+      {
+        "layer": 17,
+        "issued": 64,
+        "useful": 29,
+        "actual_misses": 110,
+        "precision": 0.453125,
+        "miss_coverage": 0.2636363636363636
+      },
+      {
+        "layer": 18,
+        "issued": 64,
+        "useful": 25,
+        "actual_misses": 106,
+        "precision": 0.390625,
+        "miss_coverage": 0.2358490566037736
+      },
+      {
+        "layer": 19,
+        "issued": 64,
+        "useful": 35,
+        "actual_misses": 221,
+        "precision": 0.546875,
+        "miss_coverage": 0.1583710407239819
+      },
+      {
+        "layer": 20,
+        "issued": 64,
+        "useful": 28,
+        "actual_misses": 80,
+        "precision": 0.4375,
+        "miss_coverage": 0.35
+      },
+      {
+        "layer": 21,
+        "issued": 64,
+        "useful": 27,
+        "actual_misses": 92,
+        "precision": 0.421875,
+        "miss_coverage": 0.29347826086956524
+      },
+      {
+        "layer": 22,
+        "issued": 64,
+        "useful": 38,
+        "actual_misses": 112,
+        "precision": 0.59375,
+        "miss_coverage": 0.3392857142857143
+      },
+      {
+        "layer": 23,
+        "issued": 64,
+        "useful": 37,
+        "actual_misses": 157,
+        "precision": 0.578125,
+        "miss_coverage": 0.2356687898089172
+      },
+      {
+        "layer": 24,
+        "issued": 64,
+        "useful": 26,
+        "actual_misses": 85,
+        "precision": 0.40625,
+        "miss_coverage": 0.3058823529411765
+      },
+      {
+        "layer": 25,
+        "issued": 64,
+        "useful": 23,
+        "actual_misses": 101,
+        "precision": 0.359375,
+        "miss_coverage": 0.22772277227722773
+      },
+      {
+        "layer": 26,
+        "issued": 64,
+        "useful": 20,
+        "actual_misses": 78,
+        "precision": 0.3125,
+        "miss_coverage": 0.2564102564102564
+      },
+      {
+        "layer": 27,
+        "issued": 64,
+        "useful": 41,
+        "actual_misses": 180,
+        "precision": 0.640625,
+        "miss_coverage": 0.22777777777777777
+      },
+      {
+        "layer": 28,
+        "issued": 64,
+        "useful": 20,
+        "actual_misses": 89,
+        "precision": 0.3125,
+        "miss_coverage": 0.2247191011235955
+      },
+      {
+        "layer": 29,
+        "issued": 64,
+        "useful": 38,
+        "actual_misses": 118,
+        "precision": 0.59375,
+        "miss_coverage": 0.3220338983050847
+      },
+      {
+        "layer": 30,
+        "issued": 64,
+        "useful": 45,
+        "actual_misses": 134,
+        "precision": 0.703125,
+        "miss_coverage": 0.3358208955223881
+      },
+      {
+        "layer": 31,
+        "issued": 64,
+        "useful": 38,
+        "actual_misses": 113,
+        "precision": 0.59375,
+        "miss_coverage": 0.336283185840708
+      },
+      {
+        "layer": 32,
+        "issued": 64,
+        "useful": 36,
+        "actual_misses": 152,
+        "precision": 0.5625,
+        "miss_coverage": 0.23684210526315788
+      },
+      {
+        "layer": 33,
+        "issued": 64,
+        "useful": 41,
+        "actual_misses": 152,
+        "precision": 0.640625,
+        "miss_coverage": 0.26973684210526316
+      },
+      {
+        "layer": 34,
+        "issued": 64,
+        "useful": 27,
+        "actual_misses": 139,
+        "precision": 0.421875,
+        "miss_coverage": 0.19424460431654678
+      },
+      {
+        "layer": 35,
+        "issued": 64,
+        "useful": 32,
+        "actual_misses": 147,
+        "precision": 0.5,
+        "miss_coverage": 0.21768707482993196
+      },
+      {
+        "layer": 36,
+        "issued": 64,
+        "useful": 37,
+        "actual_misses": 150,
+        "precision": 0.578125,
+        "miss_coverage": 0.24666666666666667
+      },
+      {
+        "layer": 37,
+        "issued": 64,
+        "useful": 32,
+        "actual_misses": 188,
+        "precision": 0.5,
+        "miss_coverage": 0.1702127659574468
+      },
+      {
+        "layer": 38,
+        "issued": 64,
+        "useful": 36,
+        "actual_misses": 194,
+        "precision": 0.5625,
+        "miss_coverage": 0.18556701030927836
+      },
+      {
+        "layer": 39,
+        "issued": 64,
+        "useful": 37,
+        "actual_misses": 196,
+        "precision": 0.578125,
+        "miss_coverage": 0.18877551020408162
+      }
+    ],
+    "k3": [
+      {
+        "layer": 4,
+        "issued": 96,
+        "useful": 44,
+        "actual_misses": 195,
+        "precision": 0.4583333333333333,
+        "miss_coverage": 0.22564102564102564
+      },
+      {
+        "layer": 5,
+        "issued": 96,
+        "useful": 46,
+        "actual_misses": 163,
+        "precision": 0.4791666666666667,
+        "miss_coverage": 0.2822085889570552
+      },
+      {
+        "layer": 6,
+        "issued": 96,
+        "useful": 23,
+        "actual_misses": 93,
+        "precision": 0.23958333333333334,
+        "miss_coverage": 0.24731182795698925
+      },
+      {
+        "layer": 7,
+        "issued": 96,
+        "useful": 31,
+        "actual_misses": 118,
+        "precision": 0.3229166666666667,
+        "miss_coverage": 0.2627118644067797
+      },
+      {
+        "layer": 8,
+        "issued": 96,
+        "useful": 46,
+        "actual_misses": 133,
+        "precision": 0.4791666666666667,
+        "miss_coverage": 0.3458646616541353
+      },
+      {
+        "layer": 9,
+        "issued": 96,
+        "useful": 48,
+        "actual_misses": 104,
+        "precision": 0.5,
+        "miss_coverage": 0.46153846153846156
+      },
+      {
+        "layer": 10,
+        "issued": 96,
+        "useful": 46,
+        "actual_misses": 153,
+        "precision": 0.4791666666666667,
+        "miss_coverage": 0.3006535947712418
+      },
+      {
+        "layer": 11,
+        "issued": 96,
+        "useful": 44,
+        "actual_misses": 134,
+        "precision": 0.4583333333333333,
+        "miss_coverage": 0.3283582089552239
+      },
+      {
+        "layer": 12,
+        "issued": 96,
+        "useful": 53,
+        "actual_misses": 157,
+        "precision": 0.5520833333333334,
+        "miss_coverage": 0.3375796178343949
+      },
+      {
+        "layer": 13,
+        "issued": 96,
+        "useful": 56,
+        "actual_misses": 196,
+        "precision": 0.5833333333333334,
+        "miss_coverage": 0.2857142857142857
+      },
+      {
+        "layer": 14,
+        "issued": 96,
+        "useful": 38,
+        "actual_misses": 80,
+        "precision": 0.3958333333333333,
+        "miss_coverage": 0.475
+      },
+      {
+        "layer": 15,
+        "issued": 96,
+        "useful": 24,
+        "actual_misses": 173,
+        "precision": 0.25,
+        "miss_coverage": 0.13872832369942195
+      },
+      {
+        "layer": 16,
+        "issued": 96,
+        "useful": 26,
+        "actual_misses": 85,
+        "precision": 0.2708333333333333,
+        "miss_coverage": 0.3058823529411765
+      },
+      {
+        "layer": 17,
+        "issued": 96,
+        "useful": 36,
+        "actual_misses": 110,
+        "precision": 0.375,
+        "miss_coverage": 0.32727272727272727
+      },
+      {
+        "layer": 18,
+        "issued": 96,
+        "useful": 33,
+        "actual_misses": 106,
+        "precision": 0.34375,
+        "miss_coverage": 0.3113207547169811
+      },
+      {
+        "layer": 19,
+        "issued": 96,
+        "useful": 44,
+        "actual_misses": 221,
+        "precision": 0.4583333333333333,
+        "miss_coverage": 0.19909502262443438
+      },
+      {
+        "layer": 20,
+        "issued": 96,
+        "useful": 36,
+        "actual_misses": 80,
+        "precision": 0.375,
+        "miss_coverage": 0.45
+      },
+      {
+        "layer": 21,
+        "issued": 96,
+        "useful": 40,
+        "actual_misses": 92,
+        "precision": 0.4166666666666667,
+        "miss_coverage": 0.43478260869565216
+      },
+      {
+        "layer": 22,
+        "issued": 96,
+        "useful": 49,
+        "actual_misses": 112,
+        "precision": 0.5104166666666666,
+        "miss_coverage": 0.4375
+      },
+      {
+        "layer": 23,
+        "issued": 96,
+        "useful": 48,
+        "actual_misses": 157,
+        "precision": 0.5,
+        "miss_coverage": 0.3057324840764331
+      },
+      {
+        "layer": 24,
+        "issued": 96,
+        "useful": 35,
+        "actual_misses": 85,
+        "precision": 0.3645833333333333,
+        "miss_coverage": 0.4117647058823529
+      },
+      {
+        "layer": 25,
+        "issued": 96,
+        "useful": 29,
+        "actual_misses": 101,
+        "precision": 0.3020833333333333,
+        "miss_coverage": 0.2871287128712871
+      },
+      {
+        "layer": 26,
+        "issued": 96,
+        "useful": 29,
+        "actual_misses": 78,
+        "precision": 0.3020833333333333,
+        "miss_coverage": 0.3717948717948718
+      },
+      {
+        "layer": 27,
+        "issued": 96,
+        "useful": 53,
+        "actual_misses": 180,
+        "precision": 0.5520833333333334,
+        "miss_coverage": 0.29444444444444445
+      },
+      {
+        "layer": 28,
+        "issued": 96,
+        "useful": 27,
+        "actual_misses": 89,
+        "precision": 0.28125,
+        "miss_coverage": 0.30337078651685395
+      },
+      {
+        "layer": 29,
+        "issued": 96,
+        "useful": 45,
+        "actual_misses": 118,
+        "precision": 0.46875,
+        "miss_coverage": 0.3813559322033898
+      },
+      {
+        "layer": 30,
+        "issued": 96,
+        "useful": 54,
+        "actual_misses": 134,
+        "precision": 0.5625,
+        "miss_coverage": 0.40298507462686567
+      },
+      {
+        "layer": 31,
+        "issued": 96,
+        "useful": 51,
+        "actual_misses": 113,
+        "precision": 0.53125,
+        "miss_coverage": 0.45132743362831856
+      },
+      {
+        "layer": 32,
+        "issued": 96,
+        "useful": 44,
+        "actual_misses": 152,
+        "precision": 0.4583333333333333,
+        "miss_coverage": 0.2894736842105263
+      },
+      {
+        "layer": 33,
+        "issued": 96,
+        "useful": 58,
+        "actual_misses": 152,
+        "precision": 0.6041666666666666,
+        "miss_coverage": 0.3815789473684211
+      },
+      {
+        "layer": 34,
+        "issued": 96,
+        "useful": 38,
+        "actual_misses": 139,
+        "precision": 0.3958333333333333,
+        "miss_coverage": 0.2733812949640288
+      },
+      {
+        "layer": 35,
+        "issued": 96,
+        "useful": 41,
+        "actual_misses": 147,
+        "precision": 0.4270833333333333,
+        "miss_coverage": 0.2789115646258503
+      },
+      {
+        "layer": 36,
+        "issued": 96,
+        "useful": 51,
+        "actual_misses": 150,
+        "precision": 0.53125,
+        "miss_coverage": 0.34
+      },
+      {
+        "layer": 37,
+        "issued": 96,
+        "useful": 46,
+        "actual_misses": 188,
+        "precision": 0.4791666666666667,
+        "miss_coverage": 0.24468085106382978
+      },
+      {
+        "layer": 38,
+        "issued": 96,
+        "useful": 50,
+        "actual_misses": 194,
+        "precision": 0.5208333333333334,
+        "miss_coverage": 0.25773195876288657
+      },
+      {
+        "layer": 39,
+        "issued": 96,
+        "useful": 52,
+        "actual_misses": 196,
+        "precision": 0.5416666666666666,
+        "miss_coverage": 0.2653061224489796
+      }
+    ],
+    "k4": [
+      {
+        "layer": 4,
+        "issued": 128,
+        "useful": 51,
+        "actual_misses": 195,
+        "precision": 0.3984375,
+        "miss_coverage": 0.26153846153846155
+      },
+      {
+        "layer": 5,
+        "issued": 128,
+        "useful": 58,
+        "actual_misses": 163,
+        "precision": 0.453125,
+        "miss_coverage": 0.3558282208588957
+      },
+      {
+        "layer": 6,
+        "issued": 128,
+        "useful": 27,
+        "actual_misses": 93,
+        "precision": 0.2109375,
+        "miss_coverage": 0.2903225806451613
+      },
+      {
+        "layer": 7,
+        "issued": 128,
+        "useful": 38,
+        "actual_misses": 118,
+        "precision": 0.296875,
+        "miss_coverage": 0.3220338983050847
+      },
+      {
+        "layer": 8,
+        "issued": 128,
+        "useful": 52,
+        "actual_misses": 133,
+        "precision": 0.40625,
+        "miss_coverage": 0.39097744360902253
+      },
+      {
+        "layer": 9,
+        "issued": 128,
+        "useful": 54,
+        "actual_misses": 104,
+        "precision": 0.421875,
+        "miss_coverage": 0.5192307692307693
+      },
+      {
+        "layer": 10,
+        "issued": 128,
+        "useful": 51,
+        "actual_misses": 153,
+        "precision": 0.3984375,
+        "miss_coverage": 0.3333333333333333
+      },
+      {
+        "layer": 11,
+        "issued": 128,
+        "useful": 49,
+        "actual_misses": 134,
+        "precision": 0.3828125,
+        "miss_coverage": 0.3656716417910448
+      },
+      {
+        "layer": 12,
+        "issued": 128,
+        "useful": 61,
+        "actual_misses": 157,
+        "precision": 0.4765625,
+        "miss_coverage": 0.3885350318471338
+      },
+      {
+        "layer": 13,
+        "issued": 128,
+        "useful": 65,
+        "actual_misses": 196,
+        "precision": 0.5078125,
+        "miss_coverage": 0.33163265306122447
+      },
+      {
+        "layer": 14,
+        "issued": 128,
+        "useful": 45,
+        "actual_misses": 80,
+        "precision": 0.3515625,
+        "miss_coverage": 0.5625
+      },
+      {
+        "layer": 15,
+        "issued": 128,
+        "useful": 28,
+        "actual_misses": 173,
+        "precision": 0.21875,
+        "miss_coverage": 0.16184971098265896
+      },
+      {
+        "layer": 16,
+        "issued": 128,
+        "useful": 29,
+        "actual_misses": 85,
+        "precision": 0.2265625,
+        "miss_coverage": 0.3411764705882353
+      },
+      {
+        "layer": 17,
+        "issued": 128,
+        "useful": 45,
+        "actual_misses": 110,
+        "precision": 0.3515625,
+        "miss_coverage": 0.4090909090909091
+      },
+      {
+        "layer": 18,
+        "issued": 128,
+        "useful": 42,
+        "actual_misses": 106,
+        "precision": 0.328125,
+        "miss_coverage": 0.39622641509433965
+      },
+      {
+        "layer": 19,
+        "issued": 128,
+        "useful": 52,
+        "actual_misses": 221,
+        "precision": 0.40625,
+        "miss_coverage": 0.23529411764705882
+      },
+      {
+        "layer": 20,
+        "issued": 128,
+        "useful": 42,
+        "actual_misses": 80,
+        "precision": 0.328125,
+        "miss_coverage": 0.525
+      },
+      {
+        "layer": 21,
+        "issued": 128,
+        "useful": 47,
+        "actual_misses": 92,
+        "precision": 0.3671875,
+        "miss_coverage": 0.5108695652173914
+      },
+      {
+        "layer": 22,
+        "issued": 128,
+        "useful": 58,
+        "actual_misses": 112,
+        "precision": 0.453125,
+        "miss_coverage": 0.5178571428571429
+      },
+      {
+        "layer": 23,
+        "issued": 128,
+        "useful": 61,
+        "actual_misses": 157,
+        "precision": 0.4765625,
+        "miss_coverage": 0.3885350318471338
+      },
+      {
+        "layer": 24,
+        "issued": 128,
+        "useful": 39,
+        "actual_misses": 85,
+        "precision": 0.3046875,
+        "miss_coverage": 0.4588235294117647
+      },
+      {
+        "layer": 25,
+        "issued": 128,
+        "useful": 33,
+        "actual_misses": 101,
+        "precision": 0.2578125,
+        "miss_coverage": 0.32673267326732675
+      },
+      {
+        "layer": 26,
+        "issued": 128,
+        "useful": 36,
+        "actual_misses": 78,
+        "precision": 0.28125,
+        "miss_coverage": 0.46153846153846156
+      },
+      {
+        "layer": 27,
+        "issued": 128,
+        "useful": 65,
+        "actual_misses": 180,
+        "precision": 0.5078125,
+        "miss_coverage": 0.3611111111111111
+      },
+      {
+        "layer": 28,
+        "issued": 128,
+        "useful": 31,
+        "actual_misses": 89,
+        "precision": 0.2421875,
+        "miss_coverage": 0.34831460674157305
+      },
+      {
+        "layer": 29,
+        "issued": 128,
+        "useful": 53,
+        "actual_misses": 118,
+        "precision": 0.4140625,
+        "miss_coverage": 0.4491525423728814
+      },
+      {
+        "layer": 30,
+        "issued": 128,
+        "useful": 65,
+        "actual_misses": 134,
+        "precision": 0.5078125,
+        "miss_coverage": 0.48507462686567165
+      },
+      {
+        "layer": 31,
+        "issued": 128,
+        "useful": 60,
+        "actual_misses": 113,
+        "precision": 0.46875,
+        "miss_coverage": 0.5309734513274337
+      },
+      {
+        "layer": 32,
+        "issued": 128,
+        "useful": 51,
+        "actual_misses": 152,
+        "precision": 0.3984375,
+        "miss_coverage": 0.3355263157894737
+      },
+      {
+        "layer": 33,
+        "issued": 128,
+        "useful": 68,
+        "actual_misses": 152,
+        "precision": 0.53125,
+        "miss_coverage": 0.4473684210526316
+      },
+      {
+        "layer": 34,
+        "issued": 128,
+        "useful": 46,
+        "actual_misses": 139,
+        "precision": 0.359375,
+        "miss_coverage": 0.33093525179856115
+      },
+      {
+        "layer": 35,
+        "issued": 128,
+        "useful": 49,
+        "actual_misses": 147,
+        "precision": 0.3828125,
+        "miss_coverage": 0.3333333333333333
+      },
+      {
+        "layer": 36,
+        "issued": 128,
+        "useful": 58,
+        "actual_misses": 150,
+        "precision": 0.453125,
+        "miss_coverage": 0.38666666666666666
+      },
+      {
+        "layer": 37,
+        "issued": 128,
+        "useful": 56,
+        "actual_misses": 188,
+        "precision": 0.4375,
+        "miss_coverage": 0.2978723404255319
+      },
+      {
+        "layer": 38,
+        "issued": 128,
+        "useful": 63,
+        "actual_misses": 194,
+        "precision": 0.4921875,
+        "miss_coverage": 0.3247422680412371
+      },
+      {
+        "layer": 39,
+        "issued": 128,
+        "useful": 62,
+        "actual_misses": 196,
+        "precision": 0.484375,
+        "miss_coverage": 0.3163265306122449
+      }
+    ],
+    "k8": [
+      {
+        "layer": 4,
+        "issued": 256,
+        "useful": 71,
+        "actual_misses": 195,
+        "precision": 0.27734375,
+        "miss_coverage": 0.3641025641025641
+      },
+      {
+        "layer": 5,
+        "issued": 256,
+        "useful": 77,
+        "actual_misses": 163,
+        "precision": 0.30078125,
+        "miss_coverage": 0.4723926380368098
+      },
+      {
+        "layer": 6,
+        "issued": 256,
+        "useful": 33,
+        "actual_misses": 93,
+        "precision": 0.12890625,
+        "miss_coverage": 0.3548387096774194
+      },
+      {
+        "layer": 7,
+        "issued": 256,
+        "useful": 52,
+        "actual_misses": 118,
+        "precision": 0.203125,
+        "miss_coverage": 0.4406779661016949
+      },
+      {
+        "layer": 8,
+        "issued": 256,
+        "useful": 65,
+        "actual_misses": 133,
+        "precision": 0.25390625,
+        "miss_coverage": 0.48872180451127817
+      },
+      {
+        "layer": 9,
+        "issued": 256,
+        "useful": 62,
+        "actual_misses": 104,
+        "precision": 0.2421875,
+        "miss_coverage": 0.5961538461538461
+      },
+      {
+        "layer": 10,
+        "issued": 256,
+        "useful": 68,
+        "actual_misses": 153,
+        "precision": 0.265625,
+        "miss_coverage": 0.4444444444444444
+      },
+      {
+        "layer": 11,
+        "issued": 256,
+        "useful": 66,
+        "actual_misses": 134,
+        "precision": 0.2578125,
+        "miss_coverage": 0.4925373134328358
+      },
+      {
+        "layer": 12,
+        "issued": 256,
+        "useful": 84,
+        "actual_misses": 157,
+        "precision": 0.328125,
+        "miss_coverage": 0.535031847133758
+      },
+      {
+        "layer": 13,
+        "issued": 256,
+        "useful": 92,
+        "actual_misses": 196,
+        "precision": 0.359375,
+        "miss_coverage": 0.46938775510204084
+      },
+      {
+        "layer": 14,
+        "issued": 256,
+        "useful": 56,
+        "actual_misses": 80,
+        "precision": 0.21875,
+        "miss_coverage": 0.7
+      },
+      {
+        "layer": 15,
+        "issued": 256,
+        "useful": 37,
+        "actual_misses": 173,
+        "precision": 0.14453125,
+        "miss_coverage": 0.2138728323699422
+      },
+      {
+        "layer": 16,
+        "issued": 256,
+        "useful": 41,
+        "actual_misses": 85,
+        "precision": 0.16015625,
+        "miss_coverage": 0.4823529411764706
+      },
+      {
+        "layer": 17,
+        "issued": 256,
+        "useful": 65,
+        "actual_misses": 110,
+        "precision": 0.25390625,
+        "miss_coverage": 0.5909090909090909
+      },
+      {
+        "layer": 18,
+        "issued": 256,
+        "useful": 60,
+        "actual_misses": 106,
+        "precision": 0.234375,
+        "miss_coverage": 0.5660377358490566
+      },
+      {
+        "layer": 19,
+        "issued": 256,
+        "useful": 80,
+        "actual_misses": 221,
+        "precision": 0.3125,
+        "miss_coverage": 0.36199095022624433
+      },
+      {
+        "layer": 20,
+        "issued": 256,
+        "useful": 50,
+        "actual_misses": 80,
+        "precision": 0.1953125,
+        "miss_coverage": 0.625
+      },
+      {
+        "layer": 21,
+        "issued": 256,
+        "useful": 64,
+        "actual_misses": 92,
+        "precision": 0.25,
+        "miss_coverage": 0.6956521739130435
+      },
+      {
+        "layer": 22,
+        "issued": 256,
+        "useful": 77,
+        "actual_misses": 112,
+        "precision": 0.30078125,
+        "miss_coverage": 0.6875
+      },
+      {
+        "layer": 23,
+        "issued": 256,
+        "useful": 83,
+        "actual_misses": 157,
+        "precision": 0.32421875,
+        "miss_coverage": 0.5286624203821656
+      },
+      {
+        "layer": 24,
+        "issued": 256,
+        "useful": 52,
+        "actual_misses": 85,
+        "precision": 0.203125,
+        "miss_coverage": 0.611764705882353
+      },
+      {
+        "layer": 25,
+        "issued": 256,
+        "useful": 46,
+        "actual_misses": 101,
+        "precision": 0.1796875,
+        "miss_coverage": 0.45544554455445546
+      },
+      {
+        "layer": 26,
+        "issued": 256,
+        "useful": 50,
+        "actual_misses": 78,
+        "precision": 0.1953125,
+        "miss_coverage": 0.6410256410256411
+      },
+      {
+        "layer": 27,
+        "issued": 256,
+        "useful": 93,
+        "actual_misses": 180,
+        "precision": 0.36328125,
+        "miss_coverage": 0.5166666666666667
+      },
+      {
+        "layer": 28,
+        "issued": 256,
+        "useful": 44,
+        "actual_misses": 89,
+        "precision": 0.171875,
+        "miss_coverage": 0.4943820224719101
+      },
+      {
+        "layer": 29,
+        "issued": 256,
+        "useful": 72,
+        "actual_misses": 118,
+        "precision": 0.28125,
+        "miss_coverage": 0.6101694915254238
+      },
+      {
+        "layer": 30,
+        "issued": 256,
+        "useful": 93,
+        "actual_misses": 134,
+        "precision": 0.36328125,
+        "miss_coverage": 0.6940298507462687
+      },
+      {
+        "layer": 31,
+        "issued": 256,
+        "useful": 80,
+        "actual_misses": 113,
+        "precision": 0.3125,
+        "miss_coverage": 0.7079646017699115
+      },
+      {
+        "layer": 32,
+        "issued": 256,
+        "useful": 73,
+        "actual_misses": 152,
+        "precision": 0.28515625,
+        "miss_coverage": 0.48026315789473684
+      },
+      {
+        "layer": 33,
+        "issued": 256,
+        "useful": 90,
+        "actual_misses": 152,
+        "precision": 0.3515625,
+        "miss_coverage": 0.5921052631578947
+      },
+      {
+        "layer": 34,
+        "issued": 256,
+        "useful": 71,
+        "actual_misses": 139,
+        "precision": 0.27734375,
+        "miss_coverage": 0.5107913669064749
+      },
+      {
+        "layer": 35,
+        "issued": 256,
+        "useful": 76,
+        "actual_misses": 147,
+        "precision": 0.296875,
+        "miss_coverage": 0.5170068027210885
+      },
+      {
+        "layer": 36,
+        "issued": 256,
+        "useful": 88,
+        "actual_misses": 150,
+        "precision": 0.34375,
+        "miss_coverage": 0.5866666666666667
+      },
+      {
+        "layer": 37,
+        "issued": 256,
+        "useful": 91,
+        "actual_misses": 188,
+        "precision": 0.35546875,
+        "miss_coverage": 0.48404255319148937
+      },
+      {
+        "layer": 38,
+        "issued": 256,
+        "useful": 91,
+        "actual_misses": 194,
+        "precision": 0.35546875,
+        "miss_coverage": 0.4690721649484536
+      },
+      {
+        "layer": 39,
+        "issued": 256,
+        "useful": 92,
+        "actual_misses": 196,
+        "precision": 0.359375,
+        "miss_coverage": 0.46938775510204084
+      }
+    ]
+  },
+  "two_ahead_evaluable": false,
+  "two_ahead_note": "NOT evaluable. The capture stores, at layer L, only the L+1 gate applied to layer L's features (a single 1-ahead score tensor per target). No L+2 score tensor exists at layer L, so two-layers-ahead predictor quality cannot be measured from this capture."
+}

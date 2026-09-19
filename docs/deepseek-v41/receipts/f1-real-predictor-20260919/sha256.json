@@ -1,0 +1,10 @@
+{
+  "scripts/deepseek_v41/rescore_router_capture.py": "aefdedd0d1fbb5b081395e40f554a458710a5c76f408f813cc911bd1bcb251af",
+  "scripts/deepseek_v41/overlap_schedule_sim.py": "9962da4c49eac36cb60d5fe9d9dfc50f628be27d8299b440cd5b92593c7ff5ce",
+  "tests/test_dsv41_overlap_schedule_sim.py": "38f11237543ee87b7cd6ce5c31d9319120298e8bd284234ec831a114f84607a9",
+  "docs/deepseek-v41/receipts/f1-real-predictor-20260919/README.md": "7afdcdc6601db15851e04c999c57f0e55b628e829f40cebaca9c5eacf8ab3176",
+  "docs/deepseek-v41/receipts/f1-real-predictor-20260919/curve.json": "2825dbcc361a32d535c0c1fc8357676644076295c6c7d404df9cc8080acac553",
+  "docs/deepseek-v41/receipts/f1-real-predictor-20260919/capture-sim.json": "049fb9a5e837b57074ce931e141adfa8c95c8fa01f1bd824e233eba842f69963",
+  "INPUT: .worktrees/deepseek-v41/.benchmark-artifacts/deepseek-v41/router-feature-20260918/full-router-feature-20260918-v2.router-capture.npz": "5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e",
+  "INPUT: .worktrees/deepseek-v41/docs/deepseek-v41/receipts/router-feature-20260918/full-v2/full-router-feature-20260918-v2.router-capture.json": "dc813d4db0c259158ff7510d6af2b2618c800b2e4e16666721a9505d4a576f89"
+}
