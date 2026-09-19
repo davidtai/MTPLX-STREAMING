@@ -660,16 +660,6 @@ class LayerExpertSlotBank:
         self._slot_to_expert: list[int | None] = [None] * self.persistent_slots
         self._expert_to_slot: dict[int, int] = {}
         self._history = [_ExpertHistory() for _ in range(expert_count)]
-        # Host-cost mirror of ``_ExpertHistory.last_used`` (int64, one cell per
-        # expert), kept in lockstep with the Python objects at every last_used
-        # write (``_touch_decode``, decode-hit refresh, transaction rollback,
-        # ``reset``).  The transition-window scorer and admission ranker read
-        # this array instead of rebuilding one by ``np.fromiter`` over 384 Python
-        # objects on every routed decode call.  Seeded -1 to match the fresh
-        # histories; a restored warm state carries prefill-only histories whose
-        # last_used are all -1 (prefill never touches last_used), so the mirror
-        # stays exact across the offline replay path too.
-        self._last_used_arr = np.full(expert_count, -1, dtype=np.int64)
         self._prefill_seed_candidates: set[int] = set()
         self._persistent_capacity = self.persistent_slots
         # W93: the speculative lookahead ring is now a SHARED GlobalPrefetchRing
@@ -761,31 +751,6 @@ class LayerExpertSlotBank:
         self._transition_previous: tuple[int, ...] | None = None
 
     @property
-    def _prefill_route_freq(self) -> "Counter[int]":
-        """Prompt routing-frequency counter (authoritative object).
-
-        A numpy mirror ``_prefill_freq_arr`` (int64, one cell per expert) is
-        rebuilt by the setter whenever the counter object is REPLACED (restore,
-        per-request reopen, transaction rollback) and updated in place at the two
-        in-place mutation sites (``reset``'s clear, ``prepare_prefill_seed``'s
-        update).  The transition-window admission ranker reads the mirror so the
-        prefill-frequency tie-break is a vectorised gather rather than a
-        ``dict.get`` per candidate.  The counter stays the public authority for
-        every other reader (pin ranking, seed ordering)."""
-
-        return self._prefill_route_freq_counter
-
-    @_prefill_route_freq.setter
-    def _prefill_route_freq(self, counter: "Counter[int]") -> None:
-        self._prefill_route_freq_counter = counter
-        mirror = np.zeros(self.expert_count, dtype=np.int64)
-        if counter:
-            keys = np.fromiter(counter.keys(), dtype=np.intp, count=len(counter))
-            vals = np.fromiter(counter.values(), dtype=np.int64, count=len(counter))
-            mirror[keys] = vals
-        self._prefill_freq_arr = mirror
-
-    @property
     def resident_experts(self) -> tuple[int, ...]:
         return tuple(expert for expert in self._slot_to_expert if expert is not None)
 
@@ -872,7 +837,6 @@ class LayerExpertSlotBank:
         self._slot_to_expert = [None] * self.persistent_slots
         self._expert_to_slot.clear()
         self._history = [_ExpertHistory() for _ in range(self.expert_count)]
-        self._last_used_arr.fill(-1)
         self._prefill_seed_candidates.clear()
         # A SHARED ring is reset once by the runtime (not per bank, or the first
         # bank's reset would wipe the others' entries); a bank-owned ring resets
@@ -881,7 +845,6 @@ class LayerExpertSlotBank:
             self._prefetch_ring.reset()
         self._pinned.clear()
         self._prefill_route_freq.clear()
-        self._prefill_freq_arr.fill(0)
         self._protected.clear()
         self._pool_recency.clear()
         self._pool_clock = 0
@@ -994,14 +957,6 @@ class LayerExpertSlotBank:
         # zero empty slots a full pool would report.
         self._reopen_pool_for_new_request()
         self._prefill_route_freq.update(experts)
-        # Mirror the in-place counter update (``_reopen`` above may have replaced
-        # the counter, which the property setter already zeroed the mirror for).
-        if experts:
-            np.add.at(
-                self._prefill_freq_arr,
-                np.fromiter(experts, dtype=np.intp, count=len(experts)),
-                1,
-            )
         if self.single_pool:
             # Budget = capacity - protected: demoted residents are probationary and
             # the seed evicts them, so the seed can span the whole pool per request.
@@ -1166,7 +1121,6 @@ class LayerExpertSlotBank:
         history.score = self._score(expert) + 1.0
         history.score_epoch = self._decode_epoch
         history.last_used = self._decode_epoch
-        self._last_used_arr[expert] = self._decode_epoch
 
     def _empty_persistent_slot(self) -> int | None:
         if self.occupancy >= self._persistent_capacity:
@@ -1389,11 +1343,11 @@ class LayerExpertSlotBank:
             prediction = np.zeros(self.expert_count, dtype=np.float32)
 
         max_window = max(float(window_frequency.max()), 1.0)
-        # ``_last_used_arr`` mirrors ``history.last_used`` exactly (maintained at
-        # every write site); read it in place instead of rebuilding an int64
-        # array by np.fromiter over 384 Python objects on every routed call.
-        # Only read below (``>= 0`` and fancy-index both copy), never mutated.
-        last_used = self._last_used_arr
+        last_used = np.fromiter(
+            (history.last_used for history in self._history),
+            dtype=np.int64,
+            count=self.expert_count,
+        )
         recency = np.zeros(self.expert_count, dtype=np.float32)
         observed = last_used >= 0
         recency[observed] = 1.0 / (
@@ -1432,62 +1386,41 @@ class LayerExpertSlotBank:
         if not misses:
             return {}
         scores = self._transition_window_scores()
-        slot_to_expert = self._slot_to_expert
         blocked = pinned | self._pinned if self._pinned else pinned
-        # One slot-order pass builds the evictable residents (expert, slot) and the
-        # empty slots at once -- the same two slot-ordered lists the two prior
-        # comprehensions produced (a resident in ``blocked`` lands in neither).
-        evictable_experts: list[int] = []
-        evictable_slots: list[int] = []
-        empty_slots_all: list[int] = []
-        for slot, expert in enumerate(slot_to_expert):
-            if expert is None:
-                empty_slots_all.append(slot)
-            elif expert not in blocked:
-                evictable_experts.append(expert)
-                evictable_slots.append(slot)
+        evictable: list[tuple[int, int]] = []
+        for slot, expert in enumerate(self._slot_to_expert):
+            if expert is not None and expert not in blocked:
+                evictable.append((expert, slot))
 
         free_budget = max(0, self._persistent_capacity - self.occupancy)
-        empty_slots = empty_slots_all[:free_budget]
-        adjustable = len(empty_slots) + len(evictable_experts)
+        empty_slots = [
+            slot
+            for slot, expert in enumerate(self._slot_to_expert)
+            if expert is None
+        ][:free_budget]
+        adjustable = len(empty_slots) + len(evictable)
         if adjustable == 0:
             return {}
 
-        candidates = evictable_experts + misses
+        candidates = [expert for expert, _slot in evictable] + misses
         keep_count = min(adjustable, len(candidates))
-        # Retain the top ``keep_count`` candidates by the rank tuple DESC
-        #   (score, last_used, prefill_route_freq, -expert)
-        # via one np.lexsort.  lexsort is ascending with the LAST key primary, so
-        # ascending on (-score, -last_used, -prefill_route_freq, expert) is exactly
-        # descending on (score, last_used, prefill_route_freq, -expert): negating the
-        # float32 score and the int64 last_used / freq flips each ordering, and an
-        # ascending expert id equals a descending -expert.  A miss is never resident,
-        # so ``evictable`` and ``misses`` are disjoint and every candidate is a
-        # distinct expert -- the four keys form a total order with no ties, so the
-        # retained SET is exactly the Python ``sorted(..., reverse=True)`` top slice.
-        # float32->float64 (the old ``float(scores[e])``) is exact and order-
-        # preserving, so the comparison order is identical either way.
-        cand = np.fromiter(candidates, dtype=np.intp, count=len(candidates))
-        cand_scores = scores[cand]
-        cand_last = self._last_used_arr[cand]
-        cand_freq = self._prefill_freq_arr[cand]
-        order = np.lexsort((cand, -cand_freq, -cand_last, -cand_scores))
-        retained = set(cand[order[:keep_count]].tolist())
+        retained = set(
+            sorted(
+                candidates,
+                key=lambda expert: self._transition_window_rank(expert, scores),
+                reverse=True,
+            )[:keep_count]
+        )
         admitted = [expert for expert in misses if expert in retained]
         if not admitted:
             return {}
 
-        # Victims: evictable residents not retained, in slot order, then sorted
-        # ASC by the same rank tuple.  This set is tiny (~one per admitted miss),
-        # so the exact Python sort stays -- no lexsort setup cost for a few items.
         victim_slots = [
-            slot
-            for expert, slot in zip(evictable_experts, evictable_slots)
-            if expert not in retained
+            slot for expert, slot in evictable if expert not in retained
         ]
 
         def victim_rank(slot: int) -> tuple[float, int, int, int]:
-            expert = slot_to_expert[slot]
+            expert = self._slot_to_expert[slot]
             assert expert is not None
             return self._transition_window_rank(expert, scores)
 
@@ -1807,7 +1740,6 @@ class LayerExpertSlotBank:
         if phase is RoutingPhase.DECODE:
             for expert in hit_set:
                 self._history[expert].last_used = self._decode_epoch
-                self._last_used_arr[expert] = self._decode_epoch
 
         return RoutePlan(
             phase=phase,
@@ -1872,7 +1804,6 @@ class LayerExpertSlotBank:
             for expert, values in histories.items():
                 history = self._history[expert]
                 history.score, history.score_epoch, history.last_used = values
-                self._last_used_arr[expert] = values[2]
             self._prefill_seed_candidates = set(seed_candidates)
             self._protected = pool_protected
             self._pool_recency = pool_recency
@@ -1918,7 +1849,6 @@ class LayerExpertSlotBank:
                 self._observe_transition_window(unique_experts)
             for expert in unique_experts:
                 self._history[expert].last_used = self._decode_epoch
-                self._last_used_arr[expert] = self._decode_epoch
 
         promotions = 0
         if self.single_pool:
@@ -1981,7 +1911,6 @@ class LayerExpertSlotBank:
             for expert, values in histories.items():
                 history = self._history[expert]
                 history.score, history.score_epoch, history.last_used = values
-                self._last_used_arr[expert] = values[2]
             self._protected = pool_protected
             self._pool_recency = pool_recency
             self._pool_clock = pool_clock
