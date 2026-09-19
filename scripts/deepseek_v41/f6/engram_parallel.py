@@ -80,47 +80,51 @@ class ParallelReadState:
         self.pool = pool if pool is not None else ThreadPoolExecutor(
             max_workers=self.workers, thread_name_prefix="f6-engram-read"
         )
-        self._lock = threading.Lock()      # guards the cross-thread counters below
-        self._inflight = 0
+        self._lock = threading.Lock()      # guards stats against a concurrent stats() read
         self.caches: "list[NGramRowCache]" = []
         self.stats = {
             "parallel_calls": 0,       # patched gather_bytes invocations
             "calls_with_reads": 0,     # of those, calls that issued >=1 concurrent read
             "reads_submitted": 0,      # sub-run reads dispatched to the pool
             "rows_read_parallel": 0,   # rows fetched through the pool
-            "max_inflight": 0,         # peak concurrently-executing reads observed
+            "max_inflight": 0,         # peak concurrent chunk tasks issued by one call
         }
 
     # -- the concurrent read task -------------------------------------------
-    def _read(self, reader, start, count):
-        with self._lock:
-            self._inflight += 1
-            if self._inflight > self.stats["max_inflight"]:
-                self.stats["max_inflight"] = self._inflight
-        try:
-            # read_run allocates its own bytearray/memoryview per call and uses
-            # positional os.preadv on the shared fd -> thread-safe, no shared
-            # per-call buffer (verified against FileRowReader.read_run).
-            return reader.read_run(start, count)
-        finally:
-            with self._lock:
-                self._inflight -= 1
+    @staticmethod
+    def _read_chunk(reader, chunk):
+        # read_run allocates its own bytearray/memoryview per call and uses positional
+        # os.preadv on the shared fd -> thread-safe, no shared per-call buffer (verified
+        # against FileRowReader.read_run). No counters or locks here: this is the hot path.
+        return [reader.read_run(start, count) for (start, count) in chunk]
 
     def fetch(self, reader, requests):
-        """Read every ``(start, count)`` run concurrently; return a list of
-        ``bytes`` aligned to ``requests``.
+        """Read every ``(start, count)`` run concurrently; return a list of ``bytes``
+        aligned to ``requests``.
 
-        Every future is drained before returning; if any read raised, the first
-        error is re-raised AFTER all settle, so the caller has not yet mutated
-        the cache (no partial insertion, no dangling in-flight read)."""
+        The runs are split into at most ``workers`` CONTIGUOUS chunks, one pool task per
+        chunk (review 2026-09-19: one ``submit`` per run cost ~12 us x ~144 runs of
+        main-thread time per Engram call -- as long as the reads themselves). Contiguous
+        chunks keep the results in request order on reassembly.
+
+        Every future is drained before returning; if any read raised, the first error is
+        re-raised AFTER all settle, so the caller has not yet mutated the cache (no partial
+        insertion, no dangling in-flight read)."""
+        n = len(requests)
+        if n == 0:
+            return []
+        size = -(-n // min(self.workers, n))
+        futures = [self.pool.submit(self._read_chunk, reader, requests[i:i + size])
+                   for i in range(0, n, size)]
         with self._lock:
-            self.stats["reads_submitted"] += len(requests)
-        futures = [self.pool.submit(self._read, reader, s, c) for (s, c) in requests]
-        results: list = [None] * len(futures)
+            self.stats["reads_submitted"] += n
+            if len(futures) > self.stats["max_inflight"]:
+                self.stats["max_inflight"] = len(futures)   # concurrent chunk tasks, per call
+        results: list = []
         error: "BaseException | None" = None
-        for i, fut in enumerate(futures):
+        for fut in futures:
             try:
-                results[i] = fut.result()
+                results.extend(fut.result())
             except BaseException as exc:  # keep draining the rest, remember the first
                 if error is None:
                     error = exc
@@ -342,7 +346,14 @@ def install_from_env(model_or_caches, *, site: "str | None" = None) -> "Parallel
     if site is not None and os.environ.get("MTPLX_DSV41_F6_INSTALL") != site:
         return None
     workers = int(os.environ.get("MTPLX_DSV41_F6_ENGRAM_WORKERS", "16"))
-    return install(model_or_caches, workers=workers)
+    state = install(model_or_caches, workers=workers)
+    import atexit
+    import json
+
+    print("F6_ENGRAM_INSTALL " + json.dumps({"site": site, "workers": workers,
+                                              "caches": len(state.caches)}), flush=True)
+    atexit.register(lambda: print("F6_ENGRAM_STATS " + json.dumps(stats()), flush=True))
+    return state
 
 
 def stats() -> dict:
