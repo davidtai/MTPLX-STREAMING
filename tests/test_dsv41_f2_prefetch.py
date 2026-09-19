@@ -43,6 +43,11 @@ if str(_SCRIPTS) not in sys.path:
 import f2_predictor as F  # noqa: E402
 from mtplx.expert_streaming import GlobalPrefetchRing  # noqa: E402
 
+# The block above PROVED f2_predictor + GlobalPrefetchRing import with no MLX. Lift it
+# now so a sibling suite that legitimately pins MLX to CPU (test_dsv41_f2_prefetch_lane)
+# can import MLX in the same pytest process.
+sys.meta_path[:] = [f for f in sys.meta_path if not isinstance(f, _NoMLX)]
+
 
 # The offline scorer lives in the f1-overlap-sim worktree (its own receipt input).
 _F1_SCORER = Path(
