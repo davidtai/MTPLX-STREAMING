@@ -1,3 +1,24 @@
+## 2026-09-19 15:06 UTC [saved]
+Goal: Use predictable non-MoE scheduling and preserve expert banks within110GB.
+Result:
+- Exact16K/1K Q4 reaches13.8688167379TPS /73.7626013330s,198 calls and all1,024
+  native IDs exact. New best single result; historical capacity/background
+  differ, so no repeated isolated full gain is claimed.20TPS remains open.
+- Keep84 expert rows, install scales without copying weights, seed native MTP,
+  append27 rows/layer. Growth2.1956928751s saves1.4780189590s; reads31,573.
+- Equal110-slot A/B/A component gains2.93676% including allocation, all206
+  outputs exact. Two CPU admission regressions pass after the full win.
+Memory:
+- Machine109,852,753,920B, process97,565,150,648B, MLX96,548,916,582B.
+  Launch estimate109,745,344,620B is exceeded107,409,300B;110GB is not.
+  Preserve both numbers; future admission needs background-variation headroom.
+Lifecycle:
+- Component/full guards exit0, restore exactQwen/warmup, release14:53:30 and
+  15:06:03UTC. Later independent observation finds foreign60643, no owned work.
+Open:
+- Save22.6126s more for20TPS. Existing GU read coalescing loses; do not repeat.
+- Archive: docs/deepseek-v41/receipts/extension-bank-20260919. Source d5f15e7a0.
+
 ## 2026-07-13 06:47 [saved]
 Goal: Make benchmark bottleneck diagnosis resource-based and agent-readable.
 Decisions:

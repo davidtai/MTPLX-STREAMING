@@ -2,11 +2,11 @@
 
 Q4 resumed at the user's request; Q2 is stopped and preserved separately.
 Target: 20 decode TPS on 16,384 Python prompt / 1,024 output tokens under 110,000,000,000 whole-machine bytes. The target remains unmet.
-Best single full result: 13.4141517619 TPS / 76.2627423750 s, 198 target calls,
-84→110 slots, all 1,024 native IDs exact. This is not an isolated repeated win.
-Latest packed-projection candidate: 13.3988661661 TPS / 76.3497438750 s,
-84→109→110 slots, all native IDs exact. It saves about 1.17 GB of sampled
-process/MLX peak memory but has no absolute speed win; it is not promoted.
+Best single full result: 13.8688167379 TPS / 73.7626013330 s, 198 target calls,
+84 original rows plus27 extension rows/layer, all1,024 native IDs exact.
+This is2.5001410420s shorter than the historical13.4141517619TPS result;
+background and capacity differ, so it is not an isolated repeated win.
+Predictable packed-projection expansion is composed with extension banks.
 Q4 only. The dense SSD and ridge-prefetch schedules remain rejected.
 
 # Decisions
@@ -16,7 +16,7 @@ Q4 only. The dense SSD and ridge-prefetch schedules remain rejected.
   missing measurements. Budget includes background, Python, Metal, KV, file
   cache, allocator cache, I/O, copies, and compile/graph peaks.
 - Preserve the 100 GiB wired ceiling and 110 decimal GB physical ceiling.
-  Best-run host reserve is 1,421,996,032 B; consensus prices 1,455,550,464 B.
+  Best-run host reserve is 1,438,773,248 B; consensus prices 1,455,550,464 B.
   Only the attested strict allocator removes its proved 2,258,155,644 B
   overshoot allowance. Stock MLX retains that allowance.
 - Before any MLX import/load/compile/run, use the parent-held exclusive
@@ -47,6 +47,20 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 
 # Evidence
 
+- Extension receipt: docs/deepseek-v41/receipts/extension-bank-20260919.
+  Scratch /tmp/dsv41-extension-bank-20260919; measured source d5f15e7a0.
+  Keep84 old banks, install packed scales, seed native MTP, add27 rows/layer.
+  No expert-weight resize; original owners survive. Growth2.1956928751s,
+  1.4780189590s shorter than previous. Reads31,573 /558,675,394,560B.
+  Baseline10,983,129,088B; launch estimate109,745,344,620B;
+  sampled machine109,852,753,920B, process97,565,150,648B, MLX96,548,916,582B.
+  Machine peak exceeds the launch estimate107,409,300B but stays below110GB.
+  Do not hide this variation or treat sampling as an unsampled hard bound.
+  Equal110-slot component A/B/A gains2.93676% with allocation charged;
+  steady replay approximately flat,206 exact outputs/arm. Two CPU admission
+  regressions pass after the full win. Output sanity unchanged/truncated.
+  Guard85235 exits0, restores exactQwen/warmup, releases15:06:03UTC.
+  Independent15:07:32check finds foreign60643 and no owned child/waiter.
 - Predictable projection receipt: docs/deepseek-v41/receipts/predictable-expansion-20260919.
   Scratch /tmp/dsv41-predictable-expansion-20260919; measured source d569990aa.
   Native packed wo_a remains resident; next exact BF16 transpose is issued
@@ -65,7 +79,7 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 - Earlier ridge, consensus and dense schedules are preserved in their dated
   20260919 receipts. Ridge is slower/flat; consensus13.3997126089TPS at109 slots
   is not an isolated comparison; query SSD offload is50.07% slower. No repeats.
-- Retained full winner: docs/deepseek-v41/receipts/hybrid-lookup-20260918.
+- Previous full winner: docs/deepseek-v41/receipts/hybrid-lookup-20260918.
   Native D5 plus up to two lookup tokens, strict allocator, exact embedding-row
   cache, packed expert scales, native KV16. Scratch full-v1 under
   /tmp/dsv41-hybrid-lookup-20260918. Baseline 10,447,192,064 B;
@@ -80,14 +94,12 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 
 # Open Issues and Next Work
 
-- Q4 needs25.1127s less decode time to reach20TPS. The projection candidate
-  saves memory with wall time0.1141% longer than the historical best; no
-  isolated/repeated throughput gain. Preserve it for possible composition.
-- Next unmeasured hypothesis: avoid the FIRST84→decode bank copy by keeping
-  old84 rows and adding an extension bank. Extra bank grouping may erase its
-  one-time growth saving. First measure the real two-bank layout and charge
-  allocation; re-derive seed/steady/growth bounds before any full request.
-  Details: scratch next-bank-layout-hypothesis.md. Do not extrapolate one-row.
+- Q4 needs22.6126s less decode time to reach20TPS. Avoiding the initial bank
+  copy is now measured. Next work needs material I/O/verification reduction.
+  Future full admission must account for observed background variation;
+  do not simply reuse the historical launch estimate or147MB sampled headroom.
+- GU read coalescing with a368,640B scale gap was already rejected in
+  gu-combined-read-20260917 (3.37% slower at3records). Do not repeat it.
 - The 80/40/24 draft subset saves 733,224,960 B but its 111-slot full bound
   refused at 11.137 GB background. Do not retry without fresh fitting admission.
 - Strict library: /tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib;

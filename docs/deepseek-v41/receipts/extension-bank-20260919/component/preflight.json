@@ -1,0 +1,9 @@
+{
+  "cpu_only": true,
+  "all_pins_valid": true,
+  "metal_payload_scratch_cache_compile_bound_bytes": 10104602624,
+  "metal_envelope_bytes": 10737418240,
+  "whole_incremental_bound_bytes": 27917287424,
+  "source_commit": "d5f15e7a02d225115debf6ce317e26dc4a935b60",
+  "primary_comparison": "Allocation plus warmed206-route replay; both packed projections and110 final slots."
+}

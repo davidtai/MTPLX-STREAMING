@@ -21,6 +21,19 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Current update, 2026-09-18
 
+**2026-09-19 extension banks:** Preserve the84 original expert rows and add a
+separate bank after packed-scale installation and native MTP seed. Equal110
+component A/B/A gains2.93676% with allocation charged, control spread0.19264%,
+all206 expert/projection outputs exact. Full84→111 reaches13.8688167379TPS /
+73.7626013330s,198 calls and all1,024 native IDs exact: a new best single result,
+not an isolated repeated gain. Growth falls3.6737→2.1957s and reads fall388
+against the historical110-slot result. Machine peak109.852754GB remains below
+110GB but exceeds the109.745345GB launch estimate; future admission must price
+background variation. Two CPU admission regressions pass after the full win.
+Both guards restore exactQwen/warmup; final release15:06:03UTC. Later foreign
+owner60643 has the lane; no owned process remains. Task4/20TPS stay open.
+See extension-bank-20260919. Do not repeat previously rejected GU coalescing.
+
 **2026-09-19 predictable projection expansion:** Keep all packed target `wo_a`
 weights resident and expand the next BF16 layer during current expert I/O.
 Two exact-output component A/B/A comparisons gain 1.65% and 1.41%; the latter
