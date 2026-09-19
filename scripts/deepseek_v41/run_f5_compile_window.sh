@@ -108,7 +108,7 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
     MTPLX_ENGRAM_CACHE_LIMIT=67108864 \
     DSV41_CACHE_GROWTH=1 \
     DSV41_STAGE_AR_REFERENCE="$AR_REFERENCE" \
-    GPU_WINDOW_LOCK_TIMEOUT=600 \
+    GPU_WINDOW_LOCK_TIMEOUT="${F5_LOCK_TIMEOUT:-1800}" \
     GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 \
     GPU_WINDOW_MIN_AVAIL_GB=100 \
     GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 \
@@ -124,7 +124,18 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
     PYTHONPATH="$PYPATH" \
     scripts/deepseek_v41/gpu_window.sh "$PYBIN" "$STAGE/launch_full.py" \
       $(retained_args "$out") \
-      > "$dir/guard.log" 2>&1 || echo "  (guard exit $? -- digest change / tie-class gate is expected for a lever arm; readout classifies it)"
+      > "$dir/guard.log" 2>&1 && rc=0 || rc=$?
+  echo "$rc" > "$dir/guard.exit"
+  if [ "$rc" != "0" ] && [ "$rc" != "4" ]; then
+    # 4 = output-digest rejection (expected for a rounding-class lever arm; the
+    # readout classifies it).  Anything else (2 = refused/lock timeout, 10 =
+    # RESTORE_FAILED, memory-guard kills...) must stop the whole window: never open
+    # another window on top of an unverified service state.
+    echo "ABORT: arm ${arm} guard exit ${rc}; see $dir/guard.log -- remaining arms NOT run"
+    tail -5 "$dir/guard.log" || true
+    exit "$rc"
+  fi
+  [ "$rc" = "4" ] && echo "  (guard exit 4 -- output digest differs from control; readout classifies it)"
 
   # readout: normal receipt if the digest matched, else the .rejected-output.json.
   local receipt="$out"
@@ -138,16 +149,20 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
 }
 
 # ------------------------------------------------------------------------- the arms
-run_arm A   ""                          0 0   # control: reproduce 0d54d9b2...
-run_arm A2  ""                          0 1   # control + TimedPackedDecode stamp probe
-run_arm B   "hc_compile"                0 0
-run_arm C   "hc_compile,attn_compile"   0 0
-run_arm D   "small_stages,attn_compile" 0 0
-# E is optional: set F5_RUN_E=1 and F5_E_ENABLE to the winning B-D lever set.
-if [ "${F5_RUN_E:-0}" = "1" ]; then
-  run_arm E "${F5_E_ENABLE:-hc_compile,attn_compile}" 1 0   # + caps@8 (rounding-class)
-fi
-run_arm F   ""                          0 0   # control again (session drift check)
+# F5_ARMS selects a subset (space separated), default = the full ladder.
+ARMS="${F5_ARMS:-A A2 B C D F}"
+for arm in $ARMS; do
+  case "$arm" in
+    A)  run_arm A   ""                          0 0 ;;  # control: reproduce 0d54d9b2...
+    A2) run_arm A2  ""                          0 1 ;;  # control + TimedPackedDecode stamp probe
+    B)  run_arm B   "hc_compile"                0 0 ;;
+    C)  run_arm C   "hc_compile,attn_compile"   0 0 ;;
+    D)  run_arm D   "small_stages,attn_compile" 0 0 ;;
+    E)  run_arm E   "${F5_E_ENABLE:-hc_compile,attn_compile}" 1 0 ;;  # + caps@8 (rounding-class)
+    F)  run_arm F   ""                          0 0 ;;  # control again (session drift check)
+    *)  echo "unknown arm '$arm'"; exit 2 ;;
+  esac
+done
 
 echo "== F5 window complete; receipts under $RECEIPTS =="
 echo "== compare per-arm readout.json: verify_ms/cycle, cycles, engagement, verdict =="
