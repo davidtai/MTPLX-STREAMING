@@ -55,6 +55,30 @@ def stage_admission(source_text: str, *, max_rows: int) -> str:
     return updated
 
 
+# The F2b host ring is anonymous HOST memory the retained admission does not know about.
+# Charge it to the physical (whole-machine) bound so a high live baseline lowers the admitted
+# capacity instead of letting the measured machine peak cross the 110e9 ceiling (the guard
+# killed an arm at a 13.32 GB baseline on 2026-09-19 before this edit existed).
+_PHYS_ANCHOR = (
+    "        physical = base + original['host_reserve_bytes'] + embedding_host + lookup_host"
+    " + expansion_host + active + original['decode_cache_allowance_bytes']"
+)
+
+
+def stage_admission_ring(source_text: str, *, ring_bytes: int) -> str:
+    ring_bytes = int(ring_bytes)
+    if not 0 < ring_bytes <= 4 * 1024**3:
+        raise RuntimeError("ring_bytes must be within (0, 4 GiB]")
+    _assert_once(source_text, _PHYS_ANCHOR, "physical-bound")
+    new_line = _PHYS_ANCHOR.replace(
+        "physical = base + ", f"physical = base + {ring_bytes} + ", 1
+    ) + "  # F2b host ring charged"
+    updated = source_text.replace(_PHYS_ANCHOR, new_line)
+    if updated.replace(new_line, _PHYS_ANCHOR) != source_text:
+        raise RuntimeError("F2b ring charge changed more than the physical-bound line")
+    return updated
+
+
 def stage_run_full(source_text: str) -> str:
     _assert_once(source_text, _INSTALL_ANCHOR, "observe_seed_prefill prime_model")
     _assert_once(source_text, _TRACE_ANCHOR, "observe_prefill_boundary SystemExit")
@@ -73,12 +97,17 @@ def main(argv=None) -> int:
     ap.add_argument("--admission", default=None, help="STAGED packed_admission.py to cap in place")
     ap.add_argument("--max-rows", type=int, default=None, help="cap the decode capacity-search start")
     ap.add_argument("--run-full", default=None, help="STAGED run_full.py to patch in place (install + traceback)")
+    ap.add_argument("--ring-bytes", type=int, default=None,
+                    help="with --admission: charge the F2b host ring to the physical bound")
     args = ap.parse_args(argv)
     if (args.admission is None) != (args.max_rows is None):
         raise SystemExit("--admission and --max-rows go together")
     if args.admission is not None:
         p = Path(args.admission)
         out = stage_admission(p.read_text(), max_rows=args.max_rows)
+        if args.ring_bytes is not None:
+            out = stage_admission_ring(out, ring_bytes=args.ring_bytes)
+            print("staged_admission_ring_bytes", args.ring_bytes)
         p.write_text(out)
         print("staged_admission", "max_rows", args.max_rows, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.run_full is not None:

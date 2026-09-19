@@ -78,8 +78,10 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
   --dep "$STRICT_LIB" --dep "$RUNWT/$PROMPT_IDS" --dep "$MODEL_DIR"
 
 # --------------------------------------------------- 2. stage patched runner copies
-stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)
-  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}"
+stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)  $5 charge the ring (0/1)
+  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}"
+  local ring_arg=""
+  [ "$ring" = "1" ] && ring_arg="--ring-bytes $((F2_RING_RECORDS * 3 * 5898240))"
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
   mkdir -p "$dest"; cp -R "$RETAINED_SRC/." "$dest/"
   # The receipt archives only artifact/manifest.json; the 3.09 GB packed-scale binaries live
@@ -116,7 +118,7 @@ ARTPY
   rm -rf "$dest/packed/artifact"
   ln -s "$PACKED_ARTIFACT_REAL" "$dest/packed/artifact"
   nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
-    --admission "$dest/packed/packed_admission.py" --max-rows "$rows"
+    --admission "$dest/packed/packed_admission.py" --max-rows "$rows" $ring_arg
   if [ "$F2_PROBE" = "1" ]; then
     nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
@@ -146,14 +148,14 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
   A_ENGSTAGE=0; [ "$A_ENG" != "0" ] && A_ENGSTAGE=1
-  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}"
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_F2B}"   # g = host ring charged to admission
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
 ARMS="${F2_ARMS:-control_a candidate control_b}"
 echo "== stage retained sources -> $STAGE_ROOT (arms: $ARMS; probe=$F2_PROBE) =="
 for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first unload
   parse_arm "$arm"
-  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE"
+  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_F2B"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
   for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG)"; done
