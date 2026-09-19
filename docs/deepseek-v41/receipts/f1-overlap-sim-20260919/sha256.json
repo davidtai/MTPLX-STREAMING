@@ -1,0 +1,9 @@
+{
+  "scripts/deepseek_v41/overlap_schedule_sim.py": "cc171ad8ea18a17a074f9b3feedcefe27e24fa49d1441810d42c8838f5f2d2b7",
+  "tests/test_dsv41_overlap_schedule_sim.py": "aea01cf3252d699dc142342610c7ed5bf61946346d1a851a58a43faf5df37e4a",
+  "docs/deepseek-v41/receipts/f1-overlap-sim-20260919/README.md": "57a6b700404a58669af547249962399d563f3bb414576f2579257db290c52db0",
+  "docs/deepseek-v41/receipts/f1-overlap-sim-20260919/results.json": "3755f99169bd66d6ab9c5410c372d56c8a394be5fb8068e84e2cd321b7a8ae7a",
+  "docs/deepseek-v41/receipts/mtp-verify-routes-20260913/mtp-verify-routes-16k-1024-v2.json.gz": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "docs/deepseek-v41/receipts/memory-budget-110/replay_route_policies.py": "7be3475934f5d2b6049d046afb30c64024aab595225bc0d8f28fd49fc03fdccc",
+  "mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39"
+}
