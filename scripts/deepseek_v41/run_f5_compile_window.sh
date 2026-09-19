@@ -127,7 +127,14 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
     echo "REFUSE: $dir exists (never overwrite a measurement)"; exit 2
   fi
   mkdir -p "$dir"
-  local out="$dir/result.jsonl"
+  # run_full.py gate (~L330): --out must be a FRESH .jsonl directly under
+  # /tmp/dsv41-110-stage (its sidecars .bounds.json/.passes.jsonl/.os.jsonl and a
+  # .rejected-output.json land beside it).  Everything is copied into the arm dir after.
+  local stem="f5-${STAMP}-${arm}"
+  local out="/tmp/dsv41-110-stage/${stem}.jsonl"
+  if ls /tmp/dsv41-110-stage/${stem}.* >/dev/null 2>&1; then
+    echo "REFUSE: stage evidence for ${stem} already exists"; exit 2
+  fi
   local probe_out="$dir/timed_probe"
   echo "== arm ${arm}: F5_ENABLE='${enable}' CAPS8=${caps8} TIMED=${timed} =="
   cd "$RUNWT"
@@ -156,6 +163,7 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
       $(retained_args "$out") \
       > "$dir/guard.log" 2>&1 && rc=0 || rc=$?
   echo "$rc" > "$dir/guard.exit"
+  cp -p /tmp/dsv41-110-stage/${stem}.* "$dir/" 2>/dev/null || true
   if [ "$rc" != "0" ] && [ "$rc" != "4" ]; then
     # 4 = output-digest rejection (expected for a rounding-class lever arm; the
     # readout classifies it).  Anything else (2 = refused/lock timeout, 10 =
@@ -168,8 +176,8 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
   [ "$rc" = "4" ] && echo "  (guard exit 4 -- output digest differs from control; readout classifies it)"
 
   # readout: normal receipt if the digest matched, else the .rejected-output.json.
-  local receipt="$out"
-  [ -f "$receipt" ] || receipt="$dir/result.rejected-output.json"
+  local receipt="$dir/${stem}.jsonl"
+  [ -f "$receipt" ] || receipt="$dir/${stem}.rejected-output.json"
   local probe_summary=""
   [ "$timed" = "1" ] && probe_summary="$probe_out.summary.json"
   PYTHONPATH="$WT" nice -n 19 "$PYBIN" "$F5DIR/f5_readout.py" \
