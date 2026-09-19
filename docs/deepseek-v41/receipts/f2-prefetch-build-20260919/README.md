@@ -235,13 +235,29 @@ generation-thread `mx.eval` count per source layer-call is unchanged.
 bash /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f2-prefetch/scripts/deepseek_v41/run_f2_prefetch_window.sh
 ```
 
-It runs the CPU preflight, then arms `control_a` (111 rows, native) / `candidate` (110
-rows + R=32, F2 lane) / `control_b` (111 rows, native) — and, with
-`F2_INCLUDE_CONTROL110=1`, `control_110` (110 rows, native, to isolate the row cut) —
-each in its own guarded window with a fresh receipt dir, the full 1,024 token ids stored,
-the token-id sha256 gated against `0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac`,
-and the candidate receipt's once-read prefetch counters. `F2_RING_RECORDS=16` selects the
-R=16 ring. The candidate arm requires the F2 stage edits applied to the staged runner tree
-(`STAGE_CANDIDATE`): the single `install_plane_lane(...)` call in `packed_phase.py` →
-`run_full_install.install_f2_growth(...)`, the ring charge in `packed_admission.py:126-131`,
-and `FullPrefetchConfig` + the counters row in `run_full.py` `record_pass`.
+The window runs from the DETACHED run worktree `.../.worktrees/dsv41-run-d5f15e7a`
+(HEAD == the pinned `source_commit` d5f15e7a), so the retained runner's source pin passes;
+the F2 package rides on PYTHONPATH and receipts are written back here. It: (1) runs
+`f2/window_preflight.py` BEFORE the service is unloaded (source pin + 11 runtime-source
+hashes + archived-helper `helper_sha256` + seam resolution against the run worktree's classes
++ staged-file `py_compile`); (2) copies the receipt-archived sources into a fresh
+`/private/tmp/dsv41-f2-prefetch-<stamp>/` (never the pinned original) and applies anchored,
+round-trip-checked edits via `f2/stage_f2_runner.py`; (3) runs the equal-capacity ladder
+`control_a`@`F2_MAX_ROWS`(108) / `candidate`@`F2_MAX_ROWS-1` + R=32 ring / `control_b`@108,
+optional `control_low`@107 via `F2_INCLUDE_CONTROL_LOW=1`, each in its own guarded window
+with a fresh receipt dir, `guard.exit` handling (0 continue; 4 = digest-mismatch FAILURE
+since prefetch is exact; else abort), `GPU_WINDOW_LOCK_TIMEOUT=${F2_LOCK_TIMEOUT:-7200}`,
+`F2_ARMS` selection, the token-id sha256 gated to `0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac`,
+the admitted rows recorded per arm (unequal control rows flagged), the once-read prefetch
+counters, and each arm's exact expanded command line in `command.txt`. `F2_RING_RECORDS=16`
+selects the R=16 ring.
+
+**Ring-enable gap (control arms runnable now; candidate needs a decision).** The candidate
+ring is a construction-time geometry change that `packed_phase.install_growth` refuses
+(packed_phase.py:41-42/54/64-65) and whose byte accounting assumes no ring (:78-93); the
+runtime must also be built with `prefetch_slots=R` (a config-swap monkeypatch on the pinned
+`deepseek_v41_loader._component_bank_allocator_for`, installed from the staged run_full —
+**no pinned-source edit**). Enabling it is a staged-helper change to `install_growth`'s ring
+acceptance + memory reconciliation that cannot be validated on CPU. See
+`/Users/davidtai/projects/OpenSourceWTF/reports/dsv41-f2-prefetch-build-report.md` "Ring-enable
+feasibility gap" for the exact anchors and the recommended path.

@@ -15,12 +15,72 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
+import py_compile
+import subprocess
 import sys
 from pathlib import Path
 
 
 class PreflightError(RuntimeError):
     pass
+
+
+def _source_pin(run_worktree, compat_installation):
+    """The check that kills a window AFTER unload if run from the wrong tree: the run
+    worktree's git HEAD must equal the pinned source_commit, be clean, and hash every
+    pinned runtime source identically. Run BEFORE the service is unloaded."""
+    problems = []
+    root = Path(run_worktree)
+    compat = json.loads(Path(compat_installation).read_text())
+    try:
+        head = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+    except Exception as exc:  # noqa: BLE001
+        return [f"cannot read run-worktree HEAD ({root}): {exc}"]
+    if head != compat["source_commit"]:
+        problems.append(f"run worktree HEAD {head} != pinned {compat['source_commit']}")
+    dirty = subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"], text=True
+    ).strip()
+    if dirty:
+        problems.append("run worktree has tracked modifications:\n" + dirty)
+    for rel, digest in compat.get("runtime_source_sha256", {}).items():
+        p = root / rel
+        if not p.exists():
+            problems.append(f"pinned runtime source missing: {rel}")
+        elif hashlib.sha256(p.read_bytes()).hexdigest() != digest:
+            problems.append(f"pinned runtime source differs: {rel}")
+    return problems
+
+
+def _verify_helpers(archived_dir, packed_installation, compat_installation):
+    """Every archived helper (the staging INPUT) must be byte-identical to the pinned
+    original per the packed/compat installation.json ``helper_sha256`` maps."""
+    problems = []
+    arch = Path(archived_dir)
+    for sub, inst in (("packed", packed_installation), ("compat", compat_installation)):
+        if inst is None:
+            continue
+        table = json.loads(Path(inst).read_text()).get("helper_sha256", {})
+        for rel, digest in table.items():
+            p = arch / sub / rel
+            if not p.exists():
+                problems.append(f"archived helper missing: {sub}/{rel}")
+            elif hashlib.sha256(p.read_bytes()).hexdigest() != digest:
+                problems.append(f"archived helper differs from pin: {sub}/{rel}")
+    return problems
+
+
+def _compile_files(paths):
+    problems = []
+    for path in paths or ():
+        try:
+            py_compile.compile(str(path), doraise=True)
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"staged file does not compile: {path}: {exc}")
+    return problems
 
 
 # (class-or-module, name, kind) the lane resolves. kind: "attr" = hasattr on the object.
@@ -146,8 +206,20 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="F2 prefetch window CPU preflight")
     parser.add_argument("--dep", action="append", default=[], help="path that must exist")
     parser.add_argument("--sha", action="append", default=[], help="PATH=HEX sha256 pin")
+    parser.add_argument("--run-worktree", default=None, help="detached run worktree at the pinned commit")
+    parser.add_argument("--compat-installation", default=None, help="compat/installation.json (source pin)")
+    parser.add_argument("--packed-installation", default=None, help="packed/installation.json (helper hashes)")
+    parser.add_argument("--archived-dir", default=None, help="receipt-archived sources dir (staging input)")
+    parser.add_argument("--compile", action="append", default=[], help="staged file to py_compile")
+    parser.add_argument("--no-seams", action="store_true", help="skip the MLX-importing seam checks")
     args = parser.parse_args(argv)
-    problems = _seam_checks() + _check_deps(args.dep, args.sha)
+    problems = [] if args.no_seams else _seam_checks()
+    problems += _check_deps(args.dep, args.sha)
+    if args.run_worktree and args.compat_installation:
+        problems += _source_pin(args.run_worktree, args.compat_installation)
+    if args.archived_dir:
+        problems += _verify_helpers(args.archived_dir, args.packed_installation, args.compat_installation)
+    problems += _compile_files(args.compile)
     if problems:
         for p in problems:
             print(f"[f2-preflight] FAIL: {p}", file=sys.stderr)
