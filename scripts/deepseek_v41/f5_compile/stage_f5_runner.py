@@ -53,14 +53,29 @@ _E2_INSERT = (
 )
 
 
+# Failure-path-only diagnostic (review 2026-09-19): the retained boundary observer turns
+# ANY transition exception into a bare SystemExit, hiding which check fired.  Print the
+# chained traceback first.  Executes only when the transition has already failed, so the
+# measured path is untouched.
+_E3_OLD = ("            except Exception as error:\n"
+           "                raise SystemExit('critical prefill/cache transition failed; aborting generation') from error")
+_E3_NEW = ("            except Exception as error:\n"
+           "                import traceback as _f5_tb; _f5_tb.print_exc()\n"
+           "                raise SystemExit('critical prefill/cache transition failed; aborting generation') from error")
+
+
 def stage(source_text: str) -> str:
     if source_text.count("    ab._ar_logits_row_at_index = cached_ar_logits_row") != 1:
         raise RuntimeError("retained cache-only AR-logits override not found exactly once")
     if source_text.count(_E2_ANCHOR) != 1:
         raise RuntimeError("EDIT 2 anchor (growth_transition call) not unique")
+    if source_text.count(_E3_OLD) != 1:
+        raise RuntimeError("boundary-observer except clause not found exactly once")
     updated = source_text.replace(_E2_ANCHOR, _E2_ANCHOR + "\n" + _E2_INSERT)
+    updated = updated.replace(_E3_OLD, _E3_NEW)
     # round-trip: reversing the edit must recover the retained source exactly.
-    recovered = updated.replace(_E2_ANCHOR + "\n" + _E2_INSERT, _E2_ANCHOR)
+    recovered = updated.replace(_E3_NEW, _E3_OLD)
+    recovered = recovered.replace(_E2_ANCHOR + "\n" + _E2_INSERT, _E2_ANCHOR)
     if recovered != source_text:
         raise RuntimeError("F5 staging changed the retained runner beyond the one edit")
     return updated
