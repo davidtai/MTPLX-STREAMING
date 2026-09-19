@@ -104,7 +104,7 @@ ARTPY
     --admission "$dest/packed/packed_admission.py" --max-rows "$rows"
   [ "$f2b" = "1" ] && nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
     --run-full "$dest/packed/run_full.py"
-  nice -n 19 "$PYBIN" -m f2.window_preflight --no-seams \
+  PYTHONPATH="$F2PKG" nice -n 19 "$PYBIN" -m f2.window_preflight --no-seams \
     $(find "$dest" -maxdepth 2 -name '*.py' | sed 's/^/--compile /')
 }
 STAGE_CONTROL="$STAGE_ROOT/control"       # F2_MAX_ROWS, no F2b
