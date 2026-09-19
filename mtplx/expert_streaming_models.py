@@ -13,7 +13,7 @@ allocate MLX arrays.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from operator import index
 
@@ -27,6 +27,12 @@ from mtplx.expert_shadow import SHADOW_CODECS, shadow_record_bytes
 # the runtime feeds ``plan_expert_memory`` manifest-derived per-layer sizes. The
 # literal must equal ``mtplx.expert_mixed_official.MIXED_MODE``.
 MIXED_OFFICIAL_CODEC = "mixed-official-v1"
+# Native mxfp4 (lossless FP4 repack): packed FP4 (E2M1) codes + one uint8 E8M0
+# shared exponent per 32-column group, no bias leaf.  DeepSeek-V4.1-Flash ships
+# its routed experts in exactly this format, so the repack is bit-exact.
+MXFP4_CODEC = "mxfp4"
+MXFP4_BITS = 4
+MXFP4_GROUP = 32
 
 
 # Load-time resident quantization (group 64 affine over BF16): kept bytes
@@ -122,6 +128,15 @@ class ExpertStreamingModelSpec:
     # until the affine assumptions catalogued in
     # research/streamed-q1-codec-gap-analysis.md are closed.
     expert_codec: str = "affine"
+    # Reference asymmetric SwiGLU clamp applied inside every streamed routed
+    # expert, between the gate/up projections and the SiLU (DeepSeek
+    # inference/model.py Expert.forward L846-847: up clipped two-sided
+    # [-limit,+limit], gate clipped from above at +limit). ``None`` (the default)
+    # means the plain unclamped SwiGLU -- every existing hy3/glm/deepseek_v4 spec
+    # leaves this None, so their streamed path is byte-for-byte unchanged. Set to
+    # a positive float only for models whose reference clamps its experts
+    # (DeepSeek-V4.1-Flash: 10.0).
+    swiglu_limit: float | None = None
 
     def __post_init__(self) -> None:
         integer_fields = {
@@ -179,13 +194,28 @@ class ExpertStreamingModelSpec:
             raise ValueError("full indexer layers must be sorted and unique")
         if (
             self.expert_codec != "affine"
+            and self.expert_codec != MXFP4_CODEC
             and self.expert_codec != MIXED_OFFICIAL_CODEC
             and self.expert_codec not in SHADOW_CODECS
         ):
             choices = ", ".join(repr(codec) for codec in SHADOW_CODECS)
             raise ValueError(
-                f"expert_codec must be 'affine', {MIXED_OFFICIAL_CODEC!r}, {choices}"
+                f"expert_codec must be 'affine', {MXFP4_CODEC!r}, "
+                f"{MIXED_OFFICIAL_CODEC!r}, {choices}"
             )
+        if self.expert_codec == MXFP4_CODEC and (
+            self.quant_bits != MXFP4_BITS or self.quant_group_size != MXFP4_GROUP
+        ):
+            raise ValueError(
+                f"mxfp4 experts require quant_bits={MXFP4_BITS} and "
+                f"quant_group_size={MXFP4_GROUP}"
+            )
+        if self.swiglu_limit is not None and (
+            not isinstance(self.swiglu_limit, (int, float))
+            or isinstance(self.swiglu_limit, bool)
+            or self.swiglu_limit <= 0
+        ):
+            raise ValueError("swiglu_limit must be None or a positive number")
         if self.expert_codec == MIXED_OFFICIAL_CODEC:
             # Mixed-official specs have no uniform record size, so the routed /
             # resident footprint split is manifest-derived at plan time. The
@@ -254,6 +284,12 @@ class ExpertStreamingModelSpec:
                 "mixed-official specs have no uniform expert_record_bytes; use "
                 "the manifest-derived per-layer record sizes (issue #51 D7)"
             )
+        if self.expert_codec == MXFP4_CODEC:
+            # Packed FP4 codes + one 1-byte E8M0 exponent per group, no bias.
+            params = self.expert_source_parameters
+            packed = params * self.quant_bits // 8
+            scales = params // self.quant_group_size
+            return packed + scales
         if self.expert_codec != "affine":
             return shadow_record_bytes(
                 self.expert_codec, self.expert_source_parameters
@@ -311,15 +347,26 @@ class ExpertMemoryPlan:
     persistent_cache_bytes: int
     unallocated_bytes: int
     fits_fixed: bool
+    # Optional exact per-layer geometry, ordered as ``(layer, capacity)``.
+    # ``slots_per_layer`` remains the uniform-equivalent scalar for legacy
+    # diagnostics; allocation and execution must use ``slots_for_layer`` when
+    # this tuple is populated.
+    persistent_slots_by_layer: tuple[tuple[int, int], ...] = ()
     island_layer_count: int = 0
     island_bytes: int = 0
     mmap_island_layer_count: int = 0
     mmap_island_bytes: int = 0
-    prefetch_slots_per_layer: int = 0
+    prefetch_ring_slots: int = 0
     prefetch_bytes: int = 0
     mmap_islands_wired: bool = True
     miss_shadow: str | None = None
     shadow_bytes: int = 0
+    # W87: the single-fence wave width (route_waves max_unique / the verify gate) --
+    # ``service_slots`` (== transient_slots) on both paths.  The merged-capacity
+    # widening was retired (review HIGH-1: a wider prefill wave is unserviceable once
+    # slots are protected/pinned, and DSV4.1 top_k=6 verify already fits it).
+    # Allocation-neutral.  0 = a plan built before W87 (consumers fall back).
+    batch_admission_slots: int = 0
 
     @property
     def fixed_bytes(self) -> int:
@@ -345,6 +392,17 @@ class ExpertMemoryPlan:
     @property
     def allocated_bytes(self) -> int:
         return self.fixed_bytes + self.persistent_cache_bytes
+
+    def slots_for_layer(self, layer: int) -> int:
+        """Return the construction-selected persistent capacity for ``layer``."""
+
+        layer = _integer("layer", layer, minimum=0)
+        for planned_layer, capacity in self.persistent_slots_by_layer:
+            if planned_layer == layer:
+                return capacity
+        if self.persistent_slots_by_layer:
+            raise ValueError(f"layer {layer} has no planned persistent capacity")
+        return self.slots_per_layer
 
 
 # Measured 2026-07-16: 511-step decode route trace (issue #63 heatmap), layers
@@ -644,6 +702,132 @@ GLM52_EXPERT_Q1B1 = replace(
 )
 
 
+# DeepSeek-V4.1-Flash expert-only affine Q2 (gs64) streamed bank.
+# Source FP4 (E2M1) routed experts on layers 0..39 (384 experts each) are
+# dequantized and re-quantized to affine Q2/gs64; residents (attention,
+# shared_experts, indexer, embed/head, mtp dense, vision/aligner) become q8/gs64
+# MLX safetensors, with router/norms/hc_*/attn_sink kept exact. Engram (layers
+# 1,14) and the MTP routed experts (mtp.*.ffn.experts) are NOT carried in this
+# run. See scripts/convert_deepseek_v41_streamed.py + mtplx/deepseek_v41_convert.py.
+#
+# Record math (matches port plan, 2.5 bpw): 3*5120*2304 params
+#   packed  = params*2//8            = 8_847_360
+#   scale/bias = (params//64)*2*2    = 2_211_840  -> record 11_059_200 B
+#   routed_expert_bytes = 40*384*11_059_200 = 169_869_312_000 (158.20 GiB).
+DEEPSEEK_V41_FLASH_EXPERT_Q2 = ExpertStreamingModelSpec(
+    key="deepseek-v41-flash-expert-q2",
+    display_name="DeepSeek-V4.1-Flash expert-only affine Q2 (gs64 experts, q8 residents)",
+    source_model="deepseek-ai/DeepSeek-V4.1-Flash",
+    source_revision="dba1be0a40aa45a94ad051997016db3960a90277",
+    # Pinned to the published streaming repo (public) and its current main
+    # commit (HF API model info sha, 2026-09-10).  ``validate_expert_manifest_spec``
+    # compares ``manifest.source_repo``/``source_revision`` against these
+    # ``quant_model``/``quant_revision`` fields.  W3 rebased the LOCAL
+    # ``~/models/DeepSeek-V4.1-Flash-MTPLX-streaming-q2/expert-manifest.json`` to
+    # this identity (identity-only edit: source_repo/source_revision +
+    # recomputed manifest_sha256; records/resident_tensors/shards untouched, no
+    # bank re-hash), so strict admission of the LOCAL artifact now passes with
+    # this pinned spec directly.  The HF-uploaded copy of expert-manifest.json
+    # STILL carries the pre-publish ``local/...`` identity and must be
+    # re-uploaded (David's call) for a fresh ``--download`` to admit.  See
+    # docs/deepseek-v41/W3_REPORT.md ("Manifest identity fix").
+    quant_model="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-q2",
+    quant_revision="b64980a16283647bb213ab475335f38f516e0d9e",
+    # Measured header-inventory sum of the artifact (W3): sum over all 49
+    # ``model-000NN.safetensors`` headers = 25_163_923_352 resident bytes, plus
+    # the routed bank 169_869_312_000 = 195_033_235_352.  Equals the artifact's
+    # ``conversion-manifest.json`` artifact_tensor_bytes and the built
+    # ``expert-manifest.json`` artifact.tensor_bytes exactly (no delta).  This
+    # resident total includes the q8 MTP dense + q8 MTP experts (15.97 GB) and
+    # the vision/aligner/image residents (0.52 GB); text-only AR skips both at
+    # load (8.67 GB actually wired -- see the loader and W3_REPORT.md).
+    total_tensor_bytes=195_033_235_352,
+    total_layers=40,
+    routed_layer_start=0,
+    routed_layer_count=40,
+    expert_count=384,
+    top_k=6,
+    hidden_size=5120,
+    expert_hidden_size=2304,
+    quant_bits=2,
+    quant_group_size=64,
+    quant_parameter_bytes=2,
+    router_storage="source bfloat16 gate with fp32 correction bias (noaux_tc, sqrtsoftplus)",
+    router_matmul_dtype="float32",
+    # 40 * (384*5120 bf16 gate.weight) + 40 * 2 * (384 f32 gate.bias/bias_vl)
+    router_bytes=157_409_280,
+    # Phase-1 bf16 global CSA2 KV (PORT_PLAN 3b): the compressed KV + index-K
+    # records that GROW per token, priced at bf16 (David's KV preference; the
+    # native FP4 KV kernel is a later size win).  Per position a Full/kv_source
+    # layer stores a compressed-KV latent (512 * 2 B) + an index-K record
+    # (128 * 2 B) = 1280 B, scaled by 1/compress_ratio; summed over the
+    # kv_source layers [L2,L8,L14 @ ratio 2, L20 @ ratio 1]:
+    #   3 * (1280 // 2) + 1280 = 3*640 + 1280 = 3200 B/token.
+    # Reindex/Reuse layers read their source layer's cache and add no per-token
+    # KV.  The SWA sliding window is a FIXED 40 * 128 * (512 * 2) = 5,242,880 B
+    # (5 MiB) buffer, NOT per token -- the loader/plan prices it as a fixed
+    # additional-resident reserve, not in kv_bytes_per_token.
+    kv_bytes_per_token=3_200,
+    # DeepSeek stores MTP as ``mtp.N.*`` (not ``layers.40``), so there is no
+    # single backbone MTP layer index; MTP is excluded from this artifact.
+    mtp_layer_index=None,
+    mtp_included=False,
+    # CSA2 index-owning layers = config ``index_source_layer_ids`` (verified
+    # from the artifact text_config): layers 2,8,14,20 (Full: own global KV +
+    # index Q) and 24,28,32,36 (Reindex: own index Q, reuse L20 KV).  This is a
+    # pinned geometry descriptor validated for structure (sorted/unique/in
+    # range); the current runtime does not yet consume it for behaviour (grep:
+    # no reader outside this module -- same status as the GLM-5.2 entry, which
+    # also pins its index-owning layers here).
+    full_indexer_layers=(2, 8, 14, 20, 24, 28, 32, 36),
+    # Unmeasured: needs a routing census before count-based island selection.
+    island_pin_order=(),
+    # DeepSeek-V4.1-Flash clamps every routed (and shared) expert's SwiGLU at
+    # +/-10 (config text_config.swiglu_limit=10.0). The streamed switch applies
+    # the reference asymmetric clamp between the gate/up qmm and the SiLU so the
+    # streaming path matches the resident ClampedSwiGLU path and the reference.
+    swiglu_limit=10.0,
+)
+
+
+# Native-mxfp4 routed-expert bank (W9 decision, 2026-09-10): the source ships
+# its routed experts as FP4 (E2M1) codes with per-32-column E8M0 scales, so
+# ``mx.quantize(mode="mxfp4", group_size=32)`` re-encodes them bit-for-bit (proven
+# on 191 real experts x 3 weights, docs/deepseek-v41/receipts/bank_mx_probe.json
+# ``bit_exact_vs_source: true``; candidate-bank ladder torchref_bank_ladder.json
+# gives MoE g = 1.000000 at every layer 0-7).  This REPLACES the affine Q2 bank
+# (expert cos 0.912, moe_L0_output cos 0.927) that W9 proved is the sole source
+# of the probe's junk.  Residents/engram/router/KV are IDENTICAL to the Q2 spec
+# (same q8 dense residents, same source revision) -- only the routed-expert bank
+# changes format, so resident_bytes matches the Q2 spec exactly.
+#   record  = 18_800_640 B (packed FP4 17_694_720 + E8M0 scales 1_105_920, no bias)
+#   bank    = 40 * 384 * 18_800_640 = 288_777_830_400 B (268.99 GiB)
+#   total   = resident 25_163_923_352 + routed 288_777_830_400 = 313_941_753_752
+DEEPSEEK_V41_FLASH_EXPERT_MXFP4 = replace(
+    DEEPSEEK_V41_FLASH_EXPERT_Q2,
+    key="deepseek-v41-flash-expert-mxfp4",
+    display_name=(
+        "DeepSeek-V4.1-Flash expert-only native mxfp4 "
+        "(gs32 FP4 lossless-repack experts, mxfp8 residents)"
+    ),
+    # The mxfp4 streaming artifact repo (upload + pin is David's call once W16
+    # builds the full 269 GiB bank).  The converter stamps these into the
+    # artifact's expert-manifest.json source identity, so local admission of a
+    # freshly converted artifact matches by construction; re-pin on upload.
+    quant_model="OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    quant_revision="unpublished-mxfp4-repack",
+    # W16: re-derived from the SHIPPED native residents (W18 mxfp8 gs32 dense +
+    # mxfp4 gs32 MTP + bf16 embed/head), scanned from the 49 model-*.safetensors
+    # (3,913 tensors) = 18_649_658_184 resident bytes + 288_777_830_400 mxfp4
+    # routed. Was the q8-era 313_941_753_752 (resident 25_163_923_352).
+    total_tensor_bytes=307_427_488_584,
+    quant_bits=MXFP4_BITS,
+    quant_group_size=MXFP4_GROUP,
+    quant_parameter_bytes=1,  # E8M0 scale is one byte; no bias (not used by mxfp4 sizing)
+    expert_codec=MXFP4_CODEC,
+)
+
+
 MODEL_SPECS: dict[str, ExpertStreamingModelSpec] = {
     spec.key: spec
     for spec in (
@@ -657,6 +841,8 @@ MODEL_SPECS: dict[str, ExpertStreamingModelSpec] = {
         GLM52_EXPERT_Q2,
         GLM52_EXPERT_Q1T,
         GLM52_EXPERT_Q1B1,
+        DEEPSEEK_V41_FLASH_EXPERT_Q2,
+        DEEPSEEK_V41_FLASH_EXPERT_MXFP4,
     )
 }
 
@@ -688,12 +874,13 @@ def plan_expert_memory(
     island_layer_count: int = 0,
     mmap_island_layer_count: int = 0,
     mmap_islands_wired: bool = True,
-    prefetch_slots_per_layer: int = 0,
+    prefetch_ring_slots: int = 0,
     miss_shadow: str | None = None,
     miss_shadow_layers: int | None = None,
     layer_record_bytes: Mapping[int, int] | None = None,
+    persistent_slots_by_layer: Mapping[int, int] | Sequence[int] | None = None,
 ) -> ExpertMemoryPlan:
-    """Fit uniform persistent expert slots under an explicit memory ceiling.
+    """Fit persistent expert slots under an explicit memory ceiling.
 
     The total limit is never treated as an expert-cache-only setting: resident
     weights, KV state, runtime headroom, and transient miss service are removed
@@ -761,8 +948,8 @@ def plan_expert_memory(
     mmap_island_layer_count = _integer(
         "mmap_island_layer_count", mmap_island_layer_count, minimum=0
     )
-    prefetch_slots_per_layer = _integer(
-        "prefetch_slots_per_layer", prefetch_slots_per_layer, minimum=0
+    prefetch_ring_slots = _integer(
+        "prefetch_ring_slots", prefetch_ring_slots, minimum=0
     )
     if island_layer_count + mmap_island_layer_count > spec.routed_layer_count:
         raise ValueError(
@@ -772,6 +959,52 @@ def plan_expert_memory(
         )
     if mmap_island_layer_count and cache_scope != "layer":
         raise ValueError("mmap island layers require cache_scope 'layer'")
+
+    resolved_slots_by_layer: tuple[tuple[int, int], ...] = ()
+    if persistent_slots_by_layer is not None:
+        if cache_scope != "layer":
+            raise ValueError(
+                "persistent_slots_by_layer requires cache_scope 'layer'"
+            )
+        if island_layer_count or mmap_island_layer_count:
+            raise ValueError(
+                "persistent_slots_by_layer cannot be combined with island layers"
+            )
+        if prefetch_ring_slots:
+            raise ValueError(
+                "persistent_slots_by_layer cannot be combined with prefetch slots"
+            )
+        routed_layers = tuple(spec.routed_layer_indices)
+        if isinstance(persistent_slots_by_layer, Mapping):
+            supplied = {
+                _integer("persistent slot layer", layer, minimum=0): _integer(
+                    "persistent layer capacity", capacity, minimum=0
+                )
+                for layer, capacity in persistent_slots_by_layer.items()
+            }
+            if set(supplied) != set(routed_layers):
+                raise ValueError(
+                    "persistent_slots_by_layer must cover every routed layer exactly"
+                )
+            capacities = tuple(supplied[layer] for layer in routed_layers)
+        else:
+            if isinstance(persistent_slots_by_layer, (str, bytes)):
+                raise TypeError(
+                    "persistent_slots_by_layer must be a sequence of integers"
+                )
+            capacities = tuple(
+                _integer("persistent layer capacity", capacity, minimum=0)
+                for capacity in persistent_slots_by_layer
+            )
+            if len(capacities) != len(routed_layers):
+                raise ValueError(
+                    "persistent_slots_by_layer must have one capacity per routed layer"
+                )
+        if any(capacity > spec.expert_count for capacity in capacities):
+            raise ValueError(
+                "persistent layer capacity cannot exceed the model expert count"
+            )
+        resolved_slots_by_layer = tuple(zip(routed_layers, capacities, strict=True))
 
     # Mixed-official (issue #51, M2): resolve every per-record byte quantity from
     # the manifest-derived ``layer_record_bytes`` instead of the (raising)
@@ -801,7 +1034,7 @@ def plan_expert_memory(
             raise ValueError(
                 "mixed-official MVP forbids dense/mmap islands and miss-shadow"
             )
-        if prefetch_slots_per_layer:
+        if prefetch_ring_slots:
             raise ValueError(
                 "mixed-official MVP forbids the prefetch ring (perf lane)"
             )
@@ -869,7 +1102,15 @@ def plan_expert_memory(
     # ``streamed_bytes_sum`` is the byte cost of one persistent slot PER streamed
     # layer summed across all streamed layers (D2): the replacement for the old
     # uniform ``streamed_layer_count * expert_record_bytes``.
-    prefetch_bytes = prefetch_slots_per_layer * streamed_bytes_sum
+    # W93: the prefetch ring is now GLOBAL (one ring SHARED across all layers,
+    # docs/deepseek-v41/W93_GATE_PREFETCH.md §4), so it reserves ``ring_slots``
+    # records TOTAL -- a small fixed pool like the transient scratch -- not
+    # ``ring_slots * n_streamed_layers`` carved from the persistent LRU budget.
+    # Records are uniform here (the ring is forbidden for mixed-official banks
+    # above), so one ``expert_record_bytes`` is the exact per-slot size.
+    prefetch_bytes = (
+        prefetch_ring_slots * spec.expert_record_bytes if prefetch_ring_slots else 0
+    )
     if miss_shadow is not None and miss_shadow not in SHADOW_CODECS:
         choices = ", ".join(repr(codec) for codec in SHADOW_CODECS)
         raise ValueError(f"miss_shadow must be None, {choices}")
@@ -925,6 +1166,27 @@ def plan_expert_memory(
         slots_per_layer = 0
         persistent_slots = 0
         persistent_cache_bytes = 0
+    elif resolved_slots_by_layer:
+        if is_mixed:
+            persistent_cache_bytes = sum(
+                capacity * resolved_layer_bytes[layer]
+                for layer, capacity in resolved_slots_by_layer
+            )
+        else:
+            persistent_cache_bytes = (
+                sum(capacity for _layer, capacity in resolved_slots_by_layer)
+                * spec.expert_record_bytes
+            )
+        if persistent_cache_bytes > persistent_budget_bytes:
+            raise ValueError(
+                "persistent_slots_by_layer requires "
+                f"{persistent_cache_bytes} bytes but only "
+                f"{persistent_budget_bytes} bytes are available"
+            )
+        persistent_slots = sum(
+            capacity for _layer, capacity in resolved_slots_by_layer
+        )
+        slots_per_layer = persistent_slots // streamed_layer_count
     else:
         slots_per_layer = min(
             spec.expert_count, persistent_budget_bytes // bytes_per_uniform_slot
@@ -955,13 +1217,17 @@ def plan_expert_memory(
         persistent_cache_bytes=persistent_cache_bytes,
         unallocated_bytes=unallocated_bytes,
         fits_fixed=fixed_bytes <= total_limit_bytes,
+        persistent_slots_by_layer=resolved_slots_by_layer,
         island_layer_count=island_layer_count,
         island_bytes=island_bytes,
         mmap_island_layer_count=mmap_island_layer_count,
         mmap_island_bytes=mmap_island_bytes,
         mmap_islands_wired=bool(mmap_islands_wired),
-        prefetch_slots_per_layer=prefetch_slots_per_layer,
+        prefetch_ring_slots=prefetch_ring_slots,
         prefetch_bytes=prefetch_bytes,
         miss_shadow=miss_shadow,
         shadow_bytes=shadow_bytes,
+        # W87: single-fence wave width = service_slots (transient) on both paths
+        # (the merged-capacity widening was retired, review HIGH-1).
+        batch_admission_slots=service_slots,
     )

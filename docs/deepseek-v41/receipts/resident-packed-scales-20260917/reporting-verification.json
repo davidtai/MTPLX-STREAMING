@@ -1,0 +1,18 @@
+{
+  "real_mlx_imports_forbidden": true,
+  "reporting_cases_passed": 37,
+  "new_focused_cases": 4,
+  "before_fix_new_cases_failed": 4,
+  "actual_physical_storage_reconciled": true,
+  "benchmark_measurements_unchanged_in_derived_receipt": true,
+  "source_checks": {
+    "ab_decode_env_levers": {
+      "source_sha256": "805f30a11d9b487fef11b7de19b68805d73d690c4a72e2035e1748266609f6ad",
+      "only_resolved_plan_ast_changed": true
+    },
+    "bench_standard_shape": {
+      "source_sha256": "8b4cad58e4e0012c8c4704a23d580564e41f2a43502b8563555f23781d9b932e",
+      "only_resolved_plan_ast_changed": true
+    }
+  }
+}

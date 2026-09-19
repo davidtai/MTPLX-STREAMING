@@ -1,0 +1,42 @@
+# arm: cell16k_ring_v2_attn
+# stream: ar
+# token_ids_sha256: 34383396cee9a53c59b8c11472a600fa20271d25e841146dabb995d5dd0f859c
+# decode_tok_s: 2.9599756144260496
+# divergence: none
+
+<｜end▁of▁sentence｜># file_0.py
+from __future__ import annotations
+
+import dataclasses
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+@dataclasses.dataclass(frozen=True)
+class RequestState:
+    request_id: str
+    prompt_tokens: int
+    started_at: float
+    metadata: dict[str, Any]
+
+def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "request_id": payload["request_id"],
+        "prompt_tokens": int(payload["prompt_tokens"]),
+        "started_at": float(payload.get("started_at", time.time())),
+        "metadata": dict(payload.get("metadata", {})),
+    }
+
+def load_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    p = Path(path)
+    rows: list[dict[str, Any]] = []
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+def validate_required(payload: dict[str, Any

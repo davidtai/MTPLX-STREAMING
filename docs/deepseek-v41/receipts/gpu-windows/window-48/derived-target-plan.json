@@ -1,0 +1,10 @@
+{
+  "memory_plan_source": "box_target",
+  "box_target_gb": 100.0,
+  "box_baseline_gb": 10.8138,
+  "allocator_cache_limit_gib": 6.0,
+  "transient_band_gib": 4.1,
+  "allocator_limit_bytes": 82743749056,
+  "engine_budget_bytes": 78341407578,
+  "engine_budget_gib": 72.96112140454352
+}

@@ -1,0 +1,232 @@
+diff --git a/mtplx/deepseek_v41_memory_profile.py b/mtplx/deepseek_v41_memory_profile.py
+index c911c5016..a8b9571cd 100644
+--- a/mtplx/deepseek_v41_memory_profile.py
++++ b/mtplx/deepseek_v41_memory_profile.py
+@@ -7,7 +7,7 @@ suite can exercise them without a Metal device or the 195 GB artifact:
+    phase (load-end / after-prefill / per-N-decode), the three MLX allocator
+    accessors (:func:`mlx_memory_snapshot`), the process footprint via ``mach``
+    ``task_info`` (:func:`process_rss_snapshot`, no ``psutil``), the box totals
+-   from ``vm_stat`` (:func:`box_memory_snapshot`), and the planner's byte
++   from Mach VM counters (:func:`box_memory_snapshot`), and the planner's byte
+    breakdown (:func:`plan_breakdown`).  :func:`format_memory_profile_table`
+    renders one table for a window receipt.
+ 
+@@ -57,10 +57,10 @@ from __future__ import annotations
+ 
+ import os
+ import resource
+-import subprocess
+ import sys
+ import time
+ from dataclasses import dataclass, field
++from functools import lru_cache
+ from typing import Any, Mapping, Sequence
+ 
+ GIB = 1024**3
+@@ -534,25 +534,104 @@ def _parse_vm_stat(text: str) -> dict[str, int]:
+     }
+ 
+ 
++@lru_cache(maxsize=1)
++def _mach_host_vm_reader():
++    """Bind the stable HOST_VM_INFO64 rev1 prefix once, without launching vm_stat."""
++    import ctypes as ct
++
++    class VMStatistics64(ct.Structure):
++        # mach/vm_statistics.h and HOST_VM_INFO64_REV1_COUNT in host_info.h.
++        # Newer revisions append fields; these 38 natural_t words cover every
++        # counter used here, including physical and logical compressor sizes.
++        _fields_ = [
++            ("free_count", ct.c_uint32), ("active_count", ct.c_uint32),
++            ("inactive_count", ct.c_uint32), ("wire_count", ct.c_uint32),
++            ("zero_fill_count", ct.c_uint64), ("reactivations", ct.c_uint64),
++            ("pageins", ct.c_uint64), ("pageouts", ct.c_uint64),
++            ("faults", ct.c_uint64), ("cow_faults", ct.c_uint64),
++            ("lookups", ct.c_uint64), ("hits", ct.c_uint64),
++            ("purges", ct.c_uint64), ("purgeable_count", ct.c_uint32),
++            ("speculative_count", ct.c_uint32),
++            ("decompressions", ct.c_uint64), ("compressions", ct.c_uint64),
++            ("swapins", ct.c_uint64), ("swapouts", ct.c_uint64),
++            ("compressor_page_count", ct.c_uint32),
++            ("throttled_count", ct.c_uint32),
++            ("external_page_count", ct.c_uint32),
++            ("internal_page_count", ct.c_uint32),
++            ("total_uncompressed_pages_in_compressor", ct.c_uint64),
++        ]
++
++    words = ct.sizeof(VMStatistics64) // ct.sizeof(ct.c_int32)
++    if words != 38:
++        raise RuntimeError("unsupported HOST_VM_INFO64 rev1 layout")
++    page_size = int(os.sysconf("SC_PAGE_SIZE"))
++    if page_size <= 0:
++        raise RuntimeError("invalid host page size")
++    libc = ct.CDLL("/usr/lib/libSystem.B.dylib")
++    host_self = libc.mach_host_self
++    host_self.argtypes, host_self.restype = [], ct.c_uint32
++    task_self = libc.mach_task_self
++    task_self.argtypes, task_self.restype = [], ct.c_uint32
++    statistics = libc.host_statistics64
++    statistics.argtypes = [ct.c_uint32, ct.c_int, ct.POINTER(VMStatistics64),
++                          ct.POINTER(ct.c_uint32)]
++    statistics.restype = ct.c_int
++    deallocate = libc.mach_port_deallocate
++    deallocate.argtypes, deallocate.restype = [ct.c_uint32, ct.c_uint32], ct.c_int
++
++    def read() -> dict[str, int]:
++        # A fresh send right per read avoids caching a port name across fork.
++        # Every successful acquisition is balanced, including failed reads.
++        host = host_self()
++        if host in (0, 0xffffffff):
++            raise RuntimeError("mach_host_self returned an invalid port")
++        try:
++            info = VMStatistics64()
++            count = ct.c_uint32(words)
++            kr = statistics(host, 4, ct.byref(info), ct.byref(count))
++            if kr != 0 or count.value != words:
++                raise RuntimeError(
++                    f"host_statistics64 failed: return={kr}, words={count.value}"
++                )
++            return {
++                "page_size": page_size,
++                # Mach includes speculative pages in free_count; vm_stat's
++                # printed Pages free excludes them and reports them separately.
++                "free_bytes": (info.free_count - info.speculative_count) * page_size,
++                "wired_bytes": info.wire_count * page_size,
++                "active_bytes": info.active_count * page_size,
++                "inactive_bytes": info.inactive_count * page_size,
++                "speculative_bytes": info.speculative_count * page_size,
++                "anonymous_bytes": info.internal_page_count * page_size,
++                "file_backed_bytes": info.external_page_count * page_size,
++                "compressor_bytes": info.compressor_page_count * page_size,
++                "compressed_bytes": info.total_uncompressed_pages_in_compressor * page_size,
++                "used_bytes": (info.wire_count + info.active_count +
++                               info.inactive_count + info.compressor_page_count) * page_size,
++                "non_file_used_bytes": (info.wire_count + info.internal_page_count +
++                                        info.compressor_page_count) * page_size,
++                "swapins_pages": info.swapins,
++                "swapouts_pages": info.swapouts,
++            }
++        finally:
++            kr = deallocate(task_self(), host)
++            if kr != 0:
++                raise RuntimeError(f"host port deallocation failed: return={kr}")
++
++    return read
++
++
+ def box_memory_snapshot() -> dict[str, Any]:
+     """Physical page counters; used includes file cache, compressor is physical."""
+ 
+     if sys.platform != "darwin":
+         return {"ok": False, "reason": "not_darwin"}
+     try:
+-        proc = subprocess.run(
+-            ["/usr/bin/vm_stat"], capture_output=True, text=True, timeout=2
+-        )
++        out = _mach_host_vm_reader()()
+     except Exception as exc:  # pragma: no cover - env guard
+         return {"ok": False, "error": repr(exc)}
+-    if proc.returncode != 0:
+-        return {"ok": False, "error": proc.stderr.strip() or "vm_stat failed"}
+-    try:
+-        out = _parse_vm_stat(proc.stdout)
+-    except ValueError as exc:
+-        return {"ok": False, "error": str(exc)}
+     out["ok"] = True
+-    out["source"] = "vm_stat"
++    out["source"] = "host_statistics64"
+     out["used_includes_file_cache"] = True
+     return out
+ 
+diff --git a/tests/test_deepseek_v41_memory_reporting.py b/tests/test_deepseek_v41_memory_reporting.py
+index 38a10c65c..5b6bdf4e2 100644
+--- a/tests/test_deepseek_v41_memory_reporting.py
++++ b/tests/test_deepseek_v41_memory_reporting.py
+@@ -49,12 +49,85 @@ def test_system_total_includes_file_pages_and_physical_compressor():
+ 
+ 
+ def test_broken_system_reader_is_unknown(monkeypatch):
+-    monkeypatch.setattr(profile.subprocess, "run", lambda *a, **k:
+-                        SimpleNamespace(returncode=0, stdout="garbage", stderr=""))
++    def unavailable():
++        raise OSError("host statistics unavailable")
++
++    monkeypatch.setattr(profile, "_mach_host_vm_reader", unavailable)
+     monkeypatch.setattr(profile.sys, "platform", "darwin")
+     assert profile.box_memory_snapshot()["ok"] is False
+ 
+ 
++@pytest.fixture
++def native_host_reader(monkeypatch):
++    """Exercise the ctypes call boundary without requiring a macOS kernel."""
++    import ctypes
++
++    state = {"result": 0, "words": 38, "release_result": 0,
++             "acquired": [], "released": []}
++
++    def host_self():
++        port = 100 + len(state["acquired"])
++        state["acquired"].append(port)
++        return port
++
++    def task_self():
++        return 42
++
++    def statistics(host, flavor, info, count):
++        assert host == state["acquired"][-1] and flavor == 4
++        assert ctypes.sizeof(info._obj) == 152 and count._obj.value == 38
++        for name, value in {
++            "free_count": 12, "active_count": 10, "inactive_count": 20,
++            "wire_count": 4, "speculative_count": 3,
++            "internal_page_count": 12, "external_page_count": 21,
++            "compressor_page_count": 5,
++            "total_uncompressed_pages_in_compressor": 17,
++            "swapins": 6, "swapouts": 7,
++        }.items():
++            setattr(info._obj, name, value)
++        count._obj.value = state["words"]
++        return state["result"]
++
++    def deallocate(task, host):
++        assert task == 42
++        state["released"].append(host)
++        return state["release_result"]
++
++    library = SimpleNamespace(mach_host_self=host_self, mach_task_self=task_self,
++                              host_statistics64=statistics,
++                              mach_port_deallocate=deallocate)
++    profile._mach_host_vm_reader.cache_clear()
++    monkeypatch.setattr(ctypes, "CDLL", lambda path: library)
++    monkeypatch.setattr(profile.os, "sysconf", lambda name: 16384)
++    monkeypatch.setattr(profile.sys, "platform", "darwin")
++    yield state
++    profile._mach_host_vm_reader.cache_clear()
++
++
++def test_native_system_counters_match_vm_stat_and_balance_host_ports(native_host_reader):
++    expected = profile._parse_vm_stat(VM_STAT)
++    for _ in range(2):
++        snapshot = profile.box_memory_snapshot()
++        assert snapshot == {**expected, "ok": True,
++                            "source": "host_statistics64",
++                            "used_includes_file_cache": True}
++    assert native_host_reader["acquired"] == [100, 101]
++    assert native_host_reader["released"] == [100, 101]
++
++
++@pytest.mark.parametrize("field,value", [
++    ("result", 5), ("words", 24), ("words", 39), ("release_result", 5),
++])
++def test_native_system_read_failures_stay_unknown_and_release_ports(
++    native_host_reader, field, value,
++):
++    native_host_reader[field] = value
++    snapshot = profile.box_memory_snapshot()
++    assert snapshot["ok"] is False
++    assert "used_bytes" not in snapshot
++    assert native_host_reader["acquired"] == native_host_reader["released"] == [100]
++
++
+ def test_footprint_reader_never_substitutes_rss(monkeypatch):
+     bench = load_script("bench_standard_shape")
+     monkeypatch.setattr(profile, "process_rss_snapshot", lambda: {

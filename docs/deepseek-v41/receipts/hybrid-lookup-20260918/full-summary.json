@@ -1,0 +1,108 @@
+{
+  "source_commit": "48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3",
+  "single_run_only": true,
+  "all_native_output_ids_exact": true,
+  "tps": 13.414151761941186,
+  "wall_s": 76.26274237499456,
+  "old_tps": 13.319530035363696,
+  "old_wall_s": 76.8045116669964,
+  "wall_saved_s": 0.5417692920018453,
+  "tps_change_percent": 0.7103983873775421,
+  "cycles": 198,
+  "verify_calls": 198,
+  "maximum_proposal_depth": 7,
+  "native_head_depth": 5,
+  "drafted_by_depth": [
+    198,
+    187,
+    175,
+    154,
+    143,
+    26,
+    23
+  ],
+  "accepted_by_depth": [
+    187,
+    175,
+    154,
+    143,
+    129,
+    23,
+    19
+  ],
+  "baseline_bytes": 10447192064,
+  "physical_bound_bytes": 109631928540,
+  "allocator_limit_bytes": 98130811904,
+  "active_bound_bytes": 97494304988,
+  "host_reserve_bytes": 1421996032,
+  "capacity": 110,
+  "memory": {
+    "mlx_peak_bytes": 97006846938,
+    "process_footprint_peak_bytes": 98027571368,
+    "system_used_peak_bytes": 109238927360,
+    "mlx_active_bytes_at_decode_end": 96846054836,
+    "mlx_cache_bytes_at_decode_end": 239688936
+  },
+  "io": {
+    "records_read": 31961,
+    "read_bytes": 565540945920,
+    "read_wall_ns": 44111376676,
+    "read_gb_per_s_window": 12.8208
+  },
+  "read_records_change": 25,
+  "phase_time_s": {
+    "draft": 2.0530915012932383,
+    "verify": 70.21909716786467,
+    "accept": 0.06405324811930768,
+    "commit": 0.15940417096135207
+  },
+  "growth": {
+    "phase": "decode",
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 110,
+    "growth_payload_bytes": 17719669500,
+    "resident_packed_scales_bytes": 3086136060,
+    "source_record_bytes": 18800640,
+    "decode_weight_record_bytes": 17694720,
+    "timing_scope": "scale installation, raw backing release and one weight resize are inside decode wall time",
+    "allocator_cache_phase_limits_bytes": {
+      "prefill": 1073741824,
+      "growth_decode": 268435456
+    },
+    "active_before_bytes": 77523252468,
+    "plane_readiness": "gate_up_then_complete_record",
+    "plane_layers": 40,
+    "growth_seconds": 3.56194954100647,
+    "active_after_bytes": 95243863284,
+    "cache_after_bytes": 0,
+    "transition_peak_bytes": 95892669688,
+    "raw_scale_backing_released_bytes": 3768975360,
+    "physical_allocated_bytes": 78706114560,
+    "plan_limit_bytes": 101146283588,
+    "plan_persistent_bytes": 77856768000
+  },
+  "hybrid": {
+    "native_head_depth": 5,
+    "maximum_proposal_depth": 7,
+    "maximum_verify_rows": 8,
+    "minimum_context_tokens": 2,
+    "maximum_lookup_tokens": 2,
+    "selection": "earliest_longest_context_matching_all_five_native_drafts",
+    "host_allowance_bytes": 16777216,
+    "additional_gpu_arrays_bytes": 0,
+    "original_decode_function_sha256": "34d88a622e2ba8ddc6741022711cbdf89837ae7229624b98cdc005ea7afc1d5d",
+    "hybrid_decode_function_sha256": "f876da4d543a03fe6f6a94fd614f65c3ff9c1d0068cfae8d0cfe8f918a62c013",
+    "native_mlx_operations_unchanged": true,
+    "scope": "One greedy exact16K/1024 request. Native MTP proposals retained; causal past-text extension verified by the unchanged target accept/commit path."
+  },
+  "guard_session": 39139,
+  "guard_exit_code": 0,
+  "guard_tail": [
+    "PACKED_CACHE_RECLAIMED {\"cached_page_bytes_before\": 0, \"cached_page_bytes_after\": 0}",
+    "2026-09-18T10:38:05Z [gpu_window] phase 4: GPU step exited with code 0; sampled peak step footprint 91.3 GiB (98015856808 bytes), sampled peak guard accounted 101.7 GiB (109181698048 bytes), sampled peak physical used 101.7 GiB (109181698048 bytes), sampled peak compressor delta 0.0 GiB (0 bytes); complete step memory samples 217, poll interval 1s",
+    "2026-09-18T10:38:05Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist",
+    "2026-09-18T10:38:22Z [gpu_window] restore: com.tea.qwen healthy, model identity [\"mtplx-flash-next-optimized-speed\"] verified, background warmup ready",
+    "2026-09-18T10:38:22Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock"
+  ],
+  "goal_20tps_achieved": false
+}

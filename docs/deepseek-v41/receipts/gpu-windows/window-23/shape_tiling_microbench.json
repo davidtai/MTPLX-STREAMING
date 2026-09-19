@@ -1,0 +1,359 @@
+{
+  "kind": "dsv41_shape_tiling_microbench",
+  "kernel_ledger": "K27",
+  "device": "Apple M5 Max/applegpu_g17s",
+  "mlx_version": "0.32.2",
+  "warmup": 3,
+  "iters": 15,
+  "seq_t": 16384,
+  "score_chunk": 1024,
+  "gather_experts": 64,
+  "results": [
+    {
+      "case": "score.chunk1024.T16384.f32",
+      "shape": "q[1,1024,64,512] KV[1,16384,512] -> scores[1,1024,64,16384]",
+      "variants": [
+        {
+          "variant": "einsum",
+          "note": "shipped mx.einsum QK^T/PV",
+          "median_ms": 53.0427,
+          "min_ms": 52.4835,
+          "max_ms": 54.0882,
+          "tflops": 41.458
+        },
+        {
+          "variant": "matmul",
+          "note": "explicit batched matmul reshape",
+          "median_ms": 57.8024,
+          "min_ms": 55.0181,
+          "max_ms": 59.9116,
+          "tflops": 38.044
+        }
+      ]
+    },
+    {
+      "case": "score.chunk1024.T16384.bf16",
+      "shape": "q[1,1024,64,512] KV[1,16384,512] -> scores[1,1024,64,16384]",
+      "variants": [
+        {
+          "variant": "einsum",
+          "note": "shipped mx.einsum QK^T/PV",
+          "median_ms": 67.0012,
+          "min_ms": 62.1443,
+          "max_ms": 71.88,
+          "tflops": 32.821
+        },
+        {
+          "variant": "matmul",
+          "note": "explicit batched matmul reshape",
+          "median_ms": 71.4822,
+          "min_ms": 67.6454,
+          "max_ms": 91.5597,
+          "tflops": 30.763
+        }
+      ]
+    },
+    {
+      "case": "score_keychunk.chunk1024.T16384.f32",
+      "shape": "online-softmax over key-chunk widths of KV[1,16384,512]",
+      "variants": [
+        {
+          "variant": "keychunk0",
+          "note": "one-shot",
+          "median_ms": 81.076,
+          "min_ms": 79.9365,
+          "max_ms": 83.9002,
+          "tflops": 27.123
+        },
+        {
+          "variant": "keychunk512",
+          "note": "split-K 512",
+          "median_ms": 144.4717,
+          "min_ms": 143.6193,
+          "max_ms": 146.0328,
+          "tflops": 15.221
+        },
+        {
+          "variant": "keychunk1024",
+          "note": "split-K 1024",
+          "median_ms": 126.1966,
+          "min_ms": 125.0897,
+          "max_ms": 126.7341,
+          "tflops": 17.425
+        },
+        {
+          "variant": "keychunk2048",
+          "note": "split-K 2048",
+          "median_ms": 118.1023,
+          "min_ms": 115.8169,
+          "max_ms": 119.0326,
+          "tflops": 18.62
+        }
+      ]
+    },
+    {
+      "case": "olora.rows1.f32",
+      "shape": "o[1,1,8,4096] W[8,1024,4096] -> [1,1,8,1024]",
+      "variants": [
+        {
+          "variant": "einsum",
+          "note": "shipped grouped einsum",
+          "median_ms": 0.4385,
+          "min_ms": 0.4153,
+          "max_ms": 0.5479,
+          "tflops": 156.73
+        },
+        {
+          "variant": "bmm",
+          "note": "transpose-to-batch + matmul",
+          "median_ms": 0.4261,
+          "min_ms": 0.409,
+          "max_ms": 0.4632,
+          "tflops": 161.266
+        }
+      ]
+    },
+    {
+      "case": "olora.rows1024.f32",
+      "shape": "o[1,1024,8,4096] W[8,1024,4096] -> [1,1024,8,1024]",
+      "variants": [
+        {
+          "variant": "einsum",
+          "note": "shipped grouped einsum",
+          "median_ms": 2.2874,
+          "min_ms": 2.1312,
+          "max_ms": 2.5322,
+          "tflops": 30.042
+        },
+        {
+          "variant": "bmm",
+          "note": "transpose-to-batch + matmul",
+          "median_ms": 2.2798,
+          "min_ms": 2.1475,
+          "max_ms": 2.3808,
+          "tflops": 30.143
+        }
+      ]
+    },
+    {
+      "case": "gather.rows6.mxfp4",
+      "shape": "x[6,1,1,5120] w[64,2304,5120] mxfp4 gs32 -> [6,2304]",
+      "variants": [
+        {
+          "variant": "unsorted",
+          "note": "shipped gather_qmv per row",
+          "median_ms": 0.2561,
+          "min_ms": 0.2236,
+          "max_ms": 0.3161,
+          "tflops": 0.553
+        },
+        {
+          "variant": "sorted",
+          "note": "sorted_indices -> gather_qmm_rhs",
+          "median_ms": 0.2502,
+          "min_ms": 0.2246,
+          "max_ms": 0.3105,
+          "tflops": 0.566
+        }
+      ]
+    },
+    {
+      "case": "gather.rows12.mxfp4",
+      "shape": "x[12,1,1,5120] w[64,2304,5120] mxfp4 gs32 -> [12,2304]",
+      "variants": [
+        {
+          "variant": "unsorted",
+          "note": "shipped gather_qmv per row",
+          "median_ms": 0.3408,
+          "min_ms": 0.3025,
+          "max_ms": 0.505,
+          "tflops": 0.831
+        },
+        {
+          "variant": "sorted",
+          "note": "sorted_indices -> gather_qmm_rhs",
+          "median_ms": 0.3227,
+          "min_ms": 0.3048,
+          "max_ms": 0.3503,
+          "tflops": 0.877
+        }
+      ]
+    },
+    {
+      "case": "gather.rows24.mxfp4",
+      "shape": "x[24,1,1,5120] w[64,2304,5120] mxfp4 gs32 -> [24,2304]",
+      "variants": [
+        {
+          "variant": "unsorted",
+          "note": "shipped gather_qmv per row",
+          "median_ms": 0.4579,
+          "min_ms": 0.4166,
+          "max_ms": 0.668,
+          "tflops": 1.237
+        },
+        {
+          "variant": "sorted",
+          "note": "sorted_indices -> gather_qmm_rhs",
+          "median_ms": 0.462,
+          "min_ms": 0.4303,
+          "max_ms": 0.5509,
+          "tflops": 1.225
+        }
+      ]
+    },
+    {
+      "case": "gather.rows48.mxfp4",
+      "shape": "x[48,1,1,5120] w[64,2304,5120] mxfp4 gs32 -> [48,2304]",
+      "variants": [
+        {
+          "variant": "unsorted",
+          "note": "shipped gather_qmv per row",
+          "median_ms": 0.7146,
+          "min_ms": 0.6772,
+          "max_ms": 0.766,
+          "tflops": 1.585
+        },
+        {
+          "variant": "sorted",
+          "note": "sorted_indices -> gather_qmm_rhs",
+          "median_ms": 0.6362,
+          "min_ms": 0.5894,
+          "max_ms": 0.7541,
+          "tflops": 1.78
+        }
+      ]
+    },
+    {
+      "case": "gather.rows96.mxfp4",
+      "shape": "x[96,1,1,5120] w[64,2304,5120] mxfp4 gs32 -> [96,2304]",
+      "variants": [
+        {
+          "variant": "unsorted",
+          "note": "shipped gather_qmv per row",
+          "median_ms": 1.2091,
+          "min_ms": 1.1633,
+          "max_ms": 1.2419,
+          "tflops": 1.873
+        },
+        {
+          "variant": "sorted",
+          "note": "sorted_indices -> gather_qmm_rhs",
+          "median_ms": 0.9749,
+          "min_ms": 0.918,
+          "max_ms": 1.0345,
+          "tflops": 2.323
+        }
+      ]
+    },
+    {
+      "case": "gather.rows6144.mxfp4",
+      "shape": "x[6144,1,1,5120] w[64,2304,5120] mxfp4 gs32 -> [6144,2304]",
+      "variants": [
+        {
+          "variant": "unsorted",
+          "note": "shipped gather_qmv per row",
+          "median_ms": 61.9937,
+          "min_ms": 61.5145,
+          "max_ms": 62.6681,
+          "tflops": 2.338
+        },
+        {
+          "variant": "sorted",
+          "note": "sorted_indices -> gather_qmm_rhs",
+          "median_ms": 5.2267,
+          "min_ms": 5.0714,
+          "max_ms": 5.3793,
+          "tflops": 27.733
+        }
+      ]
+    },
+    {
+      "case": "down_align.mxfp4",
+      "shape": "down-proj x[.,1,1,K] w[8,5120,K] mxfp4; fast qmv needs K%512==0",
+      "variants": [
+        {
+          "variant": "ragged2304",
+          "note": "K=2304 (%512=256)",
+          "median_ms": 0.263,
+          "min_ms": 0.2393,
+          "max_ms": 0.3139,
+          "tflops": 0.538
+        },
+        {
+          "variant": "padded2560",
+          "note": "K=2560 (%512=0)",
+          "median_ms": 0.2515,
+          "min_ms": 0.2243,
+          "max_ms": 0.257,
+          "tflops": 0.625
+        }
+      ]
+    },
+    {
+      "case": "dense.rows128",
+      "shape": "x[128,5120] @ gate[2304,5120]^T -> [128,2304] (dequantized-once dense matmul)",
+      "variants": [
+        {
+          "variant": "bf16",
+          "note": "dense bf16 matmul",
+          "median_ms": 0.3351,
+          "min_ms": 0.3057,
+          "max_ms": 0.4138,
+          "tflops": 9.012
+        },
+        {
+          "variant": "f32",
+          "note": "dense f32 matmul",
+          "median_ms": 0.3458,
+          "min_ms": 0.3277,
+          "max_ms": 0.47,
+          "tflops": 8.733
+        }
+      ]
+    },
+    {
+      "case": "dense.rows256",
+      "shape": "x[256,5120] @ gate[2304,5120]^T -> [256,2304] (dequantized-once dense matmul)",
+      "variants": [
+        {
+          "variant": "bf16",
+          "note": "dense bf16 matmul",
+          "median_ms": 0.3932,
+          "min_ms": 0.3745,
+          "max_ms": 0.5044,
+          "tflops": 15.359
+        },
+        {
+          "variant": "f32",
+          "note": "dense f32 matmul",
+          "median_ms": 0.4773,
+          "min_ms": 0.4305,
+          "max_ms": 0.5573,
+          "tflops": 12.654
+        }
+      ]
+    },
+    {
+      "case": "dense.rows1024",
+      "shape": "x[1024,5120] @ gate[2304,5120]^T -> [1024,2304] (dequantized-once dense matmul)",
+      "variants": [
+        {
+          "variant": "bf16",
+          "note": "dense bf16 matmul",
+          "median_ms": 0.7785,
+          "min_ms": 0.6766,
+          "max_ms": 0.878,
+          "tflops": 31.035
+        },
+        {
+          "variant": "f32",
+          "note": "dense f32 matmul",
+          "median_ms": 0.8449,
+          "min_ms": 0.7931,
+          "max_ms": 0.8907,
+          "tflops": 28.595
+        }
+      ]
+    }
+  ]
+}

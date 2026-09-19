@@ -1,0 +1,43 @@
+{
+  "source_commit": "5ba18552cb81f85793469a8d20fe2ff4af4f79d8",
+  "configure_argv": [
+    "/opt/homebrew/bin/cmake",
+    "-S",
+    "/tmp/dsv41-strict-cache-20260918/mlx-0.32.2",
+    "-B",
+    "/tmp/dsv41-strict-cache-20260918/build",
+    "-G",
+    "Unix Makefiles",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DBUILD_SHARED_LIBS=ON",
+    "-DMLX_BUILD_TESTS=OFF",
+    "-DMLX_BUILD_EXAMPLES=OFF",
+    "-DMLX_BUILD_BENCHMARKS=OFF",
+    "-DMLX_BUILD_PYTHON_BINDINGS=OFF",
+    "-DMLX_BUILD_PYTHON_STUBS=OFF",
+    "-DMLX_METAL_JIT=OFF",
+    "-DMLX_USE_CCACHE=OFF",
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=26.2",
+    "-DCMAKE_C_COMPILER=/usr/bin/clang",
+    "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+    "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/tmp/dsv41-strict-cache-20260918/strict-lib",
+    "-DMLX_METAL_PATH=/tmp/dsv41-strict-cache-20260918/strict-lib",
+    "-DDSV41_PREBUILT_METALLIB=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/mlx/lib/mlx.metallib"
+  ],
+  "build_argv": [
+    "/opt/homebrew/bin/cmake",
+    "--build",
+    "/tmp/dsv41-strict-cache-20260918/build",
+    "--target",
+    "mlx",
+    "-j",
+    "4"
+  ],
+  "helper_sha256": {
+    "build.py": "c635df946ee5c4caaeafd4cfb256ec96acb38ec0f1280d657a49be718ce88e3e",
+    "allocator.stock.cpp": "b317edbeda67afbafe63a4abe685c810b1fb0fd7d94f5f5ee17a7773bf97c65f",
+    "design.json": "cc53c9079ef81305ff6b6c0806c6f4dbbaa45316b9f58e1082e2fc2d3fe3872b",
+    "mlx-0.32.2/mlx/backend/metal/allocator.cpp": "56cc34fc6aed7f6203737f5323a155e3b9a924af52aa91ed2279ab1d77dde4f0",
+    "mlx-0.32.2/mlx/backend/metal/kernels/CMakeLists.txt": "b0eda36a1f6d841dd5efc13342648374e4ba147f6a6d7323d7f56d9f3c307990"
+  }
+}

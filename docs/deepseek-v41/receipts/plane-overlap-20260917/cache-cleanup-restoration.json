@@ -1,0 +1,60 @@
+{
+  "recorded_utc": "2026-09-17T23:25:58.848698+00:00",
+  "guard_exit_code": 0,
+  "health_ok": true,
+  "model_id": "mtplx-flash-next-optimized-speed",
+  "warmup": "done",
+  "active_requests": 0,
+  "lock_free": true,
+  "qwen_process": "13355 13337 31040848 01:10 /Users/davidtai/projects/OpenSourceWTF/.worktrees/qwen38-typical02-resident/.venv/bin/python3",
+  "snapshot": {
+    "sample_start_monotonic_ns": 153268538245791,
+    "sample_end_monotonic_ns": 153268543579041,
+    "process": {
+      "peak_maxrss_bytes": 32325632,
+      "resident_bytes": 32849920,
+      "phys_footprint_bytes": 19399136,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 2221326336,
+      "wired_bytes": 88075763712,
+      "active_bytes": 4397121536,
+      "inactive_bytes": 37367595008,
+      "speculative_bytes": 116424704,
+      "anonymous_bytes": 3312189440,
+      "file_backed_bytes": 38568951808,
+      "compressor_bytes": 1811611648,
+      "compressed_bytes": 7576535040,
+      "used_bytes": 131652091904,
+      "non_file_used_bytes": 93199564800,
+      "swapins_pages": 4817078,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "reclamation": [
+    {
+      "operation": "stopped_service_file_cache_reclamation",
+      "cached_page_bytes_before": 22129917952,
+      "cached_page_bytes_after": 0,
+      "physical_used_reduction_bytes": 22149824512
+    },
+    {
+      "operation": "candidate_file_cache_reclamation",
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "physical_used_reduction_bytes": -425984
+    },
+    {
+      "operation": "candidate_aux_file_cache_reclamation",
+      "cached_page_bytes_before": 0,
+      "cached_page_bytes_after": 0,
+      "physical_used_reduction_bytes": -212992
+    }
+  ]
+}

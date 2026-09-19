@@ -1,0 +1,75 @@
+{
+  "source_commit": "61b6899f27fee89f63bf7eed9f1c8aa77e73a53a",
+  "scope": "Independent head-only hybrid boundaries, original D5 with existing causal lookup priority. Conditioned D7 two-token suffix used only when lookup supplies none and native min-confidence>=0.9. Compare raw suffix and threshold0.5 truncation. Future target IDs only score and seed committed states; no target run or TPS claim.",
+  "static_incremental_bound_bytes": 52613349376,
+  "bound_components": {
+    "active_bytes": 44023414784,
+    "cache_bytes": 4294967296,
+    "host_bytes": 4294967296,
+    "lookup_host_bytes_inside_host_reserve": 16777216,
+    "tail_logits_and_inputs_inside_workspace_bytes": 33554432
+  },
+  "native_draft_ast_matches_prior_except_unused_detach_method": true,
+  "prior_receipt_sha256": "03629c6090c3b2052c6f676dcc7cc787b7d0a8b7aec9707f134e0be0674bf6dc",
+  "lookup_config": {
+    "minimum_context": 2,
+    "extra_tokens": 2,
+    "selection": "earliest_longest_context"
+  },
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "strict_allocator": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "runtime_source_sha256": {
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+  },
+  "helper_sha256": {
+    "head_screen.py": "17b0893c458d8281a892d502497d89ed00e6fbca5d057cfbf012ab94e861363a",
+    "tail.py": "1040b152eac60a8b54e68d40cfa6af16f8dc17f97b2aa5adcb38c1168ce8d56d",
+    "lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b",
+    "run_head.py": "c9fb044ee161d0fc49b243270351df07ab7b9c4b305117be55c4a634bcb1022f",
+    "stage.py": "82da6c53d3287d3d118a3919780d4e24bacd21b2f5ec9c5e3b2193e196edf39d",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "screen_body.py": "7aeb54fb0bef193cfef6007151adcdc2683a7cc96a43d9cc33fb93f39891cf64"
+  },
+  "control_proposal_receipt": "/private/tmp/dsv41-hybrid-lookup-20260918/head-screen.json",
+  "control_proposal_sha256": "83b84e85fa6adebeb7cfd0500c8f1cd5131f7d7daed93c66bb1cdb7da61b664b",
+  "native_prefix_length": 5,
+  "suffix_gate": {
+    "feature": "minimum native sigmoid confidence",
+    "threshold": 0.9,
+    "rule": "Broadest tested min-confidence threshold with no native-prefix failures in first103 archived boundaries; selected before this suffix screen.",
+    "training_selected": 44,
+    "training_correct": 44,
+    "heldout_selected": 42,
+    "heldout_correct": 40
+  },
+  "tail_cases": [
+    {
+      "name": "hybrid_control",
+      "tail": false
+    },
+    {
+      "name": "conditioned_raw",
+      "tail": true,
+      "tail_confidence_threshold": null
+    },
+    {
+      "name": "conditioned_conf05",
+      "tail": true,
+      "tail_confidence_threshold": 0.5
+    }
+  ],
+  "bound_scope": "Existing49GiB head-only inventory, T<=13:41GiB active plus4GiB cache and4GiB host. Three owner objects share authenticated parameter arrays. Their at-most three stage output-transpose caches per owner and sequential draft graphs fit the existing8GiB active workspace/compiler allowance. No target trunk or expert streaming bank is constructed; second-pass outputs evaluated before the next case.",
+  "arithmetic_scope": "Native D5, target weights, target arithmetic, verifier and committed-state seeding remain unchanged. Only proposal generation differs. Draft attention writes no cache state; the screen checks window identity and offsets around every extra pass.",
+  "prior_head_script_sha256": "7e1c8eb96aae985200618298f2c6891eb03b85daca62c2cb0c66b5ac35d4fae4",
+  "opportunity_receipt_sha256": "58b8d2eef7438b8069ec726f3206a5eb9fbe428e623b9ce63cc4e3347c9f87c2",
+  "max_proposed_target_width": 8
+}

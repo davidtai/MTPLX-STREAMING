@@ -1,0 +1,256 @@
+{
+  "scope": "Native dense seed weights only; synthetic16K sequence from captured native hidden rows. Compares full seeding with only the final2048 rows at correct absolute offsets. No target/draft generation or TPS claim.",
+  "installation": {
+    "source_commit": "8b4b44c622bf69ba189c430022c3c884f4cd548e",
+    "incremental_bound_bytes": 8589934592,
+    "bound_components": "4GiB for MLX allocator/cache/graph plus4GiB Python/compiler. Selected native weights below90MiB; largest source shard below305MB; full input503316480B plus at most2GiB for projections/norm/temporary arrays. Tail arm allocates only128 hidden rows. No target trunk or expert banks.",
+    "helper_sha256": {
+      "probe.py": "789e7ca6b4834fcdedd1255011ec330afacc851b33071d04f90918c7cc41bf64",
+      "seed_reader.py": "448117effe1cf9ae6a6fd7db9d9f6b17e3ce762b3e0eb63498fbee813565ed6e",
+      "run_screen.py": "ba1908bd434d5d65de73e9d87be82e658391edd5a86bef4baf20fc31146553fc"
+    },
+    "runtime_source_sha256": {
+      "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+      "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+      "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+      "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+      "mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+      "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+      "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c",
+      "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+      "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/config.json": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d"
+    },
+    "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "model_manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+    "resident_names": [
+      "mtp.0.attn.kv_norm.weight",
+      "mtp.0.attn.wkv.scales",
+      "mtp.0.attn.wkv.weight",
+      "mtp.0.main_norm.weight",
+      "mtp.0.main_proj.scales",
+      "mtp.0.main_proj.weight",
+      "mtp.1.attn.kv_norm.weight",
+      "mtp.1.attn.wkv.scales",
+      "mtp.1.attn.wkv.weight",
+      "mtp.2.attn.kv_norm.weight",
+      "mtp.2.attn.wkv.scales",
+      "mtp.2.attn.wkv.weight"
+    ],
+    "resident_payload_bytes": 89224192,
+    "teacher_sha256": "1826c18118b11ddddb75493f2cf03a12c63135855e089a3a5527a4ab8767c7d2",
+    "loader": "Direct admitted tensor ranges; native shard header and tensor metadata validated before allocation. Source identity verified after reading. F_NOCACHE and8MiB maximum positional-read views. Existing production loader unchanged.",
+    "retained_batch_rows": 2048,
+    "window_rows": 128,
+    "hypothesis": "Retain2048 rows to avoid the128-row quantized GEMM arithmetic change while retaining most measured seed memory savings. Candidate, not a proved kernel threshold."
+  },
+  "before": {
+    "sample_start_monotonic_ns": 165145460018583,
+    "sample_end_monotonic_ns": 165145462269500,
+    "process": {
+      "peak_maxrss_bytes": 24985600,
+      "resident_bytes": 25329664,
+      "phys_footprint_bytes": 14352864,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123705409536,
+      "wired_bytes": 3186016256,
+      "active_bytes": 2624978944,
+      "inactive_bytes": 2316484608,
+      "speculative_bytes": 297943040,
+      "anonymous_bytes": 3412377600,
+      "file_backed_bytes": 1827028992,
+      "compressor_bytes": 2427273216,
+      "compressed_bytes": 8494563328,
+      "used_bytes": 10554753024,
+      "non_file_used_bytes": 9025667072,
+      "swapins_pages": 4821867,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "arms": [
+    {
+      "arm": "full",
+      "seed_seconds": 0.07662454099045135,
+      "peak_bytes": 2256015020,
+      "hidden_rows": 16384,
+      "cache_offsets": [
+        16384,
+        16384,
+        16384
+      ],
+      "state_dtypes": [
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16"
+      ],
+      "equal_final_row_and_windows": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "differing_elements": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "state_sha256": [
+        "843593c5b0b36f6d17e2083014426f4af3c66d8136139792ca817cbccab6077e",
+        "8d5e2c9904407ac88a6eb325c964a71236592c01464a3362e6a73283950784a5",
+        "729f7fcdf037d6eaf4368fcb2bd985a5d7021df47b80f02f218d766f7e2fc9dc",
+        "fdc9b1c066e7aa8f2689cfc126d4cb00e4c072f7cb25831758757c08bfb15897"
+      ]
+    },
+    {
+      "arm": "tail",
+      "seed_seconds": 0.00855120798223652,
+      "peak_bytes": 416511276,
+      "hidden_rows": 2048,
+      "cache_offsets": [
+        16384,
+        16384,
+        16384
+      ],
+      "state_dtypes": [
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16"
+      ],
+      "equal_final_row_and_windows": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "differing_elements": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "state_sha256": [
+        "843593c5b0b36f6d17e2083014426f4af3c66d8136139792ca817cbccab6077e",
+        "8d5e2c9904407ac88a6eb325c964a71236592c01464a3362e6a73283950784a5",
+        "729f7fcdf037d6eaf4368fcb2bd985a5d7021df47b80f02f218d766f7e2fc9dc",
+        "fdc9b1c066e7aa8f2689cfc126d4cb00e4c072f7cb25831758757c08bfb15897"
+      ]
+    },
+    {
+      "arm": "full",
+      "seed_seconds": 0.06647320798947476,
+      "peak_bytes": 2279214764,
+      "hidden_rows": 16384,
+      "cache_offsets": [
+        16384,
+        16384,
+        16384
+      ],
+      "state_dtypes": [
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16"
+      ],
+      "equal_final_row_and_windows": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "differing_elements": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "state_sha256": [
+        "843593c5b0b36f6d17e2083014426f4af3c66d8136139792ca817cbccab6077e",
+        "8d5e2c9904407ac88a6eb325c964a71236592c01464a3362e6a73283950784a5",
+        "729f7fcdf037d6eaf4368fcb2bd985a5d7021df47b80f02f218d766f7e2fc9dc",
+        "fdc9b1c066e7aa8f2689cfc126d4cb00e4c072f7cb25831758757c08bfb15897"
+      ]
+    },
+    {
+      "arm": "tail",
+      "seed_seconds": 0.008684458996867761,
+      "peak_bytes": 416511276,
+      "hidden_rows": 2048,
+      "cache_offsets": [
+        16384,
+        16384,
+        16384
+      ],
+      "state_dtypes": [
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16",
+        "mlx.core.bfloat16"
+      ],
+      "equal_final_row_and_windows": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "differing_elements": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "state_sha256": [
+        "843593c5b0b36f6d17e2083014426f4af3c66d8136139792ca817cbccab6077e",
+        "8d5e2c9904407ac88a6eb325c964a71236592c01464a3362e6a73283950784a5",
+        "729f7fcdf037d6eaf4368fcb2bd985a5d7021df47b80f02f218d766f7e2fc9dc",
+        "fdc9b1c066e7aa8f2689cfc126d4cb00e4c072f7cb25831758757c08bfb15897"
+      ]
+    }
+  ],
+  "complete": true,
+  "resident_active_bytes": 120812936,
+  "tail_exact": true,
+  "median_seed_seconds": {
+    "full": 0.07154887448996305,
+    "tail": 0.00861783348955214
+  },
+  "after": {
+    "sample_start_monotonic_ns": 165147267263083,
+    "sample_end_monotonic_ns": 165147271155416,
+    "process": {
+      "peak_maxrss_bytes": 454803456,
+      "resident_bytes": 391446528,
+      "phys_footprint_bytes": 799720408,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 122720419840,
+      "wired_bytes": 3764256768,
+      "active_bytes": 2824978432,
+      "inactive_bytes": 2467299328,
+      "speculative_bytes": 401555456,
+      "anonymous_bytes": 3640410112,
+      "file_backed_bytes": 2053423104,
+      "compressor_bytes": 2427273216,
+      "compressed_bytes": 8494563328,
+      "used_bytes": 11483807744,
+      "non_file_used_bytes": 9831940096,
+      "swapins_pages": 4821867,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "active_after_close_bytes": 8
+}

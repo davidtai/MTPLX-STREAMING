@@ -1,0 +1,21 @@
+{
+  "scope": "exact D5/M6 16K/1024 one-request native arithmetic, lossless resident scales and three-plane weight reads, combined post-prefill resize",
+  "source_commit": "4a5acf9d4776bbe2a6a0519a4f1fc4b8965274dc",
+  "base_wrapper_sha256": "aa9da6a9ea6e5c86e10409fdbfde04703926be4b27849e087ec7fdd04a8fddd3",
+  "helper_sha256": {
+    "run_full.py": "ee19bdd26183ab6ad17c511d156d8037631fd9f4e216baecb123b3cc74319e9b",
+    "packed_admission.py": "0757c6caf8541c49b0160b11f46a304846649835deb3ba64c636a8cc7f295541",
+    "packed_phase.py": "99c6c635725cda14d21351b4b58909da7ccedabfd55289c2a6a821012a743d9d",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "storage-probe.json": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4",
+    "artifact/manifest.json": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16"
+  },
+  "packed_scales_bytes": 3086136060,
+  "startup_cache_cleanup": "export source pages were reclaimed after export; packed owner reads disable read-ahead and bypass file cache",
+  "note": "source record format remains native; decode physically retains/reads weights only and prices packed scale owners separately",
+  "cleanup": "Reclaim verified source and packed artifact clean file cache in the existing guarded finally, on success or failure, before Qwen restoration.",
+  "prefill_bound": "Proved native cap91 prefill from native-width allocation envelope, with original KV/cache/compile margins retained.",
+  "native_admission_sha256": "d016a40cfb212af5b4ea7b0ecf522b425a0203f540d0deb045e4039b65474175"
+}

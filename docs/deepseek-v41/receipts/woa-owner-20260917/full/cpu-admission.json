@@ -1,0 +1,48 @@
+{
+  "mlx_imports_blocked": true,
+  "actual_runtime_budget_matches": true,
+  "source_and_helpers_match": true,
+  "seed_envelope_credit_bytes": 0,
+  "cases": [
+    {
+      "baseline_bytes": 9500000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 103,
+      "physical_bound_bytes": 109657997400,
+      "steady_decode_active_bound_bytes": 93815431276,
+      "resize_active_bound_bytes": 94661839068,
+      "seed_active_bound_bytes": 94233601176,
+      "host_reserve_bytes": 2164260864
+    },
+    {
+      "baseline_bytes": 9955393536,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109393805656,
+      "steady_decode_active_bound_bytes": 93107642476,
+      "resize_active_bound_bytes": 93942253788,
+      "seed_active_bound_bytes": 93525812376,
+      "host_reserve_bytes": 2164260864
+    },
+    {
+      "baseline_bytes": 10603659264,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 101,
+      "physical_bound_bytes": 109322486104,
+      "steady_decode_active_bound_bytes": 92399853676,
+      "resize_active_bound_bytes": 93222668508,
+      "seed_active_bound_bytes": 92818023576,
+      "host_reserve_bytes": 2164260864
+    },
+    {
+      "baseline_bytes": 11431313408,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 100,
+      "physical_bound_bytes": 109430554968,
+      "steady_decode_active_bound_bytes": 91692064876,
+      "resize_active_bound_bytes": 92503083228,
+      "seed_active_bound_bytes": 92110234776,
+      "host_reserve_bytes": 2164260864
+    }
+  ]
+}

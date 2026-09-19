@@ -1,0 +1,111 @@
+# arm: cell16k_ring_v2_attn_pf0
+# stream: ar
+# token_ids_sha256: 2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090
+# decode_tok_s: 3.783595361640547
+# divergence: none
+
+```diff
+--- a/mtplx/generate.py
++++ b/mtplx/generate.py
+@@
+ def _generation_rate_fields(
+     *,
+     generated_tokens: int,
+     elapsed_s: float,
+     prompt_eval_time_s: float,
+     cache_restore_time_s: float = 0.0,
+ ) -> dict[str, float]:
+     end_to_end_tok_s = generated_tokens / elapsed_s if elapsed_s > 0.0 else 0.0
+     non_decode_elapsed_s = min(
+         max(0.0, prompt_eval_time_s) + max(0.0, cache_restore_time_s),
+         max(0.0, elapsed_s),
+     )
+     decode_elapsed_s = max(0.0, elapsed_s - non_decode_elapsed_s)
+     decode_tok_s = (
+         generated_tokens / decode_elapsed_s if decode_elapsed_s > 0.0 else 0.0
+     )
+     return {
+         "tok_s": decode_tok_s,
+         "decode_elapsed_s": decode_elapsed_s,
+         "decode_tok_s": decode_tok_s,
+         "end_to_end_tok_s": end_to_end_tok_s,
+     }
+ 
+ 
++def _percentile(values: Sequence[float], q: float) -> float | None:
++    """Nearest-rank percentile over a non-empty sequence of floats.
++
++    Returns None for an empty input so callers can distinguish "no data"
++    from a genuine zero. q is a fraction in [0, 1].
++    """
++
++    if not values:
++        return None
++    ordered = sorted(float(value) for value in values)
++    if q <= 0.0:
++        return ordered[0]
++    if q >= 1.0:
++        return ordered[-1]
++    rank = int(round(q * (len(ordered) - 1)))
++    rank = max(0, min(len(ordered) - 1, rank))
++    return ordered[rank]
++
++
++def _optional_float(value: Any) -> float | None:
++    """Coerce an optional numeric metric to float, or None if unavailable."""
++
++    if value is None:
++        return None
++    try:
++        return float(value)
++    except (TypeError, ValueError):
++        return None
++
++
++def summarize_generation_outputs(
++    outputs: Sequence["GenerationOutput"],
++) -> dict[str, Any]:
++    """Aggregate a batch of GenerationOutput records into a JSON-safe summary.
++
++    The summary is intentionally tolerant: an empty sequence yields a
++    well-formed dict with zero counts and None for every derived statistic,
++    and any optional metric that is missing or non-numeric on an individual
++    output is skipped rather than raising. Percentiles use the nearest-rank
++    method over the available samples.
++    """
++
++    request_count = len(outputs)
++    total_generated_tokens = 0
++    prefill_tps_samples: list[float] = []
++    decode_tps_samples: list[float] = []
++    wall_time_samples: list[float] = []
++    peak_memory_gib_samples: list[float] = []
++
++    for output in outputs:
++        generated_tokens = getattr(output, "generated_tokens", None)
++        if generated_tokens is not None:
++            try:
++                total_generated_tokens += int(generated_tokens)
++            except (TypeError, ValueError):
++                pass
++
++        prefill_tps = _optional_float(getattr(output, "prefill_tok_s", None))
++        if prefill_tps is not None:
++            prefill_tps_samples.append(prefill_tps)
++
++        decode_tps = _optional_float(getattr(output, "decode_tok_s", None))
++        if decode_tps is None:
++            decode_tps = _optional_float(getattr(output, "tok_s", None))
++        if decode_tps is not None:
++            decode_tps_samples.append(decode_tps)
++
++        wall_time = _optional_float(getattr(output, "elapsed_s", None))
++        if wall_time is not None:
++            wall_time_samples.append(wall_time)
++
++        peak_memory_bytes = getattr(output, "peak_memory_bytes", None)
++        if peak_memory_bytes is None:
++            peak_memory_bytes = getattr(output, "peak_memory", None)
++        peak_memory_value = _optional_float(peak_memory_bytes)
++        if peak_memory_value is not None:
++            peak_m

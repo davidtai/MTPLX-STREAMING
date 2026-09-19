@@ -1,0 +1,21 @@
+{
+  "source_commit": "f3fa434d778d795d370d8ebcd258743cce70440d",
+  "scope": "Three real experts; native FP4 5120x2304, V16/V8, R4 and two SIMD groups; pair two rows with identical slot/expert. No full model.",
+  "static_incremental_bound_bytes": 8589934592,
+  "active_allocator_limit_bytes": 2147483648,
+  "allocator_cache_limit_bytes": 268435456,
+  "bound_components": "3 native expert records plus one full packed-scale layer; small row/index/output tensors; separate 4GiB Python/compiler and 4GiB allocator/graph allowance.",
+  "experts": [
+    127,
+    200,
+    273
+  ],
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "helper_sha256": {
+    "row_pair_kernels.py": "e6e202a51b2e6e31c4ad01c1410a039d00900ccf66cb2e153eca563f771ff85d",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "probe.py": "5361bae174e50c1285f88bf92ac62416ebf75961ffb0c57fd6ae243e16782139",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f"
+  }
+}

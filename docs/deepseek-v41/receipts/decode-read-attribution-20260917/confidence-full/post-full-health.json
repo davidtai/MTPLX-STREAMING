@@ -1,0 +1,13 @@
+{
+  "timestamp_utc": "2026-09-17T17:57:08.619315+00:00",
+  "guard_session_exit": 4,
+  "lock_free": true,
+  "health_ok": true,
+  "active_requests": 0,
+  "health_model": "mtplx-flash-next-optimized-speed",
+  "warmup_state": "done",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "swapusage": "vm.swapusage: total = 3072.00M  used = 2162.38M  free = 909.62M  (encrypted)"
+}

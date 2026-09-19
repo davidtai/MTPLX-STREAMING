@@ -1,0 +1,227 @@
+{
+  "source_commit": "575c3c8b3beb0420d16fc03c727f3a27c0f36edd",
+  "scope": "Only the native 1.324GB BF16 input table. Exact file-row cache,16MiB arena/32MiB host bound; native M1/M5/M6 outputs, retirement and eviction ownership. No full model.",
+  "construction": {
+    "source_commit": "575c3c8b3beb0420d16fc03c727f3a27c0f36edd",
+    "scope": "Only the native 1.324GB BF16 input table. Exact file-row cache,16MiB arena/32MiB host bound; native M1/M5/M6 outputs, retirement and eviction ownership. No full model.",
+    "static_incremental_bound_bytes": 8589934592,
+    "bound_components": {
+      "metal_cache_compiler_envelope_bytes": 4294967296,
+      "host_source_table_io_compiler_envelope_bytes": 4294967296,
+      "native_embedding_bytes": 1323827200,
+      "host_arena_bytes": 16777216,
+      "host_embedding_total_bound_bytes": 33554432,
+      "source_read_chunk_bytes": 33554432,
+      "max_output_bytes": 81920
+    },
+    "embedding": {
+      "path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00002.safetensors",
+      "tensor": "embed.weight",
+      "shape": [
+        129280,
+        5120
+      ],
+      "tensor_header": {
+        "data_offsets": [
+          30720,
+          1323857920
+        ],
+        "dtype": "BF16",
+        "shape": [
+          129280,
+          5120
+        ]
+      },
+      "header_sha256": "99d072cb0195663c32d891041bd77081eb18674103ae9fbf9a23c6d42e406aaa",
+      "offset": 31070,
+      "nbytes": 1323827200,
+      "identity": {
+        "st_dev": 16777231,
+        "st_ino": 256799459,
+        "st_size": 1323858270,
+        "st_mtime_ns": 1789090278149856135
+      }
+    },
+    "draft_block_size": 5,
+    "noise_token_id": 128799,
+    "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "config_sha256": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d",
+    "model_index_sha256": "c0ead8ce7960b2c715366373da35626f3ccaef1837094bf9215cded0bfefdabb",
+    "strict_allocator": {
+      "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+      "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    },
+    "helper_sha256": {
+      "file_embedding.py": "cbd7b68c552c1e19066a4a94410ca1f51d18880a047319d8306245f132a0c9fb",
+      "probe.py": "5bcb3b436a8cdf294aea4572326e0b8475de3667bfb5569468857fcd3fca3cca",
+      "stage.py": "51c5d0b32a4631f3f76c13af57ac724482b27605570374649c0cb0104feda19f",
+      "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+      "run_screen.py": "a8fcf8bc4776f334907ab7adde5c6026c771b39fa2a55533a560b7f1dc896b95"
+    },
+    "runtime_source_sha256": {
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/mlx/nn/layers/embedding.py": "f77b039903294c6e880c503a953ea86b43aac36661b724cc9c38e3ed1969e3a8"
+    }
+  },
+  "before": {
+    "sample_start_monotonic_ns": 191213468094083,
+    "sample_end_monotonic_ns": 191213470313458,
+    "process": {
+      "peak_maxrss_bytes": 24739840,
+      "resident_bytes": 25067520,
+      "phys_footprint_bytes": 14090720,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 122940735488,
+      "wired_bytes": 3393486848,
+      "active_bytes": 2964209664,
+      "inactive_bytes": 2393522176,
+      "speculative_bytes": 553091072,
+      "anonymous_bytes": 3415834624,
+      "file_backed_bytes": 2494988288,
+      "compressor_bytes": 2328264704,
+      "compressed_bytes": 8465235968,
+      "used_bytes": 11079483392,
+      "non_file_used_bytes": 9137586176,
+      "swapins_pages": 4826222,
+      "swapouts_pages": 7667614,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "library": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "complete": true,
+  "cases": {
+    "native": {
+      "1": {
+        "total_ns": 19977876,
+        "median_ns": 219813.0,
+        "max_ns": 13053459,
+        "calls": 32
+      },
+      "5": {
+        "total_ns": 6656455,
+        "median_ns": 207750.0,
+        "max_ns": 252625,
+        "calls": 32
+      },
+      "6": {
+        "total_ns": 6604832,
+        "median_ns": 210021.0,
+        "max_ns": 234792,
+        "calls": 32
+      }
+    },
+    "file_cold": {
+      "1": {
+        "total_ns": 1974421,
+        "median_ns": 58750.5,
+        "max_ns": 113083,
+        "calls": 32
+      },
+      "5": {
+        "total_ns": 2636957,
+        "median_ns": 65729.0,
+        "max_ns": 256542,
+        "calls": 32
+      },
+      "6": {
+        "total_ns": 3274127,
+        "median_ns": 81250.0,
+        "max_ns": 404375,
+        "calls": 32
+      }
+    },
+    "file_warm": {
+      "1": {
+        "total_ns": 1692750,
+        "median_ns": 52624.5,
+        "max_ns": 59167,
+        "calls": 32
+      },
+      "5": {
+        "total_ns": 1883955,
+        "median_ns": 59145.5,
+        "max_ns": 62833,
+        "calls": 32
+      },
+      "6": {
+        "total_ns": 1934539,
+        "median_ns": 61208.5,
+        "max_ns": 64292,
+        "calls": 32
+      }
+    },
+    "native_repeat": {
+      "1": {
+        "total_ns": 6960000,
+        "median_ns": 201396.0,
+        "max_ns": 560666,
+        "calls": 32
+      },
+      "5": {
+        "total_ns": 6791544,
+        "median_ns": 210708.0,
+        "max_ns": 270292,
+        "calls": 32
+      },
+      "6": {
+        "total_ns": 6758708,
+        "median_ns": 210000.0,
+        "max_ns": 263125,
+        "calls": 32
+      }
+    }
+  },
+  "table_sha256": "78adec772ae091c82dc7fed0d7ca6cd534751cd42cc612a7e4b71a83166e1655",
+  "active_with_native_bytes": 1323827200,
+  "active_after_retirement_bytes": 0,
+  "released_native_bytes": 1323827200,
+  "arena_bytes": 16777216,
+  "resident_rows": 1638,
+  "arena_capacity_rows": 1638,
+  "eviction_ownership_exact": true,
+  "all_outputs_exact": true,
+  "peak_mlx_bytes": 1323958296,
+  "after": {
+    "sample_start_monotonic_ns": 191214307107916,
+    "sample_end_monotonic_ns": 191214311556250,
+    "process": {
+      "peak_maxrss_bytes": 2812329984,
+      "resident_bytes": 2812329984,
+      "phys_footprint_bytes": 2910440040,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 118736060416,
+      "wired_bytes": 4857413632,
+      "active_bytes": 4071587840,
+      "inactive_bytes": 2766749696,
+      "speculative_bytes": 1842757632,
+      "anonymous_bytes": 4866605056,
+      "file_backed_bytes": 3814490112,
+      "compressor_bytes": 2328264704,
+      "compressed_bytes": 8465235968,
+      "used_bytes": 14024015872,
+      "non_file_used_bytes": 12052283392,
+      "swapins_pages": 4826222,
+      "swapouts_pages": 7667614,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "active_after_close_bytes": 0
+}

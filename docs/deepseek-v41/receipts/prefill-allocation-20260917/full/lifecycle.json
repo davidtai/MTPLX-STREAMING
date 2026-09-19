@@ -1,0 +1,57 @@
+{
+  "child_exit": 0,
+  "guard_session": 28436,
+  "guard_terminal": true,
+  "restored_utc": "2026-09-18T01:19:26Z",
+  "qwen_ok": true,
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "warmup": {
+    "enabled": true,
+    "ran": true,
+    "tokens": 16,
+    "elapsed_s": 1.5736502920044586,
+    "error": null,
+    "completion_tokens": 16,
+    "tok_s": 69.16431485987998,
+    "background": {
+      "mode": "background",
+      "state": "done",
+      "steps": [
+        {
+          "kind": "gqa_packed_pipelines",
+          "state": "ok",
+          "elapsed_s": 0.011,
+          "yields": 0
+        },
+        {
+          "kind": "ladder",
+          "context": 512,
+          "state": "ok",
+          "elapsed_s": 0.528,
+          "yields": 0,
+          "tok_s": 96.29
+        },
+        {
+          "kind": "ladder",
+          "context": 2560,
+          "state": "ok",
+          "elapsed_s": 2.352,
+          "yields": 0,
+          "tok_s": 99.94
+        }
+      ],
+      "started_at_s": 1789694362.0925272,
+      "finished_at_s": 1789694365.859974,
+      "elapsed_s": 3.767,
+      "resubmits": 0
+    },
+    "extended": {
+      "mode": "background",
+      "steps_planned": 3
+    }
+  },
+  "active_requests": 0,
+  "lock_lsof_stdout": ""
+}

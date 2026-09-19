@@ -1,0 +1,12 @@
+{
+  "source_commit": "61b6899f27fee89f63bf7eed9f1c8aa77e73a53a",
+  "static_incremental_bound_bytes": 9663676416,
+  "native_reader_source_sha256": "91b7aba10b8579166ea326225cfdce7d0969943cd0839ea960c4db702c32f06f",
+  "original_plane_source_sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+  "worker_count_before": 15,
+  "worker_count_after": 6,
+  "native_pool_formula": "min(64,max(4,(1+4)*(4-1))) =15; it reserves concurrency for four speculative records even though this installed lane has no prefetch.",
+  "read_geometry": "Packed bind_reader sends three5898240B whole-plane reads per physical record. Pool-size change does not change range geometry or positional-call count. This differs from the earlier native fanout4/8 split-range experiment.",
+  "ownership": "Existing ThreadPoolExecutor and shutdown(wait=True) semantics remain. All writers drain before full READY, and native GU publication, failure cleanup, policies, pins and deferred consumer lifetimes remain unchanged.",
+  "full_model_promotion": false
+}

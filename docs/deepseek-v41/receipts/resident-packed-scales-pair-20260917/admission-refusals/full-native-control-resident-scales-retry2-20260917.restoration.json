@@ -1,0 +1,15 @@
+{
+  "utc": "2026-09-17T20:22:02.811045+00:00",
+  "owned_guard_exit": 1,
+  "lock": "free",
+  "health": {
+    "ok": true,
+    "model": "mtplx-flash-next-optimized-speed",
+    "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+    "active_requests": 0
+  },
+  "warmup": "done",
+  "models": [
+    "mtplx-flash-next-optimized-speed"
+  ]
+}

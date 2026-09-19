@@ -1,0 +1,33 @@
+{
+  "preserved_at": "2026-09-17T16:14:53.087452+00:00",
+  "scope": "Native teacher tensors; ignored binary artifacts retained locally to avoid another full-model capture",
+  "path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-depth-teacher/20260917",
+  "teacher_manifest_sha256": "1826c18118b11ddddb75493f2cf03a12c63135855e089a3a5527a4ab8767c7d2",
+  "files": [
+    {
+      "name": "committed-hidden.npy",
+      "bytes": 31580288,
+      "sha256": "48e29e24af067637f9ed93d9fcc9c0c4f63bb44a6898d5028ac69fa7b9a2bb0b"
+    },
+    {
+      "name": "initial-main.npy",
+      "bytes": 61568,
+      "sha256": "2b9be485b2e1a2c5db107929485192a12618dce6252d58b828557756b033421e"
+    },
+    {
+      "name": "initial-window-0.npy",
+      "bytes": 262272,
+      "sha256": "b026b6a5c8f8980ef07046b3fc8557bc15a6548ae8bd51fe05ad6da5580e60a7"
+    },
+    {
+      "name": "initial-window-1.npy",
+      "bytes": 262272,
+      "sha256": "9c958af6ee502e609da47ff7758fc0d9cb4b9d5fcea817e896abff91f1ab548c"
+    },
+    {
+      "name": "initial-window-2.npy",
+      "bytes": 262272,
+      "sha256": "b6ad3d36bba2150b5aa1116cf4f3911d12184870f5a48f1f0d3a6cf31e9e4e43"
+    }
+  ]
+}

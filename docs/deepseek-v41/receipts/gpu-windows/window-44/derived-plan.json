@@ -1,0 +1,16 @@
+{
+  "source": "budget",
+  "budget_total_gb": 93.0,
+  "system_used_at_start_gb": 11.487167358398438,
+  "non_metal_overhead_gb": 3.0,
+  "kv_growth_to_max_kv_gb": 0.3344879150390625,
+  "safety_gb": 3.0,
+  "plan_overshoot_gib": 6.0,
+  "floor_gib": 20.0,
+  "plan_limit_gib": 69.1783447265625,
+  "non_metal_overhead_measured_gb": null,
+  "plan_limit_gib_effective": null,
+  "kv_estimator": "w107",
+  "rss_semantics": "unmeasured",
+  "_note": "W106 HIGH-2 pinned plan; pass --memory-plan-from this file to later A/B arms so every arm uses the SAME plan_limit (reproducible residency)."
+}

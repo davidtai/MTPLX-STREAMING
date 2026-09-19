@@ -1,0 +1,35 @@
+{
+  "scope": "Fresh Q8 target KV reference and D5/M6 candidate, fixed max17664/append953; native target/head weights and packed expert decode; preserve native memory allowances and add full Q8 reserve.",
+  "source_commit": "67c0906cbc658de6219d384cf94bbdbc0484efe2",
+  "base_wrapper_sha256": "aa9da6a9ea6e5c86e10409fdbfde04703926be4b27849e087ec7fdd04a8fddd3",
+  "helper_sha256": {
+    "packed_admission.py": "7edbe888dce242ed5cfb1b1ac3f954f729d9631885ae3f887f89163c47f0de91",
+    "packed_phase.py": "103d21fc5c63b52529c63923474829735ac4df87b5ff43274c907f5039d0ea99",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "storage-probe.json": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4",
+    "artifact/manifest.json": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "../ar_reference.py": "f34924dc40e2fda4afff1eb2fb2d4d1a5703432fb80c231a0486eefe24421d53",
+    "../q8_admission.py": "1f0939728ea8044094c34f452ea2ba3d7f1e439174f92e8c99df82dbbd7f4aef",
+    "../native_admission.py": "dccea19a1c55fd0374c7553c53f7d504df61253b11dfc1517d0fc34d867bb556",
+    "../run_full.py": "29619d6e9c3d588ad93a21285ebf32101b3529b873acb37b6328d7a28a92d888"
+  },
+  "packed_scales_bytes": 3086136060,
+  "startup_cache_cleanup": "export source pages were reclaimed after export; packed owner reads disable read-ahead and bypass file cache",
+  "note": "source record format remains native; decode physically retains/reads weights only and prices packed scale owners separately",
+  "cleanup": "Reclaim verified source and packed artifact clean file cache in the existing guarded finally, on success or failure, before Qwen restoration.",
+  "prefill_bound": "Previously measured cap84 prefill; exact native allocation envelope and all original KV/cache/compile margins retained.",
+  "native_admission_sha256": "dccea19a1c55fd0374c7553c53f7d504df61253b11dfc1517d0fc34d867bb556",
+  "reporting_update": "b43f136cb corrects current slot/transient storage metadata; measured generation arithmetic unchanged",
+  "physical_ceiling_bytes": 110000000000,
+  "budget_update": "Use the user-authorized 110 decimal GB ceiling; retain all priced host, cache, KV, padding, compiler and wired allowances.",
+  "q8_change": {
+    "cache_bits": 8,
+    "max_kv": 17664,
+    "max_append": 953,
+    "additional_allocator_reserve_bytes": 503316480,
+    "ar_reference_host_logit_reserve_bytes": 671088640,
+    "lifetime_probe_sha256": "18e94621424efc5fde51bf4f5423ca4427b894662d8d85445d0346b0be621209"
+  }
+}

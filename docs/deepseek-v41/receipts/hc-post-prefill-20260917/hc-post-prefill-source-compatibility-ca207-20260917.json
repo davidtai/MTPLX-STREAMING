@@ -1,0 +1,20 @@
+{
+  "source_commit": "ca207c3d7f923678f5355ca63a0b89a483120dff",
+  "reference_source_commit": "e589c1e4b17856f506d90d9fb2bbb5ce45711648",
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "ec0dcd689afc6a57a8599f48b62a522f5c572398df4c3022eafdc2783d050c70",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "d540a77df3670786110aafd14d81a55e613aafae63e45b53cc58aaaf169e25da",
+    "scripts/deepseek_v41/bench_standard_shape.py": "6c235ac47fc4f447f3eb745195a6e337961570b4ba003d314698bf0d20e65fce"
+  },
+  "model_ast_matches_promoted_hidden_capture": true,
+  "reference_compatibility": "Prefill allocation screen only. Model AST equals the historical model plus promoted hidden capture evaluation. Other model/loader/streaming code is unchanged. Runner reporting changes do not alter prefill; its new binding is explicitly set to false for all three flags before loading. Historical actual bound flags were not recorded, so no full-run arithmetic equivalence is claimed.",
+  "explicit_bound_model_levers": {
+    "MTPLX_DSV41_HC_COMPILE": false,
+    "MTPLX_DSV41_ATTN_COMPILE": false,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": false
+  },
+  "scope": "One 16384-token prefill, 32 chunks of 512, exits before MTP seed/decode. Compiled HC post is the only candidate arithmetic graph change. No token-parity or decode-throughput claim.",
+  "small_shape_receipt": "/tmp/dsv41-hc-post-prefill-20260917/gpu-results.json",
+  "small_shape_receipt_sha256": "345e8166400eb20e3583938da04533531afa4ff5d591cba525d6b9941010740a",
+  "admission_notes": "Uses historical total peak plus exact slot-byte delta, 512MiB active margin and 1GB physical margin. All 32 full MoE outputs remain unchanged; lower bank capacity adds bounded fenced route waves, not more simultaneous rows or slots. Historical mask-memo uncertainty is below 512MiB: 32*512*16384 boolean elements is 268435456 bytes. No compile savings are credited before measurement."
+}

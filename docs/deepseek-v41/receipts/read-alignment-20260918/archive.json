@@ -1,0 +1,21 @@
+{
+  "source_root": "/tmp/dsv41-read-alignment-20260918",
+  "raw_prefix": "/tmp/dsv41-110-stage/no-alignment-full-experiment",
+  "files": {
+    "summary.json": "6b53a040f920aca1ce391ed6dff5aad147bb152c6f7b5e1b8e75aa824b8f249d",
+    "installation.json": "d6dc70f63ea89f89e09f785b44670c205d3e796b73645785e7b11cd8bfffc093",
+    "README.md": "4ce2f7dec0934d9e25a73e750758c4d02dae2d11943a0d9198242a49e17ea9e7",
+    "reclamation.json": "3dd07af72163af4b78776d30cd7eec937aae26cefd806179bd61827cee459bed",
+    "probe.json": "5fff1b6153f3476f57a6eae0f14e219cd85745c49206cd88e808a0154a2b8bd1",
+    "probe.py": "bdd331a3aa07d2fad715ff4fd42e5602756d501a2c0180e66d5ceac698a52595",
+    "native_reader.py": "c1d38200ed5eefa678d15d65d7a9671f72de2da6a4aeb96a56ab9cff5303e6a8",
+    "guard.log": "90ad1a931a775086c01e2b4f9285254aac23f8ce735e568cc76f7b8e737550a9",
+    "command.sh": "d32977cf90090752ac3e176534a8da53f8b0eadc3888d83d8e8e57674d35b3a9",
+    "stage.py": "ed88ce45b85a7f5d525eb05150f015f5b83c94d41e73218fe85dfb30dd97f717",
+    "child.json": "2a1d4df5857ba43132cb3a0d5804e7fcf1ec4a488e46e634646f0cfa8358c6f6",
+    "post-run-health.json": "0b084219c57beb96c06a6f0d35fc5adfdda279aaccd03c9939765d34b42e96bb",
+    "run_screen.py": "cd9343401923d00b87701f5279b851c34bf84e42ef2b9d20efc62efd2f5ca64b"
+  },
+  "total_bytes": 132412,
+  "artifact_copies": false
+}

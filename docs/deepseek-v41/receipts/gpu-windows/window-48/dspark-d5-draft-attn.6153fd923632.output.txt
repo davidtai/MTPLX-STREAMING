@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_draft_attn
+# stream: dspark
+# token_ids_sha256: 1f792b0ce355243e96fc38e4b94446765ebff3063ed6f12584e5cee701e4ba0b
+# decode_tok_s: 3.5603386149809726
+# divergence: {"divergence_index": 33, "ar_token": 790, "dspark_token": 305, "ar_top2_margin": 0.0, "dspark_top2_margin": 0.0, "max_abs_logit_delta": 0.8828125, "tie_margin": 0.03, "tie_band_used": 0.75, "tie_ulps": 3, "peak_contested_logit": 32.25, "ulp_bf16_at_peak": 0.25, "ar_contested_margin": 0.25, "dspark_contested_margin": 0.0, "delta_at_ar_token": 0.0, "delta_at_dspark_token": 0.25, "rounding_class_by_delta": true, "deltas_within_tie_band": true, "rows_consistent": true, "ar_logit_at_ar_token": 32.25, "ar_logit_at_dspark_token": 32.0, "dspark_logit_at_ar_token": 32.25, "dspark_logit_at_dspark_token": 32.25, "class": "tie_flip", "capture_index": 33, "capture_index_matches_first": true}
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, and the requested `summarize_generation_outputs` helper would fit naturally alongside the existing `_generation_rate_fields` and `_attach_runtime_diagnostics` utilities.
+
+- The module already exposes per-request rate helpers (`_generation_rate_fields`) and a `GenerationStats` dataclass, so a `summarize_generation_outputs` aggregator would compose cleanly on top of those rather than duplicating TPS math.
+- Optional metrics are pervasive (e.g., `paged_kv_capacity_tokens`, `prefill_*_calls`, `ar_return_hidden`), so the helper must defensively use `getattr`/`dict.get` and skip `None` values to honor the "ignore unavailable optional metrics" requirement.
+- The file's style favors module-level `_`-prefixed helpers, `dict[str, Any]` return annotations, and `from __future__ import annotations`, so the new function and its pytest tests should mirror that convention (e.g., `tests/test_generation_summary.py` with an

@@ -1,0 +1,24 @@
+{
+  "complete": true,
+  "latency_ratio": 1.001503597598446,
+  "control_spread_fraction": 0.018819957392109232,
+  "active_after_close_bytes": 12,
+  "library": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "candidate": "compile the complete existing clamped SwiGLU body",
+  "decision": "reject before a full-model run; flat at1.00150 ratio with1.882percent control spread",
+  "source_commit": "013ba48db733659d287d40e7304e1683a0d7e179",
+  "route_calls": 206,
+  "capacity": 109,
+  "all_outputs_and_reads_exact": true,
+  "warm_total_ns": [
+    1249969408,
+    1253685800,
+    1260070333,
+    1250011918,
+    1236545962
+  ],
+  "mlx_peak_bytes": 3028505101
+}

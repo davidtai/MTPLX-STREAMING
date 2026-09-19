@@ -1,0 +1,74 @@
+[
+  {
+    "mode": "ar",
+    "baseline": 10000000000,
+    "capacity": 100,
+    "physical_bound": 109628259560,
+    "allocator_limit": 97181427712,
+    "host_reserve": 2818572288,
+    "q8_extra": 503316480
+  },
+  {
+    "mode": "ar",
+    "baseline": 11000000000,
+    "capacity": 99,
+    "physical_bound": 109920470760,
+    "allocator_limit": 96181427712,
+    "host_reserve": 2818572288,
+    "q8_extra": 503316480
+  },
+  {
+    "mode": "ar",
+    "baseline": 12500000000,
+    "capacity": 96,
+    "physical_bound": 109297104360,
+    "allocator_limit": 94681427712,
+    "host_reserve": 2818572288,
+    "q8_extra": 503316480
+  },
+  {
+    "mode": "ar",
+    "baseline": 13000000000,
+    "capacity": 96,
+    "physical_bound": 109797104360,
+    "allocator_limit": 94181427712,
+    "host_reserve": 2818572288,
+    "q8_extra": 503316480
+  },
+  {
+    "mode": "dspark",
+    "baseline": 10000000000,
+    "capacity": 101,
+    "physical_bound": 109664959720,
+    "allocator_limit": 97852516352,
+    "host_reserve": 2147483648,
+    "q8_extra": 503316480
+  },
+  {
+    "mode": "dspark",
+    "baseline": 11000000000,
+    "capacity": 100,
+    "physical_bound": 109957170920,
+    "allocator_limit": 96852516352,
+    "host_reserve": 2147483648,
+    "q8_extra": 503316480
+  },
+  {
+    "mode": "dspark",
+    "baseline": 12500000000,
+    "capacity": 97,
+    "physical_bound": 109333804520,
+    "allocator_limit": 95352516352,
+    "host_reserve": 2147483648,
+    "q8_extra": 503316480
+  },
+  {
+    "mode": "dspark",
+    "baseline": 13000000000,
+    "capacity": 97,
+    "physical_bound": 109833804520,
+    "allocator_limit": 94852516352,
+    "host_reserve": 2147483648,
+    "q8_extra": 503316480
+  }
+]

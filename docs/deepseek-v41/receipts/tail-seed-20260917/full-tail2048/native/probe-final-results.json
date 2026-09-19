@@ -1,0 +1,20 @@
+{
+  "scope": "single native six-component bank, 2 to 3 rows; byte copies and release accounting, no model generation",
+  "initial_active_bytes": 37601288,
+  "grown_active_bytes": 56426504,
+  "peak_active_bytes": 73744396,
+  "active_after_close_bytes": 8,
+  "added_bytes": 18800640,
+  "allocated_growth_bytes": 18825216,
+  "page_size_bytes": 16384,
+  "growth_seconds": 0.003932833991711959,
+  "row_sha256": [
+    "53891b5541b11c41c8d51aff28b53e19685897474dbf47ea0f4a57f967f95561",
+    "6cf07e32959cb21cc4e05daa0019cbf2404fccbb20dbe0ab81e038122e7f3ede",
+    "3d95a0e4c98e7a7be08d0ea9c1e77ee7a4abe9e9ca598b9cfa6629d729f55b2c"
+  ],
+  "allocator_limit_bytes": 536870912,
+  "allocator_cache_request_bytes": 67108864,
+  "helper_sha256": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b",
+  "manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9"
+}

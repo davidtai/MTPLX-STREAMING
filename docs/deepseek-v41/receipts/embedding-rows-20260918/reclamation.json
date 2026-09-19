@@ -1,0 +1,16 @@
+{
+  "child_terminal": true,
+  "child_returncode": 0,
+  "completed_at": "2026-09-18T09:58:24.848452+00:00",
+  "files": [
+    {
+      "file": "model-00002.safetensors",
+      "file_bytes": 1323858270,
+      "cached_page_bytes_before": 1281900544,
+      "cached_page_bytes_after": 0,
+      "identity_size_mtime_unchanged": true
+    }
+  ],
+  "cached_page_bytes_before": 1281900544,
+  "cached_page_bytes_after": 0
+}

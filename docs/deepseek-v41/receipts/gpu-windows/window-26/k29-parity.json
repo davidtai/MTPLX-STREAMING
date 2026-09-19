@@ -1,0 +1,287 @@
+{
+  "all_passed": false,
+  "arms": {
+    "decode_full_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0010744929313659668,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_full_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.00039455294609069824,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_full_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.000650256872177124,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0009598731994628906,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.00040508806705474854,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0007118880748748779,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.001621842384338379,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0006306469440460205,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0008775591850280762,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0012791752815246582,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0015457868576049805,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.001415848731994629,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_full_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0006405115127563477,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_reindex_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0020855069160461426,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_reuse_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0007732808589935303,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_swa_only_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0016380548477172852,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    }
+  },
+  "default_device": "Device(gpu, 0)",
+  "kernel": "K29 deepseek_v41_attn_kernels.fused_decode_attention",
+  "kernel_builder_error": null,
+  "kernel_builder_ok": true,
+  "metal_available": true,
+  "real_model_decode": {
+    "ran": false,
+    "reason": "loader import failed: ImportError(\"cannot import name 'load' from 'mtplx.models.deepseek_v41_loader' (/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_loader.py)\")"
+  },
+  "test": "test_decode_attn_parity_gpu"
+}

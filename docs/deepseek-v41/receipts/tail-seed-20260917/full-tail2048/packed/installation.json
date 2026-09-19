@@ -1,0 +1,53 @@
+{
+  "scope": "One native KV16 full16K/1024 D5/M6 packed-plane candidate with tail2048 prefill capture and exact native output digest gate.",
+  "source_commit": "dcbec19dc7d1949eddbb8cf1fcf07a1097f92aba",
+  "base_wrapper_sha256": "0c644e433d9735fcaeb56b6ec7995b02d380de870b7a966c80d4c193b0829e43",
+  "helper_sha256": {
+    "run_full.py": "370947d6bdcddc804c02c10a6d493faf18fb29d76c02e86e55348f9c32fe7c47",
+    "packed_admission.py": "5fa7d15215e292f2b11ceaef1e9b573fb75d37ad94475bf1581ddde478556c5a",
+    "packed_phase.py": "61c0bc4c27d88448d1afb9115ba3351f044601c443af4d69e9d105c284cb7ce2",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "storage-probe.json": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4",
+    "artifact/manifest.json": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "tail_prefill.py": "bfa8f44d993987dbfc46181c1d377bafef08ae2909e1079d58a00a1a8d8cefde",
+    "tail_prefill_body.py": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2"
+  },
+  "packed_scales_bytes": 3086136060,
+  "startup_cache_cleanup": "export source pages were reclaimed after export; packed owner reads disable read-ahead and bypass file cache",
+  "note": "source record format remains native; decode physically retains/reads weights only and prices packed scale owners separately",
+  "cleanup": "Reclaim verified source and packed artifact clean file cache in the existing guarded finally, on success or failure, before Qwen restoration.",
+  "prefill_bound": "Previously measured cap84 prefill; exact native allocation envelope and all original KV/cache/compile margins retained.",
+  "native_admission_sha256": "36342b6c53711d9dbaf868207a4c3a053f906d2f92a2fd78cb5fab1bdd911885",
+  "reporting_update": "b43f136cb corrects current slot/transient storage metadata; measured generation arithmetic unchanged",
+  "physical_ceiling_bytes": 110000000000,
+  "budget_update": "Use the user-authorized 110 decimal GB ceiling; retain all priced host, cache, KV, padding, compiler and wired allowances.",
+  "plane_overlap": {
+    "lane_sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "integration_probe": "/tmp/dsv41-plane-overlap-20260917/integration-probe-v2.json",
+    "integration_probe_sha256": "f1d91f1700f97006b6433b27ae1b073d39197adb0a079a4aadab1c578a65b292",
+    "incremental_live_allowance_bytes": 67108864,
+    "max_verify_rows": 8,
+    "maximum_assignments": 48,
+    "slot_ready_publication": "after all component writers finish",
+    "install_phase": "quiescent post-prefill only",
+    "cleanup": "clear bound runners after GPU/slot drain and before freeing packed scale owners"
+  },
+  "tail_prefill": {
+    "retained_rows": 2048,
+    "prompt_tokens": 16384,
+    "absolute_seed_start": 14336,
+    "installer_sha256": "bfa8f44d993987dbfc46181c1d377bafef08ae2909e1079d58a00a1a8d8cefde",
+    "body_sha256": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2",
+    "seed_operator_receipt": "docs/deepseek-v41/receipts/tail-seed-20260917/tail2048/sha256.json",
+    "seed_operator_receipt_sha256": "83d45d45f3a8d5b34b4718039a1d7b7f2fde0968d9447353c22a8676f81e8adf",
+    "capture_receipt": "docs/deepseek-v41/receipts/tail-seed-20260917/capture-check/capture-check.json",
+    "capture_receipt_sha256": "c70d3d44aa565c468b0e6dc32213c06b34a56d86afccd0247cc9c6262b2dbdba",
+    "host_metadata_allowance_bytes": 16777216,
+    "admission_discount_bytes": 0,
+    "scope": "Native KV16 only; no Q8 partial seeding; seed timing saving is not decode TPS evidence."
+  },
+  "host_reserve_cli_fix": "--host-overhead-gib equals the admitted 2GiB+16MiB host reserve, so the derived allocator and engine match before allocation."
+}

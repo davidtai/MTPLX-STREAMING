@@ -1,0 +1,23 @@
+{
+  "cpu_only": true,
+  "main_spin": {
+    "calls": 1,
+    "wall_s": 0.03003375,
+    "main_thread_cpu_s": 0.030006875,
+    "process_cpu_s": 0.030005,
+    "wall_minus_main_thread_cpu_s": 2.6875e-05,
+    "max_wall_s": 0.03003375
+  },
+  "worker_spin_and_main_join": {
+    "calls": 1,
+    "wall_s": 0.060112083,
+    "main_thread_cpu_s": 5.9e-05,
+    "process_cpu_s": 0.060092,
+    "wall_minus_main_thread_cpu_s": 0.060053083,
+    "max_wall_s": 0.060112083
+  },
+  "empty_span_mean_ns": 1154.975,
+  "all_clock_attribution_checks_pass": true,
+  "expected_full_span_count": 17717,
+  "estimated_empty_instrumentation_s": 0.020462692075
+}

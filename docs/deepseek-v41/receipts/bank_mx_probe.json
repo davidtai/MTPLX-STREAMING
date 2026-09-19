@@ -1,0 +1,76 @@
+{
+  "n_pairs": 191,
+  "formats": {
+    "q2_gs64": {
+      "bits": 2,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.912062228453342,
+      "min_cos_vs_source": 0.9104911721740689,
+      "n_weights": 573,
+      "bytes_per_record": 11059200,
+      "bank_bytes_40x384": 169869312000,
+      "bank_GiB_40x384": 158.2
+    },
+    "q3_gs64": {
+      "bits": 3,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.9781588231808208,
+      "min_cos_vs_source": 0.977197972034235,
+      "n_weights": 573,
+      "bytes_per_record": 15482880,
+      "bank_bytes_40x384": 237817036800,
+      "bank_GiB_40x384": 221.48
+    },
+    "q4_gs64": {
+      "bits": 4,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.9953376677383121,
+      "min_cos_vs_source": 0.9952460616150323,
+      "n_weights": 573,
+      "bytes_per_record": 19906560,
+      "bank_bytes_40x384": 305764761600,
+      "bank_GiB_40x384": 284.77
+    },
+    "q4_gs32": {
+      "bits": 4,
+      "group_size": 32,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.996288637485935,
+      "min_cos_vs_source": 0.9962230790603097,
+      "n_weights": 573,
+      "bytes_per_record": 22118400,
+      "bank_bytes_40x384": 339738624000,
+      "bank_GiB_40x384": 316.41
+    },
+    "q6_gs64": {
+      "bits": 6,
+      "group_size": 64,
+      "mode": "affine",
+      "mean_cos_vs_source": 0.999734715595699,
+      "min_cos_vs_source": 0.9997304368128315,
+      "n_weights": 573,
+      "bytes_per_record": 28753920,
+      "bank_bytes_40x384": 441660211200,
+      "bank_GiB_40x384": 411.33
+    },
+    "mxfp4_gs32": {
+      "bits": 4,
+      "group_size": 32,
+      "mode": "mxfp4",
+      "mean_cos_vs_source": 1.0,
+      "min_cos_vs_source": 0.9999999999999999,
+      "n_weights": 573,
+      "bytes_per_record": 18800640,
+      "bank_bytes_40x384": 288777830400,
+      "bank_GiB_40x384": 268.95,
+      "bit_exact_vs_source": true
+    }
+  },
+  "notes": {
+    "numpy_vs_mx_affine_q4gs64_maxabsdiff": 0.013095229864120483,
+    "numpy_vs_mx_affine_q4gs64_cos": 0.9882887369945685
+  }
+}

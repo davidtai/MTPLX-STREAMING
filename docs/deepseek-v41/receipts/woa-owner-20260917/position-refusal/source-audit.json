@@ -1,0 +1,12 @@
+{
+  "native_method_sha256": "9b9875e285750e079cd9455d2801d81b9f0dadc81d990be55b06e79e5cac0c9f",
+  "native_file_sha256": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+  "arithmetic_ast_equal_after_owner_binding": true,
+  "normalizations": [
+    "remove docstring and local module import",
+    "bind materialized native BF16 transpose as weight",
+    "n_groups equals construction-validated groups",
+    "_fp/fp identify the same imported module"
+  ],
+  "first_use_scope": "Original materialization occurs at first decode use; native packed owner and source-key cache tuple retire before the unchanged output operations. No source weight is modified."
+}

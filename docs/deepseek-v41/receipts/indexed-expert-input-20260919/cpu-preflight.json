@@ -1,0 +1,10 @@
+{
+  "cpu_only": true,
+  "source_commit": "b5f41c51d74a770069048dddd0a644f07886a999",
+  "kernel_changes_invert_to_native": true,
+  "dot_loop_and_reduction_unchanged": true,
+  "static_incremental_bound_bytes": 27917287424,
+  "new_live_data": "one int32 token row per assignment; removes copied activation rows",
+  "max_assignment_rows": 48,
+  "scope": "Equal110 rows, original84 plus26 extension. Replace only gate/up token materialization with direct row addressing in unchanged native packed dot loops. Same weights, scales, BF16 casts, activation, down projection, read schedule and projection expansion. Require all206 outputs exact; primary metric warmed continuous replay, allocations separately retained."
+}

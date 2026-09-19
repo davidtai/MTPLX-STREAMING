@@ -1,0 +1,66 @@
+{
+  "name": "adjacent",
+  "source_commit": "039e3bd811c64aa645dd89b5b8c85e1c3cf5ab53",
+  "scope": "Three adjacent real expert layers; continuous held-out timing includes final drain and native gate compute on synthetic BF16 inputs. Ranked predictions use captured exact-workload scores; this prices computation but is not live predictor parity. No attention or full-model TPS claim.",
+  "arms": [
+    {
+      "mode": "native",
+      "sequence": 0,
+      "heldout_total_ns": 657587625,
+      "all64_total_ns": 1580251458,
+      "records_read": 1214,
+      "prefetch_issued": 0,
+      "prefetch_awaited": 0,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 1,
+      "heldout_total_ns": 674279792,
+      "all64_total_ns": 1751711459,
+      "records_read": 1239,
+      "prefetch_issued": 189,
+      "prefetch_awaited": 132,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "native",
+      "sequence": 2,
+      "heldout_total_ns": 655547250,
+      "all64_total_ns": 1573724875,
+      "records_read": 1214,
+      "prefetch_issued": 0,
+      "prefetch_awaited": 0,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 3,
+      "heldout_total_ns": 670808041,
+      "all64_total_ns": 1616992875,
+      "records_read": 1239,
+      "prefetch_issued": 189,
+      "prefetch_awaited": 126,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "native",
+      "sequence": 4,
+      "heldout_total_ns": 660488458,
+      "all64_total_ns": 1577034917,
+      "records_read": 1214,
+      "prefetch_issued": 0,
+      "prefetch_awaited": 0,
+      "all_outputs_exact": true
+    }
+  ],
+  "latency_ratio": 1.0227441802908015,
+  "control_spread_fraction": 0.007514143837484776,
+  "mlx_peak_bytes": 7364297233,
+  "active_after_close_bytes": 16,
+  "guard_process_peak_bytes": 7503550728,
+  "guard_machine_peak_bytes": 18749620224,
+  "guard_session": 48399,
+  "guard_exit_code": 0,
+  "decision": "Reject: no material improvement over unchanged native control."
+}

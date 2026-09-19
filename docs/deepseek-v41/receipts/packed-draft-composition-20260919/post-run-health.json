@@ -1,0 +1,15 @@
+{
+  "checked_at": "2026-09-19T17:05:08.318932+00:00",
+  "owned_guard_session_terminal_exit_code": 1,
+  "model_load_started": false,
+  "health": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "v1/models": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "lock_free_at_probe": false,
+  "lock_descriptors": "COMMAND   PID     USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME\nPython  60832 davidtai    3u   REG   1,15        0 261117403 /private/tmp/mtplx-gpu-exclusive.lock\nPython  61115 davidtai    3u   REG   1,15        0 261117403 /private/tmp/mtplx-gpu-exclusive.lock\n",
+  "owned_processes": [],
+  "scope": "Independent observation after guard exit. Subsequent foreign GPU windows are distinct from guard restoration."
+}

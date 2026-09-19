@@ -1,0 +1,8 @@
+{
+  "reference_receipt_sha256": "c1ad697c171e5c99dd4c1f1c0d7c71d314268429e7179ed494fdfa6920db6187",
+  "source_commit": "e589c1e4b17856f506d90d9fb2bbb5ce45711648",
+  "index": 297,
+  "prompt_ids_sha256": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2",
+  "ar_token_ids_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090",
+  "npy_sha256": "cd9be1f4cf7fa9dcaaaba5875bc1d52c36c6be4dc6f1c8e5424dfb4666f103a8"
+}

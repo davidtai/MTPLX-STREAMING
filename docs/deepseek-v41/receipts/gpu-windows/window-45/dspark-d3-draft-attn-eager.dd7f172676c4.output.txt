@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_draft_attn_eager
+# stream: dspark
+# token_ids_sha256: 2f3b5f4612b18ac73d4dd3a33a2372c64e496d5c7301e3889546dd7227186701
+# decode_tok_s: 3.5987005197862385
+# divergence: {"divergence_index": 111, "ar_token": 8049, "dspark_token": 1975, "ar_top2_margin": 0.125, "dspark_top2_margin": 0.0, "max_abs_logit_delta": 1.125, "tie_margin": 0.03, "class": "divergent", "capture_index": 111}
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, but it currently lacks any aggregate summary helper over `GenerationOutput` sequences.
+
+- The module already has strong per-request telemetry (`GenerationStats`, `_DecodeTrace`, `_runtime_counter_delta`) but no cross-request aggregation layer, so a `summarize_generation_outputs` helper would slot in naturally alongside `_generation_rate_fields` and reuse the same `tok_s`/`end_to_end_tok_s` conventions.
+- Type style is consistent: `from __future__ import annotations`, `Literal`/`Sequence`/`Mapping` imports from `typing`/`collections.abc`, dataclasses for structured results, and `dict[str, Any]` for JSON-serializable payloads — the new helper should mirror that (e.g., `Sequence[GenerationOutput] -> dict[str, Any]`).
+- Optional metrics are already treated defensively throughout (e.g., `_delta` tolerating missing keys, `_tree_nbytes` best-effort), so the summary should follow the same pattern: skip `None`

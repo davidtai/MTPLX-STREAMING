@@ -1,0 +1,7 @@
+{
+  "base_commit": "e589c1e4b17856f506d90d9fb2bbb5ce45711648",
+  "model_file": "mtplx/models/deepseek_v41.py",
+  "model_sha256": "ec0dcd689afc6a57a8599f48b62a522f5c572398df4c3022eafdc2783d050c70",
+  "full_module_ast_matches_measured_candidate": true,
+  "change": "evaluate captured means at the existing prefill fence; identical model AST to measured wrapper except formatting/comments"
+}

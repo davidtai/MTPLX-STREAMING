@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "env",
+    "GPU_WINDOW_LOCK_TIMEOUT=120",
+    "GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000",
+    "GPU_WINDOW_CHILD_RSS_CAP_BYTES=2147483648",
+    "GPU_WINDOW_MIN_AVAIL_GB=100",
+    "GPU_WINDOW_RESTORE_QWEN_ALWAYS=1",
+    "GPU_WINDOW_CANDIDATE_MODEL_DIR=/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "GPU_WINDOW_CANDIDATE_AUX_DIR=/tmp/dsv41-compact-residents",
+    "PYTHONHASHSEED=0",
+    "PYTHONUNBUFFERED=1",
+    "PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41",
+    "scripts/deepseek_v41/gpu_window.sh",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python",
+    "/tmp/dsv41-gu-scatter-20260917/v2/run_screen.py"
+  ],
+  "source_commit": "db5f9dd0dcfe536bce0edbf7ce59ff315b778631",
+  "guard_log": "/tmp/dsv41-gu-scatter-20260917/v2/guard.log"
+}

@@ -1,0 +1,31 @@
+{
+  "source_commit": "71d663dfe4ae51c5c37227139a758b075dd3784c",
+  "wrapper_sha256": "f2a7c97e2312057563f2291b998f51517573d0428cd794ebf5c5c3426100b05d",
+  "baseline_bytes": 9746600000,
+  "engine_budget_bytes": 88690793288,
+  "expected_slots_per_layer": 80,
+  "transient_band_gib": 8.768516652286053,
+  "transient_band_bytes": 9415123064,
+  "active_bound_bytes": 92307493712,
+  "physical_bound_bytes": 108930958592,
+  "wired_before_bytes": 3464052736,
+  "graph_workspace_margin_bytes": 2147483648,
+  "prior_measured_mtp_peak_bytes": 92650042192,
+  "prior_whole_workflow_projection_bytes": 109847248896,
+  "prior_baseline_bytes": 12193100000,
+  "positive_baseline_drift_bytes": 0,
+  "prior_decode_end_allocator_cache_bytes": 2147605335,
+  "allocator_cache_peak_saving_credited_bytes": 1073741824,
+  "prior_slots_per_layer": 79,
+  "prior_source_commit": "005973c41a1602b0ed5bbd44f82cb55299bf6b9a",
+  "projection_peak_saving_credited_bytes": 3778928640,
+  "projected_physical_peak_bytes": 108430958592,
+  "selected_mtp_experts_by_stage": [
+    93,
+    58,
+    32
+  ],
+  "mtp_pruned_experts": 201,
+  "mtp_pruned_bytes": 3778928640,
+  "scope": "exact native artifact,16K prompt,1023 steps,depth5,pf0,trace-covered compact resident MTP experts,stock target attention,compiled draft,bf16 heads; measured-baseline 80-slot planning band,1GiB cache,2GiB Python"
+}

@@ -1,0 +1,15 @@
+{
+  "source_commit": "170a576dcb22183c5e5d1366b4241a1f03e67de3",
+  "prefill84_evidence": "docs/deepseek-v41/receipts/decode-read-attribution-20260917/summary.json",
+  "prefill84_evidence_sha256": "a9214e16aa5c1363fecef065bf03c2c1fc03edebcac8249c3ab8d72fe04c67df",
+  "prefill84_evidence_output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "construction_scope": "cap84 prefill and native/packed highest admitted decode capacity; unchanged full workload and all memory margins",
+  "runtime_changes": [
+    "/tmp/dsv41-prefill84-pair-20260917/native/run_full.py",
+    "/tmp/dsv41-prefill84-pair-20260917/native/phase_growth.py",
+    "/tmp/dsv41-prefill84-pair-20260917/native/admission.py",
+    "/tmp/dsv41-prefill84-pair-20260917/packed/run_full.py",
+    "/tmp/dsv41-prefill84-pair-20260917/packed/packed_phase.py",
+    "/tmp/dsv41-prefill84-pair-20260917/packed/packed_admission.py"
+  ]
+}

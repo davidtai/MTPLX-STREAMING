@@ -1,0 +1,26 @@
+2026-09-13T06:16:11Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-13T06:16:11Z [gpu_window] abort: to abort this window cleanly, kill -TERM 63059 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-13T06:16:11Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-13T06:16:11Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-13T06:16:11Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-13T06:16:11Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-13T06:16:11Z [gpu_window] phase 2: com.tea.qwen loaded (pid=61373); plist=/Users/davidtai/.mtplx-qwen-guard-cz9jqupe/com.tea.qwen.plist
+2026-09-13T06:16:11Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-13T06:16:11Z [gpu_window] phase 3: available memory before bootout: 35.6 GiB
+2026-09-13T06:16:11Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-13T06:16:12Z [gpu_window] phase 3: com.tea.qwen pid 61373 is gone
+2026-09-13T06:16:12Z [gpu_window] phase 3: stop confirmed -- pid gone, 78.0 GiB freed, 113.6 GiB available (>= 100 GiB)
+2026-09-13T06:16:12Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-13T06:16:12Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 43.7 GiB (ceiling 102.445483 GiB); compressor at start 1.3 GiB
+2026-09-13T06:16:12Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-13T06:16:12Z [gpu_window] phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=46.9054 (decimal GB) == 43.7 GiB baseline to the step env
+2026-09-13T06:16:12Z [gpu_window] phase 4: effective child-tree footprint cap 58.8 GiB (lowered from 93.0 GiB: used_start 43.7 + cap would cross the 102.445483 GiB ceiling)
+2026-09-13T06:16:12Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 58.8 GiB (~63 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-13T06:16:12Z [gpu_window] phase 4: starting GPU step (tag gpuwin-63059-1789280172-719320392) under child-tree footprint cap 58.8 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-110-preflight/purge_probe.py
+{"before": {"sample_start_monotonic_ns": 193276597786458, "sample_end_monotonic_ns": 193276604913375, "process": {"peak_maxrss_bytes": 21807104, "resident_bytes": 22675456, "phys_footprint_bytes": 12763616, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 87146840064, "wired_bytes": 3329261568, "active_bytes": 7387840512, "inactive_bytes": 34610823168, "speculative_bytes": 213581824, "anonymous_bytes": 4828332032, "file_backed_bytes": 37383913472, "compressor_bytes": 1599291392, "compressed_bytes": 5819023360, "used_bytes": 46927216640, "non_file_used_bytes": 9756884992, "swapins_pages": 778402, "swapouts_pages": 4399765, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "returncode": 1, "stdout": "", "stderr": "sudo: a password is required\n", "after": {"sample_start_monotonic_ns": 193276614146333, "sample_end_monotonic_ns": 193276616071458, "process": {"peak_maxrss_bytes": 22740992, "resident_bytes": 22740992, "phys_footprint_bytes": 12796384, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 87145037824, "wired_bytes": 3329409024, "active_bytes": 7390740480, "inactive_bytes": 34611118080, "speculative_bytes": 213434368, "anonymous_bytes": 4831232000, "file_backed_bytes": 37384060928, "compressor_bytes": 1599291392, "compressed_bytes": 5819023360, "used_bytes": 46930558976, "non_file_used_bytes": 9759932416, "swapins_pages": 778402, "swapouts_pages": 4399765, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}}
+2026-09-13T06:16:12Z [gpu_window] phase 4: mem sample -- baseline 43.7 GiB + step footprint 0.0 GiB, live physical used 43.7 GiB => guard accounted 43.7 GiB; compressor +0.0 GiB (trip 8 GiB)
+2026-09-13T06:16:13Z [gpu_window] phase 4: GPU step exited with code 1; peak step footprint 0.0 GiB, peak guard accounted 43.7 GiB, peak physical used 43.7 GiB, peak compressor delta 0.0 GiB
+2026-09-13T06:16:13Z [gpu_window] restore: discovered plist '/Users/davidtai/.mtplx-qwen-guard-cz9jqupe/com.tea.qwen.plist' is gone; falling back to '/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist'
+2026-09-13T06:16:13Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T06:16:30Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-13T06:16:30Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

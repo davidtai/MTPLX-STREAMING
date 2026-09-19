@@ -1,0 +1,9 @@
+{
+  "semantics": "clairvoyant global cache with bypass, equal-size records and complete sequential layer order; not implemented or a speed claim",
+  "capacity": 1400,
+  "reads": 50220,
+  "misses_per_token": 49.09090909090909,
+  "bytes_per_token": 922940509.0909091,
+  "required_ssd_gb_s_at_20_tps": 18.458810181818183,
+  "calculation_s": 3.1515174999949522
+}

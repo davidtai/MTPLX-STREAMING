@@ -1,0 +1,66 @@
+{
+  "goal_tps": 20,
+  "best_complete_tps": 12.673162359609387,
+  "full_adaptive_throughput_measured": false,
+  "draft_arms": [
+    {
+      "policy": "fixed5",
+      "cycles": 206,
+      "verify_rows": 1236,
+      "width_counts": {
+        "5": 206
+      },
+      "head_replay_wall_s": 1.9609259999997448,
+      "control_exact_boundaries": true,
+      "mlx_peak_bytes": 21299586448
+    },
+    {
+      "policy": "full7_else3",
+      "cycles": 195,
+      "verify_rows": 1242,
+      "width_counts": {
+        "5": 1,
+        "3": 79,
+        "7": 115
+      },
+      "head_replay_wall_s": 1.9052033750049304,
+      "control_exact_boundaries": null,
+      "mlx_peak_bytes": 21299586448
+    },
+    {
+      "policy": "ladder357",
+      "cycles": 195,
+      "verify_rows": 1282,
+      "width_counts": {
+        "5": 43,
+        "3": 48,
+        "7": 104
+      },
+      "head_replay_wall_s": 1.904355457983911,
+      "control_exact_boundaries": null,
+      "mlx_peak_bytes": 21299586448
+    }
+  ],
+  "full_stage": "/tmp/dsv41-adaptive-depth-20260917/full",
+  "cpu_cache_screen": "/tmp/dsv41-cache-replacement-20260917",
+  "full_attempts": [
+    {
+      "version": "v1",
+      "result": "rejected before model loading: live post-shutdown baseline exceeds accepted envelope"
+    },
+    {
+      "version": "v2",
+      "result": "requested disk-cache purge refused: sudo requires a password; no GPU child launched"
+    }
+  ],
+  "guard_changes": [
+    "wait for observable idle service before bootout",
+    "optional disk-cache purge before memory baseline",
+    "administrator authentication preflight before lock/service changes"
+  ],
+  "focused_cpu_checks": {
+    "command": "python tests/test_gpu_window_runner_safety.py GuardSafetyTests.test_shutdown_requires_observable_idle_service GuardSafetyTests.test_busy_service_timeout_cannot_reach_bootout GuardSafetyTests.test_unavailable_purge_auth_refuses_before_lock_or_service",
+    "passed": 3
+  },
+  "external_step": "User asked to run sudo /usr/sbin/purge locally; do not ask for or collect their password. After cache reclamation, repin staging source and use fresh v3 output prefix."
+}

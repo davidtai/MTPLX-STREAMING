@@ -1,0 +1,72 @@
+  ███╗   ███╗ ████████╗ ██████╗  ██╗      ██╗  ██╗
+  ████╗ ████║ ╚══██╔══╝ ██╔══██╗ ██║      ╚██╗██╔╝
+  ██╔████╔██║    ██║    ██████╔╝ ██║       ╚███╔╝ 
+  ██║╚██╔╝██║    ██║    ██╔═══╝  ██║       ██╔██╗ 
+  ██║ ╚═╝ ██║    ██║    ██║      ███████╗ ██╔╝ ██╗
+  ╚═╝     ╚═╝    ╚═╝    ╚═╝      ╚══════╝ ╚═╝  ╚═╝
+
+  Native MTP speculative decoding · Apple Silicon
+
+╭─ MTPLX 2.11.2 ───────────────────────────────────────────────────────────────╮
+│                                                                              │
+│      Model  deepseek-v4.1-flash-mtplx-streaming-mxfp4                        │
+│    Profile  sustained (Sustained: long-context native-MTP path with bounded  │
+│             memory)                                                          │
+│        API  http://127.0.0.1:18080/v1                                        │
+│       Mode  Sustained MTP                                                    │
+│    Browser  http://127.0.0.1:18080/                                          │
+│  Listening  127.0.0.1:18080                                                  │
+│    Loading  /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxf…  │
+│     Warmup  16 tokens                                                        │
+│       Auth  API key: leave blank for localhost                               │
+│       Stop  Ctrl-C                                                           │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+WARNING: running a family-compatible MTPLX model without a recorded mtplx_runtime.json exactness baseline; stats will be marked unverified until this artifact is smoke-verified.
+[1/6] Server config ready: http://127.0.0.1:18080/v1
+[2/6] Model resolved: /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4
+[3/6] Runtime contract verified — profile: sustained
+      Loading the model can take about a minute on first start.
+
+[4/6] Preparing Sustained MTP runtime
+[4/6] DeepSeek-V4.1 decode levers (resolved env): HEAD_MODE=bf16 SINKHORN_METAL=1 ATTN_COMPILE=1 ATTN_WIN_MEMO=1 SWITCH_FASTPATH=<unset> SWITCH_SUBMIT=<unset> DEVICE_ROUTE=<unset> HC_COMPILE=<unset> SHARED_OVERLAP=<unset> PREFILL_LAYER_MAJOR=1 PREFILL_DENSE_EXPERTS=1 PREFILL_SCORE_PATH=lean SELECTED_KEYS=1 KV_CHUNK_GROW=1 LAYOUT_FIX=1
+[4/6] Checking local acceleration runtime
+      This may take a few seconds.
+[4/6] Runtime checks complete
+[5/6] Loading model weights: /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4
+      This is the long step; MTPLX is mapping the model into MLX.
+      Model load in progress (this may take a minute).
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[5/6] Model loaded in 6.8s
+[5/6] Installing native-MTP draft head
+[frspec] disabled (MTPLX_FRSPEC_DRAFT=None)
+[5/6] Chat template profile: tokenizer
+[5/6] Context window: 17664 tokens
+[mtplx] dense-decode ceiling auto: 131072 tokens (15% RAM over 65536 B/token — MODEL DEFAULT, set MTPLX_DENSE_KV_BYTES_PER_TOKEN for non-Qwen3.8 geometry)
+[5/6] Memory plan: 128G Mac: engine budget 53.0G (Metal limit), weights 17.7G, context 17664 (machine-bound), session bank up to 2.0G
+[5/6] Memory plan: context window 17664 is machine-bound (model supports 1048576); larger windows would swap on 128 GiB
+[5/6] GPU residency keepalive: every 1s for 600s after each request
+[mtplx] session-bank budget: 2.0G total (explicit), 24.0G per-session cap, 48 entries max, model weights 17.7G. Override: MTPLX_SESSION_BANK_MAX_BYTES / MTPLX_SESSION_BANK_PER_SESSION_BYTES (sizes like 12G or 12GiB).
+[6/6] Warming model with 16 tokens
+      warmup still running... 5s elapsed
+      warmup still running... 10s elapsed
+[6/6] Extended warmup continues silently in the background
+[6/6] Warmup complete in 12.3s (1.88 tok/s)
+
+MTPLX is ready.
+Chat UI: http://127.0.0.1:18080/
+OpenAI API Base URL: http://127.0.0.1:18080/v1
+Model: deepseek-v4.1-flash-mtplx-streaming-mxfp4
+Reasoning history: preserve (policy auto)
+API key: leave blank for localhost
+Health check: http://127.0.0.1:18080/health
+Keep this terminal open. Press Ctrl-C to stop MTPLX.
+[mtplx] memory pressure guard {"action": "pressure_trim", "level": 2, "level_source": "allocator", "allocator_fraction": 1.0, "bank_entries_evicted": 0, "bank_bytes_after": 0, "deferred_s": 0.0}
+{"event": "mtplx_openai_generation", "prompt_tokens": 5, "completion_tokens": 8, "max_tokens": 8, "effective_max_tokens": 8, "finish_reason": "length", "elapsed_s": 12.981497, "tok_s": 2.452382, "end_to_end_tok_s": 0.616262, "seed": 1636088491, "attempts": 1, "blank_retries": 0, "text_preview": "Pong! 🏓\n\nWhat", "peak_memory_bytes": 59561696764, "active_memory_bytes": 56909605142, "cache_memory_bytes": 1884180, "serve_stream_counters": {"phase": "decode", "tokens": 8, "expert_cache": {"bytes_read": 16976977920, "transient_loads": 0, "prefetch_issued": 0, "expert_misses": 1230, "evictions": 903, "route_calls": 120, "prefetch_committed": 0, "unique_expert_requests": 1609, "expert_requests": 2400, "persistent_loads": 903, "shared_expert_assignments": 791, "expert_hits": 1170, "records_streamed": 903, "hit_rate": 0.4875, "miss_rate": 0.5125, "misses_per_token": 153.75, "records_streamed_per_token": 112.875, "bytes_read_per_token": 2122122240.0}, "incremental_misses": {"parts": 903, "routes": 117, "routes_per_token": 14.625, "parts_per_token": 112.875}, "engram_row_cache": {"rows_read": 480, "gathers": 6, "hits": 0, "evictions": 0, "misses": 480, "reads": 480, "hit_rate": 0.0, "miss_rate": 1.0, "misses_per_token": 60.0, "rows_read_per_token": 60.0}, "pin_working_set": {"enabled": false, "decode_routes": 0, "all_pinned_routes": 0, "all_pinned_hit_rate": null, "pinned_total": 0, "static_layer_count": 0}, "device_route_pinned": {"enabled": false, "flushes": 0, "barrier_free_layers": 0, "recovered_layers": 0, "barrier_free_layers_per_flush": null}}}
+[mtplx] repetition stream holdback engaged (n=1, at_token=279)
+{"event": "mtplx_stream_silence", "response_id": "chatcmpl-fa033643fe1446fe8559c215aa8b1456", "session_id": "anon-85bff1ad49f77154", "elapsed_s": 260.182394, "completion_tokens": 320, "seconds_since_last_token": 30.229894, "scheduler_active_kind": "foreground", "scheduler_foreground_pending": 0, "scheduler_idle_pending": 1, "postcommit_active": false, "pending_postcommit": null}
+{"event": "mtplx_openai_generation", "prompt_tokens": 16384, "completion_tokens": 320, "max_tokens": 1024, "effective_max_tokens": 1024, "finish_reason": "stop", "elapsed_s": 305.755039, "tok_s": 2.039885, "end_to_end_tok_s": 1.046589, "seed": 20260829, "attempts": 1, "blank_retries": 0, "text_preview": ":\n_ORTP_last_ORTP_LAST_OR_LAST_policy(LAST_history_policyLAST_historian\n_history_historianTP_TPOLAST_OR_historian_OLAST_", "peak_memory_bytes": 70169376150, "active_memory_bytes": 61973323874, "cache_memory_bytes": 9880480, "serve_stream_counters": {"phase": "decode", "tokens": 180, "expert_cache": {"bytes_read": 303743139840, "transient_loads": 0, "prefetch_issued": 0, "expert_misses": 16926, "evictions": 16156, "route_calls": 9000, "prefetch_committed": 0, "unique_expert_requests": 153086, "expert_requests": 216000, "persistent_loads": 16156, "shared_expert_assignments": 62914, "expert_hits": 199074, "records_streamed": 16156, "hit_rate": 0.921639, "miss_rate": 0.078361, "misses_per_token": 94.0333, "records_streamed_per_token": 89.7556, "bytes_read_per_token": 1687461888.0}, "incremental_misses": {"parts": 16156, "routes": 5869, "routes_per_token": 32.6056, "parts_per_token": 89.7556}, "engram_row_cache": {"rows_read": 5165, "gathers": 450, "hits": 37827, "evictions": 0, "misses": 5165, "reads": 5165, "hit_rate": 0.879861, "miss_rate": 0.120139, "misses_per_token": 28.6944, "rows_read_per_token": 28.6944}, "pin_working_set": {"enabled": false, "decode_routes": 0, "all_pinned_routes": 0, "all_pinned_hit_rate": null, "pinned_total": 0, "static_layer_count": 0}, "device_route_pinned": {"enabled": false, "flushes": 0, "barrier_free_layers": 0, "recovered_layers": 0, "barrier_free_layers_per_flush": null}}}
+[mtplx] shutdown: flushing 2 pending SSD session-cache write(s) (bounded 10s)...
+[mtplx] shutdown: SSD session cache flushed 2/2 pending write(s) in 1.91s

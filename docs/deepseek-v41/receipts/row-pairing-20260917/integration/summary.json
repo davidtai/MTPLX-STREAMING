@@ -1,0 +1,28 @@
+{
+  "complete": true,
+  "outputs_checked": 64,
+  "all_outputs_exact": true,
+  "read_counts_by_arm": [
+    134,
+    134,
+    134,
+    134
+  ],
+  "latencies": {
+    "1": {
+      "native_median_s": 0.00514170825,
+      "paired_median_s": 0.0051852917499999995,
+      "reduction_pct": -0.8476463050971272,
+      "native_control_spread_pct": 9.901874537513848
+    },
+    "6": {
+      "native_median_s": 0.018669354,
+      "paired_median_s": 0.018527844,
+      "reduction_pct": 0.7579801636414252,
+      "native_control_spread_pct": 0.9715119226942774
+    }
+  },
+  "decision": "No full-model run; aggregate M6 gain is smaller than observed native control spread. Retain as an unpromoted operator experiment.",
+  "mlx_allocator_peak_bytes": 1581355529,
+  "active_after_close_bytes": 8
+}

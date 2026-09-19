@@ -1,0 +1,7 @@
+# arm: cell16k_ring_v2_attn
+# stream: ar
+# token_ids_sha256: dd7f172676c4d30453203fd1348be76a3bc5e87875250b315803e1f2dff578f3
+# decode_tok_s: 2.988485873199241
+# divergence: none
+
+<decode unavailable (no tokenizer / decode failed)>

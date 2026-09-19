@@ -1,0 +1,17 @@
+{
+  "screen.py": {
+    "original_path": "/tmp/dsv41-causal-prefetch-20260917/screen.py",
+    "sha256": "d12764ebbb01a00ef09496875f826bdad30000d51d37e2e8b4b8a8a11dc1cf48",
+    "bytes": 6835
+  },
+  "screen.json": {
+    "original_path": "/tmp/dsv41-causal-prefetch-20260917/screen.json",
+    "sha256": "81bbaf81606d8dff1059c255e5dd28a908788ddfcf130eaab14a6cdc96f66cc5",
+    "bytes": 21447
+  },
+  "bank-initializer-source.py": {
+    "original_path": "/tmp/screen_dsv41_cap93_staged_policy.py",
+    "sha256": "6521959a4fac017647f2b45b344fe6dc2e926e2a315e68e4873baa497aa73014",
+    "bytes": 4376
+  }
+}

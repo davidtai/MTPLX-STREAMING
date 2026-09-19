@@ -1,0 +1,24 @@
+{
+  "runtime_and_helper_hashes_valid": true,
+  "mlx_imports_blocked": true,
+  "cases": [
+    {
+      "baseline_bytes": 9955393536,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109908711656,
+      "prefill_physical_bound_bytes": 103245363780,
+      "host_reserve_bytes": 2164260864,
+      "tail_capture_host_allowance_bytes": 16777216
+    },
+    {
+      "baseline_bytes": 11254906880,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 100,
+      "physical_bound_bytes": 109792647400,
+      "prefill_physical_bound_bytes": 104544877124,
+      "host_reserve_bytes": 2164260864,
+      "tail_capture_host_allowance_bytes": 16777216
+    }
+  ]
+}

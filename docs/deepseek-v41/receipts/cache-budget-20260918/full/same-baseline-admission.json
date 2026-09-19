@@ -1,0 +1,24 @@
+{
+  "baseline_bytes": 11964268544,
+  "wired_before_bytes": 3414097920,
+  "scope": "Both unchanged admission implementations evaluated at this full run baseline and wired snapshot. Allocation calculation only; not a second measured run.",
+  "arms": {
+    "retained": {
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109982010600,
+      "active_bound_bytes": 93107642476,
+      "host_reserve_bytes": 1578202112,
+      "decode_cache_allowance_bytes": 3331897468,
+      "decode_cache_overshoot_allowance_bytes": 2258155644
+    },
+    "candidate": {
+      "decode_slots_per_layer": 103,
+      "physical_bound_bytes": 109677955304,
+      "active_bound_bytes": 93815431276,
+      "host_reserve_bytes": 1371664384,
+      "decode_cache_allowance_bytes": 2526591100,
+      "decode_cache_overshoot_allowance_bytes": 2258155644
+    }
+  },
+  "extra_slots_per_layer": 1
+}

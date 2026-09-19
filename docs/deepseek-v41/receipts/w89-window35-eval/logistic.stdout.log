@@ -1,0 +1,18 @@
+==============================================================================
+W89 route-predictor feasibility  |  n_experts=384 top_k=6 hidden=5120 layers=40
+  train rows (prefill-tail)=2048  test rows (decode)=256
+==============================================================================
+predictor                           prec@k   rec@k  missRed@6  missRed@8 missRed@12   #L
+----------------------------------------------------------------------------------------
+(a) router_in(L)->L  (re-run router, sanity)   0.228   0.228      0.228      0.258      0.304   40
+(b) layer_in(L-1)->L (one layer ahead)   0.222   0.222      0.222      0.254      0.300   39
+(c) layer_in(L-2)->L (two layers ahead)   0.218   0.218      0.218      0.250      0.295   38
+(d) prev-route+token->L (cheap features)   0.107   0.107      0.107      0.123      0.149   39
+----------------------------------------------------------------------------------------
+worst-5 layers by miss_red@6 (lowest prefetch coverage):
+  (a) L14=0.04, L13=0.06, L17=0.09, L12=0.09, L16=0.10
+  (b) L14=0.04, L13=0.05, L12=0.07, L17=0.08, L1=0.08
+  (c) L14=0.04, L13=0.05, L16=0.07, L12=0.07, L17=0.08
+  (d) L14=0.02, L19=0.03, L16=0.03, L21=0.03, L13=0.03
+==============================================================================
+[w89] wrote metrics json -> /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w89/docs/deepseek-v41/receipts/w89-window35-eval/logistic.json

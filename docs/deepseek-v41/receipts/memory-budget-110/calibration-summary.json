@@ -1,0 +1,34 @@
+{
+  "schema": "dsv41-memory-calibration-v1",
+  "purpose": "memory calibration, not 20 TPS acceptance",
+  "context_tokens": 16384,
+  "decode_steps": 32,
+  "generated_tokens": 33,
+  "decode_tps": 3.0472472352855955,
+  "prefill_s": 134.3501632080006,
+  "sample_period_s": 0.25,
+  "sample_count": 564,
+  "system_peak_bytes": 99188310016,
+  "process_peak_bytes": 42363028160,
+  "file_backed_start_bytes": 37189238784,
+  "file_backed_end_bytes": 47472852992,
+  "swapouts_start_pages": 4399765,
+  "swapouts_end_pages": 4399765,
+  "expert_io_cache_mode": "f-nocache",
+  "engram_io_cache_modes": {
+    "1": "f-nocache",
+    "14": "f-nocache"
+  },
+  "transient_pool_bytes": 902430720,
+  "token_prefix_equal_to_window54": true,
+  "raw_receipt_errata": [
+    "transient_bytes_total in calibration-fixed.jsonl still multiplies shared pool by40; code correction was made after this process imported the runner",
+    "new resident_load_report field was added after this process imported runner; resolved Engram modes are in guard log STORAGE_POLICY"
+  ],
+  "source_base_commit": "a0d36575b",
+  "source_changes_at_launch": [
+    "macOS FileRowReader F_NOCACHE and construction metadata",
+    "DSVloader default expert cache bypass",
+    "AB profile propagates bypass_page_cache and stamps reader mode"
+  ]
+}

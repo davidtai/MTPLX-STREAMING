@@ -1,0 +1,17 @@
+
+==================================== ERRORS ====================================
+__________ ERROR collecting tests/test_deepseek_v41_memory_profile.py __________
+tests/test_deepseek_v41_memory_profile.py:20: in <module>
+    import mlx.core as mx
+<frozen importlib._bootstrap>:1360: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1322: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:1262: in _find_spec
+    ???
+<stdin>:5: in find_spec
+    ???
+E   RuntimeError: Real MLX imports are forbidden in this CPU check
+=========================== short test summary info ============================
+ERROR tests/test_deepseek_v41_memory_profile.py - RuntimeError: Real MLX impo...
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!

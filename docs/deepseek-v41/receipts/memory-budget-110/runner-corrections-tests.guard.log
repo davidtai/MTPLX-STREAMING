@@ -1,0 +1,252 @@
+[run-guarded] waiting for Qwen background warmup and idle requests
+[run-guarded] expected Qwen models ('mtplx-qwen36-27b-optimized-speed',) -> ('mtplx-flash-next-optimized-speed',)
+[run-guarded] process pattern -> mtplx.server.openai.*Qwen3.8-Flash-Next
+.................FF.F................................................... [ 23%]
+........................................................................ [ 46%]
+................................................................F....... [ 69%]
+........................................................................ [ 92%]
+.........................                                                [100%]
+=================================== FAILURES ===================================
+________________ test_switch_output_matches_dense_reference[1] _________________
+
+tmp_path = PosixPath('/private/var/folders/rp/c6zjx06j18vgfrf_fjzt517m0000gn/T/pytest-of-davidtai/pytest-4632/test_switch_output_matches_den0')
+layer = 1
+
+    @pytest.mark.parametrize("layer", ROUTED_LAYERS)
+    def test_switch_output_matches_dense_reference(tmp_path: Path, layer: int) -> None:
+        root, _cfg, spec, manifest_path, _mm = _assemble_mixed_artifact(tmp_path)
+        runtime = _open_mixed(root, spec, manifest_path)
+        manifest = load_expert_manifest(manifest_path)
+        try:
+            switch = HotExpertSwitchGLU(runtime, layer)
+            rng = np.random.default_rng(layer * 17)
+            x = mx.array(rng.standard_normal((1, 1, HIDDEN)).astype(np.float32))
+            expert = 1
+            output = switch(x, mx.array([[[expert]]], dtype=mx.uint32))
+            mx.eval(output)
+    
+            dense = _decode_reference(manifest, root, layer, expert)
+            xr = mx.array(np.asarray(x).reshape(1, HIDDEN))
+            gate = mx.matmul(xr, mx.array(dense["gate_proj"]).T)
+            up = mx.matmul(xr, mx.array(dense["up_proj"]).T)
+            reference = mx.matmul(swiglu(gate, up), mx.array(dense["down_proj"]).T)
+            mx.eval(reference)
+    
+>           _assert_served_matches(np.asarray(output), np.asarray(reference))
+
+tests/test_expert_mixofficial_serve.py:424: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+got = array([-377.27405  ,  368.68228  , -342.64713  ,  342.7818   ,
+        218.01501  ,  399.40283  , -164.11162  , -260.5...799  ,  108.98921  , -246.56812  ,
+       -774.13525  ,   98.20964  , -434.275    , -100.54709  ],
+      dtype=float32)
+ref = array([-3.77274109e+02,  3.68132080e+02, -3.40619019e+02,  3.42781952e+02,
+        2.18015076e+02,  4.02317139e+02, -1...e+02, -2.47419083e+02,
+       -7.73581116e+02,  9.92644272e+01, -4.35669495e+02, -9.84741135e+01],
+      dtype=float32)
+
+    def _assert_served_matches(got: np.ndarray, ref: np.ndarray) -> None:
+        """Parity that proves "the served weights ARE the decoded record".
+    
+        The served path (Metal shadow/gather kernels) and the numpy
+        decode_projection reference round the codec slightly differently, and the
+        fixture's full-scale N(0,1) weights push a rare near-cancellation output
+        element to ~15% relative error. So assert the bulk is near-exact (median)
+        and the whole vector matches in relative L2 norm (robust to lone outliers),
+        instead of an element-wise max bound.
+        """
+    
+        got = np.asarray(got).reshape(-1)
+        ref = np.asarray(ref).reshape(-1)
+        relative = np.abs(got - ref) / (np.abs(ref) + 1e-6)
+>       assert np.median(relative) < 1e-3
+E       assert np.float32(0.0022353653) < 0.001
+E        +  where np.float32(0.0022353653) = <function median at 0x10c4346f0>(array([1.61779340e-07, 1.49457611e-03, 5.95417945e-03, 4.45145645e-07,\n       2.79958414e-07, 7.24380417e-03, 2.943492...13700e-08, 3.43937660e-03,\n       7.16328504e-04, 1.06260292e-02, 3.20082251e-03, 2.10509654e-02],\n      dtype=float32))
+E        +    where <function median at 0x10c4346f0> = np.median
+
+tests/test_expert_mixofficial_serve.py:269: AssertionError
+________________ test_switch_output_matches_dense_reference[2] _________________
+
+tmp_path = PosixPath('/private/var/folders/rp/c6zjx06j18vgfrf_fjzt517m0000gn/T/pytest-of-davidtai/pytest-4632/test_switch_output_matches_den1')
+layer = 2
+
+    @pytest.mark.parametrize("layer", ROUTED_LAYERS)
+    def test_switch_output_matches_dense_reference(tmp_path: Path, layer: int) -> None:
+        root, _cfg, spec, manifest_path, _mm = _assemble_mixed_artifact(tmp_path)
+        runtime = _open_mixed(root, spec, manifest_path)
+        manifest = load_expert_manifest(manifest_path)
+        try:
+            switch = HotExpertSwitchGLU(runtime, layer)
+            rng = np.random.default_rng(layer * 17)
+            x = mx.array(rng.standard_normal((1, 1, HIDDEN)).astype(np.float32))
+            expert = 1
+            output = switch(x, mx.array([[[expert]]], dtype=mx.uint32))
+            mx.eval(output)
+    
+            dense = _decode_reference(manifest, root, layer, expert)
+            xr = mx.array(np.asarray(x).reshape(1, HIDDEN))
+            gate = mx.matmul(xr, mx.array(dense["gate_proj"]).T)
+            up = mx.matmul(xr, mx.array(dense["up_proj"]).T)
+            reference = mx.matmul(swiglu(gate, up), mx.array(dense["down_proj"]).T)
+            mx.eval(reference)
+    
+>           _assert_served_matches(np.asarray(output), np.asarray(reference))
+
+tests/test_expert_mixofficial_serve.py:424: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+got = array([ -30.190613,  230.42723 ,  357.6189  ,  230.06082 ,  338.4137  ,
+        461.69244 , -333.98666 ,   97.618835, ...436 ,   33.070206,  437.68405 , -176.58707 ,
+       -261.56897 , -182.76517 , -209.40616 , -141.49902 ], dtype=float32)
+ref = array([ -30.486267,  230.39905 ,  356.86078 ,  230.79861 ,  337.2086  ,
+        459.5506  , -332.54312 ,   94.6178  , ...895 ,   32.32554 ,  438.49582 , -174.07834 ,
+       -261.19885 , -184.23563 , -208.31429 , -140.77533 ], dtype=float32)
+
+    def _assert_served_matches(got: np.ndarray, ref: np.ndarray) -> None:
+        """Parity that proves "the served weights ARE the decoded record".
+    
+        The served path (Metal shadow/gather kernels) and the numpy
+        decode_projection reference round the codec slightly differently, and the
+        fixture's full-scale N(0,1) weights push a rare near-cancellation output
+        element to ~15% relative error. So assert the bulk is near-exact (median)
+        and the whole vector matches in relative L2 norm (robust to lone outliers),
+        instead of an element-wise max bound.
+        """
+    
+        got = np.asarray(got).reshape(-1)
+        ref = np.asarray(ref).reshape(-1)
+        relative = np.abs(got - ref) / (np.abs(ref) + 1e-6)
+>       assert np.median(relative) < 1e-3
+E       assert np.float32(0.0035253705) < 0.001
+E        +  where np.float32(0.0035253705) = <function median at 0x10c4346f0>(array([9.69794951e-03, 1.22322483e-04, 2.12440733e-03, 3.19669582e-03,\n       3.57377809e-03, 4.66073956e-03, 4.340918...25496e-03, 1.44114885e-02,\n       1.41699391e-03, 7.98140373e-03, 5.24147041e-03, 5.14077162e-03],\n      dtype=float32))
+E        +    where <function median at 0x10c4346f0> = np.median
+
+tests/test_expert_mixofficial_serve.py:269: AssertionError
+__________ test_partial_residency_serves_both_tiers_through_transient __________
+
+tmp_path = PosixPath('/private/var/folders/rp/c6zjx06j18vgfrf_fjzt517m0000gn/T/pytest-of-davidtai/pytest-4632/test_partial_residency_serves_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115343d40>
+
+    def test_partial_residency_serves_both_tiers_through_transient(
+        tmp_path: Path, monkeypatch
+    ) -> None:
+        """One run, one persistent slot per layer: a second expert on BOTH a
+        t158-tier and an affine2-tier layer spills to the per-tier transient bank,
+        is filled + dispatched + numerically correct, and never crashes."""
+    
+        root, _cfg, spec, manifest_path, _mm = _assemble_mixed_artifact(tmp_path)
+        manifest = load_expert_manifest(manifest_path)
+        limit = _mixed_partial_limit(spec, manifest)
+        runtime = _open_mixed(root, spec, manifest_path, memory_limit_bytes=limit)
+        try:
+            # The plan admits exactly one persistent slot per layer.
+            assert runtime.plan.slots_per_layer == 1
+            assert runtime.plan.slots_per_layer < spec.expert_count
+    
+            for layer, expected_tier in ((1, "t158"), (2, "affine2")):
+                switch = HotExpertSwitchGLU(runtime, layer)
+                assert switch._gate_up_tier == expected_tier
+                spy = _KernelSpy()
+                spy.install(monkeypatch)
+                rng = np.random.default_rng(100 + layer)
+                # Two tokens, top_k=1, routing experts 0 then 1: expert 0 is seeded
+                # persistent, expert 1 must be served from the transient tier.
+                x = mx.array(rng.standard_normal((1, 2, HIDDEN)).astype(np.float32))
+                indices = mx.array([[[0], [1]]], dtype=mx.uint32)
+                output = switch(x, indices)  # PREFILL (seq len 2)
+                mx.eval(output)
+    
+                # Dispatch fired for this layer's tier (proves execution ran, not a
+                # crash on the differing-tier transient bank).
+                if expected_tier == "t158":
+                    assert spy.shadow_projections >= 2  # gate + up
+                    assert 3 in spy.gather_bits  # affine3 down
+                else:
+                    assert spy.shadow_projections == 0
+                    assert 2 in spy.gather_bits and 3 in spy.gather_bits
+    
+                # Numeric parity for BOTH assignments, including the transient one.
+                got = np.asarray(output).reshape(2, HIDDEN)
+                for token, expert in ((0, 0), (1, 1)):
+                    dense = _decode_reference(manifest, root, layer, expert)
+                    xr = mx.array(np.asarray(x)[0, token].reshape(1, HIDDEN))
+                    gate = mx.matmul(xr, mx.array(dense["gate_proj"]).T)
+                    up = mx.matmul(xr, mx.array(dense["up_proj"]).T)
+                    ref = np.asarray(
+                        mx.matmul(swiglu(gate, up), mx.array(dense["down_proj"]).T)
+                    ).reshape(-1)
+>                   _assert_served_matches(got[token], ref)
+
+tests/test_expert_mixofficial_serve.py:505: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+got = array([-337.13303  , -191.74449  ,  -25.309788 ,  -85.73986  ,
+       -323.01132  ,  283.99316  ,  254.11057  , -181.9...75   , -279.89767  , -195.3269   ,
+        -39.513657 , -155.664    ,  284.44705  , -354.4027   ],
+      dtype=float32)
+ref = array([-337.0249   , -190.84639  ,  -24.960373 ,  -85.598465 ,
+       -323.11676  ,  284.46735  ,  254.11058  , -182.2...888  , -279.4483   , -195.80989  ,
+        -39.18289  , -155.66406  ,  282.68698  , -354.8435   ],
+      dtype=float32)
+
+    def _assert_served_matches(got: np.ndarray, ref: np.ndarray) -> None:
+        """Parity that proves "the served weights ARE the decoded record".
+    
+        The served path (Metal shadow/gather kernels) and the numpy
+        decode_projection reference round the codec slightly differently, and the
+        fixture's full-scale N(0,1) weights push a rare near-cancellation output
+        element to ~15% relative error. So assert the bulk is near-exact (median)
+        and the whole vector matches in relative L2 norm (robust to lone outliers),
+        instead of an element-wise max bound.
+        """
+    
+        got = np.asarray(got).reshape(-1)
+        ref = np.asarray(ref).reshape(-1)
+        relative = np.abs(got - ref) / (np.abs(ref) + 1e-6)
+>       assert np.median(relative) < 1e-3
+E       assert np.float32(0.0024215314) < 0.001
+E        +  where np.float32(0.0024215314) = <function median at 0x10c4346f0>(array([3.2081836e-04, 4.7058882e-03, 1.3998781e-02, 1.6518470e-03,\n       3.2631619e-04, 1.6669123e-03, 6.0047832e-08,... 1.6080660e-03, 2.4666090e-03,\n       8.4415609e-03, 3.9209536e-07, 6.2262183e-03, 1.2422262e-03],\n      dtype=float32))
+E        +    where <function median at 0x10c4346f0> = np.median
+
+tests/test_expert_mixofficial_serve.py:269: AssertionError
+______ test_dspark_margin_is_preserved_but_not_attributed_to_another_pair ______
+
+ab = <module '_kv_parity_ab' from '/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/ab_decode_env_levers.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1375aff20>
+tmp_path = PosixPath('/private/var/folders/rp/c6zjx06j18vgfrf_fjzt517m0000gn/T/pytest-of-davidtai/pytest-4632/test_dspark_margin_is_preserve0')
+capsys = <_pytest.capture.CaptureFixture object at 0x1375af980>
+
+    def test_dspark_margin_is_preserved_but_not_attributed_to_another_pair(
+        ab, monkeypatch, tmp_path, capsys,
+    ):
+        base = _receipt(ab, "control", "control")
+        candidate = _receipt(ab, "attn_fused_proj", "candidate")
+        divergence = {"divergence_index": 33, "ar_top2_margin": 0.25,
+                      "dspark_top2_margin": 0.0, "class": "tie_flip"}
+        candidate["dspark"] = {"divergence": divergence}
+        rc, output = _summary(ab, [base, candidate], monkeypatch, tmp_path, capsys)
+        assert "token-id sha differs -- expected" in output
+>       assert "first divergence @" not in output
+E       AssertionError: assert 'first divergence @' not in '[ab] arm=co...5 (cand 0)\n'
+E         
+E         'first divergence @' is contained here:
+E           ED_PROJ); first divergence @ 33, control top-2 logit margin 0.25 (cand 0)
+E         ?           ++++++++++++++++++
+
+tests/test_deepseek_v41_unvalidated_kv_lane.py:136: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_expert_mixofficial_serve.py::test_switch_output_matches_dense_reference[1]
+FAILED tests/test_expert_mixofficial_serve.py::test_switch_output_matches_dense_reference[2]
+FAILED tests/test_expert_mixofficial_serve.py::test_partial_residency_serves_both_tiers_through_transient
+FAILED tests/test_deepseek_v41_unvalidated_kv_lane.py::test_dspark_margin_is_preserved_but_not_attributed_to_another_pair
+4 failed, 309 passed, 2 warnings in 11.13s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

@@ -1,0 +1,40 @@
+{
+  "scope": "CPU-only fixed-capacity accounting; no MLX import or 256K model run; throughput remains a separate requirement",
+  "source_sha256": "d4be865de846dee5bb39728f5f1c2f6ea45e27894057a6838eea288fd5e40e17",
+  "config_sha256": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d",
+  "config_max_position_embeddings": 1048576,
+  "kv_source_layer_ids": [
+    2,
+    8,
+    14,
+    20
+  ],
+  "configurations": [
+    {
+      "max_kv": 17664,
+      "max_append": 953,
+      "storage_bytes": {
+        "window": 50181120,
+        "compressed": 25436160,
+        "index": 6359040,
+        "frontier": 26763264,
+        "draft": 3763584,
+        "total": 112503168
+      },
+      "additional_reserve_bytes": 503316480
+    },
+    {
+      "max_kv": 262144,
+      "max_append": 953,
+      "storage_bytes": {
+        "window": 50181120,
+        "compressed": 377487360,
+        "index": 94371840,
+        "frontier": 26763264,
+        "draft": 3763584,
+        "total": 552567168
+      },
+      "additional_reserve_bytes": 2952790016
+    }
+  ]
+}

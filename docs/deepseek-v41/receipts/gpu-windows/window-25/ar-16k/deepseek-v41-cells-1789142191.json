@@ -1,0 +1,161 @@
+{
+ "schema": "mtplx-server-cell-v1",
+ "server": "deepseek-v41",
+ "stack": "remote",
+ "mode": "cells",
+ "model_family": "deepseek-v41",
+ "served_model_id": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+ "template_settings": {
+  "model_family": "deepseek-v41",
+  "chat_template_source": "artifact chat_template.jinja (W52 port of the official reference encoder) + served code fallback (mtplx.chat_encoding.encode_deepseek_v41_messages)",
+  "render": "DeepSeek-V4.1 reference chat format: BOS + [<\uff5cSystem\uff5c>effort/system] + <\uff5cUser\uff5c>content + <\uff5cAssistant\uff5c> + <think>|</think>",
+  "render_cite": "mtplx/templates/deepseek_v41/chat_template.jinja; DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages",
+  "add_special_tokens": false,
+  "enable_thinking": false,
+  "reasoning_effort": null,
+  "thinking_mode": false,
+  "bos_id_prepended": true,
+  "bos_token_id": 0,
+  "note": "DSV4.1 now templates the real chat prompt (BOS id 0 first). The OFFICIAL default is thinking OFF (reference generate.py --thinking-mode 'chat'; the encoding-test harness renders thinking_mode='chat'); reasoning_effort is inert in chat mode and omitted there. DeepSeek's instruct evals use thinking + reasoning_effort=100 -- set --dsv41-enable-thinking (DSV41_ENABLE_THINKING) + --dsv41-reasoning-effort to mirror them. The exported ids match the server byte-for-byte WITH BOS."
+ },
+ "base_url": "http://127.0.0.1:18080",
+ "prompt_cache": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-25/ar-16k/prompts-deepseek-v41.json",
+ "prompt_cache_context_sha256": "c8ae2b1790c0300aa7c1421b55e7cd5d43c93461f7fba5d3a732fd34e156b4c4",
+ "contexts": [
+  16384
+ ],
+ "seeds": [
+  20260829
+ ],
+ "max_tokens": 1024,
+ "sampler": {
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 20
+ },
+ "started_epoch_s": 1789142191.91618,
+ "elapsed_s": 10.263154029846191,
+ "fastest_of_seeds": [],
+ "records": [
+  {
+   "server": "deepseek-v41",
+   "cell": "sweep",
+   "target_tokens": 16384,
+   "seed": 20260829,
+   "repeat": 0,
+   "ok": false,
+   "prompt_tokens": 0,
+   "new_prefill_tokens": 16384,
+   "completion_tokens": 0,
+   "finish_reason": "error",
+   "prefill_time_s": null,
+   "prefill_time_source": "none",
+   "prefill_tok_s": null,
+   "ttft_s": null,
+   "decode_s": null,
+   "decode_tok_s": null,
+   "wall_s": 0.04152991699811537,
+   "peak_memory_bytes": null,
+   "peak_memory_gb": null,
+   "peak_memory_source": "none",
+   "client_rss_bytes": null,
+   "server_peak_memory_bytes": null,
+   "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "text_chars": 0,
+   "text_head": "",
+   "text_tail": "",
+   "reasoning_chars": 0,
+   "reasoning_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "thermal_gate": null,
+   "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+   "request_body": {
+    "model": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+    "max_tokens": 1024,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "top_k": 20,
+    "seed": 20260829,
+    "enable_thinking": false
+   },
+   "server_stats": {
+    "prompt_eval_time_s": null,
+    "prefill_tok_s": null,
+    "ttft_s": null,
+    "decode_elapsed_s": null,
+    "decode_tok_s": null,
+    "new_prefill_tokens": null,
+    "cached_tokens": null,
+    "peak_memory_bytes": null
+   },
+   "usage": {},
+   "server_error": {
+    "message": "insufficient memory: this prompt projects 57.2 GiB against the engine's 53.0 GiB limit (4.2 GiB over) after the allocator cache and the session bank were reclaimed (16384 prompt tokens, 16384 not cached). The engine stays up and keeps its sessions; this request was refused before prefill instead of pushing the Mac into swap. Reduce the prompt, start a new conversation, close other apps, or use q8 KV quantization; --allow-swap admits it anyway.",
+    "type": "server_error",
+    "code": "insufficient_memory",
+    "param": null
+   },
+   "error": "server error [insufficient_memory] insufficient memory: this prompt projects 57.2 GiB against the engine's 53.0 GiB limit (4.2 GiB over) after the allocator cache and the session bank were reclaimed (16384 prompt tokens, 16384 not cached). The engine stays up and keeps its sessions; this request was refused before prefill instead of pushing the Mac into swap. Reduce the prompt, start a new conversation, close other apps, or use q8 KV quantization; --allow-swap admits it anyway.",
+   "raw_engagement": {},
+   "mtp_accept_rate": null,
+   "templated_tokens_expected": 16384,
+   "request_parity": {
+    "enable_thinking": false,
+    "max_tokens": 1024,
+    "prompt_chars": 61760,
+    "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+    "seed": 20260829,
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95
+   },
+   "request_parity_source": "wire",
+   "request_body_sha256": "a81827390fb03caefc59c7dd5eba733dc59d0a2ad21cd6c71e29f7cc4120aebc",
+   "response_parity": {
+    "applied_sampler": {
+     "available": false,
+     "source": "none",
+     "temperature": null,
+     "requested_temperature": null,
+     "top_p": null,
+     "requested_top_p": null,
+     "top_k": null,
+     "requested_top_k": null,
+     "seed": null,
+     "client_sampler_fields_ignored": null,
+     "control_owner": null,
+     "content_empty_reason": null,
+     "reasoning_tokens": null,
+     "answer_tokens": null
+    },
+    "sampler_honoured": {
+     "temperature": null,
+     "top_p": null,
+     "top_k": null
+    },
+    "completion_tokens": 0,
+    "finish_reason": "error",
+    "reasoning_chars": 0,
+    "reasoning_tokens": null,
+    "reasoning_tokens_source": "none",
+    "thinking_observed": false,
+    "thinking_requested": false,
+    "reasoning_effort_requested": null,
+    "temperature_requested": 1.0,
+    "top_p_requested": 0.95,
+    "top_k_requested": 20,
+    "seed_requested": 20260829
+   },
+   "http_status": null,
+   "http_body": null,
+   "server_log_tail": "[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.\n[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.\n[5/6] Context window: 17664 tokens\n[5/6] Memory plan: context window 17664 is machine-bound (model supports 1048576); larger windows would swap on 128 GiB\n[mtplx] memory guard {\"action\": \"prefill_admission_shed\", \"prompt_tokens\": 16384, \"reusable_prefix_tokens\": 0, \"reusable_prefix_mode\": \"none\", \"miss_tokens\": 16384, \"active_bytes\": 56834342136, \"cache_bytes\": 10915793, \"projected_bytes\": 61408660681, \"threshold_bytes\": 55201067171, \"limit_bytes\": 56908316672, \"cache_cleared\": true, \"projected_bytes_after_cache_clear\": 61397744888, \"bank_bytes_before\": 1807924, \"superseded_session_entries_evicted\": 0, \"lru_entries_evicted\": 0, \"chain_entries_evicted\": 0, \"terminal_entries_evicted\": 0, \"bank_bytes_after\": 1807924, \"active_bytes_after\": 56834342136, \"cache_bytes_after\": 0, \"projected_bytes_after\": 61397744888, \"refused\": true, \"refusal_reason\": \"projected_over_limit_after_reclamation\"}"
+  }
+ ]
+}

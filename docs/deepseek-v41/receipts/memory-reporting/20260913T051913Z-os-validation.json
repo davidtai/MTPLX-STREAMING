@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "kind": "OS-only; no model loaded",
+  "system_used_formula": "wired + active + inactive + physical compressor",
+  "source_head": "c742604639b1a28b2fcd5a8f9b6f43b39e524749",
+  "working_tree_changes": true,
+  "samples": [
+    {
+      "sample_start_monotonic_ns": 189858164286291,
+      "sample_end_monotonic_ns": 189858166230000,
+      "process": {
+        "peak_maxrss_bytes": 22839296,
+        "resident_bytes": 22986752,
+        "phys_footprint_bytes": 13025760,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 1646313472,
+        "wired_bytes": 88385126400,
+        "active_bytes": 6300024832,
+        "inactive_bytes": 35919118336,
+        "speculative_bytes": 99106816,
+        "anonymous_bytes": 4672634880,
+        "file_backed_bytes": 37645615104,
+        "compressor_bytes": 1667563520,
+        "compressed_bytes": 5984714752,
+        "used_bytes": 132271833088,
+        "non_file_used_bytes": 94725324800,
+        "swapins_pages": 778358,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      },
+      "phase": "before",
+      "proc_pid_rusage_footprint_bytes": 13042144
+    },
+    {
+      "sample_start_monotonic_ns": 189858169000333,
+      "sample_end_monotonic_ns": 189858170862041,
+      "process": {
+        "peak_maxrss_bytes": 90144768,
+        "resident_bytes": 90144768,
+        "phys_footprint_bytes": 80216592,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 1578139648,
+        "wired_bytes": 88385159168,
+        "active_bytes": 6367232000,
+        "inactive_bytes": 35919118336,
+        "speculative_bytes": 99106816,
+        "anonymous_bytes": 4739842048,
+        "file_backed_bytes": 37645615104,
+        "compressor_bytes": 1667563520,
+        "compressed_bytes": 5984714752,
+        "used_bytes": 132339073024,
+        "non_file_used_bytes": 94792564736,
+        "swapins_pages": 778358,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      },
+      "phase": "allocated",
+      "proc_pid_rusage_footprint_bytes": 80232976
+    },
+    {
+      "sample_start_monotonic_ns": 189858170873458,
+      "sample_end_monotonic_ns": 189858172636500,
+      "process": {
+        "peak_maxrss_bytes": 90161152,
+        "resident_bytes": 90161152,
+        "phys_footprint_bytes": 80232976,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 1579499520,
+        "wired_bytes": 88385159168,
+        "active_bytes": 6367248384,
+        "inactive_bytes": 35919118336,
+        "speculative_bytes": 99106816,
+        "anonymous_bytes": 4739858432,
+        "file_backed_bytes": 37645615104,
+        "compressor_bytes": 1667563520,
+        "compressed_bytes": 5984714752,
+        "used_bytes": 132339089408,
+        "non_file_used_bytes": 94792581120,
+        "swapins_pages": 778358,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      },
+      "phase": "released",
+      "proc_pid_rusage_footprint_bytes": 80249360
+    }
+  ],
+  "top_physmem": "PhysMem: 123G used (82G wired, 1590M compressor), 1597M unused.",
+  "system_after_top": {
+    "sample_start_monotonic_ns": 189858319945916,
+    "sample_end_monotonic_ns": 189858321910666,
+    "process": {
+      "peak_maxrss_bytes": 90177536,
+      "resident_bytes": 90177536,
+      "phys_footprint_bytes": 80249360,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 1575534592,
+      "wired_bytes": 88385454080,
+      "active_bytes": 6369116160,
+      "inactive_bytes": 35919134720,
+      "speculative_bytes": 99123200,
+      "anonymous_bytes": 4741726208,
+      "file_backed_bytes": 37645647872,
+      "compressor_bytes": 1667563520,
+      "compressed_bytes": 5984714752,
+      "used_bytes": 132341268480,
+      "non_file_used_bytes": 94794743808,
+      "swapins_pages": 778358,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "top_rounding_tolerance_bytes": 1073741824
+}

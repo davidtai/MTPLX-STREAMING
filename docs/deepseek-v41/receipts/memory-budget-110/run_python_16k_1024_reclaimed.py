@@ -1,0 +1,76 @@
+"""Bounded larger-residency experiment; same AR graph and pinned workload."""
+import hashlib, importlib.util, json, os, pathlib, signal, subprocess, threading, time
+from mtplx.deepseek_v41_memory_profile import host_memory_snapshot
+signal.alarm(900)
+PREFIX=pathlib.Path('/tmp/dsv41-110-preflight/python-16k-1024-reclaimed')
+source_commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+if subprocess.check_output(['git','status','--porcelain','--untracked-files=no'],text=True).strip():
+ raise RuntimeError('tracked source must be clean')
+base=float(os.environ['MTPLX_DSV41_BOX_BASELINE_GB'])*1e9
+if not 12e9 <= base <= 20e9: raise RuntimeError('baseline outside this bounded experiment')
+if os.environ.get('MTPLX_DSV41_IO_READ_FANOUT')!='4': raise RuntimeError('explicit fanout4 required')
+if os.environ.get('MTPLX_BELADY_ORACLE','0')!='0': raise RuntimeError('no oracle instrumentation')
+GIB=1024**3; RECORD=18800640; FIXED=23578252736
+engine=int(110e9-base-2*GIB-16*GIB)
+slots=(engine-FIXED)//(40*RECORD)
+if not 60 <= slots <= 75: raise RuntimeError(f'unexpected slot geometry: {slots}')
+# Same graph/codec/length and shared 48-record transient pool as measured control.
+# Price added persistent bytes and two additional full bank images conservatively.
+# Routing fences cover preceding layer writes; no unbounded queued bank updates.
+active_bound=56845381092+(slots-35)*40*RECORD+2*slots*RECORD
+physical_bound=base+active_bound+2*GIB+2*GIB
+wired_now=host_memory_snapshot()['box']['wired_bytes']
+if physical_bound > 107e9 or wired_now+active_bound+2*GIB > 100*GIB:
+ raise RuntimeError('static active/cache/host/wired bound lacks headroom')
+bounds={'source_commit':source_commit,'wrapper_sha256':hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+ 'baseline_bytes':base,'engine_budget_bytes':engine,'expected_slots_per_layer':slots,
+ 'active_bound_bytes':active_bound,'physical_bound_bytes':physical_bound,'wired_before_bytes':wired_now,
+ 'scope':'same 16K/1023-step AR pf0 graph; persistent delta plus two full bank images beyond measured 35-slot peak; full 2GiB allocator cache and 2GiB Python capacity; 16GiB transient reserve'}
+PREFIX.with_suffix('.bounds.json').write_text(json.dumps(bounds,indent=2)+'\n')
+print('STATIC_BOUND',json.dumps(bounds),flush=True)
+stop=threading.Event();phase='startup'
+def sample():
+ with PREFIX.with_suffix('.os.jsonl').open('a') as f:f.write(json.dumps({'phase':phase,'snapshot':host_memory_snapshot()})+'\n')
+def monitor():
+ while not stop.wait(.25):sample()
+t=threading.Thread(target=monitor,daemon=True);sample();t.start()
+try:
+ spec=importlib.util.spec_from_file_location('ab','scripts/deepseek_v41/ab_decode_env_levers.py');ab=importlib.util.module_from_spec(spec);spec.loader.exec_module(ab)
+ args=ab.build_parser().parse_args()
+ fixture=pathlib.Path('docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json')
+ prompt_rows=[r for r in json.loads(fixture.read_text())['prompts'] if r['target_tokens']==16384]
+ if len(prompt_rows)!=1 or hashlib.sha256(json.dumps(prompt_rows[0]['token_ids']).encode()).hexdigest()!='38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2':
+  raise RuntimeError('pinned 16K prompt digest mismatch')
+ if (pathlib.Path(args.model).resolve()!=pathlib.Path('/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4')
+     or pathlib.Path(args.prompt_ids_file).resolve()!=fixture.resolve()
+     or args.box_target_gb!=110 or args.allocator_cache_gib!=2 or args.host_overhead_gib!=2
+     or args.memory_plan_from or args.memory_limit_gib is not None or args.expert_cache_limit_gib is not None):
+  raise RuntimeError('this bound requires exact artifact, fixture and live 110/16/2/2 allocation')
+ if (args.arms!=['cell16k_ring_v2_attn_pf0'] or args.decode_mode!='ar' or args.context_tokens!=16384
+     or args.decode_tokens!=1023 or args.max_kv!=17664 or args.transient_band_gib!=16
+     or args.warm_repeat or args.stage_timing or args.prefill_stage_timing or args.syncs or args.with_mtp
+     or ab._device_sample_resolved(args)):
+  raise RuntimeError('this bound requires the exact unchanged AR graph and workload')
+ original=ab._load_model
+ def load(*a,**kw):
+  global phase
+  plan=ab._resolve_target_plan(a[0])
+  if plan['engine_budget_bytes']!=engine or plan['session_bank_reserve_bytes']!=0:
+   raise RuntimeError('effective allocation differs from the static bound')
+  phase='loading';r=original(*a,**kw);phase='loaded'
+  rt=r.model._mtplx_expert_runtime;report=r.model._mtplx_resident_load_report
+  if rt.plan.persistent_slots!=slots*40:raise RuntimeError('installed slot count differs from bound')
+  if rt.reader.cache_mode!='f-nocache' or set(report.get('engram_io_cache_modes',{}).values())!={'f-nocache'}:raise RuntimeError('uncached I/O required')
+  sample();return r
+ ab._load_model=load
+ generate=ab._generate
+ def traced_generate(*a,**kw):
+  global phase
+  phase='generation';sample();rt=kw['model']._mtplx_expert_runtime
+  with rt.admit_kv_tokens(len(kw['prompt_ids'])+int(kw['steps'])):r=generate(*a,**kw)
+  if rt._live_kv_tokens!=0:raise RuntimeError('KV admission not released')
+  phase='generation_end';sample();return r
+ ab._generate=traced_generate
+ raise SystemExit(ab.main())
+finally:
+ stop.set();t.join(2);sample()

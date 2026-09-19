@@ -1,0 +1,132 @@
+{
+  "source_commit": "5ba18552cb81f85793469a8d20fe2ff4af4f79d8",
+  "receipt_sha256": "a56d11ab5c0171d3fd6bc01c56ec83a2508274d964704d57333ac6fb3abb27ec",
+  "input_tokens": 16384,
+  "output_tokens": 1024,
+  "timed_decode_steps": 1023,
+  "decode_tok_s": 13.15094665792056,
+  "decode_wall_s": 77.78907683302532,
+  "prior_best_decode_tok_s": 12.809105491938656,
+  "prior_best_decode_wall_s": 79.86506166600157,
+  "tps_change_percent": 2.6687356599337964,
+  "wall_reduction_s": 2.0759848329762463,
+  "cycles": 206,
+  "all1024_native_ids_identical": true,
+  "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "ar_divergence": {
+    "divergence_index": 297,
+    "ar_token": 11067,
+    "dspark_token": 62596,
+    "ar_top2_margin": 0.0,
+    "dspark_top2_margin": 0.25,
+    "max_abs_logit_delta": 0.75,
+    "tie_margin": 0.03,
+    "tie_band_used": 0.75,
+    "tie_ulps": 3,
+    "peak_contested_logit": 33.75,
+    "ulp_bf16_at_peak": 0.25,
+    "ar_contested_margin": 0.0,
+    "dspark_contested_margin": 0.25,
+    "delta_at_ar_token": 0.0,
+    "delta_at_dspark_token": 0.25,
+    "rounding_class_by_delta": true,
+    "deltas_within_tie_band": true,
+    "rows_consistent": true,
+    "unavailable_logits": [],
+    "ar_logit_at_ar_token": 33.75,
+    "ar_logit_at_dspark_token": 33.75,
+    "dspark_logit_at_ar_token": 33.75,
+    "dspark_logit_at_dspark_token": 34.0,
+    "class": "tie_flip",
+    "ar_replay_error": null,
+    "capture_index": 297,
+    "capture_index_matches_first": true
+  },
+  "prefill_slots_per_layer": 84,
+  "decode_slots_per_layer": 109,
+  "decode_miss_records_per_part": 3,
+  "baseline_bytes": 10240868352,
+  "physical_bound_bytes": 109979515100,
+  "mlx_active_bound_bytes": 98098546908,
+  "mlx_peak_bytes": 97614305072,
+  "process_footprint_peak_bytes": 98610301552,
+  "system_used_peak_bytes": 109671972864,
+  "mlx_active_end_bytes": 97461880244,
+  "mlx_cache_end_bytes": 256770058,
+  "read_bytes": 571822571520,
+  "read_records": 32316,
+  "read_union_s": 45.125601621,
+  "growth_seconds": 3.6173991250107065,
+  "phase_time_s": {
+    "draft": 2.032398165029008,
+    "verify": 71.83458000002429,
+    "accept": 0.06774716806830838,
+    "commit": 0.1590962530754041
+  },
+  "guard_child_exit_code": 0,
+  "guard_process_tree_peak_bytes": 98607254128,
+  "guard_physical_peak_bytes": 109664894976,
+  "guard_samples": 219,
+  "compressor_growth_bytes": 0,
+  "performance_scope": "One complete strict-cache allocator candidate versus retained part3 memory-compose result; same exact workload and native arithmetic, but different baseline and capacity. This is not a matched-capacity or repeatability proof.",
+  "goal_20_tps_reached": false,
+  "cache_limit_phase": "growth_decode",
+  "allocator_cache_phase_limits_bytes": {
+    "prefill": 1073741824,
+    "growth_decode": 268435456
+  },
+  "reported_current_cache_limit_bytes": 268435456,
+  "host_reserve_bytes": 1371664384,
+  "decode_cache_allowance_bytes": 268435456,
+  "decode_cache_overshoot_allowance_bytes": 0,
+  "bounded_engram": {
+    "python_budget": {
+      "engram_layer_count": 2,
+      "engram_per_layer_bytes": 67108864,
+      "engram_payload_bytes": 134217728,
+      "engram_metadata_reserve_bytes": 130150400,
+      "other_python_reserve_bytes": 1073741824,
+      "required_host_bytes": 1338109952
+    },
+    "banks": [
+      {
+        "layer": 1,
+        "budget_bytes": 67108864,
+        "row_bytes": 264,
+        "slot_count": 254200,
+        "arena_bytes": 67108800,
+        "resident_rows": 180226,
+        "stats": {
+          "hits": 74241,
+          "misses": 180226,
+          "evictions": 0,
+          "reads": 180218,
+          "rows_read": 180226,
+          "gathers": 224
+        }
+      },
+      {
+        "layer": 14,
+        "budget_bytes": 67108864,
+        "row_bytes": 264,
+        "slot_count": 254200,
+        "arena_bytes": 67108800,
+        "resident_rows": 180228,
+        "stats": {
+          "hits": 74241,
+          "misses": 180228,
+          "evictions": 0,
+          "reads": 180222,
+          "rows_read": 180228,
+          "gathers": 224
+        }
+      }
+    ],
+    "extra_helper_host_bytes": 33554432,
+    "scope": "Two fixed native byte arenas and original row LRU; metadata priced at256B per maximum row plus1GiB other Python capacity. Boundary observations only."
+  },
+  "strict_allocator": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  }
+}

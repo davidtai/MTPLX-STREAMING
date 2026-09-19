@@ -1,0 +1,45 @@
+{
+  "guard_session": 8711,
+  "guard_terminal": true,
+  "child_exit": 0,
+  "restored_utc": "2026-09-18T01:37:42Z",
+  "qwen_ok": true,
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "background_warmup": {
+    "mode": "background",
+    "state": "done",
+    "steps": [
+      {
+        "kind": "gqa_packed_pipelines",
+        "state": "ok",
+        "elapsed_s": 0.013,
+        "yields": 0
+      },
+      {
+        "kind": "ladder",
+        "context": 512,
+        "state": "ok",
+        "elapsed_s": 0.579,
+        "yields": 0,
+        "tok_s": 93.48
+      },
+      {
+        "kind": "ladder",
+        "context": 2560,
+        "state": "ok",
+        "elapsed_s": 2.344,
+        "yields": 0,
+        "tok_s": 101.19
+      }
+    ],
+    "started_at_s": 1789695458.909473,
+    "finished_at_s": 1789695462.587431,
+    "elapsed_s": 3.678,
+    "resubmits": 0
+  },
+  "active_requests": 0,
+  "lock_lsof_stdout": "",
+  "owned_processes": []
+}

@@ -1,0 +1,294 @@
+{
+  "A": {
+    "text": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n\n\ndef mul(a, b):",
+    "ids": [
+      0,
+      3465,
+      1258,
+      6036,
+      14,
+      291,
+      3395,
+      361,
+      1354,
+      260,
+      940,
+      291,
+      6328,
+      3465,
+      1241,
+      6036,
+      14,
+      291,
+      3395,
+      361,
+      1354,
+      260,
+      565,
+      291,
+      6328,
+      3465,
+      21740,
+      6036,
+      14,
+      291,
+      2605
+    ],
+    "match": 16,
+    "total": 30,
+    "rows": [
+      {
+        "pos": 0,
+        "pred": 5,
+        "pred_txt": "#",
+        "actual": 3465,
+        "match": false
+      },
+      {
+        "pos": 1,
+        "pred": 20038,
+        "pred_txt": "module",
+        "actual": 1258,
+        "match": false
+      },
+      {
+        "pos": 2,
+        "pred": 6036,
+        "pred_txt": "(a",
+        "actual": 6036,
+        "match": true
+      },
+      {
+        "pos": 3,
+        "pred": 16181,
+        "pred_txt": ",b",
+        "actual": 14,
+        "match": false
+      },
+      {
+        "pos": 4,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 5,
+        "pred": 70721,
+        "pred_txt": " splash",
+        "actual": 3395,
+        "match": false
+      },
+      {
+        "pos": 6,
+        "pred": 13394,
+        "pred_txt": " potentially",
+        "actual": 361,
+        "match": false
+      },
+      {
+        "pos": 7,
+        "pred": 1901,
+        "pred_txt": " while",
+        "actual": 1354,
+        "match": false
+      },
+      {
+        "pos": 8,
+        "pred": 260,
+        "pred_txt": " a",
+        "actual": 260,
+        "match": true
+      },
+      {
+        "pos": 9,
+        "pred": 940,
+        "pred_txt": " +",
+        "actual": 940,
+        "match": true
+      },
+      {
+        "pos": 10,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 11,
+        "pred": 13394,
+        "pred_txt": " potentially",
+        "actual": 6328,
+        "match": false
+      },
+      {
+        "pos": 12,
+        "pred": 104113,
+        "pred_txt": "Kasipak",
+        "actual": 3465,
+        "match": false
+      },
+      {
+        "pos": 13,
+        "pred": 1241,
+        "pred_txt": " sub",
+        "actual": 1241,
+        "match": true
+      },
+      {
+        "pos": 14,
+        "pred": 6036,
+        "pred_txt": "(a",
+        "actual": 6036,
+        "match": true
+      },
+      {
+        "pos": 15,
+        "pred": 14,
+        "pred_txt": ",",
+        "actual": 14,
+        "match": true
+      },
+      {
+        "pos": 16,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 17,
+        "pred": 3395,
+        "pred_txt": "):\n",
+        "actual": 3395,
+        "match": true
+      },
+      {
+        "pos": 18,
+        "pred": 361,
+        "pred_txt": "   ",
+        "actual": 361,
+        "match": true
+      },
+      {
+        "pos": 19,
+        "pred": 104113,
+        "pred_txt": "Kasipak",
+        "actual": 1354,
+        "match": false
+      },
+      {
+        "pos": 20,
+        "pred": 13394,
+        "pred_txt": " potentially",
+        "actual": 260,
+        "match": false
+      },
+      {
+        "pos": 21,
+        "pred": 13394,
+        "pred_txt": " potentially",
+        "actual": 565,
+        "match": false
+      },
+      {
+        "pos": 22,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 23,
+        "pred": 6328,
+        "pred_txt": "\n\n\n",
+        "actual": 6328,
+        "match": true
+      },
+      {
+        "pos": 24,
+        "pred": 13394,
+        "pred_txt": " potentially",
+        "actual": 3465,
+        "match": false
+      },
+      {
+        "pos": 25,
+        "pred": 21740,
+        "pred_txt": " mul",
+        "actual": 21740,
+        "match": true
+      },
+      {
+        "pos": 26,
+        "pred": 13394,
+        "pred_txt": " potentially",
+        "actual": 6036,
+        "match": false
+      },
+      {
+        "pos": 27,
+        "pred": 14,
+        "pred_txt": ",",
+        "actual": 14,
+        "match": true
+      },
+      {
+        "pos": 28,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 29,
+        "pred": 3395,
+        "pred_txt": "):\n",
+        "actual": 2605,
+        "match": false
+      }
+    ]
+  },
+  "B": {
+    "ids": [
+      1354,
+      260,
+      940,
+      291,
+      201,
+      104113,
+      13394,
+      36564,
+      13394,
+      36564,
+      13394,
+      36564,
+      13394,
+      13394,
+      36564,
+      13394,
+      36564,
+      13394,
+      36564,
+      13394,
+      36564,
+      13394,
+      36564,
+      13394
+    ],
+    "text": " return a + b\nKasipak potentially problematic potentially problematic potentially problematic potentially potentially problematic potentially problematic potentially problematic potentially problematic potentially problematic potentially",
+    "used_kv_cache": true
+  },
+  "C": {
+    "ids": [
+      1354,
+      260,
+      940,
+      291,
+      201,
+      104113,
+      13394
+    ],
+    "text": " return a + b\nKasipak potentially"
+  }
+}

@@ -1,0 +1,2 @@
+{"pass": "ar_reference", "decode_tok_s": 6.055909761693963, "decode_wall_s": 168.92589887499344, "mlx_peak_bytes": 83793523324, "output_ids_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090"}
+{"pass": "dspark", "decode_tok_s": 8.938810167954449, "decode_wall_s": 114.44476174999727, "mlx_peak_bytes": 87384896236, "output_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac"}

@@ -1,0 +1,93 @@
+{
+  "mlx_imports_blocked": true,
+  "all_helper_hashes_verified": true,
+  "actual_host_calculator_checked": true,
+  "overshoot_unchanged": true,
+  "configured_byte_savings": 1011844096,
+  "cases": [
+    {
+      "baseline_bytes": 10157899776,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 106,
+      "physical_bound_bytes": 109995946328,
+      "active_bound_bytes": 95939791068,
+      "prefill_active_bound_bytes": 89965493340,
+      "prefill_cache_allowance_bytes": 1160216040,
+      "host_reserve_bytes": 1371664384,
+      "decode_cache_overshoot_allowance_bytes": 2258155644,
+      "decode_cache_allowance_bytes": 2526591100
+    },
+    {
+      "baseline_bytes": 10467377152,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 105,
+      "physical_bound_bytes": 109596641512,
+      "active_bound_bytes": 95231008876,
+      "prefill_active_bound_bytes": 89965493340,
+      "prefill_cache_allowance_bytes": 1160216040,
+      "host_reserve_bytes": 1371664384,
+      "decode_cache_overshoot_allowance_bytes": 2258155644,
+      "decode_cache_allowance_bytes": 2526591100
+    },
+    {
+      "baseline_bytes": 11000000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 104,
+      "physical_bound_bytes": 109421475560,
+      "active_bound_bytes": 94523220076,
+      "prefill_active_bound_bytes": 89965493340,
+      "prefill_cache_allowance_bytes": 1160216040,
+      "host_reserve_bytes": 1371664384,
+      "decode_cache_overshoot_allowance_bytes": 2258155644,
+      "decode_cache_allowance_bytes": 2526591100
+    },
+    {
+      "baseline_bytes": 12000000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 103,
+      "physical_bound_bytes": 109713686760,
+      "active_bound_bytes": 93815431276,
+      "prefill_active_bound_bytes": 89965493340,
+      "prefill_cache_allowance_bytes": 1160216040,
+      "host_reserve_bytes": 1371664384,
+      "decode_cache_overshoot_allowance_bytes": 2258155644,
+      "decode_cache_allowance_bytes": 2526591100
+    }
+  ],
+  "engram_capacity": {
+    "python_budget": {
+      "engram_layer_count": 2,
+      "engram_per_layer_bytes": 67108864,
+      "engram_payload_bytes": 134217728,
+      "engram_metadata_reserve_bytes": 130150400,
+      "other_python_reserve_bytes": 1073741824,
+      "required_host_bytes": 1338109952
+    },
+    "banks": [
+      {
+        "layer": 1,
+        "budget_bytes": 67108864,
+        "row_bytes": 264,
+        "slot_count": 254200,
+        "arena_bytes": 67108800,
+        "resident_rows": 180228,
+        "stats": {
+          "evictions": 0
+        }
+      },
+      {
+        "layer": 14,
+        "budget_bytes": 67108864,
+        "row_bytes": 264,
+        "slot_count": 254200,
+        "arena_bytes": 67108800,
+        "resident_rows": 180228,
+        "stats": {
+          "evictions": 0
+        }
+      }
+    ],
+    "extra_helper_host_bytes": 33554432,
+    "scope": "Two fixed native byte arenas and original row LRU; metadata priced at256B per maximum row plus1GiB other Python capacity. Boundary observations only."
+  }
+}

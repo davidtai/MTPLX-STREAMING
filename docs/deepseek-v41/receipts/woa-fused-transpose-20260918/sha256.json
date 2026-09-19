@@ -1,0 +1,22 @@
+{
+  "source_commit": "9835305c1f2a66b7ad4ef98fd877db81156cd3ae",
+  "files": {
+    "MLX-LICENSE.txt": "ccfab7ccb2ea306f71531c8ca77bb55507606cd90768b1e32b8b52ab5b48cf01",
+    "README.md": "755c4fe53af8e4dd9af4942f56071fbaf9e33dea242ab7739d66502d38b968be",
+    "attention_reader.py": "a200dda92dba3bc19dd528221de47ca5f3ea4af5ffb13075e810d0c88e52f9ab",
+    "child.json": "1171d08b100d69122cb9678b708f4b2e141c7af36d56cdcbd84dee1383a76375",
+    "command.json": "77eb83a2c215e9ca3c7911fb647cce3f86e8701a9320686c50723571891aef25",
+    "command.sh": "4395d6403c355df4a21cd03762cddaadd0d8d4e9609e803e92d1ab83366e3bff",
+    "fp8.h": "3ee75c58a1e125ee9eaed3961ef89719d47ce4c8446bb930390d7a4579f08439",
+    "fp_quantized.h": "bdf6d419b623cdfd7493ff58fbf9c70b4a2c2c39511330d6a61646093148225e",
+    "fused_transpose.py": "a21121fe16e572caaa1fd56751b306a299ede011a565929a5d3bd50d6c73c1ed",
+    "guard.log": "9285eba7b88d78343d2f4d076a0b63a91d9626798af997e3902686b3f63e090e",
+    "installation.json": "c1aa87937fde49b0a749f4f28aefcefb9fdafd1be312078f10fea1365a7e6b8e",
+    "post-run-health.json": "e2da75c93db36780da9f83f86a225c8787047b2a9f1f38afadf233a60026f16a",
+    "probe.json": "f70d967f0da6654fdeb1e48c04c261fa7654a774aef9170b29bb20354dc1b4e5",
+    "probe.py": "e1eaf0867c55501219cb1644164c1a20fc2db22861924a084d46545deb673004",
+    "reclamation.json": "83239b98caee07e1cf60eabc7849abd55210c286b08515076851164f8c3fdbe3",
+    "run_screen.py": "ba2cf3e2dcf6741e352013c980a95a482cdd8693c62481163e38e23865ebd291",
+    "summary.json": "719b7b06d6aa58439752eef167a37400442b72c3292c87e37d3131105b4ce338"
+  }
+}

@@ -1,0 +1,553 @@
+[W60/K29 parity]
+{
+  "all_passed": false,
+  "arms": {
+    "decode_full_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0010745525360107422,
+      "mode": "full",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_full_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0003945976495742798,
+      "mode": "full",
+      "n_splits_auto": 32,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_full_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0006502866744995117,
+      "mode": "full",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0009598731994628906,
+      "mode": "reindex",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.00040493905544281006,
+      "mode": "reindex",
+      "n_splits_auto": 32,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0007119476795196533,
+      "mode": "reindex",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.001621842384338379,
+      "mode": "reuse",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0006307065486907959,
+      "mode": "reuse",
+      "n_splits_auto": 32,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.000877678394317627,
+      "mode": "reuse",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0012790560722351074,
+      "mode": "swa_only",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0015458464622497559,
+      "mode": "swa_only",
+      "n_splits_auto": 32,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.001415848731994629,
+      "mode": "swa_only",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "single_g1_full_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 0
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0005819201469421387,
+      "mode": "full",
+      "n_splits_auto": 8,
+      "n_splits_req": 1,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "split_g8_full_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 64,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 1,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0008480548858642578,
+      "mode": "full",
+      "n_splits_auto": 8,
+      "n_splits_req": 8,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_full_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 4,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0006405115127563477,
+      "mode": "full",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_reindex_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 4,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.002085566520690918,
+      "mode": "reindex",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_reuse_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 4,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0007732808589935303,
+      "mode": "reuse",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_swa_only_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 256,
+      "engagement": {
+        "calls": 1,
+        "fallbacks": 0,
+        "rows": 4,
+        "split_calls": 1
+      },
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0016381144523620605,
+      "mode": "swa_only",
+      "n_splits_auto": 8,
+      "n_splits_req": null,
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    }
+  },
+  "default_device": "Device(gpu, 0)",
+  "kernel": "K29 deepseek_v41_attn_kernels.fused_decode_attention",
+  "kernel_builder_error": null,
+  "kernel_builder_ok": true,
+  "metal_available": true,
+  "real_model_decode": {
+    "artifact": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "loader_importable": true,
+    "ran": false,
+    "reason": "artifact present; the 32-step served kernel-on-vs-off comparison + K29 engagement counter is the ab_decode_env_levers.py `decode_attn_kernel` arm"
+  },
+  "receipt_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-27/k29-parity.json",
+  "test": "test_decode_attn_parity_gpu"
+}
+F
+=================================== FAILURES ===================================
+_________________________ test_decode_attn_parity_gpu __________________________
+
+    @pytest.mark.skipif(
+        os.environ.get("MTPLX_GPU_PARITY") != "1",
+        reason="GPU parity: run inside a GPU window with MTPLX_GPU_PARITY=1",
+    )
+    def test_decode_attn_parity_gpu():
+        """K29 kernel == eager f32 softmax-with-sink attention to reassociation level,
+        argmax exact, for each CSA mode at T ∈ {1088, 4096, 16384} (decode M=1 + verify
+        M=4).  Self-diagnosing: every arm's max|Δ| / argmax mismatch / finiteness into
+        ``diag``, written to ``MTPLX_PARITY_RECEIPT`` and printed BEFORE any assertion."""
+        saved_dev = mx.default_device()
+        mx.set_default_device(mx.gpu)
+        scale = 512 ** -0.5
+        diag = {
+            "test": "test_decode_attn_parity_gpu",
+            "kernel": "K29 deepseek_v41_attn_kernels.fused_decode_attention",
+            "metal_available": bool(mx.metal.is_available()),
+            "default_device": str(mx.default_device()),
+            "arms": {},
+        }
+        try:
+            try:
+                probe = mx.random.normal((1, 1, 4, 512)).astype(mx.float32)
+                pk = mx.random.normal((1, 64, 512)).astype(mx.float32)
+                built = K29.fused_decode_attention(probe, pk, pk, attn_sink=mx.zeros((4,)), scale=scale)
+                mx.eval(built)
+                diag["kernel_builder_ok"] = True
+                diag["kernel_builder_error"] = None
+            except Exception as exc:
+                diag["kernel_builder_ok"] = False
+                diag["kernel_builder_error"] = repr(exc)
+    
+            seed = 100
+            # default (auto n_splits) path for each mode × T -- what the model ships.
+            for T in (1088, 4096, 16384):
+                for mode in _MODES:
+                    diag["arms"][f"decode_{mode}_T{T}"] = _measure_parity(
+                        1, 1, 64, T, mode, scale=scale, seed=seed)
+                    seed += 1
+            # a verify M=4 batch at the mid length for each mode
+            for mode in _MODES:
+                diag["arms"][f"verify4_{mode}_T4096"] = _measure_parity(
+                    1, 4, 64, 4096, mode, scale=scale, seed=seed)
+                seed += 1
+            # explicitly exercise BOTH kernel paths at T=4096 (auto picks split-K there),
+            # so the single-dispatch fused kernel also gets GPU parity coverage.
+            diag["arms"]["single_g1_full_T4096"] = _measure_parity(
+                1, 1, 64, 4096, "full", scale=scale, seed=seed, n_splits=1)
+            seed += 1
+            diag["arms"]["split_g8_full_T4096"] = _measure_parity(
+                1, 1, 64, 4096, "full", scale=scale, seed=seed, n_splits=8)
+            seed += 1
+    
+            diag["real_model_decode"] = _real_model_decode_parity()
+            diag["all_passed"] = bool(
+                diag.get("kernel_builder_ok")
+                and all(a.get("passed") for a in diag["arms"].values())
+            )
+        finally:
+            diag["receipt_path"] = _write_parity_receipt(diag)
+            print("[W60/K29 parity]\n" + json.dumps(diag, indent=2, sort_keys=True))
+            mx.set_default_device(saved_dev)
+    
+        assert diag.get("kernel_builder_ok"), f"kernel build failed: {diag.get('kernel_builder_error')}"
+        for name, arm in diag["arms"].items():
+>           assert arm["passed"], f"{name} arm failed: {arm}"
+E           AssertionError: decode_swa_only_T1088 arm failed: {'shape': [1, 1, 64, 1088], 'mode': 'swa_only', 'scale': 0.04419417382415922, 'tol': 1e-06, 'n_splits_req': None, 'n_splits_auto': 8, 'error': None, 'engagement': {'calls': 1, 'rows': 1, 'split_calls': 1, 'fallbacks': 0}, 'finite': True, 'max_abs_d': 0.0012790560722351074, 'argmax_rows': 64, 'argmax_mismatch': 0, 'passed': False}
+E           assert False
+
+tests/models/test_deepseek_v41_decode_attn_kernel.py:732: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/models/test_deepseek_v41_decode_attn_kernel.py::test_decode_attn_parity_gpu
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

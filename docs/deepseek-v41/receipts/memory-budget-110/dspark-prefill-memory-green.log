@@ -1,0 +1,332 @@
+2026-09-13T11:46:26Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-13T11:46:26Z [gpu_window] abort: to abort this window cleanly, kill -TERM 50786 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-13T11:46:26Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-13T11:46:26Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-13T11:46:26Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-13T11:46:26Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-13T11:46:26Z [gpu_window] phase 2: com.tea.qwen loaded (pid=50531); plist=/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T11:46:26Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-13T11:46:26Z [gpu_window] phase 3: available memory before bootout: 36.1 GiB
+2026-09-13T11:46:26Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-13T11:46:27Z [gpu_window] phase 3: com.tea.qwen captured process tree is gone
+2026-09-13T11:46:27Z [gpu_window] phase 3: stop confirmed -- pid gone, 79.7 GiB freed, 115.8 GiB available (>= 100 GiB)
+2026-09-13T11:46:27Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-13T11:46:27Z [gpu_window] phase 3: reclaiming stopped-service clean file cache from /Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+{"operation": "stopped_service_file_cache_reclamation", "model_dir": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed", "files": [{"file": "model-00001-of-00019.safetensors", "file_bytes": 4613737928, "cached_page_bytes_before": 4576542720, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00002-of-00019.safetensors", "file_bytes": 4299165294, "cached_page_bytes_before": 1281507328, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00003-of-00019.safetensors", "file_bytes": 4613737948, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00004-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00005-of-00019.safetensors", "file_bytes": 4613737941, "cached_page_bytes_before": 1560100864, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00006-of-00019.safetensors", "file_bytes": 4299165282, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00007-of-00019.safetensors", "file_bytes": 4613737956, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00008-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00009-of-00019.safetensors", "file_bytes": 4613737939, "cached_page_bytes_before": 1560035328, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00010-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00011-of-00019.safetensors", "file_bytes": 4613737944, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00012-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00013-of-00019.safetensors", "file_bytes": 4613737945, "cached_page_bytes_before": 1560264704, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00014-of-00019.safetensors", "file_bytes": 4299165290, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00015-of-00019.safetensors", "file_bytes": 4613737952, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00016-of-00019.safetensors", "file_bytes": 4299165265, "cached_page_bytes_before": 3640492032, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00017-of-00019.safetensors", "file_bytes": 4830006690, "cached_page_bytes_before": 4159193088, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00018-of-00019.safetensors", "file_bytes": 4307505704, "cached_page_bytes_before": 1509277696, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00019-of-00019.safetensors", "file_bytes": 20813169, "cached_page_bytes_before": 18317312, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-vision.safetensors", "file_bytes": 897899145, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "mtp.safetensors", "file_bytes": 1678147375, "cached_page_bytes_before": 1678147584, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "ngram-table.safetensors", "file_bytes": 32000154008, "cached_page_bytes_before": 14319812608, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}], "before": {"sample_start_monotonic_ns": 213092444912000, "sample_end_monotonic_ns": 213092448111666, "process": {"peak_maxrss_bytes": 23330816, "resident_bytes": 23330816, "phys_footprint_bytes": 14139848, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 87457398784, "wired_bytes": 3269017600, "active_bytes": 4348755968, "inactive_bytes": 36772495360, "speculative_bytes": 72433664, "anonymous_bytes": 2857451520, "file_backed_bytes": 38336233472, "compressor_bytes": 1818787840, "compressed_bytes": 6516457472, "used_bytes": 46209056768, "non_file_used_bytes": 7945256960, "swapins_pages": 778695, "swapouts_pages": 4399765, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "after": {"sample_start_monotonic_ns": 213095577869375, "sample_end_monotonic_ns": 213095580742625, "process": {"peak_maxrss_bytes": 23461888, "resident_bytes": 23461888, "phys_footprint_bytes": 14270920, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 123326218240, "wired_bytes": 3267624960, "active_bytes": 2665594880, "inactive_bytes": 2592980992, "speculative_bytes": 62881792, "anonymous_bytes": 2847916032, "file_backed_bytes": 2473541632, "compressor_bytes": 1818787840, "compressed_bytes": 6516457472, "used_bytes": 10344988672, "non_file_used_bytes": 7934328832, "swapins_pages": 778695, "swapouts_pages": 4399765, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "elapsed_s": 3.1326843749848194, "physical_used_reduction_bytes": 35864068096, "cached_page_bytes_before": 35863691264, "cached_page_bytes_after": 0, "semantics": "cached pages include speculative free pages; physical-used reduction is measured separately"}
+2026-09-13T11:46:31Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 9.6 GiB (ceiling 102.445483 GiB); compressor at start 1.5 GiB
+2026-09-13T11:46:31Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-13T11:46:31Z [gpu_window] phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=10.3318 (decimal GB) == 9.6 GiB baseline to the step env
+2026-09-13T11:46:31Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 3.7 GiB (~4 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-13T11:46:31Z [gpu_window] phase 4: starting GPU step (tag gpuwin-50786-1789299991-2570029209) under child-tree footprint cap 3.7 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python -m pytest -o addopts= -q -s tests/models/test_deepseek_v41_dspark_prefill_memory.py tests/models/test_deepseek_v41_dspark_decode.py::test_dspark_direct_exercises_accept_and_reject
+2026-09-13T11:46:31Z [gpu_window] phase 4: mem sample -- baseline 9.6 GiB + step footprint 0.0 GiB, live physical used 9.6 GiB => guard accounted 9.6 GiB; compressor +0.0 GiB (trip 8 GiB)
+direct: {'prefill_active_bytes': 33570816, 'decode_active_bytes': 33947660}
+Fserved: {'prefill_active_bytes': 33562624, 'decode_active_bytes': 33947648}
+Fcustom_forward: {'prefill_active_bytes': 50339840, 'decode_active_bytes': 33947660}
+F.
+=================================== FAILURES ===================================
+___________ test_prefill_releases_full_buffers_before_decode[direct] ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109740d10>
+lane = 'direct'
+
+    @pytest.mark.parametrize("lane", ["direct", "served", "custom_forward"])
+    def test_prefill_releases_full_buffers_before_decode(monkeypatch, lane):
+        previous = mx.default_device()
+        mx.set_default_device(mx.gpu)
+        gc.collect()
+        mx.clear_cache()
+        baseline = mx.get_active_memory()
+        rows, width, vocab = 2048, 4096, 2048
+        calls, memory = [], {}
+    
+        class Model:
+            def __init__(self):
+                self.mtp = SimpleNamespace(block_size=5, seed_main=self.seed_main)
+    
+            def make_cache(self):
+                return []
+    
+            def make_mtp_cache(self):
+                return [DSparkStageCache(8, 16) for _ in range(3)]
+    
+            def __call__(self, ids, *, cache, return_hidden, logits_keep=None):
+                n = ids.shape[1]
+                calls.append((n, logits_keep))
+                logits = mx.arange((logits_keep or n) * vocab, dtype=mx.float32)
+                hidden = mx.arange(n * width, dtype=mx.float32)
+                return logits.reshape(1, -1, vocab), hidden.reshape(1, n, width)
+    
+            def seed_main(self, hidden, caches):
+                for cache in caches:
+                    cache.append_main(hidden[:, :, :16] * 1.0)
+    
+        model = Model()
+    
+        def cycles(**kwargs):
+            mx.eval(kwargs["main_h"], [c.window for c in kwargs["mtp_caches"]])
+            memory["decode_active_bytes"] = mx.get_active_memory() - baseline
+            print(f"{lane}: {memory}")
+            # A slice can retain its full parent allocation even after Python locals
+            # are deleted. Check allocator bytes, not just tensor shape/refcounts.
+            assert memory["decode_active_bytes"] < 1024**2
+            main_h = kwargs["main_h"]
+            assert main_h.shape == (1, 1, width)
+            assert main_h[0, 0, 0].item() == (rows - 1) * width
+            assert main_h[0, 0, -1].item() == rows * width - 1
+            for cache in kwargs["mtp_caches"]:
+                assert cache.offset == rows
+                assert cache.window.shape == (1, 8, 16)
+                assert cache.window[0, 0, 0].item() == (rows - 8) * width
+            # Verify must still evaluate every candidate row.
+            logits, _ = kwargs["forward"](mx.array([[1, 2, 3]]), kwargs["cache"])
+            assert logits.shape == (1, 3, vocab)
+            return [7], "length"
+    
+        def prefill(_):
+            memory["prefill_active_bytes"] = mx.get_active_memory() - baseline
+    
+        monkeypatch.setattr(decode, "_decode_cycles", cycles)
+        kwargs = dict(max_tokens=2, sampler=SamplerConfig(temperature=0.0),
+                      prefill_callback=prefill)
+        try:
+            if lane == "served":
+                rt = SimpleNamespace(model=model, mtp_enabled=True,
+                                     forward_ar=model, tokenizer=SimpleNamespace(decode=str))
+                result = decode.generate_dspark(rt, [1] * rows, stop_token_ids=set(), **kwargs)
+                tokens = result.tokens
+            else:
+                if lane == "custom_forward":
+                    kwargs["forward"] = lambda ids, cache: model(
+                        ids, cache=cache, return_hidden=True)
+>               tokens = decode.dspark_generate(model, [1] * rows, **kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/models/test_deepseek_v41_dspark_prefill_memory.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+mtplx/models/deepseek_v41_dspark_decode.py:1399: in dspark_generate
+    rest, _finish = _decode_cycles(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+kwargs = {'abort_check': None, 'cache': [], 'confidence_threshold': None, 'divergence_capture': None, ...}
+@py_assert0 = 33947660, @py_assert3 = 1024, @py_assert5 = 2
+@py_assert7 = 1048576, @py_assert2 = False
+@py_format8 = '33947660 < (1024 ** 2)'
+
+    def cycles(**kwargs):
+        mx.eval(kwargs["main_h"], [c.window for c in kwargs["mtp_caches"]])
+        memory["decode_active_bytes"] = mx.get_active_memory() - baseline
+        print(f"{lane}: {memory}")
+        # A slice can retain its full parent allocation even after Python locals
+        # are deleted. Check allocator bytes, not just tensor shape/refcounts.
+>       assert memory["decode_active_bytes"] < 1024**2
+E       assert 33947660 < (1024 ** 2)
+
+tests/models/test_deepseek_v41_dspark_prefill_memory.py:52: AssertionError
+___________ test_prefill_releases_full_buffers_before_decode[served] ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x112b982c0>
+lane = 'served'
+
+    @pytest.mark.parametrize("lane", ["direct", "served", "custom_forward"])
+    def test_prefill_releases_full_buffers_before_decode(monkeypatch, lane):
+        previous = mx.default_device()
+        mx.set_default_device(mx.gpu)
+        gc.collect()
+        mx.clear_cache()
+        baseline = mx.get_active_memory()
+        rows, width, vocab = 2048, 4096, 2048
+        calls, memory = [], {}
+    
+        class Model:
+            def __init__(self):
+                self.mtp = SimpleNamespace(block_size=5, seed_main=self.seed_main)
+    
+            def make_cache(self):
+                return []
+    
+            def make_mtp_cache(self):
+                return [DSparkStageCache(8, 16) for _ in range(3)]
+    
+            def __call__(self, ids, *, cache, return_hidden, logits_keep=None):
+                n = ids.shape[1]
+                calls.append((n, logits_keep))
+                logits = mx.arange((logits_keep or n) * vocab, dtype=mx.float32)
+                hidden = mx.arange(n * width, dtype=mx.float32)
+                return logits.reshape(1, -1, vocab), hidden.reshape(1, n, width)
+    
+            def seed_main(self, hidden, caches):
+                for cache in caches:
+                    cache.append_main(hidden[:, :, :16] * 1.0)
+    
+        model = Model()
+    
+        def cycles(**kwargs):
+            mx.eval(kwargs["main_h"], [c.window for c in kwargs["mtp_caches"]])
+            memory["decode_active_bytes"] = mx.get_active_memory() - baseline
+            print(f"{lane}: {memory}")
+            # A slice can retain its full parent allocation even after Python locals
+            # are deleted. Check allocator bytes, not just tensor shape/refcounts.
+            assert memory["decode_active_bytes"] < 1024**2
+            main_h = kwargs["main_h"]
+            assert main_h.shape == (1, 1, width)
+            assert main_h[0, 0, 0].item() == (rows - 1) * width
+            assert main_h[0, 0, -1].item() == rows * width - 1
+            for cache in kwargs["mtp_caches"]:
+                assert cache.offset == rows
+                assert cache.window.shape == (1, 8, 16)
+                assert cache.window[0, 0, 0].item() == (rows - 8) * width
+            # Verify must still evaluate every candidate row.
+            logits, _ = kwargs["forward"](mx.array([[1, 2, 3]]), kwargs["cache"])
+            assert logits.shape == (1, 3, vocab)
+            return [7], "length"
+    
+        def prefill(_):
+            memory["prefill_active_bytes"] = mx.get_active_memory() - baseline
+    
+        monkeypatch.setattr(decode, "_decode_cycles", cycles)
+        kwargs = dict(max_tokens=2, sampler=SamplerConfig(temperature=0.0),
+                      prefill_callback=prefill)
+        try:
+            if lane == "served":
+                rt = SimpleNamespace(model=model, mtp_enabled=True,
+                                     forward_ar=model, tokenizer=SimpleNamespace(decode=str))
+>               result = decode.generate_dspark(rt, [1] * rows, stop_token_ids=set(), **kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/models/test_deepseek_v41_dspark_prefill_memory.py:76: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+mtplx/models/deepseek_v41_dspark_decode.py:1516: in generate_dspark
+    rest, finish_reason = _decode_cycles(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+kwargs = {'abort_check': None, 'cache': [], 'confidence_threshold': None, 'forward': <function generate_dspark.<locals>._fwd at 0x1097723e0>, ...}
+@py_assert0 = 33947648, @py_assert3 = 1024, @py_assert5 = 2
+@py_assert7 = 1048576, @py_assert2 = False
+@py_format8 = '33947648 < (1024 ** 2)'
+
+    def cycles(**kwargs):
+        mx.eval(kwargs["main_h"], [c.window for c in kwargs["mtp_caches"]])
+        memory["decode_active_bytes"] = mx.get_active_memory() - baseline
+        print(f"{lane}: {memory}")
+        # A slice can retain its full parent allocation even after Python locals
+        # are deleted. Check allocator bytes, not just tensor shape/refcounts.
+>       assert memory["decode_active_bytes"] < 1024**2
+E       assert 33947648 < (1024 ** 2)
+
+tests/models/test_deepseek_v41_dspark_prefill_memory.py:52: AssertionError
+_______ test_prefill_releases_full_buffers_before_decode[custom_forward] _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x117457290>
+lane = 'custom_forward'
+
+    @pytest.mark.parametrize("lane", ["direct", "served", "custom_forward"])
+    def test_prefill_releases_full_buffers_before_decode(monkeypatch, lane):
+        previous = mx.default_device()
+        mx.set_default_device(mx.gpu)
+        gc.collect()
+        mx.clear_cache()
+        baseline = mx.get_active_memory()
+        rows, width, vocab = 2048, 4096, 2048
+        calls, memory = [], {}
+    
+        class Model:
+            def __init__(self):
+                self.mtp = SimpleNamespace(block_size=5, seed_main=self.seed_main)
+    
+            def make_cache(self):
+                return []
+    
+            def make_mtp_cache(self):
+                return [DSparkStageCache(8, 16) for _ in range(3)]
+    
+            def __call__(self, ids, *, cache, return_hidden, logits_keep=None):
+                n = ids.shape[1]
+                calls.append((n, logits_keep))
+                logits = mx.arange((logits_keep or n) * vocab, dtype=mx.float32)
+                hidden = mx.arange(n * width, dtype=mx.float32)
+                return logits.reshape(1, -1, vocab), hidden.reshape(1, n, width)
+    
+            def seed_main(self, hidden, caches):
+                for cache in caches:
+                    cache.append_main(hidden[:, :, :16] * 1.0)
+    
+        model = Model()
+    
+        def cycles(**kwargs):
+            mx.eval(kwargs["main_h"], [c.window for c in kwargs["mtp_caches"]])
+            memory["decode_active_bytes"] = mx.get_active_memory() - baseline
+            print(f"{lane}: {memory}")
+            # A slice can retain its full parent allocation even after Python locals
+            # are deleted. Check allocator bytes, not just tensor shape/refcounts.
+            assert memory["decode_active_bytes"] < 1024**2
+            main_h = kwargs["main_h"]
+            assert main_h.shape == (1, 1, width)
+            assert main_h[0, 0, 0].item() == (rows - 1) * width
+            assert main_h[0, 0, -1].item() == rows * width - 1
+            for cache in kwargs["mtp_caches"]:
+                assert cache.offset == rows
+                assert cache.window.shape == (1, 8, 16)
+                assert cache.window[0, 0, 0].item() == (rows - 8) * width
+            # Verify must still evaluate every candidate row.
+            logits, _ = kwargs["forward"](mx.array([[1, 2, 3]]), kwargs["cache"])
+            assert logits.shape == (1, 3, vocab)
+            return [7], "length"
+    
+        def prefill(_):
+            memory["prefill_active_bytes"] = mx.get_active_memory() - baseline
+    
+        monkeypatch.setattr(decode, "_decode_cycles", cycles)
+        kwargs = dict(max_tokens=2, sampler=SamplerConfig(temperature=0.0),
+                      prefill_callback=prefill)
+        try:
+            if lane == "served":
+                rt = SimpleNamespace(model=model, mtp_enabled=True,
+                                     forward_ar=model, tokenizer=SimpleNamespace(decode=str))
+                result = decode.generate_dspark(rt, [1] * rows, stop_token_ids=set(), **kwargs)
+                tokens = result.tokens
+            else:
+                if lane == "custom_forward":
+                    kwargs["forward"] = lambda ids, cache: model(
+                        ids, cache=cache, return_hidden=True)
+>               tokens = decode.dspark_generate(model, [1] * rows, **kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/models/test_deepseek_v41_dspark_prefill_memory.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+mtplx/models/deepseek_v41_dspark_decode.py:1399: in dspark_generate
+    rest, _finish = _decode_cycles(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+kwargs = {'abort_check': None, 'cache': [], 'confidence_threshold': None, 'divergence_capture': None, ...}
+@py_assert0 = 33947660, @py_assert3 = 1024, @py_assert5 = 2
+@py_assert7 = 1048576, @py_assert2 = False
+@py_format8 = '33947660 < (1024 ** 2)'
+
+    def cycles(**kwargs):
+        mx.eval(kwargs["main_h"], [c.window for c in kwargs["mtp_caches"]])
+        memory["decode_active_bytes"] = mx.get_active_memory() - baseline
+        print(f"{lane}: {memory}")
+        # A slice can retain its full parent allocation even after Python locals
+        # are deleted. Check allocator bytes, not just tensor shape/refcounts.
+>       assert memory["decode_active_bytes"] < 1024**2
+E       assert 33947660 < (1024 ** 2)
+
+tests/models/test_deepseek_v41_dspark_prefill_memory.py:52: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/models/test_deepseek_v41_dspark_prefill_memory.py::test_prefill_releases_full_buffers_before_decode[direct]
+FAILED tests/models/test_deepseek_v41_dspark_prefill_memory.py::test_prefill_releases_full_buffers_before_decode[served]
+FAILED tests/models/test_deepseek_v41_dspark_prefill_memory.py::test_prefill_releases_full_buffers_before_decode[custom_forward]
+3 failed, 1 passed, 2 warnings in 1.49s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-09-13T11:46:33Z [gpu_window] phase 4: GPU step exited with code 1; peak step footprint 0.3 GiB, peak guard accounted 10.0 GiB, peak physical used 10.0 GiB, peak compressor delta 0.0 GiB
+2026-09-13T11:46:33Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T11:46:50Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-13T11:46:50Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

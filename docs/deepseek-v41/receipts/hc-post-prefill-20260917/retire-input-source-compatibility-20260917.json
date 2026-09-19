@@ -1,0 +1,23 @@
+{
+  "reference_source_commit": "e589c1e4b17856f506d90d9fb2bbb5ce45711648",
+  "source_commit": "c031119a1bd7b42f03a258c56f318d26606d4642",
+  "model_ast_matches_promoted_hidden_capture": true,
+  "runtime_source_sha256": {
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "cbdcdb88b21702a4e2e6fad6c166de4fe77c4819748aff46b4484ef6127f03aa",
+    "scripts/deepseek_v41/bench_standard_shape.py": "fd6cd3a8be8b6a44965f5da9852e8771c0e2334135365bd26679bcc9124e91da",
+    "mtplx/models/deepseek_v41.py": "ec0dcd689afc6a57a8599f48b62a522f5c572398df4c3022eafdc2783d050c70"
+  },
+  "all_changed_python_paths": [
+    "docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/live-combined-depth3-ar-reuse-1023.wrapper.py",
+    "docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/live-combined-depth3-hidden-cap94-1023.wrapper.py",
+    "docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/live-combined-depth3-hidden-capture-1023.wrapper.py",
+    "docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/live-combined-depth3-reserve2-1023.wrapper.py",
+    "docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/live-combined-depth5-hidden-cap94-1023.wrapper.py",
+    "docs/deepseek-v41/receipts/hidden-capture-110gb-20260917/screen_dsv41_full_m6_capacities.py",
+    "mtplx/models/deepseek_v41.py",
+    "scripts/deepseek_v41/ab_decode_env_levers.py",
+    "scripts/deepseek_v41/bench_standard_shape.py",
+    "tests/test_deepseek_v41_memory_reporting.py"
+  ],
+  "reference_compatibility": "Model AST differs only by evaluated hidden captures; reporting scripts differ only in depth metadata/help. Candidate additionally drops consumed input references after their existing fence."
+}

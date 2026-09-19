@@ -1360,7 +1360,7 @@ def test_start_opencode_dry_run_json_writes_no_hidden_cap(
     assert "--decode-batch-max" not in command
     assert "--batch-wait-ms" not in command
     assert "--prefill-chunk-tokens 2048" in command
-    assert "--ssd-session-cache on" in command
+    assert "--ssd-session-cache on" not in command
     assert "--ssd-session-cache-max-size 32GB" in command
     assert "--ssd-session-cache-min-prefix-tokens 1024" in command
     assert "--api-key $MTPLX_API_KEY" in command
@@ -1963,7 +1963,7 @@ def test_start_hermes_dry_run_json_matches_native_agent_lane(
     assert "--decode-batch-max" not in command
     assert "--batch-wait-ms" not in command
     assert "--prefill-chunk-tokens 2048" in command
-    assert "--ssd-session-cache on" in command
+    assert "--ssd-session-cache on" not in command
     assert "--ssd-session-cache-max-size 100GB" in command
     assert "--ssd-session-cache-min-prefix-tokens 512" in command
     assert "--temperature 0.6" in command

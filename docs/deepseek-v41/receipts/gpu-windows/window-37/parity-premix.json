@@ -1,0 +1,21 @@
+{
+  "comb_argmax_mismatch": 0,
+  "eps": 1e-06,
+  "hc": 4,
+  "input_shape": [
+    2,
+    7,
+    24
+  ],
+  "iters": 20,
+  "kernel_builder_ok": true,
+  "max_abs_delta": {
+    "comb": 1.1920928955078125e-07,
+    "post": 1.1920928955078125e-07,
+    "pre": 5.960464477539063e-08
+  },
+  "metal_available": true,
+  "passed": true,
+  "sinkhorn_reference_route": "recurrence",
+  "test": "test_hc_premix_kernel_parity_gpu"
+}

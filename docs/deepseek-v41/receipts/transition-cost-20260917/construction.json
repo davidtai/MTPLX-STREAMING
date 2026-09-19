@@ -1,0 +1,13 @@
+{
+  "source_commit": "cc438324696301ce3b502227bcce9777781786df",
+  "incremental_bound_bytes": 8589934592,
+  "bound_components": "4GiB allocator/cache/graph plus4GiB Python/compiler. Native84 records=1579253760B; packed scales below100MiB; one102-row replacement component plus18-row zero tail below708MiB, with other components retained. No full model.",
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "helper_sha256": {
+    "bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "probe.py": "63796dc46e3a16e64751d25cbf9eb1dfa44c76ce6038b101adeb411d0a3d1539"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "source_commit": "8f30fc002f3af27e0fec5afd56c522d3abf1da90",
+  "scope": "Successful guarded diagnostic run; cProfile timing attribution rejected, no throughput promotion",
+  "generated_tokens": 1024,
+  "token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "cycles": 206,
+  "instrumented_decode_tok_s": 10.787312807352246,
+  "decode_wall_s": 94.83362708298955,
+  "memory": {
+    "mlx_peak_bytes": 94018428478,
+    "process_footprint_peak_bytes": 95730302360,
+    "system_used_peak_bytes": 106117201920
+  },
+  "physical_bound_bytes": 109431449068,
+  "prefill_slots": 91,
+  "decode_slots": 100,
+  "phase_time_s": {
+    "draft": 2.319727335110656,
+    "verify": 89.99102000298444,
+    "accept": 0.06205299700377509,
+    "commit": 0.20897842496924568
+  },
+  "restore_complete_utc": "2026-09-17T17:01:33Z",
+  "child_exit_code": 0,
+  "profile_validation": {
+    "inconsistent_self_cumulative_rows": 3,
+    "cpu_thread_probe_reproduces_inconsistency": true,
+    "discard_thread_scope_label_in_raw_profile": true
+  }
+}

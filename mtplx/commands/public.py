@@ -259,7 +259,11 @@ TUNE_RECORD_CLEARING_VERDICTS = frozenset(
 TUNE_TELEMETRY_ENV = "MTPLX_BENCH_TUNE_TELEMETRY"
 GENERATION_MODE_MTP = "mtp"
 GENERATION_MODE_AR = "ar"
-GENERATION_MODES = {GENERATION_MODE_MTP, GENERATION_MODE_AR}
+#: DeepSeek-V4.1 DSpark-DIRECT lane (W57): a speculative (non-AR) mode that keeps
+#: MTP loaded but runs the lean DSpark loop instead of the generic native-MTP
+#: machinery. Treated like ``mtp`` everywhere that keys on "not AR".
+GENERATION_MODE_DSPARK = "dspark"
+GENERATION_MODES = {GENERATION_MODE_MTP, GENERATION_MODE_AR, GENERATION_MODE_DSPARK}
 OPENCODE_CHAT_TEMPLATE_PROFILE_DEFAULT = "local_qwen36"
 OPENCODE_FAIR_BATCHING_DEFAULTS: dict[str, Any] = {
     # 2026-07-16 agent-lane TPS alignment: `mtplx start opencode` now matches
@@ -739,7 +743,7 @@ def _normalize_generation_mode(value: Any) -> str:
         # Older app builds persisted "auto"; it means the engine default.
         return GENERATION_MODE_MTP
     if text not in GENERATION_MODES:
-        raise ValueError("generation mode must be 'mtp' or 'ar'")
+        raise ValueError("generation mode must be 'mtp', 'ar', or 'dspark'")
     return text
 
 
@@ -821,21 +825,58 @@ def _apply_runtime_compatibility_mode(
     return None
 
 
-def _streamed_generation_mode_error(args: Any) -> str | None:
+def _streamed_mtp_flag_requested(args: Any) -> bool:
+    """Whether the operator asked for MTP on the streamed serve command line."""
+
     cli_flags = set(getattr(args, "_cli_flags", set()) or set())
     explicit_generation_mode = str(
         getattr(args, "generation_mode", "") or ""
     ).strip().lower()
-    if (
-        ("generation-mode" in cli_flags and explicit_generation_mode == "mtp")
+    return (
+        (
+            "generation-mode" in cli_flags
+            and explicit_generation_mode in {"mtp", "dspark"}
+        )
         or "mtp" in cli_flags
         or (
             "load-mtp" in cli_flags
             and getattr(args, "load_mtp", True) is True
         )
-    ):
-        return "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1"
-    return None
+    )
+
+
+def _streamed_native_mtp_requested(args: Any, model_path: Any) -> bool:
+    """MTP requested AND the streamed artifact is a DSpark native-MTP head.
+
+    The one predicate that decides, on the serve path, whether
+    ``--generation-mode mtp`` is honoured (DeepSeek-V4.1 DSpark, worker W23) or
+    rejected/forced to AR (every external-MTP hy3/glm streamed profile).
+    """
+
+    if not _streamed_mtp_flag_requested(args):
+        return False
+    if model_path is None:
+        return False
+    try:
+        from mtplx.expert_cli import (
+            _authoritative_manifest_path,
+            _is_native_streamed_mtp,
+        )
+
+        root = Path(model_path).resolve()
+        return bool(
+            _is_native_streamed_mtp(root, _authoritative_manifest_path(root))
+        )
+    except Exception:
+        return False
+
+
+def _streamed_generation_mode_error(args: Any, model_path: Any = None) -> str | None:
+    if not _streamed_mtp_flag_requested(args):
+        return None
+    if _streamed_native_mtp_requested(args, model_path):
+        return None
+    return "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1"
 
 
 def _runtime_kv_admission(runtime: Any, tokens: int):
@@ -9665,7 +9706,7 @@ def cmd_serve_public(args: Any) -> int:
         _print_serve_start_line(f"error: {exc}")
         return 2
     if streaming_requested:
-        generation_error = _streamed_generation_mode_error(args)
+        generation_error = _streamed_generation_mode_error(args, runtime_model)
         if generation_error is not None:
             _print_serve_start_line(f"error: {generation_error}")
             return 2
@@ -9676,9 +9717,17 @@ def cmd_serve_public(args: Any) -> int:
         except (OSError, RuntimeError, ValueError) as exc:
             _print_serve_start_line(f"error: {exc}")
             return 2
-        args.no_mtp = True
-        args.load_mtp = False
-        args.generation_mode = GENERATION_MODE_AR
+        if _streamed_native_mtp_requested(args, runtime_model):
+            # DeepSeek-V4.1 DSpark native MTP head (worker W23): keep MTP so the
+            # forwarded child serves it; the daemon prices the mtp.* residents.
+            args.no_mtp = False
+            args.load_mtp = True
+            args.generation_mode = GENERATION_MODE_MTP
+        else:
+            # Every external-MTP (hy3/glm) streamed profile is AR-only.
+            args.no_mtp = True
+            args.load_mtp = False
+            args.generation_mode = GENERATION_MODE_AR
         generation_mode = _generation_mode_from_args(args)
     inspection, gate_exit = _model_gate(
         runtime_model,
@@ -9858,8 +9907,9 @@ def cmd_serve_public(args: Any) -> int:
         )
     if bool(getattr(args, "experimental_mtp_cohorts", False)):
         cmd.append("--experimental-mtp-cohorts")
-    ssd_session_cache = str(getattr(args, "ssd_session_cache", "on") or "on")
-    cmd.extend(["--ssd-session-cache", ssd_session_cache])
+    ssd_session_cache = _resolved_ssd_session_cache_mode(args)
+    if _forward_ssd_session_cache_mode(args, ssd_session_cache):
+        cmd.extend(["--ssd-session-cache", ssd_session_cache])
     ssd_dir = getattr(args, "ssd_session_cache_dir", None)
     if ssd_dir:
         cmd.extend(["--ssd-session-cache-dir", str(ssd_dir)])
@@ -10476,7 +10526,7 @@ def _generate_one_shot_public(
     except ValueError as exc:
         return 2, {"error": str(exc)}, []
     if streaming_requested:
-        generation_error = _streamed_generation_mode_error(args)
+        generation_error = _streamed_generation_mode_error(args, runtime_model)
         if generation_error is not None:
             return 2, {"error": generation_error}, []
         from mtplx.expert_cli import expert_streaming_load_kwargs
@@ -11807,6 +11857,19 @@ def _public_model_id_for_args(args: Any, model_ref: str | None) -> str:
     )
 
 
+def _resolved_ssd_session_cache_mode(args: Any) -> str:
+    mode = str(getattr(args, "ssd_session_cache", "on") or "on")
+    if mode == "on" and "ssd-session-cache" not in (getattr(args, "_cli_flags", set()) or set()):
+        return os.environ.get("MTPLX_SSD_SESSION_CACHE") or mode
+    return mode
+
+
+def _forward_ssd_session_cache_mode(args: Any, mode: str) -> bool:
+    """Keep explicit modes; let the daemon resolve model-specific defaults."""
+    return (mode != "on" or "ssd-session-cache" in (getattr(args, "_cli_flags", set()) or set())
+            or bool(os.environ.get("MTPLX_SSD_SESSION_CACHE")))
+
+
 def _batching_command_suffix(args: Any) -> str:
     parts: list[str] = []
     scheduler_mode = str(getattr(args, "scheduler_mode", "serial") or "serial")
@@ -11826,12 +11889,10 @@ def _batching_command_suffix(args: Any) -> str:
             parts.extend([flag, shlex.quote(str(value))])
     if bool(getattr(args, "experimental_mtp_cohorts", False)):
         parts.append("--experimental-mtp-cohorts")
-    ssd_session_cache = str(getattr(args, "ssd_session_cache", "on") or "on")
-    # Emit the mode unconditionally, "off" included: these generated
-    # commands are re-parsed by CLIs whose own default is "on"
-    # (kvcache-v2), so omitting an explicit "off" silently re-enables
-    # the cache (issue #140 class).
-    parts.extend(["--ssd-session-cache", shlex.quote(ssd_session_cache)])
+    ssd_session_cache = _resolved_ssd_session_cache_mode(args)
+    # Preserve explicit off, while leaving an implicit on for model resolution.
+    if _forward_ssd_session_cache_mode(args, ssd_session_cache):
+        parts.extend(["--ssd-session-cache", shlex.quote(ssd_session_cache)])
     if ssd_session_cache != "off":
         ssd_dir = getattr(args, "ssd_session_cache_dir", None)
         if ssd_dir:

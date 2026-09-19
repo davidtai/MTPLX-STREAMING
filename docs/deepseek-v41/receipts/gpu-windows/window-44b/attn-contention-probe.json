@@ -1,0 +1,676 @@
+{
+  "conditions_result": {
+    "a_baseline": {
+      "fenced_minus_pipelined_ms_per_layer": 0.2824,
+      "memory_after": {
+        "label": "a_baseline:after",
+        "mlx_active_gib": 7.588,
+        "mlx_cache_gib": 10.662,
+        "mlx_peak_gib": 10.845,
+        "t": 1789242158.952,
+        "vm_used_gib": 29.26
+      },
+      "memory_before": {
+        "label": "a_baseline:before",
+        "mlx_active_gib": 6.883,
+        "mlx_cache_gib": 2.56,
+        "mlx_peak_gib": 7.938,
+        "t": 1789242153.449,
+        "vm_used_gib": 20.434
+      },
+      "ms_per_layer_fenced": 1.558,
+      "ms_per_layer_pipelined": 1.2756,
+      "ms_per_token_fenced": 62.318,
+      "ms_per_token_pipelined": 51.023,
+      "n_layers": 40,
+      "proj_bytes_per_layer": 130572288,
+      "repeats": 5,
+      "samples_ms_per_layer_fenced": [
+        1.559,
+        1.5576,
+        1.5545,
+        1.558,
+        1.5872
+      ],
+      "samples_ms_per_layer_pipelined": [
+        1.2757,
+        1.2756,
+        1.265,
+        1.2791,
+        1.2639
+      ],
+      "steps": 8,
+      "warmup": 8
+    },
+    "b_ssd": {
+      "fenced_minus_pipelined_ms_per_layer": 0.312,
+      "memory_after": {
+        "label": "b_ssd:after",
+        "mlx_active_gib": 7.589,
+        "mlx_cache_gib": 15.202,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242164.631,
+        "vm_used_gib": 34.18
+      },
+      "memory_before": {
+        "label": "b_ssd:before",
+        "mlx_active_gib": 7.588,
+        "mlx_cache_gib": 10.662,
+        "mlx_peak_gib": 10.845,
+        "t": 1789242158.955,
+        "vm_used_gib": 29.26
+      },
+      "ms_per_layer_fenced": 1.6287,
+      "ms_per_layer_pipelined": 1.3167,
+      "ms_per_token_fenced": 65.148,
+      "ms_per_token_pipelined": 52.667,
+      "n_layers": 40,
+      "repeats": 5,
+      "samples_ms_per_layer_fenced": [
+        1.6348,
+        1.6257,
+        1.6256,
+        1.6299,
+        1.6287
+      ],
+      "samples_ms_per_layer_pipelined": [
+        1.3167,
+        1.3148,
+        1.3216,
+        1.3123,
+        1.3178
+      ],
+      "ssd": {
+        "achieved_gbps": 3.991,
+        "bytes_read": 22635200000,
+        "cache_mode": "f-nocache",
+        "elapsed_s": 5.671,
+        "primitive": "os.preadv",
+        "record_bytes": 18800000,
+        "records": 1204,
+        "target_gbps": 4.0,
+        "threads": 4
+      },
+      "steps": 8,
+      "warmup": 8
+    },
+    "ballast_plan": {
+      "ceiling_gib": 53.117,
+      "chain_active_gib": 6.883,
+      "clamped": false,
+      "effective_gib": 53.117,
+      "implied_process_peak_gib": 70.0,
+      "max_total_gib": 70.0,
+      "overhead_gib": 10.0,
+      "requested_gib": null
+    },
+    "c_gather_qmm": {
+      "expert_bank": {
+        "bytes_resident": 300810240,
+        "n_experts": 16,
+        "record_bytes_target": 18800000,
+        "records_per_layer": 11
+      },
+      "fenced_minus_pipelined_ms_per_layer": 0.4045,
+      "memory_after": {
+        "label": "c_gather_qmm:after",
+        "mlx_active_gib": 7.59,
+        "mlx_cache_gib": 19.771,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242171.414,
+        "vm_used_gib": 38.42
+      },
+      "memory_before": {
+        "label": "c_gather_qmm:before",
+        "mlx_active_gib": 7.589,
+        "mlx_cache_gib": 15.202,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242164.633,
+        "vm_used_gib": 34.18
+      },
+      "ms_per_layer_fenced": 1.965,
+      "ms_per_layer_pipelined": 1.5605,
+      "ms_per_token_fenced": 78.601,
+      "ms_per_token_pipelined": 62.419,
+      "n_layers": 40,
+      "repeats": 5,
+      "samples_ms_per_layer_fenced": [
+        1.965,
+        1.967,
+        1.9786,
+        1.9638,
+        1.963
+      ],
+      "samples_ms_per_layer_pipelined": [
+        1.5605,
+        1.5608,
+        1.5574,
+        1.5605,
+        1.5593
+      ],
+      "steps": 8,
+      "warmup": 8
+    },
+    "d_ssd_gather": {
+      "expert_bank": {
+        "bytes_resident": 300810240,
+        "n_experts": 16,
+        "record_bytes_target": 18800000,
+        "records_per_layer": 11
+      },
+      "fenced_minus_pipelined_ms_per_layer": 0.4175,
+      "memory_after": {
+        "label": "d_ssd_gather:after",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.536,
+        "vm_used_gib": 43.03
+      },
+      "memory_before": {
+        "label": "d_ssd_gather:before",
+        "mlx_active_gib": 7.59,
+        "mlx_cache_gib": 19.771,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242171.417,
+        "vm_used_gib": 38.42
+      },
+      "ms_per_layer_fenced": 2.0459,
+      "ms_per_layer_pipelined": 1.6284,
+      "ms_per_token_fenced": 81.836,
+      "ms_per_token_pipelined": 65.137,
+      "n_layers": 40,
+      "repeats": 5,
+      "samples_ms_per_layer_fenced": [
+        2.0455,
+        2.0446,
+        2.0459,
+        2.0641,
+        2.0462
+      ],
+      "samples_ms_per_layer_pipelined": [
+        1.6986,
+        1.6567,
+        1.618,
+        1.619,
+        1.6284
+      ],
+      "ssd": {
+        "achieved_gbps": 3.988,
+        "bytes_read": 28369200000,
+        "cache_mode": "f-nocache",
+        "elapsed_s": 7.113,
+        "primitive": "os.preadv",
+        "record_bytes": 18800000,
+        "records": 1509,
+        "target_gbps": 4.0,
+        "threads": 4
+      },
+      "steps": 8,
+      "warmup": 8
+    },
+    "e_eval_per_layer": {
+      "barrier_delta_ms_per_layer": 0.2824,
+      "memory_after": {
+        "label": "e_eval_per_layer:after",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.542,
+        "vm_used_gib": 43.03
+      },
+      "memory_before": {
+        "label": "e_eval_per_layer:before",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.539,
+        "vm_used_gib": 43.03
+      },
+      "ms_per_layer_eval_per_40": 1.2756,
+      "ms_per_layer_eval_per_layer": 1.558,
+      "ms_per_token_eval_per_40": 51.023,
+      "ms_per_token_eval_per_layer": 62.318,
+      "n_layers": 40
+    },
+    "execution_order": [
+      "a_baseline",
+      "b_ssd",
+      "c_gather_qmm",
+      "d_ssd_gather",
+      "e_eval_per_layer",
+      "g_thermal",
+      "h_olora_relayout",
+      "f_allocator"
+    ],
+    "f_allocator": {
+      "ballast_gib_effective": 53.117,
+      "ballast_plan": {
+        "ceiling_gib": 53.117,
+        "chain_active_gib": 6.883,
+        "clamped": false,
+        "effective_gib": 53.117,
+        "implied_process_peak_gib": 70.0,
+        "max_total_gib": 70.0,
+        "overhead_gib": 10.0,
+        "requested_gib": null
+      },
+      "cache_limit_gib": 6.0,
+      "fenced_minus_pipelined_ms_per_layer": -0.6017,
+      "mem_limit_gib": 60.0,
+      "memory_after": {
+        "label": "f_allocator:after",
+        "mlx_active_gib": 7.596,
+        "mlx_cache_gib": 0.0,
+        "mlx_peak_gib": 63.235,
+        "t": 1789242281.402,
+        "vm_used_gib": 18.773
+      },
+      "memory_before": {
+        "label": "f_allocator:before",
+        "mlx_active_gib": 7.595,
+        "mlx_cache_gib": 12.705,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242255.823,
+        "vm_used_gib": 31.374
+      },
+      "ms_per_layer_fenced": 5.9808,
+      "ms_per_layer_pipelined": 6.5825,
+      "ms_per_token_fenced": 239.233,
+      "ms_per_token_pipelined": 263.298,
+      "n_layers": 40,
+      "peak_gib": 63.235,
+      "repeats": 5,
+      "samples_ms_per_layer_fenced": [
+        5.9808,
+        6.0354,
+        6.0128,
+        5.9495,
+        5.9355
+      ],
+      "samples_ms_per_layer_pipelined": [
+        6.5685,
+        6.6101,
+        6.5825,
+        6.5707,
+        6.5849
+      ],
+      "steps": 8,
+      "warmup": 8
+    },
+    "g_thermal": {
+      "fenced_minus_pipelined_ms_per_layer": 0.3063,
+      "idle_gpu_freq_mhz": 0.0,
+      "idle_gpu_temp_c": 78.81380462646484,
+      "memory_after": {
+        "label": "g_thermal:after",
+        "mlx_active_gib": 7.593,
+        "mlx_cache_gib": 7.933,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242245.214,
+        "vm_used_gib": 26.609
+      },
+      "memory_before": {
+        "label": "g_thermal:before",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.545,
+        "vm_used_gib": 43.03
+      },
+      "ms_per_layer_fenced": 1.5789,
+      "ms_per_layer_pipelined": 1.2726,
+      "ms_per_token_fenced": 63.155,
+      "ms_per_token_pipelined": 50.904,
+      "n_layers": 40,
+      "repeats": 5,
+      "samples_ms_per_layer_fenced": [
+        1.5824,
+        1.5809,
+        1.5773,
+        1.5693,
+        1.5789
+      ],
+      "samples_ms_per_layer_pipelined": [
+        1.2689,
+        1.2726,
+        1.2764,
+        1.2696,
+        1.276
+      ],
+      "steps": 8,
+      "utilization": {
+        "cpu_temp_c": {
+          "max": 75.36307525634766,
+          "mean": 75.36307525634766,
+          "min": 75.36307525634766
+        },
+        "cpu_usage_ratio": {
+          "max": 0.03395620360970497,
+          "mean": 0.03395620360970497,
+          "min": 0.03395620360970497
+        },
+        "gpu_active_ratio": {
+          "max": 0.974295973777771,
+          "mean": 0.974295973777771,
+          "min": 0.974295973777771
+        },
+        "gpu_freq_mhz": {
+          "max": 1437.0,
+          "mean": 1437.0,
+          "min": 1437.0
+        },
+        "gpu_power_w": {
+          "max": 20.074878692626953,
+          "mean": 20.074878692626953,
+          "min": 20.074878692626953
+        },
+        "gpu_temp_c": {
+          "max": 83.1796875,
+          "mean": 83.1796875,
+          "min": 83.1796875
+        },
+        "gpu_usage_ratio": {
+          "max": 0.8644444346427917,
+          "mean": 0.8644444346427917,
+          "min": 0.8644444346427917
+        },
+        "samples": 1
+      },
+      "warm_load_utilization": {
+        "cpu_temp_c": {
+          "max": 82.21381378173828,
+          "mean": 79.68776992271687,
+          "min": 73.47203826904297
+        },
+        "cpu_usage_ratio": {
+          "max": 0.057546839118003845,
+          "mean": 0.011005273506302258,
+          "min": 0.004555843770503998
+        },
+        "gpu_active_ratio": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0
+        },
+        "gpu_freq_mhz": {
+          "max": 1518.0,
+          "mean": 1300.8275862068965,
+          "min": 1209.0
+        },
+        "gpu_power_w": {
+          "max": 86.80857849121094,
+          "mean": 56.98046625071559,
+          "min": 47.236061096191406
+        },
+        "gpu_temp_c": {
+          "max": 96.52232360839844,
+          "mean": 94.37120582317483,
+          "min": 88.67801666259766
+        },
+        "gpu_usage_ratio": {
+          "max": 0.937160074710846,
+          "mean": 0.8033215403556824,
+          "min": 0.7466474175453186
+        },
+        "samples": 58,
+        "seconds": 60.0
+      },
+      "warm_seconds": 60.0,
+      "warmup": 8
+    },
+    "h_olora_relayout": {
+      "delta_vs_baseline_ms_per_layer_pipelined": 0.8869,
+      "fenced_minus_pipelined_ms_per_layer": 0.3066,
+      "memory_after": {
+        "label": "h_olora_relayout:after",
+        "mlx_active_gib": 7.595,
+        "mlx_cache_gib": 12.705,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242255.82,
+        "vm_used_gib": 31.374
+      },
+      "memory_before": {
+        "label": "h_olora_relayout:before",
+        "mlx_active_gib": 7.593,
+        "mlx_cache_gib": 7.933,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242245.217,
+        "vm_used_gib": 26.609
+      },
+      "ms_per_layer_fenced": 2.4691,
+      "ms_per_layer_pipelined": 2.1625,
+      "ms_per_token_fenced": 98.765,
+      "ms_per_token_pipelined": 86.499,
+      "n_layers": 40,
+      "olora_relayout_only_ms_per_layer": 0.89,
+      "olora_relayout_only_ms_per_token": 35.6,
+      "repeats": 5,
+      "samples_ms_per_layer_fenced": [
+        2.4629,
+        2.4633,
+        2.4691,
+        2.4713,
+        2.4692
+      ],
+      "samples_ms_per_layer_pipelined": [
+        2.1625,
+        2.1631,
+        2.1673,
+        2.1605,
+        2.1622
+      ],
+      "steps": 8,
+      "warmup": 8
+    },
+    "memory": [
+      {
+        "label": "chain_built",
+        "mlx_active_gib": 6.603,
+        "mlx_cache_gib": 1.506,
+        "mlx_peak_gib": 7.212,
+        "t": 1789242153.343,
+        "vm_used_gib": 19.098
+      },
+      {
+        "label": "resident_built",
+        "mlx_active_gib": 6.883,
+        "mlx_cache_gib": 2.56,
+        "mlx_peak_gib": 7.938,
+        "t": 1789242153.447,
+        "vm_used_gib": 20.434
+      },
+      {
+        "label": "a_baseline:before",
+        "mlx_active_gib": 6.883,
+        "mlx_cache_gib": 2.56,
+        "mlx_peak_gib": 7.938,
+        "t": 1789242153.449,
+        "vm_used_gib": 20.434
+      },
+      {
+        "label": "a_baseline:after",
+        "mlx_active_gib": 7.588,
+        "mlx_cache_gib": 10.662,
+        "mlx_peak_gib": 10.845,
+        "t": 1789242158.952,
+        "vm_used_gib": 29.26
+      },
+      {
+        "label": "b_ssd:before",
+        "mlx_active_gib": 7.588,
+        "mlx_cache_gib": 10.662,
+        "mlx_peak_gib": 10.845,
+        "t": 1789242158.955,
+        "vm_used_gib": 29.26
+      },
+      {
+        "label": "b_ssd:after",
+        "mlx_active_gib": 7.589,
+        "mlx_cache_gib": 15.202,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242164.631,
+        "vm_used_gib": 34.18
+      },
+      {
+        "label": "c_gather_qmm:before",
+        "mlx_active_gib": 7.589,
+        "mlx_cache_gib": 15.202,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242164.633,
+        "vm_used_gib": 34.18
+      },
+      {
+        "label": "c_gather_qmm:after",
+        "mlx_active_gib": 7.59,
+        "mlx_cache_gib": 19.771,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242171.414,
+        "vm_used_gib": 38.42
+      },
+      {
+        "label": "d_ssd_gather:before",
+        "mlx_active_gib": 7.59,
+        "mlx_cache_gib": 19.771,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242171.417,
+        "vm_used_gib": 38.42
+      },
+      {
+        "label": "d_ssd_gather:after",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.536,
+        "vm_used_gib": 43.03
+      },
+      {
+        "label": "e_eval_per_layer:before",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.539,
+        "vm_used_gib": 43.03
+      },
+      {
+        "label": "e_eval_per_layer:after",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.542,
+        "vm_used_gib": 43.03
+      },
+      {
+        "label": "g_thermal:before",
+        "mlx_active_gib": 7.592,
+        "mlx_cache_gib": 24.363,
+        "mlx_peak_gib": 10.847,
+        "t": 1789242178.545,
+        "vm_used_gib": 43.03
+      },
+      {
+        "label": "g_thermal:after",
+        "mlx_active_gib": 7.593,
+        "mlx_cache_gib": 7.933,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242245.214,
+        "vm_used_gib": 26.609
+      },
+      {
+        "label": "h_olora_relayout:before",
+        "mlx_active_gib": 7.593,
+        "mlx_cache_gib": 7.933,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242245.217,
+        "vm_used_gib": 26.609
+      },
+      {
+        "label": "h_olora_relayout:after",
+        "mlx_active_gib": 7.595,
+        "mlx_cache_gib": 12.705,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242255.82,
+        "vm_used_gib": 31.374
+      },
+      {
+        "label": "f_allocator:before",
+        "mlx_active_gib": 7.595,
+        "mlx_cache_gib": 12.705,
+        "mlx_peak_gib": 10.853,
+        "t": 1789242255.823,
+        "vm_used_gib": 31.374
+      },
+      {
+        "label": "f_allocator:after",
+        "mlx_active_gib": 7.596,
+        "mlx_cache_gib": 0.0,
+        "mlx_peak_gib": 63.235,
+        "t": 1789242281.402,
+        "vm_used_gib": 18.773
+      }
+    ]
+  },
+  "config": {
+    "T": 16384,
+    "conditions": [
+      "a_baseline",
+      "b_ssd",
+      "c_gather_qmm",
+      "d_ssd_gather",
+      "e_eval_per_layer",
+      "f_allocator",
+      "g_thermal",
+      "h_olora_relayout"
+    ],
+    "execution_order": [
+      "a_baseline",
+      "b_ssd",
+      "c_gather_qmm",
+      "d_ssd_gather",
+      "e_eval_per_layer",
+      "g_thermal",
+      "h_olora_relayout",
+      "f_allocator"
+    ],
+    "hidden_size": 5120,
+    "max_total_gib": 70.0,
+    "moe_intermediate_size": 2304,
+    "moe_records_per_layer": 11,
+    "num_layers": 40,
+    "record_bytes": 18800000,
+    "repeats": 5,
+    "resident_codec": "mxfp8 gs32",
+    "scratch_cleaned": true,
+    "scratch_file": {
+      "created": true,
+      "f_nocache_write": true,
+      "path": "/Users/davidtai/projects/OpenSourceWTF/_w112_scratch/w112_ssd_scratch.bin",
+      "size_bytes": 8589934592
+    },
+    "steps": 8,
+    "vm_used_skip_gib": 90.0,
+    "warmup": 8
+  },
+  "meta": {
+    "argv": [
+      "--gpu",
+      "--scratch-dir",
+      "/Users/davidtai/projects/OpenSourceWTF/_w112_scratch",
+      "--out",
+      "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-44b/attn-contention-probe.json"
+    ],
+    "device": "gpu",
+    "git_sha": "233bd1bd74f4605f7705c92a58f2f22eca27c18d",
+    "hypotheses": [
+      "H4_memory_contention",
+      "H5_extra_work",
+      "H6_clock_thermal",
+      "H7_allocator_pressure"
+    ],
+    "mlx_version": "0.32.2",
+    "seed": 1234,
+    "smoke": false,
+    "timestamp_utc": "2026-09-12T19:42:32Z",
+    "window": "W112"
+  }
+}

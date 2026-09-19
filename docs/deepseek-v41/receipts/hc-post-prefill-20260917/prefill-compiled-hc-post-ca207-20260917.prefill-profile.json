@@ -1,0 +1,1161 @@
+{
+  "prefill_hc_post_compiled": true,
+  "bound_model_levers": {
+    "MTPLX_DSV41_HC_COMPILE": false,
+    "MTPLX_DSV41_ATTN_COMPILE": false,
+    "MTPLX_DSV41_ATTN_WIN_MEMO": false
+  },
+  "scope": "One 16384-token prefill, 32 chunks of 512, exits before MTP seed/decode. Compiled HC post is the only candidate arithmetic graph change. No token-parity or decode-throughput claim.",
+  "source_commit": "ca207c3d7f923678f5355ca63a0b89a483120dff",
+  "wrapper_sha256": "e5e54bcab62a672d1d343be44ddfd3e0825b60c4c346b212ede976ab20638646",
+  "source_compatibility": {
+    "source_commit": "ca207c3d7f923678f5355ca63a0b89a483120dff",
+    "reference_source_commit": "e589c1e4b17856f506d90d9fb2bbb5ce45711648",
+    "runtime_source_sha256": {
+      "mtplx/models/deepseek_v41.py": "ec0dcd689afc6a57a8599f48b62a522f5c572398df4c3022eafdc2783d050c70",
+      "scripts/deepseek_v41/ab_decode_env_levers.py": "d540a77df3670786110aafd14d81a55e613aafae63e45b53cc58aaaf169e25da",
+      "scripts/deepseek_v41/bench_standard_shape.py": "6c235ac47fc4f447f3eb745195a6e337961570b4ba003d314698bf0d20e65fce"
+    },
+    "model_ast_matches_promoted_hidden_capture": true,
+    "reference_compatibility": "Prefill allocation screen only. Model AST equals the historical model plus promoted hidden capture evaluation. Other model/loader/streaming code is unchanged. Runner reporting changes do not alter prefill; its new binding is explicitly set to false for all three flags before loading. Historical actual bound flags were not recorded, so no full-run arithmetic equivalence is claimed.",
+    "explicit_bound_model_levers": {
+      "MTPLX_DSV41_HC_COMPILE": false,
+      "MTPLX_DSV41_ATTN_COMPILE": false,
+      "MTPLX_DSV41_ATTN_WIN_MEMO": false
+    },
+    "scope": "One 16384-token prefill, 32 chunks of 512, exits before MTP seed/decode. Compiled HC post is the only candidate arithmetic graph change. No token-parity or decode-throughput claim.",
+    "small_shape_receipt": "/tmp/dsv41-hc-post-prefill-20260917/gpu-results.json",
+    "small_shape_receipt_sha256": "345e8166400eb20e3583938da04533531afa4ff5d591cba525d6b9941010740a",
+    "admission_notes": "Uses historical total peak plus exact slot-byte delta, 512MiB active margin and 1GB physical margin. All 32 full MoE outputs remain unchanged; lower bank capacity adds bounded fenced route waves, not more simultaneous rows or slots. Historical mask-memo uncertainty is below 512MiB: 32*512*16384 boolean elements is 268435456 bytes. No compile savings are credited before measurement."
+  },
+  "baseline_bytes": 9240838144,
+  "slots_per_layer": 93,
+  "samples": [
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 0,
+      "active_bytes": 85310844030,
+      "cache_bytes": 1190181806,
+      "peak_bytes": 85927588176
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 1,
+      "active_bytes": 85418489596,
+      "cache_bytes": 1118287800,
+      "peak_bytes": 86249477510
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 2,
+      "active_bytes": 85566611280,
+      "cache_bytes": 1158466488,
+      "peak_bytes": 86705239046
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 3,
+      "active_bytes": 85674094316,
+      "cache_bytes": 1142562576,
+      "peak_bytes": 86812722076
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 4,
+      "active_bytes": 85781576040,
+      "cache_bytes": 1152337568,
+      "peak_bytes": 86825183928
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 5,
+      "active_bytes": 85889057764,
+      "cache_bytes": 1152337572,
+      "peak_bytes": 86932665652
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 6,
+      "active_bytes": 85996539488,
+      "cache_bytes": 1173851916,
+      "peak_bytes": 87075193884
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 7,
+      "active_bytes": 86104021212,
+      "cache_bytes": 1142561264,
+      "peak_bytes": 87242647664
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 8,
+      "active_bytes": 86171977084,
+      "cache_bytes": 1152337564,
+      "peak_bytes": 87259355408
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 9,
+      "active_bytes": 86298992348,
+      "cache_bytes": 1083070976,
+      "peak_bytes": 87460207284
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 10,
+      "active_bytes": 86426467692,
+      "cache_bytes": 1173851916,
+      "peak_bytes": 87567690316
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 11,
+      "active_bytes": 86494423564,
+      "cache_bytes": 1142561268,
+      "peak_bytes": 87672575868
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 12,
+      "active_bytes": 86601905284,
+      "cache_bytes": 1173851916,
+      "peak_bytes": 87782653764
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 13,
+      "active_bytes": 86748912864,
+      "cache_bytes": 1173851916,
+      "peak_bytes": 87890135488
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 14,
+      "active_bytes": 86856394588,
+      "cache_bytes": 1152337568,
+      "peak_bytes": 87995021040
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 15,
+      "active_bytes": 86963876312,
+      "cache_bytes": 1152337568,
+      "peak_bytes": 88011302804
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 0,
+      "chunk": 16,
+      "active_bytes": 87071358036,
+      "cache_bytes": 1152337572,
+      "peak_bytes": 88095436196
+    },
+    {
+      "stage": "before_moe",
+      "layer": 0,
+      "chunk": -1,
+      "active_bytes": 87110730568,
+      "cache_bytes": 1078838182,
+      "peak_bytes": 88095436196
+    },
+    {
+      "stage": "after_moe",
+      "layer": 0,
+      "chunk": -1,
+      "active_bytes": 89090230252,
+      "cache_bytes": 1406696524,
+      "peak_bytes": 90109332736
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 0,
+      "chunk": -1,
+      "active_bytes": 88562180604,
+      "cache_bytes": 2702320020,
+      "peak_bytes": 92952795680
+    },
+    {
+      "stage": "before_moe",
+      "layer": 1,
+      "chunk": -1,
+      "active_bytes": 88632655964,
+      "cache_bytes": 1081524240,
+      "peak_bytes": 92952795680
+    },
+    {
+      "stage": "after_moe",
+      "layer": 1,
+      "chunk": -1,
+      "active_bytes": 90280148956,
+      "cache_bytes": 1408520988,
+      "peak_bytes": 92952795680
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 1,
+      "chunk": -1,
+      "active_bytes": 88575925600,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 92966539144
+    },
+    {
+      "stage": "before_moe",
+      "layer": 2,
+      "chunk": -1,
+      "active_bytes": 89077088112,
+      "cache_bytes": 1082278588,
+      "peak_bytes": 92966539144
+    },
+    {
+      "stage": "after_moe",
+      "layer": 2,
+      "chunk": -1,
+      "active_bytes": 90724615120,
+      "cache_bytes": 1407710300,
+      "peak_bytes": 92966539144
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 2,
+      "chunk": -1,
+      "active_bytes": 89035382240,
+      "cache_bytes": 2836967544,
+      "peak_bytes": 93425998836
+    },
+    {
+      "stage": "before_moe",
+      "layer": 3,
+      "chunk": -1,
+      "active_bytes": 89058969212,
+      "cache_bytes": 1237457948,
+      "peak_bytes": 93425998836
+    },
+    {
+      "stage": "after_moe",
+      "layer": 3,
+      "chunk": -1,
+      "active_bytes": 90725221456,
+      "cache_bytes": 1378794652,
+      "peak_bytes": 93425998836
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 3,
+      "chunk": -1,
+      "active_bytes": 89036021344,
+      "cache_bytes": 2837033080,
+      "peak_bytes": 93426605160
+    },
+    {
+      "stage": "before_moe",
+      "layer": 4,
+      "chunk": -1,
+      "active_bytes": 89078370676,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 93426605160
+    },
+    {
+      "stage": "after_moe",
+      "layer": 4,
+      "chunk": -1,
+      "active_bytes": 90725909712,
+      "cache_bytes": 1401645780,
+      "peak_bytes": 93426605160
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 4,
+      "chunk": -1,
+      "active_bytes": 89036661332,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 93427291308
+    },
+    {
+      "stage": "before_moe",
+      "layer": 5,
+      "chunk": -1,
+      "active_bytes": 89118130856,
+      "cache_bytes": 1237457948,
+      "peak_bytes": 93427291308
+    },
+    {
+      "stage": "after_moe",
+      "layer": 5,
+      "chunk": -1,
+      "active_bytes": 90726516048,
+      "cache_bytes": 1372664500,
+      "peak_bytes": 93427291308
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 5,
+      "chunk": -1,
+      "active_bytes": 89037300436,
+      "cache_bytes": 2836967548,
+      "peak_bytes": 93427897596
+    },
+    {
+      "stage": "before_moe",
+      "layer": 6,
+      "chunk": -1,
+      "active_bytes": 89060886520,
+      "cache_bytes": 1237457948,
+      "peak_bytes": 93427897596
+    },
+    {
+      "stage": "after_moe",
+      "layer": 6,
+      "chunk": -1,
+      "active_bytes": 90727171536,
+      "cache_bytes": 1395933284,
+      "peak_bytes": 93427897596
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 6,
+      "chunk": -1,
+      "active_bytes": 89037939540,
+      "cache_bytes": 2837078420,
+      "peak_bytes": 93428572664
+    },
+    {
+      "stage": "before_moe",
+      "layer": 7,
+      "chunk": -1,
+      "active_bytes": 89046530452,
+      "cache_bytes": 1077912872,
+      "peak_bytes": 93428572664
+    },
+    {
+      "stage": "after_moe",
+      "layer": 7,
+      "chunk": -1,
+      "active_bytes": 90727794256,
+      "cache_bytes": 1399005496,
+      "peak_bytes": 93428572664
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 7,
+      "chunk": -1,
+      "active_bytes": 89038578644,
+      "cache_bytes": 2845827476,
+      "peak_bytes": 93429210936
+    },
+    {
+      "stage": "before_moe",
+      "layer": 8,
+      "chunk": -1,
+      "active_bytes": 89187108328,
+      "cache_bytes": 1082278588,
+      "peak_bytes": 93429210936
+    },
+    {
+      "stage": "after_moe",
+      "layer": 8,
+      "chunk": -1,
+      "active_bytes": 90834568912,
+      "cache_bytes": 1402211732,
+      "peak_bytes": 93429210936
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 8,
+      "chunk": -1,
+      "active_bytes": 89145369684,
+      "cache_bytes": 2837012884,
+      "peak_bytes": 93535967192
+    },
+    {
+      "stage": "before_moe",
+      "layer": 9,
+      "chunk": -1,
+      "active_bytes": 89187699068,
+      "cache_bytes": 1237457948,
+      "peak_bytes": 93535967192
+    },
+    {
+      "stage": "after_moe",
+      "layer": 9,
+      "chunk": -1,
+      "active_bytes": 90835240784,
+      "cache_bytes": 1400187464,
+      "peak_bytes": 93535967192
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 9,
+      "chunk": -1,
+      "active_bytes": 89146008788,
+      "cache_bytes": 2711019924,
+      "peak_bytes": 93536639160
+    },
+    {
+      "stage": "before_moe",
+      "layer": 10,
+      "chunk": -1,
+      "active_bytes": 89132070208,
+      "cache_bytes": 1077912872,
+      "peak_bytes": 93536639160
+    },
+    {
+      "stage": "after_moe",
+      "layer": 10,
+      "chunk": -1,
+      "active_bytes": 90835863504,
+      "cache_bytes": 1408886026,
+      "peak_bytes": 93536639160
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 10,
+      "chunk": -1,
+      "active_bytes": 89146647892,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 93537245052
+    },
+    {
+      "stage": "before_moe",
+      "layer": 11,
+      "chunk": -1,
+      "active_bytes": 89170233980,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 93537245052
+    },
+    {
+      "stage": "after_moe",
+      "layer": 11,
+      "chunk": -1,
+      "active_bytes": 90836518992,
+      "cache_bytes": 1405816200,
+      "peak_bytes": 93537245052
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 11,
+      "chunk": -1,
+      "active_bytes": 89147286112,
+      "cache_bytes": 2702225528,
+      "peak_bytes": 93537901248
+    },
+    {
+      "stage": "before_moe",
+      "layer": 12,
+      "chunk": -1,
+      "active_bytes": 89201657772,
+      "cache_bytes": 1237212188,
+      "peak_bytes": 93537901248
+    },
+    {
+      "stage": "after_moe",
+      "layer": 12,
+      "chunk": -1,
+      "active_bytes": 90837125328,
+      "cache_bytes": 1398399460,
+      "peak_bytes": 93537901248
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 12,
+      "chunk": -1,
+      "active_bytes": 89147926100,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 93538506876
+    },
+    {
+      "stage": "before_moe",
+      "layer": 13,
+      "chunk": -1,
+      "active_bytes": 89190307320,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 93538506876
+    },
+    {
+      "stage": "after_moe",
+      "layer": 13,
+      "chunk": -1,
+      "active_bytes": 90837780816,
+      "cache_bytes": 1385248308,
+      "peak_bytes": 93538506876
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 13,
+      "chunk": -1,
+      "active_bytes": 89148565204,
+      "cache_bytes": 2817368468,
+      "peak_bytes": 93539162364
+    },
+    {
+      "stage": "before_moe",
+      "layer": 14,
+      "chunk": -1,
+      "active_bytes": 89312036116,
+      "cache_bytes": 1239152808,
+      "peak_bytes": 93539162364
+    },
+    {
+      "stage": "after_moe",
+      "layer": 14,
+      "chunk": -1,
+      "active_bytes": 90959562332,
+      "cache_bytes": 1386252100,
+      "peak_bytes": 93539162364
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 14,
+      "chunk": -1,
+      "active_bytes": 89255354476,
+      "cache_bytes": 2702258296,
+      "peak_bytes": 93645952520
+    },
+    {
+      "stage": "before_moe",
+      "layer": 15,
+      "chunk": -1,
+      "active_bytes": 89297703808,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 93645952520
+    },
+    {
+      "stage": "after_moe",
+      "layer": 15,
+      "chunk": -1,
+      "active_bytes": 90945243728,
+      "cache_bytes": 1407170004,
+      "peak_bytes": 93645952520
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 15,
+      "chunk": -1,
+      "active_bytes": 89255995348,
+      "cache_bytes": 2837029268,
+      "peak_bytes": 93646641660
+    },
+    {
+      "stage": "before_moe",
+      "layer": 16,
+      "chunk": -1,
+      "active_bytes": 89264586260,
+      "cache_bytes": 1077912872,
+      "peak_bytes": 93646641660
+    },
+    {
+      "stage": "after_moe",
+      "layer": 16,
+      "chunk": -1,
+      "active_bytes": 90945850064,
+      "cache_bytes": 1384420356,
+      "peak_bytes": 93646641660
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 16,
+      "chunk": -1,
+      "active_bytes": 89256634452,
+      "cache_bytes": 2837012884,
+      "peak_bytes": 93647265212
+    },
+    {
+      "stage": "before_moe",
+      "layer": 17,
+      "chunk": -1,
+      "active_bytes": 89305012216,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 93647265212
+    },
+    {
+      "stage": "after_moe",
+      "layer": 17,
+      "chunk": -1,
+      "active_bytes": 90946505552,
+      "cache_bytes": 1402561310,
+      "peak_bytes": 93647265212
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 17,
+      "chunk": -1,
+      "active_bytes": 89257273556,
+      "cache_bytes": 2817368468,
+      "peak_bytes": 93647887640
+    },
+    {
+      "stage": "before_moe",
+      "layer": 18,
+      "chunk": -1,
+      "active_bytes": 89299606752,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 93647887640
+    },
+    {
+      "stage": "after_moe",
+      "layer": 18,
+      "chunk": -1,
+      "active_bytes": 90947128272,
+      "cache_bytes": 1402293112,
+      "peak_bytes": 93647887640
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 18,
+      "chunk": -1,
+      "active_bytes": 89395505608,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 93648528508
+    },
+    {
+      "stage": "before_moe",
+      "layer": 19,
+      "chunk": -1,
+      "active_bytes": 89300245856,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 93648528508
+    },
+    {
+      "stage": "after_moe",
+      "layer": 19,
+      "chunk": -1,
+      "active_bytes": 90947750992,
+      "cache_bytes": 1403429612,
+      "peak_bytes": 93648528508
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 19,
+      "chunk": -1,
+      "active_bytes": 89258550880,
+      "cache_bytes": 2702254484,
+      "peak_bytes": 93649132800
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 20,
+      "chunk": 15,
+      "active_bytes": 89896528344,
+      "cache_bytes": 652973356,
+      "peak_bytes": 93772792692
+    },
+    {
+      "stage": "attention_chunk",
+      "layer": 20,
+      "chunk": 16,
+      "active_bytes": 90102741220,
+      "cache_bytes": 653219116,
+      "peak_bytes": 94152692372
+    },
+    {
+      "stage": "before_moe",
+      "layer": 20,
+      "chunk": -1,
+      "active_bytes": 90265705244,
+      "cache_bytes": 1087904264,
+      "peak_bytes": 94152692372
+    },
+    {
+      "stage": "after_moe",
+      "layer": 20,
+      "chunk": -1,
+      "active_bytes": 91913195124,
+      "cache_bytes": 1404545148,
+      "peak_bytes": 94152692372
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 20,
+      "chunk": -1,
+      "active_bytes": 90223963128,
+      "cache_bytes": 2682622640,
+      "peak_bytes": 94614576672
+    },
+    {
+      "stage": "before_moe",
+      "layer": 21,
+      "chunk": -1,
+      "active_bytes": 90266296324,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94614576672
+    },
+    {
+      "stage": "after_moe",
+      "layer": 21,
+      "chunk": -1,
+      "active_bytes": 91913850612,
+      "cache_bytes": 1401512144,
+      "peak_bytes": 94614576672
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 21,
+      "chunk": -1,
+      "active_bytes": 90224601348,
+      "cache_bytes": 2836967544,
+      "peak_bytes": 94615232160
+    },
+    {
+      "stage": "before_moe",
+      "layer": 22,
+      "chunk": -1,
+      "active_bytes": 90266950680,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94615232160
+    },
+    {
+      "stage": "after_moe",
+      "layer": 22,
+      "chunk": -1,
+      "active_bytes": 91914489716,
+      "cache_bytes": 1402593666,
+      "peak_bytes": 94615232160
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 22,
+      "chunk": -1,
+      "active_bytes": 90225241336,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 94615872028
+    },
+    {
+      "stage": "before_moe",
+      "layer": 23,
+      "chunk": -1,
+      "active_bytes": 90267622552,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94615872028
+    },
+    {
+      "stage": "after_moe",
+      "layer": 23,
+      "chunk": -1,
+      "active_bytes": 91915112436,
+      "cache_bytes": 1407869880,
+      "peak_bytes": 94615872028
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 23,
+      "chunk": -1,
+      "active_bytes": 90225880440,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 24,
+      "chunk": -1,
+      "active_bytes": 89842360464,
+      "cache_bytes": 1088227600,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 24,
+      "chunk": -1,
+      "active_bytes": 91489866732,
+      "cache_bytes": 1405860332,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 24,
+      "chunk": -1,
+      "active_bytes": 89800650236,
+      "cache_bytes": 2836967544,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 25,
+      "chunk": -1,
+      "active_bytes": 89842980504,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 25,
+      "chunk": -1,
+      "active_bytes": 91490473068,
+      "cache_bytes": 1399047800,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 25,
+      "chunk": -1,
+      "active_bytes": 89938292436,
+      "cache_bytes": 2702225528,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 26,
+      "chunk": -1,
+      "active_bytes": 89843623420,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 26,
+      "chunk": -1,
+      "active_bytes": 91491144940,
+      "cache_bytes": 1408510556,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 26,
+      "chunk": -1,
+      "active_bytes": 89801929328,
+      "cache_bytes": 2817417620,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 27,
+      "chunk": -1,
+      "active_bytes": 89787892444,
+      "cache_bytes": 1077867536,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 27,
+      "chunk": -1,
+      "active_bytes": 91491800428,
+      "cache_bytes": 1379006704,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 27,
+      "chunk": -1,
+      "active_bytes": 89802568432,
+      "cache_bytes": 2817368468,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 28,
+      "chunk": -1,
+      "active_bytes": 89844902052,
+      "cache_bytes": 1082624400,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 28,
+      "chunk": -1,
+      "active_bytes": 91492420956,
+      "cache_bytes": 1406985864,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 28,
+      "chunk": -1,
+      "active_bytes": 89803205344,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 29,
+      "chunk": -1,
+      "active_bytes": 89845535612,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 29,
+      "chunk": -1,
+      "active_bytes": 91493077328,
+      "cache_bytes": 1401274016,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 29,
+      "chunk": -1,
+      "active_bytes": 89803844448,
+      "cache_bytes": 2719818132,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 30,
+      "chunk": -1,
+      "active_bytes": 89789808448,
+      "cache_bytes": 1077912872,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 30,
+      "chunk": -1,
+      "active_bytes": 91493683664,
+      "cache_bytes": 1407637600,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 30,
+      "chunk": -1,
+      "active_bytes": 89804484436,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 31,
+      "chunk": -1,
+      "active_bytes": 89843061884,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 31,
+      "chunk": -1,
+      "active_bytes": 91494339152,
+      "cache_bytes": 1403459704,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 31,
+      "chunk": -1,
+      "active_bytes": 89805123540,
+      "cache_bytes": 2682655408,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 32,
+      "chunk": -1,
+      "active_bytes": 89828710936,
+      "cache_bytes": 1083017232,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 32,
+      "chunk": -1,
+      "active_bytes": 91495012332,
+      "cache_bytes": 1408437716,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 32,
+      "chunk": -1,
+      "active_bytes": 89805763068,
+      "cache_bytes": 2836967544,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 33,
+      "chunk": -1,
+      "active_bytes": 89848112396,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 33,
+      "chunk": -1,
+      "active_bytes": 91495618668,
+      "cache_bytes": 1406553008,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 33,
+      "chunk": -1,
+      "active_bytes": 89806403056,
+      "cache_bytes": 2837029268,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 34,
+      "chunk": -1,
+      "active_bytes": 89800002604,
+      "cache_bytes": 1077912872,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 34,
+      "chunk": -1,
+      "active_bytes": 91496274156,
+      "cache_bytes": 1398277832,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 34,
+      "chunk": -1,
+      "active_bytes": 89807042160,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 35,
+      "chunk": -1,
+      "active_bytes": 89849423376,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 35,
+      "chunk": -1,
+      "active_bytes": 91496896876,
+      "cache_bytes": 1408785988,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 35,
+      "chunk": -1,
+      "active_bytes": 89807681264,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 36,
+      "chunk": -1,
+      "active_bytes": 89916152936,
+      "cache_bytes": 1079860976,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 36,
+      "chunk": -1,
+      "active_bytes": 91497552364,
+      "cache_bytes": 1404476824,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 36,
+      "chunk": -1,
+      "active_bytes": 89808320368,
+      "cache_bytes": 2836963732,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 37,
+      "chunk": -1,
+      "active_bytes": 90182655132,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 37,
+      "chunk": -1,
+      "active_bytes": 91833932396,
+      "cache_bytes": 1406743960,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 37,
+      "chunk": -1,
+      "active_bytes": 90144715900,
+      "cache_bytes": 2702320020,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "before_moe",
+      "layer": 38,
+      "chunk": -1,
+      "active_bytes": 90522807296,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_moe",
+      "layer": 38,
+      "chunk": -1,
+      "active_bytes": 92170328812,
+      "cache_bytes": 1404455436,
+      "peak_bytes": 94616494868
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 38,
+      "chunk": -1,
+      "active_bytes": 90481112316,
+      "cache_bytes": 2719850900,
+      "peak_bytes": 94871711876
+    },
+    {
+      "stage": "before_moe",
+      "layer": 39,
+      "chunk": -1,
+      "active_bytes": 90855447964,
+      "cache_bytes": 1256987676,
+      "peak_bytes": 94871711876
+    },
+    {
+      "stage": "after_moe",
+      "layer": 39,
+      "chunk": -1,
+      "active_bytes": 92506741612,
+      "cache_bytes": 1407497868,
+      "peak_bytes": 94871711876
+    },
+    {
+      "stage": "after_combine_fence",
+      "layer": 39,
+      "chunk": -1,
+      "active_bytes": 90817508732,
+      "cache_bytes": 2702254484,
+      "peak_bytes": 95208123264
+    },
+    {
+      "stage": "prefill_complete",
+      "layer": -1,
+      "chunk": -1,
+      "active_bytes": 87269848308,
+      "cache_bytes": 1093074944,
+      "peak_bytes": 95208123264
+    }
+  ],
+  "prefill_seconds": 140.61883620799927,
+  "boundary_memory": {
+    "mlx_active_bytes": 87386961140,
+    "mlx_cache_bytes": 1093074944,
+    "mlx_peak_bytes": 95208123264
+  }
+}

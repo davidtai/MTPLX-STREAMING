@@ -1,0 +1,58 @@
+{
+  "source_commit": "5ba18552cb81f85793469a8d20fe2ff4af4f79d8",
+  "base": "/tmp/dsv41-cache-budget-20260918/full-v1",
+  "strict_allocator": {
+    "identity": {
+      "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+      "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    },
+    "source_archive_sha256": "bf892386ccac1d249acc9da21574fd7b95a995f4c58b03310105fe05f077b175",
+    "cache_invariant": "free and set_cache_limit hold the existing allocator mutex and evict before publishing an inactive-cache total above the configured limit. Oversized freed buffers are released directly.",
+    "decode_cache_limit_bytes": 268435456,
+    "overshoot_allowance_removed_bytes": 2258155644,
+    "capacity_search_ceiling": 110,
+    "capacity_geometry": "Page-aligned5898240-byte components; existing concatenate, pointer/row-index and int32 route arithmetic unchanged. Maximum110 persistent rows plus48 shared transients; every selected capacity still satisfies the original active/copy/seed/wired inequalities.",
+    "operators": {
+      "attention": {
+        "path": "/tmp/dsv41-strict-cache-20260918/attention-screen/summary.json",
+        "sha256": "8f297e46df154c1bb549b57064e7372b661786ee4f1b0845b9e2dc1cf0f8a06d",
+        "exact_field": "all_cross_binary_outputs_and_states_exact"
+      },
+      "expert": {
+        "path": "/tmp/dsv41-strict-cache-20260918/expert-screen/summary.json",
+        "sha256": "d32623b99b1011b7665a3d8b241183b656abc95fde92b15cbb8bd18e2ba03b4e",
+        "exact_field": "all206_cross_binary_reads_and_outputs_exact"
+      }
+    }
+  },
+  "helper_sha256": {
+    "launch_full.py": "bbee45827668f288e878525bab72b3e0b6d002a0ced240a26ec8e3db5176fca9",
+    "summarize.py": "eb05829bf5f25927accdb25f839a244f11957ec632c9fa076b83fca53c9a6e92",
+    "compat/installation.json": "9733af453cd53759eb9dcac2602c1365afa53b85a8def2ccc2cebcc759684798",
+    "compat/bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b",
+    "compat/phase_growth.py": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac",
+    "compat/admission.py": "08a5093c8d7db1d4367098b0d1b2d4c6f9711fdcf907e58b316c02e7e29c77f8",
+    "native/installation.json": "d02aae596dfc6d4a25f39461187fda71b2f12f1322a5e05e4b8a17401ce181d5",
+    "native/bank_growth_final.py": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b",
+    "native/phase_growth.py": "09fd764fd7e3a76cd40e1bd44b632e42d6126909dd015a66a7d10ececb8d5e57",
+    "native/admission.py": "365b0ea19dc7d36cb850c8208b9e698a848e858119a90a00d49c81ff3389c7bf",
+    "native/probe-final-results.json": "2eeb958ee45f43dee7f4517f8138515d194aacec87f39963b531bb5c28ce52cb",
+    "packed/projection_install.py": "bfd4b53aa0991733ec69fd6d35d28ac9c733ed620219760b87454c14e7d731c2",
+    "packed/installation.json": "17185385403281fd2ab372717d2cab374a578b33c11e0a25afb8a26d9fe7867f",
+    "packed/tail_prefill_body.py": "9730bfc22edc807fc31124f87773ce8712956c1844dd46ce1b5c84418de6a8b2",
+    "packed/bounded_host.py": "f382e2c8d8e90e3107c0d47c9a8cd91573cecea0203c560e0181c18de94743ee",
+    "packed/run_full.py": "2e96320558968235b90fcc80161ba9b4baac33508824215b6d0239ec20585991",
+    "packed/storage-probe.json": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4",
+    "packed/owned_projection.py": "df9e42df6dda252bb390756519d145fc3f2a614ca1903ab1437cfd7ca79c2396",
+    "packed/packed_phase.py": "0b3740cb492bdb7a7168b5e92553332beae00965e48cfe43f0024e9827f39c1e",
+    "packed/plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "packed/paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "packed/kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "packed/tail_prefill.py": "bfa8f44d993987dbfc46181c1d377bafef08ae2909e1079d58a00a1a8d8cefde",
+    "packed/storage_probe.py": "a94263c67868fa811186fc5f99df7ad1e0307aec24e2307d12388927592c35d3",
+    "packed/library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "packed/packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "packed/packed_admission.py": "e54731d17a3150d875d77ea1350029180d2b90a3ebe0641aaa885e812c5f83a2"
+  },
+  "production_package_replaced": false
+}

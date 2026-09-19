@@ -1,0 +1,327 @@
+{
+  "coupled-probe/construction.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/construction.json",
+    "bytes": 1352,
+    "sha256": "0a1985a304e7d6926d8a743feb8d1ac3faa24ad52f09df089e8b585ad0280705"
+  },
+  "coupled-probe/probe.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/probe.py",
+    "bytes": 11654,
+    "sha256": "c85508d829105d12fa238ac8aee6d290649b1d72405eeff6348273c8777a34ed"
+  },
+  "coupled-probe/probe.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/probe.json",
+    "bytes": 12854,
+    "sha256": "b7c4949e2aa79a90914afc35a619f36598cf0ca46f8884aa3b87ea5b82bfd310"
+  },
+  "coupled-probe/command.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/command.json",
+    "bytes": 717,
+    "sha256": "2fa86d3e7c1fe35c3e65ce47ea4bb554126e14d7fb65f5bd87516c7fbc5b0474"
+  },
+  "coupled-probe/command.sh": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/command.sh",
+    "bytes": 625,
+    "sha256": "f6dd3d1aa72ae180dffa1593d596284d1a139462cc6e9f50729ff89dffd01240"
+  },
+  "coupled-probe/guard.log": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/guard.log",
+    "bytes": 10952,
+    "sha256": "d33939f885cc2fb1011cfc4b73b65ebac9006be365d5fad02076e1ce378a8386"
+  },
+  "coupled-probe/restoration.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/restoration.json",
+    "bytes": 256,
+    "sha256": "e5d7449f9b6f54f14993212445fc50dfb9c074c1bb11765ce7b402f6f9c5b7b3"
+  },
+  "coupled-probe/packed_storage.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/packed_storage.py",
+    "bytes": 6538,
+    "sha256": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f"
+  },
+  "coupled-probe/paired_kernels.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/paired_kernels.py",
+    "bytes": 2028,
+    "sha256": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4"
+  },
+  "coupled-probe/kernels.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/kernels.py",
+    "bytes": 2788,
+    "sha256": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf"
+  },
+  "integration/plane_lane.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/plane_lane.py",
+    "bytes": 12962,
+    "sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54"
+  },
+  "integration/cpu_construction.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/cpu_construction.py",
+    "bytes": 3214,
+    "sha256": "afddc620d46d490a27cbf4e40d2ba75d2dd50650e72b1d82a496b79001e0caa9"
+  },
+  "integration/integration-construction.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-construction.json",
+    "bytes": 5546,
+    "sha256": "2606f3a2ed0c4573df696a76a961b3c8961c5476fb251add1d109b6563e08f4e"
+  },
+  "integration/integration_probe.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration_probe.py",
+    "bytes": 10106,
+    "sha256": "60f94392f463a380a7c1f80aca01345570a538f0a54f69c6cc18dca460ea9723"
+  },
+  "integration/integration-command.sh": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-command.sh",
+    "bytes": 682,
+    "sha256": "abb09aac829fb17afa860c1238da54d3885fa7fd62a5d8e4264dc2237bf0a180"
+  },
+  "integration/check_reader_lifecycle.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/check_reader_lifecycle.py",
+    "bytes": 2849,
+    "sha256": "b4927cca68f5abf43a3c8c467bc045237816ae108c4363687db14bec0edeb963"
+  },
+  "integration/reader-lifecycle-check.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/reader-lifecycle-check.json",
+    "bytes": 364,
+    "sha256": "122da07363da7d918ea7e7cf7eddd8081fd0fb03b864d912f6c0d5036d9e0316"
+  },
+  "integration/integration-probe-v2.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-probe-v2.json",
+    "bytes": 78060,
+    "sha256": "f1d91f1700f97006b6433b27ae1b073d39197adb0a079a4aadab1c578a65b292"
+  },
+  "integration/integration-guard-v2.log": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-guard-v2.log",
+    "bytes": 11370,
+    "sha256": "5a0231b5a7c3e30267d933fef621d1f486db3f81897010d3e589fa42f778605d"
+  },
+  "integration/integration-restoration-v2.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-restoration-v2.json",
+    "bytes": 256,
+    "sha256": "16930cf47b0c5d90beba0f791c2a16b0daaca631246b0dacad51b960ff7b959e"
+  },
+  "integration/failed-first-handoff/cpu_construction.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/cpu_construction.py",
+    "bytes": 3214,
+    "sha256": "afddc620d46d490a27cbf4e40d2ba75d2dd50650e72b1d82a496b79001e0caa9"
+  },
+  "integration/failed-first-handoff/integration-command.sh": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/integration-command.sh",
+    "bytes": 679,
+    "sha256": "d934c37ad7bbcd7acedc2ec5b8930ec06a8addfa03e018fd44c0010ab0f9f218"
+  },
+  "integration/failed-first-handoff/integration-construction.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/integration-construction.json",
+    "bytes": 5546,
+    "sha256": "e348014fe8d12c8e0ef9380fe933089f0d11906b2ad0c842602eda0b53b4c5cf"
+  },
+  "integration/failed-first-handoff/integration-guard.log": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/integration-guard.log",
+    "bytes": 13379,
+    "sha256": "39ef1a15dc7fb4d495ef17b9acd02ee9e9f438d9d7579d1d7a2e832906725510"
+  },
+  "integration/failed-first-handoff/integration-probe.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/integration-probe.json",
+    "bytes": 17336,
+    "sha256": "5a0e190fa48a69b782c778a613f2f9a40ae6da7816a70a08011989aa65e77813"
+  },
+  "integration/failed-first-handoff/integration_probe.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/integration_probe.py",
+    "bytes": 10032,
+    "sha256": "55978145a8152df9acdb04b588fff8845a1ca4540ab03c1553637a3d8b0d81a8"
+  },
+  "integration/failed-first-handoff/plane_lane.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/plane_lane.py",
+    "bytes": 12210,
+    "sha256": "2d11efd26fc2ae89f3d05a74634cf9a8c291564474949046985aedcae6393789"
+  },
+  "integration/failed-first-handoff/restoration.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/integration-attempt1/restoration.json",
+    "bytes": 256,
+    "sha256": "536c2f4dc0adef785da62d304df980a11d84951175f8b3bb00bf41bee6bf4b5f"
+  },
+  "harness/command.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/command.json",
+    "bytes": 2192,
+    "sha256": "f26e24f8db19442d66531c588d737098ca443f23ca74f004a29d890d76147235"
+  },
+  "harness/command.sh": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/command.sh",
+    "bytes": 1762,
+    "sha256": "0fa5977c16cd2c793bc7498ddec3f10d06e789e162fc7014f2cf24d6a409875f"
+  },
+  "harness/compat/admission.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/compat/admission.py",
+    "bytes": 4653,
+    "sha256": "08a5093c8d7db1d4367098b0d1b2d4c6f9711fdcf907e58b316c02e7e29c77f8"
+  },
+  "harness/compat/bank_growth_final.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/compat/bank_growth_final.py",
+    "bytes": 1784,
+    "sha256": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b"
+  },
+  "harness/compat/installation.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/compat/installation.json",
+    "bytes": 4105,
+    "sha256": "bca4d36d2df1c655e1207f9417c30647a50e8faa2fe2cd49515afb068cc1c079"
+  },
+  "harness/compat/phase_growth.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/compat/phase_growth.py",
+    "bytes": 9369,
+    "sha256": "8a6e32ff047d24c756646ea52a9d2a9cfb47faaf8b4d9a8efa071460260922ac"
+  },
+  "harness/cpu-construction.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/cpu-construction.json",
+    "bytes": 5280,
+    "sha256": "253c09f74a723c3dd30ef069df9a166b2589b2e09027b164bcf3de6ab541f452"
+  },
+  "harness/native/admission.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/native/admission.py",
+    "bytes": 6655,
+    "sha256": "c44c87116d16c20352dcd9f05420572f3060c461cb1c498db3e22ea9280bd86b"
+  },
+  "harness/native/bank_growth_final.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/native/bank_growth_final.py",
+    "bytes": 1784,
+    "sha256": "17f452a7373d3112bdb48f33dd7107065ead6a38f923c77b472d09fdfff5d11b"
+  },
+  "harness/native/installation.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/native/installation.json",
+    "bytes": 4928,
+    "sha256": "cb3f8178c216246a815efd959c6241250634d03cc83be2e752e4931e8fe52078"
+  },
+  "harness/native/phase_growth.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/native/phase_growth.py",
+    "bytes": 9425,
+    "sha256": "09fd764fd7e3a76cd40e1bd44b632e42d6126909dd015a66a7d10ececb8d5e57"
+  },
+  "harness/native/probe-final-results.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/native/probe-final-results.json",
+    "bytes": 888,
+    "sha256": "2eeb958ee45f43dee7f4517f8138515d194aacec87f39963b531bb5c28ce52cb"
+  },
+  "harness/native-source-change.diff": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/native-source-change.diff",
+    "bytes": 11852,
+    "sha256": "1f8aa65bf0544800668f6156628cc5fc3725b86b93e88d7d59c1db38694af51e"
+  },
+  "harness/packed/installation.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/installation.json",
+    "bytes": 2789,
+    "sha256": "c56cefba5eb1913baa44359ed3320bdca13cad9382d141839e8abb9f56def9bd"
+  },
+  "harness/packed/kernels.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/kernels.py",
+    "bytes": 2788,
+    "sha256": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf"
+  },
+  "harness/packed/packed_admission.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/packed_admission.py",
+    "bytes": 4950,
+    "sha256": "3d240d126c33cf2123bd6f12738993a215ba54b25f099c269a2f797ad3075f1d"
+  },
+  "harness/packed/packed_phase.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/packed_phase.py",
+    "bytes": 12987,
+    "sha256": "61c0bc4c27d88448d1afb9115ba3351f044601c443af4d69e9d105c284cb7ce2"
+  },
+  "harness/packed/packed_storage.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/packed_storage.py",
+    "bytes": 6538,
+    "sha256": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f"
+  },
+  "harness/packed/paired_kernels.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/paired_kernels.py",
+    "bytes": 2028,
+    "sha256": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4"
+  },
+  "harness/packed/plane_lane.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/plane_lane.py",
+    "bytes": 12962,
+    "sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54"
+  },
+  "harness/packed/run_full.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/run_full.py",
+    "bytes": 41904,
+    "sha256": "0c644e433d9735fcaeb56b6ec7995b02d380de870b7a966c80d4c193b0829e43"
+  },
+  "harness/packed/storage-probe.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/storage-probe.json",
+    "bytes": 3662,
+    "sha256": "0bb31ca47ae7582ca533467fec1ce4c0d65e8f0ac58003d03723bfae571815b4"
+  },
+  "harness/packed/storage_probe.py": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/full/packed/storage_probe.py",
+    "bytes": 7373,
+    "sha256": "a94263c67868fa811186fc5f99df7ad1e0307aec24e2307d12388927592c35d3"
+  },
+  "full/full-plane-overlap-20260917-v1.2bd0ad017b95.ar-reference.output.txt": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.2bd0ad017b95.ar-reference.output.txt",
+    "bytes": 4602,
+    "sha256": "dae9c8b00536fdaa7f451679cf19b93b56cfd937c0b6528a7d9c9a280a5ce3d5"
+  },
+  "full/full-plane-overlap-20260917-v1.2bd0ad017b95.output.txt": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.2bd0ad017b95.output.txt",
+    "bytes": 4566,
+    "sha256": "45be39758498a54b370ebbd56e0516b6b163b5aae2d49848dca4a8e8b54fe016"
+  },
+  "full/full-plane-overlap-20260917-v1.bounds.json": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.bounds.json",
+    "bytes": 12224,
+    "sha256": "9252ebb599b26b5e89c4e18c1c1b1b747e9bd697fb453fe4a71512c9a8c0b08c"
+  },
+  "full/full-plane-overlap-20260917-v1.guard.log": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.guard.log",
+    "bytes": 40132,
+    "sha256": "25d66910c98bbdc0ee042aee2487206b9e672474bf4c592a34d81a8aed9776f9"
+  },
+  "full/full-plane-overlap-20260917-v1.jsonl": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.jsonl",
+    "bytes": 233421,
+    "sha256": "b071d2a4a812f1884f1c7bb637d8067b5e2ca8d7854f7815041c50151a43f829"
+  },
+  "full/full-plane-overlap-20260917-v1.os.jsonl": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.os.jsonl",
+    "bytes": 671333,
+    "sha256": "03f87254716913430ddc1e2c17a8b777cd9114c08402889d7ecde64d603a16dc"
+  },
+  "full/full-plane-overlap-20260917-v1.passes.jsonl": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.passes.jsonl",
+    "bytes": 1342,
+    "sha256": "045a70e402769c8e8fed34e166b294b791f9e8835e59055f988ebdfb54c16c80"
+  },
+  "full/full-plane-overlap-20260917-v1.reclamation.json": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.reclamation.json",
+    "bytes": 69062,
+    "sha256": "eb8e1de33ef4d748ae377e84a8363c35722d1db324c0a44e121393c6c840370d"
+  },
+  "full/full-plane-overlap-20260917-v1.target-plan.json": {
+    "original_path": "/tmp/dsv41-110-stage/full-plane-overlap-20260917-v1.target-plan.json",
+    "bytes": 776,
+    "sha256": "0c49365d6c5a3f49c9a45bf0bb990f6fbf94b6525ed856a437b1e5e7a69e724d"
+  },
+  "summary.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/summary.json",
+    "bytes": 3608,
+    "sha256": "c5d674557de0d319cc924c4fe7259301203c9fed4b8f62ef6a0e88138ad3f351"
+  },
+  "restoration-full.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/restoration-full.json",
+    "bytes": 256,
+    "sha256": "6b67f0527e0d37317808d4b73e8afd4aa7d5f1650bc4598ff82dad5e7b00fb1a"
+  },
+  "after-restore-memory.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/after-restore-memory.json",
+    "bytes": 847,
+    "sha256": "42c8db5182f8218f2c04cd1b3e6cb32e08bb034d0dc32035380a1d6772cd0e9f"
+  },
+  "cache-cleanup-guard.log": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/cache-cleanup-guard.log",
+    "bytes": 21604,
+    "sha256": "31601197816568b8ef4436257de4730255126885b8cdadec9652a9656aa6ff30"
+  },
+  "cache-cleanup-restoration.json": {
+    "original_path": "/tmp/dsv41-plane-overlap-20260917/cache-cleanup-restoration.json",
+    "bytes": 1887,
+    "sha256": "10a3f6fcae96ca7ee5f8634949196b0b908628fa01dde0a0a660808e64c556a1"
+  }
+}

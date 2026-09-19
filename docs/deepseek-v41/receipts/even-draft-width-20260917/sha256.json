@@ -1,0 +1,21 @@
+{
+  "files": {
+    "child.json": "d94e5b1c47e92eef6a51d0ea7f0f051543dab8a7c8d0a1d7e7e7e024900ac69e",
+    "command.json": "898cd8c37bb0403ed5e923eed235bc5f9a45bb6ef069a08c0f77301f46d91ba3",
+    "command.sh": "766e1be606889e9770ad01b71144933570b4561372847758fdf38e77d15f5d4a",
+    "draft-replay.json.gz": "84f508a5912b0402da8ccfb741886fd78ff5966714cf593378f940f579ec65b3",
+    "guard.log": "ebd9271753c0fe64576f9080185e3a585d69b83ece97ccc0b6581322fc7fdba7",
+    "installation.json": "16b1c9c91ecb0b14d6db6c7b0fac1af06785ef77cbd7674a65672ee81442f764",
+    "post-run-health.json": "e31c8e61b11a58b1a5babad984be455cc0186b2d52ace35317271711fd892e77",
+    "reclamation.json": "fe43f5dc2ccdb6fe4f02804c728b8166dd119d62825767991c404fb82d4592f5",
+    "replay_even.py": "6f06da7ee18c8949e57db77f542f5665d5a62ae6666b2d67e00107d3970b3d93",
+    "run_screen.py": "9531205a6e15907826932a4e752cde15510c1aa5ee26b2d8360a3a43eb64fee0"
+  },
+  "compressed_sources": {
+    "draft-replay.json.gz": {
+      "raw_name": "draft-replay.json",
+      "raw_bytes": 240635,
+      "raw_sha256": "77c0d58da82a5f71de90408d70b4c1dc3aa1cb7ef9af7e63bcc8f0f41f66f5f6"
+    }
+  }
+}

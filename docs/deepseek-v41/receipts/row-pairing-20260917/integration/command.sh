@@ -1,0 +1,2 @@
+#!/bin/sh
+env GPU_WINDOW_LOCK_TIMEOUT=120 GPU_WINDOW_TOTAL_MEM_CEILING_BYTES=110000000000 GPU_WINDOW_CHILD_RSS_CAP_BYTES=8589934592 GPU_WINDOW_MIN_AVAIL_GB=8 GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 PYTHONUNBUFFERED=1 PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41:/tmp/dsv41-row-pairing-20260917/integration scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-row-pairing-20260917/integration/integration_probe.py > /tmp/dsv41-row-pairing-20260917/integration/guard.log 2>&1

@@ -1,0 +1,112 @@
+# arm: cell16k_ring_v2_draft_attn_pf0
+# stream: dspark
+# token_ids_sha256: 0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac
+# decode_tok_s: 8.938810167954449
+# divergence: {"divergence_index": 297, "ar_token": 11067, "dspark_token": 62596, "ar_top2_margin": 0.0, "dspark_top2_margin": 0.25, "max_abs_logit_delta": 0.75, "tie_margin": 0.03, "tie_band_used": 0.75, "tie_ulps": 3, "peak_contested_logit": 33.75, "ulp_bf16_at_peak": 0.25, "ar_contested_margin": 0.0, "dspark_contested_margin": 0.25, "delta_at_ar_token": 0.0, "delta_at_dspark_token": 0.25, "rounding_class_by_delta": true, "deltas_within_tie_band": true, "rows_consistent": true, "ar_logit_at_ar_token": 33.75, "ar_logit_at_dspark_token": 33.75, "dspark_logit_at_ar_token": 33.75, "dspark_logit_at_dspark_token": 34.0, "class": "tie_flip", "capture_index": 297, "capture_index_matches_first": true}
+
+```diff
+--- a/mtplx/generate.py
++++ b/mtplx/generate.py
+@@
+ def _generation_rate_fields(
+     *,
+     generated_tokens: int,
+     elapsed_s: float,
+     prompt_eval_time_s: float,
+     cache_restore_time_s: float = 0.0,
+ ) -> dict[str, float]:
+     end_to_end_tok_s = generated_tokens / elapsed_s if elapsed_s > 0.0 else 0.0
+     non_decode_elapsed_s = min(
+         max(0.0, prompt_eval_time_s) + max(0.0, cache_restore_time_s),
+         max(0.0, elapsed_s),
+     )
+     decode_elapsed_s = max(0.0, elapsed_s - non_decode_elapsed_s)
+     decode_tok_s = (
+         generated_tokens / decode_elapsed_s if decode_elapsed_s > 0.0 else 0.0
+     )
+     return {
+         "tok_s": decode_tok_s,
+         "decode_elapsed_s": decode_elapsed_s,
+         "decode_tok_s": decode_tok_s,
+         "end_to_end_tok_s": end_to_end_tok_s,
+     }
+ 
+ 
++def _percentile(values: Sequence[float], q: float) -> float | None:
++    """Linear-interpolation percentile over a non-empty sequence.
++
++    Returns None for an empty input so callers can distinguish "no data"
++    from a genuine zero. ``q`` is a fraction in [0, 1].
++    """
++
++    if not values:
++        return None
++    ordered = sorted(float(value) for value in values)
++    if len(ordered) == 1:
++        return ordered[0]
++    position = max(0.0, min(1.0, float(q))) * (len(ordered) - 1)
++    lower = int(position)
++    upper = min(lower + 1, len(ordered) - 1)
++    weight = position - lower
++    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
++
++
++def _optional_float(value: Any) -> float | None:
++    """Coerce an optional numeric metric, tolerating None and non-numerics."""
++
++    if value is None:
++        return None
++    try:
++        return float(value)
++    except (TypeError, ValueError):
++        return None
++
++
++def summarize_generation_outputs(
++    outputs: Sequence["GenerationOutput"],
++) -> dict[str, Any]:
++    """Aggregate a batch of generation outputs into a JSON-serializable summary.
++
++    Reports request count, total generated tokens, mean/p95 prefill and decode
++    throughput, mean wall time, and peak memory in GiB. Optional metrics that
++    are missing on any output are ignored rather than treated as zero, and an
++    empty sequence yields a well-formed summary with null aggregates.
++    """
++
++    request_count = len(outputs)
++    total_generated_tokens = 0
++    prefill_tps: list[float] = []
++    decode_tps: list[float] = []
++    wall_times: list[float] = []
++    peak_memory_gib: list[float] = []
++
++    for output in outputs:
++        generated = getattr(output, "generated_tokens", None)
++        if generated is None:
++            generated = getattr(output, "num_generated_tokens", None)
++        generated_value = _optional_float(generated)
++        if generated_value is not None:
++            total_generated_tokens += int(generated_value)
++
++        prefill_value = _optional_float(
++            getattr(output, "prefill_tok_s", None)
++            or getattr(output, "prefill_tps", None)
++        )
++        if prefill_value is not None:
++            prefill_tps.append(prefill_value)
++
++        decode_value = _optional_float(
++            getattr(output, "decode_tok_s", None)
++            or getattr(output, "decode_tps", None)
++        )
++        if decode_value is not None:
++            decode_tps.append(decode_value)
++
++        wall_value = _optional_float(
++            getattr(output, "wall_time_s", None)
++            or getattr(output, "elapsed_s", None)
++        )
++        if wall_value is not None:
++            wall_times.append(wall_value)
++
++        peak_bytes = _optional_float(getattr(output, "peak_memory

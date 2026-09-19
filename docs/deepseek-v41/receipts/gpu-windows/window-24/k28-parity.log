@@ -1,0 +1,71 @@
+[W58/K28 parity]
+{
+  "all_passed": true,
+  "arms": {
+    "long_16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 512,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 4.3655745685100555e-11,
+      "passed": true,
+      "scale": 0.125,
+      "shape": [
+        1,
+        8,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "scale_one": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 512,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 3.725290298461914e-09,
+      "passed": true,
+      "scale": 1.0,
+      "shape": [
+        2,
+        8,
+        32,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "small_4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 4096,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 1.7462298274040222e-10,
+      "passed": true,
+      "scale": 0.125,
+      "shape": [
+        1,
+        64,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    }
+  },
+  "default_device": "Device(gpu, 0)",
+  "kernel": "K28 dsv41_fused_softmax",
+  "kernel_builder_error": null,
+  "kernel_builder_ok": true,
+  "metal_available": true,
+  "receipt_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-24/k28-parity.json",
+  "test": "test_fused_softmax_parity_gpu"
+}
+.
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

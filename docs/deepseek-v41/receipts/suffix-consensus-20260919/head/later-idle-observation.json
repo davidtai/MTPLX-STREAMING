@@ -1,0 +1,11 @@
+{
+  "checked_at": 1789821694.214478,
+  "health_ok": true,
+  "active_requests": 0,
+  "warmup_state": "done",
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "lock_free_at_probe": true,
+  "scope": "Independent idle observation after head and intervening foreign jobs, before full candidate."
+}

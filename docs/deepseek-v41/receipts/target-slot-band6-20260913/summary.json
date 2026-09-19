@@ -1,0 +1,57 @@
+{
+  "source_commit": "5c7661db48a1bed22cef753e336f9aba911add24",
+  "wrapper_sha256": "26c691d8af6840c350d216778e20b417a45a2b2e021dda5c20b6596fe36fead8",
+  "prior_source_commit": "1f3b9bca7ae5aab6a4bf30eb969b1f6dd0368711",
+  "prompt_ids_sha256": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2",
+  "input_tokens": 16384,
+  "decode_steps": 1023,
+  "output_tokens": 1024,
+  "slots_per_layer": 78,
+  "prior_slots_per_layer": 72,
+  "budget": {
+    "whole_machine_limit_bytes": 110000000000,
+    "measured_baseline_bytes": 10292700000.0,
+    "transient_planning_band_gib": 6,
+    "allocator_cache_gib": 2,
+    "python_reserve_gib": 2,
+    "mlx_peak_bytes": 91897033560,
+    "sampled_physical_peak_bytes_250ms": 103392870400,
+    "admission_physical_bound_bytes": 108632200780.0,
+    "sample_count": 2516,
+    "swapouts_first": 4399765,
+    "swapouts_last": 4399765
+  },
+  "ar": {
+    "decode_tok_s": 6.2892358004934925,
+    "decode_wall_s": 162.6588718330022,
+    "ids_equal_prior": true,
+    "token_ids_sha256": "2bd0ad017b9580c8fec340e297696a0bd81a7759b6c5dfe7c5d64de6d40c1090"
+  },
+  "dspark": {
+    "decode_tok_s": 9.498634788733698,
+    "decode_wall_s": 107.69968766599777,
+    "pass_wall_s": 215.8765693330206,
+    "cycles": 206,
+    "accept_rate": 0.9163879598662207,
+    "token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "ids_equal_prior": true,
+    "divergence_class": "tie_flip",
+    "divergence_index": 297,
+    "records_read": 50552,
+    "read_bytes": 950409953280,
+    "read_gb_per_s_window": 13.1894
+  },
+  "comparison": {
+    "previous_full_mtp_tps": 8.938810167954449,
+    "mtp_tps_gain_pct": 6.262853895099085,
+    "prior_records_read": 54694,
+    "records_saved": 4142,
+    "bytes_saved": 77872250880,
+    "read_reduction_pct": 7.573042746919223
+  },
+  "guard_exit_zero": true,
+  "qwen_restored_healthy_warm": true,
+  "gpu_lock_released": true,
+  "verified_utc": "2026-09-13T23:11:22.115396+00:00",
+  "caveat": "One full candidate with identical production code and different memory-plan capacity. Not a repeated isolated A/B or proof of 20 TPS; physical memory sampled at 250 ms."
+}

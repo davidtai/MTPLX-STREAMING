@@ -1,0 +1,26 @@
+{
+  "source_commit": "61b6899f27fee89f63bf7eed9f1c8aa77e73a53a",
+  "capture_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/.benchmark-artifacts/deepseek-v41/router-feature-20260918/full-router-feature-20260918-v2.router-capture.npz",
+  "capture_sha256": "5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e",
+  "capture_bytes": 45592534,
+  "static_incremental_bound_bytes": 1073741824,
+  "source_analysis_sha256": "f7380cffb99ec032e3ba64f1e7c0e07319eaea6f1751ecf94de54c25e848fe42",
+  "script_sha256": "357e302d18f46e31d3bd8252fc5cff49a43c7c927476886b5324f6e456eb3881",
+  "analysis_sha256": "d2d4dc85acd2dbc164280ffc787ae3cf2f9e675a802b847c6d5df9b66a44ffec",
+  "training_cycles": [
+    0,
+    16
+  ],
+  "calibration_cycles": [
+    16,
+    32
+  ],
+  "heldout_cycles": [
+    32,
+    64
+  ],
+  "ridge": 1.0,
+  "ranking_margin": 0.025,
+  "scope": "Exact16K/1K native M6 capture, first64 cycles at105 slots. No true gate logits were stored, so this is a separate label-trained minimum-margin residual adapter, not a transfer or validation of the W35 score-regression model. No target execution, reads, predictor timing or TPS.",
+  "construction": "Fit per-layer affine residual from previous-layer predicted scores to the minimal score changes needed to put observed top6 labels above a0.025 margin. Fit only first16 past cycles. All admission settings use the following16 cycles and freeze before heldout32."
+}

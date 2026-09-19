@@ -1,0 +1,119 @@
+2026-09-13T13:06:59Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-13T13:06:59Z [gpu_window] abort: to abort this window cleanly, kill -TERM 95065 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-13T13:06:59Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-13T13:06:59Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-13T13:06:59Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-13T13:06:59Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-13T13:06:59Z [gpu_window] phase 2: com.tea.qwen loaded (pid=94226); plist=/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T13:06:59Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-13T13:06:59Z [gpu_window] phase 3: available memory before bootout: 36.7 GiB
+2026-09-13T13:06:59Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-13T13:07:00Z [gpu_window] phase 3: com.tea.qwen captured process tree is gone
+2026-09-13T13:07:00Z [gpu_window] phase 3: stop confirmed -- pid gone, 79.5 GiB freed, 116.2 GiB available (>= 100 GiB)
+2026-09-13T13:07:00Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-13T13:07:00Z [gpu_window] phase 3: reclaiming stopped-service clean file cache from /Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+{"operation": "stopped_service_file_cache_reclamation", "model_dir": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed", "files": [{"file": "model-00001-of-00019.safetensors", "file_bytes": 4613737928, "cached_page_bytes_before": 4576804864, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00002-of-00019.safetensors", "file_bytes": 4299165294, "cached_page_bytes_before": 1513472000, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00003-of-00019.safetensors", "file_bytes": 4613737948, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00004-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00005-of-00019.safetensors", "file_bytes": 4613737941, "cached_page_bytes_before": 1560133632, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00006-of-00019.safetensors", "file_bytes": 4299165282, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00007-of-00019.safetensors", "file_bytes": 4613737956, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00008-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00009-of-00019.safetensors", "file_bytes": 4613737939, "cached_page_bytes_before": 1560117248, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00010-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00011-of-00019.safetensors", "file_bytes": 4613737944, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00012-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00013-of-00019.safetensors", "file_bytes": 4613737945, "cached_page_bytes_before": 1560215552, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00014-of-00019.safetensors", "file_bytes": 4299165290, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00015-of-00019.safetensors", "file_bytes": 4613737952, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00016-of-00019.safetensors", "file_bytes": 4299165265, "cached_page_bytes_before": 3640410112, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00017-of-00019.safetensors", "file_bytes": 4830006690, "cached_page_bytes_before": 4160520192, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00018-of-00019.safetensors", "file_bytes": 4307505704, "cached_page_bytes_before": 1511079936, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00019-of-00019.safetensors", "file_bytes": 20813169, "cached_page_bytes_before": 18317312, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-vision.safetensors", "file_bytes": 897899145, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "mtp.safetensors", "file_bytes": 1678147375, "cached_page_bytes_before": 1678147584, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "ngram-table.safetensors", "file_bytes": 32000154008, "cached_page_bytes_before": 14774124544, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}], "before": {"sample_start_monotonic_ns": 217924672395875, "sample_end_monotonic_ns": 217924675721125, "process": {"peak_maxrss_bytes": 23281664, "resident_bytes": 23281664, "phys_footprint_bytes": 14090696, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 87076683776, "wired_bytes": 3527131136, "active_bytes": 3336667136, "inactive_bytes": 37567381504, "speculative_bytes": 129712128, "anonymous_bytes": 2025521152, "file_backed_bytes": 39008239616, "compressor_bytes": 2032238592, "compressed_bytes": 6881656832, "used_bytes": 46463418368, "non_file_used_bytes": 7584890880, "swapins_pages": 778707, "swapouts_pages": 4399765, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "after": {"sample_start_monotonic_ns": 217927807255541, "sample_end_monotonic_ns": 217927810156750, "process": {"peak_maxrss_bytes": 23429120, "resident_bytes": 23429120, "phys_footprint_bytes": 14238152, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 123648360448, "wired_bytes": 3284402176, "active_bytes": 2344927232, "inactive_bytes": 2230697984, "speculative_bytes": 131956736, "anonymous_bytes": 2245001216, "file_backed_bytes": 2462580736, "compressor_bytes": 2019721216, "compressed_bytes": 6859816960, "used_bytes": 9879748608, "non_file_used_bytes": 7549124608, "swapins_pages": 778707, "swapouts_pages": 4399765, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "elapsed_s": 3.1344835000054445, "physical_used_reduction_bytes": 36583669760, "cached_page_bytes_before": 36553342976, "cached_page_bytes_after": 0, "semantics": "cached pages include speculative free pages; physical-used reduction is measured separately"}
+2026-09-13T13:07:03Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 9.2 GiB (ceiling 102.445483 GiB); compressor at start 1.6 GiB
+2026-09-13T13:07:03Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-13T13:07:03Z [gpu_window] phase 4: exported MTPLX_DSV41_BOX_BASELINE_GB=9.8676 (decimal GB) == 9.2 GiB baseline to the step env
+2026-09-13T13:07:03Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 3.0 GiB (~3 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-13T13:07:03Z [gpu_window] phase 4: starting GPU step (tag gpuwin-95065-1789304823-2258531871) under child-tree footprint cap 3.0 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python -m pytest -q tests/models/test_deepseek_v41_layer_major_projection_lifetime.py
+2026-09-13T13:07:03Z [gpu_window] phase 4: mem sample -- baseline 9.2 GiB + step footprint 0.0 GiB, live physical used 9.2 GiB => guard accounted 9.2 GiB; compressor +0.0 GiB (trip 8 GiB)
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+________ test_projection_lifetime_and_state_across_requests[25-7-True] _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1142f2390>, rows = 25
+chunk = 7, release = True
+
+    @pytest.mark.parametrize("rows,chunk,release", [(25, 7, True), (6, 2, False)])
+    def test_projection_lifetime_and_state_across_requests(monkeypatch, rows, chunk, release):
+        monkeypatch.setenv("MTPLX_DSV41_ATTN_FUSED_PROJ", "0")
+        monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+        args = _fixture._csa_args(dspark_target_layer_ids=[5, 6, 7])
+        model = dsv41.Model(args)
+        _fixture._randomize(model, seed=71)
+        for layer in model.model.layers:
+            layer.attn.wo_a = nn.QuantizedLinear.from_linear(
+                layer.attn.wo_a, group_size=32, bits=8, mode="mxfp8")
+        mx.eval(model.parameters())
+        original = dsv41.Attention._o_lora_dense_weight
+        observed = {"active": False, "previous": None, "ids": {}}
+    
+        def weight(attn):
+            if not observed["active"]:
+                return original(attn)
+            previous = observed["previous"]
+            if release and previous is not None and previous is not attn:
+                assert getattr(previous, "_wo_a_dense_cache", None) is None, (
+                    "completed prefill layer still owns its fp32 projection cache")
+            w = original(attn)
+            ids = observed["ids"].setdefault(attn.layer_id, [])
+            ids.append(id(w))
+            assert len(set(ids)) == 1, "all chunks in a layer must reuse the same weight"
+            observed["previous"] = attn
+            return w
+    
+        monkeypatch.setattr(dsv41.Attention, "_o_lora_dense_weight", weight)
+        for request in range(2):
+>           ids = mx.array([(np.arange(rows) + request) % args.vocab_size])
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           ValueError: Invalid type ndarray received in array initialization.
+
+tests/models/test_deepseek_v41_layer_major_projection_lifetime.py:50: ValueError
+________ test_projection_lifetime_and_state_across_requests[6-2-False] _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x114311550>, rows = 6
+chunk = 2, release = False
+
+    @pytest.mark.parametrize("rows,chunk,release", [(25, 7, True), (6, 2, False)])
+    def test_projection_lifetime_and_state_across_requests(monkeypatch, rows, chunk, release):
+        monkeypatch.setenv("MTPLX_DSV41_ATTN_FUSED_PROJ", "0")
+        monkeypatch.setattr(dsv41, "_ATTN_COMPILE", False)
+        args = _fixture._csa_args(dspark_target_layer_ids=[5, 6, 7])
+        model = dsv41.Model(args)
+        _fixture._randomize(model, seed=71)
+        for layer in model.model.layers:
+            layer.attn.wo_a = nn.QuantizedLinear.from_linear(
+                layer.attn.wo_a, group_size=32, bits=8, mode="mxfp8")
+        mx.eval(model.parameters())
+        original = dsv41.Attention._o_lora_dense_weight
+        observed = {"active": False, "previous": None, "ids": {}}
+    
+        def weight(attn):
+            if not observed["active"]:
+                return original(attn)
+            previous = observed["previous"]
+            if release and previous is not None and previous is not attn:
+                assert getattr(previous, "_wo_a_dense_cache", None) is None, (
+                    "completed prefill layer still owns its fp32 projection cache")
+            w = original(attn)
+            ids = observed["ids"].setdefault(attn.layer_id, [])
+            ids.append(id(w))
+            assert len(set(ids)) == 1, "all chunks in a layer must reuse the same weight"
+            observed["previous"] = attn
+            return w
+    
+        monkeypatch.setattr(dsv41.Attention, "_o_lora_dense_weight", weight)
+        for request in range(2):
+>           ids = mx.array([(np.arange(rows) + request) % args.vocab_size])
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           ValueError: Invalid type ndarray received in array initialization.
+
+tests/models/test_deepseek_v41_layer_major_projection_lifetime.py:50: ValueError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/models/test_deepseek_v41_layer_major_projection_lifetime.py::test_projection_lifetime_and_state_across_requests[25-7-True]
+FAILED tests/models/test_deepseek_v41_layer_major_projection_lifetime.py::test_projection_lifetime_and_state_across_requests[6-2-False]
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-09-13T13:07:04Z [gpu_window] phase 4: GPU step exited with code 1; peak step footprint 0.0 GiB, peak guard accounted 9.2 GiB, peak physical used 9.2 GiB, peak compressor delta 0.0 GiB
+2026-09-13T13:07:04Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-13T13:07:21Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-13T13:07:21Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

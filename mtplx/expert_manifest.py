@@ -65,7 +65,33 @@ _SHADOW_COMPONENTS = tuple(
     for projection in _PROJECTIONS
     for leaf in _SHADOW_LEAVES
 )
-_KNOWN_COMPONENTS = frozenset(_COMPONENTS) | frozenset(_SHADOW_COMPONENTS)
+# Native mxfp4 (lossless FP4 repack, DeepSeek-V4.1-Flash) records store six
+# components per expert: per projection one packed uint32 FP4-code tensor plus
+# one uint8 E8M0 shared-exponent scale row -- no bias leaf (mlx mxfp4 layout).
+# ``weight``/``scales`` reuse the affine leaf names, so these are already a
+# subset of ``_COMPONENTS``; the distinct thing is the six-leaf order.
+MXFP4_CODEC = "mxfp4"
+MXFP4_BITS = 4
+MXFP4_GROUP = 32
+# The mxfp4 record (18_800_640 B for the pinned geometry) is not a multiple of
+# the default 16 KiB page alignment, so a CONTIGUOUS bank (record N at
+# N*record_bytes, as pinned for the parallel full-bank write) must declare the
+# largest power-of-two that divides the record size.  18_800_640 = 2**13 * 2295,
+# so 8192 is that alignment; the streaming pread/F_NOCACHE reader does not require
+# 16 KiB alignment (only the zero-copy mmap-mapped store would, which mxfp4 does
+# not use).
+MXFP4_ALIGNMENT = 8192
+_MXFP4_LEAVES = ("weight", "scales")
+_MXFP4_COMPONENTS = tuple(
+    f"{projection}.{leaf}"
+    for projection in _PROJECTIONS
+    for leaf in _MXFP4_LEAVES
+)
+_KNOWN_COMPONENTS = (
+    frozenset(_COMPONENTS)
+    | frozenset(_SHADOW_COMPONENTS)
+    | frozenset(_MXFP4_COMPONENTS)
+)
 # Nominal quantization bits carried by shadow-codec manifests; the byte
 # math lives in the codec (10 or 15 bytes per g64 group), the nominal bits
 # keep spec/manifest/pool guards single-valued.
@@ -102,11 +128,13 @@ def expert_components_for_mode(quant_mode: str) -> tuple[str, ...]:
 
     if quant_mode == "affine":
         return _COMPONENTS
+    if quant_mode == MXFP4_CODEC:
+        return _MXFP4_COMPONENTS
     if quant_mode in SHADOW_CODECS:
         return _SHADOW_COMPONENTS
     raise ExpertManifestError(
         f"unsupported manifest quantization mode {quant_mode!r}; expected "
-        f"'affine' or one of {', '.join(SHADOW_CODECS)}"
+        f"'affine', {MXFP4_CODEC!r}, or one of {', '.join(SHADOW_CODECS)}"
     )
 _LAYER_RE = re.compile(
     r"(?:^|\.)layers\.(?P<layer>\d+)\.mlp\."
@@ -560,24 +588,32 @@ class ExpertRecord:
         _valid_lengths = {
             len(_COMPONENTS),
             len(_SHADOW_COMPONENTS),
+            len(_MXFP4_COMPONENTS),
             len(_MIXED_T158_COMPONENTS),
         }
         if len(raw_segments) not in _valid_lengths:
             raise ExpertManifestError(
                 "expert record must contain the nine ordered affine components, "
-                "the six ordered shadow-codec components, or a mixed-official "
-                "seven-segment (t158 gate/up + affine3 down) record"
+                "the six ordered shadow-codec or mxfp4 components, or a "
+                "mixed-official seven-segment (t158 gate/up + affine3 down) record"
             )
         segments = tuple(TensorSegment.from_dict(item) for item in raw_segments)
         ordered = tuple(segment.component for segment in segments)
         # _MIXED_AFFINE2_COMPONENTS == _COMPONENTS (the affine order), so the
-        # 9-segment mixed order is already covered by _COMPONENTS.
-        _valid_orders = {_COMPONENTS, _SHADOW_COMPONENTS, _MIXED_T158_COMPONENTS}
+        # 9-segment mixed order is already covered by _COMPONENTS.  mxfp4 shares
+        # the six-leaf count with shadow but orders weight/scales, not
+        # packed/scales, so it needs its own entry.
+        _valid_orders = {
+            _COMPONENTS,
+            _SHADOW_COMPONENTS,
+            _MXFP4_COMPONENTS,
+            _MIXED_T158_COMPONENTS,
+        }
         if ordered not in _valid_orders:
             raise ExpertManifestError(
                 "expert record must contain the nine ordered affine components, "
-                "the six ordered shadow-codec components, or the seven ordered "
-                "mixed-official t158 components"
+                "the six ordered shadow-codec or mxfp4 components, or the seven "
+                "ordered mixed-official t158 components"
             )
         digest = obj.get("sha256")
         sidecar_offset = obj.get("sidecar_offset")
@@ -1068,6 +1104,15 @@ class ExpertManifest:
                 raise ExpertManifestError(
                     "only affine Q2 or Q4 expert manifests are supported"
                 )
+        elif self.quant_mode == MXFP4_CODEC:
+            if self.quant_bits != MXFP4_BITS:
+                raise ExpertManifestError(
+                    f"mxfp4 manifests carry nominal quantization bits {MXFP4_BITS}"
+                )
+            if self.quant_group_size != MXFP4_GROUP:
+                raise ExpertManifestError(
+                    f"mxfp4 manifests group in {MXFP4_GROUP}s"
+                )
         elif self.quant_mode in SHADOW_CODECS:
             if self.quant_bits != _SHADOW_NOMINAL_BITS[self.quant_mode]:
                 raise ExpertManifestError(
@@ -1093,8 +1138,8 @@ class ExpertManifest:
                 )
         else:
             raise ExpertManifestError(
-                "only affine Q2/Q4, shadow-codec (b1, t158), or mixed-official "
-                "expert manifests are supported"
+                "only affine Q2/Q4, mxfp4, shadow-codec (b1, t158), or "
+                "mixed-official expert manifests are supported"
             )
         # Mixed-official records differ per layer, so the expected component
         # order is resolved per record below instead of once here.
@@ -1408,10 +1453,13 @@ def save_expert_manifest(manifest: ExpertManifest, path: Path | str) -> ExpertMa
 
 
 def _read_safetensors_header(
-    path: Path, *, relative_name: str
+    path: Path, *, relative_name: str, fd: int | None = None
 ) -> tuple[ShardInfo, tuple[_TensorInfo, ...]]:
+    """Inspect a shard; a supplied descriptor is borrowed and never repositioned."""
+    owns_fd = fd is None
     try:
-        fd = os.open(path, _readonly_flags())
+        if owns_fd:
+            fd = os.open(path, _readonly_flags())
         try:
             metadata = os.fstat(fd)
             if not stat.S_ISREG(metadata.st_mode):
@@ -1427,7 +1475,8 @@ def _read_safetensors_header(
                 )
             header_raw = _pread_exact(fd, 8, header_length)
         finally:
-            os.close(fd)
+            if owns_fd:
+                os.close(fd)
     except OSError as exc:
         raise ExpertManifestError(f"could not inspect {relative_name}: {exc}") from exc
     header = _expect_object(
@@ -1598,7 +1647,21 @@ def _expected_component_shape(
         if projection in {"gate_proj", "up_proj"}
         else spec.expert_hidden_size
     )
-    if spec.expert_codec != "affine":
+    if spec.expert_codec == MXFP4_CODEC:
+        # Native mxfp4: packed FP4 codes (uint32) + one uint8 E8M0 exponent per
+        # 32-column group, no bias.  ``weight`` shares the affine packed formula
+        # (bits=4 -> input/8 words); ``scales`` is one byte per group.
+        if leaf == "weight":
+            dtype = "U32"
+            shape = (output, input_size * spec.quant_bits // 32)
+        elif leaf == "scales":
+            dtype = "U8"
+            shape = (output, input_size // spec.quant_group_size)
+        else:
+            raise ExpertManifestError(
+                f"component {component!r} is not part of the mxfp4 record layout"
+            )
+    elif spec.expert_codec != "affine":
         groups = input_size // SHADOW_GROUP
         if leaf == "packed":
             if spec.expert_codec == "b1":

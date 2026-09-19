@@ -1,0 +1,96 @@
+{
+  "scope": "Reanalysis of12 authenticated historical samples, not a new artifact read. Applies only to per-component order0 byte coding of weight payload; structured codecs may beat this model. Packed scales are already resident in the current fastest lane.",
+  "source_receipt": "docs/deepseek-v41/receipts/mxfp4-entropy-20260913/expert-entropy-probe.json",
+  "source_receipt_sha256": "b0c81506855396e57f37f0eac133eff831d1a88c18067e5badc6428ba9b66db6",
+  "samples": [
+    {
+      "layer": 0,
+      "expert": 0,
+      "source_record_sha256": "53891b5541b11c41c8d51aff28b53e19685897474dbf47ea0f4a57f967f95561",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9410415633842021
+    },
+    {
+      "layer": 0,
+      "expert": 191,
+      "source_record_sha256": "6dfa5e829e81d597fccde03ac5ffde1d1032c8fdc52cc42d3ab3ff5361323f91",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9413704809775638
+    },
+    {
+      "layer": 8,
+      "expert": 0,
+      "source_record_sha256": "af67334f3408e3bbd102588a381a88501f9a97c50d2596bfdfd11ebbcb8e3099",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9410792857482125
+    },
+    {
+      "layer": 8,
+      "expert": 191,
+      "source_record_sha256": "05f35d4fb2216a4aa8cdc582e92bd2c6d0e399d166c2c584df5a936a797df981",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.940788454696522
+    },
+    {
+      "layer": 16,
+      "expert": 0,
+      "source_record_sha256": "8674c4fa18349b049ad042712bc5726a18be1cda7fd233e154b7bc2539c0bdae",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9410238435599009
+    },
+    {
+      "layer": 16,
+      "expert": 191,
+      "source_record_sha256": "80c628cce59f17780e0b706919944af07facb1857d04f152d47544c2daa931bb",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9407979210923604
+    },
+    {
+      "layer": 24,
+      "expert": 0,
+      "source_record_sha256": "11ab6fedffe8c1203ceb455f653e0aa15dd9e25b086757b68f62fef892f4d8d2",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9415559581246239
+    },
+    {
+      "layer": 24,
+      "expert": 191,
+      "source_record_sha256": "67ca3632ff07c39d929eaa9f9f688db6658cfd2052a06f4197799f5ae9744f97",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9410383062076623
+    },
+    {
+      "layer": 32,
+      "expert": 0,
+      "source_record_sha256": "9cd09484e054e5150173ca639c46c862a4e0d4b0be4d31d23e66dbc4c4da6ef6",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9402081503850442
+    },
+    {
+      "layer": 32,
+      "expert": 191,
+      "source_record_sha256": "cedea07e5de89c26408d3d4b75cb9d08950f193a64a6ccf8758e8bc3e5fa9a91",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9408177214527783
+    },
+    {
+      "layer": 39,
+      "expert": 0,
+      "source_record_sha256": "eecec4dd5dcc05a9df9e543bf13aef2e19be96b10c2c87c261a9589387580592",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9389283397118675
+    },
+    {
+      "layer": 39,
+      "expert": 191,
+      "source_record_sha256": "a2bb6098a6e522bef5a05e2f3096d3a8ce6e0d90c18dbbcd95fbec249b32103e",
+      "weight_bytes": 17694720,
+      "ideal_order0_weight_fraction": 0.9384526621674887
+    }
+  ],
+  "mean_ideal_weight_fraction": 0.9405918906256856,
+  "mean_ideal_saving_percent": 5.94081093743144,
+  "observed_uncached_weight_GBps": 13.08,
+  "minimum_serial_decoder_GBps_for_ideal_break_even": 220.17196200583433,
+  "decision": "Do not stage a full codec from the old whole-record compression percentage. Even ideal order0 byte coding now saves only about5.94percent before framing or decode. Check native duplicate projection owners first."
+}

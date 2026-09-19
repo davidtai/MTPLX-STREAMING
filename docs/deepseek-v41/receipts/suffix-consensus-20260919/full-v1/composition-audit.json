@@ -1,0 +1,12 @@
+{
+  "complete": true,
+  "cpu_only": true,
+  "mlx_imported": false,
+  "matched_saved_proposals": 195,
+  "verify_rows": 1240,
+  "original_five_proposals_preserved": true,
+  "confidence_gate": "reconstructed saved logits; saved sigmoid margin exceeds0.002",
+  "native_mlx_operations_unchanged": true,
+  "decode_function_sha256": "43a4cf6b01e5e3f6a562cbaf53a232b781cfef0f164185151903c5f9147c913a",
+  "scope": "Construction identity and frozen trajectory only; no full target or TPS claim."
+}

@@ -1,0 +1,66 @@
+{
+  "name": "priority",
+  "source_commit": "039e3bd811c64aa645dd89b5b8c85e1c3cf5ab53",
+  "scope": "Three adjacent real expert layers; continuous held-out timing includes final drain and native gate compute on synthetic BF16 inputs. Ranked predictions use captured exact-workload scores; this prices computation but is not live predictor parity. No attention or full-model TPS claim. Candidate issues after first GU and gives demand jobs queue priority; unchanged native controls keep the original executor and issue no speculation.",
+  "arms": [
+    {
+      "mode": "native",
+      "sequence": 0,
+      "heldout_total_ns": 660016125,
+      "all64_total_ns": 1580912458,
+      "records_read": 1214,
+      "prefetch_issued": 0,
+      "prefetch_awaited": 0,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 1,
+      "heldout_total_ns": 656003917,
+      "all64_total_ns": 1591824084,
+      "records_read": 1239,
+      "prefetch_issued": 189,
+      "prefetch_awaited": 127,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "native",
+      "sequence": 2,
+      "heldout_total_ns": 660939875,
+      "all64_total_ns": 1588689291,
+      "records_read": 1214,
+      "prefetch_issued": 0,
+      "prefetch_awaited": 0,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 3,
+      "heldout_total_ns": 668704958,
+      "all64_total_ns": 1593057875,
+      "records_read": 1239,
+      "prefetch_issued": 189,
+      "prefetch_awaited": 131,
+      "all_outputs_exact": true
+    },
+    {
+      "mode": "native",
+      "sequence": 4,
+      "heldout_total_ns": 656750000,
+      "all64_total_ns": 1575633542,
+      "records_read": 1214,
+      "prefetch_issued": 0,
+      "prefetch_awaited": 0,
+      "all_outputs_exact": true
+    }
+  ],
+  "latency_ratio": 1.0035428111699545,
+  "control_spread_fraction": 0.006348140357934437,
+  "mlx_peak_bytes": 7364297233,
+  "active_after_close_bytes": 16,
+  "guard_process_peak_bytes": 7511890136,
+  "guard_machine_peak_bytes": 18560499712,
+  "guard_session": 99230,
+  "guard_exit_code": 0,
+  "decision": "Reject: no material improvement over unchanged native control."
+}

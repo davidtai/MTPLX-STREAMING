@@ -400,6 +400,7 @@ def plan_memory(
     aux_bytes_per_token: int = 0,
     prefill_transient_bytes_per_token: int = 0,
     usable_bytes_explicit: bool = False,
+    session_bank_max_bytes: int | None = None,
 ) -> MemoryPlan:
     """Solve the machine's memory geometry.
 
@@ -512,10 +513,17 @@ def plan_memory(
         resolved, int(dense_decode_ceiling) if dense_decode_ceiling else resolved
     )
     kv_reserve = reserve_tokens * kv_effective
+    # An operator's explicit session-bank cap (MTPLX_SESSION_BANK_MAX_BYTES, e.g.
+    # a streamed expert profile yielding the bank to its expert cache) is a hard
+    # ceiling on the advertised budget, so the plan matches the bank the engine
+    # actually allocates instead of the module's floor..cap band.
+    bank_ceiling = BANK_CAP_BYTES
+    if session_bank_max_bytes is not None and int(session_bank_max_bytes) > 0:
+        bank_ceiling = min(BANK_CAP_BYTES, int(session_bank_max_bytes))
     bank_idle = usable - weights - RUNTIME_TRANSIENTS_BYTES
-    bank_idle = max(BANK_FLOOR_BYTES, min(BANK_CAP_BYTES, bank_idle))
+    bank_idle = max(BANK_FLOOR_BYTES, min(bank_ceiling, bank_idle))
     bank_steady = usable - weights - RUNTIME_TRANSIENTS_BYTES - kv_reserve
-    bank_steady = max(BANK_FLOOR_BYTES, min(BANK_CAP_BYTES, bank_steady))
+    bank_steady = max(BANK_FLOOR_BYTES, min(bank_ceiling, bank_steady))
     headroom = max(
         0, usable - weights - RUNTIME_TRANSIENTS_BYTES - kv_reserve - bank_steady
     )

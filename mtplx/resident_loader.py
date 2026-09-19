@@ -31,9 +31,10 @@ class ResidentLoadReport:
     proj_quantized_modules: int = 0
     proj_requant: str | None = None
     proj_requantized_modules: int = 0
+    engram_io_cache_modes: dict[str, str] | None = None
 
-    def as_dict(self) -> dict[str, int | bool | str | None]:
-        return {
+    def as_dict(self) -> dict[str, Any]:
+        report: dict[str, Any] = {
             "shard_count": self.shard_count,
             "tensor_count": self.tensor_count,
             "raw_tensor_bytes": self.raw_tensor_bytes,
@@ -45,6 +46,9 @@ class ResidentLoadReport:
             "proj_requant": self.proj_requant,
             "proj_requantized_modules": self.proj_requantized_modules,
         }
+        if self.engram_io_cache_modes is not None:
+            report["engram_io_cache_modes"] = dict(self.engram_io_cache_modes)
+        return report
 
 
 @dataclass(frozen=True)
@@ -152,6 +156,13 @@ def get_streaming_model_classes(config: dict[str, Any]) -> tuple[type, type]:
         from .models.glm52_mlx import Model, ModelArgs
 
         return Model, ModelArgs
+    if model_type == "deepseek_v41":
+        # One-line import (worker W3): guarded until worker W1 lands
+        # mtplx/models/deepseek_v41.py, at which point this resolves the text
+        # model overlay unchanged.
+        from .models.deepseek_v41_loader import deepseek_v41_model_classes
+
+        return deepseek_v41_model_classes()
     raise ResidentLoadError(f"no streamed model overlay for model_type={model_type!r}")
 
 
@@ -346,8 +357,16 @@ def construct_resident_model(
     model_class_resolver: Callable[[dict[str, Any]], tuple[type, type]] | None = None,
     switch_binder: Callable[[Any, Any], int] | None = None,
     strict: bool = True,
+    with_mtp: bool | None = None,
 ) -> ResidentModel:
-    """Instantiate, bind, strictly load, and evaluate only resident parameters."""
+    """Instantiate, bind, strictly load, and evaluate only resident parameters.
+
+    ``with_mtp`` is the serve-path glue for DeepSeek-V4.1 DSpark MTP (worker W23):
+    the runtime derives it from ``--generation-mode mtp`` and threads it here so
+    the dedicated loader keeps the ``mtp.*`` residents and builds the head, with
+    no ``MTPLX_DSV41_MTP`` env step. ``None`` (the default, every non-deepseek
+    caller) leaves the loader's own resolution (env / auto) unchanged.
+    """
 
     artifact_root = Path(root).resolve()
     if config is None:
@@ -358,6 +377,26 @@ def construct_resident_model(
         except Exception as exc:
             raise ResidentLoadError(f"could not load model config: {exc}") from exc
     config = dict(config)
+    if str(config.get("model_type") or "") == "deepseek_v41":
+        # DeepSeek-V4.1 (worker W3) needs a text-only resident filter (skip
+        # vision/aligner/image + mtp.* residents) and an engram bank-path
+        # constructor argument that the generic hy3/glm path does not carry, so
+        # delegate the whole construct to the dedicated loader.  This is the
+        # only serve-path dispatch edit; runtime.py -> construct_resident_model
+        # reaches it with no runtime.py change, exactly like the hy3 lane.
+        from .models.deepseek_v41_loader import (
+            construct_deepseek_v41_resident_model,
+        )
+
+        return construct_deepseek_v41_resident_model(
+            artifact_root,
+            runtime,
+            config=config,
+            mx_module=mx_module,
+            switch_binder=switch_binder,
+            strict=strict,
+            with_mtp=with_mtp,
+        )
     if str(config.get("model_type") or "") not in {"hy_v3", "glm_moe_dsa"}:
         raise ResidentLoadError(
             "resident streaming supports only hy_v3 and glm_moe_dsa"

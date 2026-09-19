@@ -1,0 +1,5 @@
+{
+  "native/admission.py": "Remove legacy 96-slot search floor; byte, wired, allocator and prefill bounds unchanged",
+  "packed/run_full.py": "Construct native depth7, install parameter-sharing adaptive views, stamp explicit policy",
+  "packed/packed_admission.py": "Add 16MiB shared draft view host allowance inside existing physical/allocator bound"
+}

@@ -1,0 +1,189 @@
+{
+  "construction": {
+    "scope": "Fixed Q8 real-shape storage, native compressor reference, rollback, packed restore, tiny-model forward and immediate teardown; no full model",
+    "incremental_bound_bytes": 6442450944,
+    "allocator_limit_bytes": 1073741824,
+    "cache_limit_bytes": 134217728,
+    "host_compiler_allowance_bytes": 4294967296,
+    "config": {
+      "max_kv": 17664,
+      "max_append": 953,
+      "window_size": 128,
+      "head_dim": 512,
+      "index_head_dim": 128,
+      "ratios": [
+        0,
+        0,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "sources": [
+        2,
+        8,
+        14,
+        20
+      ],
+      "draft_layers": 3,
+      "max_rollback": 8
+    },
+    "storage_bytes": {
+      "window": 50181120,
+      "compressed": 25436160,
+      "index": 6359040,
+      "frontier": 26763264,
+      "draft": 3763584,
+      "total": 112503168
+    },
+    "source_sha256": "d4be865de846dee5bb39728f5f1c2f6ea45e27894057a6838eea288fd5e40e17",
+    "source_manifest": {
+      "mtplx/models/deepseek_v41_fixed_q8_cache.py": "d4be865de846dee5bb39728f5f1c2f6ea45e27894057a6838eea288fd5e40e17",
+      "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+      "mtplx/models/deepseek_v41_cache.py": "2e2af380b2a587dcaf10bcac2a3608fd7933e763432a67dd24e57959cb8f317f",
+      "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+      "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+      "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386"
+    },
+    "probe_sha256": "953b12bf9fe3e9380eed3d990e408246fab048468db4b4a294449a716974c494",
+    "changes_after_storage_probe": "Remove bound-method cache owner cycles; add fixed packed snapshot API with boundary validation; chunk short draft seed writes; preserve native prefill detach through cache protocol."
+  },
+  "before": {
+    "sample_start_monotonic_ns": 146722545305125,
+    "sample_end_monotonic_ns": 146722548057125,
+    "process": {
+      "peak_maxrss_bytes": 24739840,
+      "resident_bytes": 25182208,
+      "phys_footprint_bytes": 14238176,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123231715328,
+      "wired_bytes": 3148382208,
+      "active_bytes": 3197272064,
+      "inactive_bytes": 2808594432,
+      "speculative_bytes": 372047872,
+      "anonymous_bytes": 3735601152,
+      "file_backed_bytes": 2642313216,
+      "compressor_bytes": 1156644864,
+      "compressed_bytes": 6672220160,
+      "used_bytes": 10310893568,
+      "non_file_used_bytes": 8040628224,
+      "swapins_pages": 4814079,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "checks": [
+    "native compressor pooling and Q8 storage match independent references at 16384 rows",
+    "six-row verify and rollback preserve Q8 prefix bytes",
+    "packed snapshot restore preserves quantization codes and metadata",
+    "full draft seed, detach and rollback preserve packed state",
+    "native draft prefill detach preserves its floating window",
+    "fixed capacity is unchanged after prefill, quantization and rollback",
+    "tiny real model: prefill, 12 verify/trim cycles, fixed storage and context overflow"
+  ],
+  "allocated_storage_bytes": 112503168,
+  "active_after_cache_construction_bytes": 116670464,
+  "constant_storage_bytes_after_decode": 112503168,
+  "q8_error": {
+    "max_abs": 0.022075653076171875,
+    "relative_rms": 0.00539807602763176
+  },
+  "tiny_model_prefill": {
+    "max_abs": 0.0945349931716919,
+    "relative_rms": 0.017430786043405533,
+    "greedy_rows_equal": 32,
+    "rows": 32,
+    "installed": {
+      "bits": 8,
+      "group_size": 64,
+      "metadata_dtype": "float32",
+      "max_kv": 96,
+      "max_append": 16,
+      "max_rollback": 8,
+      "storage_bytes": {
+        "window": 18432,
+        "compressed": 10368,
+        "index": 10368,
+        "frontier": 32768,
+        "draft": 0,
+        "total": 71936
+      },
+      "additional_reserve_bytes": 83886080,
+      "scope": "target window/compressed/index and draft KV; native fixed compressor working rows"
+    }
+  },
+  "complete": true,
+  "mlx_peak_bytes": 274186240,
+  "mlx_active_after_close_bytes": 975688,
+  "after": {
+    "sample_start_monotonic_ns": 146723600959583,
+    "sample_end_monotonic_ns": 146723608926375,
+    "process": {
+      "peak_maxrss_bytes": 333381632,
+      "resident_bytes": 300744704,
+      "phys_footprint_bytes": 466256976,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 122777829376,
+      "wired_bytes": 3388833792,
+      "active_bytes": 3334406144,
+      "inactive_bytes": 2939813888,
+      "speculative_bytes": 388956160,
+      "anonymous_bytes": 3939729408,
+      "file_backed_bytes": 2723446784,
+      "compressor_bytes": 1156644864,
+      "compressed_bytes": 6672203776,
+      "used_bytes": 10819698688,
+      "non_file_used_bytes": 8485208064,
+      "swapins_pages": 4814079,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "elapsed_s": 1.0093912919983268
+}

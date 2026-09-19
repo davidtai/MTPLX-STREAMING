@@ -1,0 +1,20 @@
+[
+  {
+    "baseline_bytes": 9500000000,
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 100,
+    "physical_bound_bytes": 109461923052
+  },
+  {
+    "baseline_bytes": 12500000000,
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 96,
+    "physical_bound_bytes": 109453820652
+  },
+  {
+    "baseline_bytes": 14000000000,
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 94,
+    "physical_bound_bytes": 109449769452
+  }
+]

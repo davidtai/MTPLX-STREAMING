@@ -1,0 +1,39 @@
+--- a/mlx/backend/metal/kernels/CMakeLists.txt
++++ b/mlx/backend/metal/kernels/CMakeLists.txt
+@@ -10,6 +10,9 @@
+     utils.h)
+ 
+ function(build_kernel_base TARGET SRCFILE DEPS)
++  if(DSV41_PREBUILT_METALLIB)
++    return()
++  endif()
+   set(METAL_FLAGS
+       -x
+       metal
+@@ -191,6 +194,17 @@
+   set(METAL_LINK_FLAGS "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+ endif()
+ 
++if(DSV41_PREBUILT_METALLIB)
++  if(NOT EXISTS "${DSV41_PREBUILT_METALLIB}")
++    message(FATAL_ERROR "Pinned prebuilt Metal library is missing")
++  endif()
++  add_custom_command(
++    OUTPUT ${MLX_METAL_PATH}/mlx.metallib
++    COMMAND ${CMAKE_COMMAND} -E copy_if_different
++            "${DSV41_PREBUILT_METALLIB}" "${MLX_METAL_PATH}/mlx.metallib"
++    DEPENDS "${DSV41_PREBUILT_METALLIB}"
++    VERBATIM)
++else()
+ add_custom_command(
+   OUTPUT ${MLX_METAL_PATH}/mlx.metallib
+   COMMAND xcrun -sdk macosx metal ${METAL_LINK_FLAGS} ${KERNEL_AIR} -o
+@@ -199,6 +213,8 @@
+   COMMENT "Building mlx.metallib"
+   VERBATIM)
+ 
++endif()
++
+ add_custom_target(mlx-metallib DEPENDS ${MLX_METAL_PATH}/mlx.metallib)
+ 
+ add_dependencies(mlx mlx-metallib)

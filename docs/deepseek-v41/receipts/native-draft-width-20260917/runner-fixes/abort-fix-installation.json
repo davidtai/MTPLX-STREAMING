@@ -1,0 +1,8 @@
+{
+  "scope": "Installed identical fail-closed boundary in current D7 screen wrapper and retained D5 growth wrapper; old measured versions preserved",
+  "cpu_control_flow_evidence_sha256": "d6e480c477ada490f86ee37da349c80cff4c5c3aa46c0d09ec845caff630bcc4",
+  "current_d7_wrapper_sha256": "01576b922b8e3da0efce726c430476d783594d786453d6bc1bea93f0e3138623",
+  "retained_d5_wrapper_sha256": "aa9da6a9ea6e5c86e10409fdbfde04703926be4b27849e087ec7fdd04a8fddd3",
+  "identical_critical_callback_source": true,
+  "refresh_required": "Installation source commit and changed reporting-module digest must be refreshed after the upcoming repository checkpoint before either wrapper can run."
+}

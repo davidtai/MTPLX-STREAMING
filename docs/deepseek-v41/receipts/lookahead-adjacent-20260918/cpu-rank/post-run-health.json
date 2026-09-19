@@ -1,0 +1,13 @@
+{
+  "checked_at": 1789722663.4507918,
+  "lock_free": true,
+  "guard_session": 41743,
+  "guard_exit_code": 0,
+  "ok": true,
+  "model": "mtplx-flash-next-optimized-speed",
+  "active_requests": 0,
+  "warmup_state": "done",
+  "models": [
+    "mtplx-flash-next-optimized-speed"
+  ]
+}

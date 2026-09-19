@@ -1,0 +1,28 @@
+{
+  "scope": "load only; no generation",
+  "samples": {
+    "buffered": {
+      "sample_count": 27,
+      "system_start_bytes": 46973992960,
+      "system_peak_bytes": 77415890944,
+      "process_peak_bytes": 20995251784,
+      "used_file_growth_bytes": 9600466944,
+      "file_backed_growth_bytes": 9865150464,
+      "speculative_growth_bytes": 264683520,
+      "swapouts_start_pages": 4399765,
+      "swapouts_end_pages": 4399765
+    },
+    "uncached": {
+      "sample_count": 31,
+      "system_start_bytes": 46722220032,
+      "system_peak_bytes": 68360978432,
+      "process_peak_bytes": 21129175200,
+      "used_file_growth_bytes": 113655808,
+      "file_backed_growth_bytes": 9525772288,
+      "speculative_growth_bytes": 9412116480,
+      "swapouts_start_pages": 4399765,
+      "swapouts_end_pages": 4399765
+    }
+  },
+  "note": "File-backed includes speculative pages; speculative pages are free and excluded from physical used. Uncached sidecar is eager, so its resident payload is materialized at load rather than the first forward."
+}

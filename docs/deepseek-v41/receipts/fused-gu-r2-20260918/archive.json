@@ -1,0 +1,29 @@
+{
+  "source_root": "/tmp/dsv41-fused-gu-r2-20260918",
+  "raw_prefix": "/tmp/dsv41-110-stage/no-fused-gu-r2-20260918",
+  "files": {
+    "installation.json": "7d22846b26cd7f143decc3963f1a1ebfd4b6d15c1496b3b296d65179c3e6a3c9",
+    "fused_ops.py": "d530fcf322c68be18a85991e825ca728ce2f2407783d5a084e327cf538cbfd78",
+    "plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "README.md": "c5d25b1169a4c9ac05ecc3dede69c5c827967deacf3e17ba5dfab3279433db4e",
+    "reclamation.json": "12697346c886e2e0e050d605bb6255aeae86925e4251bb0ec594dff805a0ea6d",
+    "probe.json": "9a8e1ecc3635a06be7ce8f07e690a8624b8270a1b17351a9dd01ee39ff9288b4",
+    "restore_bank.py": "1ae63301433058fe491d229851e7638daf25300289af3106b0638b8c57103849",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "probe.py": "c280be7ffc2445432ef1defffddc8ce080acc3fa2a24a241abba1d4146ac97ac",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "guard.log": "cdd0e01ce3c083dc7a712e56984841e52e839aaa58feef781be981bf772effdf",
+    "command.sh": "e9dc50905832a9f6dd9f4f913d24d590fb0b06689c3a316611e4110f3766ba5c",
+    "fused_gu_r2.py": "470abe18484d84268b736c799971d710cac426b2163eabdf8ba5edd76a16f3cd",
+    "stage.py": "1a740520559d47eb126b4695e219b39d38e0c22ccc11742f0576612155847040",
+    "construction.json": "7e3edcc8f6ecee7a85466573a6a66af069a7aac635bdd032be3bce1c4cc9a767",
+    "child.json": "7a4a31388e02fb890c4b7d12997ecee519640744391f5db625e96cc972749e0a",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "routes.json": "5dd6c05ba96f9e4f829a372e25bbccb1197fd78031bf104f8bc99906a64a1cac",
+    "post-run-health.json": "eb5508ba3ebfd48f9b0014edc404a085896ffc0928da67a0639585170bea66bd",
+    "run_screen.py": "e34840c5def4ad187b04b7fc6d7b2024f94d13e4339fcb7c8229ccc8cfa5d0bd"
+  },
+  "total_bytes": 606746,
+  "artifact_copies": false
+}

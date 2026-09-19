@@ -1,0 +1,8319 @@
+{
+  "complete": true,
+  "cpu_only": true,
+  "elapsed_s": 0.027617375017143786,
+  "before": {
+    "sample_start_monotonic_ns": 285370736050583,
+    "sample_end_monotonic_ns": 285370739883458,
+    "process": {
+      "peak_maxrss_bytes": 23904256,
+      "resident_bytes": 24559616,
+      "phys_footprint_bytes": 13795808,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 111279390720,
+      "wired_bytes": 3502407680,
+      "active_bytes": 9208184832,
+      "inactive_bytes": 8813461504,
+      "speculative_bytes": 377651200,
+      "anonymous_bytes": 5782388736,
+      "file_backed_bytes": 12616908800,
+      "compressor_bytes": 1918615552,
+      "compressed_bytes": 7426785280,
+      "used_bytes": 23442669568,
+      "non_file_used_bytes": 11203411968,
+      "swapins_pages": 4836460,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "after": {
+    "sample_start_monotonic_ns": 285370769905750,
+    "sample_end_monotonic_ns": 285370771811500,
+    "process": {
+      "peak_maxrss_bytes": 40353792,
+      "resident_bytes": 40353792,
+      "phys_footprint_bytes": 29589984,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 111276933120,
+      "wired_bytes": 3501850624,
+      "active_bytes": 9207808000,
+      "inactive_bytes": 8816672768,
+      "speculative_bytes": 377569280,
+      "anonymous_bytes": 5785337856,
+      "file_backed_bytes": 12616712192,
+      "compressor_bytes": 1918615552,
+      "compressed_bytes": 7426785280,
+      "used_bytes": 23444946944,
+      "non_file_used_bytes": 11205804032,
+      "swapins_pages": 4836460,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "incremental_bound_bytes": 536870912,
+  "source_sha256": {
+    "/tmp/dsv41-q4-suffix-consensus-20260919/screen.py": "56b8a8af888d6be0d2d746dec5466aa182d1bc6dbf55e020483b3608e035ee8c",
+    "/private/tmp/dsv41-q4-suffix-consensus-20260919/consensus.py": "ad6d265ac38005d2416fc01e669ae4d2a137a5d9244579c84b13b7b123f9f984",
+    "/tmp/dsv41-depth-replay-20260917/teacher.json": "1826c18118b11ddddb75493f2cf03a12c63135855e089a3a5527a4ab8767c7d2",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json": "fd5a69f16b756f19b7487b0ac8673512506485a7631db9197b69cf4cbad018cc",
+    "/tmp/dsv41-hybrid-lookup-20260918/head-screen.json": "83b84e85fa6adebeb7cfd0500c8f1cd5131f7d7daed93c66bb1cdb7da61b664b",
+    "/tmp/dsv41-hybrid-lookup-20260918/lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b"
+  },
+  "control_boundaries": 198,
+  "control_exact": true,
+  "teacher_futures_only_score": true,
+  "selection_rule": "First half >=5 additional matched tokens and >=75% additional-row efficiency; maximize first-half gain. No second-half selection.",
+  "selected_minimum_suffix": 3,
+  "arms": [
+    {
+      "minimum_suffix": 4,
+      "minimum_occurrences": 2,
+      "confidence_minimum": 0.9,
+      "max_extra": 2,
+      "stats": {
+        "first_half": {
+          "issued": 5,
+          "extra_rows": 8,
+          "extra_matches": 6,
+          "productive": 4,
+          "bad_native_prefix": 0
+        },
+        "second_half": {
+          "issued": 5,
+          "extra_rows": 8,
+          "extra_matches": 8,
+          "productive": 5,
+          "bad_native_prefix": 0
+        },
+        "all": {
+          "issued": 10,
+          "extra_rows": 16,
+          "extra_matches": 14,
+          "productive": 9,
+          "bad_native_prefix": 0
+        }
+      },
+      "rows": [
+        {
+          "position": 0,
+          "control": [
+            43132,
+            201,
+            43132,
+            3820,
+            18157
+          ],
+          "candidate": [
+            43132,
+            201,
+            43132,
+            3820,
+            18157
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.2622663974761963
+        },
+        {
+          "position": 3,
+          "control": [
+            260,
+            2731,
+            56465,
+            65,
+            862
+          ],
+          "candidate": [
+            260,
+            2731,
+            56465,
+            65,
+            862
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.48879170417785645
+        },
+        {
+          "position": 6,
+          "control": [
+            540,
+            90,
+            13898,
+            19303,
+            23042
+          ],
+          "candidate": [
+            540,
+            90,
+            13898,
+            19303,
+            23042
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5399582386016846
+        },
+        {
+          "position": 10,
+          "control": [
+            23042,
+            201,
+            3312,
+            13,
+            291
+          ],
+          "candidate": [
+            23042,
+            201,
+            3312,
+            13,
+            291
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3778083920478821
+        },
+        {
+          "position": 16,
+          "control": [
+            86,
+            540,
+            90,
+            13898,
+            70311
+          ],
+          "candidate": [
+            86,
+            540,
+            90,
+            13898,
+            70311
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9796682000160217
+        },
+        {
+          "position": 22,
+          "control": [
+            201,
+            38835,
+            565,
+            19,
+            14
+          ],
+          "candidate": [
+            201,
+            38835,
+            565,
+            19,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33791759610176086
+        },
+        {
+          "position": 25,
+          "control": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ],
+          "candidate": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.12482748925685883
+        },
+        {
+          "position": 28,
+          "control": [
+            341,
+            61391,
+            65,
+            93256,
+            5677
+          ],
+          "candidate": [
+            341,
+            61391,
+            65,
+            93256,
+            5677
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5639326572418213
+        },
+        {
+          "position": 31,
+          "control": [
+            5677,
+            290,
+            982,
+            989,
+            290
+          ],
+          "candidate": [
+            5677,
+            290,
+            982,
+            989,
+            290
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6905540227890015
+        },
+        {
+          "position": 37,
+          "control": [
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ],
+          "candidate": [
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9955195784568787
+        },
+        {
+          "position": 43,
+          "control": [
+            71029,
+            4731,
+            28,
+            12249,
+            989
+          ],
+          "candidate": [
+            71029,
+            4731,
+            28,
+            12249,
+            989,
+            361
+          ],
+          "extra_rows": 1,
+          "extra_matches": 0,
+          "confidence_min": 0.9997103810310364
+        },
+        {
+          "position": 49,
+          "control": [
+            12275,
+            17856,
+            1879,
+            4731,
+            28
+          ],
+          "candidate": [
+            12275,
+            17856,
+            1879,
+            4731,
+            28
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8295047879219055
+        },
+        {
+          "position": 53,
+          "control": [
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ],
+          "candidate": [
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.987151026725769
+        },
+        {
+          "position": 59,
+          "control": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "candidate": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9676898717880249
+        },
+        {
+          "position": 65,
+          "control": [
+            12249,
+            438,
+            223,
+            18,
+            16,
+            18,
+            989
+          ],
+          "candidate": [
+            12249,
+            438,
+            223,
+            18,
+            16,
+            18,
+            989
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999913573265076
+        },
+        {
+          "position": 73,
+          "control": [
+            6248,
+            15932,
+            54361,
+            14,
+            12249
+          ],
+          "candidate": [
+            6248,
+            15932,
+            54361,
+            14,
+            12249,
+            23902,
+            361
+          ],
+          "extra_rows": 2,
+          "extra_matches": 1,
+          "confidence_min": 0.9454712271690369
+        },
+        {
+          "position": 79,
+          "control": [
+            290,
+            1522,
+            3682,
+            58878,
+            438
+          ],
+          "candidate": [
+            290,
+            1522,
+            3682,
+            58878,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4755679666996002
+        },
+        {
+          "position": 82,
+          "control": [
+            42616,
+            3682,
+            633,
+            4731,
+            438,
+            9846,
+            3682
+          ],
+          "candidate": [
+            42616,
+            3682,
+            633,
+            4731,
+            438,
+            9846,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9849746823310852
+        },
+        {
+          "position": 90,
+          "control": [
+            1492,
+            71029,
+            4731,
+            855,
+            71029,
+            4731,
+            1955
+          ],
+          "candidate": [
+            1492,
+            71029,
+            4731,
+            855,
+            71029,
+            4731,
+            1955
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8067031502723694
+        },
+        {
+          "position": 98,
+          "control": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ],
+          "candidate": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9985262751579285
+        },
+        {
+          "position": 106,
+          "control": [
+            201,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "candidate": [
+            201,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.34808793663978577
+        },
+        {
+          "position": 109,
+          "control": [
+            119156,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "candidate": [
+            119156,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.927480936050415
+        },
+        {
+          "position": 115,
+          "control": [
+            1550,
+            5677,
+            385,
+            3979,
+            7093
+          ],
+          "candidate": [
+            1550,
+            5677,
+            385,
+            3979,
+            7093
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8967252969741821
+        },
+        {
+          "position": 120,
+          "control": [
+            18,
+            16,
+            18,
+            14,
+            12275,
+            17856,
+            1879
+          ],
+          "candidate": [
+            18,
+            16,
+            18,
+            14,
+            12275,
+            17856,
+            1879
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999998927116394
+        },
+        {
+          "position": 128,
+          "control": [
+            4731,
+            11,
+            940,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "candidate": [
+            4731,
+            11,
+            940,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9854403734207153
+        },
+        {
+          "position": 136,
+          "control": [
+            14,
+            23809,
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "candidate": [
+            14,
+            23809,
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999793171882629
+        },
+        {
+          "position": 144,
+          "control": [
+            385,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "candidate": [
+            385,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9997844696044922
+        },
+        {
+          "position": 150,
+          "control": [
+            14,
+            71029,
+            4731,
+            3872,
+            290
+          ],
+          "candidate": [
+            14,
+            71029,
+            4731,
+            3872,
+            290
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9937809109687805
+        },
+        {
+          "position": 156,
+          "control": [
+            290,
+            64285,
+            65,
+            317,
+            25763
+          ],
+          "candidate": [
+            290,
+            64285,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9998400211334229
+        },
+        {
+          "position": 162,
+          "control": [
+            438,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ],
+          "candidate": [
+            438,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.675840437412262
+        },
+        {
+          "position": 170,
+          "control": [
+            4731,
+            565,
+            2408,
+            119156,
+            65,
+            317,
+            25763
+          ],
+          "candidate": [
+            4731,
+            565,
+            2408,
+            119156,
+            65,
+            317,
+            25763
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9987894296646118
+        },
+        {
+          "position": 178,
+          "control": [
+            682,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "candidate": [
+            682,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8506523966789246
+        },
+        {
+          "position": 184,
+          "control": [
+            438,
+            8825,
+            385,
+            9846,
+            3682
+          ],
+          "candidate": [
+            438,
+            8825,
+            385,
+            9846,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9699870347976685
+        },
+        {
+          "position": 190,
+          "control": [
+            1492,
+            64285,
+            65,
+            317,
+            25763,
+            4731,
+            855
+          ],
+          "candidate": [
+            1492,
+            64285,
+            65,
+            317,
+            25763,
+            4731,
+            855
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9984127879142761
+        },
+        {
+          "position": 198,
+          "control": [
+            65,
+            317,
+            25763,
+            4731,
+            1955,
+            223,
+            18
+          ],
+          "candidate": [
+            65,
+            317,
+            25763,
+            4731,
+            1955,
+            223,
+            18
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999879598617554
+        },
+        {
+          "position": 206,
+          "control": [
+            18,
+            3006,
+            223,
+            18,
+            16,
+            18,
+            201
+          ],
+          "candidate": [
+            18,
+            3006,
+            223,
+            18,
+            16,
+            18,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9592386484146118
+        },
+        {
+          "position": 214,
+          "control": [
+            10151,
+            290,
+            1354,
+            875,
+            385
+          ],
+          "candidate": [
+            10151,
+            290,
+            1354,
+            875,
+            385
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9219886660575867
+        },
+        {
+          "position": 220,
+          "control": [
+            77734,
+            4731,
+            3362,
+            64285,
+            3682
+          ],
+          "candidate": [
+            77734,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9694316983222961
+        },
+        {
+          "position": 226,
+          "control": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "candidate": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8962420225143433
+        },
+        {
+          "position": 232,
+          "control": [
+            317,
+            25763,
+            4731,
+            3362,
+            64285,
+            65,
+            317
+          ],
+          "candidate": [
+            317,
+            25763,
+            4731,
+            3362,
+            64285,
+            65,
+            317
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.995610237121582
+        },
+        {
+          "position": 240,
+          "control": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "candidate": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.975793182849884
+        },
+        {
+          "position": 246,
+          "control": [
+            633,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ],
+          "candidate": [
+            633,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998039603233337
+        },
+        {
+          "position": 254,
+          "control": [
+            385,
+            582,
+            523,
+            15093,
+            42616
+          ],
+          "candidate": [
+            385,
+            582,
+            523,
+            15093,
+            42616
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999027848243713
+        },
+        {
+          "position": 260,
+          "control": [
+            633,
+            4731,
+            3362,
+            1522,
+            15093,
+            42616,
+            3682
+          ],
+          "candidate": [
+            633,
+            4731,
+            3362,
+            1522,
+            15093,
+            42616,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9645242094993591
+        },
+        {
+          "position": 268,
+          "control": [
+            4731,
+            989,
+            290,
+            1554,
+            27344
+          ],
+          "candidate": [
+            4731,
+            989,
+            290,
+            1554,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8522139191627502
+        },
+        {
+          "position": 273,
+          "control": [
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ],
+          "candidate": [
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.508989691734314
+        },
+        {
+          "position": 276,
+          "control": [
+            52287,
+            806,
+            88287,
+            28,
+            52013
+          ],
+          "candidate": [
+            52287,
+            806,
+            88287,
+            28,
+            52013
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3117550015449524
+        },
+        {
+          "position": 282,
+          "control": [
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ],
+          "candidate": [
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6960588693618774
+        },
+        {
+          "position": 285,
+          "control": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ],
+          "candidate": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9841205477714539
+        },
+        {
+          "position": 291,
+          "control": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ],
+          "candidate": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9456253051757812
+        },
+        {
+          "position": 297,
+          "control": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ],
+          "candidate": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.27554482221603394
+        },
+        {
+          "position": 301,
+          "control": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ],
+          "candidate": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.32215312123298645
+        },
+        {
+          "position": 303,
+          "control": [
+            105080,
+            8205,
+            603,
+            27344,
+            13
+          ],
+          "candidate": [
+            105080,
+            8205,
+            603,
+            27344,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6070772409439087
+        },
+        {
+          "position": 309,
+          "control": [
+            29617,
+            83,
+            5230,
+            344,
+            270
+          ],
+          "candidate": [
+            29617,
+            83,
+            5230,
+            344,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.14779968559741974
+        },
+        {
+          "position": 310,
+          "control": [
+            9952,
+            1082,
+            270,
+            71087,
+            344
+          ],
+          "candidate": [
+            9952,
+            1082,
+            270,
+            71087,
+            344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.19556297361850739
+        },
+        {
+          "position": 312,
+          "control": [
+            411,
+            11181,
+            8205,
+            832,
+            270
+          ],
+          "candidate": [
+            411,
+            11181,
+            8205,
+            832,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5146085023880005
+        },
+        {
+          "position": 315,
+          "control": [
+            832,
+            1926,
+            387,
+            588,
+            1926
+          ],
+          "candidate": [
+            832,
+            1926,
+            387,
+            588,
+            1926
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33690229058265686
+        },
+        {
+          "position": 320,
+          "control": [
+            582,
+            3567,
+            201,
+            13,
+            361
+          ],
+          "candidate": [
+            582,
+            3567,
+            201,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.531425952911377
+        },
+        {
+          "position": 323,
+          "control": [
+            2701,
+            13,
+            361,
+            538,
+            582
+          ],
+          "candidate": [
+            2701,
+            13,
+            361,
+            538,
+            582
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6399314403533936
+        },
+        {
+          "position": 328,
+          "control": [
+            2041,
+            8390,
+            16,
+            6045,
+            2990
+          ],
+          "candidate": [
+            2041,
+            8390,
+            16,
+            6045,
+            2990
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5010783076286316
+        },
+        {
+          "position": 329,
+          "control": [
+            8390,
+            16,
+            6045,
+            2990,
+            270
+          ],
+          "candidate": [
+            8390,
+            16,
+            6045,
+            2990,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.22277981042861938
+        },
+        {
+          "position": 332,
+          "control": [
+            83,
+            5230,
+            344,
+            295,
+            764
+          ],
+          "candidate": [
+            83,
+            5230,
+            344,
+            295,
+            764
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.45247310400009155
+        },
+        {
+          "position": 336,
+          "control": [
+            9078,
+            295,
+            764,
+            18,
+            14
+          ],
+          "candidate": [
+            9078,
+            295,
+            764,
+            18,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8530496954917908
+        },
+        {
+          "position": 342,
+          "control": [
+            19,
+            28881,
+            13,
+            361,
+            16786
+          ],
+          "candidate": [
+            19,
+            28881,
+            13,
+            361,
+            16786
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8248357176780701
+        },
+        {
+          "position": 348,
+          "control": [
+            13,
+            361,
+            855,
+            554,
+            24216
+          ],
+          "candidate": [
+            13,
+            361,
+            855,
+            554,
+            24216
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3628455698490143
+        },
+        {
+          "position": 353,
+          "control": [
+            1137,
+            13,
+            528,
+            1354,
+            9952
+          ],
+          "candidate": [
+            1137,
+            13,
+            528,
+            1354,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9953761100769043
+        },
+        {
+          "position": 359,
+          "control": [
+            13,
+            361,
+            15320,
+            438,
+            24216
+          ],
+          "candidate": [
+            13,
+            361,
+            15320,
+            438,
+            24216
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5327653288841248
+        },
+        {
+          "position": 365,
+          "control": [
+            14724,
+            11,
+            362,
+            374,
+            295
+          ],
+          "candidate": [
+            14724,
+            11,
+            362,
+            374,
+            295
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5710166692733765
+        },
+        {
+          "position": 366,
+          "control": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ],
+          "candidate": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998902678489685
+        },
+        {
+          "position": 372,
+          "control": [
+            13,
+            361,
+            855,
+            9080,
+            10
+          ],
+          "candidate": [
+            13,
+            361,
+            855,
+            9080,
+            10
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6709473133087158
+        },
+        {
+          "position": 378,
+          "control": [
+            11,
+            2606,
+            223,
+            19,
+            1137
+          ],
+          "candidate": [
+            11,
+            2606,
+            223,
+            19,
+            1137
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9989982843399048
+        },
+        {
+          "position": 384,
+          "control": [
+            528,
+            1354,
+            12249,
+            10,
+            28798
+          ],
+          "candidate": [
+            528,
+            1354,
+            12249,
+            10,
+            28798
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7640957832336426
+        },
+        {
+          "position": 387,
+          "control": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ],
+          "candidate": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.998600959777832
+        },
+        {
+          "position": 393,
+          "control": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "candidate": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5106148719787598
+        },
+        {
+          "position": 399,
+          "control": [
+            14,
+            1550,
+            10,
+            19,
+            16
+          ],
+          "candidate": [
+            14,
+            1550,
+            10,
+            19,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8881317377090454
+        },
+        {
+          "position": 405,
+          "control": [
+            14,
+            12249,
+            26253,
+            28474,
+            982
+          ],
+          "candidate": [
+            14,
+            12249,
+            26253,
+            28474,
+            982
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7717722058296204
+        },
+        {
+          "position": 411,
+          "control": [
+            6321,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "candidate": [
+            6321,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9991945624351501
+        },
+        {
+          "position": 417,
+          "control": [
+            19,
+            682,
+            13,
+            361,
+            4263
+          ],
+          "candidate": [
+            19,
+            682,
+            13,
+            361,
+            4263
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7697593569755554
+        },
+        {
+          "position": 423,
+          "control": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203
+          ],
+          "candidate": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7581160664558411
+        },
+        {
+          "position": 425,
+          "control": [
+            682,
+            13,
+            361,
+            9509,
+            438
+          ],
+          "candidate": [
+            682,
+            13,
+            361,
+            9509,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9446842670440674
+        },
+        {
+          "position": 431,
+          "control": [
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ],
+          "candidate": [
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9706904292106628
+        },
+        {
+          "position": 437,
+          "control": [
+            9080,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "candidate": [
+            9080,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999746680259705
+        },
+        {
+          "position": 443,
+          "control": [
+            19,
+            682,
+            13,
+            361,
+            9078
+          ],
+          "candidate": [
+            19,
+            682,
+            13,
+            361,
+            9078
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5510029196739197
+        },
+        {
+          "position": 448,
+          "control": [
+            438,
+            3609,
+            565,
+            4263,
+            201
+          ],
+          "candidate": [
+            438,
+            3609,
+            565,
+            4263,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.962558925151825
+        },
+        {
+          "position": 454,
+          "control": [
+            361,
+            1354,
+            15320,
+            105099,
+            63
+          ],
+          "candidate": [
+            361,
+            1354,
+            15320,
+            105099,
+            63
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.770544171333313
+        },
+        {
+          "position": 460,
+          "control": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ],
+          "candidate": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9937845468521118
+        },
+        {
+          "position": 466,
+          "control": [
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ],
+          "candidate": [
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.993723452091217
+        },
+        {
+          "position": 472,
+          "control": [
+            982,
+            5288,
+            201,
+            27344,
+            27344
+          ],
+          "candidate": [
+            982,
+            5288,
+            201,
+            27344,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999139308929443
+        },
+        {
+          "position": 478,
+          "control": [
+            3465,
+            944,
+            24807,
+            15810,
+            19303
+          ],
+          "candidate": [
+            3465,
+            944,
+            24807,
+            15810,
+            19303
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3774964213371277
+        },
+        {
+          "position": 481,
+          "control": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ],
+          "candidate": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5727762579917908
+        },
+        {
+          "position": 484,
+          "control": [
+            28,
+            10649,
+            11,
+            6248,
+            12249
+          ],
+          "candidate": [
+            28,
+            10649,
+            11,
+            6248,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8764066696166992
+        },
+        {
+          "position": 490,
+          "control": [
+            9952,
+            1137,
+            13,
+            361,
+            26495,
+            62596,
+            33240
+          ],
+          "candidate": [
+            9952,
+            1137,
+            13,
+            361,
+            26495,
+            62596,
+            33240
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7609226703643799
+        },
+        {
+          "position": 496,
+          "control": [
+            31088,
+            260,
+            45442,
+            5238,
+            304
+          ],
+          "candidate": [
+            31088,
+            260,
+            45442,
+            5238,
+            304
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.27629339694976807
+        },
+        {
+          "position": 498,
+          "control": [
+            28895,
+            17588,
+            304,
+            12249,
+            304
+          ],
+          "candidate": [
+            28895,
+            17588,
+            304,
+            12249,
+            304
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4379810094833374
+        },
+        {
+          "position": 500,
+          "control": [
+            17588,
+            304,
+            12249,
+            14,
+            469
+          ],
+          "candidate": [
+            17588,
+            304,
+            12249,
+            14,
+            469
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4260219931602478
+        },
+        {
+          "position": 502,
+          "control": [
+            23476,
+            9952,
+            1082,
+            25892,
+            77319
+          ],
+          "candidate": [
+            23476,
+            9952,
+            1082,
+            25892,
+            77319
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.23667600750923157
+        },
+        {
+          "position": 503,
+          "control": [
+            1217,
+            9952,
+            305,
+            81409,
+            77319
+          ],
+          "candidate": [
+            1217,
+            9952,
+            305,
+            81409,
+            77319
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33981335163116455
+        },
+        {
+          "position": 507,
+          "control": [
+            111829,
+            77319,
+            27344,
+            13,
+            361
+          ],
+          "candidate": [
+            111829,
+            77319,
+            27344,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7552913427352905
+        },
+        {
+          "position": 508,
+          "control": [
+            7771,
+            1219,
+            77319,
+            27344,
+            13
+          ],
+          "candidate": [
+            7771,
+            1219,
+            77319,
+            27344,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8723974227905273
+        },
+        {
+          "position": 514,
+          "control": [
+            855,
+            1990,
+            344,
+            9952,
+            1137
+          ],
+          "candidate": [
+            855,
+            1990,
+            344,
+            9952,
+            1137
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8281404972076416
+        },
+        {
+          "position": 520,
+          "control": [
+            528,
+            1354,
+            9952,
+            201,
+            13,
+            361,
+            15320
+          ],
+          "candidate": [
+            528,
+            1354,
+            9952,
+            201,
+            13,
+            361,
+            15320
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999976634979248
+        },
+        {
+          "position": 527,
+          "control": [
+            1137,
+            13,
+            528,
+            1354,
+            12249
+          ],
+          "candidate": [
+            1137,
+            13,
+            528,
+            1354,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6448160409927368
+        },
+        {
+          "position": 533,
+          "control": [
+            682,
+            13,
+            361,
+            6816,
+            343
+          ],
+          "candidate": [
+            682,
+            13,
+            361,
+            6816,
+            343
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998547434806824
+        },
+        {
+          "position": 539,
+          "control": [
+            9000,
+            14,
+            74418,
+            3395,
+            13
+          ],
+          "candidate": [
+            9000,
+            14,
+            74418,
+            3395,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999752402305603
+        },
+        {
+          "position": 545,
+          "control": [
+            1354,
+            9952,
+            201,
+            27344,
+            27344
+          ],
+          "candidate": [
+            1354,
+            9952,
+            201,
+            27344,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9985697269439697
+        },
+        {
+          "position": 551,
+          "control": [
+            3465,
+            45706,
+            15810,
+            19303,
+            18499
+          ],
+          "candidate": [
+            3465,
+            45706,
+            15810,
+            19303,
+            18499
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5234076976776123
+        },
+        {
+          "position": 557,
+          "control": [
+            61327,
+            85,
+            28,
+            52013,
+            28
+          ],
+          "candidate": [
+            61327,
+            85,
+            28,
+            52013,
+            28
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6130719184875488
+        },
+        {
+          "position": 558,
+          "control": [
+            13,
+            361,
+            25798,
+            28,
+            52013
+          ],
+          "candidate": [
+            13,
+            361,
+            25798,
+            28,
+            52013
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9799850583076477
+        },
+        {
+          "position": 564,
+          "control": [
+            100623,
+            17797,
+            46677,
+            46085,
+            6248
+          ],
+          "candidate": [
+            100623,
+            17797,
+            46677,
+            46085,
+            6248
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.915472686290741
+        },
+        {
+          "position": 570,
+          "control": [
+            54361,
+            14,
+            10649,
+            23902,
+            13
+          ],
+          "candidate": [
+            54361,
+            14,
+            10649,
+            23902,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.99937903881073
+        },
+        {
+          "position": 576,
+          "control": [
+            26495,
+            74181,
+            60231,
+            260,
+            13672
+          ],
+          "candidate": [
+            26495,
+            74181,
+            60231,
+            260,
+            13672
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.2874966263771057
+        },
+        {
+          "position": 581,
+          "control": [
+            294,
+            9353,
+            25798,
+            1055,
+            260
+          ],
+          "candidate": [
+            294,
+            9353,
+            25798,
+            1055,
+            260
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6378254890441895
+        },
+        {
+          "position": 587,
+          "control": [
+            1715,
+            27531,
+            21408,
+            13672,
+            603
+          ],
+          "candidate": [
+            1715,
+            27531,
+            21408,
+            13672,
+            603
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7682841420173645
+        },
+        {
+          "position": 593,
+          "control": [
+            13,
+            361,
+            455,
+            13672,
+            5118
+          ],
+          "candidate": [
+            13,
+            361,
+            455,
+            13672,
+            5118
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.27660071849823
+        },
+        {
+          "position": 596,
+          "control": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ],
+          "candidate": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.2534264922142029
+        },
+        {
+          "position": 600,
+          "control": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ],
+          "candidate": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.38677364587783813
+        },
+        {
+          "position": 605,
+          "control": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ],
+          "candidate": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.41708001494407654
+        },
+        {
+          "position": 609,
+          "control": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ],
+          "candidate": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8380975723266602
+        },
+        {
+          "position": 614,
+          "control": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ],
+          "candidate": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.17464925348758698
+        },
+        {
+          "position": 616,
+          "control": [
+            6072,
+            1014,
+            14,
+            305,
+            15011,
+            6464,
+            295
+          ],
+          "candidate": [
+            6072,
+            1014,
+            14,
+            305,
+            15011,
+            6464,
+            295
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.518674373626709
+        },
+        {
+          "position": 624,
+          "control": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ],
+          "candidate": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.46832868456840515
+        },
+        {
+          "position": 629,
+          "control": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ],
+          "candidate": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4811337888240814
+        },
+        {
+          "position": 634,
+          "control": [
+            469,
+            43775,
+            377,
+            260,
+            80812
+          ],
+          "candidate": [
+            469,
+            43775,
+            377,
+            260,
+            80812
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3661215603351593
+        },
+        {
+          "position": 635,
+          "control": [
+            1117,
+            5238,
+            477,
+            80812,
+            4562
+          ],
+          "candidate": [
+            1117,
+            5238,
+            477,
+            80812,
+            4562
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4953441619873047
+        },
+        {
+          "position": 639,
+          "control": [
+            4562,
+            1099,
+            270,
+            13672,
+            201
+          ],
+          "candidate": [
+            4562,
+            1099,
+            270,
+            13672,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.21307019889354706
+        },
+        {
+          "position": 642,
+          "control": [
+            412,
+            8390,
+            603,
+            13,
+            361
+          ],
+          "candidate": [
+            412,
+            8390,
+            603,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4736493229866028
+        },
+        {
+          "position": 645,
+          "control": [
+            305,
+            411,
+            201,
+            13,
+            361
+          ],
+          "candidate": [
+            305,
+            411,
+            201,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8617329597473145
+        },
+        {
+          "position": 651,
+          "control": [
+            8205,
+            22273,
+            411,
+            11181,
+            13672
+          ],
+          "candidate": [
+            8205,
+            22273,
+            411,
+            11181,
+            13672
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.34430092573165894
+        },
+        {
+          "position": 654,
+          "control": [
+            8390,
+            284,
+            13672,
+            4562,
+            1099
+          ],
+          "candidate": [
+            8390,
+            284,
+            13672,
+            4562,
+            1099
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3314554989337921
+        },
+        {
+          "position": 655,
+          "control": [
+            111254,
+            8390,
+            13672,
+            4562,
+            1099
+          ],
+          "candidate": [
+            111254,
+            8390,
+            13672,
+            4562,
+            1099
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4070805609226227
+        },
+        {
+          "position": 657,
+          "control": [
+            418,
+            8390,
+            284,
+            513,
+            19810
+          ],
+          "candidate": [
+            418,
+            8390,
+            284,
+            513,
+            19810
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33260205388069153
+        },
+        {
+          "position": 659,
+          "control": [
+            25240,
+            6240,
+            294,
+            19810,
+            201
+          ],
+          "candidate": [
+            25240,
+            6240,
+            294,
+            19810,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.47190144658088684
+        },
+        {
+          "position": 660,
+          "control": [
+            603,
+            13,
+            361,
+            16786,
+            27344
+          ],
+          "candidate": [
+            603,
+            13,
+            361,
+            16786,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7060365676879883
+        },
+        {
+          "position": 666,
+          "control": [
+            361,
+            5118,
+            19687,
+            438,
+            9080
+          ],
+          "candidate": [
+            361,
+            5118,
+            19687,
+            438,
+            9080
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5047178864479065
+        },
+        {
+          "position": 672,
+          "control": [
+            85,
+            682,
+            13,
+            361,
+            3452
+          ],
+          "candidate": [
+            85,
+            682,
+            13,
+            361,
+            3452
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6654665470123291
+        },
+        {
+          "position": 678,
+          "control": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ],
+          "candidate": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8900794386863708
+        },
+        {
+          "position": 684,
+          "control": [
+            201,
+            13,
+            361,
+            6072,
+            3682
+          ],
+          "candidate": [
+            201,
+            13,
+            361,
+            6072,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4114559292793274
+        },
+        {
+          "position": 688,
+          "control": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "candidate": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7094074487686157
+        },
+        {
+          "position": 694,
+          "control": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ],
+          "candidate": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998867511749268
+        },
+        {
+          "position": 700,
+          "control": [
+            64285,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "candidate": [
+            64285,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9136599898338318
+        },
+        {
+          "position": 706,
+          "control": [
+            15891,
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285
+          ],
+          "candidate": [
+            15891,
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999955952167511
+        },
+        {
+          "position": 713,
+          "control": [
+            3682,
+            1695,
+            28,
+            2310,
+            61
+          ],
+          "candidate": [
+            3682,
+            1695,
+            28,
+            2310,
+            61
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8630778789520264
+        },
+        {
+          "position": 719,
+          "control": [
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285,
+            3682
+          ],
+          "candidate": [
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9990100264549255
+        },
+        {
+          "position": 725,
+          "control": [
+            5864,
+            55699,
+            98268,
+            28,
+            2310
+          ],
+          "candidate": [
+            5864,
+            55699,
+            98268,
+            28,
+            2310
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5054364204406738
+        },
+        {
+          "position": 728,
+          "control": [
+            686,
+            28,
+            2310,
+            61,
+            15891
+          ],
+          "candidate": [
+            686,
+            28,
+            2310,
+            61,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5823612213134766
+        },
+        {
+          "position": 734,
+          "control": [
+            438,
+            16461,
+            27344,
+            13,
+            361
+          ],
+          "candidate": [
+            438,
+            16461,
+            27344,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9783542156219482
+        },
+        {
+          "position": 740,
+          "control": [
+            5238,
+            295,
+            25798,
+            1137,
+            13
+          ],
+          "candidate": [
+            5238,
+            295,
+            25798,
+            1137,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9618265628814697
+        },
+        {
+          "position": 746,
+          "control": [
+            38701,
+            438,
+            1178,
+            36672,
+            61327
+          ],
+          "candidate": [
+            38701,
+            438,
+            1178,
+            36672,
+            61327
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.49522754549980164
+        },
+        {
+          "position": 747,
+          "control": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ],
+          "candidate": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5034539103507996
+        },
+        {
+          "position": 749,
+          "control": [
+            36672,
+            61327,
+            14,
+            582,
+            22724
+          ],
+          "candidate": [
+            36672,
+            61327,
+            14,
+            582,
+            22724
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.879479706287384
+        },
+        {
+          "position": 754,
+          "control": [
+            638,
+            3682,
+            58878,
+            1760,
+            9952
+          ],
+          "candidate": [
+            638,
+            3682,
+            58878,
+            1760,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9547637701034546
+        },
+        {
+          "position": 760,
+          "control": [
+            13,
+            528,
+            855,
+            9846,
+            344
+          ],
+          "candidate": [
+            13,
+            528,
+            855,
+            9846,
+            344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7148544192314148
+        },
+        {
+          "position": 766,
+          "control": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ],
+          "candidate": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5289240479469299
+        },
+        {
+          "position": 772,
+          "control": [
+            36672,
+            61327,
+            14,
+            582,
+            86
+          ],
+          "candidate": [
+            36672,
+            61327,
+            14,
+            582,
+            86
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5078068971633911
+        },
+        {
+          "position": 777,
+          "control": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ],
+          "candidate": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6632965207099915
+        },
+        {
+          "position": 783,
+          "control": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            344,
+            9952
+          ],
+          "candidate": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            344,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7093136310577393
+        },
+        {
+          "position": 787,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4466938078403473
+        },
+        {
+          "position": 788,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.840453565120697
+        },
+        {
+          "position": 794,
+          "control": [
+            74368,
+            682,
+            13,
+            528,
+            855
+          ],
+          "candidate": [
+            74368,
+            682,
+            13,
+            528,
+            855
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9921384453773499
+        },
+        {
+          "position": 800,
+          "control": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "candidate": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9651889801025391
+        },
+        {
+          "position": 806,
+          "control": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682
+          ],
+          "candidate": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9974007606506348
+        },
+        {
+          "position": 812,
+          "control": [
+            7004,
+            688,
+            12542,
+            74368,
+            23028
+          ],
+          "candidate": [
+            7004,
+            688,
+            12542,
+            74368,
+            23028
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8449661731719971
+        },
+        {
+          "position": 818,
+          "control": [
+            27344,
+            13,
+            528,
+            38701,
+            438
+          ],
+          "candidate": [
+            27344,
+            13,
+            528,
+            38701,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6332142353057861
+        },
+        {
+          "position": 822,
+          "control": [
+            27472,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "candidate": [
+            27472,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5623283982276917
+        },
+        {
+          "position": 828,
+          "control": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ],
+          "candidate": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8333767056465149
+        },
+        {
+          "position": 834,
+          "control": [
+            61327,
+            14,
+            582,
+            3548,
+            27472
+          ],
+          "candidate": [
+            61327,
+            14,
+            582,
+            3548,
+            27472
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9122925400733948
+        },
+        {
+          "position": 840,
+          "control": [
+            633,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "candidate": [
+            633,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7494865655899048
+        },
+        {
+          "position": 842,
+          "control": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ],
+          "candidate": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8228848576545715
+        },
+        {
+          "position": 847,
+          "control": [
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "candidate": [
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.897085428237915
+        },
+        {
+          "position": 853,
+          "control": [
+            3548,
+            27472,
+            3682,
+            1149,
+            1760
+          ],
+          "candidate": [
+            3548,
+            27472,
+            3682,
+            1149,
+            1760
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6436113119125366
+        },
+        {
+          "position": 859,
+          "control": [
+            682,
+            13,
+            528,
+            10151,
+            13
+          ],
+          "candidate": [
+            682,
+            13,
+            528,
+            10151,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9878275394439697
+        },
+        {
+          "position": 865,
+          "control": [
+            855,
+            852,
+            27472,
+            23028,
+            344
+          ],
+          "candidate": [
+            855,
+            852,
+            27472,
+            23028,
+            344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9920661449432373
+        },
+        {
+          "position": 871,
+          "control": [
+            9952,
+            1137,
+            13,
+            775,
+            852
+          ],
+          "candidate": [
+            9952,
+            1137,
+            13,
+            775,
+            852
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.930048406124115
+        },
+        {
+          "position": 877,
+          "control": [
+            3682,
+            1149,
+            10108,
+            89649,
+            27472
+          ],
+          "candidate": [
+            3682,
+            1149,
+            10108,
+            89649,
+            27472
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9731207489967346
+        },
+        {
+          "position": 883,
+          "control": [
+            682,
+            27344,
+            13,
+            528,
+            64285
+          ],
+          "candidate": [
+            682,
+            27344,
+            13,
+            528,
+            64285
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9922025203704834
+        },
+        {
+          "position": 889,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9995492696762085
+        },
+        {
+          "position": 895,
+          "control": [
+            13,
+            775,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ],
+          "candidate": [
+            13,
+            775,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9956815838813782
+        },
+        {
+          "position": 903,
+          "control": [
+            3682,
+            633,
+            4731,
+            1760,
+            9952
+          ],
+          "candidate": [
+            3682,
+            633,
+            4731,
+            1760,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9744535684585571
+        },
+        {
+          "position": 909,
+          "control": [
+            13,
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "candidate": [
+            13,
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9989833235740662
+        },
+        {
+          "position": 917,
+          "control": [
+            111671,
+            3682,
+            1149,
+            1760,
+            9952
+          ],
+          "candidate": [
+            111671,
+            3682,
+            1149,
+            1760,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8140062093734741
+        },
+        {
+          "position": 923,
+          "control": [
+            13,
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852
+          ],
+          "candidate": [
+            13,
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9387081265449524
+        },
+        {
+          "position": 930,
+          "control": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "candidate": [
+            23028,
+            344,
+            554,
+            9952,
+            1137,
+            13,
+            775
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9394086003303528
+        },
+        {
+          "position": 936,
+          "control": [
+            775,
+            64285,
+            3682,
+            1149,
+            10108
+          ],
+          "candidate": [
+            775,
+            64285,
+            3682,
+            1149,
+            10108
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9996824860572815
+        },
+        {
+          "position": 942,
+          "control": [
+            8308,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "candidate": [
+            8308,
+            23028,
+            682,
+            27344,
+            13,
+            528
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9999883770942688
+        },
+        {
+          "position": 948,
+          "control": [
+            6072,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "candidate": [
+            6072,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.834077775478363
+        },
+        {
+          "position": 954,
+          "control": [
+            15891,
+            5677,
+            13,
+            775,
+            1178,
+            36672,
+            61327
+          ],
+          "candidate": [
+            15891,
+            5677,
+            13,
+            775,
+            1178,
+            36672,
+            61327
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9385734796524048
+        },
+        {
+          "position": 962,
+          "control": [
+            582,
+            24358,
+            65,
+            28818,
+            1760
+          ],
+          "candidate": [
+            582,
+            24358,
+            65,
+            28818,
+            1760
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.688325047492981
+        },
+        {
+          "position": 965,
+          "control": [
+            4731,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "candidate": [
+            4731,
+            1760,
+            9952,
+            682,
+            13,
+            775,
+            469
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9836987853050232
+        },
+        {
+          "position": 971,
+          "control": [
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            3548
+          ],
+          "candidate": [
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            3548
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9599549174308777
+        },
+        {
+          "position": 978,
+          "control": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "candidate": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8702035546302795
+        },
+        {
+          "position": 984,
+          "control": [
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852,
+            27472
+          ],
+          "candidate": [
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852,
+            27472
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9941457509994507
+        },
+        {
+          "position": 990,
+          "control": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "candidate": [
+            23028,
+            344,
+            554,
+            9952,
+            1137,
+            13,
+            775
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.999850869178772
+        },
+        {
+          "position": 996,
+          "control": [
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ],
+          "candidate": [
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.994472324848175
+        },
+        {
+          "position": 1002,
+          "control": [
+            578,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "candidate": [
+            578,
+            23028,
+            682,
+            27344,
+            13,
+            528
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9999932050704956
+        },
+        {
+          "position": 1008,
+          "control": [
+            15011,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "candidate": [
+            15011,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5221255421638489
+        },
+        {
+          "position": 1010,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7671888470649719
+        },
+        {
+          "position": 1016,
+          "control": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ],
+          "candidate": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9954780340194702
+        },
+        {
+          "position": 1022,
+          "control": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203
+          ],
+          "candidate": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9483495354652405
+        }
+      ],
+      "index_keys": 34279,
+      "index_entries": 52206
+    },
+    {
+      "minimum_suffix": 3,
+      "minimum_occurrences": 2,
+      "confidence_minimum": 0.9,
+      "max_extra": 2,
+      "stats": {
+        "first_half": {
+          "issued": 6,
+          "extra_rows": 9,
+          "extra_matches": 7,
+          "productive": 5,
+          "bad_native_prefix": 0
+        },
+        "second_half": {
+          "issued": 6,
+          "extra_rows": 9,
+          "extra_matches": 9,
+          "productive": 6,
+          "bad_native_prefix": 0
+        },
+        "all": {
+          "issued": 12,
+          "extra_rows": 18,
+          "extra_matches": 16,
+          "productive": 11,
+          "bad_native_prefix": 0
+        }
+      },
+      "rows": [
+        {
+          "position": 0,
+          "control": [
+            43132,
+            201,
+            43132,
+            3820,
+            18157
+          ],
+          "candidate": [
+            43132,
+            201,
+            43132,
+            3820,
+            18157
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.2622663974761963
+        },
+        {
+          "position": 3,
+          "control": [
+            260,
+            2731,
+            56465,
+            65,
+            862
+          ],
+          "candidate": [
+            260,
+            2731,
+            56465,
+            65,
+            862
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.48879170417785645
+        },
+        {
+          "position": 6,
+          "control": [
+            540,
+            90,
+            13898,
+            19303,
+            23042
+          ],
+          "candidate": [
+            540,
+            90,
+            13898,
+            19303,
+            23042
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5399582386016846
+        },
+        {
+          "position": 10,
+          "control": [
+            23042,
+            201,
+            3312,
+            13,
+            291
+          ],
+          "candidate": [
+            23042,
+            201,
+            3312,
+            13,
+            291
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3778083920478821
+        },
+        {
+          "position": 16,
+          "control": [
+            86,
+            540,
+            90,
+            13898,
+            70311
+          ],
+          "candidate": [
+            86,
+            540,
+            90,
+            13898,
+            70311
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9796682000160217
+        },
+        {
+          "position": 22,
+          "control": [
+            201,
+            38835,
+            565,
+            19,
+            14
+          ],
+          "candidate": [
+            201,
+            38835,
+            565,
+            19,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33791759610176086
+        },
+        {
+          "position": 25,
+          "control": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ],
+          "candidate": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.12482748925685883
+        },
+        {
+          "position": 28,
+          "control": [
+            341,
+            61391,
+            65,
+            93256,
+            5677
+          ],
+          "candidate": [
+            341,
+            61391,
+            65,
+            93256,
+            5677
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5639326572418213
+        },
+        {
+          "position": 31,
+          "control": [
+            5677,
+            290,
+            982,
+            989,
+            290
+          ],
+          "candidate": [
+            5677,
+            290,
+            982,
+            989,
+            290
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6905540227890015
+        },
+        {
+          "position": 37,
+          "control": [
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ],
+          "candidate": [
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9955195784568787
+        },
+        {
+          "position": 43,
+          "control": [
+            71029,
+            4731,
+            28,
+            12249,
+            989
+          ],
+          "candidate": [
+            71029,
+            4731,
+            28,
+            12249,
+            989,
+            361
+          ],
+          "extra_rows": 1,
+          "extra_matches": 0,
+          "confidence_min": 0.9997103810310364
+        },
+        {
+          "position": 49,
+          "control": [
+            12275,
+            17856,
+            1879,
+            4731,
+            28
+          ],
+          "candidate": [
+            12275,
+            17856,
+            1879,
+            4731,
+            28
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8295047879219055
+        },
+        {
+          "position": 53,
+          "control": [
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ],
+          "candidate": [
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.987151026725769
+        },
+        {
+          "position": 59,
+          "control": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "candidate": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9676898717880249
+        },
+        {
+          "position": 65,
+          "control": [
+            12249,
+            438,
+            223,
+            18,
+            16,
+            18,
+            989
+          ],
+          "candidate": [
+            12249,
+            438,
+            223,
+            18,
+            16,
+            18,
+            989
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999913573265076
+        },
+        {
+          "position": 73,
+          "control": [
+            6248,
+            15932,
+            54361,
+            14,
+            12249
+          ],
+          "candidate": [
+            6248,
+            15932,
+            54361,
+            14,
+            12249,
+            23902,
+            361
+          ],
+          "extra_rows": 2,
+          "extra_matches": 1,
+          "confidence_min": 0.9454712271690369
+        },
+        {
+          "position": 79,
+          "control": [
+            290,
+            1522,
+            3682,
+            58878,
+            438
+          ],
+          "candidate": [
+            290,
+            1522,
+            3682,
+            58878,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4755679666996002
+        },
+        {
+          "position": 82,
+          "control": [
+            42616,
+            3682,
+            633,
+            4731,
+            438,
+            9846,
+            3682
+          ],
+          "candidate": [
+            42616,
+            3682,
+            633,
+            4731,
+            438,
+            9846,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9849746823310852
+        },
+        {
+          "position": 90,
+          "control": [
+            1492,
+            71029,
+            4731,
+            855,
+            71029,
+            4731,
+            1955
+          ],
+          "candidate": [
+            1492,
+            71029,
+            4731,
+            855,
+            71029,
+            4731,
+            1955
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8067031502723694
+        },
+        {
+          "position": 98,
+          "control": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ],
+          "candidate": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9985262751579285
+        },
+        {
+          "position": 106,
+          "control": [
+            201,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "candidate": [
+            201,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.34808793663978577
+        },
+        {
+          "position": 109,
+          "control": [
+            119156,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "candidate": [
+            119156,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.927480936050415
+        },
+        {
+          "position": 115,
+          "control": [
+            1550,
+            5677,
+            385,
+            3979,
+            7093
+          ],
+          "candidate": [
+            1550,
+            5677,
+            385,
+            3979,
+            7093
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8967252969741821
+        },
+        {
+          "position": 120,
+          "control": [
+            18,
+            16,
+            18,
+            14,
+            12275,
+            17856,
+            1879
+          ],
+          "candidate": [
+            18,
+            16,
+            18,
+            14,
+            12275,
+            17856,
+            1879
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999998927116394
+        },
+        {
+          "position": 128,
+          "control": [
+            4731,
+            11,
+            940,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "candidate": [
+            4731,
+            11,
+            940,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9854403734207153
+        },
+        {
+          "position": 136,
+          "control": [
+            14,
+            23809,
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "candidate": [
+            14,
+            23809,
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999793171882629
+        },
+        {
+          "position": 144,
+          "control": [
+            385,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "candidate": [
+            385,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9997844696044922
+        },
+        {
+          "position": 150,
+          "control": [
+            14,
+            71029,
+            4731,
+            3872,
+            290
+          ],
+          "candidate": [
+            14,
+            71029,
+            4731,
+            3872,
+            290
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9937809109687805
+        },
+        {
+          "position": 156,
+          "control": [
+            290,
+            64285,
+            65,
+            317,
+            25763
+          ],
+          "candidate": [
+            290,
+            64285,
+            65,
+            317,
+            25763,
+            4731
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9998400211334229
+        },
+        {
+          "position": 162,
+          "control": [
+            438,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ],
+          "candidate": [
+            438,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.675840437412262
+        },
+        {
+          "position": 170,
+          "control": [
+            4731,
+            565,
+            2408,
+            119156,
+            65,
+            317,
+            25763
+          ],
+          "candidate": [
+            4731,
+            565,
+            2408,
+            119156,
+            65,
+            317,
+            25763
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9987894296646118
+        },
+        {
+          "position": 178,
+          "control": [
+            682,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "candidate": [
+            682,
+            290,
+            64285,
+            3682,
+            633
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8506523966789246
+        },
+        {
+          "position": 184,
+          "control": [
+            438,
+            8825,
+            385,
+            9846,
+            3682
+          ],
+          "candidate": [
+            438,
+            8825,
+            385,
+            9846,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9699870347976685
+        },
+        {
+          "position": 190,
+          "control": [
+            1492,
+            64285,
+            65,
+            317,
+            25763,
+            4731,
+            855
+          ],
+          "candidate": [
+            1492,
+            64285,
+            65,
+            317,
+            25763,
+            4731,
+            855
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9984127879142761
+        },
+        {
+          "position": 198,
+          "control": [
+            65,
+            317,
+            25763,
+            4731,
+            1955,
+            223,
+            18
+          ],
+          "candidate": [
+            65,
+            317,
+            25763,
+            4731,
+            1955,
+            223,
+            18
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999879598617554
+        },
+        {
+          "position": 206,
+          "control": [
+            18,
+            3006,
+            223,
+            18,
+            16,
+            18,
+            201
+          ],
+          "candidate": [
+            18,
+            3006,
+            223,
+            18,
+            16,
+            18,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9592386484146118
+        },
+        {
+          "position": 214,
+          "control": [
+            10151,
+            290,
+            1354,
+            875,
+            385
+          ],
+          "candidate": [
+            10151,
+            290,
+            1354,
+            875,
+            385
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9219886660575867
+        },
+        {
+          "position": 220,
+          "control": [
+            77734,
+            4731,
+            3362,
+            64285,
+            3682
+          ],
+          "candidate": [
+            77734,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9694316983222961
+        },
+        {
+          "position": 226,
+          "control": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "candidate": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8962420225143433
+        },
+        {
+          "position": 232,
+          "control": [
+            317,
+            25763,
+            4731,
+            3362,
+            64285,
+            65,
+            317
+          ],
+          "candidate": [
+            317,
+            25763,
+            4731,
+            3362,
+            64285,
+            65,
+            317
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.995610237121582
+        },
+        {
+          "position": 240,
+          "control": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "candidate": [
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.975793182849884
+        },
+        {
+          "position": 246,
+          "control": [
+            633,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ],
+          "candidate": [
+            633,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998039603233337
+        },
+        {
+          "position": 254,
+          "control": [
+            385,
+            582,
+            523,
+            15093,
+            42616
+          ],
+          "candidate": [
+            385,
+            582,
+            523,
+            15093,
+            42616
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999027848243713
+        },
+        {
+          "position": 260,
+          "control": [
+            633,
+            4731,
+            3362,
+            1522,
+            15093,
+            42616,
+            3682
+          ],
+          "candidate": [
+            633,
+            4731,
+            3362,
+            1522,
+            15093,
+            42616,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9645242094993591
+        },
+        {
+          "position": 268,
+          "control": [
+            4731,
+            989,
+            290,
+            1554,
+            27344
+          ],
+          "candidate": [
+            4731,
+            989,
+            290,
+            1554,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8522139191627502
+        },
+        {
+          "position": 273,
+          "control": [
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ],
+          "candidate": [
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.508989691734314
+        },
+        {
+          "position": 276,
+          "control": [
+            52287,
+            806,
+            88287,
+            28,
+            52013
+          ],
+          "candidate": [
+            52287,
+            806,
+            88287,
+            28,
+            52013
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3117550015449524
+        },
+        {
+          "position": 282,
+          "control": [
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ],
+          "candidate": [
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6960588693618774
+        },
+        {
+          "position": 285,
+          "control": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ],
+          "candidate": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9841205477714539
+        },
+        {
+          "position": 291,
+          "control": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ],
+          "candidate": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9456253051757812
+        },
+        {
+          "position": 297,
+          "control": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ],
+          "candidate": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.27554482221603394
+        },
+        {
+          "position": 301,
+          "control": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ],
+          "candidate": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.32215312123298645
+        },
+        {
+          "position": 303,
+          "control": [
+            105080,
+            8205,
+            603,
+            27344,
+            13
+          ],
+          "candidate": [
+            105080,
+            8205,
+            603,
+            27344,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6070772409439087
+        },
+        {
+          "position": 309,
+          "control": [
+            29617,
+            83,
+            5230,
+            344,
+            270
+          ],
+          "candidate": [
+            29617,
+            83,
+            5230,
+            344,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.14779968559741974
+        },
+        {
+          "position": 310,
+          "control": [
+            9952,
+            1082,
+            270,
+            71087,
+            344
+          ],
+          "candidate": [
+            9952,
+            1082,
+            270,
+            71087,
+            344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.19556297361850739
+        },
+        {
+          "position": 312,
+          "control": [
+            411,
+            11181,
+            8205,
+            832,
+            270
+          ],
+          "candidate": [
+            411,
+            11181,
+            8205,
+            832,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5146085023880005
+        },
+        {
+          "position": 315,
+          "control": [
+            832,
+            1926,
+            387,
+            588,
+            1926
+          ],
+          "candidate": [
+            832,
+            1926,
+            387,
+            588,
+            1926
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33690229058265686
+        },
+        {
+          "position": 320,
+          "control": [
+            582,
+            3567,
+            201,
+            13,
+            361
+          ],
+          "candidate": [
+            582,
+            3567,
+            201,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.531425952911377
+        },
+        {
+          "position": 323,
+          "control": [
+            2701,
+            13,
+            361,
+            538,
+            582
+          ],
+          "candidate": [
+            2701,
+            13,
+            361,
+            538,
+            582
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6399314403533936
+        },
+        {
+          "position": 328,
+          "control": [
+            2041,
+            8390,
+            16,
+            6045,
+            2990
+          ],
+          "candidate": [
+            2041,
+            8390,
+            16,
+            6045,
+            2990
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5010783076286316
+        },
+        {
+          "position": 329,
+          "control": [
+            8390,
+            16,
+            6045,
+            2990,
+            270
+          ],
+          "candidate": [
+            8390,
+            16,
+            6045,
+            2990,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.22277981042861938
+        },
+        {
+          "position": 332,
+          "control": [
+            83,
+            5230,
+            344,
+            295,
+            764
+          ],
+          "candidate": [
+            83,
+            5230,
+            344,
+            295,
+            764
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.45247310400009155
+        },
+        {
+          "position": 336,
+          "control": [
+            9078,
+            295,
+            764,
+            18,
+            14
+          ],
+          "candidate": [
+            9078,
+            295,
+            764,
+            18,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8530496954917908
+        },
+        {
+          "position": 342,
+          "control": [
+            19,
+            28881,
+            13,
+            361,
+            16786
+          ],
+          "candidate": [
+            19,
+            28881,
+            13,
+            361,
+            16786
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8248357176780701
+        },
+        {
+          "position": 348,
+          "control": [
+            13,
+            361,
+            855,
+            554,
+            24216
+          ],
+          "candidate": [
+            13,
+            361,
+            855,
+            554,
+            24216
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3628455698490143
+        },
+        {
+          "position": 353,
+          "control": [
+            1137,
+            13,
+            528,
+            1354,
+            9952
+          ],
+          "candidate": [
+            1137,
+            13,
+            528,
+            1354,
+            9952,
+            201
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9953761100769043
+        },
+        {
+          "position": 359,
+          "control": [
+            13,
+            361,
+            15320,
+            438,
+            24216
+          ],
+          "candidate": [
+            13,
+            361,
+            15320,
+            438,
+            24216
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5327653288841248
+        },
+        {
+          "position": 365,
+          "control": [
+            14724,
+            11,
+            362,
+            374,
+            295
+          ],
+          "candidate": [
+            14724,
+            11,
+            362,
+            374,
+            295
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5710166692733765
+        },
+        {
+          "position": 366,
+          "control": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ],
+          "candidate": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998902678489685
+        },
+        {
+          "position": 372,
+          "control": [
+            13,
+            361,
+            855,
+            9080,
+            10
+          ],
+          "candidate": [
+            13,
+            361,
+            855,
+            9080,
+            10
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6709473133087158
+        },
+        {
+          "position": 378,
+          "control": [
+            11,
+            2606,
+            223,
+            19,
+            1137
+          ],
+          "candidate": [
+            11,
+            2606,
+            223,
+            19,
+            1137
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9989982843399048
+        },
+        {
+          "position": 384,
+          "control": [
+            528,
+            1354,
+            12249,
+            10,
+            28798
+          ],
+          "candidate": [
+            528,
+            1354,
+            12249,
+            10,
+            28798
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7640957832336426
+        },
+        {
+          "position": 387,
+          "control": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ],
+          "candidate": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.998600959777832
+        },
+        {
+          "position": 393,
+          "control": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "candidate": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5106148719787598
+        },
+        {
+          "position": 399,
+          "control": [
+            14,
+            1550,
+            10,
+            19,
+            16
+          ],
+          "candidate": [
+            14,
+            1550,
+            10,
+            19,
+            16
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8881317377090454
+        },
+        {
+          "position": 405,
+          "control": [
+            14,
+            12249,
+            26253,
+            28474,
+            982
+          ],
+          "candidate": [
+            14,
+            12249,
+            26253,
+            28474,
+            982
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7717722058296204
+        },
+        {
+          "position": 411,
+          "control": [
+            6321,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "candidate": [
+            6321,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9991945624351501
+        },
+        {
+          "position": 417,
+          "control": [
+            19,
+            682,
+            13,
+            361,
+            4263
+          ],
+          "candidate": [
+            19,
+            682,
+            13,
+            361,
+            4263
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7697593569755554
+        },
+        {
+          "position": 423,
+          "control": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203
+          ],
+          "candidate": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7581160664558411
+        },
+        {
+          "position": 425,
+          "control": [
+            682,
+            13,
+            361,
+            9509,
+            438
+          ],
+          "candidate": [
+            682,
+            13,
+            361,
+            9509,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9446842670440674
+        },
+        {
+          "position": 431,
+          "control": [
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ],
+          "candidate": [
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9706904292106628
+        },
+        {
+          "position": 437,
+          "control": [
+            9080,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "candidate": [
+            9080,
+            10,
+            28798,
+            11,
+            565
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999746680259705
+        },
+        {
+          "position": 443,
+          "control": [
+            19,
+            682,
+            13,
+            361,
+            9078
+          ],
+          "candidate": [
+            19,
+            682,
+            13,
+            361,
+            9078
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5510029196739197
+        },
+        {
+          "position": 448,
+          "control": [
+            438,
+            3609,
+            565,
+            4263,
+            201
+          ],
+          "candidate": [
+            438,
+            3609,
+            565,
+            4263,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.962558925151825
+        },
+        {
+          "position": 454,
+          "control": [
+            361,
+            1354,
+            15320,
+            105099,
+            63
+          ],
+          "candidate": [
+            361,
+            1354,
+            15320,
+            105099,
+            63
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.770544171333313
+        },
+        {
+          "position": 460,
+          "control": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ],
+          "candidate": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9937845468521118
+        },
+        {
+          "position": 466,
+          "control": [
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ],
+          "candidate": [
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.993723452091217
+        },
+        {
+          "position": 472,
+          "control": [
+            982,
+            5288,
+            201,
+            27344,
+            27344
+          ],
+          "candidate": [
+            982,
+            5288,
+            201,
+            27344,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9999139308929443
+        },
+        {
+          "position": 478,
+          "control": [
+            3465,
+            944,
+            24807,
+            15810,
+            19303
+          ],
+          "candidate": [
+            3465,
+            944,
+            24807,
+            15810,
+            19303
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3774964213371277
+        },
+        {
+          "position": 481,
+          "control": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ],
+          "candidate": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5727762579917908
+        },
+        {
+          "position": 484,
+          "control": [
+            28,
+            10649,
+            11,
+            6248,
+            12249
+          ],
+          "candidate": [
+            28,
+            10649,
+            11,
+            6248,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8764066696166992
+        },
+        {
+          "position": 490,
+          "control": [
+            9952,
+            1137,
+            13,
+            361,
+            26495,
+            62596,
+            33240
+          ],
+          "candidate": [
+            9952,
+            1137,
+            13,
+            361,
+            26495,
+            62596,
+            33240
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7609226703643799
+        },
+        {
+          "position": 496,
+          "control": [
+            31088,
+            260,
+            45442,
+            5238,
+            304
+          ],
+          "candidate": [
+            31088,
+            260,
+            45442,
+            5238,
+            304
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.27629339694976807
+        },
+        {
+          "position": 498,
+          "control": [
+            28895,
+            17588,
+            304,
+            12249,
+            304
+          ],
+          "candidate": [
+            28895,
+            17588,
+            304,
+            12249,
+            304
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4379810094833374
+        },
+        {
+          "position": 500,
+          "control": [
+            17588,
+            304,
+            12249,
+            14,
+            469
+          ],
+          "candidate": [
+            17588,
+            304,
+            12249,
+            14,
+            469
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4260219931602478
+        },
+        {
+          "position": 502,
+          "control": [
+            23476,
+            9952,
+            1082,
+            25892,
+            77319
+          ],
+          "candidate": [
+            23476,
+            9952,
+            1082,
+            25892,
+            77319
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.23667600750923157
+        },
+        {
+          "position": 503,
+          "control": [
+            1217,
+            9952,
+            305,
+            81409,
+            77319
+          ],
+          "candidate": [
+            1217,
+            9952,
+            305,
+            81409,
+            77319
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33981335163116455
+        },
+        {
+          "position": 507,
+          "control": [
+            111829,
+            77319,
+            27344,
+            13,
+            361
+          ],
+          "candidate": [
+            111829,
+            77319,
+            27344,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7552913427352905
+        },
+        {
+          "position": 508,
+          "control": [
+            7771,
+            1219,
+            77319,
+            27344,
+            13
+          ],
+          "candidate": [
+            7771,
+            1219,
+            77319,
+            27344,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8723974227905273
+        },
+        {
+          "position": 514,
+          "control": [
+            855,
+            1990,
+            344,
+            9952,
+            1137
+          ],
+          "candidate": [
+            855,
+            1990,
+            344,
+            9952,
+            1137
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8281404972076416
+        },
+        {
+          "position": 520,
+          "control": [
+            528,
+            1354,
+            9952,
+            201,
+            13,
+            361,
+            15320
+          ],
+          "candidate": [
+            528,
+            1354,
+            9952,
+            201,
+            13,
+            361,
+            15320
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999976634979248
+        },
+        {
+          "position": 527,
+          "control": [
+            1137,
+            13,
+            528,
+            1354,
+            12249
+          ],
+          "candidate": [
+            1137,
+            13,
+            528,
+            1354,
+            12249
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6448160409927368
+        },
+        {
+          "position": 533,
+          "control": [
+            682,
+            13,
+            361,
+            6816,
+            343
+          ],
+          "candidate": [
+            682,
+            13,
+            361,
+            6816,
+            343
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998547434806824
+        },
+        {
+          "position": 539,
+          "control": [
+            9000,
+            14,
+            74418,
+            3395,
+            13
+          ],
+          "candidate": [
+            9000,
+            14,
+            74418,
+            3395,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999752402305603
+        },
+        {
+          "position": 545,
+          "control": [
+            1354,
+            9952,
+            201,
+            27344,
+            27344
+          ],
+          "candidate": [
+            1354,
+            9952,
+            201,
+            27344,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9985697269439697
+        },
+        {
+          "position": 551,
+          "control": [
+            3465,
+            45706,
+            15810,
+            19303,
+            18499
+          ],
+          "candidate": [
+            3465,
+            45706,
+            15810,
+            19303,
+            18499
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5234076976776123
+        },
+        {
+          "position": 557,
+          "control": [
+            61327,
+            85,
+            28,
+            52013,
+            28
+          ],
+          "candidate": [
+            61327,
+            85,
+            28,
+            52013,
+            28
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6130719184875488
+        },
+        {
+          "position": 558,
+          "control": [
+            13,
+            361,
+            25798,
+            28,
+            52013
+          ],
+          "candidate": [
+            13,
+            361,
+            25798,
+            28,
+            52013
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9799850583076477
+        },
+        {
+          "position": 564,
+          "control": [
+            100623,
+            17797,
+            46677,
+            46085,
+            6248
+          ],
+          "candidate": [
+            100623,
+            17797,
+            46677,
+            46085,
+            6248
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.915472686290741
+        },
+        {
+          "position": 570,
+          "control": [
+            54361,
+            14,
+            10649,
+            23902,
+            13
+          ],
+          "candidate": [
+            54361,
+            14,
+            10649,
+            23902,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.99937903881073
+        },
+        {
+          "position": 576,
+          "control": [
+            26495,
+            74181,
+            60231,
+            260,
+            13672
+          ],
+          "candidate": [
+            26495,
+            74181,
+            60231,
+            260,
+            13672
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.2874966263771057
+        },
+        {
+          "position": 581,
+          "control": [
+            294,
+            9353,
+            25798,
+            1055,
+            260
+          ],
+          "candidate": [
+            294,
+            9353,
+            25798,
+            1055,
+            260
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6378254890441895
+        },
+        {
+          "position": 587,
+          "control": [
+            1715,
+            27531,
+            21408,
+            13672,
+            603
+          ],
+          "candidate": [
+            1715,
+            27531,
+            21408,
+            13672,
+            603
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7682841420173645
+        },
+        {
+          "position": 593,
+          "control": [
+            13,
+            361,
+            455,
+            13672,
+            5118
+          ],
+          "candidate": [
+            13,
+            361,
+            455,
+            13672,
+            5118
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.27660071849823
+        },
+        {
+          "position": 596,
+          "control": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ],
+          "candidate": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.2534264922142029
+        },
+        {
+          "position": 600,
+          "control": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ],
+          "candidate": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.38677364587783813
+        },
+        {
+          "position": 605,
+          "control": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ],
+          "candidate": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.41708001494407654
+        },
+        {
+          "position": 609,
+          "control": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ],
+          "candidate": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8380975723266602
+        },
+        {
+          "position": 614,
+          "control": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ],
+          "candidate": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.17464925348758698
+        },
+        {
+          "position": 616,
+          "control": [
+            6072,
+            1014,
+            14,
+            305,
+            15011,
+            6464,
+            295
+          ],
+          "candidate": [
+            6072,
+            1014,
+            14,
+            305,
+            15011,
+            6464,
+            295
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.518674373626709
+        },
+        {
+          "position": 624,
+          "control": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ],
+          "candidate": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.46832868456840515
+        },
+        {
+          "position": 629,
+          "control": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ],
+          "candidate": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4811337888240814
+        },
+        {
+          "position": 634,
+          "control": [
+            469,
+            43775,
+            377,
+            260,
+            80812
+          ],
+          "candidate": [
+            469,
+            43775,
+            377,
+            260,
+            80812
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3661215603351593
+        },
+        {
+          "position": 635,
+          "control": [
+            1117,
+            5238,
+            477,
+            80812,
+            4562
+          ],
+          "candidate": [
+            1117,
+            5238,
+            477,
+            80812,
+            4562
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4953441619873047
+        },
+        {
+          "position": 639,
+          "control": [
+            4562,
+            1099,
+            270,
+            13672,
+            201
+          ],
+          "candidate": [
+            4562,
+            1099,
+            270,
+            13672,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.21307019889354706
+        },
+        {
+          "position": 642,
+          "control": [
+            412,
+            8390,
+            603,
+            13,
+            361
+          ],
+          "candidate": [
+            412,
+            8390,
+            603,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4736493229866028
+        },
+        {
+          "position": 645,
+          "control": [
+            305,
+            411,
+            201,
+            13,
+            361
+          ],
+          "candidate": [
+            305,
+            411,
+            201,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8617329597473145
+        },
+        {
+          "position": 651,
+          "control": [
+            8205,
+            22273,
+            411,
+            11181,
+            13672
+          ],
+          "candidate": [
+            8205,
+            22273,
+            411,
+            11181,
+            13672
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.34430092573165894
+        },
+        {
+          "position": 654,
+          "control": [
+            8390,
+            284,
+            13672,
+            4562,
+            1099
+          ],
+          "candidate": [
+            8390,
+            284,
+            13672,
+            4562,
+            1099
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.3314554989337921
+        },
+        {
+          "position": 655,
+          "control": [
+            111254,
+            8390,
+            13672,
+            4562,
+            1099
+          ],
+          "candidate": [
+            111254,
+            8390,
+            13672,
+            4562,
+            1099
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4070805609226227
+        },
+        {
+          "position": 657,
+          "control": [
+            418,
+            8390,
+            284,
+            513,
+            19810
+          ],
+          "candidate": [
+            418,
+            8390,
+            284,
+            513,
+            19810
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.33260205388069153
+        },
+        {
+          "position": 659,
+          "control": [
+            25240,
+            6240,
+            294,
+            19810,
+            201
+          ],
+          "candidate": [
+            25240,
+            6240,
+            294,
+            19810,
+            201
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.47190144658088684
+        },
+        {
+          "position": 660,
+          "control": [
+            603,
+            13,
+            361,
+            16786,
+            27344
+          ],
+          "candidate": [
+            603,
+            13,
+            361,
+            16786,
+            27344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7060365676879883
+        },
+        {
+          "position": 666,
+          "control": [
+            361,
+            5118,
+            19687,
+            438,
+            9080
+          ],
+          "candidate": [
+            361,
+            5118,
+            19687,
+            438,
+            9080
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5047178864479065
+        },
+        {
+          "position": 672,
+          "control": [
+            85,
+            682,
+            13,
+            361,
+            3452
+          ],
+          "candidate": [
+            85,
+            682,
+            13,
+            361,
+            3452
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6654665470123291
+        },
+        {
+          "position": 678,
+          "control": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ],
+          "candidate": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8900794386863708
+        },
+        {
+          "position": 684,
+          "control": [
+            201,
+            13,
+            361,
+            6072,
+            3682
+          ],
+          "candidate": [
+            201,
+            13,
+            361,
+            6072,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4114559292793274
+        },
+        {
+          "position": 688,
+          "control": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "candidate": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7094074487686157
+        },
+        {
+          "position": 694,
+          "control": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ],
+          "candidate": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9998867511749268
+        },
+        {
+          "position": 700,
+          "control": [
+            64285,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "candidate": [
+            64285,
+            3682,
+            1149,
+            28,
+            2310
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9136599898338318
+        },
+        {
+          "position": 706,
+          "control": [
+            15891,
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285
+          ],
+          "candidate": [
+            15891,
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.999955952167511
+        },
+        {
+          "position": 713,
+          "control": [
+            3682,
+            1695,
+            28,
+            2310,
+            61
+          ],
+          "candidate": [
+            3682,
+            1695,
+            28,
+            2310,
+            61
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8630778789520264
+        },
+        {
+          "position": 719,
+          "control": [
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285,
+            3682
+          ],
+          "candidate": [
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285,
+            3682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9990100264549255
+        },
+        {
+          "position": 725,
+          "control": [
+            5864,
+            55699,
+            98268,
+            28,
+            2310
+          ],
+          "candidate": [
+            5864,
+            55699,
+            98268,
+            28,
+            2310
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5054364204406738
+        },
+        {
+          "position": 728,
+          "control": [
+            686,
+            28,
+            2310,
+            61,
+            15891
+          ],
+          "candidate": [
+            686,
+            28,
+            2310,
+            61,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5823612213134766
+        },
+        {
+          "position": 734,
+          "control": [
+            438,
+            16461,
+            27344,
+            13,
+            361
+          ],
+          "candidate": [
+            438,
+            16461,
+            27344,
+            13,
+            361
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9783542156219482
+        },
+        {
+          "position": 740,
+          "control": [
+            5238,
+            295,
+            25798,
+            1137,
+            13
+          ],
+          "candidate": [
+            5238,
+            295,
+            25798,
+            1137,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9618265628814697
+        },
+        {
+          "position": 746,
+          "control": [
+            38701,
+            438,
+            1178,
+            36672,
+            61327
+          ],
+          "candidate": [
+            38701,
+            438,
+            1178,
+            36672,
+            61327
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.49522754549980164
+        },
+        {
+          "position": 747,
+          "control": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ],
+          "candidate": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5034539103507996
+        },
+        {
+          "position": 749,
+          "control": [
+            36672,
+            61327,
+            14,
+            582,
+            22724
+          ],
+          "candidate": [
+            36672,
+            61327,
+            14,
+            582,
+            22724
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.879479706287384
+        },
+        {
+          "position": 754,
+          "control": [
+            638,
+            3682,
+            58878,
+            1760,
+            9952
+          ],
+          "candidate": [
+            638,
+            3682,
+            58878,
+            1760,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9547637701034546
+        },
+        {
+          "position": 760,
+          "control": [
+            13,
+            528,
+            855,
+            9846,
+            344
+          ],
+          "candidate": [
+            13,
+            528,
+            855,
+            9846,
+            344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7148544192314148
+        },
+        {
+          "position": 766,
+          "control": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ],
+          "candidate": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5289240479469299
+        },
+        {
+          "position": 772,
+          "control": [
+            36672,
+            61327,
+            14,
+            582,
+            86
+          ],
+          "candidate": [
+            36672,
+            61327,
+            14,
+            582,
+            86
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5078068971633911
+        },
+        {
+          "position": 777,
+          "control": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ],
+          "candidate": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6632965207099915
+        },
+        {
+          "position": 783,
+          "control": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            344,
+            9952
+          ],
+          "candidate": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            344,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7093136310577393
+        },
+        {
+          "position": 787,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.4466938078403473
+        },
+        {
+          "position": 788,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.840453565120697
+        },
+        {
+          "position": 794,
+          "control": [
+            74368,
+            682,
+            13,
+            528,
+            855
+          ],
+          "candidate": [
+            74368,
+            682,
+            13,
+            528,
+            855
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9921384453773499
+        },
+        {
+          "position": 800,
+          "control": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "candidate": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9651889801025391
+        },
+        {
+          "position": 806,
+          "control": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682
+          ],
+          "candidate": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682,
+            58878
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9974007606506348
+        },
+        {
+          "position": 812,
+          "control": [
+            7004,
+            688,
+            12542,
+            74368,
+            23028
+          ],
+          "candidate": [
+            7004,
+            688,
+            12542,
+            74368,
+            23028
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8449661731719971
+        },
+        {
+          "position": 818,
+          "control": [
+            27344,
+            13,
+            528,
+            38701,
+            438
+          ],
+          "candidate": [
+            27344,
+            13,
+            528,
+            38701,
+            438
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6332142353057861
+        },
+        {
+          "position": 822,
+          "control": [
+            27472,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "candidate": [
+            27472,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5623283982276917
+        },
+        {
+          "position": 828,
+          "control": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ],
+          "candidate": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8333767056465149
+        },
+        {
+          "position": 834,
+          "control": [
+            61327,
+            14,
+            582,
+            3548,
+            27472
+          ],
+          "candidate": [
+            61327,
+            14,
+            582,
+            3548,
+            27472
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9122925400733948
+        },
+        {
+          "position": 840,
+          "control": [
+            633,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "candidate": [
+            633,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7494865655899048
+        },
+        {
+          "position": 842,
+          "control": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ],
+          "candidate": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8228848576545715
+        },
+        {
+          "position": 847,
+          "control": [
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "candidate": [
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.897085428237915
+        },
+        {
+          "position": 853,
+          "control": [
+            3548,
+            27472,
+            3682,
+            1149,
+            1760
+          ],
+          "candidate": [
+            3548,
+            27472,
+            3682,
+            1149,
+            1760
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.6436113119125366
+        },
+        {
+          "position": 859,
+          "control": [
+            682,
+            13,
+            528,
+            10151,
+            13
+          ],
+          "candidate": [
+            682,
+            13,
+            528,
+            10151,
+            13
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9878275394439697
+        },
+        {
+          "position": 865,
+          "control": [
+            855,
+            852,
+            27472,
+            23028,
+            344
+          ],
+          "candidate": [
+            855,
+            852,
+            27472,
+            23028,
+            344
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9920661449432373
+        },
+        {
+          "position": 871,
+          "control": [
+            9952,
+            1137,
+            13,
+            775,
+            852
+          ],
+          "candidate": [
+            9952,
+            1137,
+            13,
+            775,
+            852
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.930048406124115
+        },
+        {
+          "position": 877,
+          "control": [
+            3682,
+            1149,
+            10108,
+            89649,
+            27472
+          ],
+          "candidate": [
+            3682,
+            1149,
+            10108,
+            89649,
+            27472
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9731207489967346
+        },
+        {
+          "position": 883,
+          "control": [
+            682,
+            27344,
+            13,
+            528,
+            64285
+          ],
+          "candidate": [
+            682,
+            27344,
+            13,
+            528,
+            64285
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9922025203704834
+        },
+        {
+          "position": 889,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9995492696762085
+        },
+        {
+          "position": 895,
+          "control": [
+            13,
+            775,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ],
+          "candidate": [
+            13,
+            775,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9956815838813782
+        },
+        {
+          "position": 903,
+          "control": [
+            3682,
+            633,
+            4731,
+            1760,
+            9952
+          ],
+          "candidate": [
+            3682,
+            633,
+            4731,
+            1760,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9744535684585571
+        },
+        {
+          "position": 909,
+          "control": [
+            13,
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "candidate": [
+            13,
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9989833235740662
+        },
+        {
+          "position": 917,
+          "control": [
+            111671,
+            3682,
+            1149,
+            1760,
+            9952
+          ],
+          "candidate": [
+            111671,
+            3682,
+            1149,
+            1760,
+            9952
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8140062093734741
+        },
+        {
+          "position": 923,
+          "control": [
+            13,
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852
+          ],
+          "candidate": [
+            13,
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9387081265449524
+        },
+        {
+          "position": 930,
+          "control": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "candidate": [
+            23028,
+            344,
+            554,
+            9952,
+            1137,
+            13,
+            775
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9394086003303528
+        },
+        {
+          "position": 936,
+          "control": [
+            775,
+            64285,
+            3682,
+            1149,
+            10108
+          ],
+          "candidate": [
+            775,
+            64285,
+            3682,
+            1149,
+            10108
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9996824860572815
+        },
+        {
+          "position": 942,
+          "control": [
+            8308,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "candidate": [
+            8308,
+            23028,
+            682,
+            27344,
+            13,
+            528
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9999883770942688
+        },
+        {
+          "position": 948,
+          "control": [
+            6072,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "candidate": [
+            6072,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.834077775478363
+        },
+        {
+          "position": 954,
+          "control": [
+            15891,
+            5677,
+            13,
+            775,
+            1178,
+            36672,
+            61327
+          ],
+          "candidate": [
+            15891,
+            5677,
+            13,
+            775,
+            1178,
+            36672,
+            61327
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9385734796524048
+        },
+        {
+          "position": 962,
+          "control": [
+            582,
+            24358,
+            65,
+            28818,
+            1760
+          ],
+          "candidate": [
+            582,
+            24358,
+            65,
+            28818,
+            1760
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.688325047492981
+        },
+        {
+          "position": 965,
+          "control": [
+            4731,
+            1760,
+            9952,
+            682,
+            13
+          ],
+          "candidate": [
+            4731,
+            1760,
+            9952,
+            682,
+            13,
+            775,
+            469
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.9836987853050232
+        },
+        {
+          "position": 971,
+          "control": [
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            3548
+          ],
+          "candidate": [
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            3548
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9599549174308777
+        },
+        {
+          "position": 978,
+          "control": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "candidate": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.8702035546302795
+        },
+        {
+          "position": 984,
+          "control": [
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852,
+            27472
+          ],
+          "candidate": [
+            528,
+            10151,
+            13,
+            528,
+            855,
+            852,
+            27472
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9941457509994507
+        },
+        {
+          "position": 990,
+          "control": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ],
+          "candidate": [
+            23028,
+            344,
+            554,
+            9952,
+            1137,
+            13,
+            775
+          ],
+          "extra_rows": 2,
+          "extra_matches": 2,
+          "confidence_min": 0.999850869178772
+        },
+        {
+          "position": 996,
+          "control": [
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ],
+          "candidate": [
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.994472324848175
+        },
+        {
+          "position": 1002,
+          "control": [
+            578,
+            23028,
+            682,
+            27344,
+            13
+          ],
+          "candidate": [
+            578,
+            23028,
+            682,
+            27344,
+            13,
+            528
+          ],
+          "extra_rows": 1,
+          "extra_matches": 1,
+          "confidence_min": 0.9999932050704956
+        },
+        {
+          "position": 1008,
+          "control": [
+            15011,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "candidate": [
+            15011,
+            23028,
+            438,
+            944,
+            41401
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.5221255421638489
+        },
+        {
+          "position": 1010,
+          "control": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "candidate": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.7671888470649719
+        },
+        {
+          "position": 1016,
+          "control": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ],
+          "candidate": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9954780340194702
+        },
+        {
+          "position": 1022,
+          "control": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203
+          ],
+          "candidate": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203
+          ],
+          "extra_rows": 0,
+          "extra_matches": 0,
+          "confidence_min": 0.9483495354652405
+        }
+      ],
+      "index_keys": 42413,
+      "index_entries": 69610
+    }
+  ],
+  "scope": "CPU-only independent-boundary opportunity screen; no target TPS claim.",
+  "mlx_imported": false
+}

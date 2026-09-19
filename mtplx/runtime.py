@@ -12,7 +12,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -851,7 +851,13 @@ def _load_impl(
             ExpertStreamingConfigurationError,
             ExpertStreamingRuntime,
             apply_mlx_memory_cap,
+            validate_deepseek_v41_runtime_env,
         )
+        if not isinstance(expert_streaming_config, ExpertStreamingConfig):
+            raise TypeError("expert_streaming_config must be an ExpertStreamingConfig")
+        # Native MTP serving can set the allocator cap before runtime.open.
+        # Validate here as well as at the direct runtime/benchmark boundary.
+        validate_deepseek_v41_runtime_env(expert_streaming_config.model_key)
         from .expert_streaming_models import get_model_spec
         from .models.expert_mlx import (
             make_mlx_component_bank_allocator,
@@ -861,11 +867,24 @@ def _load_impl(
 
         import mlx.core as mx
 
-        if not isinstance(expert_streaming_config, ExpertStreamingConfig):
-            raise TypeError("expert_streaming_config must be an ExpertStreamingConfig")
         streaming_spec = get_model_spec(expert_streaming_config.model_key)
+        # DeepSeek-V4.1 DSpark MTP is a NATIVE in-artifact draft head (worker W23),
+        # not an external hy3/glm MTP adapter. When --generation-mode mtp selects
+        # it (mtp=True) the loader keeps the mtp.* residents and builds the head,
+        # and the head-injection dispatch below publishes it; the external-MTP path
+        # (_streamed_mtp_backend, which requires mtp_artifacts) must be skipped.
+        # The plan must also PRICE the wired mtp.* residents: mtp_included=True so
+        # text_only_resident_discount stops discounting them (+7.95 GB / 7.404 GiB
+        # for the mxfp4 artifact -- the DSpark head's ~6.7 GiB active experts plus
+        # the remaining mtp.* residents partition_text_residents(with_mtp=True)
+        # keeps). The swap flows to the pre-flight plan and open()'s pool plan.
+        from .models.deepseek_v41 import is_deepseek_v41_mtp_config
+
+        native_streamed_mtp = bool(mtp) and is_deepseek_v41_mtp_config(config)
+        if native_streamed_mtp:
+            streaming_spec = replace(streaming_spec, mtp_included=True)
         verified_artifact_context = nullcontext(None)
-        if mtp:
+        if mtp and not native_streamed_mtp:
             streamed_mtp_backend = _streamed_mtp_backend(
                 expert_streaming_config.model_key,
                 mtp_precision,
@@ -947,6 +966,15 @@ def _load_impl(
             additional_resident_bytes = (
                 streamed_mtp_resident_bytes + hy3_router_incremental_bytes
             )
+            if streaming_spec.key.startswith("deepseek-v41-"):
+                from .models.deepseek_v41_loader import (
+                    deepseek_v41_additional_resident_bytes,
+                    deepseek_v41_mtp_layers,
+                )
+
+                additional_resident_bytes += deepseek_v41_additional_resident_bytes(
+                    mtp_layers=deepseek_v41_mtp_layers(config) if native_streamed_mtp else 0
+                )
             plan_kwargs = (
                 {"additional_resident_bytes": additional_resident_bytes}
                 if additional_resident_bytes
@@ -964,26 +992,34 @@ def _load_impl(
                     expert_streaming_config, Path(expert_manifest).parent
                 )
             preflight_plan_kwargs = dict(plan_kwargs)
-            if expert_streaming_config.proj_quant or getattr(
-                expert_streaming_config, "proj_requant", None
-            ):
-                from .expert_manifest import load_expert_manifest
-                from .expert_runtime import (
-                    proj_quant_plan_discount,
-                    proj_requant_plan_discount,
-                )
+            # The pre-flight plan sizes the component-bank slot allocator below,
+            # so its resident discount must equal the one ExpertStreamingRuntime.open
+            # applies to its own pool plan (proj_quant + proj_requant + the
+            # text-only skip); otherwise the allocator's per-layer bank capacity
+            # and the runtime slot pool disagree. The text-only term is 0 for any
+            # manifest with no MTP/vision residents (hy3/glm), so their plans are
+            # unchanged.
+            from .expert_manifest import load_expert_manifest
+            from .expert_runtime import (
+                proj_quant_plan_discount,
+                proj_requant_plan_discount,
+                text_only_resident_discount,
+            )
 
-                _preflight_manifest = load_expert_manifest(expert_manifest)
-                preflight_plan_kwargs["resident_discount_bytes"] = (
-                    proj_quant_plan_discount(
-                        _preflight_manifest,
-                        expert_streaming_config.proj_quant,
-                    )
-                    + proj_requant_plan_discount(
-                        _preflight_manifest,
-                        getattr(expert_streaming_config, "proj_requant", None),
-                    )
+            _preflight_manifest = load_expert_manifest(expert_manifest)
+            _resident_discount = (
+                proj_quant_plan_discount(
+                    _preflight_manifest,
+                    expert_streaming_config.proj_quant,
                 )
+                + proj_requant_plan_discount(
+                    _preflight_manifest,
+                    getattr(expert_streaming_config, "proj_requant", None),
+                )
+                + text_only_resident_discount(_preflight_manifest, streaming_spec)
+            )
+            if _resident_discount:
+                preflight_plan_kwargs["resident_discount_bytes"] = _resident_discount
             if bool(getattr(streaming_spec, "is_mixed_official", False)):
                 # Mixed-official has no uniform record size; the preflight gate
                 # must see the same manifest-derived per-layer sizes as open()
@@ -1065,12 +1101,31 @@ def _load_impl(
             )
             _expert_runtime_owner[:] = [expert_runtime]
             try:
-                resident = construct_resident_model(path, expert_runtime, config=config)
+                resident = construct_resident_model(
+                    path, expert_runtime, config=config, with_mtp=native_streamed_mtp
+                )
                 model = resident.model
-                resident_load_report = resident.report.as_dict()
+                resident_load_report = dict(
+                    getattr(model, "_mtplx_resident_load_report", resident.report.as_dict())
+                )
                 tokenizer = _load_tokenizer_resilient(path, config)
                 if mtp:
-                    if streamed_mtp_backend == "hy3":
+                    if native_streamed_mtp:
+                        # DeepSeek-V4.1 DSpark native draft head (worker W23): the
+                        # head is already built into the model by the mtp=True
+                        # resident construct above; there is no external MTP
+                        # artifact, so publish the in-model head here (the general
+                        # is_deepseek_v41_mtp_config dispatch lives past the
+                        # streaming block's `return runtime`, so the streamed lane
+                        # must publish it itself).
+                        from .models.deepseek_v41 import (
+                            inject_deepseek_v41_mtp_support,
+                        )
+
+                        mtp_enabled = inject_deepseek_v41_mtp_support(
+                            model, path, config, contract
+                        )
+                    elif streamed_mtp_backend == "hy3":
                         from .hy3_mtp_patch import inject_hy3_streamed_mtp_support
 
                         mtp_enabled = inject_hy3_streamed_mtp_support(
@@ -1246,6 +1301,10 @@ def _load_impl(
             inject_deepseek_v4_mtp_support,
             is_deepseek_v4_mtp_config,
         )
+        from .models.deepseek_v41 import (
+            inject_deepseek_v41_mtp_support,
+            is_deepseek_v41_mtp_config,
+        )
         from .models.qwen4_exp import (
             inject_qwen4_exp_mtp_support,
             is_qwen4_exp_mtp_config,
@@ -1260,6 +1319,13 @@ def _load_impl(
             # glm_moe_dsa}, so it cannot match a deepseek_v4 config today, but it
             # is the arm that would build a V3 head if the sets ever overlap.
             mtp_enabled = inject_deepseek_v4_mtp_support(model, path, config, contract)
+        elif is_deepseek_v41_mtp_config(config):
+            # DeepSeek-V4.1 DSpark native draft head: the head binds through the
+            # opt-in mtp=True load path and the model carries the runtime surface,
+            # so this only publishes it.  A dedicated arm is required because
+            # is_deepseek_v4_mtp_config never matches a V4.1 config and the generic
+            # inject_mtp_support builds a qwen3_5 graft, not this native head (W23).
+            mtp_enabled = inject_deepseek_v41_mtp_support(model, path, config, contract)
         elif is_nemotron_h_mtp_config(config):
             mtp_enabled = inject_nemotron_h_mtp_support(model, path, config, contract)
         elif is_mimo_mtp_config(config):

@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/tmp/dsv41-q4-suffix-consensus-20260919/screen.py", line 32, in <module>
+    raise RuntimeError('CPU bound does not fit')
+RuntimeError: CPU bound does not fit

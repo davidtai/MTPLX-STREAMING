@@ -30,10 +30,13 @@ def _parse_profile_document(document):
 
 
 def test_only_promoted_oq2e_profiles_are_installed():
+    # hy3 oQ2e promoted profiles plus the DeepSeek-V4.1-Flash mxfp4 serve
+    # profile (W21), which auto-resolves the streamed config with no flags.
     assert set(load_expert_profiles()) == {
         "hy3-oq2e-64",
         "hy3-oq2e-88",
         "hy3-oq2e-96",
+        "deepseek-v41-mxfp4-75",
     }
 
 
@@ -150,6 +153,38 @@ def test_88_and_96_profiles_install_exact_island_counts():
     assert config_96.deferred_pin_release is False
 
 
+def test_deepseek_v41_profile_defaults_to_a_lean_60gib_plan():
+    # W79: the served default engine plan drops to 60 GiB -- window 30 measured the
+    # 16K cell as fast at a 60 GiB plan as at 80 (2.24 vs 2.21 tok/s) at a far lower
+    # peak (67.5 vs 87.8 GB) -- while the admission ceiling and --expert-memory-limit
+    # override cap stay at the 82 GiB envelope (75 GiB weights + 7 GiB reserve).
+    profile = load_expert_profiles()["deepseek-v41-mxfp4-75"]
+    assert profile.process_ceiling_bytes == 82 * GiB
+    assert profile.weight_envelope_bytes == 75 * GiB
+    assert profile.config["runtime_reserve_bytes"] == 7 * GiB
+    # envelope + reserve == ceiling still holds; the default plan sits BELOW it.
+    assert (
+        profile.weight_envelope_bytes + profile.config["runtime_reserve_bytes"]
+        == profile.process_ceiling_bytes
+    )
+    assert profile.config["memory_limit_bytes"] == 60 * GiB
+
+    config = build_expert_streaming_config(profile)
+    assert config.memory_limit_bytes == 60 * GiB
+
+    # --expert-memory-limit still overrides UP TO the 82 GiB ceiling (the 80 GiB
+    # A/B arm window 30 ran) ...
+    raised = build_expert_streaming_config(
+        profile, overrides={"memory_limit_bytes": "80GiB"}
+    )
+    assert raised.memory_limit_bytes == 80 * GiB
+    # ... but never beyond it.
+    with pytest.raises(ValueError, match="memory_limit_bytes"):
+        build_expert_streaming_config(
+            profile, overrides={"memory_limit_bytes": "90GiB"}
+        )
+
+
 def test_profile_overrides_normalize_memory_values():
     profile = load_expert_profiles()["hy3-oq2e-64"]
 
@@ -199,13 +234,30 @@ def test_profile_resource_rejects_duplicate_json_keys():
         expert_profiles._parse_expert_profiles_resource(resource)
 
 
-def test_profile_resource_rejects_config_ceiling_mismatch():
+def test_profile_resource_rejects_config_ceiling_above_process_ceiling():
+    # W79: memory_limit_bytes is the DEFAULT engine plan and may sit AT or BELOW
+    # process_ceiling_bytes (the admission RAM + the --expert-memory-limit override
+    # cap).  Only a default ABOVE the ceiling is incoherent (it could not be
+    # admitted), so that alone is rejected.
+    document = _profile_resource_document()
+    row = document["profiles"][0]
+    row["config"]["memory_limit_bytes"] += 1
+
+    with pytest.raises(ValueError, match="config.memory_limit_bytes"):
+        _parse_profile_document(document)
+
+
+def test_profile_resource_accepts_default_plan_below_ceiling():
+    # A default plan strictly below the ceiling is valid (W79): the profile ships a
+    # proven-lean plan while leaving operators headroom to A/B a larger cap.
     document = _profile_resource_document()
     row = document["profiles"][0]
     row["config"]["memory_limit_bytes"] -= 1
 
-    with pytest.raises(ValueError, match="config.memory_limit_bytes"):
-        _parse_profile_document(document)
+    profiles = _parse_profile_document(document)
+    parsed = profiles[row["name"]]
+    assert parsed.config["memory_limit_bytes"] == row["config"]["memory_limit_bytes"]
+    assert parsed.config["memory_limit_bytes"] < parsed.process_ceiling_bytes
 
 
 def test_profile_resource_rejects_weight_and_reserve_mismatch():

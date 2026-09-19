@@ -1,0 +1,117 @@
+{
+  "dense_cache_bytes_per_layer": 67108864,
+  "iterations_per_round": 16,
+  "mlx": {
+    "active_bytes": 212992024,
+    "cache_bytes": 296423096,
+    "peak_bytes": 489422872
+  },
+  "rounds": 7,
+  "scope": "one real target layer; cached BF16 transpose versus transient dequantize+transpose",
+  "shapes": {
+    "1": {
+      "down_median_ms": {
+        "cached": 0.2771615,
+        "qmm_chunk2": 0.3483073125,
+        "qmm_chunk4": 0.356625,
+        "qmm_f32cast": 0.2139635,
+        "transient_contiguous": 0.8667994375,
+        "transient_view": 0.613854125
+      },
+      "full_median_ms": {
+        "cached": 0.3928828125,
+        "qmm_chunk2": 0.4877578125,
+        "qmm_chunk4": 0.5047916875,
+        "qmm_f32cast": 0.3240573125,
+        "transient_contiguous": 0.95908075,
+        "transient_view": 0.72665625
+      },
+      "full_slowdown_vs_cached": {
+        "cached": 1.0,
+        "qmm_chunk2": 1.2414842212014556,
+        "qmm_chunk4": 1.2848403428185091,
+        "qmm_f32cast": 0.8248192646503212,
+        "transient_contiguous": 2.4411369484380283,
+        "transient_view": 1.8495496032929666
+      },
+      "numerics": {
+        "cached": {
+          "byte_equal_control": true,
+          "max_abs": 0.0
+        },
+        "qmm_chunk2": {
+          "byte_equal_control": false,
+          "max_abs": 0.0625
+        },
+        "qmm_chunk4": {
+          "byte_equal_control": false,
+          "max_abs": 0.0625
+        },
+        "qmm_f32cast": {
+          "byte_equal_control": true,
+          "max_abs": 0.0
+        },
+        "transient_contiguous": {
+          "byte_equal_control": true,
+          "max_abs": 0.0
+        },
+        "transient_view": {
+          "byte_equal_control": false,
+          "max_abs": 3.814697265625e-06
+        }
+      }
+    },
+    "6": {
+      "down_median_ms": {
+        "cached": 0.39798175,
+        "qmm_chunk2": 0.4296979375,
+        "qmm_chunk4": 0.448716125,
+        "qmm_f32cast": 0.27401825,
+        "transient_contiguous": 0.9538645625,
+        "transient_view": 0.6175885625
+      },
+      "full_median_ms": {
+        "cached": 0.53226825,
+        "qmm_chunk2": 0.54441925,
+        "qmm_chunk4": 0.5663671875,
+        "qmm_f32cast": 0.455091125,
+        "transient_contiguous": 1.0859166875,
+        "transient_view": 0.77295575
+      },
+      "full_slowdown_vs_cached": {
+        "cached": 1.0,
+        "qmm_chunk2": 1.0228287146565664,
+        "qmm_chunk4": 1.0640634445131756,
+        "qmm_f32cast": 0.8550033277393494,
+        "transient_contiguous": 2.0401680684504475,
+        "transient_view": 1.452192104263217
+      },
+      "numerics": {
+        "cached": {
+          "byte_equal_control": true,
+          "max_abs": 0.0
+        },
+        "qmm_chunk2": {
+          "byte_equal_control": false,
+          "max_abs": 0.0625
+        },
+        "qmm_chunk4": {
+          "byte_equal_control": false,
+          "max_abs": 0.0625
+        },
+        "qmm_f32cast": {
+          "byte_equal_control": false,
+          "max_abs": 0.0625
+        },
+        "transient_contiguous": {
+          "byte_equal_control": true,
+          "max_abs": 0.0
+        },
+        "transient_view": {
+          "byte_equal_control": false,
+          "max_abs": 0.0625
+        }
+      }
+    }
+  }
+}

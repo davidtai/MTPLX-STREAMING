@@ -1,0 +1,22 @@
+{
+  "source_commit": "07998bbd6f696756dd6c76ee0035a855269b7cec",
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "32d42a85ebe69ce986e6f8a7d0d20eb435ad70206c8fdc8649aa276043055963",
+    "scripts/deepseek_v41/bench_standard_shape.py": "7a2c5873ac54d90b060ea32a6d0d7c5c395bdf2f19f67023dbed58341e4d70ac",
+    "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+    "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "scripts/deepseek_v41/gpu_window.sh": "cefdd9533a0dd99910b522b2a8992352db43d5a247bb2b238c9656e40cfa15c8"
+  },
+  "teacher_source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+  "source_audit": "deepseek_v41.py unchanged; DSpark only adds detach_prefill_backings, which draft-only replay never calls. No target runtime or decode loop executes.",
+  "bound_bytes": {
+    "active": 44023414784,
+    "cache": 4294967296,
+    "host": 4294967296,
+    "whole_machine_ceiling": 110000000000
+  },
+  "policies": "Depth selected from previous observed acceptance only; 3,5,7 heads share the same installed compact parameters. One D5 control and two adaptive arms."
+}

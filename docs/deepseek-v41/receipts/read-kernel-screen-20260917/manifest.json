@@ -1,0 +1,87 @@
+{
+  "measured_source_commit": "8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5",
+  "files": {
+    "README.md": {
+      "bytes": 5800,
+      "sha256": "8405abd38877ab0482c9aedf489de09de41ab019c3f5c15f06ab81c4502ae291"
+    },
+    "commands.txt": {
+      "bytes": 2182,
+      "sha256": "ff937f0db077ae1d4f3052ec5a1fb08d8cf1a528151f9458d506bec2cf3f5538"
+    },
+    "entropy/guard.log.gz": {
+      "bytes": 2801,
+      "sha256": "3534afd657596f80fdb84ce6a9e26425fcf6d6b4f1b9306c94dd99379374eb5d",
+      "raw_bytes": 11131,
+      "raw_sha256": "4268cf5770c06cc3c4499200fbfee9baa4965f5cc4659cc5f0f9ee740ecd582e"
+    },
+    "entropy/screen.json": {
+      "bytes": 24866,
+      "sha256": "5712ad4608814523a6ec03c0dc7f8cc17ddd3edb4e36440899929fc214ead7c1"
+    },
+    "entropy/screen.py": {
+      "bytes": 5641,
+      "sha256": "6578a13490d6ea6dcadc9396005cf3b28d8a1d5e2c4d369e5cd59caf7ec7bb11"
+    },
+    "guard-reporting/guard-summary-regression.json": {
+      "bytes": 3095,
+      "sha256": "06fab38b47586dc640b2143052847632ffc73c5b794e0cef61ec8fb24d3c5b76"
+    },
+    "guard-reporting/memory-accounting-test.log.gz": {
+      "bytes": 2073,
+      "sha256": "40346d9524fce1130c2d8b84b5cbd47cd210463bb913414afa8f1506d10509e4",
+      "raw_bytes": 7990,
+      "raw_sha256": "add43206693017049ff0fac3f70600b27b14bfd26364ea735af0bfc57588d33f"
+    },
+    "kernel/guard-v2.log.gz": {
+      "bytes": 3234,
+      "sha256": "7a52d465e3d88455eb25bf0ec21acb327fc42609f81df76af89f9c7fd09f6133",
+      "raw_bytes": 13575,
+      "raw_sha256": "28d1e431bd9fb1d71ab53c1bb20f96ae59b6159dcae6521079bc09bbc2344ccc"
+    },
+    "kernel/guard.log.gz": {
+      "bytes": 2866,
+      "sha256": "2b57eb4c281e26b9eb106be0cf8a1be74eb42742b78952a58bee5a51a1209d4f",
+      "raw_bytes": 11622,
+      "raw_sha256": "f926c466d582fba596726fef75dc5d1b96827db39dc0d6a40fc13c41689ea8e4"
+    },
+    "kernel/mlp-guard.log.gz": {
+      "bytes": 3745,
+      "sha256": "627ccfd76393761756bffec4d5efa125d02e084e9b596e4e8c777a539bdf60b4",
+      "raw_bytes": 15157,
+      "raw_sha256": "ffea896dda9dda6a2a9fdf6e76680572b5910e433c9faf5497d555fdb11cde9f"
+    },
+    "kernel/mlp-probe.json": {
+      "bytes": 16619,
+      "sha256": "e133df54238b591d3f0f52a107269e5b46b230d904883cc303cbb648cbf0dcfe"
+    },
+    "kernel/mlp-probe.py": {
+      "bytes": 7919,
+      "sha256": "7a0c990fe133bafe93a0a7f40d4bcd723c1eec8fb82e2a2a6b5ae77ef1aadffd"
+    },
+    "kernel/post-health.json": {
+      "bytes": 304,
+      "sha256": "4b43f8f7a4b9dfe14f60f91f2cf69dfb2611a5d9e22fea57c840876d2f32e43f"
+    },
+    "kernel/probe-v2.json": {
+      "bytes": 13477,
+      "sha256": "199998ce92a25e47d31a2f03e964b055dafcae5418728752457b2a3029aa13c8"
+    },
+    "kernel/probe-v2.py": {
+      "bytes": 7400,
+      "sha256": "033d1b19f4866e857f49a65ddfa81dfd174033523509c219afc600e331214a52"
+    },
+    "kernel/probe.json": {
+      "bytes": 9599,
+      "sha256": "955c053308d305e27f72fa47c7fc6f546124006069d3d1651a69496dbed180c3"
+    },
+    "kernel/probe.py": {
+      "bytes": 7398,
+      "sha256": "d1690b9727cb9eb327c23765cd4c5dbace88364fbd358085a8f7a74d8ce8aacd"
+    },
+    "summary.json": {
+      "bytes": 3248,
+      "sha256": "74da402dca45e66bb1b137474e1e229f2ab1bcbab0c477ae9f03538aa60ce0b3"
+    }
+  }
+}

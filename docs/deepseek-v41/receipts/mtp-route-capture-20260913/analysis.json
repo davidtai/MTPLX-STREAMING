@@ -1,0 +1,131 @@
+{
+  "purpose": "diagnostic native MTP expert reuse; no throughput claim",
+  "source_commit": "5c7661db48a1bed22cef753e336f9aba911add24",
+  "wrapper_sha256": "9fc40abc96482777affc82b0d51ff8f8f424c8b2fc4220390cca70df5e90b3ab",
+  "raw_routes_sha256": "6a90006c9c4829dac2a548298c1d237bfd1beb793c0bc6eaf99315fad8c9c3dd",
+  "input_tokens": 16384,
+  "output_tokens": 1024,
+  "cycles": 206,
+  "slots_per_layer": 71,
+  "matches_prior_mtp_ids": true,
+  "stage_summary": [
+    {
+      "unique_experts": 93,
+      "mean_unique_per_cycle": 8.058252427184467,
+      "max_unique_per_cycle": 13,
+      "first_half_unique": 89,
+      "new_experts_second_half": 4
+    },
+    {
+      "unique_experts": 58,
+      "mean_unique_per_cycle": 8.155339805825243,
+      "max_unique_per_cycle": 12,
+      "first_half_unique": 56,
+      "new_experts_second_half": 2
+    },
+    {
+      "unique_experts": 32,
+      "mean_unique_per_cycle": 7.233009708737864,
+      "max_unique_per_cycle": 11,
+      "first_half_unique": 32,
+      "new_experts_second_half": 0
+    }
+  ],
+  "partial_residency_offline_profiles": [
+    {
+      "slots_by_stage": [
+        32,
+        32,
+        32
+      ],
+      "resident_bytes_freed": 5414584320,
+      "target_slots_per_layer_equivalent": 7,
+      "cold_lru_record_reads_by_stage": [
+        300,
+        159,
+        32
+      ],
+      "cold_lru_read_bytes": 9231114240,
+      "clairvoyant_cold_record_reads_by_stage": [
+        188,
+        91,
+        32
+      ],
+      "clairvoyant_cold_read_bytes": 5846999040
+    },
+    {
+      "slots_by_stage": [
+        48,
+        48,
+        48
+      ],
+      "resident_bytes_freed": 4512153600,
+      "target_slots_per_layer_equivalent": 6,
+      "cold_lru_record_reads_by_stage": [
+        195,
+        64,
+        32
+      ],
+      "cold_lru_read_bytes": 5470986240,
+      "clairvoyant_cold_record_reads_by_stage": [
+        124,
+        58,
+        32
+      ],
+      "clairvoyant_cold_read_bytes": 4023336960
+    },
+    {
+      "slots_by_stage": [
+        72,
+        48,
+        24
+      ],
+      "resident_bytes_freed": 4512153600,
+      "target_slots_per_layer_equivalent": 6,
+      "cold_lru_record_reads_by_stage": [
+        110,
+        64,
+        39
+      ],
+      "cold_lru_read_bytes": 4004536320,
+      "clairvoyant_cold_record_reads_by_stage": [
+        93,
+        58,
+        35
+      ],
+      "clairvoyant_cold_read_bytes": 3496919040
+    },
+    {
+      "slots_by_stage": [
+        64,
+        48,
+        32
+      ],
+      "resident_bytes_freed": 4512153600,
+      "target_slots_per_layer_equivalent": 6,
+      "cold_lru_record_reads_by_stage": [
+        136,
+        64,
+        32
+      ],
+      "cold_lru_read_bytes": 4361748480,
+      "clairvoyant_cold_record_reads_by_stage": [
+        98,
+        58,
+        32
+      ],
+      "clairvoyant_cold_read_bytes": 3534520320
+    }
+  ],
+  "decode_target_records_read": 55465,
+  "decode_target_read_bytes": 1042777497600,
+  "mlx_peak_bytes": 86633869112,
+  "physical_peak_bytes_250ms": 97928101888,
+  "physical_bound_bytes": 104369347180.0,
+  "swapouts_unchanged": true,
+  "guard_exit_zero": true,
+  "qwen_restored_healthy_warm": true,
+  "gpu_lock_released": true,
+  "verified_utc": "2026-09-13T22:58:16.273073+00:00",
+  "caveat": "Cold LRU and clairvoyant simulations use only observed draft routes and assume a hypothetical correct streaming implementation. They omit host routing barriers, weight-loader redesign, and target-route changes from extra capacity."
+}

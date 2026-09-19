@@ -1,0 +1,35 @@
+{
+  "source_commit": "61b6899f27fee89f63bf7eed9f1c8aa77e73a53a",
+  "static_incremental_bound_bytes": 9663676416,
+  "ancestor_r4_fused_sha256": "7988ea6315ce06fefe257ad2ab9bda01b49f3719b592de4dec427867b1493402",
+  "native_plane_sha256": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+  "candidate_kernel_sha256": "470abe18484d84268b736c799971d710cac426b2163eabdf8ba5edd76a16f3cd",
+  "native_tile": {
+    "rows_per_simd_per_projection": 4,
+    "simds_per_group": 2,
+    "accumulators_per_thread": 4,
+    "gu_dispatches": 2,
+    "grid_per_dispatch": [
+      32,
+      576,
+      "assignments"
+    ]
+  },
+  "candidate_tile": {
+    "rows_per_simd_per_projection": 2,
+    "simds_per_group": 2,
+    "accumulators_per_thread": 4,
+    "gu_dispatches": 1,
+    "grid_per_dispatch": [
+      32,
+      1152,
+      "assignments"
+    ]
+  },
+  "arithmetic": "V16 K5120 STEP512; unchanged scale decoding and scale_dot<16>; ten block accumulations in native order; simd_sum; separate BF16 gate/up stores followed by unchanged clamped_swiglu and native down.",
+  "ownership": "Physical bank slots and expert scale IDs remain separate; same grouped assignments and tensors; native part3 GU witness, full-ready publication, pins, failure draining and deferred releases.",
+  "extra_array_bytes": 0,
+  "extra_threadgroup_scratch_bytes": 0,
+  "max_gu_outputs_bytes": 331776,
+  "full_model_promotion": false
+}

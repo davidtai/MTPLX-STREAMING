@@ -1,0 +1,29 @@
+--- a/mlx/backend/metal/allocator.cpp
++++ b/mlx/backend/metal/allocator.cpp
+@@ -80,6 +80,10 @@
+ 
+ size_t MetalAllocator::set_cache_limit(size_t limit) {
+   std::unique_lock lk(mutex_);
++  if (get_cache_memory() > limit) {
++    num_resources_ -=
++        buffer_cache_.release_cached_buffers(get_cache_memory() - limit);
++  }
+   std::swap(limit, max_pool_size_);
+   return limit;
+ };
+@@ -187,7 +191,14 @@
+   }
+   std::unique_lock lk(mutex_);
+   active_memory_ -= buf->length();
+-  if (get_cache_memory() < max_pool_size_) {
++  // Keep the configured inactive-buffer capacity strict. Retain the newest
++  // reusable buffer, evicting older cached buffers before publication.
++  if (buf->length() <= max_pool_size_) {
++    const size_t room = max_pool_size_ - buf->length();
++    if (get_cache_memory() > room) {
++      num_resources_ -= buffer_cache_.release_cached_buffers(
++          get_cache_memory() - room);
++    }
+     buffer_cache_.recycle_to_cache(buf);
+   } else {
+     num_resources_--;

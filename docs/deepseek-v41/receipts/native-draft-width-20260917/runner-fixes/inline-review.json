@@ -1,0 +1,20 @@
+{
+  "review_mode": "inline as required by the approved plan; no agents",
+  "base_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+  "source_sha256": "46303c75c8dd1600226d97adc3e334607b0369490feb6b671230105a82eb53b0",
+  "changed_functions": [
+    "_receipt_plan_limit_bytes",
+    "main"
+  ],
+  "added_functions": [
+    "_measured_pass"
+  ],
+  "removed_functions": [],
+  "generation_and_model_loading_ast_unchanged": true,
+  "findings": [],
+  "security_findings": "not applicable; local reporting and benchmark failure propagation only",
+  "local_checkpoint_ready": true,
+  "goal20_met": false,
+  "evidence": "24 CPU reporting cases; original main fails the new regression; critical-boundary exception flow checked without MLX",
+  "scope_limit": "No throughput promotion or general-serving resize lifecycle claim."
+}

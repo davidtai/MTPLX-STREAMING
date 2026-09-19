@@ -543,6 +543,19 @@ def snapshot_supports_prefix_decode(snapshot_spec: Any) -> bool:
         # counters which must stay coupled to its compressed tensor state.
         if values and values[0] == "mtplx-deepseek-v4-cache-v1":
             return False
+        # DeepSeek-V4.1's per-layer state tensors are [B, seq, head_dim] -- the
+        # token axis is axis 1, whereas the prefix decoder slices axis 2 (the
+        # token axis of a standard mlx_lm KVCache [B, H, T, D]).  Block-slicing
+        # V4.1 by axis 2 therefore never trims the sequence: it returns the full
+        # banked lanes labelled as the requested prefix, so restore_entry_prefix_
+        # cache skips its follow-up trim (cache_snapshot_prefix_len == required)
+        # and the served cache holds the whole banked entry's KV while the engine
+        # believes it restored the short boundary -> desynced suffix prefill ->
+        # token soup (W83).  The full decode + the cache's own entry.trim is
+        # exact for every V4.1 lane (window ring, compress/index groups,
+        # compressor frontier, engram), so route V4.1 there.
+        if values and values[0] == "mtplx-deepseek-v41-layer-cache-v1":
+            return False
         # Gemma's rotating cache carries (keep, max_size, offset, write_idx).
         # The persisted tensor order is ring-buffer order once full, so a
         # token-prefix slice cannot faithfully reconstruct it.

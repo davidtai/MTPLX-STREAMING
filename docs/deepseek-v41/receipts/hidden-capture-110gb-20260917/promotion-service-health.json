@@ -1,0 +1,10 @@
+{
+  "checked_at_utc": "2026-09-17T09:08:10.077600+00:00",
+  "ok": true,
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "warmup_state": "done",
+  "lock_free": true,
+  "owned_gpu_children": false
+}

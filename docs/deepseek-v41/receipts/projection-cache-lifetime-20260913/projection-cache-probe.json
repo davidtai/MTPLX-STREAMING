@@ -1,0 +1,267 @@
+{
+  "source_commit": "d133cb694dc8a2d886ba21ac5d94a2dc05706ec2",
+  "source_diff_sha256": "291fd4c4583d4c0c16108a3f21df4dd649954ffe467a4b87d0a88146f044d22c",
+  "script_sha256": "c37a061e5d8787523f8588588759089bdec684b2df4c84cdfacae08db628b179",
+  "scope": "one native mxfp8 wo_a [8192,4096], group32; no model or expert bank",
+  "bound": "134MiB initializer+quant/dequant/transpose/comparison temporaries <1GiB; 3GiB MLX limit,128MiB cache,4GiB process guard",
+  "snapshots": [
+    {
+      "sample_start_monotonic_ns": 216555688405958,
+      "sample_end_monotonic_ns": 216555693119083,
+      "process": {
+        "peak_maxrss_bytes": 104022016,
+        "resident_bytes": 104136704,
+        "phys_footprint_bytes": 368607880,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 121805996032,
+        "wired_bytes": 3598319616,
+        "active_bytes": 3463282688,
+        "inactive_bytes": 3043786752,
+        "speculative_bytes": 415055872,
+        "anonymous_bytes": 3701882880,
+        "file_backed_bytes": 3220242432,
+        "compressor_bytes": 1787150336,
+        "compressed_bytes": 6292422656,
+        "used_bytes": 11892539392,
+        "non_file_used_bytes": 9087352832,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 216555713688666,
+      "sample_end_monotonic_ns": 216555716427333,
+      "process": {
+        "peak_maxrss_bytes": 104759296,
+        "resident_bytes": 104759296,
+        "phys_footprint_bytes": 620921480,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 121553403904,
+        "wired_bytes": 3850715136,
+        "active_bytes": 3464019968,
+        "inactive_bytes": 3043672064,
+        "speculative_bytes": 415105024,
+        "anonymous_bytes": 3702177792,
+        "file_backed_bytes": 3220619264,
+        "compressor_bytes": 1787150336,
+        "compressed_bytes": 6292422656,
+        "used_bytes": 12145557504,
+        "non_file_used_bytes": 9340043264,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 216555733909166,
+      "sample_end_monotonic_ns": 216555736393500,
+      "process": {
+        "peak_maxrss_bytes": 104873984,
+        "resident_bytes": 104873984,
+        "phys_footprint_bytes": 620954248,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 121553502208,
+        "wired_bytes": 3850747904,
+        "active_bytes": 3463905280,
+        "inactive_bytes": 3043672064,
+        "speculative_bytes": 415105024,
+        "anonymous_bytes": 3701997568,
+        "file_backed_bytes": 3220684800,
+        "compressor_bytes": 1787150336,
+        "compressed_bytes": 6292422656,
+        "used_bytes": 12145475584,
+        "non_file_used_bytes": 9339895808,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 216555754727666,
+      "sample_end_monotonic_ns": 216555757199583,
+      "process": {
+        "peak_maxrss_bytes": 104873984,
+        "resident_bytes": 104873984,
+        "phys_footprint_bytes": 620954248,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 121552437248,
+        "wired_bytes": 3850747904,
+        "active_bytes": 3464036352,
+        "inactive_bytes": 3043672064,
+        "speculative_bytes": 415105024,
+        "anonymous_bytes": 3702128640,
+        "file_backed_bytes": 3220684800,
+        "compressor_bytes": 1787150336,
+        "compressed_bytes": 6292422656,
+        "used_bytes": 12145606656,
+        "non_file_used_bytes": 9340026880,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 216555774556958,
+      "sample_end_monotonic_ns": 216555777229750,
+      "process": {
+        "peak_maxrss_bytes": 104873984,
+        "resident_bytes": 104873984,
+        "phys_footprint_bytes": 620954248,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 121552601088,
+        "wired_bytes": 3850747904,
+        "active_bytes": 3463954432,
+        "inactive_bytes": 3043672064,
+        "speculative_bytes": 415105024,
+        "anonymous_bytes": 3702046720,
+        "file_backed_bytes": 3220684800,
+        "compressor_bytes": 1787150336,
+        "compressed_bytes": 6292422656,
+        "used_bytes": 12145524736,
+        "non_file_used_bytes": 9339944960,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 216555840118750,
+      "sample_end_monotonic_ns": 216555843257041,
+      "process": {
+        "peak_maxrss_bytes": 105037824,
+        "resident_bytes": 105037824,
+        "phys_footprint_bytes": 554992264,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 121605423104,
+        "wired_bytes": 3784982528,
+        "active_bytes": 3476389888,
+        "inactive_bytes": 3044311040,
+        "speculative_bytes": 418234368,
+        "anonymous_bytes": 3713318912,
+        "file_backed_bytes": 3225616384,
+        "compressor_bytes": 1787150336,
+        "compressed_bytes": 6292422656,
+        "used_bytes": 12092833792,
+        "non_file_used_bytes": 9285451776,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    },
+    {
+      "sample_start_monotonic_ns": 216555843305791,
+      "sample_end_monotonic_ns": 216555845306083,
+      "process": {
+        "peak_maxrss_bytes": 105037824,
+        "resident_bytes": 105037824,
+        "phys_footprint_bytes": 554992264,
+        "compressed_bytes": 0,
+        "source": "mach_task_vm_info"
+      },
+      "box": {
+        "page_size": 16384,
+        "free_bytes": 121605046272,
+        "wired_bytes": 3784982528,
+        "active_bytes": 3476307968,
+        "inactive_bytes": 3044311040,
+        "speculative_bytes": 418234368,
+        "anonymous_bytes": 3713236992,
+        "file_backed_bytes": 3225616384,
+        "compressor_bytes": 1787150336,
+        "compressed_bytes": 6292422656,
+        "used_bytes": 12092751872,
+        "non_file_used_bytes": 9285369856,
+        "swapins_pages": 778707,
+        "swapouts_pages": 4399765,
+        "ok": true,
+        "source": "vm_stat",
+        "used_includes_file_cache": true
+      }
+    }
+  ],
+  "phases": [
+    {
+      "phase": "packed_weights",
+      "active_bytes": 34603024,
+      "peak_bytes": 168820780,
+      "dense_cache_bytes": 0,
+      "fused_cache_bytes": 0
+    },
+    {
+      "phase": "prefill_0",
+      "active_bytes": 168820752,
+      "peak_bytes": 403701908,
+      "dense_cache_bytes": 134217728,
+      "fused_cache_bytes": 0
+    },
+    {
+      "phase": "decode_0",
+      "active_bytes": 101711888,
+      "peak_bytes": 403701908,
+      "dense_cache_bytes": 0,
+      "fused_cache_bytes": 67108864
+    },
+    {
+      "phase": "prefill_1",
+      "active_bytes": 168820752,
+      "peak_bytes": 403701908,
+      "dense_cache_bytes": 134217728,
+      "fused_cache_bytes": 0
+    },
+    {
+      "phase": "decode_1",
+      "active_bytes": 101711888,
+      "peak_bytes": 403701908,
+      "dense_cache_bytes": 0,
+      "fused_cache_bytes": 67108864
+    },
+    {
+      "phase": "scales_reloaded",
+      "active_bytes": 101711888,
+      "peak_bytes": 403701908,
+      "dense_cache_bytes": 0,
+      "fused_cache_bytes": 67108864
+    }
+  ],
+  "ok": true,
+  "repeated_phase_weights_exact": true,
+  "native_scales_reload_exact": true,
+  "peak_mlx_bytes": 403701908
+}

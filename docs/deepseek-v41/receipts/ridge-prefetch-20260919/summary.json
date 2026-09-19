@@ -1,0 +1,276 @@
+{
+  "source_commit": "3dcc1605404c860342601479dad1d4a5bc10f9bf",
+  "scope": "Three real Q4 expert layers, saved routes, synthetic inputs and omitted attention. No full-model throughput claim.",
+  "decision": "Neither schedule is promoted; no full candidate or optimization regression tests follow.",
+  "box_budget_bytes": 110000000000,
+  "canonical_component_accounting": {
+    "static_incremental_bound_bytes": 15032385536,
+    "metal_cache_compiler_bound_bytes": 10737418240,
+    "host_reader_compiler_bound_bytes": 4294967296,
+    "persistent_slots_per_layer": 105,
+    "layers": [
+      30,
+      31,
+      32
+    ],
+    "shared_transient_slots": 48,
+    "shared_prefetch_slots": 16,
+    "total_slots": 379,
+    "raw_bank_bytes": 7125442560,
+    "packed_bank_bytes": 6706298880,
+    "retained_output_bytes": 70778880,
+    "ridge_parameter_payload_bytes": 1188864,
+    "accounting_note": "Bank, output and adapter payloads are inside the Metal envelope; do not add them again. CPU preparation finishes before GPU loading."
+  },
+  "receipt_metadata_correction": {
+    "raw_receipts_unchanged": true,
+    "authoritative_admission_fields": [
+      "static_incremental_bound_bytes",
+      "budget_components",
+      "plan"
+    ],
+    "obsolete_inherited_fields": [
+      "bound_components",
+      "bound_scope",
+      "native_slot_bytes",
+      "packed_slot_bytes",
+      "memory_components",
+      "comparison",
+      "layer_selection",
+      "experimental_prefetch",
+      "allocator_sources.rule"
+    ],
+    "reason": "Copied descriptive fields still describe earlier 157/274-slot and row-permutation screens. Actual preflight, 379-slot geometry, 14 GiB admission, 10 GiB allocator and command cap agree; canonical values above supersede only those stale descriptions."
+  },
+  "ownership_review": {
+    "issue_targets": {
+      "30": 31,
+      "31": 32
+    },
+    "current_layer": "GlobalPrefetchRing.plan_prefetch protects every target-1 tenant, including the source layer whose resident GPU work has just been enqueued.",
+    "previous_layer": "The probe evaluates each layer output before the next layer flushes deferred leases. The full lane requires a covering dependency evaluation; this screen does not establish full integration.",
+    "physical_writer": "ExpertSlotPool._prepare_load waits for LOADING and pinned slots before ownership changes. load_speculative keeps its lifecycle claim through all component writers.",
+    "publication": "Ticket-bound completion and native route transactions are unchanged; callback workers do not publish directly.",
+    "failure": "The lane synchronizes submitted GPU work before abort/close. The supervisor reaps its child before file-cache reclamation.",
+    "source_files": {
+      "mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+      "mtplx/expert_slots.py": "27084ec00f0040644ccc1c93ce4adbc78a65f3fb4b17670cd26d8fb43d75e887",
+      "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+      "mtplx/models/expert_mlx.py": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc"
+    }
+  },
+  "runs": [
+    {
+      "variant": "v1",
+      "issue_point": "first missing-part GU witness",
+      "result_sha256": "baad0bdad59728ad6e806b5bf615dba11b51652ee730b31343f5b04ff5a14225",
+      "heldout_candidate_over_native_median": 1.010988452238514,
+      "heldout_latency_change_percent": 1.0988452238513968,
+      "control_spread_fraction": 0.005336367757653402,
+      "all64_candidate_over_native_median": 1.3059408109324016,
+      "all_192_layer_outputs_exact_per_arm": true,
+      "final_active_bytes": 8,
+      "memory": {
+        "child_tree_footprint_peak_bytes": 7526357160,
+        "guard_accounted_peak_bytes": 19159941120,
+        "whole_machine_physical_peak_bytes": 19159941120,
+        "compressor_growth_peak_bytes": 0,
+        "guard_samples": 14
+      },
+      "arms": [
+        {
+          "mode": "native",
+          "sequence": 0,
+          "heldout_total_ns": 657924459,
+          "continuous_all64_ns": 1580293667,
+          "mlx_peak_bytes": 7365486089,
+          "active_after_close_bytes": 239969800,
+          "reader": {
+            "records_read": 1214,
+            "read_bytes": 21481390080,
+            "read_wall_ns": 1667212419
+          },
+          "prefetch": {
+            "prefetch_issued": 0,
+            "prefetch_committed": 0,
+            "prefetch_issued_verify": 0,
+            "prefetch_committed_verify": 0,
+            "prefetch_predicted": 0,
+            "prefetch_hit_on_true_route": 0,
+            "prefetch_wasted": 0,
+            "prefetch_awaited_inflight": 0,
+            "prefetch_bytes": 0,
+            "prefetch_first_consumption_hits": 0
+          }
+        },
+        {
+          "mode": "prefetch",
+          "sequence": 1,
+          "heldout_total_ns": 663384000,
+          "continuous_all64_ns": 2057520250,
+          "mlx_peak_bytes": 7365486089,
+          "active_after_close_bytes": 239969808,
+          "reader": {
+            "records_read": 1250,
+            "read_bytes": 22118400000,
+            "read_wall_ns": 1712530038
+          },
+          "prefetch": {
+            "prefetch_issued": 209,
+            "prefetch_committed": 81,
+            "prefetch_issued_verify": 209,
+            "prefetch_committed_verify": 81,
+            "prefetch_predicted": 0,
+            "prefetch_hit_on_true_route": 230,
+            "prefetch_wasted": 21,
+            "prefetch_awaited_inflight": 128,
+            "prefetch_bytes": 3698196480,
+            "prefetch_first_consumption_hits": 186
+          }
+        },
+        {
+          "mode": "native",
+          "sequence": 2,
+          "heldout_total_ns": 654422875,
+          "continuous_all64_ns": 1570722417,
+          "mlx_peak_bytes": 7365486097,
+          "active_after_close_bytes": 239969808,
+          "reader": {
+            "records_read": 1214,
+            "read_bytes": 21481390080,
+            "read_wall_ns": 1669211916
+          },
+          "prefetch": {
+            "prefetch_issued": 0,
+            "prefetch_committed": 0,
+            "prefetch_issued_verify": 0,
+            "prefetch_committed_verify": 0,
+            "prefetch_predicted": 0,
+            "prefetch_hit_on_true_route": 0,
+            "prefetch_wasted": 0,
+            "prefetch_awaited_inflight": 0,
+            "prefetch_bytes": 0,
+            "prefetch_first_consumption_hits": 0
+          }
+        }
+      ],
+      "counter_scope": "Whole 64-cycle run, including initial bank seeding for reader counters; not heldout-only. Assignment hits and physical records are different units.",
+      "guard_restore_evidence": "2026-09-19T13:14:54Z [gpu_window] restore: com.tea.qwen healthy, model identity [\"mtplx-flash-next-optimized-speed\"] verified, background warmup ready",
+      "guard_release_evidence": "2026-09-19T13:14:54Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock",
+      "guard_exit_code": 0,
+      "child": {
+        "pid": 41501,
+        "started_at": "2026-09-19T13:14:22.863615+00:00",
+        "returncode": 0,
+        "exited_at": "2026-09-19T13:14:31.504677+00:00"
+      },
+      "source_cache_after_bytes": 0
+    },
+    {
+      "variant": "v2",
+      "issue_point": "after demand and resident/shared GPU submission",
+      "result_sha256": "03d9e751c5ca70e4e4bff6c6d205fa03bc6876e7ca764ac5cf2f8f22279db607",
+      "heldout_candidate_over_native_median": 0.9969150346223546,
+      "heldout_latency_change_percent": -0.30849653776453545,
+      "control_spread_fraction": 0.0018574129688021205,
+      "all64_candidate_over_native_median": 1.0002358086403318,
+      "all_192_layer_outputs_exact_per_arm": true,
+      "final_active_bytes": 8,
+      "memory": {
+        "child_tree_footprint_peak_bytes": 7872499744,
+        "guard_accounted_peak_bytes": 18899767328,
+        "whole_machine_physical_peak_bytes": 18627559424,
+        "compressor_growth_peak_bytes": 0,
+        "guard_samples": 13
+      },
+      "arms": [
+        {
+          "mode": "native",
+          "sequence": 0,
+          "heldout_total_ns": 659422791,
+          "continuous_all64_ns": 1575419250,
+          "mlx_peak_bytes": 7365486089,
+          "active_after_close_bytes": 239969800,
+          "reader": {
+            "records_read": 1214,
+            "read_bytes": 21481390080,
+            "read_wall_ns": 1668757795
+          },
+          "prefetch": {
+            "prefetch_issued": 0,
+            "prefetch_committed": 0,
+            "prefetch_issued_verify": 0,
+            "prefetch_committed_verify": 0,
+            "prefetch_predicted": 0,
+            "prefetch_hit_on_true_route": 0,
+            "prefetch_wasted": 0,
+            "prefetch_awaited_inflight": 0,
+            "prefetch_bytes": 0,
+            "prefetch_first_consumption_hits": 0
+          }
+        },
+        {
+          "mode": "prefetch",
+          "sequence": 1,
+          "heldout_total_ns": 657999583,
+          "continuous_all64_ns": 1576151416,
+          "mlx_peak_bytes": 7365486089,
+          "active_after_close_bytes": 239969808,
+          "reader": {
+            "records_read": 1250,
+            "read_bytes": 22118400000,
+            "read_wall_ns": 1708748540
+          },
+          "prefetch": {
+            "prefetch_issued": 209,
+            "prefetch_committed": 92,
+            "prefetch_issued_verify": 209,
+            "prefetch_committed_verify": 92,
+            "prefetch_predicted": 0,
+            "prefetch_hit_on_true_route": 230,
+            "prefetch_wasted": 21,
+            "prefetch_awaited_inflight": 117,
+            "prefetch_bytes": 3698196480,
+            "prefetch_first_consumption_hits": 186
+          }
+        },
+        {
+          "mode": "native",
+          "sequence": 2,
+          "heldout_total_ns": 660648750,
+          "continuous_all64_ns": 1576140417,
+          "mlx_peak_bytes": 7365486097,
+          "active_after_close_bytes": 239969808,
+          "reader": {
+            "records_read": 1214,
+            "read_bytes": 21481390080,
+            "read_wall_ns": 1666589176
+          },
+          "prefetch": {
+            "prefetch_issued": 0,
+            "prefetch_committed": 0,
+            "prefetch_issued_verify": 0,
+            "prefetch_committed_verify": 0,
+            "prefetch_predicted": 0,
+            "prefetch_hit_on_true_route": 0,
+            "prefetch_wasted": 0,
+            "prefetch_awaited_inflight": 0,
+            "prefetch_bytes": 0,
+            "prefetch_first_consumption_hits": 0
+          }
+        }
+      ],
+      "counter_scope": "Whole 64-cycle run, including initial bank seeding for reader counters; not heldout-only. Assignment hits and physical records are different units.",
+      "guard_restore_evidence": "2026-09-19T13:26:40Z [gpu_window] restore: com.tea.qwen healthy, model identity [\"mtplx-flash-next-optimized-speed\"] verified, background warmup ready",
+      "guard_release_evidence": "2026-09-19T13:26:40Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock",
+      "guard_exit_code": 0,
+      "child": {
+        "pid": 55073,
+        "started_at": "2026-09-19T13:26:09.629902+00:00",
+        "returncode": 0,
+        "exited_at": "2026-09-19T13:26:17.789732+00:00"
+      },
+      "source_cache_after_bytes": 0
+    }
+  ]
+}

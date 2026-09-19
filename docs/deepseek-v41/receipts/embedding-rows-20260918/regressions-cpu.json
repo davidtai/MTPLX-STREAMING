@@ -1,0 +1,8 @@
+{
+  "tests_run": 2,
+  "failures": 0,
+  "errors": 0,
+  "successful": true,
+  "real_mlx_imports_blocked": true,
+  "scope": "Host arena, duplicate ordering, eviction owners, close and short-read failure. Added after exact full candidate."
+}

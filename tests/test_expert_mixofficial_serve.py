@@ -11,8 +11,9 @@ through ``gather_qmm(bits=2)`` and down through ``gather_qmm(bits=3)``. Output
 is compared against a ``decode_projection`` dense reference (close, not bitwise
 for the shadow tier — the codec differs by construction).
 
-CPU-only: no GPU/Metal beyond the tiny gather kernels the q1 serve test also
-runs, no real bank, no network.
+Tiny Metal tests: synthetic banks only, no full model or network. The served
+kernels and dense reference run on the same GPU device, even when another
+test module selected CPU during collection.
 """
 
 from __future__ import annotations
@@ -66,6 +67,19 @@ _MIXED_DIMS = {
     "down_proj": (HIDDEN, EXPERT_HIDDEN),
 }
 _LAYER_GGUF = {1: "IQ1_M", 2: "IQ2_XXS"}
+
+
+@pytest.fixture(autouse=True)
+def _metal_device():
+    previous = mx.default_device()
+    mx.set_default_device(mx.gpu)
+    try:
+        yield
+    finally:
+        try:
+            mx.synchronize()
+        finally:
+            mx.set_default_device(previous)
 
 
 # ---------------------------------------------------------------------------
@@ -624,15 +638,12 @@ def test_missing_tier_entry_fails_closed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# KV boundaries under the derived single-limit policy (issue #46 meets #51 M2)
+# Mixed records reserve maximum KV before allocating their fixed slot banks.
 # ---------------------------------------------------------------------------
 
 
-def test_kv_admission_replans_mixed_records(tmp_path: Path) -> None:
-    """A mixed runtime with KV admission enabled reaches the derived-allowance
-    recompute at every boundary: the replan must thread the manifest per-layer
-    record map, divide the allowance by summed per-layer record bytes, evict
-    to the derived capacity, and restore the zero-KV capacity on release."""
+def test_kv_admission_preserves_mixed_record_storage(tmp_path: Path) -> None:
+    """Per-layer record sizes and maximum KV price the immutable backing pool."""
 
     root, _cfg, spec, manifest_path, _mm = _assemble_mixed_artifact(tmp_path)
     manifest = load_expert_manifest(manifest_path)
@@ -647,27 +658,28 @@ def test_kv_admission_replans_mixed_records(tmp_path: Path) -> None:
     )
     runtime = _open_mixed(root, spec, manifest_path, config=config)
     try:
-        assert runtime._derived_cache_policy
+        assert not runtime._derived_cache_policy
         assert runtime._per_layer_record_bytes == layer_bytes
-        open_capacity = runtime._derived_capacity_slots
-        assert open_capacity is not None and open_capacity >= 1
+        open_capacity = runtime.plan.slots_per_layer
+        assert open_capacity >= 1
+        allocated = runtime.slots.allocated_bytes
+        assert runtime.plan.kv_bytes == kv_budget * spec.kv_bytes_per_token
 
         admission = runtime.admit_kv_tokens(kv_budget)
-        allowance = runtime._derived_allowance_bytes
-        capacity = runtime._derived_capacity_slots
-        assert allowance is not None and allowance >= 0
         streamed_sum = sum(layer_bytes[layer] for layer in runtime._banks)
-        assert capacity * streamed_sum <= allowance
-        assert capacity <= open_capacity
+        assert runtime.plan.persistent_cache_bytes == open_capacity * streamed_sum
+        assert runtime.slots.allocated_bytes == allocated
+        assert runtime.plan.allocated_bytes <= limit
         for bank in runtime._banks.values():
-            assert bank.occupancy <= capacity
+            assert bank.persistent_capacity == open_capacity
 
         policy = runtime.snapshot(mx_module=mx)["expert_cache_policy"]
-        assert policy["derived"] is True
-        assert policy["allowance_bytes"] == allowance
-        assert policy["persistent_capacity"] == capacity
+        assert policy["derived"] is False
+        assert policy["allowance_bytes"] is None
+        assert policy["persistent_capacity"] is None
 
         admission.release()
-        assert runtime._derived_capacity_slots == open_capacity
+        assert runtime.slots.allocated_bytes == allocated
+        assert all(bank.persistent_capacity == open_capacity for bank in runtime._banks.values())
     finally:
         runtime.close()

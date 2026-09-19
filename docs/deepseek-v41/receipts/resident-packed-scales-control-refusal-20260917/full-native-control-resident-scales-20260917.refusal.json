@@ -1,0 +1,21 @@
+{
+  "scope": "CPU static admission arithmetic; no model load",
+  "native_prefill_slots": 91,
+  "native_decode_slots": 100,
+  "actual_baseline_bytes": 28352921600,
+  "recorded_wired_bytes": 3238674432,
+  "required_incremental_bound_bytes": 99827705324,
+  "maximum_baseline_for_machine_bound_bytes": 9672294676,
+  "baseline_excess_bytes": 18680626924,
+  "ceiling_bytes": 110000000000,
+  "admission_target_bytes": 109500000000,
+  "safety_margins_changed": false,
+  "actual_admission_error": "cap91 prefill cannot fit the current baseline: 126890293828B",
+  "file_cache_diagnostic": {
+    "method": "read-only mincore, no payload reads or invalidation",
+    "source_experts_bin_cached_page_bytes": 0,
+    "packed_payload_files": 360,
+    "packed_cached_page_bytes": 0,
+    "source_and_packed_files": 361
+  }
+}

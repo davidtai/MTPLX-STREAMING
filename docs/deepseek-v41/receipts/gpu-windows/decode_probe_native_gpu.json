@@ -1,0 +1,298 @@
+{
+  "A": {
+    "text": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n\n\ndef mul(a, b):",
+    "ids": [
+      0,
+      3465,
+      1258,
+      6036,
+      14,
+      291,
+      3395,
+      361,
+      1354,
+      260,
+      940,
+      291,
+      6328,
+      3465,
+      1241,
+      6036,
+      14,
+      291,
+      3395,
+      361,
+      1354,
+      260,
+      565,
+      291,
+      6328,
+      3465,
+      21740,
+      6036,
+      14,
+      291,
+      2605
+    ],
+    "match": 25,
+    "total": 30,
+    "rows": [
+      {
+        "pos": 0,
+        "pred": 5,
+        "pred_txt": "#",
+        "actual": 3465,
+        "match": false
+      },
+      {
+        "pos": 1,
+        "pred": 4630,
+        "pred_txt": " solution",
+        "actual": 1258,
+        "match": false
+      },
+      {
+        "pos": 2,
+        "pred": 6036,
+        "pred_txt": "(a",
+        "actual": 6036,
+        "match": true
+      },
+      {
+        "pos": 3,
+        "pred": 16181,
+        "pred_txt": ",b",
+        "actual": 14,
+        "match": false
+      },
+      {
+        "pos": 4,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 5,
+        "pred": 3395,
+        "pred_txt": "):\n",
+        "actual": 3395,
+        "match": true
+      },
+      {
+        "pos": 6,
+        "pred": 361,
+        "pred_txt": "   ",
+        "actual": 361,
+        "match": true
+      },
+      {
+        "pos": 7,
+        "pred": 1354,
+        "pred_txt": " return",
+        "actual": 1354,
+        "match": true
+      },
+      {
+        "pos": 8,
+        "pred": 260,
+        "pred_txt": " a",
+        "actual": 260,
+        "match": true
+      },
+      {
+        "pos": 9,
+        "pred": 940,
+        "pred_txt": " +",
+        "actual": 940,
+        "match": true
+      },
+      {
+        "pos": 10,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 11,
+        "pred": 271,
+        "pred_txt": "\n\n",
+        "actual": 6328,
+        "match": false
+      },
+      {
+        "pos": 12,
+        "pred": 3465,
+        "pred_txt": "def",
+        "actual": 3465,
+        "match": true
+      },
+      {
+        "pos": 13,
+        "pred": 1241,
+        "pred_txt": " sub",
+        "actual": 1241,
+        "match": true
+      },
+      {
+        "pos": 14,
+        "pred": 6036,
+        "pred_txt": "(a",
+        "actual": 6036,
+        "match": true
+      },
+      {
+        "pos": 15,
+        "pred": 14,
+        "pred_txt": ",",
+        "actual": 14,
+        "match": true
+      },
+      {
+        "pos": 16,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 17,
+        "pred": 3395,
+        "pred_txt": "):\n",
+        "actual": 3395,
+        "match": true
+      },
+      {
+        "pos": 18,
+        "pred": 361,
+        "pred_txt": "   ",
+        "actual": 361,
+        "match": true
+      },
+      {
+        "pos": 19,
+        "pred": 1354,
+        "pred_txt": " return",
+        "actual": 1354,
+        "match": true
+      },
+      {
+        "pos": 20,
+        "pred": 260,
+        "pred_txt": " a",
+        "actual": 260,
+        "match": true
+      },
+      {
+        "pos": 21,
+        "pred": 565,
+        "pred_txt": " -",
+        "actual": 565,
+        "match": true
+      },
+      {
+        "pos": 22,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 23,
+        "pred": 6328,
+        "pred_txt": "\n\n\n",
+        "actual": 6328,
+        "match": true
+      },
+      {
+        "pos": 24,
+        "pred": 3465,
+        "pred_txt": "def",
+        "actual": 3465,
+        "match": true
+      },
+      {
+        "pos": 25,
+        "pred": 21740,
+        "pred_txt": " mul",
+        "actual": 21740,
+        "match": true
+      },
+      {
+        "pos": 26,
+        "pred": 6036,
+        "pred_txt": "(a",
+        "actual": 6036,
+        "match": true
+      },
+      {
+        "pos": 27,
+        "pred": 14,
+        "pred_txt": ",",
+        "actual": 14,
+        "match": true
+      },
+      {
+        "pos": 28,
+        "pred": 291,
+        "pred_txt": " b",
+        "actual": 291,
+        "match": true
+      },
+      {
+        "pos": 29,
+        "pred": 3395,
+        "pred_txt": "):\n",
+        "actual": 2605,
+        "match": false
+      }
+    ]
+  },
+  "B": {
+    "ids": [
+      1354,
+      260,
+      940,
+      291,
+      201,
+      3465,
+      1241,
+      6036,
+      14,
+      291,
+      2605,
+      1354,
+      260,
+      565,
+      291,
+      201,
+      3465,
+      21740,
+      6036,
+      14,
+      291,
+      2605,
+      1354,
+      260
+    ],
+    "text": " return a + b\ndef sub(a, b): return a - b\ndef mul(a, b): return a",
+    "used_kv_cache": true
+  },
+  "C": {
+    "ids": [
+      1354,
+      260,
+      940,
+      291,
+      201,
+      3465,
+      1241,
+      6036,
+      14,
+      291,
+      2605
+    ],
+    "text": " return a + b\ndef sub(a, b):"
+  }
+}

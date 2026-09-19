@@ -1,0 +1,216 @@
+{
+  "python": "3.12.13 (main, Jun 11 2026, 03:55:21) [Clang 22.1.3 ]",
+  "rows": [
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'difference_update' of 'set' objects>",
+      "calls": 1,
+      "self_s": 2.7500000000000004e-06,
+      "cumulative_s": 2.7500000000000004e-06
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<built-in method builtins.len>",
+      "calls": 2,
+      "self_s": 1.6250000000000001e-06,
+      "cumulative_s": 1.6250000000000001e-06
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'disable' of '_lsprof.Profiler' objects>",
+      "calls": 1,
+      "self_s": 2.5334000000000002e-05,
+      "cumulative_s": 2.5334000000000002e-05
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'remove' of 'collections.deque' objects>",
+      "calls": 1,
+      "self_s": 1.2500000000000002e-07,
+      "cumulative_s": 1.2500000000000002e-07
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<built-in method _thread.get_ident>",
+      "calls": 2,
+      "self_s": 8.32e-07,
+      "cumulative_s": 8.32e-07
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'acquire' of '_thread.lock' objects>",
+      "calls": 3,
+      "self_s": 1.7490000000000001e-06,
+      "cumulative_s": 1.7490000000000001e-06
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'release' of '_thread.lock' objects>",
+      "calls": 2,
+      "self_s": 1.917e-06,
+      "cumulative_s": 1.917e-06
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'locked' of '_thread.lock' objects>",
+      "calls": 3,
+      "self_s": 8.33e-07,
+      "cumulative_s": 8.33e-07
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method '__enter__' of '_thread.lock' objects>",
+      "calls": 2,
+      "self_s": 2.8330000000000002e-06,
+      "cumulative_s": 2.8330000000000002e-06
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method '__exit__' of '_thread.lock' objects>",
+      "calls": 4,
+      "self_s": 1.9600000000000003e-06,
+      "cumulative_s": 1.9600000000000003e-06
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method '__exit__' of '_thread.RLock' objects>",
+      "calls": 1,
+      "self_s": 4.16e-07,
+      "cumulative_s": 4.16e-07
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<built-in method time.sleep>",
+      "calls": 36,
+      "self_s": 0.103992754,
+      "cumulative_s": 0.001131125
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 394,
+      "name": "notify",
+      "calls": 2,
+      "self_s": 2.7490000000000003e-06,
+      "cumulative_s": 6.791000000000001e-06
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 299,
+      "name": "__enter__",
+      "calls": 2,
+      "self_s": 3.666e-06,
+      "cumulative_s": 6.499000000000001e-06
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 302,
+      "name": "__exit__",
+      "calls": 3,
+      "self_s": 2.2470000000000003e-06,
+      "cumulative_s": 3.7070000000000003e-06
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 311,
+      "name": "_acquire_restore",
+      "calls": 1,
+      "self_s": 2.5000000000000004e-07,
+      "cumulative_s": 3.75e-07
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 616,
+      "name": "set",
+      "calls": 2,
+      "self_s": 8.461e-06,
+      "cumulative_s": 3.0667e-05
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 857,
+      "name": "_maintain_shutdown_locks",
+      "calls": 1,
+      "self_s": 8.584000000000001e-06,
+      "cumulative_s": 1.1792e-05
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 1108,
+      "name": "_delete",
+      "calls": 1,
+      "self_s": 9.459e-06,
+      "cumulative_s": 1.0291e-05
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 1485,
+      "name": "current_thread",
+      "calls": 1,
+      "self_s": 8.875e-06,
+      "cumulative_s": 9.291000000000001e-06
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 314,
+      "name": "_is_owned",
+      "calls": 2,
+      "self_s": 1.043e-06,
+      "cumulative_s": 2.667e-06
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 601,
+      "name": "is_set",
+      "calls": 37,
+      "self_s": 5.129e-06,
+      "cumulative_s": 5.129e-06
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 1236,
+      "name": "daemon",
+      "calls": 1,
+      "self_s": 7.92e-07,
+      "cumulative_s": 7.92e-07
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 1081,
+      "name": "_stop",
+      "calls": 1,
+      "self_s": 1.425e-05,
+      "cumulative_s": 2.7709000000000002e-05
+    },
+    {
+      "file": "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py",
+      "line": 424,
+      "name": "notify_all",
+      "calls": 2,
+      "self_s": 3.834e-06,
+      "cumulative_s": 1.2250000000000001e-05
+    }
+  ],
+  "worker_only_recorded": false,
+  "self_exceeds_cumulative": [
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<built-in method time.sleep>",
+      "calls": 36,
+      "self_s": 0.103992754,
+      "cumulative_s": 0.001131125
+    }
+  ]
+}

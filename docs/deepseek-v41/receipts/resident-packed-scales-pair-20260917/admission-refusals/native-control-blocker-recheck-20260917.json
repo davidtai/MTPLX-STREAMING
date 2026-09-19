@@ -1,0 +1,41 @@
+{
+  "utc": "2026-09-17T20:19:47.113363+00:00",
+  "gpu_lock": "free",
+  "health": {
+    "ok": true,
+    "model": "mtplx-flash-next-optimized-speed",
+    "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+    "active_requests": 0
+  },
+  "warmup_state": "done",
+  "machine_memory": {
+    "page_size": 16384,
+    "free_bytes": 4283744256,
+    "wired_bytes": 3211345920,
+    "active_bytes": 98690973696,
+    "inactive_bytes": 26198999040,
+    "speculative_bytes": 967458816,
+    "anonymous_bytes": 97159888896,
+    "file_backed_bytes": 28697542656,
+    "compressor_bytes": 1033781248,
+    "compressed_bytes": 6503563264,
+    "used_bytes": 129135099904,
+    "non_file_used_bytes": 101405016064,
+    "swapins_pages": 4809309,
+    "swapouts_pages": 7666694,
+    "ok": true,
+    "source": "vm_stat",
+    "used_includes_file_cache": true
+  },
+  "qwen_model_cache_scan": {
+    "operation": "read-only mincore; no payload reads or invalidation",
+    "file_count": 22,
+    "cached_page_bytes": 25090572288
+  },
+  "non_qwen_file_cache_lower_estimate_bytes": 2639511552,
+  "estimate_note": "Sequential snapshots; not an admission measurement or exact post-shutdown baseline.",
+  "owned_guard_or_model_children": [],
+  "last_direct_post_qwen_baseline_bytes": 28352921600,
+  "required_control_baseline_max_bytes": 9672294676,
+  "model_work_started": false
+}

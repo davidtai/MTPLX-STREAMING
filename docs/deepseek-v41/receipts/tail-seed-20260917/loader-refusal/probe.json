@@ -1,0 +1,74 @@
+{
+  "scope": "Native dense seed weights only; synthetic16K sequence from captured native hidden rows. Compares full seeding with only the final128 rows at correct absolute offsets. No target/draft generation or TPS claim.",
+  "installation": {
+    "source_commit": "b42e9807b3fd0c84193f10fab5ae652abcc23da9",
+    "incremental_bound_bytes": 8589934592,
+    "bound_components": "4GiB for MLX allocator/cache/graph plus4GiB Python/compiler. Selected native weights below90MiB; largest source shard below305MB; full input503316480B plus at most2GiB for projections/norm/temporary arrays. Tail arm allocates only128 hidden rows. No target trunk or expert banks.",
+    "helper_sha256": {
+      "probe.py": "167d8a5c3c625cd2c84a50764393fc8e83252bdffd272b9566a60c6ba26e5318",
+      "run_screen.py": "ba1908bd434d5d65de73e9d87be82e658391edd5a86bef4baf20fc31146553fc"
+    },
+    "runtime_source_sha256": {
+      "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+      "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+      "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+      "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+      "mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+      "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+      "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c",
+      "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+      "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/config.json": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d"
+    },
+    "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "model_manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+    "resident_names": [
+      "mtp.0.attn.kv_norm.weight",
+      "mtp.0.attn.wkv.scales",
+      "mtp.0.attn.wkv.weight",
+      "mtp.0.main_norm.weight",
+      "mtp.0.main_proj.scales",
+      "mtp.0.main_proj.weight",
+      "mtp.1.attn.kv_norm.weight",
+      "mtp.1.attn.wkv.scales",
+      "mtp.1.attn.wkv.weight",
+      "mtp.2.attn.kv_norm.weight",
+      "mtp.2.attn.wkv.scales",
+      "mtp.2.attn.wkv.weight"
+    ],
+    "resident_payload_bytes": 89224192,
+    "teacher_sha256": "1826c18118b11ddddb75493f2cf03a12c63135855e089a3a5527a4ab8767c7d2"
+  },
+  "before": {
+    "sample_start_monotonic_ns": 164551503085333,
+    "sample_end_monotonic_ns": 164551505223708,
+    "process": {
+      "peak_maxrss_bytes": 25001984,
+      "resident_bytes": 25346048,
+      "phys_footprint_bytes": 14369248,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123460190208,
+      "wired_bytes": 3423928320,
+      "active_bytes": 2663366656,
+      "inactive_bytes": 2348924928,
+      "speculative_bytes": 306036736,
+      "anonymous_bytes": 3480993792,
+      "file_backed_bytes": 1837334528,
+      "compressor_bytes": 2348924928,
+      "compressed_bytes": 8314077184,
+      "used_bytes": 10785144832,
+      "non_file_used_bytes": 9253847040,
+      "swapins_pages": 4821827,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "arms": [],
+  "complete": false,
+  "active_after_close_bytes": 472
+}

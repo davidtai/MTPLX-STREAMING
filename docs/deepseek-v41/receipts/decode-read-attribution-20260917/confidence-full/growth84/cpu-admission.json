@@ -1,0 +1,28 @@
+{
+  "corrected_field": "phase_memory_control_sha256 points to the unchanged measured receipt, not the new wrapper",
+  "phase_memory_control_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+  "full_wrapper_sha256": "e1d37e88c09a778a9143f6249f70f23000064f3cb67ade7f8b98156950b66949",
+  "results": [
+    {
+      "baseline_bytes": 9500000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 100,
+      "physical_bound_bytes": 109327705324,
+      "allocator_limit_bytes": 98352516352
+    },
+    {
+      "baseline_bytes": 10700000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 98,
+      "physical_bound_bytes": 109023654124,
+      "allocator_limit_bytes": 97152516352
+    },
+    {
+      "baseline_bytes": 13000000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 95,
+      "physical_bound_bytes": 109067577324,
+      "allocator_limit_bytes": 94852516352
+    }
+  ]
+}

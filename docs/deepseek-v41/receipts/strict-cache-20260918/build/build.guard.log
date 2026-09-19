@@ -1,0 +1,247 @@
+2026-09-18T06:55:37Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-18T06:55:37Z [gpu_window] abort: to abort this window cleanly, kill -TERM 15460 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-18T06:55:37Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-18T06:55:37Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-18T06:55:37Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-18T06:55:37Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-18T06:55:37Z [gpu_window] phase 2: com.tea.qwen loaded (pid=14634); plist=/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-18T06:55:37Z [gpu_window] phase 2: captured model identity ["mtplx-flash-next-optimized-speed"]
+2026-09-18T06:55:37Z [gpu_window] phase 3: available memory before bootout: 60.3 GiB
+2026-09-18T06:55:37Z [gpu_window] phase 3: launchctl bootout gui/501/com.tea.qwen (NO kickstart)
+2026-09-18T06:55:38Z [gpu_window] phase 3: com.tea.qwen captured process tree is gone
+2026-09-18T06:55:38Z [gpu_window] phase 3: reclaiming stopped-service clean file cache from /Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+{"operation": "stopped_service_file_cache_reclamation", "layout": "model", "model_dir": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed", "files": [{"file": "model-00001-of-00019.safetensors", "file_bytes": 4613737928, "cached_page_bytes_before": 4576575488, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00002-of-00019.safetensors", "file_bytes": 4299165294, "cached_page_bytes_before": 1216069632, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00003-of-00019.safetensors", "file_bytes": 4613737948, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00004-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00005-of-00019.safetensors", "file_bytes": 4613737941, "cached_page_bytes_before": 1560117248, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00006-of-00019.safetensors", "file_bytes": 4299165282, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00007-of-00019.safetensors", "file_bytes": 4613737956, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00008-of-00019.safetensors", "file_bytes": 4299165288, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00009-of-00019.safetensors", "file_bytes": 4613737939, "cached_page_bytes_before": 1560150016, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00010-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00011-of-00019.safetensors", "file_bytes": 4613737944, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00012-of-00019.safetensors", "file_bytes": 4299165286, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00013-of-00019.safetensors", "file_bytes": 4613737945, "cached_page_bytes_before": 1560264704, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00014-of-00019.safetensors", "file_bytes": 4299165290, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00015-of-00019.safetensors", "file_bytes": 4613737952, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00016-of-00019.safetensors", "file_bytes": 4299165265, "cached_page_bytes_before": 3640524800, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00017-of-00019.safetensors", "file_bytes": 4830006690, "cached_page_bytes_before": 4159012864, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00018-of-00019.safetensors", "file_bytes": 4307505704, "cached_page_bytes_before": 1508884480, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-00019-of-00019.safetensors", "file_bytes": 20813169, "cached_page_bytes_before": 18350080, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "model-vision.safetensors", "file_bytes": 897899145, "cached_page_bytes_before": 0, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "mtp.safetensors", "file_bytes": 1678147375, "cached_page_bytes_before": 1659027456, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}, {"file": "ngram-table.safetensors", "file_bytes": 32000154008, "cached_page_bytes_before": 14942633984, "cached_page_bytes_after": 0, "identity_size_mtime_unchanged": true}], "before": {"sample_start_monotonic_ns": 180248107537416, "sample_end_monotonic_ns": 180248110008458, "process": {"peak_maxrss_bytes": 23871488, "resident_bytes": 23855104, "phys_footprint_bytes": 14680520, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 85868462080, "wired_bytes": 3401498624, "active_bytes": 4568301568, "inactive_bytes": 38692339712, "speculative_bytes": 127123456, "anonymous_bytes": 4414275584, "file_backed_bytes": 38973489152, "compressor_bytes": 2152660992, "compressed_bytes": 8096546816, "used_bytes": 48814800896, "non_file_used_bytes": 9968435200, "swapins_pages": 4825890, "swapouts_pages": 7667614, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "after": {"sample_start_monotonic_ns": 180251231580708, "sample_end_monotonic_ns": 180251234189583, "process": {"peak_maxrss_bytes": 23986176, "resident_bytes": 23986176, "phys_footprint_bytes": 14811592, "compressed_bytes": 0, "source": "mach_task_vm_info"}, "box": {"page_size": 16384, "free_bytes": 122260602880, "wired_bytes": 3401809920, "active_bytes": 3512188928, "inactive_bytes": 3357523968, "speculative_bytes": 142917632, "anonymous_bytes": 4427825152, "file_backed_bytes": 2584805376, "compressor_bytes": 2152644608, "compressed_bytes": 8096514048, "used_bytes": 12424167424, "non_file_used_bytes": 9982279680, "swapins_pages": 4825890, "swapouts_pages": 7667614, "ok": true, "source": "vm_stat", "used_includes_file_cache": true}}, "elapsed_s": 3.124235208000755, "physical_used_reduction_bytes": 36390633472, "cached_page_bytes_before": 36401610752, "cached_page_bytes_after": 0, "semantics": "cached pages include speculative free pages; physical-used reduction is measured separately"}
+2026-09-18T06:55:41Z [gpu_window] phase 3: stop confirmed -- pid gone, 57.0 GiB freed, 117.3 GiB available (>= 16 GiB)
+2026-09-18T06:55:41Z [gpu_window] phase 4: scanning for other heavy mtplx/python workers (> 2 GiB RSS) before opening the window
+2026-09-18T06:55:41Z [gpu_window] phase 4: physical used at start (wired+active+inactive+compressor, includes file cache): 11.6 GiB (ceiling 102.445483 GiB); compressor at start 1.7 GiB
+2026-09-18T06:55:41Z [gpu_window] phase 4: guard accounting = max(baseline + step footprint estimate, live physical used); compressor tripwire 8 GiB over start; physical used includes file cache
+2026-09-18T06:55:41Z [gpu_window] phase 4: exported exact 12411404288-byte baseline as MTPLX_DSV41_BOX_BASELINE_GB=12.411404288 (decimal GB; 11.6 GiB) to the step env
+2026-09-18T06:55:41Z [gpu_window] phase 4: effective child-tree footprint cap 90.9 GiB (lowered from 100.0 GiB: used_start 11.6 + cap would cross the 102.445483 GiB ceiling)
+2026-09-18T06:55:41Z [gpu_window] phase 4: guard caps -- child-tree footprint cap 90.9 GiB (~98 GB); physical-used ceiling 110000000000 bytes (110.000 decimal GB, 102.445483 GiB)
+2026-09-18T06:55:41Z [gpu_window] phase 4: starting GPU step (tag gpuwin-15460-1789714541-3226519434) under child-tree footprint cap 90.9 GiB + system ceiling 102.445483 GiB: /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /tmp/dsv41-strict-cache-20260918/build.py
+BUILD_COMMAND ["/opt/homebrew/bin/cmake", "-S", "/tmp/dsv41-strict-cache-20260918/mlx-0.32.2", "-B", "/tmp/dsv41-strict-cache-20260918/build", "-G", "Unix Makefiles", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=ON", "-DMLX_BUILD_TESTS=OFF", "-DMLX_BUILD_EXAMPLES=OFF", "-DMLX_BUILD_BENCHMARKS=OFF", "-DMLX_BUILD_PYTHON_BINDINGS=OFF", "-DMLX_BUILD_PYTHON_STUBS=OFF", "-DMLX_METAL_JIT=OFF", "-DMLX_USE_CCACHE=OFF", "-DCMAKE_OSX_DEPLOYMENT_TARGET=26.2", "-DCMAKE_C_COMPILER=/usr/bin/clang", "-DCMAKE_CXX_COMPILER=/usr/bin/clang++", "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/tmp/dsv41-strict-cache-20260918/strict-lib", "-DMLX_METAL_PATH=/tmp/dsv41-strict-cache-20260918/strict-lib", "-DDSV41_PREBUILT_METALLIB=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/mlx/lib/mlx.metallib"]
+2026-09-18T06:55:41Z [gpu_window] phase 4: mem sample -- baseline 11.6 GiB + step footprint 0.0 GiB, live physical used 11.6 GiB => guard accounted 11.6 GiB; compressor +0.0 GiB (trip 8 GiB)
+-- The C compiler identification is AppleClang 21.0.0.21000334
+-- The CXX compiler identification is AppleClang 21.0.0.21000334
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/clang - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Building MLX for arm64 processor on Darwin
+-- Metal found /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/Metal.framework
+-- Building on macOS 26.6.2
+-- Building with macOS 27.0 SDK
+-- Building for macOS 26.2
+-- Metal version: 400
+-- Accelerate found /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/Accelerate.framework
+-- Downloading json
+-- Using the multi-header code from /tmp/dsv41-strict-cache-20260918/build/_deps/json-src/include/
+-- Downloading json for JACCL
+-- Downloading gguflib
+-- {fmt} version: 12.1.0
+-- Build type: Release
+-- Performing Test HAS_NULLPTR_WARNING
+-- Performing Test HAS_NULLPTR_WARNING - Success
+-- Configuring done (6.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /tmp/dsv41-strict-cache-20260918/build
+BUILD_COMMAND ["/opt/homebrew/bin/cmake", "--build", "/tmp/dsv41-strict-cache-20260918/build", "--target", "mlx", "-j", "4"]
+[  1%] Building CXX object mlx/CMakeFiles/mlx_version.dir/version.cpp.o
+[  3%] Building CXX object jaccl/CMakeFiles/jaccl.dir/jaccl/tcp.cpp.o
+[  3%] Generating compiled_preamble.cpp
+[  3%] Generating /tmp/dsv41-strict-cache-20260918/strict-lib/mlx.metallib
+[  3%] Built target mlx-metallib
+[  4%] Building CXX object jaccl/CMakeFiles/jaccl.dir/jaccl/rdma.cpp.o
+[  4%] Built target cpu_compiled_preamble
+[  4%] Built target mlx_version
+[  5%] Building CXX object jaccl/CMakeFiles/jaccl.dir/jaccl/mesh.cpp.o
+[  5%] Building CXX object jaccl/CMakeFiles/jaccl.dir/jaccl/ring.cpp.o
+[  6%] Building CXX object jaccl/CMakeFiles/jaccl.dir/jaccl/jaccl.cpp.o
+[  7%] Building C object mlx/io/CMakeFiles/gguflib.dir/__/__/_deps/gguflib-src/fp16.c.o
+[  7%] Building C object mlx/io/CMakeFiles/gguflib.dir/__/__/_deps/gguflib-src/gguflib.c.o
+[  8%] Linking C static library libgguflib.a
+[  8%] Built target gguflib
+[  9%] Generating jit/utils.cpp
+[ 10%] Generating jit/unary_ops.cpp
+[ 10%] Built target unary_ops
+[ 10%] Generating jit/binary_ops.cpp
+[ 10%] Built target binary_ops
+[ 10%] Generating jit/ternary_ops.cpp
+[ 10%] Built target ternary_ops
+[ 10%] Generating jit/reduce_utils.cpp
+[ 11%] Generating jit/scatter.cpp
+[ 11%] Built target scatter
+[ 11%] Built target utils
+[ 11%] Built target reduce_utils
+[ 11%] Generating jit/masked_scatter.cpp
+[ 12%] Generating jit/gather.cpp
+[ 13%] Generating jit/gather_front.cpp
+[ 13%] Built target masked_scatter
+[ 13%] Built target gather
+[ 13%] Built target gather_front
+[ 13%] Generating jit/gather_axis.cpp
+[ 15%] Generating jit/hadamard.cpp
+[ 15%] Generating jit/scatter_axis.cpp
+[ 15%] Built target gather_axis
+[ 15%] Built target scatter_axis
+[ 15%] Built target hadamard
+[ 16%] Linking CXX shared library /tmp/dsv41-strict-cache-20260918/strict-lib/libjaccl.dylib
+[ 16%] Built target jaccl
+[ 17%] Building CXX object CMakeFiles/mlx.dir/mlx/device.cpp.o
+[ 19%] Building CXX object CMakeFiles/mlx.dir/mlx/array.cpp.o
+[ 19%] Building CXX object CMakeFiles/mlx.dir/mlx/compile.cpp.o
+[ 19%] Building CXX object CMakeFiles/mlx.dir/mlx/dtype.cpp.o
+[ 20%] Building CXX object CMakeFiles/mlx.dir/mlx/dtype_utils.cpp.o
+[ 20%] Building CXX object CMakeFiles/mlx.dir/mlx/export.cpp.o
+[ 21%] Building CXX object CMakeFiles/mlx.dir/mlx/einsum.cpp.o
+[ 22%] Building CXX object CMakeFiles/mlx.dir/mlx/fast.cpp.o
+[ 22%] Building CXX object CMakeFiles/mlx.dir/mlx/fft.cpp.o
+[ 23%] Building CXX object CMakeFiles/mlx.dir/mlx/ops.cpp.o
+[ 24%] Building CXX object CMakeFiles/mlx.dir/mlx/graph_utils.cpp.o
+[ 24%] Building CXX object CMakeFiles/mlx.dir/mlx/primitives.cpp.o
+[ 25%] Building CXX object CMakeFiles/mlx.dir/mlx/random.cpp.o
+[ 26%] Building CXX object CMakeFiles/mlx.dir/mlx/scheduler.cpp.o
+[ 26%] Building CXX object CMakeFiles/mlx.dir/mlx/stream.cpp.o
+[ 27%] Building CXX object CMakeFiles/mlx.dir/mlx/transforms.cpp.o
+[ 28%] Building CXX object CMakeFiles/mlx.dir/mlx/utils.cpp.o
+[ 28%] Building CXX object CMakeFiles/mlx.dir/mlx/linalg.cpp.o
+[ 29%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/broadcasting.cpp.o
+[ 30%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/compiled.cpp.o
+[ 30%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/common.cpp.o
+[ 31%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/load.cpp.o
+[ 32%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/metal_kernel.cpp.o
+[ 32%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/reduce.cpp.o
+[ 33%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/slicing.cpp.o
+[ 34%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/common/utils.cpp.o
+[ 34%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/device_info.cpp.o
+[ 35%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/arg_reduce.cpp.o
+[ 36%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/binary.cpp.o
+[ 36%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/conv.cpp.o
+[ 37%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/copy.cpp.o
+[ 38%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/distributed.cpp.o
+[ 38%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/eig.cpp.o
+[ 39%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/eigh.cpp.o
+[ 40%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/encoder.cpp.o
+[ 40%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/fft.cpp.o
+[ 41%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/hadamard.cpp.o
+[ 42%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/matmul.cpp.o
+[ 42%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/gemms/cblas.cpp.o
+[ 43%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/masked_mm.cpp.o
+[ 44%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/primitives.cpp.o
+[ 44%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/quantized.cpp.o
+[ 45%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/reduce.cpp.o
+[ 46%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/scan.cpp.o
+[ 46%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/select.cpp.o
+2026-09-18T06:56:11Z [gpu_window] phase 4: mem sample -- baseline 11.6 GiB + step footprint 0.8 GiB, live physical used 13.2 GiB => guard accounted 13.2 GiB; compressor +0.0 GiB (trip 8 GiB)
+[ 47%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/softmax.cpp.o
+[ 48%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/logsumexp.cpp.o
+[ 48%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/sort.cpp.o
+[ 50%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/threefry.cpp.o
+[ 51%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/indexing.cpp.o
+[ 51%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/luf.cpp.o
+[ 52%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/qrf.cpp.o
+[ 53%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/svd.cpp.o
+[ 53%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/inverse.cpp.o
+[ 54%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/cholesky.cpp.o
+[ 55%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/unary.cpp.o
+[ 55%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/eval.cpp.o
+[ 56%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/compiled_preamble.cpp.o
+[ 57%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/gemms/bnns.cpp.o
+[ 57%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/compiled.cpp.o
+[ 58%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cpu/jit_compiler.cpp.o
+[ 59%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/primitives.cpp.o
+[ 59%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/ops.cpp.o
+[ 60%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/distributed.cpp.o
+[ 61%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/utils.cpp.o
+[ 61%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/mpi/mpi.cpp.o
+[ 62%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/ring/ring.cpp.o
+[ 63%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/nccl/no_nccl.cpp.o
+[ 63%] Building CXX object CMakeFiles/mlx.dir/mlx/distributed/jaccl/jaccl.cpp.o
+[ 64%] Building CXX object CMakeFiles/mlx.dir/mlx/io/load.cpp.o
+[ 65%] Building CXX object CMakeFiles/mlx.dir/mlx/io/safetensors.cpp.o
+[ 65%] Building CXX object CMakeFiles/mlx.dir/mlx/io/gguf.cpp.o
+[ 66%] Building CXX object CMakeFiles/mlx.dir/mlx/io/gguf_quants.cpp.o
+[ 67%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/utils.cpp.o
+[ 67%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/unary_ops.cpp.o
+[ 68%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/binary_ops.cpp.o
+[ 69%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/ternary_ops.cpp.o
+[ 69%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/reduce_utils.cpp.o
+[ 70%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/scatter.cpp.o
+[ 71%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/masked_scatter.cpp.o
+[ 71%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/gather.cpp.o
+[ 72%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/gather_front.cpp.o
+[ 73%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/gather_axis.cpp.o
+[ 73%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/scatter_axis.cpp.o
+[ 74%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/jit/hadamard.cpp.o
+[ 75%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/nojit_kernels.cpp.o
+[ 75%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/allocator.cpp.o
+[ 76%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/binary.cpp.o
+[ 77%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/device_info.cpp.o
+[ 77%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/compiled.cpp.o
+[ 78%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/conv.cpp.o
+[ 79%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/copy.cpp.o
+[ 79%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/custom_kernel.cpp.o
+[ 80%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/distributed.cpp.o
+[ 81%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/device.cpp.o
+[ 81%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/event.cpp.o
+[ 82%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/eval.cpp.o
+[ 83%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/fence.cpp.o
+[ 83%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/fft.cpp.o
+[ 84%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/hadamard.cpp.o
+[ 85%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/indexing.cpp.o
+[ 85%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/logsumexp.cpp.o
+[ 86%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/matmul.cpp.o
+[ 87%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/scaled_dot_product_attention.cpp.o
+[ 87%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/metal.cpp.o
+[ 88%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/primitives.cpp.o
+[ 89%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/quantized.cpp.o
+[ 89%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/normalization.cpp.o
+[ 90%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/rope.cpp.o
+[ 91%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/scan.cpp.o
+[ 91%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/slicing.cpp.o
+[ 92%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/softmax.cpp.o
+[ 93%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/sort.cpp.o
+[ 93%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/reduce.cpp.o
+[ 94%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/ternary.cpp.o
+[ 95%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/unary.cpp.o
+[ 95%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/resident.cpp.o
+[ 96%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/utils.cpp.o
+[ 97%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/cuda/no_cuda.cpp.o
+2026-09-18T06:56:41Z [gpu_window] phase 4: mem sample -- baseline 11.6 GiB + step footprint 1.3 GiB, live physical used 13.6 GiB => guard accounted 13.6 GiB; compressor +0.0 GiB (trip 8 GiB)
+[ 97%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/gpu/copy.cpp.o
+[ 98%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/gpu/primitives.cpp.o
+[100%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/gpu/slicing.cpp.o
+[100%] Linking CXX shared library /tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib
+[100%] Built target mlx
+BUILD_COMMAND ["/opt/homebrew/bin/cmake", "--build", "/tmp/dsv41-strict-cache-20260918/build", "--target", "mlx", "-j", "4"]
+[  3%] Built target cpu_compiled_preamble
+[  3%] Built target mlx-metallib
+[  3%] Built target mlx_version
+[  5%] Built target utils
+[  5%] Built target unary_ops
+[  7%] Built target gguflib
+[ 11%] Built target jaccl
+[ 11%] Built target binary_ops
+[ 11%] Built target ternary_ops
+[ 11%] Built target reduce_utils
+[ 12%] Built target scatter
+[ 12%] Built target masked_scatter
+[ 13%] Built target gather
+[ 14%] Built target gather_front
+[ 14%] Built target gather_axis
+[ 15%] Built target hadamard
+[ 16%] Built target scatter_axis
+[ 16%] Building CXX object CMakeFiles/mlx.dir/mlx/backend/metal/allocator.cpp.o
+[ 16%] Linking CXX shared library /tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib
+[100%] Built target mlx
+BUILD_COMPLETE {"stock_source": {"libjaccl.dylib": "369b3afc17793b8e84925f5b34debb156e8f09cebf2c6e2ef3cbe96b5951727a", "libmlx.dylib": "937954b01bb547298fd5c6d09a61e72ba41a3828296ae90617079c5eff72c89a", "mlx.metallib": "dc59d1cceb1a5c7e578232e6e41e28e2c73c9463ac6dbc3886c3ee17ffc270ed"}, "strict": {"libjaccl.dylib": "369b3afc17793b8e84925f5b34debb156e8f09cebf2c6e2ef3cbe96b5951727a", "libmlx.dylib": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9", "mlx.metallib": "dc59d1cceb1a5c7e578232e6e41e28e2c73c9463ac6dbc3886c3ee17ffc270ed"}}
+2026-09-18T06:56:45Z [gpu_window] phase 4: GPU step exited with code 0; sampled peak step footprint 1.9 GiB (1996822480 bytes), sampled peak guard accounted 14.4 GiB (15486369792 bytes), sampled peak physical used 14.4 GiB (15486369792 bytes), sampled peak compressor delta 0.0 GiB (0 bytes); complete step memory samples 60, poll interval 1s
+2026-09-18T06:56:45Z [gpu_window] restore: launchctl bootstrap gui/501 /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-18T06:57:02Z [gpu_window] restore: com.tea.qwen healthy, model identity ["mtplx-flash-next-optimized-speed"] verified, background warmup ready
+2026-09-18T06:57:02Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

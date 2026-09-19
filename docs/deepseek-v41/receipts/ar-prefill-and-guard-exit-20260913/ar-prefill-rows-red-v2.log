@@ -1,0 +1,109 @@
+FFFF.                                                                    [100%]
+=================================== FAILURES ===================================
+___________ test_generation_heads_one_row_and_preserves_prompt_cache ___________
+
+ab = <module 'ar_prefill_rows' from '/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/ab_decode_env_levers.py'>
+
+    def test_generation_heads_one_row_and_preserves_prompt_cache(ab):
+        model = Model()
+        result = ab._generate(model=model, ops=OPS, mem_probe=MEM, prompt_ids=PROMPT,
+                              steps=5, stop_on_eos=True, eos_id=4)
+        assert result["generated"] == [2, 3, 4]
+        assert result["decode_steps_run"] == 2
+        assert model.cache == PROMPT + [2, 3]
+>       assert model.rows == [1, 1, 1]
+E       assert [16384, 1, 1] == [1, 1, 1]
+E         
+E         At index 0 diff: 16384 != 1
+E         Use -v to get more diff
+
+/tmp/dsv41-110-preflight/test_ar_prefill_rows.py:57: AssertionError
+___________ test_replay_keeps_full_vocabulary_and_exact_ar_prefix[0] ___________
+
+ab = <module 'ar_prefill_rows' from '/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/ab_decode_env_levers.py'>
+index = 0
+
+    @pytest.mark.parametrize("index", [0, 2])
+    def test_replay_keeps_full_vocabulary_and_exact_ar_prefix(ab, index):
+        model = Model()
+        row = ab._ar_logits_row_at_index(model=model, ops=OPS,
+                                         mx=SimpleNamespace(float32=np.float32),
+                                         prompt_ids=PROMPT, ar_tokens=[2, 3], index=index)
+        assert row.shape == (8,)
+        assert int(np.argmax(row)) == index + 2
+        assert model.cache == PROMPT + [2, 3][:index]
+>       assert model.rows == [1] * (index + 1)
+E       assert [16384] == [1]
+E         
+E         At index 0 diff: 16384 != 1
+E         Use -v to get more diff
+
+/tmp/dsv41-110-preflight/test_ar_prefill_rows.py:69: AssertionError
+___________ test_replay_keeps_full_vocabulary_and_exact_ar_prefix[2] ___________
+
+ab = <module 'ar_prefill_rows' from '/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/ab_decode_env_levers.py'>
+index = 2
+
+    @pytest.mark.parametrize("index", [0, 2])
+    def test_replay_keeps_full_vocabulary_and_exact_ar_prefix(ab, index):
+        model = Model()
+        row = ab._ar_logits_row_at_index(model=model, ops=OPS,
+                                         mx=SimpleNamespace(float32=np.float32),
+                                         prompt_ids=PROMPT, ar_tokens=[2, 3], index=index)
+        assert row.shape == (8,)
+        assert int(np.argmax(row)) == index + 2
+        assert model.cache == PROMPT + [2, 3][:index]
+>       assert model.rows == [1] * (index + 1)
+E       assert [16384, 1, 1] == [1, 1, 1]
+E         
+E         At index 0 diff: 16384 != 1
+E         Use -v to get more diff
+
+/tmp/dsv41-110-preflight/test_ar_prefill_rows.py:69: AssertionError
+_________ test_model_captures_draft_hidden_only_when_requested[False] __________
+
+return_hidden = False
+
+    @pytest.mark.parametrize("return_hidden", [False, True])
+    def test_model_captures_draft_hidden_only_when_requested(return_hidden):
+        # Execute the real model entrypoint with an allocation-recording backbone;
+        # no MLX import, parameters, or device execution is needed for this boundary.
+        path = Path.cwd() / "mtplx/models/deepseek_v41.py"
+        tree = ast.parse(path.read_text())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Model")
+        fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "__call__")
+        noop = lambda *a, **kw: None
+        namespace = {
+            "_stime": SimpleNamespace(active=lambda: None,
+                                      stage=lambda name: contextlib.nullcontext(SimpleNamespace(add=noop))),
+            "_tl": SimpleNamespace(token_head_done=noop, forward_end=noop),
+            "_resolve_logits_keep": lambda keep, rows: keep,
+        }
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(path), "exec"), namespace)
+        h = np.arange(24).reshape(1, 3, 8)
+        hidden = h + 100
+        captures = []
+        def backbone(ids, cache, **kw):
+            captures.append(kw["return_main_hidden"])
+            return (h, hidden) if kw["return_main_hidden"] else h
+        model = SimpleNamespace(model=backbone, _apply_head=lambda x: x)
+        result = namespace["__call__"](model, np.array([[1, 2, 3]]),
+                                        return_hidden=return_hidden, logits_keep=1)
+        if return_hidden:
+            np.testing.assert_array_equal(result[0], h[:, -1:])
+            np.testing.assert_array_equal(result[1], hidden)
+        else:
+            np.testing.assert_array_equal(result, h[:, -1:])
+>       assert captures == [return_hidden]
+E       assert [True] == [False]
+E         
+E         At index 0 diff: True != False
+E         Use -v to get more diff
+
+/tmp/dsv41-110-preflight/test_ar_prefill_rows.py:102: AssertionError
+=========================== short test summary info ============================
+FAILED ../../../../../../../tmp/dsv41-110-preflight/test_ar_prefill_rows.py::test_generation_heads_one_row_and_preserves_prompt_cache
+FAILED ../../../../../../../tmp/dsv41-110-preflight/test_ar_prefill_rows.py::test_replay_keeps_full_vocabulary_and_exact_ar_prefix[0]
+FAILED ../../../../../../../tmp/dsv41-110-preflight/test_ar_prefill_rows.py::test_replay_keeps_full_vocabulary_and_exact_ar_prefix[2]
+FAILED ../../../../../../../tmp/dsv41-110-preflight/test_ar_prefill_rows.py::test_model_captures_draft_hidden_only_when_requested[False]
+4 failed, 1 passed in 0.08s

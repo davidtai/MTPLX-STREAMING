@@ -5159,15 +5159,33 @@ def test_memory_cap_reconciliation_and_fake_mlx_application() -> None:
 
     class FakeMX:
         value = 0
+        wired = 0
 
         @classmethod
         def set_memory_limit(cls, value: int) -> None:
             cls.value = value
 
+        @classmethod
+        def set_wired_limit(cls, value: int) -> int:
+            prev = cls.wired
+            cls.wired = value
+            return prev
+
     env: dict[str, str] = {}
     report = apply_mlx_memory_cap(plan, mx_module=FakeMX, env=env)
-    assert report == {"applied": True, "limit": expected}
+    # W121: the cap also WIRES the Metal working set to the same value, so the
+    # report carries the wired-limit outcome alongside the allocation limit.
+    assert report == {
+        "applied": True,
+        "limit": expected,
+        "limit_source": "plan",
+        "wired_limit_applied": True,
+        "wired_limit_bytes": expected,
+        "wired_limit_api": "mx.set_wired_limit",
+        "previous_wired_limit_bytes": 0,
+    }
     assert FakeMX.value == expected
+    assert FakeMX.wired == expected
     assert env["MTPLX_MEMORY_LIMIT_BYTES"] == str(expected)
 
 

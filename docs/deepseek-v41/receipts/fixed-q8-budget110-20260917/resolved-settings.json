@@ -1,0 +1,28 @@
+{
+  "scope": "CPU evaluation of the actual config arithmetic; no MLX import or full-model run",
+  "source_sha256": "d4be865de846dee5bb39728f5f1c2f6ea45e27894057a6838eea288fd5e40e17",
+  "physical_ceiling_bytes": 110000000000,
+  "storage_bytes": {
+    "window": 50181120,
+    "compressed": 25436160,
+    "index": 6359040,
+    "frontier": 26763264,
+    "draft": 3763584,
+    "total": 112503168
+  },
+  "additional_reserve_bytes": 503316480,
+  "runner_arguments": [
+    "--box-target-gb",
+    "110",
+    "--max-kv",
+    "17664",
+    "--kv-cache-bits",
+    "8",
+    "--kv-max-append",
+    "953"
+  ],
+  "default_native_control_bits": 16,
+  "legacy_gib_default_check": "passed",
+  "full_model_quality_and_throughput": "unmeasured",
+  "old_native_growth_bounds": "stale for Q8; require a new bound before full execution"
+}

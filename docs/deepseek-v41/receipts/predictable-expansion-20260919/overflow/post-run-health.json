@@ -1,0 +1,12 @@
+{
+  "time_utc": "2026-09-19T14:10:56.074656+00:00",
+  "health": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "models": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "lock_free_at_probe": false,
+  "owned_processes": [],
+  "lock_fds": "COMMAND  PID     USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME\nPython  4766 davidtai    3u   REG   1,15        0 261117403 /private/tmp/mtplx-gpu-exclusive.lock\n"
+}

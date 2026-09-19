@@ -1,0 +1,9 @@
+{
+  "source_commit": "85c7a33fd9f171c3847d7e59f8566b8b72de7225",
+  "runtime_hashes_unchanged": 10,
+  "helper_hashes": 10,
+  "bound_bytes": 9663676416,
+  "slot_future_scope": "Native _ensure_route_locked owns its private futures, calls result after releasing completion-error lock, drains every result on failure, and pins only after every fill completes. No generic executor replacement or cross-thread future consumer.",
+  "arithmetic": "All plane kernels and PackedDecode calls remain byte-identical to current winner.",
+  "changed_owners": "One Future and one component batch per <=3-record part; no new Metal buffers, staging payload or worker threads."
+}

@@ -1,0 +1,52 @@
+{
+  "source_commit": "f384b2ce19df3f40d954e9cfc0c383f51cf122c1",
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "32d42a85ebe69ce986e6f8a7d0d20eb435ad70206c8fdc8649aa276043055963",
+    "scripts/deepseek_v41/bench_standard_shape.py": "7a2c5873ac54d90b060ea32a6d0d7c5c395bdf2f19f67023dbed58341e4d70ac",
+    "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+    "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c",
+    "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+    "mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399"
+  },
+  "helper_sha256": {
+    "replay_even.py": "6f06da7ee18c8949e57db77f542f5665d5a62ae6666b2d67e00107d3970b3d93",
+    "run_screen.py": "9531205a6e15907826932a4e752cde15510c1aa5ee26b2d8360a3a43eb64fee0"
+  },
+  "teacher_source_commit": "7537ead7ab6ae53b0cbec8fb78a225c65b37c4bc",
+  "source_audit": "Native model, DSpark, loader and runner hashes match the previous exact adaptive draft screen; only the service guard changed. Four shared compact weight views, max T=8. No target execution.",
+  "bound_bytes": {
+    "active": 44023414784,
+    "cache": 4294967296,
+    "host": 4294967296,
+    "whole_machine_ceiling": 110000000000
+  },
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "policies": [
+    [
+      "fixed5",
+      5,
+      5
+    ],
+    [
+      "fixed4",
+      4,
+      4
+    ],
+    [
+      "fixed6",
+      6,
+      6
+    ],
+    [
+      "head7_cut6",
+      7,
+      6
+    ]
+  ],
+  "selection": "One exact D5 boundary control and three fixed proposals/width designs; teacher future IDs only score acceptance, never choose proposed tokens."
+}

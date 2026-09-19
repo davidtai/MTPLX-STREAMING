@@ -1,0 +1,8 @@
+{
+  "models": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "active_requests": 0,
+  "warmup_state": "done",
+  "lock_free": true
+}

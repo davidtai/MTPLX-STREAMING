@@ -1,0 +1,364 @@
+[W60/K29 parity]
+{
+  "all_passed": false,
+  "arms": {
+    "decode_full_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0010744929313659668,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_full_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.00039455294609069824,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_full_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.000650256872177124,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0009598731994628906,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.00040508806705474854,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_reindex_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0007118880748748779,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.001621842384338379,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0006306469440460205,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_reuse_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0008775591850280762,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T1088": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0012791752815246582,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        1088
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T16384": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0015457868576049805,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        16384
+      ],
+      "tol": 1e-06
+    },
+    "decode_swa_only_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 64,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.001415848731994629,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        1,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_full_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0006405115127563477,
+      "mode": "full",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_reindex_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0020855069160461426,
+      "mode": "reindex",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_reuse_T4096": {
+      "argmax_mismatch": 1,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0007732808589935303,
+      "mode": "reuse",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    },
+    "verify4_swa_only_T4096": {
+      "argmax_mismatch": 0,
+      "argmax_rows": 256,
+      "error": null,
+      "finite": true,
+      "max_abs_d": 0.0016380548477172852,
+      "mode": "swa_only",
+      "passed": false,
+      "scale": 0.04419417382415922,
+      "shape": [
+        1,
+        4,
+        64,
+        4096
+      ],
+      "tol": 1e-06
+    }
+  },
+  "default_device": "Device(gpu, 0)",
+  "kernel": "K29 deepseek_v41_attn_kernels.fused_decode_attention",
+  "kernel_builder_error": null,
+  "kernel_builder_ok": true,
+  "metal_available": true,
+  "real_model_decode": {
+    "ran": false,
+    "reason": "loader import failed: ImportError(\"cannot import name 'load' from 'mtplx.models.deepseek_v41_loader' (/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_loader.py)\")"
+  },
+  "receipt_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-26/k29-parity.json",
+  "test": "test_decode_attn_parity_gpu"
+}
+F
+=================================== FAILURES ===================================
+_________________________ test_decode_attn_parity_gpu __________________________
+
+    @pytest.mark.skipif(
+        os.environ.get("MTPLX_GPU_PARITY") != "1",
+        reason="GPU parity: run inside a GPU window with MTPLX_GPU_PARITY=1",
+    )
+    def test_decode_attn_parity_gpu():
+        """K29 kernel == eager f32 softmax-with-sink attention to reassociation level,
+        argmax exact, for each CSA mode at T ∈ {1088, 4096, 16384} (decode M=1 + verify
+        M=4).  Self-diagnosing: every arm's max|Δ| / argmax mismatch / finiteness into
+        ``diag``, written to ``MTPLX_PARITY_RECEIPT`` and printed BEFORE any assertion."""
+        saved_dev = mx.default_device()
+        mx.set_default_device(mx.gpu)
+        scale = 512 ** -0.5
+        diag = {
+            "test": "test_decode_attn_parity_gpu",
+            "kernel": "K29 deepseek_v41_attn_kernels.fused_decode_attention",
+            "metal_available": bool(mx.metal.is_available()),
+            "default_device": str(mx.default_device()),
+            "arms": {},
+        }
+        try:
+            try:
+                probe = mx.random.normal((1, 1, 4, 512)).astype(mx.float32)
+                pk = mx.random.normal((1, 64, 512)).astype(mx.float32)
+                built = K29.fused_decode_attention(probe, pk, pk, attn_sink=mx.zeros((4,)), scale=scale)
+                mx.eval(built)
+                diag["kernel_builder_ok"] = True
+                diag["kernel_builder_error"] = None
+            except Exception as exc:
+                diag["kernel_builder_ok"] = False
+                diag["kernel_builder_error"] = repr(exc)
+    
+            seed = 100
+            for T in (1088, 4096, 16384):
+                for mode in _MODES:
+                    diag["arms"][f"decode_{mode}_T{T}"] = _measure_parity(
+                        1, 1, 64, T, mode, scale=scale, seed=seed)
+                    seed += 1
+            # a verify M=4 batch at the mid length for each mode
+            for mode in _MODES:
+                diag["arms"][f"verify4_{mode}_T4096"] = _measure_parity(
+                    1, 4, 64, 4096, mode, scale=scale, seed=seed)
+                seed += 1
+    
+            diag["real_model_decode"] = _real_model_decode_parity()
+            diag["all_passed"] = bool(
+                diag.get("kernel_builder_ok")
+                and all(a.get("passed") for a in diag["arms"].values())
+            )
+        finally:
+            diag["receipt_path"] = _write_parity_receipt(diag)
+            print("[W60/K29 parity]\n" + json.dumps(diag, indent=2, sort_keys=True))
+            mx.set_default_device(saved_dev)
+    
+        assert diag.get("kernel_builder_ok"), f"kernel build failed: {diag.get('kernel_builder_error')}"
+        for name, arm in diag["arms"].items():
+>           assert arm["passed"], f"{name} arm failed: {arm}"
+E           AssertionError: decode_swa_only_T1088 arm failed: {'shape': [1, 1, 64, 1088], 'mode': 'swa_only', 'scale': 0.04419417382415922, 'tol': 1e-06, 'error': None, 'finite': True, 'max_abs_d': 0.0012791752815246582, 'argmax_rows': 64, 'argmax_mismatch': 0, 'passed': False}
+E           assert False
+
+tests/models/test_deepseek_v41_decode_attn_kernel.py:570: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/models/test_deepseek_v41_decode_attn_kernel.py::test_decode_attn_parity_gpu
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

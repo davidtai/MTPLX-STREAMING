@@ -1,0 +1,20 @@
+[
+  {
+    "with_mtp": false,
+    "kept_bytes": 9729152448,
+    "kept_count": 1246,
+    "shards": 42,
+    "unselected_bytes": 30720,
+    "max_shard_bytes": 1323858270,
+    "io_cache_mode": "f-nocache"
+  },
+  {
+    "with_mtp": true,
+    "kept_bytes": 17679119688,
+    "kept_count": 3644,
+    "shards": 48,
+    "unselected_bytes": 32256,
+    "max_shard_bytes": 2406563050,
+    "io_cache_mode": "f-nocache"
+  }
+]

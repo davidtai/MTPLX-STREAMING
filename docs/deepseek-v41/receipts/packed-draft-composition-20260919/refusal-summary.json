@@ -1,0 +1,35 @@
+{
+  "complete": true,
+  "source_commit": "b5f41c51d74a770069048dddd0a644f07886a999",
+  "live_baseline_bytes": 12160188416,
+  "guard_exit_code": 1,
+  "model_load_started": false,
+  "prefill_started": false,
+  "decode_started": false,
+  "live_bounds_file_emitted": false,
+  "physical_ceiling_bytes": 110000000000,
+  "counterfactual_wired_bytes": 0,
+  "maximum_rows_with_wired_constraint_removed": 109,
+  "counterfactual_111_row_physical_bound_bytes": 111073252600,
+  "counterfactual_111_row_over_budget_bytes": 1073252600,
+  "counterfactual_scope": "CPU physical accounting at the live baseline, with no wired constraint. Not a live admission receipt or GPU measurement.",
+  "exact_qwen_identity_health_and_warmup_restored": true,
+  "guard_lock_released_at": "2026-09-19T17:04:14Z",
+  "independent_health": {
+    "checked_at": "2026-09-19T17:05:08.318932+00:00",
+    "owned_guard_session_terminal_exit_code": 1,
+    "model_load_started": false,
+    "health": {
+      "error": "<urlopen error [Errno 61] Connection refused>"
+    },
+    "v1/models": {
+      "error": "<urlopen error [Errno 61] Connection refused>"
+    },
+    "lock_free_at_probe": false,
+    "lock_descriptors": "COMMAND   PID     USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME\nPython  60832 davidtai    3u   REG   1,15        0 261117403 /private/tmp/mtplx-gpu-exclusive.lock\nPython  61115 davidtai    3u   REG   1,15        0 261117403 /private/tmp/mtplx-gpu-exclusive.lock\n",
+    "owned_processes": [],
+    "scope": "Independent observation after guard exit. Subsequent foreign GPU windows are distinct from guard restoration."
+  },
+  "unchanged_retry": false,
+  "new_full_tps": null
+}

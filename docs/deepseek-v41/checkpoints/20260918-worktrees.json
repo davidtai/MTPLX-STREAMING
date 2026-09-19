@@ -1,0 +1,1268 @@
+{
+  "created_at": "20260918T161816Z",
+  "repository": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41",
+  "worktrees": [
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41",
+      "branch": "refs/heads/feat/deepseek-v41-streaming",
+      "head": "4f3af25aeed6a37c7297db50d8987f214cc2ee37",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/deepseek-v41",
+      "checkpoint_commit": "a25c967bcc3c3f385a61e1f26bc911ef8ea9f837",
+      "dirty_snapshot": true,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-merge2",
+      "branch": "refs/heads/int/w73-cell16k",
+      "head": "d6780da6476562c7de2bae77493110e891840178",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-merge2",
+      "checkpoint_commit": "d6780da6476562c7de2bae77493110e891840178",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-merge3",
+      "branch": "refs/heads/int/w97f-lanes",
+      "head": "ec9ff29790ac8ec70009bc4aecc00d4152f6b8ea",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-merge3",
+      "checkpoint_commit": "ec9ff29790ac8ec70009bc4aecc00d4152f6b8ea",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-mtpglue",
+      "branch": "refs/heads/feat/deepseek-v41-mtp-serve-glue",
+      "head": "2ed30c9c3b9b9a7508c2bc67c05a1321a9341646",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-mtpglue",
+      "checkpoint_commit": "2ed30c9c3b9b9a7508c2bc67c05a1321a9341646",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w1",
+      "branch": "refs/heads/feat/deepseek-v41-w1",
+      "head": "086d6c186587a546c1268875429c49996001fcb3",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w1",
+      "checkpoint_commit": "086d6c186587a546c1268875429c49996001fcb3",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w10",
+      "branch": "refs/heads/feat/deepseek-v41-w10",
+      "head": "301904a891d14b51cb15ac0195a4f15eb92e43db",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w10",
+      "checkpoint_commit": "0182458678706f8d6bc3c4e39a0a2eb462a1906b",
+      "dirty_snapshot": true,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w100",
+      "branch": "refs/heads/w100/dspark-verify-prefetch",
+      "head": "4afce250d8ea1e583d24aa22f5c5616298f2f7aa",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w100",
+      "checkpoint_commit": "4afce250d8ea1e583d24aa22f5c5616298f2f7aa",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w101",
+      "branch": "refs/heads/w101/attn-fused-projections",
+      "head": "35a2133c410aa499e3a3bec5581e9a81138227cd",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w101",
+      "checkpoint_commit": "35a2133c410aa499e3a3bec5581e9a81138227cd",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w102",
+      "branch": "refs/heads/w102/fence-probe",
+      "head": "a906334016e2d2b528664c54f2db1fc934493d66",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w102",
+      "checkpoint_commit": "a906334016e2d2b528664c54f2db1fc934493d66",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w103",
+      "branch": "refs/heads/w103/dspark-draft-census",
+      "head": "48a1cde216420e543f84886a80e68fcc30388edc",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w103",
+      "checkpoint_commit": "48a1cde216420e543f84886a80e68fcc30388edc",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w104",
+      "branch": "refs/heads/w104/draft-resident-moe",
+      "head": "b2d661f76e4ea621d8237adc970be147a37a8670",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w104",
+      "checkpoint_commit": "b2d661f76e4ea621d8237adc970be147a37a8670",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w105",
+      "branch": "refs/heads/w105/proj-codec-probe",
+      "head": "1f927ad85530df8355a3e231dddb4f3c6f8eafae",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w105",
+      "checkpoint_commit": "1f927ad85530df8355a3e231dddb4f3c6f8eafae",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w106",
+      "branch": "refs/heads/w106/window-memory-accounting",
+      "head": "50c5a0628425a6f1061ccd856d35d55c723b80bd",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w106",
+      "checkpoint_commit": "50c5a0628425a6f1061ccd856d35d55c723b80bd",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w107",
+      "branch": "refs/heads/w107/kv-growth-bounded",
+      "head": "44575317aa2cdbc19ad80a92403efcb2904370a7",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w107",
+      "checkpoint_commit": "44575317aa2cdbc19ad80a92403efcb2904370a7",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w108",
+      "branch": "refs/heads/w108/dspark-runner-audit",
+      "head": "cc9ff37a08993e041bc25c1a44bfb6547bd74da4",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w108",
+      "checkpoint_commit": "cc9ff37a08993e041bc25c1a44bfb6547bd74da4",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w109",
+      "branch": "refs/heads/w109/verify-io-fanout",
+      "head": "8b4322d9b299f8778bdde5ecab507c5e422bc59d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w109",
+      "checkpoint_commit": "8b4322d9b299f8778bdde5ecab507c5e422bc59d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w11",
+      "branch": "refs/heads/feat/deepseek-v41-w11",
+      "head": "afcd87e1908f838c32ea2569047549332ef2c717",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w11",
+      "checkpoint_commit": "afcd87e1908f838c32ea2569047549332ef2c717",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w110",
+      "branch": "refs/heads/w110/decode-record-hash",
+      "head": "434f4f6dc8b29f78e86fd7cb04039f9625db58ce",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w110",
+      "checkpoint_commit": "434f4f6dc8b29f78e86fd7cb04039f9625db58ce",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w111",
+      "branch": "refs/heads/w111/verify-prefetch-during-draft",
+      "head": "e91af14621efd3b166ccb3da44d5754c07d1b425",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w111",
+      "checkpoint_commit": "e91af14621efd3b166ccb3da44d5754c07d1b425",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w112",
+      "branch": "refs/heads/w112/attn-contention-probe",
+      "head": "233bd1bd74f4605f7705c92a58f2f22eca27c18d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w112",
+      "checkpoint_commit": "233bd1bd74f4605f7705c92a58f2f22eca27c18d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w113",
+      "branch": "refs/heads/w113/cell-prompt-guard",
+      "head": "bbdbeb82a25217bac04e7ba3a01f7b7242ff0b2a",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w113",
+      "checkpoint_commit": "bbdbeb82a25217bac04e7ba3a01f7b7242ff0b2a",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w114",
+      "branch": "refs/heads/w114/dspark-cycle-decomp",
+      "head": "53e540139462daeb8692fb4b371750dfd71f4a39",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w114",
+      "checkpoint_commit": "53e540139462daeb8692fb4b371750dfd71f4a39",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w115",
+      "branch": "refs/heads/w115/verify-attn-fastpath",
+      "head": "0419b18e8a193d78d87e19b17f6a6255a7e0b939",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w115",
+      "checkpoint_commit": "0419b18e8a193d78d87e19b17f6a6255a7e0b939",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w116",
+      "branch": "refs/heads/w116/verify-attn-rows-census",
+      "head": "932c063dc3c9e4f852d27d918b19869b21e29842",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w116",
+      "checkpoint_commit": "932c063dc3c9e4f852d27d918b19869b21e29842",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w118",
+      "branch": "refs/heads/w118/mlx-limit-headroom",
+      "head": "3d719e1b94395f58fe3d555f277ca8c2fdce6159",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w118",
+      "checkpoint_commit": "3d719e1b94395f58fe3d555f277ca8c2fdce6159",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w119",
+      "branch": "refs/heads/w119/eager-verify-parity",
+      "head": "48668a7a6c381fe6b54a5c46366c7da6d0f9f087",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w119",
+      "checkpoint_commit": "48668a7a6c381fe6b54a5c46366c7da6d0f9f087",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w120",
+      "branch": "refs/heads/w120/divergence-tie-band",
+      "head": "c21559447bc84c75002714709ad2e4dea81e28b6",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w120",
+      "checkpoint_commit": "c21559447bc84c75002714709ad2e4dea81e28b6",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w13",
+      "branch": "refs/heads/feat/deepseek-v41-w13",
+      "head": "633eb299bac78522bad3766773c29ed39b44a189",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w13",
+      "checkpoint_commit": "633eb299bac78522bad3766773c29ed39b44a189",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w14",
+      "branch": "refs/heads/feat/deepseek-v41-w14",
+      "head": "ebdf55be8e2bf3d9bf205e61e9b8d0add820a9c0",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w14",
+      "checkpoint_commit": "ebdf55be8e2bf3d9bf205e61e9b8d0add820a9c0",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w15",
+      "branch": "refs/heads/feat/deepseek-v41-w15",
+      "head": "ce5975b0c1bd6c16ac664b5d21e5d41c3cecdb89",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w15",
+      "checkpoint_commit": "ce5975b0c1bd6c16ac664b5d21e5d41c3cecdb89",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w16",
+      "branch": "refs/heads/feat/deepseek-v41-w16",
+      "head": "1f35b11a56f9f2fba42e42958de4c627f0e73650",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w16",
+      "checkpoint_commit": "1f35b11a56f9f2fba42e42958de4c627f0e73650",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w18",
+      "branch": "refs/heads/feat/deepseek-v41-w18",
+      "head": "363f9b7b429d66cc93ec3eb499f883dfa56124fa",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w18",
+      "checkpoint_commit": "363f9b7b429d66cc93ec3eb499f883dfa56124fa",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w19",
+      "branch": "refs/heads/feat/deepseek-v41-w19",
+      "head": "c2b2efe4863c71dfaa8ace402bf0294deb077a3f",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w19",
+      "checkpoint_commit": "c2b2efe4863c71dfaa8ace402bf0294deb077a3f",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w19-wkv",
+      "branch": "refs/heads/feat/deepseek-v41-w19-wkv",
+      "head": "6ff6fa71ba568485b1a2c83313aa129a104775cf",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w19-wkv",
+      "checkpoint_commit": "6ff6fa71ba568485b1a2c83313aa129a104775cf",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w2",
+      "branch": "refs/heads/feat/deepseek-v41-w2",
+      "head": "3598d3cc0aafe2fd3c77e5b77ef1b4e67b9c9fd2",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w2",
+      "checkpoint_commit": "3598d3cc0aafe2fd3c77e5b77ef1b4e67b9c9fd2",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w20",
+      "branch": "refs/heads/feat/deepseek-v41-w20",
+      "head": "30c0a9eaa901ced9c262b34fb319bcb553d2d635",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w20",
+      "checkpoint_commit": "30c0a9eaa901ced9c262b34fb319bcb553d2d635",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w21",
+      "branch": "refs/heads/feat/deepseek-v41-w21",
+      "head": "485854d52d9c79c1c132b7d57baf4a128542dd60",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w21",
+      "checkpoint_commit": "485854d52d9c79c1c132b7d57baf4a128542dd60",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w22",
+      "branch": "refs/heads/feat/deepseek-v41-w22",
+      "head": "6266208da7d460a7d44241fcb665eb5a41d54fae",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w22",
+      "checkpoint_commit": "6266208da7d460a7d44241fcb665eb5a41d54fae",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w23",
+      "branch": "refs/heads/feat/deepseek-v41-w23",
+      "head": "26203a0cc4ce5066d90356d216e0c2bf425e73d5",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w23",
+      "checkpoint_commit": "26203a0cc4ce5066d90356d216e0c2bf425e73d5",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w24",
+      "branch": "refs/heads/feat/deepseek-v41-w24",
+      "head": "f2d5c78ce477bd59f959442a086bbe4f6df209a3",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w24",
+      "checkpoint_commit": "f2d5c78ce477bd59f959442a086bbe4f6df209a3",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w25",
+      "branch": "refs/heads/feat/deepseek-v41-w25",
+      "head": "c979b783f9011aacf511be0f94c76b5edd94035a",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w25",
+      "checkpoint_commit": "c979b783f9011aacf511be0f94c76b5edd94035a",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w26",
+      "branch": "refs/heads/feat/deepseek-v41-w26",
+      "head": "b835c660fe5d60d2f6c1cd06a6cccb9b54dd046b",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w26",
+      "checkpoint_commit": "b835c660fe5d60d2f6c1cd06a6cccb9b54dd046b",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w27",
+      "branch": "refs/heads/feat/deepseek-v41-w27",
+      "head": "04a8755def8ce3c022218375a8657a8ca90eb085",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w27",
+      "checkpoint_commit": "04a8755def8ce3c022218375a8657a8ca90eb085",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w28",
+      "branch": "refs/heads/feat/deepseek-v41-w28",
+      "head": "0aac5deb589205f379511909b799050a7bd65e92",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w28",
+      "checkpoint_commit": "0aac5deb589205f379511909b799050a7bd65e92",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w29",
+      "branch": "refs/heads/feat/deepseek-v41-w29",
+      "head": "3b78c26db930b7a87e67ff75df981b8cbf8f3253",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w29",
+      "checkpoint_commit": "3b78c26db930b7a87e67ff75df981b8cbf8f3253",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w3",
+      "branch": "refs/heads/feat/deepseek-v41-w3",
+      "head": "3ea18f6809633272545f18b6ccd386c2d5ac4a7e",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w3",
+      "checkpoint_commit": "3ea18f6809633272545f18b6ccd386c2d5ac4a7e",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w30",
+      "branch": "refs/heads/feat/deepseek-v41-w30",
+      "head": "d41ac34181fedec17074a28ff98665af12e576fb",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w30",
+      "checkpoint_commit": "d41ac34181fedec17074a28ff98665af12e576fb",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w31",
+      "branch": "refs/heads/feat/deepseek-v41-w31",
+      "head": "7f228ced78bfa73c4375578952a025b6e7880a7e",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w31",
+      "checkpoint_commit": "7f228ced78bfa73c4375578952a025b6e7880a7e",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w32",
+      "branch": "refs/heads/feat/deepseek-v41-w32",
+      "head": "7eb15fda1ce13e58462e808ddfa2887fef370e36",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w32",
+      "checkpoint_commit": "7eb15fda1ce13e58462e808ddfa2887fef370e36",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w33",
+      "branch": "refs/heads/feat/deepseek-v41-w33",
+      "head": "a9bc187dc79b451498630b293b5cfe5477ddbfee",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w33",
+      "checkpoint_commit": "a9bc187dc79b451498630b293b5cfe5477ddbfee",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w34",
+      "branch": "refs/heads/feat/deepseek-v41-w34",
+      "head": "50c8f8d332ea49e3324b689e588dfee4e71972cc",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w34",
+      "checkpoint_commit": "50c8f8d332ea49e3324b689e588dfee4e71972cc",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w35",
+      "branch": "refs/heads/feat/deepseek-v41-w35",
+      "head": "0ccc939bc0ed9ca50849b2be6363d43aa0145bb2",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w35",
+      "checkpoint_commit": "0ccc939bc0ed9ca50849b2be6363d43aa0145bb2",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w36",
+      "branch": "refs/heads/feat/deepseek-v41-w36",
+      "head": "8b1f8428afabef6a1c8c3e1086a57339625925b3",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w36",
+      "checkpoint_commit": "8b1f8428afabef6a1c8c3e1086a57339625925b3",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w37",
+      "branch": "refs/heads/feat/deepseek-v41-w37",
+      "head": "ee0f72f0ff7a324f092a2df5e0d26224d9497d96",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w37",
+      "checkpoint_commit": "ee0f72f0ff7a324f092a2df5e0d26224d9497d96",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w38",
+      "branch": "refs/heads/feat/deepseek-v41-w38",
+      "head": "ee8602afc0fa0c9895eb524347f9f864c3cf478e",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w38",
+      "checkpoint_commit": "ee8602afc0fa0c9895eb524347f9f864c3cf478e",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w39",
+      "branch": "refs/heads/feat/deepseek-v41-w39",
+      "head": "8b54dd2fb2d96616ea2971a8b60365693434f251",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w39",
+      "checkpoint_commit": "8b54dd2fb2d96616ea2971a8b60365693434f251",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w4",
+      "branch": "refs/heads/feat/deepseek-v41-w4",
+      "head": "a497233a4891661ffcda86d602b1a6c97493128d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w4",
+      "checkpoint_commit": "a497233a4891661ffcda86d602b1a6c97493128d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w40",
+      "branch": "refs/heads/feat/deepseek-v41-w40",
+      "head": "b3ca92c0c4b90f4ed9c989cc4195ef53702428be",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w40",
+      "checkpoint_commit": "b3ca92c0c4b90f4ed9c989cc4195ef53702428be",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w41",
+      "branch": "refs/heads/feat/deepseek-v41-w41",
+      "head": "8c8e55110ca4c5926fc91b932e8898a9ede01485",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w41",
+      "checkpoint_commit": "8c8e55110ca4c5926fc91b932e8898a9ede01485",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w42",
+      "branch": "refs/heads/feat/deepseek-v41-w42",
+      "head": "7c6503438d29a6265f5e27387a4e5b34d611a5df",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w42",
+      "checkpoint_commit": "7c6503438d29a6265f5e27387a4e5b34d611a5df",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w43",
+      "branch": "refs/heads/feat/deepseek-v41-w43",
+      "head": "6be9af158d72111be537a2fb945641822ee10945",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w43",
+      "checkpoint_commit": "6be9af158d72111be537a2fb945641822ee10945",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w44",
+      "branch": "refs/heads/feat/deepseek-v41-w44",
+      "head": "c383178b15e7726b3a7fb370963e569aa867ff0d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w44",
+      "checkpoint_commit": "c383178b15e7726b3a7fb370963e569aa867ff0d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w45",
+      "branch": "refs/heads/feat/deepseek-v41-w45",
+      "head": "5761cc18c13af2b5420eb87ed37d34172420cf00",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w45",
+      "checkpoint_commit": "5761cc18c13af2b5420eb87ed37d34172420cf00",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w46",
+      "branch": "refs/heads/feat/deepseek-v41-w46",
+      "head": "e0e663eeae6c65b769756346d408590cd2e981fb",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w46",
+      "checkpoint_commit": "e0e663eeae6c65b769756346d408590cd2e981fb",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w47",
+      "branch": "refs/heads/feat/deepseek-v41-w47",
+      "head": "f15ecc2c89af9df05d4b21de639828221f8922db",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w47",
+      "checkpoint_commit": "f15ecc2c89af9df05d4b21de639828221f8922db",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w48",
+      "branch": "refs/heads/feat/deepseek-v41-w48",
+      "head": "6fd35fa01f97a61e54dd280271314323f8ebfe19",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w48",
+      "checkpoint_commit": "6fd35fa01f97a61e54dd280271314323f8ebfe19",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w49",
+      "branch": "refs/heads/feat/deepseek-v41-w49",
+      "head": "01754bef5a67286022c94504fa6f26605f3c8347",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w49",
+      "checkpoint_commit": "01754bef5a67286022c94504fa6f26605f3c8347",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w5",
+      "branch": "refs/heads/feat/deepseek-v41-w5",
+      "head": "7ba7193ccc3e8b91b942fcfd2b51830a5cb825b5",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w5",
+      "checkpoint_commit": "7ba7193ccc3e8b91b942fcfd2b51830a5cb825b5",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w50",
+      "branch": "refs/heads/feat/deepseek-v41-w50",
+      "head": "12ef6b0ef140040e204953b71edf7a07b5acb8d2",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w50",
+      "checkpoint_commit": "12ef6b0ef140040e204953b71edf7a07b5acb8d2",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w51",
+      "branch": "refs/heads/feat/deepseek-v41-w51",
+      "head": "a84090f6166aa2ca7c69661ab03fb89e8c428fc7",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w51",
+      "checkpoint_commit": "a84090f6166aa2ca7c69661ab03fb89e8c428fc7",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w52",
+      "branch": "refs/heads/feat/deepseek-v41-w52",
+      "head": "72a63c80f6c8b71368da3b56774076549f664e39",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w52",
+      "checkpoint_commit": "72a63c80f6c8b71368da3b56774076549f664e39",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w53",
+      "branch": "refs/heads/feat/deepseek-v41-w53",
+      "head": "398211b0d46015d2c0a1cfa5fc8c18da710163a2",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w53",
+      "checkpoint_commit": "398211b0d46015d2c0a1cfa5fc8c18da710163a2",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w54",
+      "branch": "refs/heads/feat/deepseek-v41-w54",
+      "head": "91869796fe5e322b45e22aee137261dcd9bf1a08",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w54",
+      "checkpoint_commit": "91869796fe5e322b45e22aee137261dcd9bf1a08",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w55",
+      "branch": "refs/heads/feat/deepseek-v41-w55",
+      "head": "c98e9ad96388d8a2cc118b0a5929d35719f53ef6",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w55",
+      "checkpoint_commit": "c98e9ad96388d8a2cc118b0a5929d35719f53ef6",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w56",
+      "branch": "refs/heads/feat/deepseek-v41-w56",
+      "head": "c9ad19b3a345202c74543c49e693d0ee1d412d66",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w56",
+      "checkpoint_commit": "c9ad19b3a345202c74543c49e693d0ee1d412d66",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w57",
+      "branch": "refs/heads/feat/deepseek-v41-w57",
+      "head": "ae6d7f41c39223413ae3f4fccfa0277d692f6dcd",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w57",
+      "checkpoint_commit": "ae6d7f41c39223413ae3f4fccfa0277d692f6dcd",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w58",
+      "branch": "refs/heads/feat/deepseek-v41-w58",
+      "head": "f6d3f374b38c7b49048caec325d278395992b72c",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w58",
+      "checkpoint_commit": "f6d3f374b38c7b49048caec325d278395992b72c",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w59",
+      "branch": "refs/heads/feat/deepseek-v41-w59",
+      "head": "8553773138f7d13da51aee06d5e45878cad93efd",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w59",
+      "checkpoint_commit": "8553773138f7d13da51aee06d5e45878cad93efd",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w6",
+      "branch": "refs/heads/feat/deepseek-v41-w6",
+      "head": "aa57e195b55192971546d970cdd65f2b7fe4421d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w6",
+      "checkpoint_commit": "aa57e195b55192971546d970cdd65f2b7fe4421d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w60",
+      "branch": "refs/heads/feat/deepseek-v41-w60",
+      "head": "c012fd06577ba20f4b4e6cd63872e317a2a4a09f",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w60",
+      "checkpoint_commit": "c012fd06577ba20f4b4e6cd63872e317a2a4a09f",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w61",
+      "branch": "refs/heads/feat/deepseek-v41-w61",
+      "head": "5e7d8a59971f2ff2d5f86c63556f3d6850071dad",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w61",
+      "checkpoint_commit": "5e7d8a59971f2ff2d5f86c63556f3d6850071dad",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w62",
+      "branch": "refs/heads/feat/deepseek-v41-w62",
+      "head": "7a3ac5f561842a37adf58e24fe37d11fbfdf9782",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w62",
+      "checkpoint_commit": "7a3ac5f561842a37adf58e24fe37d11fbfdf9782",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w63",
+      "branch": "refs/heads/feat/deepseek-v41-w63",
+      "head": "79bba48692099bc574936c0e83b0fab5ee10040b",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w63",
+      "checkpoint_commit": "79bba48692099bc574936c0e83b0fab5ee10040b",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w64",
+      "branch": "refs/heads/feat/deepseek-v41-w64",
+      "head": "7810a08eaadd06c54a5795fd75ba01fe590c1de6",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w64",
+      "checkpoint_commit": "7810a08eaadd06c54a5795fd75ba01fe590c1de6",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w65",
+      "branch": "refs/heads/feat/deepseek-v41-w65",
+      "head": "43f0a9d80c43106f73ad7c544d7e29e8d12ffb17",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w65",
+      "checkpoint_commit": "43f0a9d80c43106f73ad7c544d7e29e8d12ffb17",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w66",
+      "branch": "refs/heads/feat/deepseek-v41-w66",
+      "head": "205070b3ea2978dbceb02ca6cf40ae6f473cf4cf",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w66",
+      "checkpoint_commit": "205070b3ea2978dbceb02ca6cf40ae6f473cf4cf",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w68",
+      "branch": "refs/heads/feat/deepseek-v41-w68",
+      "head": "c6fddfac73cbe8eb709755f660e6623444948aa9",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w68",
+      "checkpoint_commit": "c6fddfac73cbe8eb709755f660e6623444948aa9",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w7",
+      "branch": "refs/heads/feat/deepseek-v41-w7",
+      "head": "4c6a8b4c411fad88d1110be48c5b0982216dc575",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w7",
+      "checkpoint_commit": "4c6a8b4c411fad88d1110be48c5b0982216dc575",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w70",
+      "branch": "refs/heads/feat/deepseek-v41-w70",
+      "head": "cb2e83934a3d7b8748e351f7d94f95eff0c62df8",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w70",
+      "checkpoint_commit": "cb2e83934a3d7b8748e351f7d94f95eff0c62df8",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w71",
+      "branch": "refs/heads/feat/deepseek-v41-w71",
+      "head": "323f69748de53fa54df017665f323b53fb98d8cf",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w71",
+      "checkpoint_commit": "323f69748de53fa54df017665f323b53fb98d8cf",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w72",
+      "branch": "refs/heads/feat/deepseek-v41-w72",
+      "head": "dd4cd1145b877c3694ada4a51a6a1e4cbdb63129",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w72",
+      "checkpoint_commit": "dd4cd1145b877c3694ada4a51a6a1e4cbdb63129",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w73",
+      "branch": "refs/heads/w73/decode-16k-probe",
+      "head": "05bf88a78271c972c14401e79d88ab5e24a80436",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w73",
+      "checkpoint_commit": "05bf88a78271c972c14401e79d88ab5e24a80436",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w75",
+      "branch": "refs/heads/w75/served-16k-stall",
+      "head": "ab94720a686fa32f8dadb1b1bf8c882993ab700a",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w75",
+      "checkpoint_commit": "85e3ac1355050affbc9f9acfc7413399ae3e33ea",
+      "dirty_snapshot": true,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w76",
+      "branch": "refs/heads/w76/decode-attn-16k",
+      "head": "bcbb0bdadb32954b1882980d35ecd36a852453c2",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w76",
+      "checkpoint_commit": "bcbb0bdadb32954b1882980d35ecd36a852453c2",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w77",
+      "branch": "refs/heads/w77/dspark-divergence",
+      "head": "41ea4178843d287e8fb09a4ed495876921a19c8f",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w77",
+      "checkpoint_commit": "41ea4178843d287e8fb09a4ed495876921a19c8f",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w78",
+      "branch": "refs/heads/w78/metal-attn-bisect",
+      "head": "b448909d7df18f952ea3a55d0260e12009da06a1",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w78",
+      "checkpoint_commit": "b448909d7df18f952ea3a55d0260e12009da06a1",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w79",
+      "branch": "refs/heads/w79/served-cell-levers",
+      "head": "b7d6f6db437fdc8708545313f73b1a8dab4f8b33",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w79",
+      "checkpoint_commit": "b7d6f6db437fdc8708545313f73b1a8dab4f8b33",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w8",
+      "branch": "refs/heads/feat/deepseek-v41-w8",
+      "head": "4e276eb2070c05e8909bacd55da8b106d386de3c",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w8",
+      "checkpoint_commit": "6089d603e3700245a736954f679d725b995490bc",
+      "dirty_snapshot": true,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w80",
+      "branch": "refs/heads/w80/window-ring",
+      "head": "eb6acafeda4f791b7725c26edd54b2f0e35d33e5",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w80",
+      "checkpoint_commit": "eb6acafeda4f791b7725c26edd54b2f0e35d33e5",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w81",
+      "branch": "refs/heads/w81/verify-switch",
+      "head": "51166c3f3dd41f16d18e923041a5226a455bbdd9",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w81",
+      "checkpoint_commit": "51166c3f3dd41f16d18e923041a5226a455bbdd9",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w82",
+      "branch": "refs/heads/w82/cycle-model",
+      "head": "c2aa32fcb2c97b285353fce38a0b7d1c5193f9e9",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w82",
+      "checkpoint_commit": "c2aa32fcb2c97b285353fce38a0b7d1c5193f9e9",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w83",
+      "branch": "refs/heads/w83/served-prefix-garbage",
+      "head": "ad312595f70976cb0ff6a7f35ebfdf130704beb5",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w83",
+      "checkpoint_commit": "ad312595f70976cb0ff6a7f35ebfdf130704beb5",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w85",
+      "branch": "refs/heads/w85/residency-program",
+      "head": "47df6db90531e8e6cb8b1a43cb4198a516ac732e",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w85",
+      "checkpoint_commit": "47df6db90531e8e6cb8b1a43cb4198a516ac732e",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w87",
+      "branch": "refs/heads/w87/single-slot-pool",
+      "head": "791d8f31cbe2bb1b9d58b2a789892262f6b95e5e",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w87",
+      "checkpoint_commit": "791d8f31cbe2bb1b9d58b2a789892262f6b95e5e",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w89",
+      "branch": "refs/heads/w89/route-predictor",
+      "head": "bca167e1cc073ef09ee8e8fb2a060f2572f89ed0",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w89",
+      "checkpoint_commit": "bca167e1cc073ef09ee8e8fb2a060f2572f89ed0",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w9",
+      "branch": "refs/heads/feat/deepseek-v41-w9",
+      "head": "3b2f46626f508f4bf0f954a5b83c3aee38085478",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w9",
+      "checkpoint_commit": "206d6308c8b8672d78490d33e954b047c42c10c5",
+      "dirty_snapshot": true,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w90",
+      "branch": "refs/heads/w90/attn-in-situ",
+      "head": "3acda6f3a37304506788d818c9068a02dab3f03d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w90",
+      "checkpoint_commit": "3acda6f3a37304506788d818c9068a02dab3f03d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w91",
+      "branch": "refs/heads/w91/layer-small-stages",
+      "head": "08d6fb20321ea15249d243e7a2063a7570625f5b",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w91",
+      "checkpoint_commit": "08d6fb20321ea15249d243e7a2063a7570625f5b",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w92",
+      "branch": "refs/heads/w92/switch-dispatch",
+      "head": "a5c81506f2cb4507f19868ee5bceb43da2a05233",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w92",
+      "checkpoint_commit": "a5c81506f2cb4507f19868ee5bceb43da2a05233",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w93",
+      "branch": "refs/heads/w93/lane-a-config",
+      "head": "ab4b199616852b2af4ee87508b5393a1037931fe",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w93",
+      "checkpoint_commit": "ab4b199616852b2af4ee87508b5393a1037931fe",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w93b",
+      "branch": "refs/heads/w93/lane-b-ring",
+      "head": "31dec024b9afc7a4efb2dd20e6deef13bb9525d7",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w93b",
+      "checkpoint_commit": "31dec024b9afc7a4efb2dd20e6deef13bb9525d7",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w93c",
+      "branch": "refs/heads/w93/lane-c-issue",
+      "head": "91cb9150a9194ce01208895d277ef0a31a07bd94",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w93c",
+      "checkpoint_commit": "91cb9150a9194ce01208895d277ef0a31a07bd94",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w93d",
+      "branch": "refs/heads/w93/lane-d-predictor",
+      "head": "55ac71f4eb35f73be2b4a2a1018965807b392a4d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w93d",
+      "checkpoint_commit": "55ac71f4eb35f73be2b4a2a1018965807b392a4d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w94",
+      "branch": "refs/heads/w94/unfenced-attribution",
+      "head": "5afb75151e3e098ac0f3f4b1258cca556588cad5",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w94",
+      "checkpoint_commit": "5afb75151e3e098ac0f3f4b1258cca556588cad5",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w95",
+      "branch": "refs/heads/w95/barrier-free-resident",
+      "head": "f58578869724586826cea401390f2913c7ca49e4",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w95",
+      "checkpoint_commit": "f58578869724586826cea401390f2913c7ca49e4",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-w97",
+      "branch": "refs/heads/w97/attention-291ms",
+      "head": "50892109ed4c86d1422271389b01a36009818501",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-w97",
+      "checkpoint_commit": "50892109ed4c86d1422271389b01a36009818501",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-win39",
+      "branch": null,
+      "head": "5795f0b364163553d9e3d7a332f60be210dc985f",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-win39",
+      "checkpoint_commit": "5795f0b364163553d9e3d7a332f60be210dc985f",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-40",
+      "branch": null,
+      "head": "cdabd7db83896e052049a238071745e3e81a7dd0",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-40",
+      "checkpoint_commit": "cdabd7db83896e052049a238071745e3e81a7dd0",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-40b",
+      "branch": null,
+      "head": "a906334016e2d2b528664c54f2db1fc934493d66",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-40b",
+      "checkpoint_commit": "a906334016e2d2b528664c54f2db1fc934493d66",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-41",
+      "branch": null,
+      "head": "1e1856ea6ef4e16fd73e7a138486f2af8024f1a2",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-41",
+      "checkpoint_commit": "1e1856ea6ef4e16fd73e7a138486f2af8024f1a2",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-42",
+      "branch": null,
+      "head": "0cc4dd7d3c931bcaa1f8a0da2a69fb6fbcf8165f",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-42",
+      "checkpoint_commit": "0cc4dd7d3c931bcaa1f8a0da2a69fb6fbcf8165f",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-43",
+      "branch": null,
+      "head": "0961dd91487879a7de0cba92e48119021e6b8e99",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-43",
+      "checkpoint_commit": "0961dd91487879a7de0cba92e48119021e6b8e99",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-44",
+      "branch": null,
+      "head": "38d3b2d704c85b42cce3d06ec94ce5e399ba37f6",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-44",
+      "checkpoint_commit": "38d3b2d704c85b42cce3d06ec94ce5e399ba37f6",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-45",
+      "branch": null,
+      "head": "891fb870a3932577cd727501e847c52e153e7400",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-45",
+      "checkpoint_commit": "891fb870a3932577cd727501e847c52e153e7400",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-46",
+      "branch": null,
+      "head": "804c6050a617be8b7818bf5ad1edb67e7c586588",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-46",
+      "checkpoint_commit": "804c6050a617be8b7818bf5ad1edb67e7c586588",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-47",
+      "branch": null,
+      "head": "42e599d3e01ee0d8b032928f283be18f7c8bf046",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-47",
+      "checkpoint_commit": "42e599d3e01ee0d8b032928f283be18f7c8bf046",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-48",
+      "branch": null,
+      "head": "cd1e91b1d1d6db6217b424639ed0d225b5dccdef",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-48",
+      "checkpoint_commit": "cd1e91b1d1d6db6217b424639ed0d225b5dccdef",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-49",
+      "branch": null,
+      "head": "c4ea3b3297aa1f87707eb01fa6a2216c66e53ca4",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-49",
+      "checkpoint_commit": "c4ea3b3297aa1f87707eb01fa6a2216c66e53ca4",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-50",
+      "branch": null,
+      "head": "f9d32d391bde132e7b83aa69d51a43edde198686",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-50",
+      "checkpoint_commit": "f9d32d391bde132e7b83aa69d51a43edde198686",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-51",
+      "branch": null,
+      "head": "75cb12a77cc0312d6edc5da9d35a4b86273c64b5",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-51",
+      "checkpoint_commit": "75cb12a77cc0312d6edc5da9d35a4b86273c64b5",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-52",
+      "branch": null,
+      "head": "7c6f8e22e10d17736168850c3c578921f827ae59",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-52",
+      "checkpoint_commit": "7c6f8e22e10d17736168850c3c578921f827ae59",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-53",
+      "branch": null,
+      "head": "9bedc825a8ad22e104fb597c939161f8f19838ea",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-53",
+      "checkpoint_commit": "9bedc825a8ad22e104fb597c939161f8f19838ea",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-window-54",
+      "branch": null,
+      "head": "c8db2d42e3058bd318d818ee4b0a20a9b121d9b0",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/dsv41-window-54",
+      "checkpoint_commit": "c8db2d42e3058bd318d818ee4b0a20a9b121d9b0",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/w121-plan-peak",
+      "branch": "refs/heads/w121/plan-peak-accounting",
+      "head": "5682eac2cbceb9b64706d6bb5ffc947d9b700ede",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/w121-plan-peak",
+      "checkpoint_commit": "5682eac2cbceb9b64706d6bb5ffc947d9b700ede",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/w123-io-qd",
+      "branch": "refs/heads/w123/io-queue-depth",
+      "head": "f85d5f93249ee4a116ba75d7e849e962d3fd0a56",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/w123-io-qd",
+      "checkpoint_commit": "f85d5f93249ee4a116ba75d7e849e962d3fd0a56",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/w124-prefetch-arms",
+      "branch": "refs/heads/w124/prefetch-arms",
+      "head": "9b8a69ece1bd8d4c2e538512202b72cc5fb1113d",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/w124-prefetch-arms",
+      "checkpoint_commit": "9b8a69ece1bd8d4c2e538512202b72cc5fb1113d",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/w125-timeline",
+      "branch": "refs/heads/w125/decode-timeline",
+      "head": "1dd69d7673e797a8e32d4c4e6568823531e8bdb5",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/w125-timeline",
+      "checkpoint_commit": "1dd69d7673e797a8e32d4c4e6568823531e8bdb5",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/w126-async-reconcile",
+      "branch": "refs/heads/w126/async-reconcile",
+      "head": "49d6b7c5d3feb9345e97b7ed992198837bd6d57b",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/w126-async-reconcile",
+      "checkpoint_commit": "49a249ad33069c45aedce0adc0d77f70a24e31b1",
+      "dirty_snapshot": true,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/w127-dispatch-build",
+      "branch": "refs/heads/w127/dispatch-build",
+      "head": "fc9a899b6a1f9b1eb492938838965b962d8a031e",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/w127-dispatch-build",
+      "checkpoint_commit": "fc9a899b6a1f9b1eb492938838965b962d8a031e",
+      "dirty_snapshot": false,
+      "original_index_and_worktree_unchanged": true
+    },
+    {
+      "worktree": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/w128-served-memory",
+      "branch": "refs/heads/w128/served-memory",
+      "head": "c86a5f3f7650bea212699e9abbf203b91c7ede71",
+      "checkpoint_ref": "refs/checkpoints/deepseek-v41-20260918T161816Z/w128-served-memory",
+      "checkpoint_commit": "e0f32bb365102d5487e37111967327207fc371d3",
+      "dirty_snapshot": true,
+      "original_index_and_worktree_unchanged": true
+    }
+  ],
+  "ignored_artifacts": "Retained in original worktrees; model weights, environments and ignored benchmark tensors are not copied into Git.",
+  "backup_root": "/Users/davidtai/projects/OpenSourceWTF/checkpoints/deepseek-v41-20260918T161816Z"
+}

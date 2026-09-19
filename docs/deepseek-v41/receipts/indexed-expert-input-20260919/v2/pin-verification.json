@@ -1,0 +1,7 @@
+{
+  "cpu_only": true,
+  "canonical_unique_pins_verified": 33,
+  "source_commit": "b5f41c51d74a770069048dddd0a644f07886a999",
+  "prior_attempt": "stopped at source authentication before GPU child launch",
+  "prior_failure_preserved": "/private/tmp/dsv41-indexed-input-20260919/guard.log"
+}

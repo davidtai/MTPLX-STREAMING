@@ -73,12 +73,27 @@ _CONTEXT_WINDOW_CONFIG_KEYS = (
 # Users who need more context can pass --expert-max-live-kv-tokens explicitly
 # (which reserves more KV and yields slower decode).
 _DEFAULT_KV_TOKENS = 32768
-EXPERT_PROFILE_CHOICES = (
-    "auto",
-    "hy3-oq2e-64",
-    "hy3-oq2e-88",
-    "hy3-oq2e-96",
-)
+def expert_profile_choices() -> tuple[str, ...]:
+    """``--expert-profile`` choices: ``auto`` plus every registered profile.
+
+    Derived from the profile registry (``mtplx/data/expert_profiles.json``)
+    rather than hard-coded, so a newly promoted profile is selectable by name.
+    Critically, ``mtplx serve --model <artifact>`` (no flags) resolves
+    ``--expert-profile auto`` to the profile's name and FORWARDS that name to the
+    daemon child; the child re-parses it against these choices, so a static list
+    that omits the resolved profile fails the no-flags serve for any model whose
+    auto-selected profile is not in the old hard-coded set.
+    """
+
+    from .expert_profiles import load_expert_profiles
+
+    return ("auto", *sorted(load_expert_profiles()))
+
+
+# Back-compat module constant (evaluated once at import). Prefer
+# ``expert_profile_choices()`` at parser-build time so a profile added after
+# import is still selectable.
+EXPERT_PROFILE_CHOICES = expert_profile_choices()
 _PROFILE_EFFECTIVE_FIELDS = (
     "memory_limit_bytes",
     "max_live_kv_tokens",
@@ -157,7 +172,7 @@ def add_expert_streaming_args(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("SSD expert streaming")
     group.add_argument(
         "--expert-profile",
-        choices=EXPERT_PROFILE_CHOICES,
+        choices=expert_profile_choices(),
         default="auto",
         help="Promoted SSD expert memory profile (default: auto).",
     )
@@ -215,7 +230,12 @@ def add_expert_streaming_args(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--expert-cache-policy",
-        choices=["frequency", "lru"],
+        choices=[
+            "frequency",
+            "lru",
+            "transition-window",
+            "transition-window-tuned",
+        ],
         help="Decode expert-cache replacement policy.",
     )
     group.add_argument(
@@ -611,13 +631,50 @@ def resolve_expert_profile_for_args(
     )
 
 
+#: Child-env keys in this namespace are the DeepSeek-V4.1 byte-identical A/B
+#: decode/prefill levers (``MTPLX_DSV41_*``).  A profile ships the measured-good
+#: ones as SERVED DEFAULTS, but they are applied with ``setdefault`` semantics so
+#: an explicit parent-shell export (the operator flipping one lever for a single
+#: GPU window) wins over the profile.  Every OTHER child_env key stays FORCED
+#: (profile overrides whatever the inherited env carried), because those are
+#: memory-safety caps -- ``MTPLX_SESSION_BANK_MAX_BYTES`` / ``MTPLX_ENGRAM_CACHE_LIMIT``
+#: -- that a serve flag such as ``--ram-session-cache`` (which stamps
+#: ``MTPLX_SESSION_BANK_MAX_BYTES`` into the child env before this runs, W35) must
+#: not be able to defeat.
+_OPERATOR_OVERRIDABLE_CHILD_ENV_PREFIX = "MTPLX_DSV41_"
+
+
 def apply_expert_profile_child_env(
     args: Any,
     environ: dict[str, str],
 ) -> None:
+    """Compose a resolved profile's ``child_env`` onto ``environ`` in place.
+
+    Precedence, highest first:
+      * ``MTPLX_DSV41_*`` lever keys: explicit parent env > profile default.
+      * every other key: profile (forced) > inherited/serve-flag env.
+    """
     profile = getattr(args, "_resolved_expert_profile", None)
-    if profile is not None:
-        environ.update(dict(profile.child_env))
+    if profile is None:
+        return
+    for key, value in profile.child_env.items():
+        if (
+            key.startswith(_OPERATOR_OVERRIDABLE_CHILD_ENV_PREFIX)
+            and key in environ
+        ):
+            # Served default: keep the operator's explicit parent-shell value.
+            continue
+        environ[key] = value
+    # W62: propagate David's TOTAL box budget to the DeepSeek-V4.1 child so the
+    # served path shares the one knob the bench scripts derive their plan from
+    # (mtplx.deepseek_v41_memory_profile.derive_plan_from_budget). Advisory and
+    # operator-overridable: only stamped when unset, and never the load-bearing
+    # MTPLX_MEMORY_LIMIT_BYTES, so it cannot conflict with the served plan's cap.
+    if str(getattr(profile, "model_key", "")).startswith("deepseek-v41"):
+        from .deepseek_v41_memory_profile import budget_child_env
+
+        for key, value in budget_child_env(environ).items():
+            environ.setdefault(key, value)
 
 
 def _apply_diagnostic_hash_policy(
@@ -668,6 +725,36 @@ def _profile_customization(
     return changed, effective
 
 
+def _is_native_streamed_mtp(root: Path, manifest_path: Path) -> bool:
+    """Whether this streamed artifact serves a NATIVE in-artifact MTP head.
+
+    Currently only DeepSeek-V4.1 DSpark (worker W23): the merged config declares
+    MTP stages and the manifest ships ``mtp.*`` residents. This lets the serve
+    path honour ``--generation-mode mtp`` for that artifact while keeping the
+    AR-only rule for the external-MTP hy3/glm streamed profiles (whose model_type
+    never matches ``is_deepseek_v41_mtp_config``).
+    """
+
+    try:
+        from mlx_lm.utils import load_config
+
+        config = load_config(root)
+    except Exception:
+        return False
+    from .models.deepseek_v41 import is_deepseek_v41_mtp_config
+
+    if not is_deepseek_v41_mtp_config(config):
+        return False
+    from .expert_manifest import load_expert_manifest
+    from .models.deepseek_v41_loader import manifest_has_mtp_residents
+
+    try:
+        manifest = load_expert_manifest(manifest_path)
+    except Exception:
+        return False
+    return manifest_has_mtp_residents(manifest)
+
+
 def expert_streaming_load_kwargs(
     args: Any,
     model_path: Path | str,
@@ -677,7 +764,7 @@ def expert_streaming_load_kwargs(
     if not expert_streaming_requested(args):
         return {}
     cli_flags = set(getattr(args, "_cli_flags", set()) or set())
-    if (
+    mtp_requested = (
         (
             "generation-mode" in cli_flags
             and str(getattr(args, "generation_mode", "") or "").strip().lower()
@@ -688,13 +775,21 @@ def expert_streaming_load_kwargs(
             "load-mtp" in cli_flags
             and getattr(args, "load_mtp", True) is True
         )
-    ):
-        raise ValueError(
-            "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1"
-        )
+    )
     root = Path(model_path).resolve()
-    receipt = ensure_expert_admitted(root)
     manifest = _authoritative_manifest_path(root)
+    # DeepSeek-V4.1 DSpark native MTP (worker W23) is served with
+    # --generation-mode mtp; the AR-only rule stays for every external-MTP
+    # (hy3/glm) streamed profile. This is the serve glue that removes the
+    # MTPLX_DSV41_MTP env step -- with_mtp is threaded from mtp below.
+    native_mtp = bool(mtp_requested) and _is_native_streamed_mtp(root, manifest)
+    if mtp_requested and not native_mtp:
+        raise ValueError(
+            "promoted streamed profiles are AR-only in MTPLX 2.3.1rc1 "
+            "(only the DeepSeek-V4.1 DSpark native MTP head supports "
+            "--generation-mode mtp)"
+        )
+    receipt = ensure_expert_admitted(root)
     explicit_manifest = getattr(args, "expert_manifest", None)
     if explicit_manifest:
         _validate_explicit_manifest(
@@ -704,6 +799,8 @@ def expert_streaming_load_kwargs(
     model_key = _resolve_model_key(root, manifest)
     values = _load_config_object(getattr(args, "expert_streaming_config", None))
     overrides = _explicit_overrides(args)
+    setattr(args, "_expert_memory_limit_explicit",
+            "memory_limit_bytes" in values or "memory_limit_bytes" in overrides)
     configured_model_key = overrides.pop(
         "model_key", values.pop("model_key", None)
     )
@@ -766,7 +863,10 @@ def expert_streaming_load_kwargs(
     setattr(args, "_resolved_expert_effective_config", effective_config)
     setattr(args, "_expert_admission_receipt", receipt)
     return {
-        "mtp": False,
+        # True only for the DeepSeek-V4.1 DSpark native MTP head under
+        # --generation-mode mtp; runtime.load then threads with_mtp to the loader
+        # and prices the mtp.* residents. Every other streamed profile is AR-only.
+        "mtp": native_mtp,
         "expert_streaming_config": config,
         "expert_manifest": manifest,
         "expert_admission_receipt": receipt,

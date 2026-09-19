@@ -1,0 +1,161 @@
+{
+ "schema": "mtplx-server-cell-v1",
+ "server": "deepseek-v41",
+ "stack": "remote",
+ "mode": "cells",
+ "model_family": "deepseek-v41",
+ "served_model_id": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+ "template_settings": {
+  "model_family": "deepseek-v41",
+  "chat_template_source": "artifact chat_template.jinja (W52 port of the official reference encoder) + served code fallback (mtplx.chat_encoding.encode_deepseek_v41_messages)",
+  "render": "DeepSeek-V4.1 reference chat format: BOS + [<\uff5cSystem\uff5c>effort/system] + <\uff5cUser\uff5c>content + <\uff5cAssistant\uff5c> + <think>|</think>",
+  "render_cite": "mtplx/templates/deepseek_v41/chat_template.jinja; DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages",
+  "add_special_tokens": false,
+  "enable_thinking": false,
+  "reasoning_effort": null,
+  "thinking_mode": false,
+  "bos_id_prepended": true,
+  "bos_token_id": 0,
+  "note": "DSV4.1 now templates the real chat prompt (BOS id 0 first). The OFFICIAL default is thinking OFF (reference generate.py --thinking-mode 'chat'; the encoding-test harness renders thinking_mode='chat'); reasoning_effort is inert in chat mode and omitted there. DeepSeek's instruct evals use thinking + reasoning_effort=100 -- set --dsv41-enable-thinking (DSV41_ENABLE_THINKING) + --dsv41-reasoning-effort to mirror them. The exported ids match the server byte-for-byte WITH BOS."
+ },
+ "base_url": "http://127.0.0.1:18080",
+ "prompt_cache": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/prompts-deepseek-v41.json",
+ "prompt_cache_context_sha256": "c8ae2b1790c0300aa7c1421b55e7cd5d43c93461f7fba5d3a732fd34e156b4c4",
+ "contexts": [
+  16384
+ ],
+ "seeds": [
+  20260829
+ ],
+ "max_tokens": 1024,
+ "sampler": {
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 20
+ },
+ "started_epoch_s": 1789153235.885817,
+ "elapsed_s": 312.0629708766937,
+ "fastest_of_seeds": [],
+ "records": [
+  {
+   "server": "deepseek-v41",
+   "cell": "sweep",
+   "target_tokens": 16384,
+   "seed": 20260829,
+   "repeat": 0,
+   "ok": false,
+   "prompt_tokens": 0,
+   "new_prefill_tokens": 16384,
+   "completion_tokens": 0,
+   "finish_reason": "error",
+   "prefill_time_s": null,
+   "prefill_time_source": "none",
+   "prefill_tok_s": null,
+   "ttft_s": null,
+   "decode_s": null,
+   "decode_tok_s": null,
+   "wall_s": 300.9673141250096,
+   "peak_memory_bytes": null,
+   "peak_memory_gb": null,
+   "peak_memory_source": "none",
+   "client_rss_bytes": null,
+   "server_peak_memory_bytes": null,
+   "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "text_chars": 0,
+   "text_head": "",
+   "text_tail": "",
+   "reasoning_chars": 0,
+   "reasoning_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "thermal_gate": null,
+   "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+   "request_body": {
+    "model": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+    "max_tokens": 1024,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "top_k": 20,
+    "seed": 20260829,
+    "enable_thinking": false
+   },
+   "server_stats": {
+    "prompt_eval_time_s": null,
+    "prefill_tok_s": null,
+    "ttft_s": null,
+    "decode_elapsed_s": null,
+    "decode_tok_s": null,
+    "new_prefill_tokens": null,
+    "cached_tokens": null,
+    "peak_memory_bytes": null
+   },
+   "usage": {},
+   "server_error": {
+    "message": "model owner made no progress for 300s; request aborted by the stream stall watchdog (MTPLX_STREAM_STALL_DEADLINE_S)",
+    "type": "server_error",
+    "code": "TimeoutError",
+    "param": null
+   },
+   "error": "server error [TimeoutError] model owner made no progress for 300s; request aborted by the stream stall watchdog (MTPLX_STREAM_STALL_DEADLINE_S)",
+   "raw_engagement": {},
+   "mtp_accept_rate": null,
+   "templated_tokens_expected": 16384,
+   "request_parity": {
+    "enable_thinking": false,
+    "max_tokens": 1024,
+    "prompt_chars": 61760,
+    "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+    "seed": 20260829,
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95
+   },
+   "request_parity_source": "wire",
+   "request_body_sha256": "a81827390fb03caefc59c7dd5eba733dc59d0a2ad21cd6c71e29f7cc4120aebc",
+   "response_parity": {
+    "applied_sampler": {
+     "available": false,
+     "source": "none",
+     "temperature": null,
+     "requested_temperature": null,
+     "top_p": null,
+     "requested_top_p": null,
+     "top_k": null,
+     "requested_top_k": null,
+     "seed": null,
+     "client_sampler_fields_ignored": null,
+     "control_owner": null,
+     "content_empty_reason": null,
+     "reasoning_tokens": null,
+     "answer_tokens": null
+    },
+    "sampler_honoured": {
+     "temperature": null,
+     "top_p": null,
+     "top_k": null
+    },
+    "completion_tokens": 0,
+    "finish_reason": "error",
+    "reasoning_chars": 0,
+    "reasoning_tokens": null,
+    "reasoning_tokens_source": "none",
+    "thinking_observed": false,
+    "thinking_requested": false,
+    "reasoning_effort_requested": null,
+    "temperature_requested": 1.0,
+    "top_p_requested": 0.95,
+    "top_k_requested": 20,
+    "seed_requested": 20260829
+   },
+   "http_status": null,
+   "http_body": null,
+   "server_log_tail": "[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.\n[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.\n[5/6] Context window: 17664 tokens\n[5/6] Memory plan: context window 17664 is machine-bound (model supports 1048576); larger windows would swap on 128 GiB\n{\"event\": \"mtplx_stream_stall_break\", \"response_id\": \"chatcmpl-8607cd561cab4dec87d77c06bb6bda3a\", \"session_id\": \"anon-0e6ff40fcc9c3b05\", \"owner_frozen_s\": 300.2, \"deadline_s\": 300.0, \"streamed_tokens\": 0, \"scheduler\": {\"idle_keepalive\": {\"armed\": true, \"attentive\": true, \"interval_s\": 1.0, \"attentive_s\": 600.0, \"attentive_remaining_s\": 299.03199433299596, \"beats\": 1, \"errors\": 0, \"last_error\": null, \"last_beat_age_s\": 312.7970713340037, \"last_beat_duration_s\": 0.005842083002789877, \"warm\": false}, \"foreground_pending\": 0, \"idle_pending\": 1, \"persistence_pending\": 1, \"persistence_coalesced\": 0, \"persistence_pump_budget\": 0, \"persistence_pumped\": 0, \"active_kind\": \"foreground\", \"active_sequence\": 11, \"active_batch_key\": \"chat.stream\", \"active_run_s\": 300.928917540994, \"active_queue_wait_s\": 4.133400216232985e-05, \"started\": 10, \"completed\": 9, \"cancelled_before_start\": 0, \"request_cancelled\": 0, \"completed_by_kind\": {\"foreground\": 6, \"idle_postcommit\": 3}, \"started_by_batch_key\": {\"startup.load\": 1, \"startup.chat_template_profile\": 1, \"startup.template_hash\": 1, \"startup.warmup\": 1, \"warmup.background\": 3, \"chat.stream\": 2, \"postcommit.stream.final\": 1}, \"batch_histogram\": {\"1\": 6}, \"queue_wait_s\": {\"count\": 10, \"latest\": 4.133400216232985e-05, \"min\": 5.790992872789502e-06, \"max\": 5.508595374994911, \"mean\": 1.1589347290995646, \"p50\": 4.170850297668949e-05, \"p95\": 5.4876053684456565}, \"run_duration_s\": {\"count\": 9, \"latest\": 0.018348917001276277, \"min\": 2.5832996470853686e-05, \"max\": 11.059602374996757, \"mean\": 3.1789774027759754, \"p50\": 0.018348917001276277, \"p95\": 9.170017774996811}, \"cancellation_latency_s\": {\"count\": 0, \"latest\": null, \"min\": null, \"max\": null, \"mean\": null, \"p50\": null, \"p95\": null}, \"owner_thread_id\": 6115733504, \"shutdown\": false}}"
+  }
+ ]
+}

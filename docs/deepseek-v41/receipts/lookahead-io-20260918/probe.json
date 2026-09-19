@@ -1,0 +1,2995 @@
+{
+  "complete": true,
+  "scope": "Two real packed expert layers, native105 persistent+48 shared transient+16 shared prefetch slots; first64 exact native routes and recorded causal predictions. Cycles32..63 decide timing. Excludes live router evaluation and attention; an optimistic I/O screen only.",
+  "source_commit": "0f7146768f93423956ac6ce48ebe9b549cdde4a8",
+  "construction": {
+    "source_commit": "0f7146768f93423956ac6ce48ebe9b549cdde4a8",
+    "static_incremental_bound_bytes": 11811160064,
+    "bound_components": {
+      "mlx_allocator_envelope_bytes": 5368709120,
+      "mlx_cache_inside_envelope_bytes": 1073741824,
+      "host_reader_compiler_reserve_bytes": 4294967296,
+      "raw_bank_bytes": 2951700480,
+      "packed_bank_bytes": 2778071040,
+      "one_packed_scale_layer_bound_bytes": 104857600,
+      "inputs_outputs_scratch_bound_bytes": 16777216,
+      "largest_component_cache_overshoot_allowance_bytes": 613449728
+    },
+    "bound_scope": "Unchanged9GiB envelope:5GiB Metal/cache/compile plus4GiB host/reader/compiler. Exact157-slot raw bank updated in inventory; all kernels/temporary shapes unchanged and actual strict inactive cache256MiB. One runtime at a time.",
+    "box_budget_bytes": 110000000000,
+    "bank_capacity": 274,
+    "helper_sha256": {
+      "plane_lane.py": "8f899eb54c147e96db64d3fe6edfd86354fd29fbda2e4cfad4282ea46300f17f",
+      "restore_bank.py": "974ff9f0065e362add1b3fa997ab8b7de3ed771a25dad45440dab086e8d608f0",
+      "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+      "probe.py": "6bbc74e6885dcf3370ca0c352ac6ef7165f01094c45e9b0e4bfbbb5e5d92674d",
+      "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+      "paired_config.py": "153eb9b5b5179a14b94be4fda7da8d312b6394ebe84d63aef1e3e3868e95db1a",
+      "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+      "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+      "routes.json": "c5af4f149083113fb2c8638fd3d9f0ffcfbb82b2bd4a30a45482cb438d0cb982",
+      "run_screen.py": "e320f3115995632352d8886251d710a44adb661ddbabba13f9240eba8a88cb20",
+      "preflight.py": "852d0475b9e004df5e413e0824ceef34207886fbe2e42de9ddd5a818923b5f87"
+    },
+    "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "comparison": "Native versus grouped-row/CPU-permutation packed decode at256MiB strict inactive-cache limit.",
+    "spec": {
+      "key": "deepseek-v41-flash-expert-mxfp4",
+      "display_name": "DeepSeek-V4.1-Flash expert-only native mxfp4 (gs32 FP4 lossless-repack experts, mxfp8 residents)",
+      "source_model": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "source_revision": "dba1be0a40aa45a94ad051997016db3960a90277",
+      "quant_model": "OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+      "quant_revision": "unpublished-mxfp4-repack",
+      "total_tensor_bytes": 14438895616,
+      "total_layers": 40,
+      "routed_layer_start": 30,
+      "routed_layer_count": 2,
+      "expert_count": 384,
+      "top_k": 6,
+      "hidden_size": 5120,
+      "expert_hidden_size": 2304,
+      "quant_bits": 4,
+      "quant_group_size": 32,
+      "quant_parameter_bytes": 1,
+      "router_storage": "source bfloat16 gate with fp32 correction bias (noaux_tc, sqrtsoftplus)",
+      "router_matmul_dtype": "float32",
+      "router_bytes": 0,
+      "kv_bytes_per_token": 0,
+      "mtp_layer_index": null,
+      "mtp_included": false,
+      "full_indexer_layers": [],
+      "island_pin_order": [],
+      "expert_codec": "mxfp4",
+      "swiglu_limit": 10.0
+    },
+    "plan": {
+      "model_key": "deepseek-v41-flash-expert-mxfp4",
+      "total_limit_bytes": 7516192768,
+      "runtime_reserve_bytes": 0,
+      "io_staging_bytes": 0,
+      "execution_workspace_bytes": 0,
+      "context_tokens": 0,
+      "resident_bytes": 4096,
+      "kv_bytes": 0,
+      "transient_slots": 48,
+      "transient_bytes": 902430720,
+      "expert_cache_limit_bytes": 3948134400,
+      "persistent_budget_bytes": 3948134400,
+      "cache_scope": "layer",
+      "persistent_slots": 210,
+      "slots_per_layer": 105,
+      "persistent_cache_bytes": 3948134400,
+      "unallocated_bytes": 2364813312,
+      "fits_fixed": true,
+      "persistent_slots_by_layer": [],
+      "island_layer_count": 0,
+      "island_bytes": 0,
+      "mmap_island_layer_count": 0,
+      "mmap_island_bytes": 0,
+      "prefetch_ring_slots": 16,
+      "prefetch_bytes": 300810240,
+      "mmap_islands_wired": true,
+      "miss_shadow": null,
+      "shadow_bytes": 0,
+      "batch_admission_slots": 48
+    },
+    "config": {
+      "model_key": "deepseek-v41-flash-expert-mxfp4",
+      "memory_limit_bytes": 7516192768,
+      "max_live_kv_tokens": 17664,
+      "runtime_reserve_bytes": 0,
+      "expert_cache_limit_bytes": 3948134400,
+      "persistent_slots_by_layer": [],
+      "transient_slots": 48,
+      "io_staging_bytes": 0,
+      "execution_workspace_bytes": 0,
+      "max_inflight_io_bytes": null,
+      "max_open_files": 16,
+      "max_read_chunk_bytes": 8388608,
+      "io_read_fanout": 4,
+      "frequency_decay": 0.995,
+      "prefer_sidecar": true,
+      "verify_record_hashes": false,
+      "verify_artifact_headers": true,
+      "verify_sidecar_hash_at_open": false,
+      "prefill_admission": false,
+      "slot_layout": "component-banks",
+      "trace_routes": false,
+      "cache_policy": "transition-window",
+      "cache_scope": "layer",
+      "bypass_page_cache": true,
+      "resource_telemetry": false,
+      "q2_expert_kernel": "stock",
+      "hy3_router_kernel": "mpp-r1-fused-r2",
+      "hy3_router_sigmoid": "precise",
+      "hy3_mtp_shared_kernel": "stock",
+      "hy3_mtp_shared_kernel_depth": 3,
+      "deferred_pin_release": true,
+      "island_layers": [],
+      "island_layer_count": null,
+      "mmap_island_layers": [],
+      "banked_manifest": null,
+      "banked_codec": "none",
+      "streamed_codec": "none",
+      "streamed_codec_manifest": null,
+      "streamed_codec_verify": true,
+      "mmap_island_wired": true,
+      "proj_quant": null,
+      "proj_requant": null,
+      "kv_quant": null,
+      "split_route_release": "deferred",
+      "overlap_miss_reads": true,
+      "decode_miss_records_per_part": 3,
+      "verify_shared_overlap": true,
+      "prefetch_slots": 16,
+      "speculative_io_fraction": 0.25,
+      "route_census": true,
+      "miss_shadow": null,
+      "miss_shadow_layers": null
+    },
+    "native_slot_bytes": 2951700480,
+    "packed_slot_bytes": 2778071040,
+    "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "scope": "Two real packed expert layers, native105 persistent+48 shared transient+16 shared prefetch slots; first64 exact native routes and recorded causal predictions. Cycles32..63 decide timing. Excludes live router evaluation and attention; an optimistic I/O screen only.",
+    "replay_source_sha256": "7be3475934f5d2b6049d046afb30c64024aab595225bc0d8f28fd49fc03fdccc",
+    "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+    "arms": [
+      "native",
+      "prefetch",
+      "native",
+      "prefetch",
+      "native"
+    ],
+    "runtime_source_sha256": {
+      "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+      "mtplx/expert_slots.py": "27084ec00f0040644ccc1c93ce4adbc78a65f3fb4b17670cd26d8fb43d75e887",
+      "mtplx/expert_io.py": "91b7aba10b8579166ea326225cfdce7d0969943cd0839ea960c4db702c32f06f",
+      "mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+      "mtplx/models/expert_mlx.py": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc",
+      "mtplx/expert_streaming_models.py": "aa72a10cfadcd42f6ac285394e0e86f1c38d7185facac961434b95fae49b0913",
+      "mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+      "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+      "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c",
+      "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+    },
+    "layer_selection": "Same independently preselected median-miss layer34; expand the physically restored saved73-slot bank to109 before each arm. Do not select layers from candidate timing.",
+    "allocator_sources": {
+      "version": "mlx0.32.2; mlx-metal0.32.2",
+      "source_url": "https://github.com/ml-explore/mlx/blob/v0.32.2/mlx/backend/metal/allocator.cpp",
+      "rule": "Use the already-verified pinned strict allocator. This screen changes row permutation only; no cache-policy experiment."
+    },
+    "strict_allocator": {
+      "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+      "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    },
+    "layers": [
+      30,
+      31
+    ],
+    "capacity": 105,
+    "memory_components": {
+      "metal_cache_compiler_bound_bytes": 7516192768,
+      "host_reader_compiler_bound_bytes": 4294967296,
+      "raw_bank_bytes": 5151375360,
+      "packed_bank_bytes": 4848353280
+    },
+    "experimental_prefetch": "Native ring ownership/publication; speculative worker has an explicit non-GU publication witness. Issue only after all source demand GU witnesses arrive. Replace stale prior-layer miss hints with actual READY physical filtering at the issue boundary.",
+    "paired_capability": {
+      "scope": "two-layer operator only",
+      "native_config_guard_unchanged": true,
+      "native_published_ring_transaction_observed": true,
+      "published_expert": 14,
+      "published_slot": 153,
+      "policy_mapping_and_epoch_rollback_exact": true
+    }
+  },
+  "before": {
+    "sample_start_monotonic_ns": 186850998780125,
+    "sample_end_monotonic_ns": 186851001248166,
+    "process": {
+      "peak_maxrss_bytes": 25329664,
+      "resident_bytes": 25690112,
+      "phys_footprint_bytes": 14713312,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 122707050496,
+      "wired_bytes": 3402743808,
+      "active_bytes": 3094675456,
+      "inactive_bytes": 2437758976,
+      "speculative_bytes": 626049024,
+      "anonymous_bytes": 3532161024,
+      "file_backed_bytes": 2626322432,
+      "compressor_bytes": 2272165888,
+      "compressed_bytes": 8372961280,
+      "used_bytes": 11207344128,
+      "non_file_used_bytes": 9207070720,
+      "swapins_pages": 4826070,
+      "swapouts_pages": 7667614,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "library": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "arms": [
+    {
+      "mode": "native",
+      "sequence": 0,
+      "cases": [
+        {
+          "call": 0,
+          "elapsed_ns": 41797042,
+          "output_sha256": "5c5d7792076d90596c6fc2141d1e6202be2cb74997ee25bec53b7fd3eed033a1",
+          "records_read": 27,
+          "read_bytes": 477757440
+        },
+        {
+          "call": 1,
+          "elapsed_ns": 26920875,
+          "output_sha256": "4c6e8fcf167dd31901c80380f933f4f683c3c3409fcca3c5343e64c2c983a7b9",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 2,
+          "elapsed_ns": 21109792,
+          "output_sha256": "77e1d45d2029f0c35aca3dc7b28a09322e460fc8c939ba3c9d82e7a53982ad5a",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 3,
+          "elapsed_ns": 15391291,
+          "output_sha256": "4864b962908724ab3ed7b8d407307ac951a7de6fddd1a9212741b3f7b64a98ae",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 4,
+          "elapsed_ns": 17322000,
+          "output_sha256": "87b857b0c3004e3eba90e3f1acf00fb8271c959f2f1f6284be968bd27b4c229d",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 5,
+          "elapsed_ns": 26877541,
+          "output_sha256": "c545c876d570eee8aac2b111d0eaaf6de2343a1ef706e6f2c1045c984b58da18",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 6,
+          "elapsed_ns": 8182291,
+          "output_sha256": "6e24b8d4c112946da6f7ffa18268fd90658656b0bf31b2a2247c6e59a3a7a4ce",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 7,
+          "elapsed_ns": 15458292,
+          "output_sha256": "7b1208a4d0c21c4d91940bd958be80f6b31c4d640ddee1a58ea779ea8dc46613",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 8,
+          "elapsed_ns": 22928583,
+          "output_sha256": "96c68428a00c4153906df49d3669f566be811aca9483495f8a2d6369a3ddcad3",
+          "records_read": 15,
+          "read_bytes": 265420800
+        },
+        {
+          "call": 9,
+          "elapsed_ns": 28470375,
+          "output_sha256": "e91222ee5d3cc1dfa36b29eebbf103282a7104e935ebdf66c837c9401f4cf94e",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 10,
+          "elapsed_ns": 19440375,
+          "output_sha256": "015872fa86fb78c898460057f12d7967aebfb99e8a12a03309fa00ec6e638fc0",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 11,
+          "elapsed_ns": 15940625,
+          "output_sha256": "0615999ed19e918aa7e447183cd463abc41521a6b621874aab680e685bef1e29",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 12,
+          "elapsed_ns": 12750833,
+          "output_sha256": "e0156457b562626235dd35a8e098a08678401fd72cb0c4fdc2a74d71bc80a0d1",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 13,
+          "elapsed_ns": 15162625,
+          "output_sha256": "fbca28c4e2cd6b5c56f88396c6c4494747196e436628d9cace7785e1d2241a99",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 14,
+          "elapsed_ns": 25870500,
+          "output_sha256": "cb3a6b48dd1e0036b8c3c16a098b4b29cf6513115f1f58c9cf7ebbf22cbc81ca",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 15,
+          "elapsed_ns": 17623000,
+          "output_sha256": "babbf0eccd44c3862f840c0c66319adc7848d22e04da0c60977c4b6f080663ac",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 16,
+          "elapsed_ns": 15106541,
+          "output_sha256": "5a53b32fb2e6c5aad08775f0c31ad698968bad8d2527ddf576cf156cb0ee63ce",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 17,
+          "elapsed_ns": 27715167,
+          "output_sha256": "1035a6264dbdd8d37d77e9f0cd14074eb5291c3762da5c931823bed80fb5751a",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 18,
+          "elapsed_ns": 19831875,
+          "output_sha256": "2115e49f682e74c8f36b3c6189047c5b53f983217381529a2b2bcd7e953e7f57",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 19,
+          "elapsed_ns": 26121875,
+          "output_sha256": "f5a5658cc59f1ca5d2fd36a1eb700faa3bf0090b9ca369b127523ae9b1f4e0b8",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 20,
+          "elapsed_ns": 20937625,
+          "output_sha256": "5de97a4543cb82667d96d01067b8da1ec1a41909fda605da218e1c4f8bac9259",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 21,
+          "elapsed_ns": 18259000,
+          "output_sha256": "5e1481ea0d7b74e2d3c85beb5870867e4ed5e72c0b6d1a8d460cbe079e25134f",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 22,
+          "elapsed_ns": 22838416,
+          "output_sha256": "5f50895a5bd6c79da8a2410752666067df295de8886b86c8de250694c7a303b0",
+          "records_read": 16,
+          "read_bytes": 283115520
+        },
+        {
+          "call": 23,
+          "elapsed_ns": 13044459,
+          "output_sha256": "37cdc49a665b99ccbbe761dc866f80e82a2f8c5acd3170aacc403a8f8c890b92",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 24,
+          "elapsed_ns": 16321375,
+          "output_sha256": "32c39f406c2ed7438e91d36f44d1dcc8334c746301deaa1ed9eead62be78c64a",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 25,
+          "elapsed_ns": 14208667,
+          "output_sha256": "b7742d6b4d7fe27e2b082db7a4686f0284188e936036e7c3c6864e3c03d21620",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 26,
+          "elapsed_ns": 16675375,
+          "output_sha256": "789556d42f703376608350ca407084f3764876502b254e029565d22ff47813c3",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 27,
+          "elapsed_ns": 14058250,
+          "output_sha256": "6bf575dd84383af689ca99520082454657360403c0782f359a289f816c1870f9",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 28,
+          "elapsed_ns": 13717375,
+          "output_sha256": "dc0aa6700e8aa89961b1276fd147b048e8f64d20ea243960e791904f0d4f1f92",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 29,
+          "elapsed_ns": 19555000,
+          "output_sha256": "3c9313b7586b80f97a074ac95d26d08a50de71121d6e39d0e9e7a0854538c60e",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 30,
+          "elapsed_ns": 9472584,
+          "output_sha256": "682a0bf1b956d2cde279b582ef947891d63189d7f821eff852eb60b119887eac",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 31,
+          "elapsed_ns": 24482292,
+          "output_sha256": "23af1595610ac3eb28b29583f5f229f5f8ca79b7ee99cb63e993bd1735f4236b",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 32,
+          "elapsed_ns": 13536292,
+          "output_sha256": "0252b69af8db1ef1e4a8eff92fb14115fc612b09a65ada3ceae04807baba806f",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 33,
+          "elapsed_ns": 11842750,
+          "output_sha256": "0784f1be7825694c364e2a97f8991b135bfba8d7cda4134a3e58df5dd2e04903",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 34,
+          "elapsed_ns": 11642833,
+          "output_sha256": "cc1bc55bfd1cae343d9b15dffd9a3354f00a520748c86a5ba8156639f4f73ccd",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 35,
+          "elapsed_ns": 12284375,
+          "output_sha256": "38d01374e5e75a1d1c8ed64f1846f030aca742d7c31a7060db5271afce7bee7c",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 36,
+          "elapsed_ns": 7898875,
+          "output_sha256": "2abdda628741ec7f798ba614c87cb67af69ab03f3cf2bc09b52456f7b89efcbd",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 37,
+          "elapsed_ns": 15194250,
+          "output_sha256": "60331addb7ed907ad515578f5260426bad721d2ce0b4c5a4fd44945d83b9f0db",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 38,
+          "elapsed_ns": 13537333,
+          "output_sha256": "efcf36f16f2cd26c82f9c5078b34a44e6a4c97e1bebe8ffb1b6b6e38cc637f69",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 39,
+          "elapsed_ns": 12144792,
+          "output_sha256": "159fd23e2291a1f69c1621aefa2d0b2ac2c1ee7ce9bfce8828609833e37c1bc7",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 40,
+          "elapsed_ns": 12121542,
+          "output_sha256": "225cfab62800b6cbadd2601b3c37f1f8ae91d79eb5498f95a315971a3abe0973",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 41,
+          "elapsed_ns": 18875667,
+          "output_sha256": "1398a6bc3ba6862f1d991f083443cb298f1b2a005cb2150e23f6b76f2b9325c5",
+          "records_read": 12,
+          "read_bytes": 212336640
+        },
+        {
+          "call": 42,
+          "elapsed_ns": 21645667,
+          "output_sha256": "3b9699cb763e8ff4165c4a392cc1acac5495bf67c79041ced862b3cf39d5ce03",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 43,
+          "elapsed_ns": 8634500,
+          "output_sha256": "f66f79dd5a84379747351f91a342fe901b36644baca1a83ccf21e90e7fafd8f6",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 44,
+          "elapsed_ns": 12184958,
+          "output_sha256": "e2f2c484428ddaf278ccccf7134fb81406d4a695bcbcb74a102d216082ffdaaa",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 45,
+          "elapsed_ns": 10093625,
+          "output_sha256": "bc554c9210f1e5426747da413003e2fd29a6d6075719ad4f64f31667cc348694",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 46,
+          "elapsed_ns": 13578625,
+          "output_sha256": "4401e6f555c1df199874bedb8d9fb778640c7f09017bc4ebf00f36dd299916a3",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 47,
+          "elapsed_ns": 8007791,
+          "output_sha256": "78df8ad781dfa0ea594072c13d06ee8bdbc6d506d7683d4f1f973d0568d17ebe",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 48,
+          "elapsed_ns": 9666500,
+          "output_sha256": "242611a4e2dca058e7b142c9ffc7f686f63cfad0ebacba3539910d1a9f4bad8b",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 49,
+          "elapsed_ns": 7266042,
+          "output_sha256": "f85c146672039905acf0a14a5b1d21739eec2d1b993f53709c86304d6a1c09e4",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 50,
+          "elapsed_ns": 13986333,
+          "output_sha256": "85621bcb2c5d22df0444074d4d94a2083191453389d5c5722de1de20b44233ee",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 51,
+          "elapsed_ns": 10896583,
+          "output_sha256": "b26710bb8d4a607100f51e9a54039079dcc4439a541a590ec1ecbd735079400f",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 52,
+          "elapsed_ns": 15461458,
+          "output_sha256": "d0d6ba2c668e3be1b1c2217a4c0170b9ee4fe13e66db097a66e93b1412b7b9c5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 53,
+          "elapsed_ns": 16300667,
+          "output_sha256": "438de33f769a50fcc5f418075cbfa014fc269259751d6751e9e481b604e6d2c7",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 54,
+          "elapsed_ns": 11617250,
+          "output_sha256": "6baca496a487e4072b3876fd0b7f382b28b453997cd3b007c0aab30858c68da2",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 55,
+          "elapsed_ns": 7506000,
+          "output_sha256": "3711ccf1f0e02faf524ff145b94dcf4b825132c9834e3fb802bed4d6e6d1f580",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 56,
+          "elapsed_ns": 15307959,
+          "output_sha256": "ba1f94266fba11b29d1378dcc9fa3ef5331df042d90179425ef4c5dfd2ce9db5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 57,
+          "elapsed_ns": 12798666,
+          "output_sha256": "9395aec9639c6c4b54c932fc432471658f7e3731be20dfbefb59fb0c487cec93",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 58,
+          "elapsed_ns": 9953542,
+          "output_sha256": "94303948946363c28a960754721d80c7de5935f20f85803a65588e0ccb306a6d",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 59,
+          "elapsed_ns": 10590208,
+          "output_sha256": "586daef037349925484a4842050ef35047602032a65a4e8427bd0ab0fda8990c",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 60,
+          "elapsed_ns": 26401917,
+          "output_sha256": "3650c61c38239d383c023e94dfae1369769386173797bb2d1b65fc4e55316afc",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 61,
+          "elapsed_ns": 14063083,
+          "output_sha256": "a6799a4d5c59c3424db5febeffdf2bc9c44f56d8f973ae5f2b87964b404c1322",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 62,
+          "elapsed_ns": 14555250,
+          "output_sha256": "b2c758c11d9127ca3f98088bbd022a137f0617b85e913fff2d593c080bf38de7",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 63,
+          "elapsed_ns": 11375500,
+          "output_sha256": "6fb39386c70fe4dee95f94730adfea0428aba24e717395c54167a26d192eca65",
+          "records_read": 7,
+          "read_bytes": 123863040
+        }
+      ],
+      "reader_metrics": {
+        "record_requests": 793,
+        "source_record_requests": 0,
+        "sidecar_record_requests": 793,
+        "read_operations": 2379,
+        "python_preadv_invocations": 2379,
+        "preadv_bytes_returned": 14031912960,
+        "native_positional_calls": 0,
+        "native_bytes_returned": 0,
+        "requested_bytes": 14031912960,
+        "read_bytes": 14031912960,
+        "read_ns": 13289665167,
+        "decoded_records": 0,
+        "decoded_raw_bytes": 0,
+        "bytes_read_saved": 0,
+        "decode_ns": 0,
+        "open_files_peak": 1,
+        "short_reads": 0,
+        "integrity_errors": 0,
+        "cancellations": 0,
+        "deadline_errors": 0,
+        "io_errors": 0,
+        "records_hashed": 0,
+        "records_unhashed": 793,
+        "hash_thread_ns_total": 0,
+        "read_inflight_max": 39,
+        "read_inflight_depth_sum": 27786,
+        "read_inflight_samples": 2379,
+        "read_wall_ns": 1098636161,
+        "records_read": 793,
+        "read_mib_per_second": 1006.9384617175283,
+        "read_inflight_depth_mean": 11.6796973518285,
+        "read_realized_gb_per_s": 12.772120068602039,
+        "read_realized_qd": 12.096511692190695
+      },
+      "slot_metrics": {
+        "ensure_calls": 394,
+        "load_requests": 793,
+        "owned_loads": 793,
+        "deduplicated_loads": 0,
+        "ready_hits": 0,
+        "load_failures": 0,
+        "generation_replacements": 583,
+        "pin_waits": 0,
+        "load_waits": 0,
+        "active_routes": 0,
+        "active_routes_peak": 7,
+        "completion_fences": 0,
+        "completion_fence_slots": 0,
+        "completion_fence_fallbacks": 0,
+        "completion_fence_failures": 0,
+        "synchronous_fences": 0,
+        "synchronous_fence_slots": 0,
+        "batched_miss_parts": 258,
+        "batched_miss_records": 647,
+        "overlap_split_routes": 0,
+        "overlap_gpu_dispatch_ns": 0,
+        "overlap_exposed_wait_ns": 0
+      },
+      "runtime_counters": {
+        "route_calls": 128,
+        "expert_requests": 4608,
+        "unique_expert_requests": 3290,
+        "shared_expert_assignments": 1318,
+        "expert_hits": 3876,
+        "expert_misses": 732,
+        "hit_rate": 0.8411458333333334,
+        "persistent_loads": 647,
+        "transient_loads": 0,
+        "evictions": 583,
+        "bytes_read": 11448483840,
+        "prefetch_issued": 0,
+        "prefetch_committed": 0,
+        "prefetch_issued_verify": 0,
+        "prefetch_committed_verify": 0,
+        "pool_loads": 647,
+        "scan_inserts": 0,
+        "promotions": 309,
+        "prefetch_predicted": 0,
+        "prefetch_hit_on_true_route": 0,
+        "prefetch_wasted": 0,
+        "prefetch_awaited_inflight": 0,
+        "prefetch_bytes": 0,
+        "prefetch_first_consumption_hits": 0
+      },
+      "mlx_peak_bytes": 5304624137,
+      "heldout_total_ns": 410970833,
+      "heldout_read_records": 247,
+      "all_outputs_exact": true,
+      "active_after_close_bytes": 153199624
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 1,
+      "cases": [
+        {
+          "call": 0,
+          "elapsed_ns": 38720458,
+          "output_sha256": "5c5d7792076d90596c6fc2141d1e6202be2cb74997ee25bec53b7fd3eed033a1",
+          "records_read": 28,
+          "read_bytes": 495452160
+        },
+        {
+          "call": 1,
+          "elapsed_ns": 27941625,
+          "output_sha256": "4c6e8fcf167dd31901c80380f933f4f683c3c3409fcca3c5343e64c2c983a7b9",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 2,
+          "elapsed_ns": 22834208,
+          "output_sha256": "77e1d45d2029f0c35aca3dc7b28a09322e460fc8c939ba3c9d82e7a53982ad5a",
+          "records_read": 15,
+          "read_bytes": 265420800
+        },
+        {
+          "call": 3,
+          "elapsed_ns": 15151833,
+          "output_sha256": "4864b962908724ab3ed7b8d407307ac951a7de6fddd1a9212741b3f7b64a98ae",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 4,
+          "elapsed_ns": 18265625,
+          "output_sha256": "87b857b0c3004e3eba90e3f1acf00fb8271c959f2f1f6284be968bd27b4c229d",
+          "records_read": 12,
+          "read_bytes": 212336640
+        },
+        {
+          "call": 5,
+          "elapsed_ns": 27863250,
+          "output_sha256": "c545c876d570eee8aac2b111d0eaaf6de2343a1ef706e6f2c1045c984b58da18",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 6,
+          "elapsed_ns": 8252667,
+          "output_sha256": "6e24b8d4c112946da6f7ffa18268fd90658656b0bf31b2a2247c6e59a3a7a4ce",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 7,
+          "elapsed_ns": 14822000,
+          "output_sha256": "7b1208a4d0c21c4d91940bd958be80f6b31c4d640ddee1a58ea779ea8dc46613",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 8,
+          "elapsed_ns": 21037459,
+          "output_sha256": "96c68428a00c4153906df49d3669f566be811aca9483495f8a2d6369a3ddcad3",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 9,
+          "elapsed_ns": 23446583,
+          "output_sha256": "e91222ee5d3cc1dfa36b29eebbf103282a7104e935ebdf66c837c9401f4cf94e",
+          "records_read": 16,
+          "read_bytes": 283115520
+        },
+        {
+          "call": 10,
+          "elapsed_ns": 18732542,
+          "output_sha256": "015872fa86fb78c898460057f12d7967aebfb99e8a12a03309fa00ec6e638fc0",
+          "records_read": 12,
+          "read_bytes": 212336640
+        },
+        {
+          "call": 11,
+          "elapsed_ns": 12915958,
+          "output_sha256": "0615999ed19e918aa7e447183cd463abc41521a6b621874aab680e685bef1e29",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 12,
+          "elapsed_ns": 10986125,
+          "output_sha256": "e0156457b562626235dd35a8e098a08678401fd72cb0c4fdc2a74d71bc80a0d1",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 13,
+          "elapsed_ns": 14868375,
+          "output_sha256": "fbca28c4e2cd6b5c56f88396c6c4494747196e436628d9cace7785e1d2241a99",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 14,
+          "elapsed_ns": 23124917,
+          "output_sha256": "cb3a6b48dd1e0036b8c3c16a098b4b29cf6513115f1f58c9cf7ebbf22cbc81ca",
+          "records_read": 16,
+          "read_bytes": 283115520
+        },
+        {
+          "call": 15,
+          "elapsed_ns": 16061750,
+          "output_sha256": "babbf0eccd44c3862f840c0c66319adc7848d22e04da0c60977c4b6f080663ac",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 16,
+          "elapsed_ns": 15454000,
+          "output_sha256": "5a53b32fb2e6c5aad08775f0c31ad698968bad8d2527ddf576cf156cb0ee63ce",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 17,
+          "elapsed_ns": 26394584,
+          "output_sha256": "1035a6264dbdd8d37d77e9f0cd14074eb5291c3762da5c931823bed80fb5751a",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 18,
+          "elapsed_ns": 19571125,
+          "output_sha256": "2115e49f682e74c8f36b3c6189047c5b53f983217381529a2b2bcd7e953e7f57",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 19,
+          "elapsed_ns": 25075000,
+          "output_sha256": "f5a5658cc59f1ca5d2fd36a1eb700faa3bf0090b9ca369b127523ae9b1f4e0b8",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 20,
+          "elapsed_ns": 20514333,
+          "output_sha256": "5de97a4543cb82667d96d01067b8da1ec1a41909fda605da218e1c4f8bac9259",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 21,
+          "elapsed_ns": 18012667,
+          "output_sha256": "5e1481ea0d7b74e2d3c85beb5870867e4ed5e72c0b6d1a8d460cbe079e25134f",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 22,
+          "elapsed_ns": 20967833,
+          "output_sha256": "5f50895a5bd6c79da8a2410752666067df295de8886b86c8de250694c7a303b0",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 23,
+          "elapsed_ns": 11822958,
+          "output_sha256": "37cdc49a665b99ccbbe761dc866f80e82a2f8c5acd3170aacc403a8f8c890b92",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 24,
+          "elapsed_ns": 16042083,
+          "output_sha256": "32c39f406c2ed7438e91d36f44d1dcc8334c746301deaa1ed9eead62be78c64a",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 25,
+          "elapsed_ns": 16143084,
+          "output_sha256": "b7742d6b4d7fe27e2b082db7a4686f0284188e936036e7c3c6864e3c03d21620",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 26,
+          "elapsed_ns": 16988250,
+          "output_sha256": "789556d42f703376608350ca407084f3764876502b254e029565d22ff47813c3",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 27,
+          "elapsed_ns": 11809917,
+          "output_sha256": "6bf575dd84383af689ca99520082454657360403c0782f359a289f816c1870f9",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 28,
+          "elapsed_ns": 13983584,
+          "output_sha256": "dc0aa6700e8aa89961b1276fd147b048e8f64d20ea243960e791904f0d4f1f92",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 29,
+          "elapsed_ns": 17338500,
+          "output_sha256": "3c9313b7586b80f97a074ac95d26d08a50de71121d6e39d0e9e7a0854538c60e",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 30,
+          "elapsed_ns": 6779167,
+          "output_sha256": "682a0bf1b956d2cde279b582ef947891d63189d7f821eff852eb60b119887eac",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 31,
+          "elapsed_ns": 25400875,
+          "output_sha256": "23af1595610ac3eb28b29583f5f229f5f8ca79b7ee99cb63e993bd1735f4236b",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 32,
+          "elapsed_ns": 12844959,
+          "output_sha256": "0252b69af8db1ef1e4a8eff92fb14115fc612b09a65ada3ceae04807baba806f",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 33,
+          "elapsed_ns": 11500083,
+          "output_sha256": "0784f1be7825694c364e2a97f8991b135bfba8d7cda4134a3e58df5dd2e04903",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 34,
+          "elapsed_ns": 12392041,
+          "output_sha256": "cc1bc55bfd1cae343d9b15dffd9a3354f00a520748c86a5ba8156639f4f73ccd",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 35,
+          "elapsed_ns": 10083125,
+          "output_sha256": "38d01374e5e75a1d1c8ed64f1846f030aca742d7c31a7060db5271afce7bee7c",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 36,
+          "elapsed_ns": 7647625,
+          "output_sha256": "2abdda628741ec7f798ba614c87cb67af69ab03f3cf2bc09b52456f7b89efcbd",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 37,
+          "elapsed_ns": 14973250,
+          "output_sha256": "60331addb7ed907ad515578f5260426bad721d2ce0b4c5a4fd44945d83b9f0db",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 38,
+          "elapsed_ns": 13711250,
+          "output_sha256": "efcf36f16f2cd26c82f9c5078b34a44e6a4c97e1bebe8ffb1b6b6e38cc637f69",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 39,
+          "elapsed_ns": 10112875,
+          "output_sha256": "159fd23e2291a1f69c1621aefa2d0b2ac2c1ee7ce9bfce8828609833e37c1bc7",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 40,
+          "elapsed_ns": 11719458,
+          "output_sha256": "225cfab62800b6cbadd2601b3c37f1f8ae91d79eb5498f95a315971a3abe0973",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 41,
+          "elapsed_ns": 16716791,
+          "output_sha256": "1398a6bc3ba6862f1d991f083443cb298f1b2a005cb2150e23f6b76f2b9325c5",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 42,
+          "elapsed_ns": 20539416,
+          "output_sha256": "3b9699cb763e8ff4165c4a392cc1acac5495bf67c79041ced862b3cf39d5ce03",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 43,
+          "elapsed_ns": 8331000,
+          "output_sha256": "f66f79dd5a84379747351f91a342fe901b36644baca1a83ccf21e90e7fafd8f6",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 44,
+          "elapsed_ns": 11281666,
+          "output_sha256": "e2f2c484428ddaf278ccccf7134fb81406d4a695bcbcb74a102d216082ffdaaa",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 45,
+          "elapsed_ns": 12922250,
+          "output_sha256": "bc554c9210f1e5426747da413003e2fd29a6d6075719ad4f64f31667cc348694",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 46,
+          "elapsed_ns": 10396917,
+          "output_sha256": "4401e6f555c1df199874bedb8d9fb778640c7f09017bc4ebf00f36dd299916a3",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 47,
+          "elapsed_ns": 9389958,
+          "output_sha256": "78df8ad781dfa0ea594072c13d06ee8bdbc6d506d7683d4f1f973d0568d17ebe",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 48,
+          "elapsed_ns": 8685208,
+          "output_sha256": "242611a4e2dca058e7b142c9ffc7f686f63cfad0ebacba3539910d1a9f4bad8b",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 49,
+          "elapsed_ns": 7439875,
+          "output_sha256": "f85c146672039905acf0a14a5b1d21739eec2d1b993f53709c86304d6a1c09e4",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 50,
+          "elapsed_ns": 13013458,
+          "output_sha256": "85621bcb2c5d22df0444074d4d94a2083191453389d5c5722de1de20b44233ee",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 51,
+          "elapsed_ns": 10167667,
+          "output_sha256": "b26710bb8d4a607100f51e9a54039079dcc4439a541a590ec1ecbd735079400f",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 52,
+          "elapsed_ns": 14313333,
+          "output_sha256": "d0d6ba2c668e3be1b1c2217a4c0170b9ee4fe13e66db097a66e93b1412b7b9c5",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 53,
+          "elapsed_ns": 16012500,
+          "output_sha256": "438de33f769a50fcc5f418075cbfa014fc269259751d6751e9e481b604e6d2c7",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 54,
+          "elapsed_ns": 13647958,
+          "output_sha256": "6baca496a487e4072b3876fd0b7f382b28b453997cd3b007c0aab30858c68da2",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 55,
+          "elapsed_ns": 9785834,
+          "output_sha256": "3711ccf1f0e02faf524ff145b94dcf4b825132c9834e3fb802bed4d6e6d1f580",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 56,
+          "elapsed_ns": 15800708,
+          "output_sha256": "ba1f94266fba11b29d1378dcc9fa3ef5331df042d90179425ef4c5dfd2ce9db5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 57,
+          "elapsed_ns": 12055875,
+          "output_sha256": "9395aec9639c6c4b54c932fc432471658f7e3731be20dfbefb59fb0c487cec93",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 58,
+          "elapsed_ns": 9692959,
+          "output_sha256": "94303948946363c28a960754721d80c7de5935f20f85803a65588e0ccb306a6d",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 59,
+          "elapsed_ns": 9502625,
+          "output_sha256": "586daef037349925484a4842050ef35047602032a65a4e8427bd0ab0fda8990c",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 60,
+          "elapsed_ns": 24584708,
+          "output_sha256": "3650c61c38239d383c023e94dfae1369769386173797bb2d1b65fc4e55316afc",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 61,
+          "elapsed_ns": 11700250,
+          "output_sha256": "a6799a4d5c59c3424db5febeffdf2bc9c44f56d8f973ae5f2b87964b404c1322",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 62,
+          "elapsed_ns": 13692417,
+          "output_sha256": "b2c758c11d9127ca3f98088bbd022a137f0617b85e913fff2d593c080bf38de7",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 63,
+          "elapsed_ns": 10789833,
+          "output_sha256": "6fb39386c70fe4dee95f94730adfea0428aba24e717395c54167a26d192eca65",
+          "records_read": 6,
+          "read_bytes": 106168320
+        }
+      ],
+      "reader_metrics": {
+        "record_requests": 762,
+        "source_record_requests": 0,
+        "sidecar_record_requests": 762,
+        "read_operations": 2286,
+        "python_preadv_invocations": 2286,
+        "preadv_bytes_returned": 13483376640,
+        "native_positional_calls": 0,
+        "native_bytes_returned": 0,
+        "requested_bytes": 13483376640,
+        "read_bytes": 13483376640,
+        "read_ns": 11349478548,
+        "decoded_records": 0,
+        "decoded_raw_bytes": 0,
+        "bytes_read_saved": 0,
+        "decode_ns": 0,
+        "open_files_peak": 1,
+        "short_reads": 0,
+        "integrity_errors": 0,
+        "cancellations": 0,
+        "deadline_errors": 0,
+        "io_errors": 0,
+        "records_hashed": 0,
+        "records_unhashed": 762,
+        "hash_thread_ns_total": 0,
+        "read_inflight_max": 39,
+        "read_inflight_depth_sum": 23560,
+        "read_inflight_samples": 2286,
+        "read_wall_ns": 1071444533,
+        "records_read": 762,
+        "read_mib_per_second": 1132.9815678858622,
+        "read_inflight_depth_mean": 10.306211723534558,
+        "read_realized_gb_per_s": 12.58429738984911,
+        "read_realized_qd": 10.592688840571087
+      },
+      "slot_metrics": {
+        "ensure_calls": 350,
+        "load_requests": 652,
+        "owned_loads": 762,
+        "deduplicated_loads": 0,
+        "ready_hits": 0,
+        "load_failures": 0,
+        "generation_replacements": 536,
+        "pin_waits": 0,
+        "load_waits": 0,
+        "active_routes": 0,
+        "active_routes_peak": 9,
+        "completion_fences": 0,
+        "completion_fence_slots": 0,
+        "completion_fence_fallbacks": 0,
+        "completion_fence_failures": 0,
+        "synchronous_fences": 0,
+        "synchronous_fence_slots": 0,
+        "batched_miss_parts": 214,
+        "batched_miss_records": 506,
+        "overlap_split_routes": 0,
+        "overlap_gpu_dispatch_ns": 0,
+        "overlap_exposed_wait_ns": 0
+      },
+      "runtime_counters": {
+        "route_calls": 128,
+        "expert_requests": 4608,
+        "unique_expert_requests": 3290,
+        "shared_expert_assignments": 1318,
+        "expert_hits": 4050,
+        "expert_misses": 558,
+        "hit_rate": 0.87890625,
+        "persistent_loads": 506,
+        "transient_loads": 0,
+        "evictions": 442,
+        "bytes_read": 8953528320,
+        "prefetch_issued": 110,
+        "prefetch_committed": 41,
+        "prefetch_issued_verify": 110,
+        "prefetch_committed_verify": 41,
+        "pool_loads": 506,
+        "scan_inserts": 0,
+        "promotions": 259,
+        "prefetch_predicted": 0,
+        "prefetch_hit_on_true_route": 210,
+        "prefetch_wasted": 8,
+        "prefetch_awaited_inflight": 69,
+        "prefetch_bytes": 1946419200,
+        "prefetch_first_consumption_hits": 101
+      },
+      "mlx_peak_bytes": 5304624137,
+      "heldout_total_ns": 395447872,
+      "heldout_read_records": 231,
+      "all_outputs_exact": true,
+      "active_after_close_bytes": 153199624
+    },
+    {
+      "mode": "native",
+      "sequence": 2,
+      "cases": [
+        {
+          "call": 0,
+          "elapsed_ns": 38502584,
+          "output_sha256": "5c5d7792076d90596c6fc2141d1e6202be2cb74997ee25bec53b7fd3eed033a1",
+          "records_read": 27,
+          "read_bytes": 477757440
+        },
+        {
+          "call": 1,
+          "elapsed_ns": 26708500,
+          "output_sha256": "4c6e8fcf167dd31901c80380f933f4f683c3c3409fcca3c5343e64c2c983a7b9",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 2,
+          "elapsed_ns": 21081500,
+          "output_sha256": "77e1d45d2029f0c35aca3dc7b28a09322e460fc8c939ba3c9d82e7a53982ad5a",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 3,
+          "elapsed_ns": 15160167,
+          "output_sha256": "4864b962908724ab3ed7b8d407307ac951a7de6fddd1a9212741b3f7b64a98ae",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 4,
+          "elapsed_ns": 17424250,
+          "output_sha256": "87b857b0c3004e3eba90e3f1acf00fb8271c959f2f1f6284be968bd27b4c229d",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 5,
+          "elapsed_ns": 25628333,
+          "output_sha256": "c545c876d570eee8aac2b111d0eaaf6de2343a1ef706e6f2c1045c984b58da18",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 6,
+          "elapsed_ns": 8176750,
+          "output_sha256": "6e24b8d4c112946da6f7ffa18268fd90658656b0bf31b2a2247c6e59a3a7a4ce",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 7,
+          "elapsed_ns": 15324250,
+          "output_sha256": "7b1208a4d0c21c4d91940bd958be80f6b31c4d640ddee1a58ea779ea8dc46613",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 8,
+          "elapsed_ns": 21669791,
+          "output_sha256": "96c68428a00c4153906df49d3669f566be811aca9483495f8a2d6369a3ddcad3",
+          "records_read": 15,
+          "read_bytes": 265420800
+        },
+        {
+          "call": 9,
+          "elapsed_ns": 28171125,
+          "output_sha256": "e91222ee5d3cc1dfa36b29eebbf103282a7104e935ebdf66c837c9401f4cf94e",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 10,
+          "elapsed_ns": 19368125,
+          "output_sha256": "015872fa86fb78c898460057f12d7967aebfb99e8a12a03309fa00ec6e638fc0",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 11,
+          "elapsed_ns": 16029958,
+          "output_sha256": "0615999ed19e918aa7e447183cd463abc41521a6b621874aab680e685bef1e29",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 12,
+          "elapsed_ns": 12345709,
+          "output_sha256": "e0156457b562626235dd35a8e098a08678401fd72cb0c4fdc2a74d71bc80a0d1",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 13,
+          "elapsed_ns": 13861875,
+          "output_sha256": "fbca28c4e2cd6b5c56f88396c6c4494747196e436628d9cace7785e1d2241a99",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 14,
+          "elapsed_ns": 24917750,
+          "output_sha256": "cb3a6b48dd1e0036b8c3c16a098b4b29cf6513115f1f58c9cf7ebbf22cbc81ca",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 15,
+          "elapsed_ns": 17742875,
+          "output_sha256": "babbf0eccd44c3862f840c0c66319adc7848d22e04da0c60977c4b6f080663ac",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 16,
+          "elapsed_ns": 15190458,
+          "output_sha256": "5a53b32fb2e6c5aad08775f0c31ad698968bad8d2527ddf576cf156cb0ee63ce",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 17,
+          "elapsed_ns": 27138875,
+          "output_sha256": "1035a6264dbdd8d37d77e9f0cd14074eb5291c3762da5c931823bed80fb5751a",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 18,
+          "elapsed_ns": 19340500,
+          "output_sha256": "2115e49f682e74c8f36b3c6189047c5b53f983217381529a2b2bcd7e953e7f57",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 19,
+          "elapsed_ns": 25983208,
+          "output_sha256": "f5a5658cc59f1ca5d2fd36a1eb700faa3bf0090b9ca369b127523ae9b1f4e0b8",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 20,
+          "elapsed_ns": 20912084,
+          "output_sha256": "5de97a4543cb82667d96d01067b8da1ec1a41909fda605da218e1c4f8bac9259",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 21,
+          "elapsed_ns": 17979458,
+          "output_sha256": "5e1481ea0d7b74e2d3c85beb5870867e4ed5e72c0b6d1a8d460cbe079e25134f",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 22,
+          "elapsed_ns": 23188208,
+          "output_sha256": "5f50895a5bd6c79da8a2410752666067df295de8886b86c8de250694c7a303b0",
+          "records_read": 16,
+          "read_bytes": 283115520
+        },
+        {
+          "call": 23,
+          "elapsed_ns": 12956000,
+          "output_sha256": "37cdc49a665b99ccbbe761dc866f80e82a2f8c5acd3170aacc403a8f8c890b92",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 24,
+          "elapsed_ns": 15918875,
+          "output_sha256": "32c39f406c2ed7438e91d36f44d1dcc8334c746301deaa1ed9eead62be78c64a",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 25,
+          "elapsed_ns": 14427583,
+          "output_sha256": "b7742d6b4d7fe27e2b082db7a4686f0284188e936036e7c3c6864e3c03d21620",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 26,
+          "elapsed_ns": 17864792,
+          "output_sha256": "789556d42f703376608350ca407084f3764876502b254e029565d22ff47813c3",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 27,
+          "elapsed_ns": 14312667,
+          "output_sha256": "6bf575dd84383af689ca99520082454657360403c0782f359a289f816c1870f9",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 28,
+          "elapsed_ns": 13626417,
+          "output_sha256": "dc0aa6700e8aa89961b1276fd147b048e8f64d20ea243960e791904f0d4f1f92",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 29,
+          "elapsed_ns": 20071667,
+          "output_sha256": "3c9313b7586b80f97a074ac95d26d08a50de71121d6e39d0e9e7a0854538c60e",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 30,
+          "elapsed_ns": 10941167,
+          "output_sha256": "682a0bf1b956d2cde279b582ef947891d63189d7f821eff852eb60b119887eac",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 31,
+          "elapsed_ns": 25572583,
+          "output_sha256": "23af1595610ac3eb28b29583f5f229f5f8ca79b7ee99cb63e993bd1735f4236b",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 32,
+          "elapsed_ns": 14976875,
+          "output_sha256": "0252b69af8db1ef1e4a8eff92fb14115fc612b09a65ada3ceae04807baba806f",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 33,
+          "elapsed_ns": 12237959,
+          "output_sha256": "0784f1be7825694c364e2a97f8991b135bfba8d7cda4134a3e58df5dd2e04903",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 34,
+          "elapsed_ns": 11860250,
+          "output_sha256": "cc1bc55bfd1cae343d9b15dffd9a3354f00a520748c86a5ba8156639f4f73ccd",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 35,
+          "elapsed_ns": 11944125,
+          "output_sha256": "38d01374e5e75a1d1c8ed64f1846f030aca742d7c31a7060db5271afce7bee7c",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 36,
+          "elapsed_ns": 8045208,
+          "output_sha256": "2abdda628741ec7f798ba614c87cb67af69ab03f3cf2bc09b52456f7b89efcbd",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 37,
+          "elapsed_ns": 15361875,
+          "output_sha256": "60331addb7ed907ad515578f5260426bad721d2ce0b4c5a4fd44945d83b9f0db",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 38,
+          "elapsed_ns": 14032875,
+          "output_sha256": "efcf36f16f2cd26c82f9c5078b34a44e6a4c97e1bebe8ffb1b6b6e38cc637f69",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 39,
+          "elapsed_ns": 12585083,
+          "output_sha256": "159fd23e2291a1f69c1621aefa2d0b2ac2c1ee7ce9bfce8828609833e37c1bc7",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 40,
+          "elapsed_ns": 12153125,
+          "output_sha256": "225cfab62800b6cbadd2601b3c37f1f8ae91d79eb5498f95a315971a3abe0973",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 41,
+          "elapsed_ns": 18479917,
+          "output_sha256": "1398a6bc3ba6862f1d991f083443cb298f1b2a005cb2150e23f6b76f2b9325c5",
+          "records_read": 12,
+          "read_bytes": 212336640
+        },
+        {
+          "call": 42,
+          "elapsed_ns": 20885166,
+          "output_sha256": "3b9699cb763e8ff4165c4a392cc1acac5495bf67c79041ced862b3cf39d5ce03",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 43,
+          "elapsed_ns": 9151000,
+          "output_sha256": "f66f79dd5a84379747351f91a342fe901b36644baca1a83ccf21e90e7fafd8f6",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 44,
+          "elapsed_ns": 12535250,
+          "output_sha256": "e2f2c484428ddaf278ccccf7134fb81406d4a695bcbcb74a102d216082ffdaaa",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 45,
+          "elapsed_ns": 10921584,
+          "output_sha256": "bc554c9210f1e5426747da413003e2fd29a6d6075719ad4f64f31667cc348694",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 46,
+          "elapsed_ns": 13911583,
+          "output_sha256": "4401e6f555c1df199874bedb8d9fb778640c7f09017bc4ebf00f36dd299916a3",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 47,
+          "elapsed_ns": 7683708,
+          "output_sha256": "78df8ad781dfa0ea594072c13d06ee8bdbc6d506d7683d4f1f973d0568d17ebe",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 48,
+          "elapsed_ns": 9392792,
+          "output_sha256": "242611a4e2dca058e7b142c9ffc7f686f63cfad0ebacba3539910d1a9f4bad8b",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 49,
+          "elapsed_ns": 7565833,
+          "output_sha256": "f85c146672039905acf0a14a5b1d21739eec2d1b993f53709c86304d6a1c09e4",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 50,
+          "elapsed_ns": 13965208,
+          "output_sha256": "85621bcb2c5d22df0444074d4d94a2083191453389d5c5722de1de20b44233ee",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 51,
+          "elapsed_ns": 10406125,
+          "output_sha256": "b26710bb8d4a607100f51e9a54039079dcc4439a541a590ec1ecbd735079400f",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 52,
+          "elapsed_ns": 16107541,
+          "output_sha256": "d0d6ba2c668e3be1b1c2217a4c0170b9ee4fe13e66db097a66e93b1412b7b9c5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 53,
+          "elapsed_ns": 15764500,
+          "output_sha256": "438de33f769a50fcc5f418075cbfa014fc269259751d6751e9e481b604e6d2c7",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 54,
+          "elapsed_ns": 11833875,
+          "output_sha256": "6baca496a487e4072b3876fd0b7f382b28b453997cd3b007c0aab30858c68da2",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 55,
+          "elapsed_ns": 7991458,
+          "output_sha256": "3711ccf1f0e02faf524ff145b94dcf4b825132c9834e3fb802bed4d6e6d1f580",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 56,
+          "elapsed_ns": 15791375,
+          "output_sha256": "ba1f94266fba11b29d1378dcc9fa3ef5331df042d90179425ef4c5dfd2ce9db5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 57,
+          "elapsed_ns": 13194875,
+          "output_sha256": "9395aec9639c6c4b54c932fc432471658f7e3731be20dfbefb59fb0c487cec93",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 58,
+          "elapsed_ns": 10005000,
+          "output_sha256": "94303948946363c28a960754721d80c7de5935f20f85803a65588e0ccb306a6d",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 59,
+          "elapsed_ns": 11332958,
+          "output_sha256": "586daef037349925484a4842050ef35047602032a65a4e8427bd0ab0fda8990c",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 60,
+          "elapsed_ns": 25355250,
+          "output_sha256": "3650c61c38239d383c023e94dfae1369769386173797bb2d1b65fc4e55316afc",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 61,
+          "elapsed_ns": 13200542,
+          "output_sha256": "a6799a4d5c59c3424db5febeffdf2bc9c44f56d8f973ae5f2b87964b404c1322",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 62,
+          "elapsed_ns": 14110792,
+          "output_sha256": "b2c758c11d9127ca3f98088bbd022a137f0617b85e913fff2d593c080bf38de7",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 63,
+          "elapsed_ns": 12021459,
+          "output_sha256": "6fb39386c70fe4dee95f94730adfea0428aba24e717395c54167a26d192eca65",
+          "records_read": 7,
+          "read_bytes": 123863040
+        }
+      ],
+      "reader_metrics": {
+        "record_requests": 793,
+        "source_record_requests": 0,
+        "sidecar_record_requests": 793,
+        "read_operations": 2379,
+        "python_preadv_invocations": 2379,
+        "preadv_bytes_returned": 14031912960,
+        "native_positional_calls": 0,
+        "native_bytes_returned": 0,
+        "requested_bytes": 14031912960,
+        "read_bytes": 14031912960,
+        "read_ns": 13175068347,
+        "decoded_records": 0,
+        "decoded_raw_bytes": 0,
+        "bytes_read_saved": 0,
+        "decode_ns": 0,
+        "open_files_peak": 1,
+        "short_reads": 0,
+        "integrity_errors": 0,
+        "cancellations": 0,
+        "deadline_errors": 0,
+        "io_errors": 0,
+        "records_hashed": 0,
+        "records_unhashed": 793,
+        "hash_thread_ns_total": 0,
+        "read_inflight_max": 39,
+        "read_inflight_depth_sum": 27670,
+        "read_inflight_samples": 2379,
+        "read_wall_ns": 1096661463,
+        "records_read": 793,
+        "read_mib_per_second": 1015.6968182291889,
+        "read_inflight_depth_mean": 11.630937368642286,
+        "read_realized_gb_per_s": 12.795118122975385,
+        "read_realized_qd": 12.0137971393274
+      },
+      "slot_metrics": {
+        "ensure_calls": 394,
+        "load_requests": 793,
+        "owned_loads": 793,
+        "deduplicated_loads": 0,
+        "ready_hits": 0,
+        "load_failures": 0,
+        "generation_replacements": 583,
+        "pin_waits": 0,
+        "load_waits": 0,
+        "active_routes": 0,
+        "active_routes_peak": 7,
+        "completion_fences": 0,
+        "completion_fence_slots": 0,
+        "completion_fence_fallbacks": 0,
+        "completion_fence_failures": 0,
+        "synchronous_fences": 0,
+        "synchronous_fence_slots": 0,
+        "batched_miss_parts": 258,
+        "batched_miss_records": 647,
+        "overlap_split_routes": 0,
+        "overlap_gpu_dispatch_ns": 0,
+        "overlap_exposed_wait_ns": 0
+      },
+      "runtime_counters": {
+        "route_calls": 128,
+        "expert_requests": 4608,
+        "unique_expert_requests": 3290,
+        "shared_expert_assignments": 1318,
+        "expert_hits": 3876,
+        "expert_misses": 732,
+        "hit_rate": 0.8411458333333334,
+        "persistent_loads": 647,
+        "transient_loads": 0,
+        "evictions": 583,
+        "bytes_read": 11448483840,
+        "prefetch_issued": 0,
+        "prefetch_committed": 0,
+        "prefetch_issued_verify": 0,
+        "prefetch_committed_verify": 0,
+        "pool_loads": 647,
+        "scan_inserts": 0,
+        "promotions": 309,
+        "prefetch_predicted": 0,
+        "prefetch_hit_on_true_route": 0,
+        "prefetch_wasted": 0,
+        "prefetch_awaited_inflight": 0,
+        "prefetch_bytes": 0,
+        "prefetch_first_consumption_hits": 0
+      },
+      "mlx_peak_bytes": 5304624137,
+      "heldout_total_ns": 414805166,
+      "heldout_read_records": 247,
+      "all_outputs_exact": true,
+      "active_after_close_bytes": 153199624
+    },
+    {
+      "mode": "prefetch",
+      "sequence": 3,
+      "cases": [
+        {
+          "call": 0,
+          "elapsed_ns": 38769917,
+          "output_sha256": "5c5d7792076d90596c6fc2141d1e6202be2cb74997ee25bec53b7fd3eed033a1",
+          "records_read": 28,
+          "read_bytes": 495452160
+        },
+        {
+          "call": 1,
+          "elapsed_ns": 27880917,
+          "output_sha256": "4c6e8fcf167dd31901c80380f933f4f683c3c3409fcca3c5343e64c2c983a7b9",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 2,
+          "elapsed_ns": 22479541,
+          "output_sha256": "77e1d45d2029f0c35aca3dc7b28a09322e460fc8c939ba3c9d82e7a53982ad5a",
+          "records_read": 15,
+          "read_bytes": 265420800
+        },
+        {
+          "call": 3,
+          "elapsed_ns": 15205875,
+          "output_sha256": "4864b962908724ab3ed7b8d407307ac951a7de6fddd1a9212741b3f7b64a98ae",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 4,
+          "elapsed_ns": 17732417,
+          "output_sha256": "87b857b0c3004e3eba90e3f1acf00fb8271c959f2f1f6284be968bd27b4c229d",
+          "records_read": 12,
+          "read_bytes": 212336640
+        },
+        {
+          "call": 5,
+          "elapsed_ns": 27610000,
+          "output_sha256": "c545c876d570eee8aac2b111d0eaaf6de2343a1ef706e6f2c1045c984b58da18",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 6,
+          "elapsed_ns": 6177625,
+          "output_sha256": "6e24b8d4c112946da6f7ffa18268fd90658656b0bf31b2a2247c6e59a3a7a4ce",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 7,
+          "elapsed_ns": 14599708,
+          "output_sha256": "7b1208a4d0c21c4d91940bd958be80f6b31c4d640ddee1a58ea779ea8dc46613",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 8,
+          "elapsed_ns": 20766375,
+          "output_sha256": "96c68428a00c4153906df49d3669f566be811aca9483495f8a2d6369a3ddcad3",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 9,
+          "elapsed_ns": 24116958,
+          "output_sha256": "e91222ee5d3cc1dfa36b29eebbf103282a7104e935ebdf66c837c9401f4cf94e",
+          "records_read": 16,
+          "read_bytes": 283115520
+        },
+        {
+          "call": 10,
+          "elapsed_ns": 17602084,
+          "output_sha256": "015872fa86fb78c898460057f12d7967aebfb99e8a12a03309fa00ec6e638fc0",
+          "records_read": 12,
+          "read_bytes": 212336640
+        },
+        {
+          "call": 11,
+          "elapsed_ns": 12960667,
+          "output_sha256": "0615999ed19e918aa7e447183cd463abc41521a6b621874aab680e685bef1e29",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 12,
+          "elapsed_ns": 11210667,
+          "output_sha256": "e0156457b562626235dd35a8e098a08678401fd72cb0c4fdc2a74d71bc80a0d1",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 13,
+          "elapsed_ns": 13358875,
+          "output_sha256": "fbca28c4e2cd6b5c56f88396c6c4494747196e436628d9cace7785e1d2241a99",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 14,
+          "elapsed_ns": 24630125,
+          "output_sha256": "cb3a6b48dd1e0036b8c3c16a098b4b29cf6513115f1f58c9cf7ebbf22cbc81ca",
+          "records_read": 16,
+          "read_bytes": 283115520
+        },
+        {
+          "call": 15,
+          "elapsed_ns": 16402209,
+          "output_sha256": "babbf0eccd44c3862f840c0c66319adc7848d22e04da0c60977c4b6f080663ac",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 16,
+          "elapsed_ns": 14084625,
+          "output_sha256": "5a53b32fb2e6c5aad08775f0c31ad698968bad8d2527ddf576cf156cb0ee63ce",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 17,
+          "elapsed_ns": 27975334,
+          "output_sha256": "1035a6264dbdd8d37d77e9f0cd14074eb5291c3762da5c931823bed80fb5751a",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 18,
+          "elapsed_ns": 19261917,
+          "output_sha256": "2115e49f682e74c8f36b3c6189047c5b53f983217381529a2b2bcd7e953e7f57",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 19,
+          "elapsed_ns": 24590708,
+          "output_sha256": "f5a5658cc59f1ca5d2fd36a1eb700faa3bf0090b9ca369b127523ae9b1f4e0b8",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 20,
+          "elapsed_ns": 20714459,
+          "output_sha256": "5de97a4543cb82667d96d01067b8da1ec1a41909fda605da218e1c4f8bac9259",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 21,
+          "elapsed_ns": 17776333,
+          "output_sha256": "5e1481ea0d7b74e2d3c85beb5870867e4ed5e72c0b6d1a8d460cbe079e25134f",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 22,
+          "elapsed_ns": 21539500,
+          "output_sha256": "5f50895a5bd6c79da8a2410752666067df295de8886b86c8de250694c7a303b0",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 23,
+          "elapsed_ns": 11792542,
+          "output_sha256": "37cdc49a665b99ccbbe761dc866f80e82a2f8c5acd3170aacc403a8f8c890b92",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 24,
+          "elapsed_ns": 16435000,
+          "output_sha256": "32c39f406c2ed7438e91d36f44d1dcc8334c746301deaa1ed9eead62be78c64a",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 25,
+          "elapsed_ns": 15356000,
+          "output_sha256": "b7742d6b4d7fe27e2b082db7a4686f0284188e936036e7c3c6864e3c03d21620",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 26,
+          "elapsed_ns": 16392333,
+          "output_sha256": "789556d42f703376608350ca407084f3764876502b254e029565d22ff47813c3",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 27,
+          "elapsed_ns": 11873750,
+          "output_sha256": "6bf575dd84383af689ca99520082454657360403c0782f359a289f816c1870f9",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 28,
+          "elapsed_ns": 14522542,
+          "output_sha256": "dc0aa6700e8aa89961b1276fd147b048e8f64d20ea243960e791904f0d4f1f92",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 29,
+          "elapsed_ns": 16918916,
+          "output_sha256": "3c9313b7586b80f97a074ac95d26d08a50de71121d6e39d0e9e7a0854538c60e",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 30,
+          "elapsed_ns": 5938084,
+          "output_sha256": "682a0bf1b956d2cde279b582ef947891d63189d7f821eff852eb60b119887eac",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 31,
+          "elapsed_ns": 24651625,
+          "output_sha256": "23af1595610ac3eb28b29583f5f229f5f8ca79b7ee99cb63e993bd1735f4236b",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 32,
+          "elapsed_ns": 12789000,
+          "output_sha256": "0252b69af8db1ef1e4a8eff92fb14115fc612b09a65ada3ceae04807baba806f",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 33,
+          "elapsed_ns": 11187250,
+          "output_sha256": "0784f1be7825694c364e2a97f8991b135bfba8d7cda4134a3e58df5dd2e04903",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 34,
+          "elapsed_ns": 11843958,
+          "output_sha256": "cc1bc55bfd1cae343d9b15dffd9a3354f00a520748c86a5ba8156639f4f73ccd",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 35,
+          "elapsed_ns": 10634083,
+          "output_sha256": "38d01374e5e75a1d1c8ed64f1846f030aca742d7c31a7060db5271afce7bee7c",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 36,
+          "elapsed_ns": 7457875,
+          "output_sha256": "2abdda628741ec7f798ba614c87cb67af69ab03f3cf2bc09b52456f7b89efcbd",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 37,
+          "elapsed_ns": 15422250,
+          "output_sha256": "60331addb7ed907ad515578f5260426bad721d2ce0b4c5a4fd44945d83b9f0db",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 38,
+          "elapsed_ns": 14493084,
+          "output_sha256": "efcf36f16f2cd26c82f9c5078b34a44e6a4c97e1bebe8ffb1b6b6e38cc637f69",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 39,
+          "elapsed_ns": 10175958,
+          "output_sha256": "159fd23e2291a1f69c1621aefa2d0b2ac2c1ee7ce9bfce8828609833e37c1bc7",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 40,
+          "elapsed_ns": 12115000,
+          "output_sha256": "225cfab62800b6cbadd2601b3c37f1f8ae91d79eb5498f95a315971a3abe0973",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 41,
+          "elapsed_ns": 16620041,
+          "output_sha256": "1398a6bc3ba6862f1d991f083443cb298f1b2a005cb2150e23f6b76f2b9325c5",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 42,
+          "elapsed_ns": 19758833,
+          "output_sha256": "3b9699cb763e8ff4165c4a392cc1acac5495bf67c79041ced862b3cf39d5ce03",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 43,
+          "elapsed_ns": 7742500,
+          "output_sha256": "f66f79dd5a84379747351f91a342fe901b36644baca1a83ccf21e90e7fafd8f6",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 44,
+          "elapsed_ns": 10754542,
+          "output_sha256": "e2f2c484428ddaf278ccccf7134fb81406d4a695bcbcb74a102d216082ffdaaa",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 45,
+          "elapsed_ns": 13115750,
+          "output_sha256": "bc554c9210f1e5426747da413003e2fd29a6d6075719ad4f64f31667cc348694",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 46,
+          "elapsed_ns": 10643083,
+          "output_sha256": "4401e6f555c1df199874bedb8d9fb778640c7f09017bc4ebf00f36dd299916a3",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 47,
+          "elapsed_ns": 9337250,
+          "output_sha256": "78df8ad781dfa0ea594072c13d06ee8bdbc6d506d7683d4f1f973d0568d17ebe",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 48,
+          "elapsed_ns": 8364416,
+          "output_sha256": "242611a4e2dca058e7b142c9ffc7f686f63cfad0ebacba3539910d1a9f4bad8b",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 49,
+          "elapsed_ns": 7248916,
+          "output_sha256": "f85c146672039905acf0a14a5b1d21739eec2d1b993f53709c86304d6a1c09e4",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 50,
+          "elapsed_ns": 12869083,
+          "output_sha256": "85621bcb2c5d22df0444074d4d94a2083191453389d5c5722de1de20b44233ee",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 51,
+          "elapsed_ns": 9946250,
+          "output_sha256": "b26710bb8d4a607100f51e9a54039079dcc4439a541a590ec1ecbd735079400f",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 52,
+          "elapsed_ns": 13790500,
+          "output_sha256": "d0d6ba2c668e3be1b1c2217a4c0170b9ee4fe13e66db097a66e93b1412b7b9c5",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 53,
+          "elapsed_ns": 15683459,
+          "output_sha256": "438de33f769a50fcc5f418075cbfa014fc269259751d6751e9e481b604e6d2c7",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 54,
+          "elapsed_ns": 11449125,
+          "output_sha256": "6baca496a487e4072b3876fd0b7f382b28b453997cd3b007c0aab30858c68da2",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 55,
+          "elapsed_ns": 7659333,
+          "output_sha256": "3711ccf1f0e02faf524ff145b94dcf4b825132c9834e3fb802bed4d6e6d1f580",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 56,
+          "elapsed_ns": 15422084,
+          "output_sha256": "ba1f94266fba11b29d1378dcc9fa3ef5331df042d90179425ef4c5dfd2ce9db5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 57,
+          "elapsed_ns": 11173292,
+          "output_sha256": "9395aec9639c6c4b54c932fc432471658f7e3731be20dfbefb59fb0c487cec93",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 58,
+          "elapsed_ns": 10273125,
+          "output_sha256": "94303948946363c28a960754721d80c7de5935f20f85803a65588e0ccb306a6d",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 59,
+          "elapsed_ns": 10146792,
+          "output_sha256": "586daef037349925484a4842050ef35047602032a65a4e8427bd0ab0fda8990c",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 60,
+          "elapsed_ns": 24994125,
+          "output_sha256": "3650c61c38239d383c023e94dfae1369769386173797bb2d1b65fc4e55316afc",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 61,
+          "elapsed_ns": 11727541,
+          "output_sha256": "a6799a4d5c59c3424db5febeffdf2bc9c44f56d8f973ae5f2b87964b404c1322",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 62,
+          "elapsed_ns": 12266500,
+          "output_sha256": "b2c758c11d9127ca3f98088bbd022a137f0617b85e913fff2d593c080bf38de7",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 63,
+          "elapsed_ns": 9817667,
+          "output_sha256": "6fb39386c70fe4dee95f94730adfea0428aba24e717395c54167a26d192eca65",
+          "records_read": 6,
+          "read_bytes": 106168320
+        }
+      ],
+      "reader_metrics": {
+        "record_requests": 762,
+        "source_record_requests": 0,
+        "sidecar_record_requests": 762,
+        "read_operations": 2286,
+        "python_preadv_invocations": 2286,
+        "preadv_bytes_returned": 13483376640,
+        "native_positional_calls": 0,
+        "native_bytes_returned": 0,
+        "requested_bytes": 13483376640,
+        "read_bytes": 13483376640,
+        "read_ns": 11256919033,
+        "decoded_records": 0,
+        "decoded_raw_bytes": 0,
+        "bytes_read_saved": 0,
+        "decode_ns": 0,
+        "open_files_peak": 1,
+        "short_reads": 0,
+        "integrity_errors": 0,
+        "cancellations": 0,
+        "deadline_errors": 0,
+        "io_errors": 0,
+        "records_hashed": 0,
+        "records_unhashed": 762,
+        "hash_thread_ns_total": 0,
+        "read_inflight_max": 39,
+        "read_inflight_depth_sum": 23586,
+        "read_inflight_samples": 2286,
+        "read_wall_ns": 1066873487,
+        "records_read": 762,
+        "read_mib_per_second": 1142.297458328001,
+        "read_inflight_depth_mean": 10.317585301837271,
+        "read_realized_gb_per_s": 12.63821512512664,
+        "read_realized_qd": 10.551315755960857
+      },
+      "slot_metrics": {
+        "ensure_calls": 350,
+        "load_requests": 652,
+        "owned_loads": 762,
+        "deduplicated_loads": 0,
+        "ready_hits": 0,
+        "load_failures": 0,
+        "generation_replacements": 536,
+        "pin_waits": 0,
+        "load_waits": 0,
+        "active_routes": 0,
+        "active_routes_peak": 9,
+        "completion_fences": 0,
+        "completion_fence_slots": 0,
+        "completion_fence_fallbacks": 0,
+        "completion_fence_failures": 0,
+        "synchronous_fences": 0,
+        "synchronous_fence_slots": 0,
+        "batched_miss_parts": 214,
+        "batched_miss_records": 506,
+        "overlap_split_routes": 0,
+        "overlap_gpu_dispatch_ns": 0,
+        "overlap_exposed_wait_ns": 0
+      },
+      "runtime_counters": {
+        "route_calls": 128,
+        "expert_requests": 4608,
+        "unique_expert_requests": 3290,
+        "shared_expert_assignments": 1318,
+        "expert_hits": 4050,
+        "expert_misses": 558,
+        "hit_rate": 0.87890625,
+        "persistent_loads": 506,
+        "transient_loads": 0,
+        "evictions": 442,
+        "bytes_read": 8953528320,
+        "prefetch_issued": 110,
+        "prefetch_committed": 44,
+        "prefetch_issued_verify": 110,
+        "prefetch_committed_verify": 44,
+        "pool_loads": 506,
+        "scan_inserts": 0,
+        "promotions": 259,
+        "prefetch_predicted": 0,
+        "prefetch_hit_on_true_route": 210,
+        "prefetch_wasted": 8,
+        "prefetch_awaited_inflight": 66,
+        "prefetch_bytes": 1946419200,
+        "prefetch_first_consumption_hits": 101
+      },
+      "mlx_peak_bytes": 5304624137,
+      "heldout_total_ns": 386922665,
+      "heldout_read_records": 231,
+      "all_outputs_exact": true,
+      "active_after_close_bytes": 153199624
+    },
+    {
+      "mode": "native",
+      "sequence": 4,
+      "cases": [
+        {
+          "call": 0,
+          "elapsed_ns": 39150333,
+          "output_sha256": "5c5d7792076d90596c6fc2141d1e6202be2cb74997ee25bec53b7fd3eed033a1",
+          "records_read": 27,
+          "read_bytes": 477757440
+        },
+        {
+          "call": 1,
+          "elapsed_ns": 26601000,
+          "output_sha256": "4c6e8fcf167dd31901c80380f933f4f683c3c3409fcca3c5343e64c2c983a7b9",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 2,
+          "elapsed_ns": 21896375,
+          "output_sha256": "77e1d45d2029f0c35aca3dc7b28a09322e460fc8c939ba3c9d82e7a53982ad5a",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 3,
+          "elapsed_ns": 14835917,
+          "output_sha256": "4864b962908724ab3ed7b8d407307ac951a7de6fddd1a9212741b3f7b64a98ae",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 4,
+          "elapsed_ns": 16881792,
+          "output_sha256": "87b857b0c3004e3eba90e3f1acf00fb8271c959f2f1f6284be968bd27b4c229d",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 5,
+          "elapsed_ns": 27041208,
+          "output_sha256": "c545c876d570eee8aac2b111d0eaaf6de2343a1ef706e6f2c1045c984b58da18",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 6,
+          "elapsed_ns": 8128375,
+          "output_sha256": "6e24b8d4c112946da6f7ffa18268fd90658656b0bf31b2a2247c6e59a3a7a4ce",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 7,
+          "elapsed_ns": 15467625,
+          "output_sha256": "7b1208a4d0c21c4d91940bd958be80f6b31c4d640ddee1a58ea779ea8dc46613",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 8,
+          "elapsed_ns": 21863666,
+          "output_sha256": "96c68428a00c4153906df49d3669f566be811aca9483495f8a2d6369a3ddcad3",
+          "records_read": 15,
+          "read_bytes": 265420800
+        },
+        {
+          "call": 9,
+          "elapsed_ns": 27258708,
+          "output_sha256": "e91222ee5d3cc1dfa36b29eebbf103282a7104e935ebdf66c837c9401f4cf94e",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 10,
+          "elapsed_ns": 19373917,
+          "output_sha256": "015872fa86fb78c898460057f12d7967aebfb99e8a12a03309fa00ec6e638fc0",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 11,
+          "elapsed_ns": 15877000,
+          "output_sha256": "0615999ed19e918aa7e447183cd463abc41521a6b621874aab680e685bef1e29",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 12,
+          "elapsed_ns": 11550750,
+          "output_sha256": "e0156457b562626235dd35a8e098a08678401fd72cb0c4fdc2a74d71bc80a0d1",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 13,
+          "elapsed_ns": 14016750,
+          "output_sha256": "fbca28c4e2cd6b5c56f88396c6c4494747196e436628d9cace7785e1d2241a99",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 14,
+          "elapsed_ns": 25001209,
+          "output_sha256": "cb3a6b48dd1e0036b8c3c16a098b4b29cf6513115f1f58c9cf7ebbf22cbc81ca",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 15,
+          "elapsed_ns": 18515125,
+          "output_sha256": "babbf0eccd44c3862f840c0c66319adc7848d22e04da0c60977c4b6f080663ac",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 16,
+          "elapsed_ns": 14905292,
+          "output_sha256": "5a53b32fb2e6c5aad08775f0c31ad698968bad8d2527ddf576cf156cb0ee63ce",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 17,
+          "elapsed_ns": 26740208,
+          "output_sha256": "1035a6264dbdd8d37d77e9f0cd14074eb5291c3762da5c931823bed80fb5751a",
+          "records_read": 19,
+          "read_bytes": 336199680
+        },
+        {
+          "call": 18,
+          "elapsed_ns": 19798875,
+          "output_sha256": "2115e49f682e74c8f36b3c6189047c5b53f983217381529a2b2bcd7e953e7f57",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 19,
+          "elapsed_ns": 25800250,
+          "output_sha256": "f5a5658cc59f1ca5d2fd36a1eb700faa3bf0090b9ca369b127523ae9b1f4e0b8",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 20,
+          "elapsed_ns": 21072000,
+          "output_sha256": "5de97a4543cb82667d96d01067b8da1ec1a41909fda605da218e1c4f8bac9259",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 21,
+          "elapsed_ns": 17210583,
+          "output_sha256": "5e1481ea0d7b74e2d3c85beb5870867e4ed5e72c0b6d1a8d460cbe079e25134f",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 22,
+          "elapsed_ns": 23561417,
+          "output_sha256": "5f50895a5bd6c79da8a2410752666067df295de8886b86c8de250694c7a303b0",
+          "records_read": 16,
+          "read_bytes": 283115520
+        },
+        {
+          "call": 23,
+          "elapsed_ns": 12940958,
+          "output_sha256": "37cdc49a665b99ccbbe761dc866f80e82a2f8c5acd3170aacc403a8f8c890b92",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 24,
+          "elapsed_ns": 16019541,
+          "output_sha256": "32c39f406c2ed7438e91d36f44d1dcc8334c746301deaa1ed9eead62be78c64a",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 25,
+          "elapsed_ns": 14560583,
+          "output_sha256": "b7742d6b4d7fe27e2b082db7a4686f0284188e936036e7c3c6864e3c03d21620",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 26,
+          "elapsed_ns": 17036542,
+          "output_sha256": "789556d42f703376608350ca407084f3764876502b254e029565d22ff47813c3",
+          "records_read": 11,
+          "read_bytes": 194641920
+        },
+        {
+          "call": 27,
+          "elapsed_ns": 14434250,
+          "output_sha256": "6bf575dd84383af689ca99520082454657360403c0782f359a289f816c1870f9",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 28,
+          "elapsed_ns": 13436541,
+          "output_sha256": "dc0aa6700e8aa89961b1276fd147b048e8f64d20ea243960e791904f0d4f1f92",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 29,
+          "elapsed_ns": 19183916,
+          "output_sha256": "3c9313b7586b80f97a074ac95d26d08a50de71121d6e39d0e9e7a0854538c60e",
+          "records_read": 13,
+          "read_bytes": 230031360
+        },
+        {
+          "call": 30,
+          "elapsed_ns": 9416625,
+          "output_sha256": "682a0bf1b956d2cde279b582ef947891d63189d7f821eff852eb60b119887eac",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 31,
+          "elapsed_ns": 24464834,
+          "output_sha256": "23af1595610ac3eb28b29583f5f229f5f8ca79b7ee99cb63e993bd1735f4236b",
+          "records_read": 17,
+          "read_bytes": 300810240
+        },
+        {
+          "call": 32,
+          "elapsed_ns": 13889500,
+          "output_sha256": "0252b69af8db1ef1e4a8eff92fb14115fc612b09a65ada3ceae04807baba806f",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 33,
+          "elapsed_ns": 11834417,
+          "output_sha256": "0784f1be7825694c364e2a97f8991b135bfba8d7cda4134a3e58df5dd2e04903",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 34,
+          "elapsed_ns": 12063750,
+          "output_sha256": "cc1bc55bfd1cae343d9b15dffd9a3354f00a520748c86a5ba8156639f4f73ccd",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 35,
+          "elapsed_ns": 12552834,
+          "output_sha256": "38d01374e5e75a1d1c8ed64f1846f030aca742d7c31a7060db5271afce7bee7c",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 36,
+          "elapsed_ns": 8018500,
+          "output_sha256": "2abdda628741ec7f798ba614c87cb67af69ab03f3cf2bc09b52456f7b89efcbd",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 37,
+          "elapsed_ns": 15193833,
+          "output_sha256": "60331addb7ed907ad515578f5260426bad721d2ce0b4c5a4fd44945d83b9f0db",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 38,
+          "elapsed_ns": 13829000,
+          "output_sha256": "efcf36f16f2cd26c82f9c5078b34a44e6a4c97e1bebe8ffb1b6b6e38cc637f69",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 39,
+          "elapsed_ns": 11622208,
+          "output_sha256": "159fd23e2291a1f69c1621aefa2d0b2ac2c1ee7ce9bfce8828609833e37c1bc7",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 40,
+          "elapsed_ns": 11665791,
+          "output_sha256": "225cfab62800b6cbadd2601b3c37f1f8ae91d79eb5498f95a315971a3abe0973",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 41,
+          "elapsed_ns": 18230500,
+          "output_sha256": "1398a6bc3ba6862f1d991f083443cb298f1b2a005cb2150e23f6b76f2b9325c5",
+          "records_read": 12,
+          "read_bytes": 212336640
+        },
+        {
+          "call": 42,
+          "elapsed_ns": 21399750,
+          "output_sha256": "3b9699cb763e8ff4165c4a392cc1acac5495bf67c79041ced862b3cf39d5ce03",
+          "records_read": 14,
+          "read_bytes": 247726080
+        },
+        {
+          "call": 43,
+          "elapsed_ns": 9476334,
+          "output_sha256": "f66f79dd5a84379747351f91a342fe901b36644baca1a83ccf21e90e7fafd8f6",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 44,
+          "elapsed_ns": 11709125,
+          "output_sha256": "e2f2c484428ddaf278ccccf7134fb81406d4a695bcbcb74a102d216082ffdaaa",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 45,
+          "elapsed_ns": 10044916,
+          "output_sha256": "bc554c9210f1e5426747da413003e2fd29a6d6075719ad4f64f31667cc348694",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 46,
+          "elapsed_ns": 12960375,
+          "output_sha256": "4401e6f555c1df199874bedb8d9fb778640c7f09017bc4ebf00f36dd299916a3",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 47,
+          "elapsed_ns": 8106709,
+          "output_sha256": "78df8ad781dfa0ea594072c13d06ee8bdbc6d506d7683d4f1f973d0568d17ebe",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 48,
+          "elapsed_ns": 9455583,
+          "output_sha256": "242611a4e2dca058e7b142c9ffc7f686f63cfad0ebacba3539910d1a9f4bad8b",
+          "records_read": 5,
+          "read_bytes": 88473600
+        },
+        {
+          "call": 49,
+          "elapsed_ns": 7356458,
+          "output_sha256": "f85c146672039905acf0a14a5b1d21739eec2d1b993f53709c86304d6a1c09e4",
+          "records_read": 3,
+          "read_bytes": 53084160
+        },
+        {
+          "call": 50,
+          "elapsed_ns": 14004875,
+          "output_sha256": "85621bcb2c5d22df0444074d4d94a2083191453389d5c5722de1de20b44233ee",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 51,
+          "elapsed_ns": 10846708,
+          "output_sha256": "b26710bb8d4a607100f51e9a54039079dcc4439a541a590ec1ecbd735079400f",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 52,
+          "elapsed_ns": 15952500,
+          "output_sha256": "d0d6ba2c668e3be1b1c2217a4c0170b9ee4fe13e66db097a66e93b1412b7b9c5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 53,
+          "elapsed_ns": 16215958,
+          "output_sha256": "438de33f769a50fcc5f418075cbfa014fc269259751d6751e9e481b604e6d2c7",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 54,
+          "elapsed_ns": 11799500,
+          "output_sha256": "6baca496a487e4072b3876fd0b7f382b28b453997cd3b007c0aab30858c68da2",
+          "records_read": 7,
+          "read_bytes": 123863040
+        },
+        {
+          "call": 55,
+          "elapsed_ns": 8116750,
+          "output_sha256": "3711ccf1f0e02faf524ff145b94dcf4b825132c9834e3fb802bed4d6e6d1f580",
+          "records_read": 4,
+          "read_bytes": 70778880
+        },
+        {
+          "call": 56,
+          "elapsed_ns": 15408458,
+          "output_sha256": "ba1f94266fba11b29d1378dcc9fa3ef5331df042d90179425ef4c5dfd2ce9db5",
+          "records_read": 10,
+          "read_bytes": 176947200
+        },
+        {
+          "call": 57,
+          "elapsed_ns": 12815417,
+          "output_sha256": "9395aec9639c6c4b54c932fc432471658f7e3731be20dfbefb59fb0c487cec93",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 58,
+          "elapsed_ns": 10402125,
+          "output_sha256": "94303948946363c28a960754721d80c7de5935f20f85803a65588e0ccb306a6d",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 59,
+          "elapsed_ns": 11688584,
+          "output_sha256": "586daef037349925484a4842050ef35047602032a65a4e8427bd0ab0fda8990c",
+          "records_read": 6,
+          "read_bytes": 106168320
+        },
+        {
+          "call": 60,
+          "elapsed_ns": 25606000,
+          "output_sha256": "3650c61c38239d383c023e94dfae1369769386173797bb2d1b65fc4e55316afc",
+          "records_read": 18,
+          "read_bytes": 318504960
+        },
+        {
+          "call": 61,
+          "elapsed_ns": 13716875,
+          "output_sha256": "a6799a4d5c59c3424db5febeffdf2bc9c44f56d8f973ae5f2b87964b404c1322",
+          "records_read": 8,
+          "read_bytes": 141557760
+        },
+        {
+          "call": 62,
+          "elapsed_ns": 14189292,
+          "output_sha256": "b2c758c11d9127ca3f98088bbd022a137f0617b85e913fff2d593c080bf38de7",
+          "records_read": 9,
+          "read_bytes": 159252480
+        },
+        {
+          "call": 63,
+          "elapsed_ns": 12085458,
+          "output_sha256": "6fb39386c70fe4dee95f94730adfea0428aba24e717395c54167a26d192eca65",
+          "records_read": 7,
+          "read_bytes": 123863040
+        }
+      ],
+      "reader_metrics": {
+        "record_requests": 793,
+        "source_record_requests": 0,
+        "sidecar_record_requests": 793,
+        "read_operations": 2379,
+        "python_preadv_invocations": 2379,
+        "preadv_bytes_returned": 14031912960,
+        "native_positional_calls": 0,
+        "native_bytes_returned": 0,
+        "requested_bytes": 14031912960,
+        "read_bytes": 14031912960,
+        "read_ns": 13203334217,
+        "decoded_records": 0,
+        "decoded_raw_bytes": 0,
+        "bytes_read_saved": 0,
+        "decode_ns": 0,
+        "open_files_peak": 1,
+        "short_reads": 0,
+        "integrity_errors": 0,
+        "cancellations": 0,
+        "deadline_errors": 0,
+        "io_errors": 0,
+        "records_hashed": 0,
+        "records_unhashed": 793,
+        "hash_thread_ns_total": 0,
+        "read_inflight_max": 39,
+        "read_inflight_depth_sum": 27797,
+        "read_inflight_samples": 2379,
+        "read_wall_ns": 1097250244,
+        "records_read": 793,
+        "read_mib_per_second": 1013.5224012409017,
+        "read_inflight_depth_mean": 11.684321143337536,
+        "read_realized_gb_per_s": 12.78825230318199,
+        "read_realized_qd": 12.033111215238883
+      },
+      "slot_metrics": {
+        "ensure_calls": 394,
+        "load_requests": 793,
+        "owned_loads": 793,
+        "deduplicated_loads": 0,
+        "ready_hits": 0,
+        "load_failures": 0,
+        "generation_replacements": 583,
+        "pin_waits": 0,
+        "load_waits": 0,
+        "active_routes": 0,
+        "active_routes_peak": 7,
+        "completion_fences": 0,
+        "completion_fence_slots": 0,
+        "completion_fence_fallbacks": 0,
+        "completion_fence_failures": 0,
+        "synchronous_fences": 0,
+        "synchronous_fence_slots": 0,
+        "batched_miss_parts": 258,
+        "batched_miss_records": 647,
+        "overlap_split_routes": 0,
+        "overlap_gpu_dispatch_ns": 0,
+        "overlap_exposed_wait_ns": 0
+      },
+      "runtime_counters": {
+        "route_calls": 128,
+        "expert_requests": 4608,
+        "unique_expert_requests": 3290,
+        "shared_expert_assignments": 1318,
+        "expert_hits": 3876,
+        "expert_misses": 732,
+        "hit_rate": 0.8411458333333334,
+        "persistent_loads": 647,
+        "transient_loads": 0,
+        "evictions": 583,
+        "bytes_read": 11448483840,
+        "prefetch_issued": 0,
+        "prefetch_committed": 0,
+        "prefetch_issued_verify": 0,
+        "prefetch_committed_verify": 0,
+        "pool_loads": 647,
+        "scan_inserts": 0,
+        "promotions": 309,
+        "prefetch_predicted": 0,
+        "prefetch_hit_on_true_route": 0,
+        "prefetch_wasted": 0,
+        "prefetch_awaited_inflight": 0,
+        "prefetch_bytes": 0,
+        "prefetch_first_consumption_hits": 0
+      },
+      "mlx_peak_bytes": 5304624137,
+      "heldout_total_ns": 412258083,
+      "heldout_read_records": 247,
+      "all_outputs_exact": true,
+      "active_after_close_bytes": 153199624
+    }
+  ],
+  "latency_ratio": 0.9488844115641026,
+  "control_spread_fraction": 0.009300807329470846,
+  "after": {
+    "sample_start_monotonic_ns": 186859506247583,
+    "sample_end_monotonic_ns": 186859509907666,
+    "process": {
+      "peak_maxrss_bytes": 4522983424,
+      "resident_bytes": 522649600,
+      "phys_footprint_bytes": 636650552,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 121996181504,
+      "wired_bytes": 3713531904,
+      "active_bytes": 3316416512,
+      "inactive_bytes": 2649931776,
+      "speculative_bytes": 637878272,
+      "anonymous_bytes": 3857350656,
+      "file_backed_bytes": 2746875904,
+      "compressor_bytes": 2272116736,
+      "compressed_bytes": 8372748288,
+      "used_bytes": 11951996928,
+      "non_file_used_bytes": 9842999296,
+      "swapins_pages": 4826070,
+      "swapouts_pages": 7667614,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "active_after_close_bytes": 8
+}

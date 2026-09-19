@@ -1,0 +1,2 @@
+ALLOCATOR_CACHE_ARM {"part_size": 3, "cache_limit_bytes": 268435456, "sequence": 0, "mlx_peak_bytes": 2934477321, "warm_total_ns": 1316572586, "warm_median_ns": 6362104.5, "warm_read_records": 794, "all_outputs_and_reads_exact": true, "active_after_close_bytes": 76780040}
+ALLOCATOR_CACHE_COMPLETE {"complete": true, "binary": "strict", "active_after_close_bytes": 8}

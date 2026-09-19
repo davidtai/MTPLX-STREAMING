@@ -1,0 +1,24 @@
+{
+  "memory_plan_source": "box_target",
+  "box_target_bytes": 110000000000,
+  "box_target_gb": 110.0,
+  "box_baseline_bytes": 10897063936,
+  "box_baseline_gb": 10.897063936,
+  "host_overhead_gib": 1.2774620056152344,
+  "allocator_cache_limit_gib": 1.0,
+  "transient_band_gib": 12.947250537574291,
+  "active_overshoot_gib": 1.45,
+  "allocator_limit_bytes": 97731271680,
+  "engine_budget_bytes": 83829267272,
+  "engine_budget_gib": 78.07208902388811,
+  "python_cache_budget": {
+    "engram_layer_count": 2,
+    "engram_per_layer_bytes": 67108864,
+    "engram_payload_bytes": 134217728,
+    "engram_metadata_reserve_bytes": 130150400,
+    "other_python_reserve_bytes": 1073741824,
+    "required_host_bytes": 1338109952
+  },
+  "session_bank_capacity_bytes": 0,
+  "session_bank_reserve_bytes": 0
+}

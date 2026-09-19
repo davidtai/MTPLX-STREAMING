@@ -1,0 +1,156 @@
+{
+ "schema": "mtplx-server-cell-v1",
+ "server": "deepseek-v41",
+ "stack": "remote",
+ "mode": "cells",
+ "model_family": "deepseek-v41",
+ "served_model_id": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+ "template_settings": {
+  "model_family": "deepseek-v41",
+  "chat_template_source": "artifact chat_template.jinja (W52 port of the official reference encoder) + served code fallback (mtplx.chat_encoding.encode_deepseek_v41_messages)",
+  "render": "DeepSeek-V4.1 reference chat format: BOS + [<\uff5cSystem\uff5c>effort/system] + <\uff5cUser\uff5c>content + <\uff5cAssistant\uff5c> + <think>|</think>",
+  "render_cite": "mtplx/templates/deepseek_v41/chat_template.jinja; DeepSeek-V4.1-Flash-src/encoding/encoding.py::encode_messages",
+  "add_special_tokens": false,
+  "enable_thinking": false,
+  "reasoning_effort": null,
+  "thinking_mode": false,
+  "bos_id_prepended": true,
+  "bos_token_id": 0,
+  "note": "DSV4.1 now templates the real chat prompt (BOS id 0 first). The OFFICIAL default is thinking OFF (reference generate.py --thinking-mode 'chat'; the encoding-test harness renders thinking_mode='chat'); reasoning_effort is inert in chat mode and omitted there. DeepSeek's instruct evals use thinking + reasoning_effort=100 -- set --dsv41-enable-thinking (DSV41_ENABLE_THINKING) + --dsv41-reasoning-effort to mirror them. The exported ids match the server byte-for-byte WITH BOS."
+ },
+ "base_url": "http://127.0.0.1:18080",
+ "prompt_cache": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-30/served-dspark-16k/prompts-deepseek-v41.json",
+ "prompt_cache_context_sha256": "c8ae2b1790c0300aa7c1421b55e7cd5d43c93461f7fba5d3a732fd34e156b4c4",
+ "contexts": [
+  16384
+ ],
+ "seeds": [
+  20260829
+ ],
+ "max_tokens": 1024,
+ "sampler": {
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 20
+ },
+ "started_epoch_s": 1789162110.4342132,
+ "elapsed_s": 437.21243381500244,
+ "fastest_of_seeds": [],
+ "records": [
+  {
+   "server": "deepseek-v41",
+   "cell": "sweep",
+   "target_tokens": 16384,
+   "seed": 20260829,
+   "repeat": 0,
+   "ok": false,
+   "prompt_tokens": 0,
+   "new_prefill_tokens": 16384,
+   "completion_tokens": 0,
+   "finish_reason": null,
+   "prefill_time_s": null,
+   "prefill_time_source": "none",
+   "prefill_tok_s": null,
+   "ttft_s": null,
+   "decode_s": null,
+   "decode_tok_s": null,
+   "wall_s": 432.16642683300597,
+   "peak_memory_bytes": null,
+   "peak_memory_gb": null,
+   "peak_memory_source": "none",
+   "client_rss_bytes": null,
+   "server_peak_memory_bytes": null,
+   "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "text_chars": 0,
+   "text_head": "",
+   "text_tail": "",
+   "reasoning_chars": 0,
+   "reasoning_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "thermal_gate": null,
+   "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+   "request_body": {
+    "model": "deepseek-v4.1-flash-mtplx-streaming-mxfp4",
+    "max_tokens": 1024,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "top_k": 20,
+    "seed": 20260829,
+    "enable_thinking": false
+   },
+   "server_stats": {
+    "prompt_eval_time_s": null,
+    "prefill_tok_s": null,
+    "ttft_s": null,
+    "decode_elapsed_s": null,
+    "decode_tok_s": null,
+    "new_prefill_tokens": null,
+    "cached_tokens": null,
+    "peak_memory_bytes": null
+   },
+   "usage": {},
+   "server_error": null,
+   "error": "no tokens generated (finish_reason=None)",
+   "raw_engagement": {},
+   "mtp_accept_rate": null,
+   "templated_tokens_expected": 16384,
+   "request_parity": {
+    "enable_thinking": false,
+    "max_tokens": 1024,
+    "prompt_chars": 61760,
+    "prompt_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+    "seed": 20260829,
+    "stream": true,
+    "stream_options": {
+     "include_usage": true
+    },
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95
+   },
+   "request_parity_source": "wire",
+   "request_body_sha256": "a81827390fb03caefc59c7dd5eba733dc59d0a2ad21cd6c71e29f7cc4120aebc",
+   "response_parity": {
+    "applied_sampler": {
+     "available": false,
+     "source": "none",
+     "temperature": null,
+     "requested_temperature": null,
+     "top_p": null,
+     "requested_top_p": null,
+     "top_k": null,
+     "requested_top_k": null,
+     "seed": null,
+     "client_sampler_fields_ignored": null,
+     "control_owner": null,
+     "content_empty_reason": null,
+     "reasoning_tokens": null,
+     "answer_tokens": null
+    },
+    "sampler_honoured": {
+     "temperature": null,
+     "top_p": null,
+     "top_k": null
+    },
+    "completion_tokens": 0,
+    "finish_reason": null,
+    "reasoning_chars": 0,
+    "reasoning_tokens": null,
+    "reasoning_tokens_source": "none",
+    "thinking_observed": false,
+    "thinking_requested": false,
+    "reasoning_effort_requested": null,
+    "temperature_requested": 1.0,
+    "top_p_requested": 0.95,
+    "top_k_requested": 20,
+    "seed_requested": 20260829
+   },
+   "http_status": null,
+   "http_body": null,
+   "server_log_tail": "[5/6] Memory plan: context window 17664 is machine-bound (model supports 1048576); larger windows would swap on 128 GiB\n{\"event\": \"mtplx_openai_generation\", \"prompt_tokens\": 5, \"completion_tokens\": 8, \"max_tokens\": 8, \"effective_max_tokens\": 8, \"finish_reason\": \"length\", \"elapsed_s\": 5.007774, \"tok_s\": 2.596419, \"end_to_end_tok_s\": 1.597516, \"seed\": 180629544, \"attempts\": 1, \"blank_retries\": 0, \"text_preview\": \"Pong! \ud83c\udfd3\\n\\nWhat\", \"peak_memory_bytes\": 81349495292, \"active_memory_bytes\": 78697326612, \"cache_memory_bytes\": 1900564, \"serve_stream_counters\": {\"phase\": \"decode\", \"tokens\": 8, \"expert_cache\": {\"route_calls\": 120, \"bytes_read\": 13649264640, \"expert_misses\": 944, \"evictions\": 700, \"persistent_loads\": 726, \"prefetch_issued\": 0, \"unique_expert_requests\": 1609, \"transient_loads\": 0, \"shared_expert_assignments\": 791, \"expert_requests\": 2400, \"prefetch_committed\": 0, \"expert_hits\": 1456, \"records_streamed\": 726, \"hit_rate\": 0.606667, \"miss_rate\": 0.393333, \"misses_per_token\": 118.0, \"records_streamed_per_token\": 90.75, \"bytes_read_per_token\": 1706158080.0}, \"incremental_misses\": {\"parts\": 726, \"routes\": 116, \"routes_per_token\": 14.5, \"parts_per_token\": 90.75}, \"engram_row_cache\": {\"hits\": 0, \"rows_read\": 480, \"misses\": 480, \"reads\": 480, \"gathers\": 6, \"evictions\": 0, \"hit_rate\": 0.0, \"miss_rate\": 1.0, \"misses_per_token\": 60.0, \"rows_read_per_token\": 60.0}, \"pin_working_set\": {\"enabled\": false, \"decode_routes\": 0, \"all_pinned_routes\": 0, \"all_pinned_hit_rate\": null, \"pinned_total\": 0, \"static_layer_count\": 0}, \"device_route_pinned\": {\"enabled\": false, \"flushes\": 0, \"barrier_free_layers\": 0, \"recovered_layers\": 0, \"barrier_free_layers_per_flush\": null}}}\nERROR:    Cancel 1 running task(s), timeout graceful shutdown exceeded\nERROR:    Exception in ASGI application\nTraceback (most recent call last):\n  File \"/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py\", line 164, in __call__\n  File \"/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py\", line 63, in __call__\n    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)\n  File \"/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py\", line 42, in wrapped_app\n    await wrap_app_handling_exceptions(app, request)(scope, receive, send)\n  File \"/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py\", line 42, in wrapped_app\nasyncio.exceptions.CancelledError: Task cancelled, timeout graceful shutdown exceeded"
+  }
+ ]
+}

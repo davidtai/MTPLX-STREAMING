@@ -1,0 +1,10 @@
+{
+  "source_commit": "48de2aaac8c13c5d31cfbeb8ee5bc0f92f78f9b3",
+  "cpu_only": true,
+  "helper_hashes": 26,
+  "runtime_hashes": 24,
+  "python_syntax": 35,
+  "review": "Causal history includes prompt and only emitted verified tokens; whole native proposal match precedes bounded extension. Exact native MX operation ASTs and accept/commit arithmetic preserved. Fixed host allowance and native M8 allocation envelope are priced through CLI and admission. Single-request experimental installation; no service default change.",
+  "minimum_regressions": "Two successful host regressions after full candidate; no repeat run.",
+  "goal_20tps_achieved": false
+}

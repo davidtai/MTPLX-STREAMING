@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import threading
 import time
+from contextlib import nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
@@ -14,6 +16,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from .expert_io import ExpertIOError, PositionalExpertReader
+# W125 host-side decode timeline probe (env MTPLX_DSV41_DECODE_TIMELINE=1). No-op
+# import when unset; the marks below self-gate on the single-row decode window.
+from . import dsv41_decode_timeline as _tl
 from .expert_manifest import (
     ExpertManifest,
     ExpertManifestError,
@@ -31,10 +36,14 @@ from .expert_slots import (
 from .expert_streaming import (
     CacheCounters,
     GlobalExpertSlotBank,
+    GlobalPrefetchRing,
     LayerExpertSlotBank,
     RoutePlan,
     RoutePolicyTxn,
     RoutingPhase,
+    TRANSITION_WINDOW_CACHE_POLICIES,
+    TRANSITION_WINDOW_CACHE_POLICY,
+    TUNED_TRANSITION_WINDOW_CACHE_POLICY,
 )
 from .expert_streaming_models import (
     MIXED_OFFICIAL_CODEC,
@@ -71,6 +80,22 @@ _MEMORY_RE = re.compile(r"^([0-9]+)([kmgt]i?b?|b)?$", re.IGNORECASE)
 
 class ExpertStreamingConfigurationError(ValueError):
     pass
+
+
+def validate_deepseek_v41_runtime_env(model_key: str) -> None:
+    """Reject unvalidated full-model lanes before load-time caps or allocations.
+
+    Read the actual process environment used by cache construction. Isolated cache
+    classes remain available for numerical investigation; this is installation-only.
+    """
+    if model_key.startswith("deepseek-v41") and (
+        os.environ.get("MTPLX_DSV41_KV_BOUNDED") or ""
+    ).strip().lower() in ("1", "true", "yes", "on"):
+        raise ExpertStreamingConfigurationError(
+            "MTPLX_DSV41_KV_BOUNDED has unvalidated Metal parity and cannot "
+            "be installed for DeepSeek-V4.1 streaming; disable it before "
+            "loading. Use isolated cache tests to investigate the lane."
+        )
 
 
 def _pipeline_call(
@@ -145,19 +170,31 @@ class ExpertStreamingConfig:
     max_live_kv_tokens: int
     runtime_reserve_bytes: int = 16 * 1024**3
     expert_cache_limit_bytes: int | None = None
+    # Exact per-routed-layer persistent capacities. Empty keeps the uniform
+    # budget-derived geometry. The tuple is ordered by spec.routed_layer_indices.
+    persistent_slots_by_layer: tuple[int, ...] = ()
     transient_slots: int | None = None
     io_staging_bytes: int = 0
     execution_workspace_bytes: int = 0
     max_inflight_io_bytes: int | None = None
     max_open_files: int = 16
     max_read_chunk_bytes: int = 8 * 1024 * 1024
+    # W24 R4 (Factor D) lever, default 1 (OFF): split each large record's
+    # positional read into N concurrent contiguous sub-reads to raise SSD queue
+    # depth on the serially-layer-dependent decode path. Byte-identical.
+    io_read_fanout: int = 1
     frequency_decay: float = 0.995
     prefer_sidecar: bool = True
     verify_record_hashes: bool = True
     verify_artifact_headers: bool = True
     verify_sidecar_hash_at_open: bool = False
     prefill_admission: bool = False
-    slot_layout: str = "direct-slots"
+    # ``None`` (the default, i.e. the user set no --expert-slot-layout) derives the
+    # layout from the streamed record codec in __post_init__: a non-affine artifact
+    # (mxfp4/shadow/mixed-official) can only be read by the component-banks dispatch,
+    # every other dispatch assumes the affine triple; affine keeps the historical
+    # direct-slots default.  An explicit value is honoured verbatim.
+    slot_layout: str | None = None
     trace_routes: bool = False
     cache_policy: str = "frequency"
     cache_scope: str = "layer"
@@ -199,6 +236,17 @@ class ExpertStreamingConfig:
     # coalesced into scatter reads) so resident-expert compute overlaps the
     # miss reads. OFF leaves the per-expert split-part path byte-identical.
     overlap_miss_reads: bool = False
+    # DeepSeek-V4.1 decode scheduling arm.  When overlap_miss_reads is enabled,
+    # cap each independently completable miss part to this many records while
+    # still submitting every part at once.  ``None`` keeps the current one-part
+    # layer batch.  The cap is construction-selected so the enabled hot path
+    # never probes or falls back.
+    decode_miss_records_per_part: int | None = None
+    # DeepSeek-V4.1 verify-only scheduling arm: after a split route has submitted
+    # its demand misses, enqueue the resident shared MLP before waiting for those
+    # reads. Installed once at switch construction; OFF preserves the unchanged
+    # routed-then-shared control ordering.
+    verify_shared_overlap: bool = False
     prefetch_slots: int = 0
     speculative_io_fraction: float = 0.25
     route_census: bool = True
@@ -208,6 +256,26 @@ class ExpertStreamingConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.model_key, str) or not self.model_key:
             raise TypeError("model_key must be a non-empty string")
+        # Slot-layout default derives from the streamed record codec, in the one
+        # place both the loader (build_streaming_config) and the serve path pass
+        # through (this __post_init__).  When the user set no explicit layout, a
+        # non-affine artifact (mxfp4/shadow/mixed-official) defaults to the
+        # component-banks dispatch — the only one that carries the codec branch;
+        # the direct-slot / mapped / dense-island dispatches assume the affine
+        # triple and would misread the record.  An explicit direct-slots stays
+        # verbatim and ExpertStreamingRuntime.open rejects it loudly for a
+        # non-affine artifact.  Unregistered synthetic keys keep the affine
+        # default (their spec is carried into open() directly).
+        if self.slot_layout is None:
+            try:
+                codec = get_model_spec(self.model_key).expert_codec
+            except ValueError:
+                codec = "affine"
+            object.__setattr__(
+                self,
+                "slot_layout",
+                "component-banks" if codec != "affine" else "direct-slots",
+            )
         for name, minimum in (
             ("memory_limit_bytes", 1),
             ("max_live_kv_tokens", 0),
@@ -216,6 +284,7 @@ class ExpertStreamingConfig:
             ("execution_workspace_bytes", 0),
             ("max_open_files", 1),
             ("max_read_chunk_bytes", 1),
+            ("io_read_fanout", 1),
         ):
             object.__setattr__(
                 self, name, _integer(name, getattr(self, name), minimum=minimum)
@@ -236,10 +305,35 @@ class ExpertStreamingConfig:
         if not 0.0 < decay <= 1.0:
             raise ValueError("frequency_decay must be in (0, 1]")
         object.__setattr__(self, "frequency_decay", decay)
-        if self.cache_policy not in {"frequency", "lru"}:
-            raise ValueError("cache_policy must be 'frequency' or 'lru'")
+        if self.cache_policy not in {
+            "frequency",
+            "lru",
+            *TRANSITION_WINDOW_CACHE_POLICIES,
+        }:
+            raise ValueError(
+                "cache_policy must be 'frequency', 'lru', "
+                f"{TRANSITION_WINDOW_CACHE_POLICY!r}, or "
+                f"{TUNED_TRANSITION_WINDOW_CACHE_POLICY!r}"
+            )
         if self.cache_scope not in {"layer", "global"}:
             raise ValueError("cache_scope must be 'layer' or 'global'")
+        layer_capacities = self.persistent_slots_by_layer
+        if layer_capacities is None:
+            layer_capacities = ()
+        if isinstance(layer_capacities, (str, bytes)) or not isinstance(
+            layer_capacities, (tuple, list)
+        ):
+            raise TypeError(
+                "persistent_slots_by_layer must be a tuple of capacities"
+            )
+        object.__setattr__(
+            self,
+            "persistent_slots_by_layer",
+            tuple(
+                _integer("persistent layer capacity", capacity, minimum=0)
+                for capacity in layer_capacities
+            ),
+        )
         if self.q2_expert_kernel not in {
             "stock",
             "nax",
@@ -303,6 +397,41 @@ class ExpertStreamingConfig:
             raise ValueError(
                 "overlap_miss_reads requires the component-banks slot layout"
             )
+        if self.decode_miss_records_per_part is not None:
+            object.__setattr__(
+                self,
+                "decode_miss_records_per_part",
+                _integer(
+                    "decode_miss_records_per_part",
+                    self.decode_miss_records_per_part,
+                    minimum=1,
+                ),
+            )
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "decode_miss_records_per_part is only installed for "
+                    "DeepSeek-V4.1"
+                )
+            if not self.overlap_miss_reads:
+                raise ValueError(
+                    "decode_miss_records_per_part requires overlap_miss_reads"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "decode_miss_records_per_part requires the component-banks "
+                    "slot layout"
+                )
+        if not isinstance(self.verify_shared_overlap, bool):
+            raise ValueError("verify_shared_overlap must be bool")
+        if self.verify_shared_overlap:
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "verify_shared_overlap is only installed for DeepSeek-V4.1"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "verify_shared_overlap requires the component-banks slot layout"
+                )
         object.__setattr__(
             self,
             "prefetch_slots",
@@ -310,6 +439,26 @@ class ExpertStreamingConfig:
         )
         if self.prefetch_slots and self.cache_scope != "layer":
             raise ValueError("prefetch_slots require cache_scope 'layer'")
+        if self.cache_policy in TRANSITION_WINDOW_CACHE_POLICIES:
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "transition-window cache policy is only installed for "
+                    "DeepSeek-V4.1"
+                )
+            if self.cache_scope != "layer":
+                raise ValueError(
+                    "transition-window cache policy requires cache_scope 'layer'"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "transition-window cache policy requires the component-banks "
+                    "slot layout"
+                )
+            if self.prefetch_slots:
+                raise ValueError(
+                    "transition-window cache policy cannot be combined with "
+                    "speculative prefetch"
+                )
         if isinstance(self.speculative_io_fraction, bool) or not isinstance(
             self.speculative_io_fraction, (int, float)
         ):
@@ -413,6 +562,11 @@ class ExpertStreamingConfig:
                     "streamed_codec decodes compressed records into slots; it is "
                     "incompatible with the metal-mmap zero-copy layout"
                 )
+            if self.decode_miss_records_per_part is not None:
+                raise ValueError(
+                    "decode_miss_records_per_part requires raw sidecar records; "
+                    "disable streamed_codec for this scheduling arm"
+                )
         elif self.streamed_codec_manifest is not None:
             raise ValueError(
                 "streamed_codec_manifest requires streamed_codec 'rans32x-v1'"
@@ -498,6 +652,31 @@ class ExpertStreamingConfig:
             raise ValueError(
                 "global expert caching requires direct-slots or component-banks"
             )
+        if self.persistent_slots_by_layer:
+            if not self.model_key.startswith("deepseek-v41"):
+                raise ValueError(
+                    "persistent_slots_by_layer is only installed for DeepSeek-V4.1"
+                )
+            if self.cache_scope != "layer":
+                raise ValueError(
+                    "persistent_slots_by_layer requires cache_scope 'layer'"
+                )
+            if self.slot_layout != "component-banks":
+                raise ValueError(
+                    "persistent_slots_by_layer requires component-banks"
+                )
+            if (
+                self.island_layers
+                or self.island_layer_count is not None
+                or self.mmap_island_layers
+            ):
+                raise ValueError(
+                    "persistent_slots_by_layer cannot be combined with island layers"
+                )
+            if self.prefetch_slots:
+                raise ValueError(
+                    "persistent_slots_by_layer cannot be combined with prefetch slots"
+                )
         if self.prefill_admission:
             raise ValueError(
                 "prefill admission is not implemented; prefill must use transient slots"
@@ -505,20 +684,16 @@ class ExpertStreamingConfig:
 
     @property
     def derived_expert_cache_policy(self) -> bool:
-        """Whether the expert-cache byte allowance is derived at runtime.
+        """Current layouts require a static maximum-context reservation.
 
-        With no explicit ``expert_cache_limit_bytes``, ``memory_limit_bytes``
-        is the single memory knob: the runtime recomputes the streamed
-        expert-cache allowance from it at every KV admission boundary instead
-        of reserving the whole ``max_live_kv_tokens`` context up front.  The
-        metal-mmap layout has no slot cache to budget, so it keeps the static
-        plan.
+        Direct slots and component banks allocate their full backing storage
+        at construction. Evicting an expert only changes its logical mapping;
+        it cannot fund growing KV storage. Reserve ``max_live_kv_tokens`` before
+        sizing either pool, including when no expert-cache cap is supplied.
+        The mapped layout also retains its existing static reservation.
         """
 
-        return (
-            self.expert_cache_limit_bytes is None
-            and self.slot_layout != "metal-mmap"
-        )
+        return False
 
     def memory_plan(
         self,
@@ -578,10 +753,13 @@ class ExpertStreamingConfig:
             island_layer_count=len(self.island_layers),
             mmap_island_layer_count=len(self.mmap_island_layers),
             mmap_islands_wired=self.mmap_island_wired,
-            prefetch_slots_per_layer=self.prefetch_slots,
+            prefetch_ring_slots=self.prefetch_slots,
             miss_shadow=self.miss_shadow,
             miss_shadow_layers=self.miss_shadow_layers,
             layer_record_bytes=layer_record_bytes,
+            persistent_slots_by_layer=(
+                self.persistent_slots_by_layer or None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1064,6 +1242,11 @@ class PendingSplitRoute:
             if self._pipeline_route is None
             else self._iter_pipeline_miss_completions(snapshot)
         )
+        # W125: from here to each yield the generation thread is blocked on the miss
+        # futures (as_completed / future.result) -- the EXPOSED SSD read wait the
+        # overlap could not hide, and the biggest suspected host gap. Reset after
+        # every yield so a multi-part route accumulates only its own blocks.
+        _tl_w = _tl.now()
         for future in completion_order:
             with self._state_lock:
                 if future not in self._miss_futures:
@@ -1127,7 +1310,10 @@ class PendingSplitRoute:
                 self.abort(failure)
                 self._finish_failure_if_ready()
                 raise failure
+            _tl.add_miss_wait(self.layer, _tl_w)  # W125: exposed miss wait for this part
+            _tl.miss_ready(self.layer)  # W125: a miss part's slots are ready
             yield ready
+            _tl_w = _tl.now()  # W125: start timing the next part's wait
         if not self._policy_observed:
             try:
                 self.runtime.slots.raise_if_unhealthy()
@@ -1555,6 +1741,44 @@ def proj_requant_plan_discount(manifest: Any, proj_requant: str | None) -> int:
     return discount
 
 
+# Residents a text-only autoregressive forward never wires. The DeepSeek-V4.1
+# converter keeps the MTP residents (mxfp8 dense + mxfp4 experts) and the
+# vision/aligner/image residents inside the streamed artifact, but phase-1 AR
+# serving loads only the text backbone
+# (``mtplx.models.deepseek_v41_loader.partition_text_residents`` drops exactly
+# these dotted-name prefixes). Kept here so the memory-plan discount and the
+# loader's text-only filter share one prefix set; a test locks the two equal.
+TEXT_ONLY_SKIP_PREFIXES = ("mtp.", "vision.", "aligner.", "image_")
+
+
+def text_only_resident_discount(manifest: Any, spec: Any) -> int:
+    """Bytes of residents the text-only AR forward skips at load, for planner pricing.
+
+    ``spec.resident_bytes`` counts every resident the converter emitted, but the
+    serve path materializes only the text backbone; without this discount the
+    planner over-reserves the fixed side. For the shipped DeepSeek-V4.1-Flash
+    mxfp4 artifact the skipped MTP + vision residents are 8.31 GiB, worth +11
+    resident expert slots/layer at the 82 GiB envelope (W3/W21).
+
+    Zero for every spec whose streamed manifest carries no such residents
+    (hy3/glm keep their MTP head in a separate external artifact and have no
+    vision residents), so their resolved memory plans stay byte-identical. When
+    ``spec.mtp_included`` is True (a future MTP serve path wires the MTP
+    residents), only vision/aligner/image are discounted.
+    """
+
+    mtp_wired = bool(getattr(spec, "mtp_included", False))
+    discount = 0
+    for tensor in manifest.resident_tensors:
+        name = tensor.tensor
+        if not name.startswith(TEXT_ONLY_SKIP_PREFIXES):
+            continue
+        if mtp_wired and name.startswith("mtp."):
+            continue
+        discount += tensor.length
+    return discount
+
+
 def reconcile_mlx_memory_cap(
     plan: ExpertMemoryPlan,
     *,
@@ -1608,17 +1832,391 @@ def reconcile_mlx_memory_cap(
     return mlx_limit
 
 
+# W118 (H7): the MLX allocator-limit headroom lever.  Read at USE (never frozen at
+# import), matching every other DSV4.1 lever ([[env-flags-read-at-use-not-import]]).
+# Default 0 == today.  It adds N GiB to the value passed to ``set_memory_limit`` ABOVE
+# the residency plan WITHOUT changing the plan (residents, expert-cache slots, prefetch
+# ring) or the ``MTPLX_MEMORY_LIMIT_BYTES`` engine budget -- so bytes/routing/outputs
+# stay byte-identical.  The finding (W112 receipt window-44b): every real window runs
+# the model OVER its own MLX limit (plan 69.2 -> mlx_peak 74.3).
+#
+# Mechanism (mlx 0.32.2 allocator.cpp): set_memory_limit sets block_limit_ and
+# gc_limit_ = min(limit, 0.95 x recommendedMaxWorkingSetSize).  On a cache MISS with
+# active + cache + size >= gc_limit_, MetalAllocator::malloc calls
+# release_cached_buffers(...); once active >= gc_limit_ the release argument exceeds the
+# pool, so the ENTIRE buffer cache is cleared, and every later allocation is a fresh
+# newBuffer (page zero-fill) + residency-set insert.  There is NO scheduler wait and NO
+# error -- it is cache-clear-on-miss thrash, the (f) allocator-pressure regime (5.2x
+# in-model attention).  Raising ONLY the limit above the steady-state peak lifts
+# gc_limit_ so the miss path stops clearing the cache, without touching what is
+# resident.  (Proven for prefill, where mlx_peak > limit; whether decode is also over
+# the limit is what window 46 measures -- see W118_MLX_LIMIT_HEADROOM.md.)
+MLX_LIMIT_HEADROOM_ENV = "MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB"
+_MLX_LIMIT_HEADROOM_GIB = 1024**3
+
+
+def resolve_mlx_limit_headroom_bytes(env: Mapping[str, str] | None = None) -> int:
+    """Extra bytes added to the value passed to ``mx.set_memory_limit`` ABOVE the
+    residency plan (W118 / H7).  Reads ``MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB`` at USE;
+    default 0 (unset / empty == today).  Does NOT change the plan or
+    ``MTPLX_MEMORY_LIMIT_BYTES``.  Rejects a non-numeric or negative value."""
+
+    source = os.environ if env is None else env
+    raw = source.get(MLX_LIMIT_HEADROOM_ENV)
+    if raw is None or str(raw).strip() == "":
+        return 0
+    stripped = str(raw).strip()
+    # W118 review MEDIUM-3: reject underscore-obfuscated values ("1_0" is 10.0 under
+    # PEP 515, which silently misreads an operator typo) BEFORE float().
+    if "_" in stripped:
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be a plain number of GiB, got {raw!r} "
+            "(underscores are not allowed)"
+        )
+    try:
+        value = float(stripped)
+    except (TypeError, ValueError) as exc:
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be a number of GiB, got {raw!r}"
+        ) from exc
+    # W118 review MEDIUM-3: nan/inf must be rejected -- ``float('nan') < 0`` is False,
+    # so a non-finite value would otherwise pass and crash in-window.
+    if not math.isfinite(value):
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be finite, got {raw!r}"
+        )
+    if value < 0:
+        raise ExpertStreamingConfigurationError(
+            f"{MLX_LIMIT_HEADROOM_ENV} must be non-negative, got {value}"
+        )
+    return int(round(value * _MLX_LIMIT_HEADROOM_GIB))
+
+
+# W121: target-based MLX allocator limit.  David's directive after window 47 proved
+# the mechanism: with set_memory_limit ABOVE the steady active peak the freed-buffer
+# LRU HOLDS across misses (decode 2.99 -> 5.49; cache_at_decode_end 0 -> 5.0 GiB),
+# whereas at-the-plan it clears on every miss.  Instead of a hand-picked headroom, the
+# allocator limit is derived from David's TOTAL box target so box_used stays <= target
+# BY CONSTRUCTION: the box holds macOS+agent (the baseline, measured once with the
+# resident agent booted out) plus this process, so the process may use
+# Allocation target and baseline are decimal GB; all cache/reserve bands are GiB.
+# Serving and benchmark constructors derive one shared target plan before loading.
+# An unset target in the low-level runtime preserves the legacy explicit-plan path.
+BOX_TARGET_ENV = "MTPLX_DSV41_BOX_TARGET_GB"
+BOX_BASELINE_ENV = "MTPLX_DSV41_BOX_BASELINE_GB"
+from .deepseek_v41_memory_profile import DEFAULT_BOX_BUDGET_BYTES
+
+DEFAULT_BOX_TARGET_GB = DEFAULT_BOX_BUDGET_BYTES / 1_000_000_000
+_DECIMAL_GB = 1_000_000_000
+_GIB = 1024**3
+
+# The allocator policy accounts for active allocations plus retained cache jointly.
+# MLX get_peak_memory reports ACTIVE allocations only; it does not measure this sum.
+# Reserve Python arenas/indices outside the allocator. Inside it, reserve the larger
+# of observed prefill transients and decode active overshoot + retained allocator
+# cache. These are planning bands from prior receipts, not a hard process peak proof.
+# The OS guard independently measures physical system usage, including file cache.
+BOX_ALLOC_CACHE_ENV = "MTPLX_DSV41_MLX_CACHE_LIMIT_GIB"
+BOX_TRANSIENT_BAND_ENV = "MTPLX_DSV41_TRANSIENT_BAND_GIB"
+BOX_HOST_OVERHEAD_ENV = "MTPLX_DSV41_HOST_OVERHEAD_GIB"
+BOX_ACTIVE_OVERSHOOT_ENV = "MTPLX_DSV41_ACTIVE_OVERSHOOT_GIB"
+BOX_SESSION_BANK_ENV = "MTPLX_DSV41_SESSION_BANK_GIB"
+# Uncached 16K receipts show ~6.53 GiB active overhang above allocated plan
+# storage. The prefill band includes the full 2 GiB freed cache plus headroom.
+DEFAULT_ALLOC_CACHE_GIB = 2.0
+DEFAULT_TRANSIENT_BAND_GIB = 10.0
+DEFAULT_ACTIVE_OVERSHOOT_GIB = 1.45  # active_at_decode_start - PLAN (W47 receipt 1.4416; round up to cover it)
+DEFAULT_HOST_OVERHEAD_GIB = 2.0  # full default Engram arenas, indices, and other Python
+
+
+def _physical_ram_bytes() -> int | None:
+    import subprocess
+    import sys
+    if sys.platform != "darwin":
+        return None
+    result = subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"],
+                            capture_output=True, text=True, timeout=5, check=True)
+    return int(result.stdout.strip())
+
+
+def prepare_deepseek_v41_memory_config(config, *, env=None, preserve_memory_limit=False,
+                                     args=None):
+    """Resolve the serving allocation once, before any model or cache allocation."""
+    if not config.model_key.startswith("deepseek-v41"):
+        return config, None
+    from .deepseek_v41_memory_profile import DEFAULT_ENGRAM_CACHE_BYTES, box_memory_snapshot
+    target_env = os.environ if env is None else env
+    if args is not None:
+        if getattr(args, "memory_budget", None):
+            raise ExpertStreamingConfigurationError(
+                "--memory-budget conflicts with the DeepSeek box target; configure "
+                "MTPLX_DSV41_BOX_TARGET_GB in decimal GB instead")
+        for key in ("MTPLX_MEMORY_LIMIT_BYTES", "MTPLX_WIRED_LIMIT_BYTES", "MTPLX_MEMORY_BUDGET"):
+            if target_env.get(key):
+                raise ExpertStreamingConfigurationError(
+                    f"{key} conflicts with the DeepSeek box target; configure "
+                    "MTPLX_DSV41_BOX_TARGET_GB or --expert-memory-limit instead")
+        # The SSD writer admits oversized entries even above its backlog limit.
+        # Until encode/restore capacity is bounded, it cannot share this budget.
+        explicit_ssd = ("ssd-session-cache" in getattr(args, "_cli_flags", set()) or
+                        bool(target_env.get("MTPLX_SSD_SESSION_CACHE")))
+        if explicit_ssd and getattr(args, "ssd_session_cache", "off") != "off":
+            raise ExpertStreamingConfigurationError(
+                "SSD session cache has no bounded host allocation under the DeepSeek "
+                "box target; use --ssd-session-cache off")
+        args.ssd_session_cache = "off"
+        from pydantic import ByteSize, TypeAdapter
+        target_env.setdefault("MTPLX_SESSION_BANK_MAX_BYTES", "2GiB")
+        bank_bytes = int(TypeAdapter(ByteSize).validate_python(
+            target_env["MTPLX_SESSION_BANK_MAX_BYTES"]))
+        if bank_bytes <= 0:
+            raise ExpertStreamingConfigurationError("session bank capacity must be positive")
+        # Use bytes for the downstream parser so GB/GiB aliases cannot disagree.
+        target_env["MTPLX_SESSION_BANK_MAX_BYTES"] = str(bank_bytes)
+        target_env[BOX_SESSION_BANK_ENV] = str(bank_bytes / _GIB)
+        raw_cache = getattr(args, "mlx_cache_limit", None) or target_env.get("MTPLX_MLX_CACHE_LIMIT")
+        if raw_cache:
+            from pydantic import ByteSize, TypeAdapter
+            cache_bytes = int(TypeAdapter(ByteSize).validate_python(raw_cache))
+            target_env[BOX_ALLOC_CACHE_ENV] = str(cache_bytes / _GIB)
+    target_env.setdefault(BOX_TARGET_ENV, str(int(DEFAULT_BOX_TARGET_GB)))
+    target_env.setdefault("MTPLX_ENGRAM_CACHE_LIMIT", str(DEFAULT_ENGRAM_CACHE_BYTES))
+    if not target_env.get(BOX_BASELINE_ENV):
+        snap = box_memory_snapshot()
+        baseline = snap.get("used_bytes")
+        if not snap.get("ok") or baseline is None or baseline <= 0:
+            raise ExpertStreamingConfigurationError("cannot measure pre-load system baseline")
+        target_env[BOX_BASELINE_ENV] = f"{baseline / _DECIMAL_GB:.12g}"
+    budget = resolve_box_target_mlx_limit_bytes(target_env)
+    engine_bytes = budget["engine_budget_bytes"]
+    if preserve_memory_limit:
+        if config.memory_limit_bytes > engine_bytes:
+            raise ExpertStreamingConfigurationError(
+                "explicit engine budget exceeds the target allocation budget")
+        engine_bytes = config.memory_limit_bytes
+    budget["configured_engine_budget_bytes"] = engine_bytes
+    return dataclass_replace(config, memory_limit_bytes=engine_bytes), budget
+
+
+def _env_pos_float(env: Mapping[str, str], key: str) -> float | None:
+    raw = env.get(key)
+    if raw is None or str(raw).strip() == "" or str(raw).strip().lower() == "default":
+        return None
+    stripped = str(raw).strip()
+    if "_" in stripped:
+        raise ExpertStreamingConfigurationError(
+            f"{key} must be a plain number, got {raw!r} (underscores not allowed)"
+        )
+    try:
+        value = float(stripped)
+    except (TypeError, ValueError) as exc:
+        raise ExpertStreamingConfigurationError(
+            f"{key} must be a number, got {raw!r}"
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ExpertStreamingConfigurationError(f"{key} must be finite and positive, got {value}")
+    return value
+
+
+def _env_nonneg_float_or_default(
+    env: Mapping[str, str], key: str, default: float
+) -> float:
+    """A GiB band value from the env (>= 0, finite), or ``default`` when unset/empty."""
+
+    raw = env.get(key)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    stripped = str(raw).strip()
+    if "_" in stripped:
+        raise ExpertStreamingConfigurationError(
+            f"{key} must be a plain number of GiB, got {raw!r} (underscores not allowed)"
+        )
+    try:
+        value = float(stripped)
+    except (TypeError, ValueError) as exc:
+        raise ExpertStreamingConfigurationError(
+            f"{key} must be a number of GiB, got {raw!r}"
+        ) from exc
+    if not math.isfinite(value) or value < 0:
+        raise ExpertStreamingConfigurationError(
+            f"{key} must be finite and non-negative GiB, got {value}"
+        )
+    return value
+
+
+def resolve_box_target_mlx_limit_bytes(
+    env: Mapping[str, str] | None = None,
+    *,
+    baseline_bytes: int | None = None,
+    memsize_bytes: int | None = None,
+) -> dict[str, Any] | None:
+    """Resolve a construction-time budget, or None when the target is unset.
+
+    allocator = target - measured system baseline - full Python capacity reserve.
+    engine = allocator - max(prefill transient, decode overshoot + allocator cache).
+    The cache lives within the allocator budget. MLX peak is active-only and is
+    not a process/system measurement. Bands are forecasts; the guarded runner
+    must still verify actual usage and full-model peak headroom before execution.
+    Target/baseline are decimal GB; cache and reserve settings are GiB.
+    """
+
+    source = os.environ if env is None else env
+    target_gb = _env_pos_float(source, BOX_TARGET_ENV)
+    if target_gb is None:
+        # The env may be set to a bare marker meaning "use the default target".  Only
+        # arm when the key is present at all; absent -> legacy path (return None).
+        if BOX_TARGET_ENV not in source:
+            return None
+        target_gb = DEFAULT_BOX_TARGET_GB
+    baseline_gb = _env_pos_float(source, BOX_BASELINE_ENV)
+    if baseline_gb is not None:
+        baseline_b = int(round(baseline_gb * _DECIMAL_GB))
+    elif baseline_bytes is not None:
+        baseline_b = int(baseline_bytes)
+        if baseline_b <= 0:
+            raise ExpertStreamingConfigurationError("baseline_bytes must be positive")
+        baseline_gb = baseline_b / _DECIMAL_GB
+    else:
+        raise ExpertStreamingConfigurationError(
+            f"{BOX_TARGET_ENV} is set but no baseline is available: set "
+            f"{BOX_BASELINE_ENV} (decimal GB, measured physical system usage with the "
+            "resident agent booted out) or pass baseline_bytes"
+        )
+    cache_gib = _env_nonneg_float_or_default(
+        source, BOX_ALLOC_CACHE_ENV, DEFAULT_ALLOC_CACHE_GIB
+    )
+    transient_gib = _env_nonneg_float_or_default(
+        source, BOX_TRANSIENT_BAND_ENV, DEFAULT_TRANSIENT_BAND_GIB
+    )
+    from .deepseek_v41_memory_profile import python_cache_budget
+    try:
+        python_budget = python_cache_budget(source)
+    except ValueError as exc:
+        raise ExpertStreamingConfigurationError(str(exc)) from exc
+    host_gib = _env_nonneg_float_or_default(source, BOX_HOST_OVERHEAD_ENV,
+        max(DEFAULT_HOST_OVERHEAD_GIB, python_budget["required_host_bytes"] / _GIB))
+    if round(host_gib * _GIB) < python_budget["required_host_bytes"]:
+        raise ExpertStreamingConfigurationError(
+            "host overhead does not cover configured Python caches and metadata")
+    active_gib = _env_nonneg_float_or_default(
+        source, BOX_ACTIVE_OVERSHOOT_ENV, DEFAULT_ACTIVE_OVERSHOOT_GIB
+    )
+    cache_b = int(round(cache_gib * _GIB))
+    transient_b = int(round(transient_gib * _GIB))
+    host_b = int(round(host_gib * _GIB))
+    active_b = int(round(active_gib * _GIB))
+    session_b = int(round(_env_nonneg_float_or_default(source, BOX_SESSION_BANK_ENV, 0) * _GIB))
+    target_b = int(round(target_gb * _DECIMAL_GB))
+    # (HIGH-2 (1)) the allocator/wired limit reserves only the host overhead the MLX
+    # allocator can't see; the cache lives WITHIN this joint active+cache limit.
+    mlx_limit = target_b - baseline_b - host_b
+    if mlx_limit <= 0:
+        raise ExpertStreamingConfigurationError(
+            f"{BOX_TARGET_ENV} {target_gb:g} GB minus baseline {baseline_gb:.4g} GB "
+            f"minus host overhead {host_gib:g} GiB leaves no MLX budget "
+            f"({mlx_limit} bytes)"
+        )
+    if mlx_limit > 100 * _GIB:
+        raise ExpertStreamingConfigurationError("derived allocator exceeds 100 GiB wired cap")
+    physical = _physical_ram_bytes() if memsize_bytes is None else memsize_bytes
+    if physical is not None and target_b + 8 * _DECIMAL_GB > physical:
+        raise ExpertStreamingConfigurationError("target plus 8 GB headroom exceeds physical RAM")
+    # (HIGH-A) the engine budget (persistent slots == the plan) reserves the WORST of the
+    # two regimes under the allocator limit -- they are NOT additive (each is a distinct execution phase): prefill peak = engine + transient_band; decode peak = active
+    # (engine + active_overshoot) + cache_room.  engine = allocator - max(band,
+    # active_overshoot + cache).
+    # Retained owners, an admitted candidate, and one strided-copy scratch leaf.
+    engine_reserve_b = max(transient_b, active_b + cache_b) + 3 * session_b
+    engine_budget_b = mlx_limit - engine_reserve_b
+    if engine_budget_b <= 0:
+        raise ExpertStreamingConfigurationError(
+            f"{BOX_TARGET_ENV} derives allocator limit {mlx_limit} bytes but the engine "
+            f"reserve max(transient band {transient_gib:g}, active overshoot {active_gib:g} "
+            f"+ cache {cache_gib:g}) GiB leaves no engine budget ({engine_budget_b} "
+            f"bytes); raise {BOX_TARGET_ENV}"
+        )
+    return {
+        "mlx_limit_bytes": mlx_limit,
+        "box_target_bytes": target_b,
+        "box_target_gb": target_gb,
+        "box_baseline_gb": baseline_gb,
+        "box_baseline_bytes": baseline_b,
+        "host_overhead_gib": host_gib,
+        "host_overhead_bytes": host_b,
+        "allocator_cache_limit_gib": cache_gib,
+        "allocator_cache_limit_bytes": cache_b,
+        "transient_band_gib": transient_gib,
+        "transient_band_bytes": transient_b,
+        "active_overshoot_gib": active_gib,
+        "active_overshoot_bytes": active_b,
+        "engine_reserve_bytes": engine_reserve_b,
+        "session_bank_capacity_bytes": session_b,
+        "session_bank_reserve_bytes": 3 * session_b,
+        "engine_budget_bytes": engine_budget_b,
+        "python_cache_budget": python_budget,
+        "physical_ram_bytes": physical,
+        "wired_hard_limit_bytes": 100 * _GIB,
+    }
+
+
 def apply_mlx_memory_cap(
     plan: ExpertMemoryPlan,
     *,
     mx_module: Any | None = None,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Apply the reconciled cap before resident or expert-slot allocation."""
+    """Install allocator, wired and cache limits before model allocation.
+
+    Target mode requires every cap to succeed. Its engine budget has already
+    reserved Python capacity and Metal transient/cache room at construction.
+    Legacy callers retain their explicit plan/headroom behavior. Limits are
+    configuration policies, not measured peaks or hard process-memory bounds.
+    """
 
     target_env = os.environ if env is None else env
-    limit = reconcile_mlx_memory_cap(plan, env=target_env)
-    target_env["MTPLX_MEMORY_LIMIT_BYTES"] = str(limit)
+    plan_limit = reconcile_mlx_memory_cap(plan, env=target_env)
+    # The engine budget env stays the reconciled PLAN value (the config that built the
+    # plan already sized it -- to allocator_limit - max(band, active_overshoot + cache)
+    # when the target is armed, see the bench).  reconcile stamps it for the cross-check; this
+    # function never moves it, so bytes/routing follow the config's slot count.
+    target_env["MTPLX_MEMORY_LIMIT_BYTES"] = str(plan_limit)
+    headroom = resolve_mlx_limit_headroom_bytes(target_env)
+    # W121 + HIGH-2: when the box target is armed, set the allocator limit from the
+    # target (target - baseline - host_overhead) instead of the plan, and bound the
+    # freed-buffer LRU with set_cache_limit(allocator_cache_limit) ALONE (the cache lives
+    # within the joint active+cache policy). The OS guard measures actual usage;
+    # this allocation policy is not itself a hard physical-memory bound.  Headroom stays an explicit add-on override.
+    box_target = None
+    try:
+        box_target = resolve_box_target_mlx_limit_bytes(target_env)
+    except ExpertStreamingConfigurationError:
+        raise
+    if box_target is not None:
+        # HIGH-B: an explicit headroom ADDED to the target-derived limit pushes box_used
+        # ABOVE the target (an *_hr8 arm under an armed target -> +8 GiB -> ~108.6 GB box,
+        # 1.4 GB from the panic line, and the receipt/sidecar omit the +8).  The target
+        # IS the box budget, so refuse rather than silently overshoot it.
+        if headroom > 0:
+            raise ExpertStreamingConfigurationError(
+                f"{MLX_LIMIT_HEADROOM_ENV} ({headroom} bytes) cannot be combined with an "
+                f"armed {BOX_TARGET_ENV}: the target already IS the box budget, so adding "
+                "headroom would push box_used above the target. Drop the headroom or the "
+                "target."
+            )
+        base_limit = box_target["mlx_limit_bytes"]
+        limit_source = "box_target"
+        if base_limit < plan_limit:
+            raise ExpertStreamingConfigurationError(
+                f"{BOX_TARGET_ENV} derives an MLX allocator limit of {base_limit} "
+                f"bytes (target - baseline - host overhead), BELOW the engine budget "
+                f"{plan_limit} (residents + KV + expert slots do not fit under the "
+                f"target); raise {BOX_TARGET_ENV} or lower --max-kv / the expert-cache "
+                "budget"
+            )
+    else:
+        base_limit = plan_limit
+        limit_source = "plan"
+    limit = base_limit + headroom
     if mx_module is None:
         try:
             import mlx.core as mx
@@ -1638,7 +2236,164 @@ def apply_mlx_memory_cap(
     if not callable(setter):
         raise ExpertStreamingConfigurationError("MLX memory limit API is unavailable")
     setter(limit)
-    return {"applied": True, "limit": limit}
+    # Target-mode admission depends on wiring the working set. A refused or
+    # unavailable wired/cache API therefore aborts before any model allocation.
+    wired_report: dict[str, Any] = {}
+    wired_setter = getattr(mx, "set_wired_limit", None)
+    wired_api = "mx.set_wired_limit"
+    if not callable(wired_setter):
+        metal = getattr(mx, "metal", None)
+        wired_setter = getattr(metal, "set_wired_limit", None)
+        wired_api = "mx.metal.set_wired_limit"
+    if callable(wired_setter):
+        try:
+            previous = wired_setter(limit)
+            wired_report = {
+                "wired_limit_applied": True,
+                "wired_limit_bytes": limit,
+                "wired_limit_api": wired_api,
+                "previous_wired_limit_bytes": (
+                    int(previous) if previous is not None else None
+                ),
+            }
+        except Exception as exc:  # pragma: no cover - OS/driver refusal path
+            wired_report = {
+                "wired_limit_applied": False,
+                "wired_limit_bytes": limit,
+                "wired_limit_error": repr(exc),
+            }
+    else:
+        wired_report = {
+            "wired_limit_applied": False,
+            "wired_limit_reason": "set_wired_limit_unavailable",
+        }
+    if box_target is not None and not wired_report["wired_limit_applied"]:
+        raise ExpertStreamingConfigurationError(
+            f"required wired limit could not be applied: {wired_report}")
+    # The retained allocator cache lives within the target-derived limit.
+    cache_report: dict[str, Any] = {}
+    if box_target is not None:
+        cache_bytes = int(box_target["allocator_cache_limit_bytes"])
+        cache_setter = getattr(mx, "set_cache_limit", None)
+        cache_api = "mx.set_cache_limit"
+        if not callable(cache_setter):
+            metal = getattr(mx, "metal", None)
+            cache_setter = getattr(metal, "set_cache_limit", None)
+            cache_api = "mx.metal.set_cache_limit"
+        if callable(cache_setter):
+            try:
+                prev_cache = cache_setter(cache_bytes)
+                cache_report = {
+                    "cache_limit_applied": True,
+                    "cache_limit_bytes": cache_bytes,
+                    "cache_limit_api": cache_api,
+                    "previous_cache_limit_bytes": (
+                        int(prev_cache) if prev_cache is not None else None
+                    ),
+                }
+            except Exception as exc:  # pragma: no cover - OS/driver refusal path
+                cache_report = {
+                    "cache_limit_applied": False,
+                    "cache_limit_bytes": cache_bytes,
+                    "cache_limit_error": repr(exc),
+                }
+        else:
+            cache_report = {
+                "cache_limit_applied": False,
+                "cache_limit_reason": "set_cache_limit_unavailable",
+                "cache_limit_bytes": cache_bytes,
+            }
+        if not cache_report["cache_limit_applied"]:
+            raise ExpertStreamingConfigurationError(
+                f"required cache limit could not be applied: {cache_report}")
+    report: dict[str, Any] = {
+        "applied": True,
+        "limit": limit,
+        "limit_source": limit_source,
+        **wired_report,
+        **cache_report,
+    }
+    if box_target is not None:
+        report["box_target_bytes"] = int(box_target["box_target_bytes"])
+        report["box_target_gb"] = box_target["box_target_gb"]
+        report["box_baseline_bytes"] = int(box_target["box_baseline_bytes"])
+        report["box_baseline_gb"] = round(box_target["box_baseline_gb"], 6)
+        report["box_target_mlx_limit_bytes"] = int(box_target["mlx_limit_bytes"])
+        report["host_overhead_bytes"] = int(box_target["host_overhead_bytes"])
+        report["host_overhead_gib"] = round(box_target["host_overhead_gib"], 6)
+        report["allocator_cache_limit_bytes"] = int(
+            box_target["allocator_cache_limit_bytes"]
+        )
+        report["allocator_cache_limit_gib"] = round(
+            box_target["allocator_cache_limit_gib"], 6
+        )
+        report["transient_band_bytes"] = int(box_target["transient_band_bytes"])
+        report["transient_band_gib"] = round(box_target["transient_band_gib"], 6)
+        report["active_overshoot_bytes"] = int(box_target["active_overshoot_bytes"])
+        report["active_overshoot_gib"] = round(box_target["active_overshoot_gib"], 6)
+        report["engine_reserve_bytes"] = int(box_target["engine_reserve_bytes"])
+        report["session_bank_capacity_bytes"] = int(box_target["session_bank_capacity_bytes"])
+        report["session_bank_reserve_bytes"] = int(box_target["session_bank_reserve_bytes"])
+        report["engine_budget_bytes"] = int(box_target["engine_budget_bytes"])
+        report["python_cache_budget"] = box_target["python_cache_budget"]
+        report["slot_derivation"] = _slot_derivation_report(plan, box_target)
+    return report
+
+
+def _slot_derivation_report(
+    plan: ExpertMemoryPlan, box_target: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The W121 persistent-slot arithmetic for the receipt (David: "track the memory
+    usage so we can efficiently use it").
+
+        engine_budget = allocator_limit - max(transient_band, active_overshoot + cache_room)
+        persistent expert slots = (engine_budget - fixed_footprint) / record_bytes
+
+    ``fixed_footprint_source`` is ``plan.fixed_bytes`` -- the plan's ESTIMATE (residents
+    + KV + reserves + transient service), NOT a live measurement (LOW: labelled as such).
+    ``record_bytes`` is one streamed expert record.  Records what the target SUPPORTS and
+    what the plan (built by the config with ``memory_limit_bytes = engine_budget``)
+    actually resolved, so a receipt shows both agree; it never re-sizes the live plan."""
+
+    allocator_limit = int(box_target["mlx_limit_bytes"])
+    transient_band = int(box_target["transient_band_bytes"])
+    active_overshoot = int(box_target["active_overshoot_bytes"])
+    cache_room = int(box_target["allocator_cache_limit_bytes"])
+    engine_reserve = int(box_target["engine_reserve_bytes"])
+    engine_budget = int(box_target["engine_budget_bytes"])
+    fixed_bytes = int(getattr(plan, "fixed_bytes", 0) or 0)
+    persistent_slots_plan = int(getattr(plan, "persistent_slots", 0) or 0)
+    persistent_cache_bytes = int(getattr(plan, "persistent_cache_bytes", 0) or 0)
+    record_bytes = (
+        persistent_cache_bytes // persistent_slots_plan
+        if persistent_slots_plan > 0
+        else None
+    )
+    slot_allowance = engine_budget - fixed_bytes
+    slots_at_target = (
+        max(0, slot_allowance) // record_bytes if record_bytes else None
+    )
+    return {
+        "formula": (
+            "engine_budget = allocator_limit - max(transient_band, active_overshoot + "
+            "cache_room) - session_bank_reserve; persistent_slots = "
+            "(engine_budget - fixed_footprint) / record_bytes"
+        ),
+        "allocator_limit_bytes": allocator_limit,
+        "transient_band_bytes": transient_band,
+        "active_overshoot_bytes": active_overshoot,
+        "cache_room_bytes": cache_room,
+        "engine_reserve_bytes": engine_reserve,
+        "session_bank_reserve_bytes": int(box_target.get("session_bank_reserve_bytes", 0)),
+        "engine_budget_bytes": engine_budget,
+        # NB: the plan's ESTIMATE of the fixed footprint, not a live measurement.
+        "fixed_footprint_bytes_plan_estimate": fixed_bytes,
+        "slot_allowance_bytes": slot_allowance,
+        "record_bytes": record_bytes,
+        "persistent_slots_at_target": slots_at_target,
+        "persistent_slots_plan": persistent_slots_plan,
+        "persistent_cache_bytes_plan": persistent_cache_bytes,
+    }
 
 
 def mlx_memory_telemetry(mx_module: Any | None = None) -> dict[str, int | str]:
@@ -1662,6 +2417,75 @@ def mlx_memory_telemetry(mx_module: Any | None = None) -> dict[str, int | str]:
     return report
 
 
+# W64 (R3-pin) env flags. Read at USE (never frozen at import), matching every
+# other DSV4.1 lever ([[env-flags-read-at-use-not-import]]): the server stamps
+# the optimization keys AFTER importing the runtime module.
+PIN_WORKING_SET_ENV = "MTPLX_DSV41_PIN_WORKING_SET"
+PIN_REFRESH_TOKENS_ENV = "MTPLX_DSV41_PIN_REFRESH_TOKENS"
+# W71 (K24 revived): the barrier-free device route guarded by the W64 pins. When
+# "1" the switch takes the pinned device path (gather over the pinned-only LUT,
+# defer the all-pinned check) and the backbone establishes pins out-of-band at the
+# prefill->decode boundary + arms the cold-recovery flush. Default off.
+DEVICE_ROUTE_PINNED_ENV = "MTPLX_DSV41_DEVICE_ROUTE_PINNED"
+
+# Reusable no-op context for the "no per-layer lock" branch (global-lock banks
+# are already excluded from W64, so this only stands in for a missing lock).
+_NULL_CTX = nullcontext()
+
+
+def parse_pin_working_set(value: str | None) -> tuple[str, float | None] | None:
+    """Parse ``MTPLX_DSV41_PIN_WORKING_SET`` into a pin spec, or None (off).
+
+    - unset / ``0`` / ``off`` / ``false`` / ``no`` / empty  -> None (default off)
+    - ``all`` / ``keys``                                    -> ``("all", None)``
+      (pin every resident expert -> a fully static layer; the ``pin_ws`` arm)
+    - a fraction in ``(0, 1]`` (``0.5``, ``50%``, ``1.0``)  -> ``("frac", f)``
+      (pin ``round(f * persistent_slots)`` experts)
+    - a positive integer ``K``                              -> ``("slots", K)``
+      (pin the top ``K`` resident experts)
+
+    Ambiguity rule: a bare integer is a slot COUNT; write ``1.0`` / ``100%`` /
+    ``all`` for "the whole set". Anything unparseable is treated as off.
+    """
+
+    if value is None:
+        return None
+    raw = value.strip().lower()
+    if not raw or raw in {"0", "off", "false", "no"}:
+        return None
+    if raw in {"all", "keys", "1.0", "100%"}:
+        return ("all", None)
+    try:
+        if raw.endswith("%"):
+            frac = float(raw[:-1]) / 100.0
+            return ("frac", frac) if 0.0 < frac <= 1.0 else None
+        if "." in raw:
+            frac = float(raw)
+            return ("frac", frac) if 0.0 < frac <= 1.0 else None
+        count = int(raw)
+        return ("slots", float(count)) if count >= 1 else None
+    except ValueError:
+        return None
+
+
+def parse_pin_refresh_tokens(value: str | None) -> int:
+    """Decode ``MTPLX_DSV41_PIN_REFRESH_TOKENS`` (>=1 re-ranks every N decode
+    epochs; 0 / unset / bad = pin once after prefill and never refresh)."""
+
+    if not value:
+        return 0
+    try:
+        n = int(value.strip())
+    except ValueError:
+        return 0
+    return n if n >= 1 else 0
+
+
+# W87: first N DECODE tokens counted as "cold start" for the first-N-token vs
+# steady-state decode hit-rate receipt fields (both slot-pool paths populate them).
+_COLD_START_DECODE_TOKENS = 64
+
+
 class ExpertStreamingRuntime:
     """Connect cache policy, checked I/O, fixed slots, and KV admission."""
 
@@ -1678,6 +2502,7 @@ class ExpertStreamingRuntime:
         memory_cap_report: dict[str, Any] | None = None,
         integrity_report: dict[str, Any] | None = None,
         pipeline_ledger: ExpertPipelineLedger | None = None,
+        single_slot_pool: bool = False,
     ) -> None:
         self.root = root
         self.spec = spec
@@ -1689,6 +2514,21 @@ class ExpertStreamingRuntime:
         self.memory_cap_report = memory_cap_report
         self.integrity_report = integrity_report
         self._pipeline_ledger = pipeline_ledger
+        self._decode_miss_records_per_part = int(
+            config.decode_miss_records_per_part or 0
+        )
+        self._decode_miss_placement = (
+            {
+                (record.layer, record.expert): (
+                    int(record.part),
+                    int(record.sidecar_offset),
+                    int(record.sidecar_length),
+                )
+                for record in manifest.records
+            }
+            if config.decode_miss_records_per_part is not None
+            else {}
+        )
         # Mixed-official (issue #51, M2): per-layer record bytes for telemetry
         # accounting, since ``spec.expert_record_bytes`` raises for mixed. The
         # representative (exemplar) value stands in where a single scalar is
@@ -1727,17 +2567,51 @@ class ExpertStreamingRuntime:
         self.island_layer_set = frozenset(config.island_layers) | frozenset(
             config.mmap_island_layers
         )
+        # W87 single-slot pool (env MTPLX_DSV41_SINGLE_SLOT_POOL): merge each
+        # layer's persistent + transient tiers into ONE scan-resistant resident
+        # pool (only layer cache scope; the two-tier path is byte-identical off).
+        self._single_slot_pool = bool(single_slot_pool)
+        # W87 cold-start decode telemetry: first-N-token vs steady-state decode
+        # hit rate, ALWAYS ON so both paths report the same receipt fields.
+        self._streamed_layer_set = (
+            frozenset(spec.routed_layer_indices) - self.island_layer_set
+        )
+        self._cold_start_decode_tokens = _COLD_START_DECODE_TOKENS
+        self._decode_token_index = 0
+        self._decode_layers_seen: set[int] = set()
+        self._cold_decode_hits = 0
+        self._cold_decode_requests = 0
+        self._steady_decode_hits = 0
+        self._steady_decode_requests = 0
+        # MED-4: re-open the cold window on the first PREFILL route after decode
+        # (a new request), so each request's first decode steps are measured fresh.
+        self._saw_decode_since_prefill = False
+        # W93: ONE shared prefetch ring across all routed layers (the memory bound
+        # -- ``prefetch_ring_slots`` records TOTAL, not per-layer). Every bank
+        # delegates its ring bookkeeping to this instance, keyed by its layer.
+        self._prefetch_ring = (
+            GlobalPrefetchRing(
+                ring_size=plan.prefetch_ring_slots,
+                base=plan.slots_per_layer + plan.transient_slots,
+                expert_count=spec.expert_count,
+            )
+            if plan.prefetch_ring_slots > 0 and self._global_bank is None
+            else None
+        )
         self._banks = (
             {}
             if self._global_bank is not None
             else {
                 layer: LayerExpertSlotBank(
                     expert_count=spec.expert_count,
-                    persistent_slots=plan.slots_per_layer,
+                    persistent_slots=plan.slots_for_layer(layer),
                     transient_slots=plan.transient_slots,
                     frequency_decay=config.frequency_decay,
                     cache_policy=config.cache_policy,
-                    prefetch_slots=plan.prefetch_slots_per_layer,
+                    prefetch_slots=plan.prefetch_ring_slots,
+                    single_pool=self._single_slot_pool,
+                    layer_id=layer,
+                    prefetch_ring=self._prefetch_ring,
                 )
                 for layer in spec.routed_layer_indices
                 if layer not in self.island_layer_set
@@ -1800,6 +2674,47 @@ class ExpertStreamingRuntime:
         self._island_store: Any | None = None
         self._banked_island_store: Any | None = None
         self._shadow_store: Any | None = None
+        # W44 device-route (barrier-free all-hit, K24): per-layer device LUT
+        # (expert -> persistent bank row, -1 = non-resident), rebuilt on the host
+        # ONLY when that layer's residency changes; the resident snapshot each LUT
+        # was built from; a dirty flag per layer; the per-layer component bank
+        # captured from the first fenced binding (so the device path gathers
+        # without a routed binding); and the async verification queue.
+        self._device_route_lut: dict[int, Any] = {}
+        self._device_route_lut_snapshot: dict[int, frozenset[int]] = {}
+        self._device_route_lut_dirty: dict[int, bool] = {}
+        self._device_route_bank: dict[int, Any] = {}
+        self._device_route_probes: list[tuple[int, Any, frozenset[int], bool]] = []
+        # W71 (K24 revived, env ``MTPLX_DSV41_DEVICE_ROUTE_PINNED``): a parallel
+        # PINNED-only LUT (expert -> slot for PINNED experts, -1 for everything
+        # else, so the device gather is exact only on an all-pinned route -- whose
+        # slots W64 guarantees cannot be recycled by normal decode admission). It
+        # is rebuilt on the host only when the layer's PIN set changes (a pin /
+        # refresh, or a memory-forced capacity eviction that unpins an expert),
+        # tracked by its own dirty flag so it never rebuilds off a mere LRU churn
+        # of the unpinned free tail. Telemetry counts the barrier-free (all-pinned,
+        # kept) vs recovered (not-all-pinned, refenced) layers per flush.
+        self._device_route_pinned_lut: dict[int, Any] = {}
+        self._device_route_pinned_snapshot: dict[int, frozenset[int]] = {}
+        self._device_route_pinned_lut_dirty: dict[int, bool] = {}
+        self._device_route_pinned_flushes = 0
+        self._device_route_pinned_barrier_free_layers = 0
+        self._device_route_pinned_recovered_layers = 0
+        # Layers the backbone has forced back onto the fenced path for a W44 cold
+        # recovery pass (the switch skips the device path for these). Empty in the
+        # steady state; set/cleared around a recovery re-run by the decode forward.
+        self._device_route_force_fenced: frozenset[int] = frozenset()
+        # W64 (R3-pin): post-prefill pinned working set (env
+        # ``MTPLX_DSV41_PIN_WORKING_SET``; default off -> every path below is a
+        # byte-identical no-op). Per-layer banks only. ``_pin_last_epoch`` gates
+        # the pin trigger to the first decode route after prefill (and to every
+        # ``MTPLX_DSV41_PIN_REFRESH_TOKENS`` decode epochs when set); the two
+        # counters feed the all-pinned-hit-rate telemetry surfaced in the
+        # snapshot / A/B receipt / served event.
+        self._pin_last_epoch: dict[int, int] = {}
+        self._pin_telemetry_lock = threading.Lock()
+        self._pin_decode_routes = 0
+        self._pin_all_pinned_routes = 0
         self._shadow_serve_routes = 0
         self._shadow_serve_assignments = 0
         self._shadow_serve_experts = 0
@@ -1839,6 +2754,19 @@ class ExpertStreamingRuntime:
         self._prefetch_completions: dict[
             int, list[tuple[int, int | None, bool]]
         ] = {}
+        # W93: (layer, expert) -> the inflight speculative read's future, so the
+        # DEMAND route can await a needed expert's in-flight prefetch instead of
+        # issuing a duplicate read (``_reconcile_prefetch_for_route``). Registered
+        # under ``_prefetch_lock`` alongside ``_prefetch_futures``; dropped when the
+        # read settles (``_finish_prefetch_load``).
+        self._prefetch_inflight_futures: dict[tuple[int, int], Future] = {}
+        # W100: (layer, expert, ticket) of speculative reads issued during a
+        # DSpark VERIFY-phase prefetch, so the async commit path can attribute
+        # ``prefetch_committed_verify`` to the verify without the completion
+        # carrying its issuing phase. Written in ``prefetch_experts`` (verify=True)
+        # and consumed/discarded in ``_apply_prefetch_completions``; guarded by
+        # ``_prefetch_lock`` (same as the completions/futures indices).
+        self._verify_prefetch_tags: set[tuple[int, int, int | None]] = set()
         # Each layer's most recent route-plan misses (updated under the
         # layer lock): their bytes are streaming in on the demand path or
         # freshly transient-resident, so predicting them again would only
@@ -1851,13 +2779,31 @@ class ExpertStreamingRuntime:
         # whole backlog. Beyond this ceiling prefetch_experts plans
         # nothing — speculation is best-effort.
         self._prefetch_backlog_limit = 4 * max(
-            1, plan.prefetch_slots_per_layer
+            1, plan.prefetch_ring_slots
         )
         # Speculative I/O admission: speculation may occupy at most a
         # configured fraction of the inflight read budget, so a demand
         # miss read never queues behind a burst of predictions at the
         # SSD. Concurrency floors at one read (speculation is throttled,
         # never starved) and the ring width still bounds it above.
+        #
+        # W93 lane C (HIGH-3): the fraction budget above can still resolve to a
+        # large executor (~12 reads == ~216 MiB in flight on the 75 GiB profile),
+        # which -- on its own bypass-admission executor -- let a prediction burst
+        # race the current layer's demand misses. Cap the ABSOLUTE number of
+        # concurrent speculative reads (executor max_workers, and thus in-flight
+        # single-record reads) to a small, strictly-smaller-than-demand bound,
+        # default 4. Configurable via MTPLX_DSV41_GATE_PREFETCH_MAX_INFLIGHT, read
+        # here at construction (use, not import); floored at 1 so speculation is
+        # throttled, never starved. The demand-miss executor (_split_executor,
+        # max_workers=transient_slots) is not bounded by this cap.
+        _spec_cap_raw = os.environ.get(
+            "MTPLX_DSV41_GATE_PREFETCH_MAX_INFLIGHT", "4"
+        )
+        try:
+            _spec_inflight_cap = max(1, int(_spec_cap_raw))
+        except (TypeError, ValueError):
+            _spec_inflight_cap = 4
         if config.prefetch_slots > 0:
             inflight_budget = (
                 config.max_inflight_io_bytes
@@ -1869,7 +2815,11 @@ class ExpertStreamingRuntime:
             ) // max(1, spec.expert_record_bytes)
             self._prefetch_max_reads = max(
                 1,
-                min(budget_reads, max(1, plan.prefetch_slots_per_layer)),
+                min(
+                    budget_reads,
+                    max(1, plan.prefetch_ring_slots),
+                    _spec_inflight_cap,
+                ),
             )
         else:
             self._prefetch_max_reads = 0
@@ -1881,6 +2831,77 @@ class ExpertStreamingRuntime:
             if config.prefetch_slots > 0
             else None
         )
+        # W93 lane C: split I/O-byte accounting for the receipt (lane B's snapshot
+        # block reads these by name). ``speculative_bytes_read`` is bumped by the
+        # speculative executor (``_run_speculative_load``); ``demand_bytes_read``
+        # by the reconcile fallback (``_reconcile_prefetch_for_route``) when a
+        # gate-predicted expert's speculative read timed out or failed and the
+        # route had to stream it on the demand path instead.
+        self.speculative_bytes_read = 0
+        self.demand_bytes_read = 0
+        # W95g (HIGH-1 re-review): strict demand priority via a per-token
+        # speculative SHARE with a floor -- NOT a cumulative spec<=(budget x demand)
+        # cap. The old rule (budget 0.5, cumulative) combined with the recovering
+        # window and the negative feedback of every hidden miss shrinking the demand
+        # denominator settled to spec/(spec+demand) <= 1/3, so a real-runtime probe
+        # showed only the first call in a token issuing and every later call
+        # skipped, throttling to ~16-25 issued/token vs the ~149 the design cost
+        # model (§5) needs. The rule is now: skip only when this token's speculative
+        # bytes exceed a SHARE ``f`` of the token's total (spec+demand) SSD bytes,
+        # PLUS a floor of ``floor_records`` records so early speculation (small or
+        # zero demand) is never throttled. ``MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET``
+        # keeps its name but now sets the share ``f``; 0 disables the budget
+        # entirely (what the live windows use right now). Default f = 0.85 under the
+        # v2 runner, else 0.0 (no budget -- the GATE_PREFETCH-only path).
+        _budget_raw = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_BYTE_BUDGET")
+        if _budget_raw is not None:
+            try:
+                self._prefetch_byte_budget = max(0.0, float(_budget_raw))
+            except (TypeError, ValueError):
+                self._prefetch_byte_budget = 0.0
+        elif os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
+            self._prefetch_byte_budget = 0.85
+        else:
+            self._prefetch_byte_budget = 0.0
+        # W95g: the floor (in expert records) below which speculation is never
+        # throttled regardless of the share -- so a token's first prefetch calls
+        # always issue. Env-overridable (MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR);
+        # default 8 records.
+        _floor_raw = os.environ.get("MTPLX_DSV41_GATE_PREFETCH_BYTE_FLOOR")
+        if _floor_raw is not None:
+            try:
+                self._prefetch_byte_floor_records = max(0, int(_floor_raw))
+            except (TypeError, ValueError):
+                self._prefetch_byte_floor_records = 8
+        else:
+            self._prefetch_byte_floor_records = 8
+        self._prefetch_budget_skips = 0
+        # W95g: prefetch_experts calls that reached the budget decision, so the
+        # receipt exposes budget_skips / prefetch_calls (the visible throttle ratio).
+        self._prefetch_calls = 0
+        # W95f: the speculative-byte BUDGET is a RECOVERING per-decode-token window,
+        # not a cumulative-since-open latch. ``demand_bytes_read`` and
+        # ``speculative_bytes_read`` stay cumulative (the receipt reports them and
+        # normalises per decode token); the budget in ``prefetch_experts`` compares
+        # the DELTAS since the last token boundary, marked here and re-snapshotted
+        # whenever ``_decode_token_index`` advances (``_observe_cold_start_unlocked``)
+        # / at ``reset``. Without the window the budget latched off after the first
+        # fallback (spec >> demand forever); with it each token races demand afresh.
+        self._demand_bytes_at_token_start = 0
+        self._speculative_bytes_at_token_start = 0
+        # W93 lane C (MED-a): bound the wait ``_reconcile_prefetch_for_route`` holds
+        # under the layer lock on an in-flight speculative read. Default 2.0 s;
+        # configurable via MTPLX_DSV41_GATE_PREFETCH_RECONCILE_TIMEOUT_S (read at
+        # construction). On timeout the route falls back to a demand load.
+        _reconcile_timeout_raw = os.environ.get(
+            "MTPLX_DSV41_GATE_PREFETCH_RECONCILE_TIMEOUT_S", "2.0"
+        )
+        try:
+            self._prefetch_reconcile_timeout_s = max(
+                0.0, float(_reconcile_timeout_raw)
+            )
+        except (TypeError, ValueError):
+            self._prefetch_reconcile_timeout_s = 2.0
 
     @classmethod
     def open(
@@ -1902,6 +2923,7 @@ class ExpertStreamingRuntime:
         model_spec = get_model_spec(config.model_key) if spec is None else spec
         if model_spec.key != config.model_key:
             raise ExpertStreamingConfigurationError("config and spec model keys differ")
+        validate_deepseek_v41_runtime_env(config.model_key)
         # Optimization-profile enforcement (issue #99): knobs the profile
         # marks not_applicable fail loudly when explicitly forced. This
         # generalizes resident_loader's _verify_kv_quant_honored probe to
@@ -1960,6 +2982,15 @@ class ExpertStreamingRuntime:
                 )
         manifest = load_expert_manifest(manifest_path)
         cls._validate_manifest_identity(manifest, model_spec)
+        if config.decode_miss_records_per_part is not None:
+            if manifest.sidecar is None or any(
+                record.sidecar_offset is None or record.sidecar_length is None
+                for record in manifest.records
+            ):
+                raise ExpertStreamingConfigurationError(
+                    "decode_miss_records_per_part requires construction-verified "
+                    "sidecar placement for every expert record"
+                )
         if config.island_layers and not set(config.island_layers) <= set(
             model_spec.routed_layer_indices
         ):
@@ -2011,13 +3042,46 @@ class ExpertStreamingRuntime:
                 artifact_root,
                 verify_sidecar_hash=config.verify_sidecar_hash_at_open,
             )
+        # W95 v2 runner (MTPLX_DSV41_RUNNER=v2) arms the single scan-resistant pool
+        # (admit every miss) as part of its one composed switch, without the user
+        # stacking MTPLX_DSV41_SINGLE_SLOT_POOL. Inline env read (no import of the
+        # deepseek_v41 helper) keeps this low-level module free of that cycle; the
+        # value is byte-identical to the pre-v2 path when MTPLX_DSV41_RUNNER is unset.
+        _ssp_env = (
+            os.environ.get("MTPLX_DSV41_SINGLE_SLOT_POOL") == "1"
+            or os.environ.get("MTPLX_DSV41_RUNNER") == "v2"
+        )
+        # MED-6: the single slot pool is implemented only for per-layer banks
+        # (GlobalExpertSlotBank has no pool policy and would fault every prefill
+        # wave). Gate it on layer scope and warn rather than crash a served config.
+        # The transition-window policy is itself a construction-time request for
+        # the per-layer merged pool; it does not depend on a second environment
+        # switch.  Other policies retain the existing runner/env selection.
+        single_slot_pool = (
+            config.cache_policy in TRANSITION_WINDOW_CACHE_POLICIES
+            or (_ssp_env and config.cache_scope == "layer")
+        )
+        if _ssp_env and config.cache_scope != "layer":
+            _LOGGER.warning(
+                "MTPLX_DSV41_SINGLE_SLOT_POOL ignored: it requires cache_scope "
+                "'layer' (got %r); running the two-tier path.",
+                config.cache_scope,
+            )
+        if (
+            config.cache_policy in TRANSITION_WINDOW_CACHE_POLICIES
+            and model_spec.expert_count != 384
+        ):
+            raise ExpertStreamingConfigurationError(
+                "transition-window cache policy requires exactly 384 experts"
+            )
         plan = config.memory_plan(
             model_spec,
             additional_resident_bytes=additional_resident_bytes,
             resident_discount_bytes=proj_quant_plan_discount(
                 manifest, config.proj_quant
             )
-            + proj_requant_plan_discount(manifest, config.proj_requant),
+            + proj_requant_plan_discount(manifest, config.proj_requant)
+            + text_only_resident_discount(manifest, model_spec),
             layer_record_bytes=(
                 manifest.record_bytes_by_layer() if mixed_official else None
             ),
@@ -2083,6 +3147,42 @@ class ExpertStreamingRuntime:
             admission_kwargs["expert_admission_receipt"] = (
                 expert_admission_receipt
             )
+        # W123: io read-fanout arm/kill-switch. The reader's ``io_read_fanout``
+        # (default 1 == OFF, byte-identical single scatter) splits a record's
+        # contiguous read into N concurrent sub-reads to raise SSD queue depth
+        # off the QD1 floor. An inline env override lets a window arm or kill the
+        # lever without a code change (like MTPLX_DSV41_SINGLE_SLOT_POOL above):
+        # set MTPLX_DSV41_IO_READ_FANOUT to an int >= 1 (1 disables the fanout).
+        # Unset -> config.io_read_fanout (default 1), so the shipped path is
+        # unchanged. Gated to DeepSeek-V4.1 configs so the DSV4.1-named env never
+        # reshapes another model's reader (red-team MEDIUM); config.io_read_fanout
+        # still applies to any model.
+        _io_read_fanout = config.io_read_fanout
+        _fanout_env = (
+            os.environ.get("MTPLX_DSV41_IO_READ_FANOUT")
+            if str(config.model_key).startswith("deepseek-v41")
+            else None
+        )
+        if _fanout_env is not None:
+            try:
+                _parsed_fanout = int(_fanout_env)
+            except ValueError:
+                _LOGGER.warning(
+                    "MTPLX_DSV41_IO_READ_FANOUT=%r is not an integer; using "
+                    "config io_read_fanout=%d",
+                    _fanout_env,
+                    config.io_read_fanout,
+                )
+            else:
+                if _parsed_fanout >= 1:
+                    _io_read_fanout = _parsed_fanout
+                else:
+                    _LOGGER.warning(
+                        "MTPLX_DSV41_IO_READ_FANOUT=%d must be >= 1; using "
+                        "config io_read_fanout=%d",
+                        _parsed_fanout,
+                        config.io_read_fanout,
+                    )
         try:
             reader = PositionalExpertReader(
                 artifact_root,
@@ -2091,6 +3191,7 @@ class ExpertStreamingRuntime:
                 bypass_page_cache=config.bypass_page_cache,
                 codec_sidecar=codec_sidecar,
                 codec_verify=config.streamed_codec_verify,
+                io_read_fanout=_io_read_fanout,
                 **pipeline_kwargs,
                 **admission_kwargs,
             )
@@ -2146,6 +3247,7 @@ class ExpertStreamingRuntime:
             slots,
             memory_cap_report=cap_report,
             integrity_report=integrity_report,
+            single_slot_pool=single_slot_pool,
             **pipeline_kwargs,
         )
         if config.miss_shadow is not None:
@@ -2239,11 +3341,23 @@ class ExpertStreamingRuntime:
         """Recompute the derived expert-cache allowance and evict down to it.
 
         Runs only at KV boundaries (admission, release, reset); cache hits
-        never reach this path.  Byte accounting is record-granular: every
+        never reach this path.  Those boundaries run on the generation thread,
+        like reset()/close() -- the same thread that holds a deferred route's
+        layer lock -- which is why the flush below (not a blocking re-acquire) is
+        what breaks the self-deadlock.  Byte accounting is record-granular: every
         streamed slot holds exactly ``spec.expert_record_bytes``, so a byte
         allowance maps to an exact entry capacity.
         """
 
+        # A deferred split/all-hit route (split_route_release="deferred",
+        # deferred_pin_release, or the W42/W92 switch fast-path) keeps its layer
+        # lock held until the next covering flush -- but the eviction loop below
+        # takes EVERY layer lock, so on the generation thread (which also runs the
+        # deferral) this KV boundary would self-deadlock waiting on a lock only a
+        # later forward would release.  Drain the deferred releases first (they are
+        # this thread's own, already async-submitted), exactly as reset()/close()
+        # do at their boundaries.  No-op when nothing is deferred.
+        self.flush_deferred_slot_releases(evaluate=True)
         with self._allowance_lock:
             with self._kv_lock:
                 admitted = self._live_kv_tokens + self._pending_kv_tokens
@@ -2301,7 +3415,11 @@ class ExpertStreamingRuntime:
         bank.set_persistent_capacity(capacity)
         skipped: set[int] = set()
         while bank.occupancy > capacity:
-            victim = bank.peek_victim(excluded=skipped)
+            # A KV-growth boundary lowers the cap: memory is the hard constraint,
+            # so a W64 pinned expert may be evicted here as a last resort
+            # (``respect_pins=False``). ``invalidate_expert`` unpins it, and the
+            # device-route dirty marks below rebuild the layer's LUT views.
+            victim = bank.peek_victim(excluded=skipped, respect_pins=False)
             if victim is None:
                 raise ExpertStreamingConfigurationError(
                     f"cannot evict streamed experts on layer {layer} below "
@@ -2310,12 +3428,19 @@ class ExpertStreamingRuntime:
                     "candidate is pinned or loading"
                 )
             expert, slot = victim
+            was_pinned = expert in bank.pinned_experts
             try:
                 self.slots.invalidate(layer, slot, expert=expert)
             except ExpertSlotError:
                 skipped.add(expert)
                 continue
             bank.invalidate_expert(expert)
+            self._mark_device_route_dirty(layer)  # W44: residency changed
+            if was_pinned:
+                # W71 (3): a pinned expert was force-evicted -> its pinned-only LUT
+                # is now stale (slot recycled); invalidate so the next pinned route
+                # touching it is recomputed on the fenced path.
+                self._mark_device_route_pinned_dirty(layer)
 
     def _evict_global_bank_to_capacity(self, capacity: int) -> None:
         """Synchronously evict the global bank's policy victims to a cap."""
@@ -2477,8 +3602,10 @@ class ExpertStreamingRuntime:
         """Release queued routes; the caller just completed a covering eval.
 
         ``evaluate=True`` fences the pending wave outputs first and is safe at
-        any generation-thread boundary (row end, reset, close) where no later
-        eval is guaranteed to cover them.
+        any generation-thread boundary (row end, reset, close, KV admit/release)
+        where no later eval is guaranteed to cover them.  All of these run on the
+        generation thread -- the same thread that enqueues the deferrals -- so the
+        pop/release below is not racing a concurrent append.
         """
 
         pending = getattr(self, "_deferred_slot_releases", None)
@@ -2576,6 +3703,7 @@ class ExpertStreamingRuntime:
                     self._record_cleanup_error(rollback_error)
                 raise
             assert ready is not None
+            _tl.all_hit(layer)  # W125: fully resident route, no miss I/O this layer
             return ready
 
     def _observe_plan(self, layer: int, plan: RoutePlan) -> None:
@@ -2598,6 +3726,79 @@ class ExpertStreamingRuntime:
         self._phase_counters[plan.phase].observe(
             plan, expert_record_bytes=record_bytes
         )
+        self._observe_cold_start_unlocked(layer, plan)
+
+    def _snapshot_prefetch_byte_window(self) -> None:
+        """W95f: open a fresh speculative-byte budget window by marking the current
+        cumulative demand/speculative byte totals as this window's origin. Called at
+        every decode-token boundary (and at ``reset``); the budget in
+        ``prefetch_experts`` throttles on the delta from here, so each token's
+        speculation races that token's demand afresh and the budget cannot latch off
+        for the life of the process. Caller holds ``_counter_lock``."""
+
+        self._demand_bytes_at_token_start = self.demand_bytes_read
+        self._speculative_bytes_at_token_start = self.speculative_bytes_read
+
+    def _observe_cold_start_unlocked(self, layer: int, plan: RoutePlan) -> None:
+        """W87: attribute each DECODE layer-route's assignment hits to the
+        first-N-step (cold-start) or steady-state bucket, advancing the decode-step
+        index at the token boundary (all streamed layers seen, or a layer repeats).
+        Assignment-grained to match ``CacheCounters.hit_rate``.  Always on; both
+        slot-pool paths populate the same fields.  A decode STEP == one full layer
+        sweep == one token in --decode-mode ar (the mode the window A/B runs in);
+        MED-4 re-opens the cold window on the first PREFILL route after decode so
+        each request is measured fresh."""
+
+        if plan.phase is not RoutingPhase.DECODE:
+            if plan.phase is RoutingPhase.PREFILL and self._saw_decode_since_prefill:
+                self._decode_token_index = 0
+                self._decode_layers_seen = set()
+                self._saw_decode_since_prefill = False
+                self._snapshot_prefetch_byte_window()  # W95f: new request window
+            return
+        self._saw_decode_since_prefill = True
+        hit_experts = set(plan.hits)
+        assignment_hits = sum(expert in hit_experts for expert in plan.experts)
+        requests = len(plan.experts)
+        if self._decode_token_index < self._cold_start_decode_tokens:
+            self._cold_decode_hits += assignment_hits
+            self._cold_decode_requests += requests
+        else:
+            self._steady_decode_hits += assignment_hits
+            self._steady_decode_requests += requests
+        seen = self._decode_layers_seen
+        if layer in seen:
+            self._decode_token_index += 1
+            self._decode_layers_seen = {layer}
+            self._snapshot_prefetch_byte_window()  # W95f: new decode-token window
+        else:
+            seen.add(layer)
+            if self._streamed_layer_set and seen >= self._streamed_layer_set:
+                self._decode_token_index += 1
+                self._decode_layers_seen = set()
+                self._snapshot_prefetch_byte_window()  # W95f: new decode-token window
+
+    def _cold_start_telemetry_locked(self) -> dict[str, Any]:
+        """W87 cold-start decode telemetry (caller holds the counter lock)."""
+
+        cold_h, cold_r = self._cold_decode_hits, self._cold_decode_requests
+        warm_h, warm_r = self._steady_decode_hits, self._steady_decode_requests
+        return {
+            "cold_start_decode_steps": self._cold_start_decode_tokens,
+            "decode_steps_observed": self._decode_token_index,
+            "measurement_basis": (
+                "first-64 DECODE STEPS, single-request (verify calls under DSpark, "
+                "one token per step under --decode-mode ar; the cold window "
+                "re-opens per request). Run the window A/B in --decode-mode ar."
+            ),
+            "single_slot_pool": self._single_slot_pool,
+            "first_64_steps_hits": cold_h,
+            "first_64_steps_requests": cold_r,
+            "first_64_steps_hit_rate": (cold_h / cold_r) if cold_r else None,
+            "steady_hits": warm_h,
+            "steady_requests": warm_r,
+            "steady_hit_rate": (warm_h / warm_r) if warm_r else None,
+        }
 
     def _observe_incremental_unlocked(self, *, routes: int, parts: int) -> None:
         self._incremental_miss_routes += routes
@@ -2635,6 +3836,10 @@ class ExpertStreamingRuntime:
                 # not need to copy the entire LRU merely to undo a later
                 # counter failure.
                 policy_txn.commit()
+                # W44: a route that loads/evicts/misses changed this layer's
+                # persistent residency, so its device-route LUT is now stale.
+                if plan.loads or plan.evictions or plan.misses:
+                    self._mark_device_route_dirty(layer)
             except BaseException:
                 for counter, snapshot in zip(counters, counter_snapshots, strict=True):
                     counter.__dict__.clear()
@@ -2688,7 +3893,14 @@ class ExpertStreamingRuntime:
     def _invalidate_policy_expert(self, layer: int, expert: int) -> int | None:
         if self._global_bank is not None:
             return self._global_bank.invalidate_expert(layer, expert)
-        return self._banks[layer].invalidate_expert(expert)
+        bank = self._banks[layer]
+        was_pinned = int(expert) in bank.pinned_experts
+        slot = bank.invalidate_expert(expert)
+        if was_pinned:
+            # W71 (3): forgetting a pinned mapping unpins it -> its pinned-only LUT
+            # entry is stale; invalidate so a later pinned route recomputes fenced.
+            self._mark_device_route_pinned_dirty(layer)
+        return slot
 
     @staticmethod
     def _subset_route_plan(
@@ -2723,7 +3935,46 @@ class ExpertStreamingRuntime:
         )
 
     @staticmethod
-    def _miss_route_parts(plan: RoutePlan) -> tuple[RoutePlan, ...]:
+    def _grouped_miss_route_parts(
+        plan: RoutePlan,
+        *,
+        expert_groups: tuple[tuple[int, ...], ...],
+    ) -> tuple[RoutePlan, ...]:
+        loads_by_expert = {load.expert: load for load in plan.loads}
+        parts: list[RoutePlan] = []
+        for group in expert_groups:
+            group_set = set(group)
+            positions = tuple(
+                index
+                for index, candidate in enumerate(plan.experts)
+                if candidate in group_set
+            )
+            parts.append(
+                RoutePlan(
+                    phase=plan.phase,
+                    experts=tuple(plan.experts[index] for index in positions),
+                    slots=tuple(plan.slots[index] for index in positions),
+                    hits=(),
+                    misses=tuple(
+                        expert for expert in plan.misses if expert in group_set
+                    ),
+                    loads=tuple(loads_by_expert[expert] for expert in group),
+                    evictions=tuple(
+                        eviction
+                        for eviction in plan.evictions
+                        if eviction.next_expert in group_set
+                    ),
+                    generations=(
+                        tuple(plan.generations[index] for index in positions)
+                        if plan.generations
+                        else ()
+                    ),
+                )
+            )
+        return tuple(parts)
+
+    @classmethod
+    def _miss_route_parts(cls, plan: RoutePlan) -> tuple[RoutePlan, ...]:
         """Split a miss plan by expert while preserving assignment duplicates."""
 
         unique_experts = tuple(dict.fromkeys(plan.experts))
@@ -2736,39 +3987,54 @@ class ExpertStreamingRuntime:
             )
         if len({load.slot for load in plan.loads}) != len(plan.loads):
             raise ExpertSlotError("incremental miss parts must own disjoint slots")
-        parts: list[RoutePlan] = []
-        for expert in unique_experts:
-            positions = tuple(
-                index
-                for index, candidate in enumerate(plan.experts)
-                if candidate == expert
+        return cls._grouped_miss_route_parts(
+            plan,
+            expert_groups=tuple((expert,) for expert in unique_experts),
+        )
+
+    def _bounded_decode_miss_route_parts(
+        self,
+        layer: int,
+        plan: RoutePlan,
+    ) -> tuple[RoutePlan, ...]:
+        """Build bounded, sidecar-ordered parts for early miss completion."""
+
+        records_per_part = self._decode_miss_records_per_part
+        placement = self._decode_miss_placement
+        ordered_experts = tuple(
+            load.expert
+            for load in sorted(
+                plan.loads,
+                key=lambda load: placement[(layer, load.expert)][:2],
             )
-            loads = tuple(load for load in plan.loads if load.expert == expert)
-            if len(loads) != 1:
-                raise ExpertSlotError(
-                    "each incremental miss expert must own exactly one slot load"
-                )
-            parts.append(
-                RoutePlan(
-                    phase=plan.phase,
-                    experts=tuple(plan.experts[index] for index in positions),
-                    slots=tuple(plan.slots[index] for index in positions),
-                    hits=(),
-                    misses=(expert,),
-                    loads=loads,
-                    evictions=tuple(
-                        eviction
-                        for eviction in plan.evictions
-                        if eviction.next_expert == expert
-                    ),
-                    generations=(
-                        tuple(plan.generations[index] for index in positions)
-                        if plan.generations
-                        else ()
-                    ),
-                )
-            )
-        return tuple(parts)
+        )
+
+        # Prefer a boundary at a physical gap.  This retains a contiguous
+        # sidecar run in one scatter read unless the run itself exceeds the
+        # construction-time bound.
+        groups: list[tuple[int, ...]] = []
+        start = 0
+        while start < len(ordered_experts):
+            end = min(start + records_per_part, len(ordered_experts))
+            if end < len(ordered_experts):
+                gap = None
+                for index in range(start + 1, end + 1):
+                    left = placement[(layer, ordered_experts[index - 1])]
+                    right = placement[(layer, ordered_experts[index])]
+                    adjacent = (
+                        left[0] == right[0]
+                        and left[1] + left[2] == right[1]
+                    )
+                    if not adjacent:
+                        gap = index
+                if gap is not None:
+                    end = gap
+            groups.append(ordered_experts[start:end])
+            start = end
+        return self._grouped_miss_route_parts(
+            plan,
+            expert_groups=tuple(groups),
+        )
 
     def _rollback_route_loads(self, layer: int, plan: RoutePlan) -> None:
         for load in plan.loads:
@@ -2881,6 +4147,9 @@ class ExpertStreamingRuntime:
                 f"layer {layer} is not routed for {self.spec.key}"
             ) from exc
         lock.acquire()
+        # W93: materialize once so the reconcile scan below and the planner see the
+        # same ids (expert_ids may be a one-shot iterable).
+        expert_ids = tuple(expert_ids)
         plan: RoutePlan | None = None
         policy_txn: RoutePolicyTxn | None = None
         hit_ready: ReadyRoute | None = None
@@ -2891,6 +4160,14 @@ class ExpertStreamingRuntime:
         combined_cancel = _RouteCancel(cancel_event, miss_cancel_event)
         try:
             self._raise_if_unhealthy()
+            # W93 gate-oracle prefetch reconcile (inert unless the ring is armed):
+            # publish settled ring reads and await a needed in-flight one before
+            # planning, so a gate-predicted expert resolves as a hit rather than a
+            # duplicate demand read. Under the layer lock already held here.
+            _tl_rc = _tl.now()  # W125: time the reconcile await (host gap component)
+            self._reconcile_prefetch_for_route(layer, expert_ids)
+            _tl.add_reconcile(layer, _tl_rc)
+            _tl.reconcile_done(layer)
             plan, policy_txn = self._plan_route_transaction(
                 layer,
                 expert_ids,
@@ -2898,21 +4175,52 @@ class ExpertStreamingRuntime:
             )
             hit_plan = self._subset_route_plan(plan, hits=True)
             miss_plan = self._subset_route_plan(plan, hits=False)
-            # Fix (B) overlap: the layer's decode misses go down as ONE part
-            # (single future, admission ahead of the wait, adjacency-run
-            # scatter reads in the pool) instead of one part per expert.
+            # W95f: account this layer-route's DEMAND miss bytes -- the reads that
+            # touch the SSD on the blocking path -- WHERE the demand plan is made,
+            # so the speculative-byte budget has a real demand denominator. At HEAD
+            # the only writer was the reconcile fallback below, so cold demand
+            # misses never advanced it: the budget was inert until the first
+            # fallback and then latched off. ``_reconcile_prefetch_for_route`` above
+            # already promoted settled ring reads to hits and invalidated fell-back
+            # predictions, so ``miss_plan.loads`` is exactly the {cold miss,
+            # fell-back} demand set -- counting it here SUPERSEDES the fallback
+            # increment (which is removed, so no double count). Gated on the ring
+            # being armed so the shipped (ring-off) path stays byte-identical.
+            if (
+                self.config.prefetch_slots > 0
+                and miss_plan is not None
+                and miss_plan.loads
+            ):
+                _demand_record_bytes = self._record_bytes_for_layer(layer)
+                with self._counter_lock:
+                    self.demand_bytes_read += (
+                        len(miss_plan.loads) * _demand_record_bytes
+                    )
+            # Fix (B) overlap submits the layer's decode misses together.  The
+            # unchanged mode uses one part; the construction-selected bounded
+            # mode exposes several completion groups while still submitting all
+            # groups before the caller starts resident work.
             batch_misses = (
                 self.config.overlap_miss_reads
                 and miss_plan is not None
                 and plan.phase is RoutingPhase.DECODE
             )
-            miss_parts = (
-                self._miss_route_parts(miss_plan)
-                if miss_plan is not None
-                and plan.phase is RoutingPhase.DECODE
-                and not batch_misses
-                else ((miss_plan,) if miss_plan is not None else ())
-            )
+            if miss_plan is None:
+                miss_parts = ()
+            elif (
+                batch_misses
+                and self.config.decode_miss_records_per_part is not None
+            ):
+                miss_parts = self._bounded_decode_miss_route_parts(
+                    layer,
+                    miss_plan,
+                )
+            elif batch_misses:
+                miss_parts = (miss_plan,)
+            elif plan.phase is RoutingPhase.DECODE:
+                miss_parts = self._miss_route_parts(miss_plan)
+            else:
+                miss_parts = (miss_plan,)
             pipeline_ledger = self._pipeline_ledger
             if pipeline_ledger is not None:
                 try:
@@ -3004,6 +4312,10 @@ class ExpertStreamingRuntime:
                     )
             else:
                 pending._commit_policy()
+            # W125: the demand miss set is planned and its reads submitted to the
+            # split executor (the miss futures above); this is the "miss set
+            # computed + reads issued" host event for this layer/token.
+            _tl.miss_issue(layer)
             return pending
         except BaseException as setup_error:
             # Mirror the sync-path rollback: without it, a failed hit pin or
@@ -3047,9 +4359,21 @@ class ExpertStreamingRuntime:
     ) -> tuple[RouteWave, ...]:
         return partition_route_waves(
             expert_ids,
-            max_unique_experts=self.plan.transient_slots,
+            max_unique_experts=self._batch_admission_slots(),
             sort_unique=sort_unique,
         )
+
+    def _batch_admission_slots(self) -> int:
+        """W87: max unique experts admitted in ONE transaction (one fence) =
+        ``plan.batch_admission_slots`` (== transient_slots on both paths; the merged-
+        capacity widening was retired, review HIGH-1).  Consumed by ``route_waves``
+        and the expert_mlx verify single-fence gate."""
+
+        # W87: the single-fence wave width is plan.batch_admission_slots
+        # (== transient_slots; the merged-capacity widening was retired, review
+        # HIGH-1) -- transient_slots on both paths (byte-identical).  The single-pool
+        # win is the admission policy (prefill warms the pool, decode 2Q), not width.
+        return int(self.plan.batch_admission_slots or self.plan.transient_slots)
 
     def observe_route(
         self,
@@ -3059,6 +4383,42 @@ class ExpertStreamingRuntime:
         *,
         token_count: int,
     ) -> None:
+        # W125: this call fires immediately after the switch's mx.eval(indices)
+        # routing barrier (the device->host sync / device-LUT resolve), so it is
+        # the "routing indices barrier done" host event for this layer.
+        _tl.barrier_done(layer)
+        # W125 (red-team HIGH-2/MEDIUM): stamp which switch path this run uses, once.
+        # deferred_pin_release / split_route_release are NOT in _PROFILE_PLAN_FIELDS,
+        # so on the shipped default (fenced) with SWITCH_FASTPATH off the split path
+        # blocks on mx.eval of the gather -- meaning ready_to_dispatch and the
+        # miss_issue_to_ready PHASE include GPU gather time; only miss_wait_total
+        # (ACC) is the pure host SSD wait. A reader needs this flag to interpret them.
+        if _tl.enabled() and not _tl.config_noted():
+            _cfg = self.config
+            _dpr = bool(getattr(_cfg, "deferred_pin_release", False))
+            _srr = str(getattr(_cfg, "split_route_release", "fenced"))
+            _fastpath = os.environ.get("MTPLX_DSV41_SWITCH_FASTPATH") == "1"
+            # HIGH-2b: mirror the switch's _deferred_pin_active exactly. The route
+            # fences unless deferred_pin_release OR fastpath_can_defer is set;
+            # split_route_release alone (even "deferred") does NOT stop the fence.
+            # fastpath_can_defer = SWITCH_FASTPATH armed AND this runtime has the
+            # defer/flush seam (the real ExpertStreamingRuntime does).
+            _can_defer = callable(getattr(self, "defer_slot_release", None)) and callable(
+                getattr(self, "flush_deferred_slot_releases", None)
+            )
+            _fastpath_can_defer = _fastpath and _can_defer
+            _tl.note_switch_config(
+                deferred_pin_release=_dpr,
+                split_route_release=_srr,
+                switch_fastpath=_fastpath,
+                fastpath_can_defer=_fastpath_can_defer,
+                overlap_miss_reads=bool(getattr(_cfg, "overlap_miss_reads", False)),
+                device_route=(
+                    os.environ.get("MTPLX_DSV41_DEVICE_ROUTE") == "1"
+                    or os.environ.get("MTPLX_DSV41_DEVICE_ROUTE_PINNED") == "1"
+                ),
+                fenced_split_path=not (_dpr or _fastpath_can_defer),
+            )
         census = self._route_census
         if (
             census is None
@@ -3169,6 +4529,434 @@ class ExpertStreamingRuntime:
         with lock:
             return bank.published_experts(expert_ids)
 
+    # ------------------------------------------------------------------
+    # W44 device-route (barrier-free all-hit; env MTPLX_DSV41_DEVICE_ROUTE).
+    # See docs/deepseek-v41/W44_DEVICE_ROUTE.md.
+    # ------------------------------------------------------------------
+    def _mark_device_route_dirty(self, layer: int) -> None:
+        """Residency for ``layer`` changed -> its device LUT must be rebuilt on
+        the next device-route gather. No-op until the device path is used."""
+
+        if self._device_route_lut:
+            self._device_route_lut_dirty[int(layer)] = True
+
+    def _mark_device_route_pinned_dirty(self, layer: int) -> None:
+        """The PINNED set for ``layer`` changed (a pin, a refresh re-rank, or a
+        force-eviction unpin) -> its pinned-only LUT must be rebuilt on the next
+        pinned device-route gather (W71 (1)/(3)). Kept SEPARATE from the residency
+        dirty mark: a pinned expert's slot never moves while it stays pinned (W64),
+        so a mere free-tail LRU churn -- an unpinned residency change -- leaves the
+        pinned LUT exact and must NOT trigger a rebuild. No-op until the pinned
+        device path has been used."""
+
+        if self._device_route_pinned_lut:
+            self._device_route_pinned_lut_dirty[int(layer)] = True
+
+    def register_component_bank(self, layer: int, bank: Any) -> None:
+        """Capture ``layer``'s component bank from a fenced binding (idempotent),
+        so the device-route path can gather without a routed binding of its own."""
+
+        if bank is not None and int(layer) not in self._device_route_bank:
+            self._device_route_bank[int(layer)] = bank
+
+    def component_bank_for_layer(self, layer: int) -> Any | None:
+        return self._device_route_bank.get(int(layer))
+
+    def device_route_lut(self, layer: int, *, mx_module: Any | None = None) -> Any:
+        """Device expert->slot LUT for ``layer`` (int32 ``[expert_count]``; -1 =
+        non-resident).  Rebuilt on the host only when the layer's persistent
+        residency has changed since the last build; otherwise the cached mx.array
+        is returned unchanged (no host work).  Only per-layer component banks
+        populate the table; under other layouts every expert reads as -1 (a miss),
+        so the device path never fabricates an all-hit it cannot back with the
+        exact resident slot."""
+
+        layer = int(layer)
+        cached = self._device_route_lut.get(layer)
+        if cached is not None and not self._device_route_lut_dirty.get(layer, False):
+            return cached
+        mx = mx_module
+        if mx is None:  # local import: keep this module MLX-free at import time
+            import mlx.core as mx
+        n = int(self.spec.expert_count)
+        table = [-1] * n
+        snapshot: set[int] = set()
+        bank = self._banks.get(layer) if self._banks else None
+        lock = self._layer_locks.get(layer)
+
+        def _fill(source_bank: Any) -> None:
+            slot_map = getattr(source_bank, "_expert_to_slot", None)
+            if not slot_map:
+                return
+            for expert, slot in slot_map.items():
+                e = int(expert)
+                if 0 <= e < n:
+                    table[e] = int(slot)
+                    snapshot.add(e)
+
+        if bank is not None:
+            if lock is not None:
+                # Non-blocking: this rebuild is reached from _run_device_route
+                # BEFORE the per-layer covering flush, so a pending deferred route
+                # (split_route_release="deferred" / deferred_pin_release / the W42
+                # switch fast-path / a W61/W81 verify defer) may hold this layer's
+                # lock. Blocking here would self-deadlock the generation thread; on
+                # contention return None so the caller uses the fenced path (which
+                # flushes) and the LUT stays dirty to rebuild next token. (W92 review.)
+                if not lock.acquire(blocking=False):
+                    return None
+                try:
+                    _fill(bank)
+                finally:
+                    lock.release()
+            else:
+                _fill(bank)
+        arr = mx.array(table, dtype=mx.int32)
+        mx.eval(arr)
+        self._device_route_lut[layer] = arr
+        self._device_route_lut_snapshot[layer] = frozenset(snapshot)
+        self._device_route_lut_dirty[layer] = False
+        return arr
+
+    def device_route_snapshot(self, layer: int) -> frozenset[int]:
+        """The resident-expert set the current LUT for ``layer`` was built from
+        (what an all-hit device gather for ``layer`` is exact against)."""
+
+        return self._device_route_lut_snapshot.get(int(layer), frozenset())
+
+    def device_route_pinned_lut(self, layer: int, *, mx_module: Any | None = None) -> Any:
+        """W71: device expert->slot LUT for ``layer`` built from PINNED experts
+        ONLY (int32 ``[expert_count]``; -1 for every non-pinned expert, resident or
+        not). Rebuilt on the host only when the layer's PIN set changes -- a pin /
+        refresh re-rank or a memory-forced capacity eviction that unpins an expert
+        (``_mark_device_route_pinned_dirty``); otherwise the cached mx.array is
+        returned unchanged. A pinned expert's slot is never recycled by normal
+        decode admission (W64), so an all-pinned route's deferred gather over this
+        table cannot race a recycle -- the safety property W44 §8 lacked. A route
+        touching any non-pinned expert reads -1 -> void row (clamped) and is caught
+        by the deferred flush, which recomputes that layer on the fenced path."""
+
+        layer = int(layer)
+        cached = self._device_route_pinned_lut.get(layer)
+        if cached is not None and not self._device_route_pinned_lut_dirty.get(
+            layer, False
+        ):
+            return cached
+        mx = mx_module
+        if mx is None:  # local import: keep this module MLX-free at import time
+            import mlx.core as mx
+        n = int(self.spec.expert_count)
+        table = [-1] * n
+        snapshot: set[int] = set()
+        bank = self._banks.get(layer) if self._banks else None
+        lock = self._layer_locks.get(layer)
+
+        def _fill(source_bank: Any) -> None:
+            slot_map = getattr(source_bank, "_expert_to_slot", None)
+            if not slot_map:
+                return
+            pinned = getattr(source_bank, "pinned_experts", frozenset())
+            for expert in pinned:
+                e = int(expert)
+                slot = slot_map.get(e)
+                if slot is not None and 0 <= e < n:
+                    table[e] = int(slot)
+                    snapshot.add(e)
+
+        if bank is not None:
+            if lock is not None:
+                # Non-blocking (see device_route_lut): a pending deferred route may
+                # hold this layer's lock before the covering flush; on contention
+                # return None so _run_device_route falls to the fenced path. (W92.)
+                if not lock.acquire(blocking=False):
+                    return None
+                try:
+                    _fill(bank)
+                finally:
+                    lock.release()
+            else:
+                _fill(bank)
+        arr = mx.array(table, dtype=mx.int32)
+        mx.eval(arr)
+        self._device_route_pinned_lut[layer] = arr
+        self._device_route_pinned_snapshot[layer] = frozenset(snapshot)
+        self._device_route_pinned_lut_dirty[layer] = False
+        return arr
+
+    def device_route_pinned_snapshot(self, layer: int) -> frozenset[int]:
+        """The PINNED-expert set the current pinned LUT for ``layer`` was built
+        from (what an all-pinned device gather for ``layer`` is exact against)."""
+
+        return self._device_route_pinned_snapshot.get(int(layer), frozenset())
+
+    def set_device_route_force_fenced(self, layers: Iterable[int]) -> None:
+        """Force ``layers`` onto the fenced path (barrier + admit + gather) for a
+        W44 cold-recovery re-run; pass ``()`` to clear. The switch reads this and
+        skips its device path for those layers, so a flagged miss is repaired
+        byte-identically while every other layer keeps the barrier-free route."""
+
+        self._device_route_force_fenced = frozenset(int(x) for x in layers)
+
+    def enqueue_device_route_probe(
+        self,
+        layer: int,
+        indices: Any,
+        snapshot: frozenset[int],
+        *,
+        pinned: bool = False,
+    ) -> None:
+        """Queue a routed ``indices`` array (already ``async_eval``'d by the
+        switch) for deferred verification. ``pinned`` (W71) selects the check the
+        flush applies: a pinned probe is kept only if every routed expert is
+        CURRENTLY pinned (so a mid-token force-eviction of a pinned expert flips it
+        to a recompute), a resident (W44) probe only if every expert is in the
+        build ``snapshot``."""
+
+        self._device_route_probes.append((int(layer), indices, snapshot, bool(pinned)))
+
+    def flush_device_route_probes(self) -> list[tuple[int, tuple[int, ...]]]:
+        """Read back the queued route indices and return, per probed layer, the
+        experts that were NOT in that layer's LUT snapshot -- the misses whose
+        optimistic gather is void and must be recovered on the fenced path.  An
+        empty result means every probed layer was all-hit (its device gather is
+        byte-identical to the fenced path)."""
+
+        probes = self._device_route_probes
+        if not probes:
+            return []
+        self._device_route_probes = []
+        # ONE batched host sync for the whole span's verification: the ids were
+        # async_eval'd per layer during the barrier-free pass (so they are usually
+        # already resident by now), and evaluating them together here forces a
+        # single device->host round-trip -- not one per layer, which would
+        # reintroduce the ~40 syncs the device route exists to remove. (The
+        # warm/all-hit token therefore costs this ONE verify sync, not 40.)
+        import mlx.core as mx  # local: keep this module MLX-free at import
+
+        mx.eval(*[indices for _layer, indices, _snapshot, _pinned in probes])
+        misses: list[tuple[int, tuple[int, ...]]] = []
+        pinned_probes = 0
+        pinned_recovered = 0
+        for layer, indices, snapshot, pinned in probes:
+            ids = [int(v) for v in indices.reshape(-1).tolist()]
+            if pinned:
+                # W71: verify against the CURRENT pinned set, not the build
+                # snapshot -- so an expert that was pinned when the LUT was built
+                # but has since been force-evicted (unpinned) is flagged for a
+                # fenced recompute, closing the W44 §8 recycle race for the one
+                # case W64 allows a pinned slot to move (memory hard constraint).
+                bank = self._banks.get(layer) if self._banks else None
+                lock = self._layer_locks.get(layer)
+                if bank is not None and lock is not None:
+                    with lock:
+                        pinned_now = getattr(bank, "pinned_experts", frozenset())
+                else:
+                    pinned_now = getattr(bank, "pinned_experts", frozenset())
+                missed = tuple(sorted({e for e in ids if e not in pinned_now}))
+                pinned_probes += 1
+                if missed:
+                    pinned_recovered += 1
+            else:
+                missed = tuple(sorted({e for e in ids if e not in snapshot}))
+            if missed:
+                misses.append((layer, missed))
+        if pinned_probes:
+            self._device_route_pinned_flushes += 1
+            self._device_route_pinned_barrier_free_layers += (
+                pinned_probes - pinned_recovered
+            )
+            self._device_route_pinned_recovered_layers += pinned_recovered
+        return misses
+
+    # ------------------------------------------------------------------
+    # W64 (R3-pin): post-prefill pinned working set + all-pinned telemetry.
+    # See docs/deepseek-v41/W64_PINNED_WORKING_SET.md.
+    # ------------------------------------------------------------------
+    def pin_working_set_hook(
+        self,
+        layer: int,
+        expert_ids: Iterable[int],
+        phase: RoutingPhase | str,
+    ) -> None:
+        """Switch-side per-route hook (env ``MTPLX_DSV41_PIN_WORKING_SET``).
+
+        Default off -> immediate no-op (one env read), so decode is byte-identical
+        to the pre-W64 path. When armed and ``phase`` is DECODE it (1) pins the
+        layer's working set on the first decode route after prefill -- and every
+        ``MTPLX_DSV41_PIN_REFRESH_TOKENS`` decode epochs when set -- and (2)
+        records whether every routed expert was pinned (the all-pinned-hit rate a
+        later device route can turn barrier-free). Never raises: a pin failure
+        disables W64 for the session rather than perturbing decode."""
+
+        spec = parse_pin_working_set(os.environ.get(PIN_WORKING_SET_ENV))
+        if spec is None:
+            return
+        if RoutingPhase(phase) is not RoutingPhase.DECODE:
+            return
+        if self._global_bank is not None:
+            return  # per-layer banks only; global scope is out of W64 scope
+        try:
+            self._maybe_pin_layer(int(layer), spec)
+            self._observe_pin_route(int(layer), expert_ids)
+        except Exception:  # pragma: no cover - defensive; never perturb decode
+            _LOGGER.warning(
+                "W64 pin_working_set hook failed; pinning left as-is for the "
+                "remaining decode",
+                exc_info=True,
+            )
+
+    def _maybe_pin_layer(
+        self, layer: int, spec: tuple[str, float | None]
+    ) -> None:
+        bank = self._banks.get(layer)
+        if bank is None:
+            return
+        lock = self._layer_locks.get(layer)
+        refresh = parse_pin_refresh_tokens(os.environ.get(PIN_REFRESH_TOKENS_ENV))
+        with lock if lock is not None else _NULL_CTX:
+            epoch = bank._decode_epoch
+            last = self._pin_last_epoch.get(layer)
+            if last is not None and (refresh <= 0 or epoch - last < refresh):
+                return
+            mode, value = spec
+            if mode == "all":
+                bank.pin_working_set(experts=bank.resident_experts)
+            else:
+                slots = bank.persistent_slots
+                if mode == "frac":
+                    assert value is not None
+                    k = max(1, int(round(value * slots)))
+                else:
+                    k = int(value or 0)
+                free_tail = max(0, slots - k)
+                bank.pin_working_set(top_k=k, free_tail=free_tail)
+            self._pin_last_epoch[layer] = epoch
+        # Residency contract changed (pinned set is now this layer's static set);
+        # a device-route LUT built before the pin must be rebuilt.
+        self._mark_device_route_dirty(layer)
+        # W71: the pin set changed -> the pinned-only LUT must rebuild too.
+        self._mark_device_route_pinned_dirty(layer)
+
+    def _observe_pin_route(self, layer: int, expert_ids: Iterable[int]) -> None:
+        bank = self._banks.get(layer)
+        if bank is None:
+            return
+        all_pinned = bank.route_all_pinned(expert_ids)
+        with self._pin_telemetry_lock:
+            self._pin_decode_routes += 1
+            if all_pinned:
+                self._pin_all_pinned_routes += 1
+
+    def pin_working_set(self, layer: int | None = None) -> dict[int, tuple[int, ...]]:
+        """Force-pin the working set now (out-of-band from the switch hook).
+
+        Ranks each per-layer bank's resident experts by prefill frequency and
+        pins the top set per the env spec. Returns ``{layer: pinned ids}``. A
+        no-op (``{}``) when the lever is off or the runtime uses a global bank.
+        Exposed for a backbone that prefers to pin explicitly at the prefill ->
+        decode boundary rather than lazily on the first decode route."""
+
+        spec = parse_pin_working_set(os.environ.get(PIN_WORKING_SET_ENV))
+        if spec is None or self._global_bank is not None:
+            return {}
+        layers = (
+            [int(layer)] if layer is not None else sorted(self._banks)
+        )
+        pinned: dict[int, tuple[int, ...]] = {}
+        for lyr in layers:
+            bank = self._banks.get(lyr)
+            if bank is None:
+                continue
+            self._maybe_pin_layer(lyr, spec)
+            pinned[lyr] = tuple(sorted(bank.pinned_experts))
+        return pinned
+
+    def clear_working_set_pins(self) -> None:
+        """Drop every layer's pinned working set (and the pin-epoch gates)."""
+
+        if self._global_bank is not None:
+            return
+        for lyr, bank in self._banks.items():
+            lock = self._layer_locks.get(lyr)
+            with lock if lock is not None else _NULL_CTX:
+                bank.clear_pins()
+            self._mark_device_route_dirty(lyr)
+            self._mark_device_route_pinned_dirty(lyr)  # W71: pin set changed
+        self._pin_last_epoch.clear()
+
+    def layer_pinned_static(self, layer: int) -> bool:
+        """True iff ``layer`` has an active pinned working set (its pinned
+        experts are never recycled on normal admission). A device route may take
+        the barrier-free path for a route only when this holds AND every routed
+        expert is pinned -- see :meth:`route_all_pinned`."""
+
+        bank = self._banks.get(int(layer))
+        return bool(bank is not None and bank.pinned_static)
+
+    def route_all_pinned(self, layer: int, expert_ids: Iterable[int]) -> bool:
+        """True iff every routed expert on ``layer`` is pinned (slot-stable).
+        The per-token gate a barrier-free device route consults (W44 §8)."""
+
+        bank = self._banks.get(int(layer))
+        return bool(bank is not None and bank.route_all_pinned(expert_ids))
+
+    def pinned_working_set_telemetry(self) -> dict[str, Any]:
+        """Snapshot of the W64 pin state (pinned count per layer + the
+        all-pinned-hit rate per decode route). Surfaced in the runtime snapshot,
+        the A/B receipt, and the served event; empty-ish when the lever is off."""
+
+        enabled = parse_pin_working_set(os.environ.get(PIN_WORKING_SET_ENV)) is not None
+        pinned_by_layer: dict[str, int] = {}
+        static_layers: list[int] = []
+        if self._global_bank is None:
+            for lyr in sorted(self._banks):
+                bank = self._banks[lyr]
+                count = bank.pinned_count
+                if count:
+                    pinned_by_layer[str(lyr)] = count
+                    static_layers.append(lyr)
+        with self._pin_telemetry_lock:
+            routes = self._pin_decode_routes
+            all_pinned = self._pin_all_pinned_routes
+        return {
+            "enabled": enabled,
+            "spec": os.environ.get(PIN_WORKING_SET_ENV),
+            "refresh_tokens": parse_pin_refresh_tokens(
+                os.environ.get(PIN_REFRESH_TOKENS_ENV)
+            ),
+            "pinned_by_layer": pinned_by_layer,
+            "pinned_total": sum(pinned_by_layer.values()),
+            "static_layer_count": len(static_layers),
+            "decode_routes": routes,
+            "all_pinned_routes": all_pinned,
+            "all_pinned_hit_rate": (
+                round(all_pinned / routes, 6) if routes else None
+            ),
+        }
+
+    def device_route_pinned_telemetry(self) -> dict[str, Any]:
+        """W71 barrier-free-layer telemetry for the pinned device route (env
+        ``MTPLX_DSV41_DEVICE_ROUTE_PINNED``). Counts, per probe flush (~= per
+        decode token in the steady no-recovery state), how many probed layers
+        were kept barrier-free (every routed expert pinned -> slot-stable, so the
+        deferred gather stands) vs recovered on the fenced path (a routed expert
+        was not pinned or was force-evicted). Cumulative counters, so the
+        served-event delta reports the window's barrier-free-layers-per-token."""
+
+        enabled = os.environ.get(DEVICE_ROUTE_PINNED_ENV) == "1"
+        flushes = self._device_route_pinned_flushes
+        return {
+            "enabled": enabled,
+            "flushes": flushes,
+            "barrier_free_layers": self._device_route_pinned_barrier_free_layers,
+            "recovered_layers": self._device_route_pinned_recovered_layers,
+            "barrier_free_layers_per_flush": (
+                round(self._device_route_pinned_barrier_free_layers / flushes, 6)
+                if flushes
+                else None
+            ),
+        }
+
     def note_shadow_serve(
         self, layer: int, *, assignments: int, experts: int
     ) -> None:
@@ -3191,8 +4979,111 @@ class ExpertStreamingRuntime:
         with self._prefetch_lock:
             return len(self._prefetch_futures) >= self._prefetch_backlog_limit
 
-    def prefetch_experts(self, layer: int, expert_ids: Iterable[int]) -> int:
+    def note_gate_prefetch_predicted(self, layer: int, count: int) -> None:
+        """W93: record the id volume a gate-oracle prediction handed to the ring
+        for ``layer`` (before the ring dedups it against residency/inflight/
+        recent-miss). No-op when the ring is off or the layer is not routed."""
+
+        if self.config.prefetch_slots <= 0 or count <= 0:
+            return
+        layer_counter = self._layer_counters.get(layer)
+        with self._counter_lock:
+            self.counters.prefetch_predicted += int(count)
+            if layer_counter is not None:
+                layer_counter.prefetch_predicted += int(count)
+
+    def _reconcile_prefetch_for_route(
+        self, layer: int, expert_ids: tuple[int, ...]
+    ) -> None:
+        """W93 (item 3): before a DEMAND route plans ``layer``, promote settled
+        ring reads to committed hits and AWAIT any needed expert whose ring read
+        is still in flight -- so the true route reads the already-issued bytes
+        rather than issuing a duplicate demand read.
+
+        Runs under the layer lock the caller (``begin_split_route``) already
+        holds. Deadlock-free: the awaited read runs on a prefetch worker whose
+        ``_run_speculative_load`` takes the layer lock only advisorily
+        (``blocking=False``) and reads through the slot state machine's own locks,
+        never this layer lock. Inert unless the ring is armed, so the shipped
+        demand path is byte-identical with the flag off.
+
+        MED-a: the await is BOUNDED (``_prefetch_reconcile_timeout_s``, default
+        2.0 s). On timeout the route can use a demand load while the ring retains
+        the unfinished writer's assignment. Only a terminal failed/cancelled
+        read can release its ticket; a running read must keep its physical slot
+        until completion, even after the demand route stops waiting."""
+
+        if self.config.prefetch_slots <= 0:
+            return
+        bank = self._banks.get(layer)
+        if bank is None:
+            return
+        # The common case: the read finished during the one-layer overlap window
+        # and only needs publishing (cheap, non-blocking) -> it becomes a hit.
+        self._apply_prefetch_completions(layer, bank)
+        awaited = 0
+        fell_back = 0
+        for expert in dict.fromkeys(int(value) for value in expert_ids):
+            # A committed expert already hit-resolves; only a still-INFLIGHT ring
+            # read has a live ticket here.
+            ticket = bank.prefetch_ticket(expert)
+            if ticket is None:
+                continue
+            with self._prefetch_lock:
+                future = self._prefetch_inflight_futures.get((layer, expert))
+            if future is None:
+                continue
+            # MED-a: bound the wait held under the layer lock. An unbounded
+            # ``future.result()`` parked the generation thread on a stuck
+            # speculative read for the whole route. With a timeout, ``result``
+            # raises on timeout OR read failure. An unpublished ring assignment
+            # is already invisible to demand planning, so a timeout need not
+            # release it. Retaining it prevents a stale physical writer from
+            # overwriting a newer expert in the same ring slot.
+            try:
+                future.result(timeout=self._prefetch_reconcile_timeout_s)
+                ok = True
+            except BaseException:
+                ok = False
+            if ok and bank.prefetch_ticket(expert) == ticket:
+                # Publish the settled read directly (do not race the done
+                # callback's completion record): the true route then hit-resolves
+                # this ring slot instead of issuing a second read.
+                if bank.commit_prefetch(expert, ticket=ticket):
+                    awaited += 1
+            elif not ok:
+                # A finished read cannot write again. An unfinished read still
+                # owns its ring slot; its completion callback will publish or
+                # invalidate it once recycling is safe.
+                if future.done():
+                    bank.invalidate_prefetch(expert, ticket=ticket)
+                fell_back += 1
+        # Catch any reads that settled while we awaited above.
+        self._apply_prefetch_completions(layer, bank)
+        if awaited:
+            with self._counter_lock:
+                self.counters.prefetch_awaited_inflight += awaited
+                self._layer_counters[layer].prefetch_awaited_inflight += awaited
+        # W95f: unpublished experts are re-planned as demand misses by ``_plan_route_transaction``
+        # (begin_split_route), where their bytes are now accounted via
+        # ``miss_plan.loads``. Adding them here as well double-counted the demand
+        # denominator -- and, being fallback-only, this was the sole demand writer,
+        # so cold demand misses went uncounted and the budget stayed inert until a
+        # fallback then latched. The demand increment moved wholesale to the plan
+        # site. (``fell_back`` is left counted above for readability/future
+        # telemetry; it no longer feeds any counter.)
+
+    def prefetch_experts(
+        self, layer: int, expert_ids: Iterable[int], *, verify: bool = False
+    ) -> int:
         """Speculatively load predicted experts into the layer's ring tier.
+
+        ``verify`` (W100) flags a DSpark verify-phase issue (RoutingPhase.DECODE,
+        2..8-row target forward) so the issued/committed reads also accrue to
+        ``prefetch_issued_verify`` / ``prefetch_committed_verify`` -- the AR (M=1)
+        and verify (M=K+1) prefetch would otherwise be indistinguishable in the
+        merged totals. Pure telemetry: ``verify`` never changes which reads issue
+        or the gathered math.
 
         Returns the number of asynchronous loads issued. Zero when prefetch
         is disabled, the layer is an island or unrouted, or every prediction
@@ -3216,6 +5107,65 @@ class ExpertStreamingRuntime:
         executor = self._prefetch_executor
         if executor is None:
             return 0
+        # W95g (HIGH-1 re-review): per-token speculative SHARE with a floor (see the
+        # __init__ budget note). Skip only when this token's speculative bytes exceed
+        # a share ``f`` of the token's total (spec+demand) SSD bytes PLUS a floor of
+        # ``floor_records`` records -- so a token's first prefetch calls always issue
+        # (small/zero demand no longer latches speculation off after one call), while
+        # a sustained speculative burst that dominates the drive still backs off. The
+        # previous rule (spec >= budget x demand) settled to spec/(spec+demand) <= 1/3
+        # -- every hidden miss shrank the demand denominator -- so a probe issued 4 on
+        # the first call and skipped every later one, ~16-25 issued/token vs the ~149
+        # the design table needs. ``prefetch_calls`` counts every call reaching this
+        # decision so budget_skips/prefetch_calls is the visible throttle fraction.
+        # Off (share 0) -> no budget (what the live windows use).
+        #
+        # W95f: the windows are RECOVERING per-decode-token deltas (bytes since the
+        # last token boundary), not cumulative-since-open. The demand denominator
+        # advances on every cold miss (plan site), and the marks re-snapshot at each
+        # token boundary (``_observe_cold_start_unlocked``) / at ``reset``, so a token
+        # that ran speculation ahead races demand afresh next token; the budget can
+        # never latch off for the life of the process.
+        self._prefetch_calls += 1
+        _demand_window = self.demand_bytes_read - self._demand_bytes_at_token_start
+        _spec_window = (
+            self.speculative_bytes_read - self._speculative_bytes_at_token_start
+        )
+        if self._prefetch_byte_budget > 0.0:
+            _record_bytes = self._record_bytes_for_layer(layer)
+            _floor_bytes = self._prefetch_byte_floor_records * _record_bytes
+            _share_cap = (
+                self._prefetch_byte_budget * (_spec_window + _demand_window)
+                + _floor_bytes
+            )
+            if _spec_window > _share_cap:
+                self._prefetch_budget_skips += 1
+                return 0
+        # W93 HIGH-2 (self-starving ring): a speculative read that settles AFTER
+        # its own layer's reconcile stays queued as an unapplied completion, and
+        # its ring slot stays inflight (so unrecyclable) until that layer is
+        # visited again — a whole token later. On the shared ring that pins one
+        # of the 2*k slots per stuck read and starves every other layer's
+        # prefetch. So before planning THIS layer, drain the settled completions
+        # of every OTHER layer whose lock we can take without blocking — each
+        # under its own lock, one at a time (never two layer locks held at once,
+        # so this cannot deadlock; all acquisitions are non-blocking) — turning
+        # settled reads into committed, recyclable entries and freeing their
+        # shared slots.
+        with self._prefetch_lock:
+            other_pending = [
+                other for other in self._prefetch_completions if other != layer
+            ]
+        for other in other_pending:
+            other_bank = self._banks.get(other)
+            other_lock = self._layer_locks.get(other)
+            if other_bank is None or other_lock is None:
+                continue
+            if other_lock.acquire(blocking=False):
+                try:
+                    self._apply_prefetch_completions(other, other_bank)
+                finally:
+                    other_lock.release()
         lock = self._layer_locks[layer]
         # Never block the generation thread on a layer transaction: under
         # deferred split-route release the previous token's pending split
@@ -3223,12 +5173,18 @@ class ExpertStreamingRuntime:
         # flush runs on the very thread calling here. Speculation is
         # best-effort — skip the step instead of waiting.
         if not lock.acquire(blocking=False):
+            # ~3827 deferred-split hazard: the predictions never issued. Count
+            # them so the receipt shows the skip instead of silent loss.
+            if self._prefetch_ring is not None:
+                self._prefetch_ring.note_skipped_lock_held(layer)
             return 0
         try:
             self._apply_prefetch_completions(layer, bank)
             with self._prefetch_lock:
                 backlog = len(self._prefetch_futures)
             if backlog >= self._prefetch_backlog_limit:
+                if self._prefetch_ring is not None:
+                    self._prefetch_ring.note_skipped_backlog(layer)
                 return 0
             recent_misses = self._recent_route_misses.get(layer)
             if recent_misses:
@@ -3238,6 +5194,15 @@ class ExpertStreamingRuntime:
                     if expert not in recent_misses
                 ]
             loads = bank.plan_prefetch(expert_ids)
+            # W93: drain the wasted-read count the plan_prefetch eviction accrued
+            # while we still hold the layer lock. MED-b: the ring attributes each
+            # waste to the VICTIM's layer, so drain the per-layer breakdown (the
+            # victim may be a DIFFERENT layer than this evicting caller).
+            wasted_by_layer = (
+                self._prefetch_ring.consume_wasted_by_layer()
+                if self._prefetch_ring is not None
+                else {}
+            )
             # Assignment tickets bind each load's completion to the exact
             # assignment it filled: the same expert can be recycled and
             # re-assigned while a callback is still queued, and that stale
@@ -3268,16 +5233,42 @@ class ExpertStreamingRuntime:
                 continue
             with self._prefetch_lock:
                 self._prefetch_futures.add(future)
+                # W93: index the future by (layer, expert) so a demand route can
+                # await this exact read (see _reconcile_prefetch_for_route).
+                self._prefetch_inflight_futures[(layer, load.expert)] = future
+                # W100: tag verify-phase reads so the async commit path can
+                # attribute prefetch_committed_verify without the completion
+                # carrying its issuing phase.
+                if verify:
+                    self._verify_prefetch_tags.add(
+                        (layer, load.expert, tickets[load.expert])
+                    )
             future.add_done_callback(
                 lambda completed, layer=layer, expert=load.expert, ticket=(
                     tickets[load.expert]
                 ): self._finish_prefetch_load(layer, expert, ticket, completed)
             )
             issued += 1
-        if issued:
+        record_bytes = self._record_bytes_for_layer(layer)
+        wasted_total = sum(wasted_by_layer.values())
+        if issued or wasted_total:
             with self._counter_lock:
                 self.counters.prefetch_issued += issued
                 self._layer_counters[layer].prefetch_issued += issued
+                # W100: the DSpark verify-phase slice of the same issues.
+                if verify and issued:
+                    self.counters.prefetch_issued_verify += issued
+                    self._layer_counters[layer].prefetch_issued_verify += issued
+                self.counters.prefetch_bytes += issued * record_bytes
+                self._layer_counters[layer].prefetch_bytes += issued * record_bytes
+                if wasted_total:
+                    self.counters.prefetch_wasted += wasted_total
+                    # MED-b: charge each waste to the victim layer that predicted
+                    # it, not to this evicting caller.
+                    for victim_layer, count in wasted_by_layer.items():
+                        victim_counter = self._layer_counters.get(victim_layer)
+                        if victim_counter is not None:
+                            victim_counter.prefetch_wasted += count
         return issued
 
     def _run_speculative_load(
@@ -3291,8 +5282,9 @@ class ExpertStreamingRuntime:
         A load can sit in the executor queue while later plan_prefetch
         calls recycle its ring assignment; performing the read anyway
         would waste SSD bandwidth on bytes whose ticketed commit is
-        guaranteed to be refused. The check is advisory — recycling after
-        it is still caught by the ticket at commit time.
+        guaranteed to be refused. The check is advisory; physical assignment
+        ownership lasts until this worker's Future is terminal. A stale commit
+        check alone cannot prevent a late writer from overwriting recycled bytes.
         """
 
         bank = self._banks.get(layer)
@@ -3300,8 +5292,8 @@ class ExpertStreamingRuntime:
         if bank is None or lock is None:
             return
         # Advisory only, so never block a worker on a route-held layer
-        # lock: when the lock is contended just perform the read — a
-        # recycled assignment's bytes are refused at commit time anyway.
+        # lock: when the lock is contended the still-owned assignment permits
+        # the read to proceed without waiting for generation.
         if lock.acquire(blocking=False):
             try:
                 live = bank.prefetch_ticket(load.expert) == ticket
@@ -3310,6 +5302,12 @@ class ExpertStreamingRuntime:
             if not live:
                 return
         self.slots.load_speculative(layer, load)
+        # W93 lane C: this speculative read actually touched the SSD -- account its
+        # bytes on the speculative side of the demand/speculative split (the early
+        # ``return`` above skips reads whose assignment already recycled).
+        record_bytes = self._record_bytes_for_layer(layer)
+        with self._counter_lock:
+            self.speculative_bytes_read += record_bytes
 
     def _finish_prefetch_load(
         self,
@@ -3330,6 +5328,10 @@ class ExpertStreamingRuntime:
 
         with self._prefetch_lock:
             self._prefetch_futures.discard(future)
+            # W93: drop the (layer, expert) index only if it still points at THIS
+            # future -- a newer prefetch of the same expert may have replaced it.
+            if self._prefetch_inflight_futures.get((layer, expert)) is future:
+                del self._prefetch_inflight_futures[(layer, expert)]
         try:
             future.result()
         except BaseException:
@@ -3354,17 +5356,32 @@ class ExpertStreamingRuntime:
             completions = self._prefetch_completions.pop(layer, None)
         if not completions:
             return
+        # W100: snapshot which of THIS layer's settling reads were verify-tagged
+        # and drop every settled tag (committed or not) so the tag set cannot grow.
+        # Done under _prefetch_lock, without any bank op held under it.
+        keys = [(layer, expert, ticket) for expert, ticket, _ in completions]
+        with self._prefetch_lock:
+            verify_keys = {k for k in keys if k in self._verify_prefetch_tags}
+            self._verify_prefetch_tags.difference_update(keys)
         committed = 0
+        committed_verify = 0
         for expert, ticket, succeeded in completions:
             if succeeded:
                 if bank.commit_prefetch(expert, ticket=ticket):
                     committed += 1
+                    if (layer, expert, ticket) in verify_keys:
+                        committed_verify += 1
             else:
                 bank.invalidate_prefetch(expert, ticket=ticket)
         if committed:
             with self._counter_lock:
                 self.counters.prefetch_committed += committed
                 self._layer_counters[layer].prefetch_committed += committed
+                if committed_verify:
+                    self.counters.prefetch_committed_verify += committed_verify
+                    self._layer_counters[
+                        layer
+                    ].prefetch_committed_verify += committed_verify
 
     def _drain_prefetch_loads(self) -> None:
         """Wait out in-flight speculative loads (bounded single-record reads).
@@ -3384,11 +5401,26 @@ class ExpertStreamingRuntime:
                 pass
         with self._prefetch_lock:
             self._prefetch_completions.clear()
+            # W93: the futures have all settled; their (layer, expert) index dies
+            # with the bank state along with the completions.
+            self._prefetch_inflight_futures.clear()
+            # W100: the verify-attribution tags die with the drained reads.
+            self._verify_prefetch_tags.clear()
 
     def reset(self) -> None:
         # Deferred pin releases must flush (with a covering fence) before the
         # pool resets, or reset waits forever on the final routes' pins.
         self.flush_deferred_slot_releases(evaluate=True)
+        # W44: residency is cleared below, so every device-route LUT is stale and
+        # any un-flushed route probes belong to the pre-reset row. Keep the
+        # captured component banks (physical arrays survive the reset).
+        self._device_route_lut.clear()
+        self._device_route_lut_snapshot.clear()
+        self._device_route_lut_dirty.clear()
+        self._device_route_pinned_lut.clear()
+        self._device_route_pinned_snapshot.clear()
+        self._device_route_pinned_lut_dirty.clear()
+        self._device_route_probes = []
         # Straggler speculative loads hold pool lifecycle claims; without
         # this drain the pool reset below would reject them as active
         # routes. The bank reset then retires any not-yet-committed
@@ -3405,6 +5437,10 @@ class ExpertStreamingRuntime:
             else:
                 for bank in self._banks.values():
                     bank.reset()
+            # W93: the shared ring is reset once here (the banks delegate to it and
+            # do not reset a shared ring themselves).
+            if self._prefetch_ring is not None:
+                self._prefetch_ring.reset()
             self._recent_route_misses.clear()
             with self._counter_lock:
                 self.counters = CacheCounters()
@@ -3416,6 +5452,25 @@ class ExpertStreamingRuntime:
                 }
                 self._incremental_miss_routes = 0
                 self._incremental_miss_parts = 0
+                self._decode_token_index = 0
+                self._decode_layers_seen = set()
+                self._cold_decode_hits = 0
+                self._cold_decode_requests = 0
+                self._steady_decode_hits = 0
+                self._steady_decode_requests = 0
+                self._saw_decode_since_prefill = False
+                # W95g (MEDIUM-1): zero the demand/speculative byte totals and the
+                # budget-skip / prefetch-call counters HERE, matching ``counters``.
+                # Leaving them cumulative made ``_runner_snapshot`` divide bytes
+                # accrued across the AR pass + prefill by the post-reset decode step
+                # count, so the DSpark block's per-token figures folded in the prior
+                # phases. Then re-mark the budget window origin (now 0) -> an empty
+                # window right after reset.
+                self.demand_bytes_read = 0
+                self.speculative_bytes_read = 0
+                self._prefetch_budget_skips = 0
+                self._prefetch_calls = 0
+                self._snapshot_prefetch_byte_window()
             if self.config.trace_routes:
                 with self._route_trace_lock:
                     previous_epoch = self._route_trace_epoch
@@ -3456,6 +5511,7 @@ class ExpertStreamingRuntime:
                 "routes": self._incremental_miss_routes,
                 "parts": self._incremental_miss_parts,
             }
+            cold_start = self._cold_start_telemetry_locked()
         # Never hold the counter lock across slot health/fence inspection.
         slots = self.slots.snapshot()
         snapshot = {
@@ -3466,7 +5522,16 @@ class ExpertStreamingRuntime:
                 "total_limit_bytes": self.plan.total_limit_bytes,
                 "fixed_bytes": self.plan.fixed_bytes,
                 "persistent_cache_bytes": self.plan.persistent_cache_bytes,
-                "slots_per_layer": self.plan.slots_per_layer,
+                "slots_per_layer": (
+                    None
+                    if self.plan.persistent_slots_by_layer
+                    else self.plan.slots_per_layer
+                ),
+                "uniform_equivalent_slots_per_layer": self.plan.slots_per_layer,
+                "persistent_slots_by_layer": {
+                    str(layer): capacity
+                    for layer, capacity in self.plan.persistent_slots_by_layer
+                },
                 "cache_scope": self.config.cache_scope,
                 "global_persistent_slots": (
                     self.plan.persistent_slots
@@ -3474,6 +5539,8 @@ class ExpertStreamingRuntime:
                     else None
                 ),
                 "transient_slots": self.plan.transient_slots,
+                "batch_admission_slots": self._batch_admission_slots(),
+                "single_slot_pool": self._single_slot_pool,
                 "allocated_bytes": self.plan.allocated_bytes,
                 "unallocated_bytes": self.plan.unallocated_bytes,
                 "miss_shadow": self.plan.miss_shadow,
@@ -3499,9 +5566,23 @@ class ExpertStreamingRuntime:
             "cache_by_layer": cache_by_layer,
             "cache_by_phase": cache_by_phase,
             "incremental_misses": incremental_misses,
+            "cold_start": cold_start,
             "slots": slots,
+            "pin_working_set": self.pinned_working_set_telemetry(),
+            "device_route_pinned": self.device_route_pinned_telemetry(),
         }
-        if self._belady_oracle is not None:
+        # W110: the io-thread reader metrics (per-record sha256 engagement +
+        # bytes/reads) so the MTPLX_DSV41_VERIFY_RECORD_HASHES lever's counters
+        # (records_hashed / records_unhashed / hash_thread_ns_total) travel on the receipt.
+        # Guarded: a stub reader without metrics just omits the block.
+        try:
+            snapshot["io"] = self.reader.metrics.as_dict()
+        except Exception:
+            pass
+        if (
+            self._belady_oracle is not None
+            and not self.plan.persistent_slots_by_layer
+        ):
             # The clairvoyant fetch floor over the full decode window, at the
             # actual per-layer slot budget — the runtime analog of the offline
             # replay, reported alongside the measured loads for a live gap.
@@ -3544,6 +5625,20 @@ class ExpertStreamingRuntime:
         }
         if self._pipeline_ledger is not None:
             snapshot["expert_pipeline"] = self._pipeline_ledger.snapshot()
+        # W95f (review HIGH-3): carry the gate-oracle prefetch + v2 runner receipt
+        # blocks on THIS snapshot too (not only resource_telemetry_snapshot), so the
+        # served daemon's stream-counter path (expert_streaming_snapshot -> snapshot
+        # -> serve_stream_counters.snapshot_stream_counters) logs the SSD-hiding
+        # counters. Guarded, so the shipped/off snapshot is byte-unchanged.
+        if self.config.prefetch_slots > 0:
+            snapshot["gate_prefetch"] = self._gate_prefetch_snapshot(
+                cache, cache_by_layer
+            )
+        if os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
+            snapshot["runner"] = self._runner_snapshot(cache, cold_start)
+        # W125: served-path host decode timeline (additive; only when armed).
+        if _tl.enabled():
+            snapshot["decode_timeline"] = _tl.snapshot()
         self._raise_if_unhealthy()
         return snapshot
 
@@ -3568,6 +5663,7 @@ class ExpertStreamingRuntime:
                 "routes": self._incremental_miss_routes,
                 "parts": self._incremental_miss_parts,
             }
+            cold_start = self._cold_start_telemetry_locked()
         # Pool occupancy has independent locks; do not hold the counter lock
         # across that snapshot.
         slots = self.slots.resource_telemetry_snapshot()
@@ -3580,11 +5676,325 @@ class ExpertStreamingRuntime:
             "cache_by_layer": cache_by_layer,
             "cache_by_phase": cache_by_phase,
             "incremental_misses": incremental_misses,
+            "cold_start": cold_start,
+            "pin_working_set": self.pinned_working_set_telemetry(),
+            "device_route_pinned": self.device_route_pinned_telemetry(),
             **slots,
         }
+        # W110: io-thread reader metrics (per-record sha256 engagement) for the
+        # bench sampler's receipt too (records_hashed / records_unhashed /
+        # hash_thread_ns_total). Guarded; a stub reader just omits it.
+        try:
+            snapshot["io"] = self.reader.metrics.as_dict()
+        except Exception:
+            pass
+        # W125: per-token/per-layer host decode timeline (only when the probe is
+        # armed via MTPLX_DSV41_DECODE_TIMELINE=1, so the shipped snapshot is
+        # byte-unchanged off). Additive key.
+        if _tl.enabled():
+            snapshot["decode_timeline"] = _tl.snapshot()
         if self._pipeline_ledger is not None:
             snapshot["expert_pipeline"] = self._pipeline_ledger.snapshot()
+        # W93: the gate-oracle prefetch receipt block (only when the ring is armed,
+        # so the shipped snapshot is unchanged with the flag off).
+        if self.config.prefetch_slots > 0:
+            snapshot["gate_prefetch"] = self._gate_prefetch_snapshot(
+                cache, cache_by_layer
+            )
+        # W95: the v2 runner receipt block -- ONE rolled-up view of the composed
+        # SSD-hiding runner (single pool + prefetch ring + overlap_miss_reads).
+        # Only when MTPLX_DSV41_RUNNER=v2 is armed, so the shipped snapshot is
+        # byte-unchanged off.
+        if os.environ.get("MTPLX_DSV41_RUNNER") == "v2":
+            snapshot["runner"] = self._runner_snapshot(cache, cold_start)
         return snapshot
+
+    def _runner_snapshot(
+        self, cache: dict[str, Any], cold_start: dict[str, Any]
+    ) -> dict[str, Any]:
+        """W95 v2 runner receipt block, built from the already-collected cache
+        counters + W87 cold-start telemetry. Emitted by BOTH ``snapshot`` (the
+        served daemon's stream-counter path) and ``resource_telemetry_snapshot``
+        (the bench sampler), so the paired window reads the SAME SSD-hiding counters
+        whether it scrapes the daemon or the harness receipt.
+
+        W95f (review HIGH-3): carries the ``committed+awaited`` denominator so a
+        prefetch HIT RATE can be derived, and PER-DECODE-TOKEN normalisations
+        (misses/token, speculative-bytes/token) rather than only cumulative-since-
+        open -- the window targets are per token."""
+
+        # W95f (review MEDIUM): report the RESOLVED prefetch width / margin -- the
+        # values the run actually uses -- not the raw env. Re-parsing the env here
+        # (``int(env)`` / ``float(env)``) raised ValueError on a malformed
+        # MTPLX_DSV41_GATE_PREFETCH_MARGIN (e.g. "abc") and lost the whole receipt,
+        # even though the run proceeded because ``_resolve_gate_prefetch_margin``
+        # swallows the bad value. The resolvers also apply the v2 default + explicit-
+        # override precedence, so the receipt matches the routed behaviour. Lazy
+        # import keeps this low-level module free of the deepseek_v41 import cycle
+        # (see the single_slot_pool note in ``open``); a resolver failure falls back
+        # to the v2 defaults rather than dropping the receipt.
+        # W95g (review LOW-1): also resolve the DSpark verify-phase prefetch gate so
+        # the receipt stamps whether the verify speculates and its row bound -- a
+        # self-describing receipt (the verify shares the AR width/margin and the
+        # speculative-byte throttle, stamped in ``verify_prefetch`` below).
+        try:
+            from mtplx.models.deepseek_v41 import (
+                _resolve_gate_prefetch_k,
+                _resolve_gate_prefetch_margin,
+                _runner_v2_enabled,
+                _RUNNER_V2_VERIFY_MAX_ROWS,
+            )
+
+            _k_resolved = int(_resolve_gate_prefetch_k())
+            _margin_resolved = float(_resolve_gate_prefetch_margin())
+            _v2_on = bool(_runner_v2_enabled())
+            _verify_max_rows = int(_RUNNER_V2_VERIFY_MAX_ROWS)
+        except Exception:
+            _k_resolved, _margin_resolved = 6, -0.05
+            _v2_on, _verify_max_rows = True, 8
+        # committed+awaited denominator: a settled ring read is counted in
+        # prefetch_committed XOR prefetch_awaited_inflight (the demand-await publish
+        # path), so their sum is the settled+published total and a prefetch hit rate
+        # (hit_on_true_route / this) is <= 1.0.
+        _committed = int(cache.get("prefetch_committed", 0))
+        _awaited = int(cache.get("prefetch_awaited_inflight", 0))
+        _committed_settled = _committed + _awaited
+        _hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        # W95g (review MEDIUM-2): ``prefetch_hit_on_true_route`` counts EVERY
+        # consumption of a prefetched record, so a resident ring record re-consumed
+        # across tokens makes ``prefetch_hit_rate`` (hit / committed+awaited) exceed
+        # 1.0. ``prefetch_first_consumption_hits`` counts each record's hit at most
+        # once, and ``prefetch_first_hit_rate`` = it / records ISSUED is bounded
+        # [0,1]. Both keys are ADDED; ``prefetch_hit_rate`` keeps its meaning.
+        _first_hit = int(cache.get("prefetch_first_consumption_hits", 0))
+        _issued = int(cache.get("prefetch_issued", 0))
+        # per-decode-token normalisations. ``decode_steps`` is the W87 decode-step
+        # index (one full routed-layer sweep == one token under --decode-mode ar).
+        _steps = int(cold_start.get("decode_steps_observed", 0))
+        _misses = int(cache.get("expert_misses", 0))
+        _bytes_read = int(cache.get("bytes_read", 0))
+        _demand = int(getattr(self, "demand_bytes_read", 0))
+        _spec = int(getattr(self, "speculative_bytes_read", 0))
+
+        def _per_tok(value: int) -> float | None:
+            return (value / _steps) if _steps else None
+
+        return {
+            "mode": "v2",
+            "single_pool": bool(getattr(self, "_single_slot_pool", False)),
+            "overlap_miss_reads": bool(
+                getattr(self.config, "overlap_miss_reads", False)
+            ),
+            "decode_miss_records_per_part": getattr(
+                self.config,
+                "decode_miss_records_per_part",
+                None,
+            ),
+            "verify_shared_overlap": bool(
+                getattr(self.config, "verify_shared_overlap", False)
+            ),
+            "verify_shared_overlap_bound_layers": int(
+                getattr(self, "_verify_shared_overlap_bound_layers", 0)
+            ),
+            # W123: resolved io read-fanout (1 == OFF; the reader holds the
+            # env-override-applied value). Pairs with io.read_inflight_max and
+            # io.read_ns/decode_wall_s to price the realized read-pool queue
+            # depth in the receipt.
+            "io_read_fanout": int(
+                getattr(getattr(self, "reader", None), "io_read_fanout", 1)
+            ),
+            # the retuned prefetch knobs (W95): AR predict width, confidence
+            # margin, global ring size, and the demand-priority byte budget.
+            "prefetch_k": _k_resolved,
+            "prefetch_margin": _margin_resolved,
+            "ring_slots": int(getattr(self.config, "prefetch_slots", 0)),
+            # W95g: byte_budget is now the per-token speculative SHARE f (0 = off),
+            # with a floor of byte_floor_records records; budget_skips / prefetch_calls
+            # is the visible throttle fraction.
+            "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+            "byte_floor_records": int(
+                getattr(self, "_prefetch_byte_floor_records", 0)
+            ),
+            "budget_skips": int(getattr(self, "_prefetch_budget_skips", 0)),
+            "prefetch_calls": int(getattr(self, "_prefetch_calls", 0)),
+            # W95g (review LOW-1): the DSpark verify-phase prefetch gate, stamped so
+            # the receipt self-describes what the verify did. The verify predicts the
+            # per-row UNION of gate_L one layer ahead ONLY under v2, on a
+            # <= ``max_rows`` batch in the DECODE routing phase; it reuses the AR
+            # predict width (``k`` == prefetch_k) + confidence ``margin`` (==
+            # prefetch_margin) and shares the same speculative-byte throttle
+            # (``byte_budget`` / ``byte_floor_records`` == the runner-level keys
+            # above, by construction). ``enabled`` = the gate will speculate on a
+            # verify (v2 armed, width > 0, ring present).
+            "verify_prefetch": {
+                "enabled": bool(
+                    _v2_on
+                    and _k_resolved > 0
+                    and int(getattr(self.config, "prefetch_slots", 0)) > 0
+                ),
+                "max_rows": _verify_max_rows,
+                "k": _k_resolved,
+                "margin": _margin_resolved,
+                "byte_budget": float(getattr(self, "_prefetch_byte_budget", 0.0)),
+                "byte_floor_records": int(
+                    getattr(self, "_prefetch_byte_floor_records", 0)
+                ),
+            },
+            # SSD read (demand vs speculative split shows the drive contention).
+            "expert_misses": _misses,
+            "bytes_read": _bytes_read,
+            "hit_rate": float(cache.get("hit_rate", 0.0)),
+            "demand_bytes_read": _demand,
+            "speculative_bytes_read": _spec,
+            "prefetch_issued": _issued,
+            # W100: the DSpark verify-phase slice, so the paired window can prove
+            # the multi-row verify engaged the prefetch independent of the AR total
+            # (prefetch_issued above merges AR M=1 and verify M=K+1).
+            "prefetch_issued_verify": int(cache.get("prefetch_issued_verify", 0)),
+            "prefetch_committed_verify": int(
+                cache.get("prefetch_committed_verify", 0)
+            ),
+            "prefetch_hit_on_true_route": _hit,
+            "prefetch_wasted": int(cache.get("prefetch_wasted", 0)),
+            "prefetch_bytes": int(cache.get("prefetch_bytes", 0)),
+            "pool_promotions": int(cache.get("promotions", 0)),
+            "pool_loads": int(cache.get("pool_loads", 0)),
+            # committed+awaited denominator + the derived prefetch hit rate.
+            # NOTE (W95g MEDIUM-2): this key counts every consumption in the
+            # numerator and CAN exceed 1.0; use ``prefetch_first_hit_rate`` below for
+            # the bounded [0,1] rate. Kept unchanged for continuity (existing key).
+            "prefetch_committed": _committed_settled,
+            "prefetch_awaited_inflight": _awaited,
+            "prefetch_hit_rate": (
+                _hit / _committed_settled if _committed_settled else 0.0
+            ),
+            # W95g (review MEDIUM-2): first-consumption hits (each prefetched record
+            # counted at most once) and the bounded [0,1] rate over records issued.
+            "prefetch_first_consumption_hits": _first_hit,
+            "prefetch_first_hit_rate": (
+                _first_hit / _issued if _issued else 0.0
+            ),
+            # per-decode-token normalisations (the window targets are per token).
+            "decode_steps": _steps,
+            "expert_misses_per_token": _per_tok(_misses),
+            "bytes_read_per_token": _per_tok(_bytes_read),
+            "demand_bytes_per_token": _per_tok(_demand),
+            "speculative_bytes_per_token": _per_tok(_spec),
+            # Not timed on this path; the receipt derives SSD ms/token from
+            # expert_misses x record_bytes / realized BW.
+            "ssd_wait_ms_per_token": None,
+        }
+
+    def _gate_prefetch_snapshot(
+        self, cache: dict[str, Any], cache_by_layer: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Assemble the W93 ``gate_prefetch`` receipt block from the already
+        collected cache counters: totals, per-layer hit rate, and a one-line
+        census. ``min_layer`` reads the DSV4.1 lever env (gate-prefetch is a
+        DSV4.1 feature); a bad value falls back to the shipped default 4."""
+
+        try:
+            min_layer = max(
+                0, int(os.environ.get("MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER") or 4)
+            )
+        except (TypeError, ValueError):
+            min_layer = 4
+        committed = int(cache.get("prefetch_committed", 0))
+        awaited = int(cache.get("prefetch_awaited_inflight", 0))
+        hit = int(cache.get("prefetch_hit_on_true_route", 0))
+        issued = int(cache.get("prefetch_issued", 0))
+        # W95g (review MEDIUM-2): first-consumption hits (each record at most once).
+        # ``hit_rate`` below counts every consumption in its numerator and can exceed
+        # 1.0; ``first_hit_rate`` = first_consumption_hits / issued is bounded [0,1].
+        first_hit = int(cache.get("prefetch_first_consumption_hits", 0))
+        bytes_prefetched = int(cache.get("prefetch_bytes", 0))
+        # W93 MED-b: an awaited-inflight commit is a ring read that SETTLED and
+        # PUBLISHED — the demand route blocked on the in-flight read and committed
+        # it (``_reconcile_prefetch_for_route``) — which is exactly the meaning of
+        # ``committed``, but it published on the demand-await path rather than the
+        # async-completion path that increments ``prefetch_committed``. It then
+        # counts as a ``hit_on_true_route``, so without folding it in, hit can
+        # exceed committed and hit_rate > 1.0. A settle is counted in committed
+        # XOR awaited (never both), so the sum is the true settled+published total
+        # and hit_rate <= 1.0.
+        committed_settled = committed + awaited
+        # W93 HIGH-2: predictions that never issued, by reason (cumulative, read
+        # from the shared ring; keyed by target layer).
+        skips = (
+            self._prefetch_ring.prefetch_skip_snapshot()
+            if self._prefetch_ring is not None
+            else {
+                "dropped_no_slot": {},
+                "skipped_lock_held": {},
+                "skipped_backlog": {},
+            }
+        )
+        dropped_no_slot = sum(skips["dropped_no_slot"].values())
+        skipped_lock_held = sum(skips["skipped_lock_held"].values())
+        skipped_backlog = sum(skips["skipped_backlog"].values())
+        block: dict[str, Any] = {
+            "k": int(self.config.prefetch_slots),
+            "min_layer": min_layer,
+            "predicted": int(cache.get("prefetch_predicted", 0)),
+            "issued": issued,
+            "committed": committed_settled,
+            "hit_on_true_route": hit,
+            "first_consumption_hits": first_hit,
+            "wasted": int(cache.get("prefetch_wasted", 0)),
+            "awaited_inflight": awaited,
+            "dropped_no_slot": dropped_no_slot,
+            "skipped_lock_held": skipped_lock_held,
+            "skipped_backlog": skipped_backlog,
+            "bytes_prefetched": bytes_prefetched,
+            "hit_rate": (hit / committed_settled) if committed_settled else 0.0,
+            "first_hit_rate": (first_hit / issued) if issued else 0.0,
+        }
+        per_layer: dict[str, Any] = {}
+        for layer, lc in cache_by_layer.items():
+            lcommitted = int(lc.get("prefetch_committed", 0))
+            lawaited = int(lc.get("prefetch_awaited_inflight", 0))
+            lhit = int(lc.get("prefetch_hit_on_true_route", 0))
+            lfirst_hit = int(lc.get("prefetch_first_consumption_hits", 0))
+            lissued = int(lc.get("prefetch_issued", 0))
+            ldropped = int(skips["dropped_no_slot"].get(int(layer), 0))
+            lskip_lock = int(skips["skipped_lock_held"].get(int(layer), 0))
+            lskip_backlog = int(skips["skipped_backlog"].get(int(layer), 0))
+            if not (
+                lc.get("prefetch_predicted")
+                or lc.get("prefetch_issued")
+                or lhit
+                or ldropped
+                or lskip_lock
+                or lskip_backlog
+            ):
+                continue
+            lcommitted_settled = lcommitted + lawaited
+            per_layer[str(layer)] = {
+                "predicted": int(lc.get("prefetch_predicted", 0)),
+                "issued": lissued,
+                "committed": lcommitted_settled,
+                "hit_on_true_route": lhit,
+                "first_consumption_hits": lfirst_hit,
+                "wasted": int(lc.get("prefetch_wasted", 0)),
+                "awaited_inflight": lawaited,
+                "dropped_no_slot": ldropped,
+                "skipped_lock_held": lskip_lock,
+                "skipped_backlog": lskip_backlog,
+                "hit_rate": (lhit / lcommitted_settled) if lcommitted_settled else 0.0,
+                "first_hit_rate": (lfirst_hit / lissued) if lissued else 0.0,
+            }
+        block["per_layer"] = per_layer
+        block["census"] = (
+            f"gate_prefetch k={block['k']} min_layer={min_layer}: "
+            f"predicted={block['predicted']} issued={block['issued']} "
+            f"committed={committed_settled} hit={hit} (rate {block['hit_rate']:.3f}) "
+            f"first_hit={first_hit} (rate {block['first_hit_rate']:.3f}) "
+            f"wasted={block['wasted']} awaited={awaited} "
+            f"dropped={dropped_no_slot} skipped_lock={skipped_lock_held} "
+            f"skipped_backlog={skipped_backlog} "
+            f"bytes={bytes_prefetched / (1024 * 1024):.1f}MiB"
+        )
+        return block
 
     def _flush_route_census(self) -> None:
         """Merge session decode counts to disk and re-derive the placement.

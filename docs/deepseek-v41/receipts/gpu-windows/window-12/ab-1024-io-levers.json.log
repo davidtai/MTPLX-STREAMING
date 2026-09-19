@@ -1,0 +1,13 @@
+=== arm control overrides={} ===
+[control] loaded in 6.5s
+[control] decode 3.889 tok/s  realizedBW 2.2945678993258944  hit 0.17190104166666667  peak 77.68047959730029  sha 35e8bd28e7b8
+=== arm fanout4 overrides={'io_read_fanout': 4} ===
+[fanout4] loaded in 6.5s
+[fanout4] decode 3.870 tok/s  realizedBW 2.2834560144267746  hit 0.17190104166666667  peak 77.68047960102558  sha 35e8bd28e7b8
+=== arm overlap overrides={'overlap_miss_reads': True} ===
+[overlap] loaded in 6.4s
+[overlap] decode 3.860 tok/s  realizedBW 2.277327070345685  hit 0.17190104166666667  peak 77.68047960102558  sha 35e8bd28e7b8
+=== arm overlap_fanout4 overrides={'overlap_miss_reads': True, 'io_read_fanout': 4} ===
+[overlap_fanout4] loaded in 6.5s
+[overlap_fanout4] decode 3.851 tok/s  realizedBW 2.2724708321344016  hit 0.17190104166666667  peak 77.68047960102558  sha 35e8bd28e7b8
+[ab] wrote /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-12/ab-1024-io-levers.json  (4 arms)

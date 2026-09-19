@@ -1,0 +1,106 @@
+FF.FF.F..                                                                [100%]
+=================================== FAILURES ===================================
+_____ test_repeated_prefill_decode_owns_only_current_representation[False] _____
+
+attention = (<test_deepseek_v41_projection_cache_lifetime.Attention object at 0x10999dd00>, namespace(cache=False))
+cache = False
+
+    @pytest.mark.parametrize("cache", [False, True])
+    def test_repeated_prefill_decode_owns_only_current_representation(attention, cache):
+        obj, flags = attention
+        flags.cache = cache
+        previous = None
+        for _ in range(3):
+            dense = obj._o_lora_dense_weight()
+            if previous is not None:
+>               assert previous() is None, "prefill retained the previous decode representation"
+E               AssertionError: prefill retained the previous decode representation
+E               assert array([[[ 0.,  6.],\n        [ 1.,  7.],\n        [ 2.,  8.],\n        [ 3.,  9.],\n        [ 4., 10.],\n        [ 5., 11.]...],\n        [13., 19.],\n        [14., 20.],\n        [15., 21.],\n        [16., 22.],\n        [17., 23.]]], dtype=float16) is None
+E                +  where array([[[ 0.,  6.],\n        [ 1.,  7.],\n        [ 2.,  8.],\n        [ 3.,  9.],\n        [ 4., 10.],\n        [ 5., 11.]...],\n        [13., 19.],\n        [14., 20.],\n        [15., 21.],\n        [16., 22.],\n        [17., 23.]]], dtype=float16) = <weakref at 0x109bf5f30; to 'numpy.ndarray' at 0x109bce970>()
+
+tests/test_deepseek_v41_projection_cache_lifetime.py:62: AssertionError
+_____ test_repeated_prefill_decode_owns_only_current_representation[True] ______
+
+attention = (<test_deepseek_v41_projection_cache_lifetime.Attention object at 0x109b8a420>, namespace(cache=True))
+cache = True
+
+    @pytest.mark.parametrize("cache", [False, True])
+    def test_repeated_prefill_decode_owns_only_current_representation(attention, cache):
+        obj, flags = attention
+        flags.cache = cache
+        previous = None
+        for _ in range(3):
+            dense = obj._o_lora_dense_weight()
+            if previous is not None:
+                assert previous() is None, "prefill retained the previous decode representation"
+            if cache:
+                assert obj._o_lora_dense_weight() is dense
+            expected = dense.astype(np.float16).swapaxes(1, 2).copy()
+            previous = weakref.ref(dense)
+            del dense
+            fused = obj._o_lora_fused_weight()
+>           assert previous() is None, "decode retained the previous prefill representation"
+E           AssertionError: decode retained the previous prefill representation
+E           assert array([[[ 0.,  1.,  2.,  3.,  4.,  5.],\n        [ 6.,  7.,  8.,  9., 10., 11.]],\n\n       [[12., 13., 14., 15., 16., 17.],\n        [18., 19., 20., 21., 22., 23.]]], dtype=float32) is None
+E            +  where array([[[ 0.,  1.,  2.,  3.,  4.,  5.],\n        [ 6.,  7.,  8.,  9., 10., 11.]],\n\n       [[12., 13., 14., 15., 16., 17.],\n        [18., 19., 20., 21., 22., 23.]]], dtype=float32) = <weakref at 0x10a1fff10; to 'numpy.ndarray' at 0x10a23ec70>()
+
+tests/test_deepseek_v41_projection_cache_lifetime.py:69: AssertionError
+______________ test_fused_cache_reloads_each_packed_input[scales] ______________
+
+attention = (<test_deepseek_v41_projection_cache_lifetime.Attention object at 0x109c2c260>, namespace(cache=True))
+member = 'scales'
+
+    @pytest.mark.parametrize("member", ["weight", "scales", "biases"])
+    def test_fused_cache_reloads_each_packed_input(attention, member):
+        obj, _ = attention
+        original = obj._o_lora_fused_weight()
+        obj.wo_a[member] = obj.wo_a[member] + 1
+        rebuilt = obj._o_lora_fused_weight()
+>       assert rebuilt is not original
+E       assert array([[[ 0.,  6.],\n        [ 1.,  7.],\n        [ 2.,  8.],\n        [ 3.,  9.],\n        [ 4., 10.],\n        [ 5., 11.]...],\n        [13., 19.],\n        [14., 20.],\n        [15., 21.],\n        [16., 22.],\n        [17., 23.]]], dtype=float16) is not array([[[ 0.,  6.],\n        [ 1.,  7.],\n        [ 2.,  8.],\n        [ 3.,  9.],\n        [ 4., 10.],\n        [ 5., 11.]...],\n        [13., 19.],\n        [14., 20.],\n        [15., 21.],\n        [16., 22.],\n        [17., 23.]]], dtype=float16)
+
+tests/test_deepseek_v41_projection_cache_lifetime.py:82: AssertionError
+______________ test_fused_cache_reloads_each_packed_input[biases] ______________
+
+attention = (<test_deepseek_v41_projection_cache_lifetime.Attention object at 0x109c2ca40>, namespace(cache=True))
+member = 'biases'
+
+    @pytest.mark.parametrize("member", ["weight", "scales", "biases"])
+    def test_fused_cache_reloads_each_packed_input(attention, member):
+        obj, _ = attention
+        original = obj._o_lora_fused_weight()
+        obj.wo_a[member] = obj.wo_a[member] + 1
+        rebuilt = obj._o_lora_fused_weight()
+>       assert rebuilt is not original
+E       assert array([[[ 0.,  6.],\n        [ 1.,  7.],\n        [ 2.,  8.],\n        [ 3.,  9.],\n        [ 4., 10.],\n        [ 5., 11.]...],\n        [13., 19.],\n        [14., 20.],\n        [15., 21.],\n        [16., 22.],\n        [17., 23.]]], dtype=float16) is not array([[[ 0.,  6.],\n        [ 1.,  7.],\n        [ 2.,  8.],\n        [ 3.,  9.],\n        [ 4., 10.],\n        [ 5., 11.]...],\n        [13., 19.],\n        [14., 20.],\n        [15., 21.],\n        [16., 22.],\n        [17., 23.]]], dtype=float16)
+
+tests/test_deepseek_v41_projection_cache_lifetime.py:82: AssertionError
+__ test_plan_prices_largest_target_representation_and_native_mtp[False-True] ___
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109c2e4b0>
+cache = False, fused = True
+
+    @pytest.mark.parametrize("cache,fused", [(False, False), (False, True), (True, False), (True, True)])
+    def test_plan_prices_largest_target_representation_and_native_mtp(monkeypatch, cache, fused):
+        monkeypatch.setitem(sys.modules, "mtplx.models.deepseek_v41", SimpleNamespace(
+            _resolve_wo_a_cache=lambda: cache, _resolve_attn_fused_proj=lambda: fused))
+        ns = definitions("mtplx/models/deepseek_v41_loader.py",
+                         {"deepseek_v41_additional_resident_bytes"}, {
+            "__package__": "mtplx.models", "NUM_TEXT_LAYERS": 40,
+            "WO_A_DENSE_F32_BYTES": 134217728, "WO_A_DENSE_BF16_BYTES": 67108864,
+            "SWA_WINDOW_BYTES": 5242880, "SLIDING_WINDOW": 128, "KV_LATENT_DIM": 512,
+        })
+        target = 40 * (134217728 if cache else 67108864 if fused else 0)
+        stage = 134217728 if cache else 0
+>       assert ns["deepseek_v41_additional_resident_bytes"](mtp_layers=3) == (
+            5242880 + 3 * 128 * 512 * 4 + target + 3 * stage)
+E       assert 6029312 == (((5242880 + (((3 * 128) * 512) * 4)) + 2684354560) + (3 * 0))
+E        +  where 6029312 = <function deepseek_v41_additional_resident_bytes at 0x10a21c220>(mtp_layers=3)
+
+tests/test_deepseek_v41_projection_cache_lifetime.py:99: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_deepseek_v41_projection_cache_lifetime.py::test_repeated_prefill_decode_owns_only_current_representation[False]
+FAILED tests/test_deepseek_v41_projection_cache_lifetime.py::test_repeated_prefill_decode_owns_only_current_representation[True]
+FAILED tests/test_deepseek_v41_projection_cache_lifetime.py::test_fused_cache_reloads_each_packed_input[scales]
+FAILED tests/test_deepseek_v41_projection_cache_lifetime.py::test_fused_cache_reloads_each_packed_input[biases]
+FAILED tests/test_deepseek_v41_projection_cache_lifetime.py::test_plan_prices_largest_target_representation_and_native_mtp[False-True]

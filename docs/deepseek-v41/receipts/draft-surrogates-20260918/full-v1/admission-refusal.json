@@ -1,0 +1,14 @@
+{
+  "full_model_loaded": false,
+  "decision": "admission_refused_before_model_load",
+  "guard_session": 85153,
+  "exit_code": 1,
+  "live_baseline_bytes": 11137220608,
+  "reference_baseline_bytes": 10240868352,
+  "reference_111_slot_physical_bound_bytes": 109411965148,
+  "same_envelope_111_slot_bound_at_live_baseline_bytes": 110308317404,
+  "over_110gb_bytes": 308317404,
+  "source_commit": "19ea3ac2f888edf5035e3a43bc314bea64f3cb6f",
+  "throughput_measured": false,
+  "fresh_native_output_gate": false
+}

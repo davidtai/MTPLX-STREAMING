@@ -1,0 +1,15 @@
+{
+  "time_utc": "2026-09-19T14:34:43.275312+00:00",
+  "guard_session": 5388,
+  "guard_exit_code": 0,
+  "guard_restored_and_released_at": "2026-09-19T14:33:10Z",
+  "health": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "models": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "lock_free_at_probe": false,
+  "owned_processes": [],
+  "lock_fds": "COMMAND   PID     USER   FD   TYPE DEVICE SIZE/OFF      NODE NAME\nPython  28587 davidtai    3u   REG   1,15        0 261117403 /private/tmp/mtplx-gpu-exclusive.lock\n"
+}

@@ -1,0 +1,14 @@
+# offline decode of receipt token_ids (W106 in-run decode wrote empty text)
+# stream: ar  n=257  eos_index=None
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, but it currently lacks any aggregate summary helper over `GenerationOutput` sequences.
+
+- The module already exposes rich per-request telemetry (`GenerationStats`, `_DecodeTrace`, runtime counters) but no cross-request rollup, so a `summarize_generation_outputs` helper would slot in naturally alongside `_generation_rate_fields` and `_attach_runtime_diagnostics`.
+- Type style is consistent: `from __future__ import annotations`, `Sequence`/`Mapping` from `collections.abc`, `dict[str, Any]` returns, and dataclasses — a new helper should mirror that (e.g., `Sequence[GenerationOutput] -> dict[str, Any]`) and reuse `_generation_rate_fields`-style TPS math rather than re-deriving it.
+- Optional metrics (prefill TPS, decode TPS, peak memory) are frequently absent or zero in this codebase (see `_mlx_memory_stats`, `_generation_rate_fields` zero-guards), so the helper must skip `None`/missing fields and
+
+# stream: dspark  n=257  eos_index=None
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, and the requested `summarize_generation_outputs` helper would fit naturally alongside the existing `_generation_rate_fields` and `_attach_runtime_diagnostics` utilities.
+
+- The module already exposes per-request rate helpers (`_generation_rate_fields`) and a `GenerationStats` dataclass, so a `summarize_generation_outputs` aggregator would compose cleanly on top of those rather than duplicating TPS math.
+- Optional metrics are pervasive (e.g., `paged_kv_capacity_tokens`, `prefill_*_calls`, `ar_return_hidden`), so the helper must defensively use `getattr`/`dict.get` and skip `None` values to honor the "ignore unavailable optional metrics" requirement.
+- The file's style favors module-level `_`-prefixed helpers, `dict[str, Any]` return annotations, and `from __future__ import annotations`, so the new function and its pytest tests should mirror that convention (e.g., `tests/test_generation_summary.py` with an

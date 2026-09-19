@@ -1,0 +1,1111 @@
+{
+  "source_commit": "70331ffc5b7aec6b41cff6d173766811d6ef787b",
+  "static_incremental_bound_bytes": 25769803776,
+  "bound_components": {
+    "mlx_active_cache_and_compile_envelope_bytes": 8589934592,
+    "host_python_reader_compiler_reserve_bytes": 4294967296,
+    "source_file_cache_conservative_reserve_bytes": 12884901888,
+    "raw_expert_bank_max_bytes": 3008102400,
+    "packed_expert_bank_max_bytes": 2831155200,
+    "query_control_payload_bytes": 1730150400,
+    "query_candidate_payload_bytes": 86507520,
+    "packed_scales_bound_bytes": 104857600,
+    "retained_component_outputs_and_inputs_bound_bytes": 268435456,
+    "inactive_allocator_cache_inside_envelope_bytes": 268435456,
+    "unique_expert_source_bytes": 7219445760
+  },
+  "bound_scope": "24GiB incremental. Control retains 1.73GB query weights plus at most160 raw expert rows, then strips scales in place before steady execution. No weight copies on stream reads. One dense worker, original15 expert auxiliary workers. Only evaluated small query/output arrays retained. 8GiB strict Metal envelope includes inactive cache and compiler workspace;4GiB host/compiler plus12GiB conservative cache reserve covers all touched payload.",
+  "box_budget_bytes": 110000000000,
+  "layer": 34,
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "comparison": "Query storage resident versus two rotating buffers, native MXFP8 qmm unchanged. Dense issue follows current demand submission. Ring retirement follows the query-dependent existing router eval. Original packed expert kernels, read pool, parts and policy unchanged except the112-slot memory-funded capacity.",
+  "spec": {
+    "key": "deepseek-v41-flash-expert-mxfp4",
+    "display_name": "DeepSeek-V4.1-Flash expert-only native mxfp4 (gs32 FP4 lossless-repack experts, mxfp8 residents)",
+    "source_model": "deepseek-ai/DeepSeek-V4.1-Flash",
+    "source_revision": "dba1be0a40aa45a94ad051997016db3960a90277",
+    "quant_model": "OpensourceWTF/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+    "quant_revision": "unpublished-mxfp4-repack",
+    "total_tensor_bytes": 7219449856,
+    "total_layers": 40,
+    "routed_layer_start": 34,
+    "routed_layer_count": 1,
+    "expert_count": 384,
+    "top_k": 6,
+    "hidden_size": 5120,
+    "expert_hidden_size": 2304,
+    "quant_bits": 4,
+    "quant_group_size": 32,
+    "quant_parameter_bytes": 1,
+    "router_storage": "source bfloat16 gate with fp32 correction bias (noaux_tc, sqrtsoftplus)",
+    "router_matmul_dtype": "float32",
+    "router_bytes": 0,
+    "kv_bytes_per_token": 0,
+    "mtp_layer_index": null,
+    "mtp_included": false,
+    "full_indexer_layers": [],
+    "island_pin_order": [],
+    "expert_codec": "mxfp4",
+    "swiglu_limit": 10.0
+  },
+  "plan": {
+    "model_key": "deepseek-v41-flash-expert-mxfp4",
+    "total_limit_bytes": 5368709120,
+    "runtime_reserve_bytes": 0,
+    "io_staging_bytes": 0,
+    "execution_workspace_bytes": 0,
+    "context_tokens": 0,
+    "resident_bytes": 4096,
+    "kv_bytes": 0,
+    "transient_slots": 48,
+    "transient_bytes": 902430720,
+    "expert_cache_limit_bytes": 2068070400,
+    "persistent_budget_bytes": 2068070400,
+    "cache_scope": "layer",
+    "persistent_slots": 110,
+    "slots_per_layer": 110,
+    "persistent_cache_bytes": 2068070400,
+    "unallocated_bytes": 2398203904,
+    "fits_fixed": true,
+    "persistent_slots_by_layer": [],
+    "island_layer_count": 0,
+    "island_bytes": 0,
+    "mmap_island_layer_count": 0,
+    "mmap_island_bytes": 0,
+    "prefetch_ring_slots": 0,
+    "prefetch_bytes": 0,
+    "mmap_islands_wired": true,
+    "miss_shadow": null,
+    "shadow_bytes": 0,
+    "batch_admission_slots": 48
+  },
+  "config": {
+    "model_key": "deepseek-v41-flash-expert-mxfp4",
+    "memory_limit_bytes": 5368709120,
+    "max_live_kv_tokens": 17664,
+    "runtime_reserve_bytes": 0,
+    "expert_cache_limit_bytes": 2068070400,
+    "persistent_slots_by_layer": [],
+    "transient_slots": 48,
+    "io_staging_bytes": 0,
+    "execution_workspace_bytes": 0,
+    "max_inflight_io_bytes": null,
+    "max_open_files": 16,
+    "max_read_chunk_bytes": 8388608,
+    "io_read_fanout": 4,
+    "frequency_decay": 0.995,
+    "prefer_sidecar": true,
+    "verify_record_hashes": false,
+    "verify_artifact_headers": true,
+    "verify_sidecar_hash_at_open": false,
+    "prefill_admission": false,
+    "slot_layout": "component-banks",
+    "trace_routes": false,
+    "cache_policy": "transition-window",
+    "cache_scope": "layer",
+    "bypass_page_cache": true,
+    "resource_telemetry": false,
+    "q2_expert_kernel": "stock",
+    "hy3_router_kernel": "mpp-r1-fused-r2",
+    "hy3_router_sigmoid": "precise",
+    "hy3_mtp_shared_kernel": "stock",
+    "hy3_mtp_shared_kernel_depth": 3,
+    "deferred_pin_release": true,
+    "island_layers": [],
+    "island_layer_count": null,
+    "mmap_island_layers": [],
+    "banked_manifest": null,
+    "banked_codec": "none",
+    "streamed_codec": "none",
+    "streamed_codec_manifest": null,
+    "streamed_codec_verify": true,
+    "mmap_island_wired": true,
+    "proj_quant": null,
+    "proj_requant": null,
+    "kv_quant": null,
+    "split_route_release": "deferred",
+    "overlap_miss_reads": true,
+    "decode_miss_records_per_part": 3,
+    "verify_shared_overlap": true,
+    "prefetch_slots": 0,
+    "speculative_io_fraction": 0.25,
+    "route_census": true,
+    "miss_shadow": null,
+    "miss_shadow_layers": null
+  },
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "scope": "Component only: all 40 real native MXFP8 query layers rotate across 206 calls, combined with layer34 actual M6 expert routes and real packed Q4 expert I/O. Synthetic query inputs and saved route IDs with a query-dependent barrier; no attention or complete model. Continuous loop timing, output hashing outside timing. First four calls warm kernels. Resident110 versus two-buffer streamed112 redeems the whole-model payload saving into two extra slots in this one-layer component. This is not full-model throughput evidence.",
+  "replay_source_sha256": "7be3475934f5d2b6049d046afb30c64024aab595225bc0d8f28fd49fc03fdccc",
+  "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "arms": [
+    "resident-110",
+    "stream-112",
+    "resident-110",
+    "stream-112",
+    "resident-110"
+  ],
+  "strict_allocator": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "query_tensors": [
+    {
+      "tensor": "layers.0.attn.wq_b.scales",
+      "shard": "model-00003.safetensors",
+      "offset": 51438174,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.0.attn.wq_b.weight",
+      "shard": "model-00003.safetensors",
+      "offset": 64545374,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.1.attn.wq_b.scales",
+      "shard": "model-00004.safetensors",
+      "offset": 42133082,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.1.attn.wq_b.weight",
+      "shard": "model-00004.safetensors",
+      "offset": 87144026,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.10.attn.wq_b.scales",
+      "shard": "model-00013.safetensors",
+      "offset": 50776176,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.10.attn.wq_b.weight",
+      "shard": "model-00013.safetensors",
+      "offset": 52455536,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.11.attn.wq_b.scales",
+      "shard": "model-00014.safetensors",
+      "offset": 158102394,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.11.attn.wq_b.weight",
+      "shard": "model-00014.safetensors",
+      "offset": 30253850,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.12.attn.wq_b.scales",
+      "shard": "model-00015.safetensors",
+      "offset": 32211982,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.12.attn.wq_b.weight",
+      "shard": "model-00015.safetensors",
+      "offset": 133019150,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.13.attn.wq_b.scales",
+      "shard": "model-00016.safetensors",
+      "offset": 32221204,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.13.attn.wq_b.weight",
+      "shard": "model-00016.safetensors",
+      "offset": 132568948,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.14.attn.wq_b.scales",
+      "shard": "model-00017.safetensors",
+      "offset": 110853607,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.14.attn.wq_b.weight",
+      "shard": "model-00017.safetensors",
+      "offset": 46259687,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.15.attn.wq_b.scales",
+      "shard": "model-00018.safetensors",
+      "offset": 130717314,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.15.attn.wq_b.weight",
+      "shard": "model-00018.safetensors",
+      "offset": 80434818,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.16.attn.wq_b.scales",
+      "shard": "model-00019.safetensors",
+      "offset": 2352146,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.16.attn.wq_b.weight",
+      "shard": "model-00019.safetensors",
+      "offset": 7605266,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.17.attn.wq_b.scales",
+      "shard": "model-00020.safetensors",
+      "offset": 78512770,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.17.attn.wq_b.weight",
+      "shard": "model-00020.safetensors",
+      "offset": 79823490,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.18.attn.wq_b.scales",
+      "shard": "model-00021.safetensors",
+      "offset": 21463068,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.18.attn.wq_b.weight",
+      "shard": "model-00021.safetensors",
+      "offset": 92541468,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.19.attn.wq_b.scales",
+      "shard": "model-00022.safetensors",
+      "offset": 32209430,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.19.attn.wq_b.weight",
+      "shard": "model-00022.safetensors",
+      "offset": 33520150,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.2.attn.wq_b.scales",
+      "shard": "model-00005.safetensors",
+      "offset": 88777161,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.2.attn.wq_b.weight",
+      "shard": "model-00005.safetensors",
+      "offset": 40074697,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.20.attn.wq_b.scales",
+      "shard": "model-00023.safetensors",
+      "offset": 44375309,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.20.attn.wq_b.weight",
+      "shard": "model-00023.safetensors",
+      "offset": 52074765,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.21.attn.wq_b.scales",
+      "shard": "model-00024.safetensors",
+      "offset": 61448720,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.21.attn.wq_b.weight",
+      "shard": "model-00024.safetensors",
+      "offset": 6280208,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.22.attn.wq_b.scales",
+      "shard": "model-00025.safetensors",
+      "offset": 73440116,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.22.attn.wq_b.weight",
+      "shard": "model-00025.safetensors",
+      "offset": 18271604,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.23.attn.wq_b.scales",
+      "shard": "model-00026.safetensors",
+      "offset": 73785618,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.23.attn.wq_b.weight",
+      "shard": "model-00026.safetensors",
+      "offset": 119447826,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.24.attn.wq_b.scales",
+      "shard": "model-00027.safetensors",
+      "offset": 163956605,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.24.attn.wq_b.weight",
+      "shard": "model-00027.safetensors",
+      "offset": 32494877,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.25.attn.wq_b.scales",
+      "shard": "model-00028.safetensors",
+      "offset": 50568306,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.25.attn.wq_b.weight",
+      "shard": "model-00028.safetensors",
+      "offset": 88454782,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.26.attn.wq_b.scales",
+      "shard": "model-00029.safetensors",
+      "offset": 82020996,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.26.attn.wq_b.weight",
+      "shard": "model-00029.safetensors",
+      "offset": 83331716,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.27.attn.wq_b.scales",
+      "shard": "model-00030.safetensors",
+      "offset": 96177786,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.27.attn.wq_b.weight",
+      "shard": "model-00030.safetensors",
+      "offset": 99454842,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.28.attn.wq_b.scales",
+      "shard": "model-00031.safetensors",
+      "offset": 37577145,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.28.attn.wq_b.weight",
+      "shard": "model-00031.safetensors",
+      "offset": 52660665,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.29.attn.wq_b.scales",
+      "shard": "model-00032.safetensors",
+      "offset": 47317538,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.29.attn.wq_b.weight",
+      "shard": "model-00032.safetensors",
+      "offset": 91144738,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.3.attn.wq_b.scales",
+      "shard": "model-00006.safetensors",
+      "offset": 49643596,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.3.attn.wq_b.weight",
+      "shard": "model-00006.safetensors",
+      "offset": 52715608,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.30.attn.wq_b.scales",
+      "shard": "model-00033.safetensors",
+      "offset": 33841774,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.30.attn.wq_b.weight",
+      "shard": "model-00033.safetensors",
+      "offset": 35152494,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.31.attn.wq_b.scales",
+      "shard": "model-00034.safetensors",
+      "offset": 35031416,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.31.attn.wq_b.weight",
+      "shard": "model-00034.safetensors",
+      "offset": 84838776,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.32.attn.wq_b.scales",
+      "shard": "model-00035.safetensors",
+      "offset": 179222747,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.32.attn.wq_b.weight",
+      "shard": "model-00035.safetensors",
+      "offset": 131708879,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.33.attn.wq_b.scales",
+      "shard": "model-00036.safetensors",
+      "offset": 73628198,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.33.attn.wq_b.weight",
+      "shard": "model-00036.safetensors",
+      "offset": 80589350,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.34.attn.wq_b.scales",
+      "shard": "model-00037.safetensors",
+      "offset": 44004378,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.34.attn.wq_b.weight",
+      "shard": "model-00037.safetensors",
+      "offset": 88940570,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.35.attn.wq_b.scales",
+      "shard": "model-00038.safetensors",
+      "offset": 103783566,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.35.attn.wq_b.weight",
+      "shard": "model-00038.safetensors",
+      "offset": 3945614,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.36.attn.wq_b.scales",
+      "shard": "model-00039.safetensors",
+      "offset": 13767617,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.36.attn.wq_b.weight",
+      "shard": "model-00039.safetensors",
+      "offset": 15079873,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.37.attn.wq_b.scales",
+      "shard": "model-00040.safetensors",
+      "offset": 93566468,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.37.attn.wq_b.weight",
+      "shard": "model-00040.safetensors",
+      "offset": 133019236,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.38.attn.wq_b.scales",
+      "shard": "model-00041.safetensors",
+      "offset": 114630796,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.38.attn.wq_b.weight",
+      "shard": "model-00041.safetensors",
+      "offset": 56209964,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.39.attn.wq_b.scales",
+      "shard": "model-00042.safetensors",
+      "offset": 159151994,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.39.attn.wq_b.weight",
+      "shard": "model-00042.safetensors",
+      "offset": 30612090,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.4.attn.wq_b.scales",
+      "shard": "model-00007.safetensors",
+      "offset": 38110296,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.4.attn.wq_b.weight",
+      "shard": "model-00007.safetensors",
+      "offset": 43363416,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.5.attn.wq_b.scales",
+      "shard": "model-00008.safetensors",
+      "offset": 27336784,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.5.attn.wq_b.weight",
+      "shard": "model-00008.safetensors",
+      "offset": 40443984,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.6.attn.wq_b.scales",
+      "shard": "model-00009.safetensors",
+      "offset": 33366514,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.6.attn.wq_b.weight",
+      "shard": "model-00009.safetensors",
+      "offset": 130028370,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.7.attn.wq_b.scales",
+      "shard": "model-00010.safetensors",
+      "offset": 112222732,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.7.attn.wq_b.weight",
+      "shard": "model-00010.safetensors",
+      "offset": 113536108,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.8.attn.wq_b.scales",
+      "shard": "model-00011.safetensors",
+      "offset": 158533987,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.8.attn.wq_b.weight",
+      "shard": "model-00011.safetensors",
+      "offset": 27540835,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    },
+    {
+      "tensor": "layers.9.attn.wq_b.scales",
+      "shard": "model-00012.safetensors",
+      "offset": 27052034,
+      "length": 1310720,
+      "dtype": "U8",
+      "shape": [
+        32768,
+        40
+      ]
+    },
+    {
+      "tensor": "layers.9.attn.wq_b.weight",
+      "shard": "model-00012.safetensors",
+      "offset": 28362754,
+      "length": 41943040,
+      "dtype": "U32",
+      "shape": [
+        32768,
+        320
+      ]
+    }
+  ],
+  "touched_files": [
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/experts.bin",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00003.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00004.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00005.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00006.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00007.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00008.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00009.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00010.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00011.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00012.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00013.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00014.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00015.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00016.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00017.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00018.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00019.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00020.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00021.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00022.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00023.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00024.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00025.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00026.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00027.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00028.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00029.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00030.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00031.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00032.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00033.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00034.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00035.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00036.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00037.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00038.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00039.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00040.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00041.safetensors",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/model-00042.safetensors",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-down_proj-bases.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-down_proj-descriptors.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-down_proj-payload.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-gate_proj-bases.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-gate_proj-descriptors.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-gate_proj-payload.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-up_proj-bases.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-up_proj-descriptors.bin",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/layer34-up_proj-payload.bin"
+  ],
+  "sha256": {
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/dense_io.py": "def641044d525fe2c8a9e3c0cbb9ebd24d55944ad59c7bf9707d641518ca3aa7",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/probe.py": "d30dc2bc7560dd4b9688dc8fe4ddc536468672211b0d6d3560a55eb931208ccc",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/run_screen.py": "0a5c7ba9df18a3f5b405439cdcbec4e1f5773f2747e6b33771dcebe1e1674207",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/stage.py": "e90599627b7f6f831aea316122d2ee948e349e09a3bc51e0c0929cbfc87509d7",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/plane_lane.py": "1acad9e24c37e5c618b2d8e2e98fb93eb94b5476d5c6de6fa0ee054db468ba54",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/restore_bank.py": "1ae63301433058fe491d229851e7638daf25300289af3106b0638b8c57103849",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32",
+    "/private/tmp/dsv41-q4-dense-prefetch-20260919/probe-v1/routes.json": "5dd6c05ba96f9e4f829a372e25bbccb1197fd78031bf104f8bc99906a64a1cac",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_slots.py": "27084ec00f0040644ccc1c93ce4adbc78a65f3fb4b17670cd26d8fb43d75e887",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_io.py": "91b7aba10b8579166ea326225cfdce7d0969943cd0839ea960c4db702c32f06f",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/expert_mlx.py": "9a204d4000471617361a8e397e58af33c331af524aa1f560034416217872fabc",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_streaming_models.py": "aa72a10cfadcd42f6ac285394e0e86f1c38d7185facac961434b95fae49b0913",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+    "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4/expert-manifest.json": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917/manifest.json": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+    "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  }
+}

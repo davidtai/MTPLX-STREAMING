@@ -1,0 +1,8118 @@
+{
+  "scope": "Causal adaptive draft-only replay on saved exact native target states; no target execution, cache-read or throughput claim",
+  "teacher_sha256": "1826c18118b11ddddb75493f2cf03a12c63135855e089a3a5527a4ab8767c7d2",
+  "source_commit": "07998bbd6f696756dd6c76ee0035a855269b7cec",
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "scripts/deepseek_v41/ab_decode_env_levers.py": "32d42a85ebe69ce986e6f8a7d0d20eb435ad70206c8fdc8649aa276043055963",
+    "scripts/deepseek_v41/bench_standard_shape.py": "7a2c5873ac54d90b060ea32a6d0d7c5c395bdf2f19f67023dbed58341e4d70ac",
+    "mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "mtplx/models/deepseek_v41_dspark_decode.py": "3b6c773adea5a8178230143888dd67802e30da4853a22285c868b528a63d8fe1",
+    "mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "scripts/deepseek_v41/gpu_window.sh": "cefdd9533a0dd99910b522b2a8992352db43d5a247bb2b238c9656e40cfa15c8"
+  },
+  "script_sha256": "aad1dfbb5e0ac870e06c12f080e92d3edbe0615e138f279b8539d9530c2e7ff9",
+  "static_active_bound_bytes": 44023414784,
+  "cache_allowance_bytes": 4294967296,
+  "host_allowance_bytes": 4294967296,
+  "baseline": {
+    "sample_start_monotonic_ns": 154644206354833,
+    "sample_end_monotonic_ns": 154644208923041,
+    "process": {
+      "peak_maxrss_bytes": 25772032,
+      "resident_bytes": 26198016,
+      "phys_footprint_bytes": 15237600,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 119075454976,
+      "wired_bytes": 3199877120,
+      "active_bytes": 5762318336,
+      "inactive_bytes": 5538217984,
+      "speculative_bytes": 205520896,
+      "anonymous_bytes": 7329529856,
+      "file_backed_bytes": 4176527360,
+      "compressor_bytes": 1271250944,
+      "compressed_bytes": 6511263744,
+      "used_bytes": 15771664384,
+      "non_file_used_bytes": 11800657920,
+      "swapins_pages": 4820586,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "arms": [
+    {
+      "policy": "fixed5",
+      "cycles": 206,
+      "verify_rows": 1236,
+      "width_counts": {
+        "5": 206
+      },
+      "head_replay_wall_s": 1.9609259999997448,
+      "control_exact_boundaries": true,
+      "mlx_peak_bytes": 21299586448,
+      "host_memory": {
+        "sample_start_monotonic_ns": 154650130061750,
+        "sample_end_monotonic_ns": 154650137462083,
+        "process": {
+          "peak_maxrss_bytes": 18057723904,
+          "resident_bytes": 3676012544,
+          "phys_footprint_bytes": 7735840176,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 95767117824,
+          "wired_bytes": 10806181888,
+          "active_bytes": 6058983424,
+          "inactive_bytes": 5652938752,
+          "speculative_bytes": 15548514304,
+          "anonymous_bytes": 7653179392,
+          "file_backed_bytes": 19607257088,
+          "compressor_bytes": 1271087104,
+          "compressed_bytes": 6510952448,
+          "used_bytes": 23789191168,
+          "non_file_used_bytes": 19730448384,
+          "swapins_pages": 4820586,
+          "swapouts_pages": 7666694,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "rows": [
+        {
+          "position": 0,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            43132,
+            201,
+            43132,
+            3820,
+            18157
+          ]
+        },
+        {
+          "position": 3,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            260,
+            2731,
+            56465,
+            65,
+            862
+          ]
+        },
+        {
+          "position": 6,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            540,
+            90,
+            13898,
+            19303,
+            23042
+          ]
+        },
+        {
+          "position": 10,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            23042,
+            201,
+            3312,
+            13,
+            291
+          ]
+        },
+        {
+          "position": 16,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            86,
+            540,
+            90,
+            13898,
+            70311
+          ]
+        },
+        {
+          "position": 22,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            201,
+            38835,
+            565,
+            19,
+            14
+          ]
+        },
+        {
+          "position": 25,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ]
+        },
+        {
+          "position": 28,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            341,
+            61391,
+            65,
+            93256,
+            5677
+          ]
+        },
+        {
+          "position": 31,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            5677,
+            290,
+            982,
+            989,
+            290
+          ]
+        },
+        {
+          "position": 37,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ]
+        },
+        {
+          "position": 43,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            71029,
+            4731,
+            28,
+            12249,
+            989
+          ]
+        },
+        {
+          "position": 49,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            12275,
+            17856,
+            1879,
+            4731,
+            28
+          ]
+        },
+        {
+          "position": 53,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ]
+        },
+        {
+          "position": 59,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ]
+        },
+        {
+          "position": 65,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            12249,
+            438,
+            223,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 71,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            989,
+            1900,
+            6248,
+            15932,
+            54361
+          ]
+        },
+        {
+          "position": 77,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            12249,
+            23902,
+            290,
+            71029,
+            4731
+          ]
+        },
+        {
+          "position": 81,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            15093,
+            42616,
+            4731,
+            633,
+            438
+          ]
+        },
+        {
+          "position": 84,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            633,
+            4731,
+            438,
+            9846,
+            3682
+          ]
+        },
+        {
+          "position": 90,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1492,
+            71029,
+            4731,
+            855,
+            71029
+          ]
+        },
+        {
+          "position": 96,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1955,
+            223,
+            18,
+            16,
+            18
+          ]
+        },
+        {
+          "position": 102,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            223,
+            18,
+            16,
+            18,
+            201
+          ]
+        },
+        {
+          "position": 108,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            2408,
+            119156,
+            42616,
+            20035,
+            4731
+          ]
+        },
+        {
+          "position": 111,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            317,
+            25763,
+            4731,
+            438,
+            3979
+          ]
+        },
+        {
+          "position": 116,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5677,
+            385,
+            3979,
+            7093,
+            79078
+          ]
+        },
+        {
+          "position": 120,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            14,
+            12275
+          ]
+        },
+        {
+          "position": 126,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1879,
+            20035,
+            4731,
+            11,
+            940
+          ]
+        },
+        {
+          "position": 132,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            10,
+            18,
+            16,
+            18,
+            14
+          ]
+        },
+        {
+          "position": 138,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ]
+        },
+        {
+          "position": 144,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            385,
+            3979,
+            10,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 150,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            14,
+            71029,
+            4731,
+            3872,
+            290
+          ]
+        },
+        {
+          "position": 156,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            290,
+            64285,
+            65,
+            317,
+            25763
+          ]
+        },
+        {
+          "position": 162,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 168,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            14,
+            71029,
+            4731,
+            565,
+            2408
+          ]
+        },
+        {
+          "position": 174,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            682
+          ]
+        },
+        {
+          "position": 180,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            64285,
+            3682,
+            633,
+            4731,
+            438
+          ]
+        },
+        {
+          "position": 186,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            385,
+            9846,
+            3682,
+            58878,
+            1492
+          ]
+        },
+        {
+          "position": 192,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            855
+          ]
+        },
+        {
+          "position": 198,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            1955
+          ]
+        },
+        {
+          "position": 204,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            3006,
+            223
+          ]
+        },
+        {
+          "position": 210,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            16,
+            18,
+            201,
+            290,
+            10151
+          ]
+        },
+        {
+          "position": 216,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            1354,
+            875,
+            385,
+            582,
+            111671
+          ]
+        },
+        {
+          "position": 221,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            4731,
+            3362,
+            64285,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 227,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            989,
+            385,
+            582,
+            111671,
+            3682
+          ]
+        },
+        {
+          "position": 232,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            317,
+            25763,
+            4731,
+            3362,
+            64285
+          ]
+        },
+        {
+          "position": 238,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            317,
+            25763,
+            4731,
+            989,
+            385
+          ]
+        },
+        {
+          "position": 244,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            111671,
+            3682,
+            633,
+            4731,
+            3362
+          ]
+        },
+        {
+          "position": 250,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            3682,
+            633,
+            4731,
+            989,
+            385
+          ]
+        },
+        {
+          "position": 256,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            523,
+            15093,
+            42616,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 262,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            3362,
+            1522,
+            15093,
+            42616,
+            3682
+          ]
+        },
+        {
+          "position": 268,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            4731,
+            989,
+            290,
+            1554,
+            27344
+          ]
+        },
+        {
+          "position": 273,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ]
+        },
+        {
+          "position": 276,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            52287,
+            806,
+            88287,
+            28,
+            52013
+          ]
+        },
+        {
+          "position": 282,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ]
+        },
+        {
+          "position": 285,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ]
+        },
+        {
+          "position": 291,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ]
+        },
+        {
+          "position": 297,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ]
+        },
+        {
+          "position": 301,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ]
+        },
+        {
+          "position": 303,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            105080,
+            8205,
+            603,
+            27344,
+            13
+          ]
+        },
+        {
+          "position": 309,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            29617,
+            83,
+            5230,
+            344,
+            270
+          ]
+        },
+        {
+          "position": 310,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            9952,
+            1082,
+            270,
+            71087,
+            344
+          ]
+        },
+        {
+          "position": 312,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            411,
+            11181,
+            8205,
+            832,
+            270
+          ]
+        },
+        {
+          "position": 315,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            832,
+            1926,
+            387,
+            588,
+            1926
+          ]
+        },
+        {
+          "position": 320,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            582,
+            3567,
+            201,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 323,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            2701,
+            13,
+            361,
+            538,
+            582
+          ]
+        },
+        {
+          "position": 328,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            2041,
+            8390,
+            16,
+            6045,
+            2990
+          ]
+        },
+        {
+          "position": 329,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            8390,
+            16,
+            6045,
+            2990,
+            270
+          ]
+        },
+        {
+          "position": 332,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            83,
+            5230,
+            344,
+            295,
+            764
+          ]
+        },
+        {
+          "position": 336,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            9078,
+            295,
+            764,
+            18,
+            14
+          ]
+        },
+        {
+          "position": 342,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            19,
+            28881,
+            13,
+            361,
+            16786
+          ]
+        },
+        {
+          "position": 348,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            13,
+            361,
+            855,
+            554,
+            24216
+          ]
+        },
+        {
+          "position": 353,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1137,
+            13,
+            528,
+            1354,
+            9952
+          ]
+        },
+        {
+          "position": 359,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            361,
+            15320,
+            438,
+            24216
+          ]
+        },
+        {
+          "position": 365,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            14724,
+            11,
+            362,
+            374,
+            295
+          ]
+        },
+        {
+          "position": 366,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ]
+        },
+        {
+          "position": 372,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            361,
+            855,
+            9080,
+            10
+          ]
+        },
+        {
+          "position": 378,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            11,
+            2606,
+            223,
+            19,
+            1137
+          ]
+        },
+        {
+          "position": 384,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            528,
+            1354,
+            12249,
+            10,
+            28798
+          ]
+        },
+        {
+          "position": 387,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 393,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            3979,
+            10,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 399,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            14,
+            1550,
+            10,
+            19,
+            16
+          ]
+        },
+        {
+          "position": 405,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            14,
+            12249,
+            26253,
+            28474,
+            982
+          ]
+        },
+        {
+          "position": 411,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            6321,
+            10,
+            28798,
+            11,
+            565
+          ]
+        },
+        {
+          "position": 417,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            19,
+            682,
+            13,
+            361,
+            4263
+          ]
+        },
+        {
+          "position": 423,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203
+          ]
+        },
+        {
+          "position": 425,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            682,
+            13,
+            361,
+            9509,
+            438
+          ]
+        },
+        {
+          "position": 431,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ]
+        },
+        {
+          "position": 437,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            9080,
+            10,
+            28798,
+            11,
+            565
+          ]
+        },
+        {
+          "position": 443,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            19,
+            682,
+            13,
+            361,
+            9078
+          ]
+        },
+        {
+          "position": 448,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            3609,
+            565,
+            4263,
+            201
+          ]
+        },
+        {
+          "position": 454,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            361,
+            1354,
+            15320,
+            105099,
+            63
+          ]
+        },
+        {
+          "position": 460,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ]
+        },
+        {
+          "position": 466,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ]
+        },
+        {
+          "position": 472,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            982,
+            5288,
+            201,
+            27344,
+            27344
+          ]
+        },
+        {
+          "position": 478,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            3465,
+            944,
+            24807,
+            15810,
+            19303
+          ]
+        },
+        {
+          "position": 481,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ]
+        },
+        {
+          "position": 484,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            28,
+            10649,
+            11,
+            6248,
+            12249
+          ]
+        },
+        {
+          "position": 490,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ]
+        },
+        {
+          "position": 496,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            31088,
+            260,
+            45442,
+            5238,
+            304
+          ]
+        },
+        {
+          "position": 498,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            28895,
+            17588,
+            304,
+            12249,
+            304
+          ]
+        },
+        {
+          "position": 500,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            17588,
+            304,
+            12249,
+            14,
+            469
+          ]
+        },
+        {
+          "position": 502,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            23476,
+            9952,
+            1082,
+            25892,
+            77319
+          ]
+        },
+        {
+          "position": 503,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1217,
+            9952,
+            305,
+            81409,
+            77319
+          ]
+        },
+        {
+          "position": 507,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            111829,
+            77319,
+            27344,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 508,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            7771,
+            1219,
+            77319,
+            27344,
+            13
+          ]
+        },
+        {
+          "position": 514,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            855,
+            1990,
+            344,
+            9952,
+            1137
+          ]
+        },
+        {
+          "position": 520,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            528,
+            1354,
+            9952,
+            201,
+            13
+          ]
+        },
+        {
+          "position": 526,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            3047,
+            1137,
+            13,
+            528,
+            1167
+          ]
+        },
+        {
+          "position": 531,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            12249,
+            22070,
+            682,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 537,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            343,
+            4595,
+            9000,
+            14,
+            74418
+          ]
+        },
+        {
+          "position": 543,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            528,
+            1354,
+            9952,
+            201
+          ]
+        },
+        {
+          "position": 549,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            27344,
+            13,
+            3465,
+            45706,
+            15810
+          ]
+        },
+        {
+          "position": 555,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            18499,
+            85,
+            61327,
+            85,
+            28
+          ]
+        },
+        {
+          "position": 558,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            361,
+            25798,
+            28,
+            52013
+          ]
+        },
+        {
+          "position": 564,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            100623,
+            17797,
+            46677,
+            46085,
+            6248
+          ]
+        },
+        {
+          "position": 570,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            54361,
+            14,
+            10649,
+            23902,
+            13
+          ]
+        },
+        {
+          "position": 576,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            26495,
+            74181,
+            60231,
+            260,
+            13672
+          ]
+        },
+        {
+          "position": 581,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            294,
+            9353,
+            25798,
+            1055,
+            260
+          ]
+        },
+        {
+          "position": 587,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1715,
+            27531,
+            21408,
+            13672,
+            603
+          ]
+        },
+        {
+          "position": 593,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            13,
+            361,
+            455,
+            13672,
+            5118
+          ]
+        },
+        {
+          "position": 596,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ]
+        },
+        {
+          "position": 600,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ]
+        },
+        {
+          "position": 605,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ]
+        },
+        {
+          "position": 609,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ]
+        },
+        {
+          "position": 614,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ]
+        },
+        {
+          "position": 616,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            6072,
+            1014,
+            14,
+            305,
+            15011
+          ]
+        },
+        {
+          "position": 622,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            295,
+            21857,
+            36,
+            16,
+            41222
+          ]
+        },
+        {
+          "position": 624,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ]
+        },
+        {
+          "position": 629,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ]
+        },
+        {
+          "position": 634,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            469,
+            43775,
+            377,
+            260,
+            80812
+          ]
+        },
+        {
+          "position": 635,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1117,
+            5238,
+            477,
+            80812,
+            4562
+          ]
+        },
+        {
+          "position": 639,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            4562,
+            1099,
+            270,
+            13672,
+            201
+          ]
+        },
+        {
+          "position": 642,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            412,
+            8390,
+            603,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 645,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            305,
+            411,
+            201,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 651,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            8205,
+            22273,
+            411,
+            11181,
+            13672
+          ]
+        },
+        {
+          "position": 654,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            8390,
+            284,
+            13672,
+            4562,
+            1099
+          ]
+        },
+        {
+          "position": 655,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            111254,
+            8390,
+            13672,
+            4562,
+            1099
+          ]
+        },
+        {
+          "position": 657,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            418,
+            8390,
+            284,
+            513,
+            19810
+          ]
+        },
+        {
+          "position": 659,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            25240,
+            6240,
+            294,
+            19810,
+            201
+          ]
+        },
+        {
+          "position": 660,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            603,
+            13,
+            361,
+            16786,
+            27344
+          ]
+        },
+        {
+          "position": 666,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            361,
+            5118,
+            19687,
+            438,
+            9080
+          ]
+        },
+        {
+          "position": 672,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            85,
+            682,
+            13,
+            361,
+            3452
+          ]
+        },
+        {
+          "position": 678,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ]
+        },
+        {
+          "position": 684,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            201,
+            13,
+            361,
+            6072,
+            3682
+          ]
+        },
+        {
+          "position": 688,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ]
+        },
+        {
+          "position": 694,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ]
+        },
+        {
+          "position": 700,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            64285,
+            3682,
+            1149,
+            28,
+            2310
+          ]
+        },
+        {
+          "position": 706,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ]
+        },
+        {
+          "position": 712,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            6072,
+            3682,
+            1695,
+            28,
+            2310
+          ]
+        },
+        {
+          "position": 718,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ]
+        },
+        {
+          "position": 724,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            15011,
+            5864,
+            55699,
+            98268,
+            28
+          ]
+        },
+        {
+          "position": 728,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            686,
+            28,
+            2310,
+            61,
+            15891
+          ]
+        },
+        {
+          "position": 734,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            16461,
+            27344,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 740,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            5238,
+            295,
+            25798,
+            1137,
+            13
+          ]
+        },
+        {
+          "position": 746,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            38701,
+            438,
+            1178,
+            36672,
+            61327
+          ]
+        },
+        {
+          "position": 747,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ]
+        },
+        {
+          "position": 749,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            22724
+          ]
+        },
+        {
+          "position": 754,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            638,
+            3682,
+            58878,
+            1760,
+            9952
+          ]
+        },
+        {
+          "position": 760,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            528,
+            855,
+            9846,
+            344
+          ]
+        },
+        {
+          "position": 766,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ]
+        },
+        {
+          "position": 772,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            86
+          ]
+        },
+        {
+          "position": 777,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ]
+        },
+        {
+          "position": 783,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            682,
+            13,
+            528,
+            855,
+            9846
+          ]
+        },
+        {
+          "position": 787,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ]
+        },
+        {
+          "position": 788,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ]
+        },
+        {
+          "position": 794,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            74368,
+            682,
+            13,
+            528,
+            855
+          ]
+        },
+        {
+          "position": 800,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ]
+        },
+        {
+          "position": 806,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682
+          ]
+        },
+        {
+          "position": 812,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            7004,
+            688,
+            12542,
+            74368,
+            23028
+          ]
+        },
+        {
+          "position": 818,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            27344,
+            13,
+            528,
+            38701,
+            438
+          ]
+        },
+        {
+          "position": 822,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            27472,
+            23028,
+            438,
+            944,
+            41401
+          ]
+        },
+        {
+          "position": 828,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ]
+        },
+        {
+          "position": 834,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            61327,
+            14,
+            582,
+            3548,
+            27472
+          ]
+        },
+        {
+          "position": 840,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            633,
+            1760,
+            9952,
+            682,
+            13
+          ]
+        },
+        {
+          "position": 842,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ]
+        },
+        {
+          "position": 847,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            469,
+            1178,
+            36672,
+            61327,
+            14
+          ]
+        },
+        {
+          "position": 853,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            3548,
+            27472,
+            3682,
+            1149,
+            1760
+          ]
+        },
+        {
+          "position": 859,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            682,
+            13,
+            528,
+            10151,
+            13
+          ]
+        },
+        {
+          "position": 865,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            855,
+            852,
+            27472,
+            23028,
+            344
+          ]
+        },
+        {
+          "position": 871,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            9952,
+            1137,
+            13,
+            775,
+            852
+          ]
+        },
+        {
+          "position": 877,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            3682,
+            1149,
+            10108,
+            89649,
+            27472
+          ]
+        },
+        {
+          "position": 883,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            682,
+            27344,
+            13,
+            528,
+            64285
+          ]
+        },
+        {
+          "position": 889,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ]
+        },
+        {
+          "position": 895,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            775,
+            1178,
+            36672,
+            61327
+          ]
+        },
+        {
+          "position": 901,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            582,
+            111671,
+            3682,
+            633,
+            1760
+          ]
+        },
+        {
+          "position": 906,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1760,
+            9952,
+            682,
+            13,
+            775
+          ]
+        },
+        {
+          "position": 912,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 918,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            3682,
+            1149,
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 924,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            528,
+            10151,
+            13,
+            528,
+            855
+          ]
+        },
+        {
+          "position": 930,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ]
+        },
+        {
+          "position": 936,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            775,
+            64285,
+            3682,
+            1149,
+            10108
+          ]
+        },
+        {
+          "position": 942,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            8308,
+            23028,
+            682,
+            27344,
+            13
+          ]
+        },
+        {
+          "position": 948,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            6072,
+            23028,
+            438,
+            944,
+            41401
+          ]
+        },
+        {
+          "position": 954,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            15891,
+            5677,
+            13,
+            775,
+            1178
+          ]
+        },
+        {
+          "position": 960,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            61327,
+            14,
+            582,
+            24358,
+            20035
+          ]
+        },
+        {
+          "position": 966,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1760,
+            9952,
+            682,
+            13,
+            775
+          ]
+        },
+        {
+          "position": 972,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 978,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 984,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            528,
+            10151,
+            13,
+            528,
+            855
+          ]
+        },
+        {
+          "position": 990,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            23028,
+            344,
+            554,
+            9952,
+            1137
+          ]
+        },
+        {
+          "position": 996,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ]
+        },
+        {
+          "position": 1002,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            578,
+            23028,
+            682,
+            27344,
+            13
+          ]
+        },
+        {
+          "position": 1008,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            15011,
+            23028,
+            438,
+            944,
+            41401
+          ]
+        },
+        {
+          "position": 1010,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ]
+        },
+        {
+          "position": 1016,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ]
+        },
+        {
+          "position": 1022,
+          "width": 5,
+          "accepted": 1,
+          "committed": 1,
+          "proposed_ids": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203
+          ]
+        }
+      ]
+    },
+    {
+      "policy": "full7_else3",
+      "cycles": 195,
+      "verify_rows": 1242,
+      "width_counts": {
+        "5": 1,
+        "3": 79,
+        "7": 115
+      },
+      "head_replay_wall_s": 1.9052033750049304,
+      "control_exact_boundaries": null,
+      "mlx_peak_bytes": 21299586448,
+      "host_memory": {
+        "sample_start_monotonic_ns": 154652053152500,
+        "sample_end_monotonic_ns": 154652056558291,
+        "process": {
+          "peak_maxrss_bytes": 18057723904,
+          "resident_bytes": 3676733440,
+          "phys_footprint_bytes": 8578764208,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 94951784448,
+          "wired_bytes": 11214602240,
+          "active_bytes": 6506774528,
+          "inactive_bytes": 5593333760,
+          "speculative_bytes": 15551037440,
+          "anonymous_bytes": 8040529920,
+          "file_backed_bytes": 19610615808,
+          "compressor_bytes": 1270988800,
+          "compressed_bytes": 6510395392,
+          "used_bytes": 24585699328,
+          "non_file_used_bytes": 20526120960,
+          "swapins_pages": 4820586,
+          "swapouts_pages": 7666694,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "rows": [
+        {
+          "position": 0,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            43132,
+            201,
+            43132,
+            3820,
+            18157
+          ]
+        },
+        {
+          "position": 3,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            260,
+            2731,
+            56465
+          ]
+        },
+        {
+          "position": 6,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            540,
+            90,
+            13898
+          ]
+        },
+        {
+          "position": 10,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            23042,
+            201,
+            3312,
+            17,
+            3312,
+            62435,
+            20255
+          ]
+        },
+        {
+          "position": 14,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            291,
+            2731,
+            86
+          ]
+        },
+        {
+          "position": 18,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            90,
+            13898,
+            70311,
+            23042,
+            201,
+            38835,
+            565
+          ]
+        },
+        {
+          "position": 25,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            1351,
+            944,
+            77772
+          ]
+        },
+        {
+          "position": 28,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            341,
+            61391,
+            65
+          ]
+        },
+        {
+          "position": 31,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5677,
+            290,
+            982
+          ]
+        },
+        {
+          "position": 35,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            290,
+            9846,
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ]
+        },
+        {
+          "position": 43,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            71029,
+            4731,
+            28,
+            12249,
+            989,
+            290,
+            12275
+          ]
+        },
+        {
+          "position": 51,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1879,
+            20035,
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ]
+        },
+        {
+          "position": 59,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            65,
+            6333,
+            492,
+            20035,
+            4731,
+            28,
+            12249
+          ]
+        },
+        {
+          "position": 67,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            223,
+            18,
+            16,
+            18,
+            989,
+            1900,
+            6248
+          ]
+        },
+        {
+          "position": 75,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            54361,
+            14,
+            12249,
+            23902,
+            38835,
+            201,
+            290
+          ]
+        },
+        {
+          "position": 80,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            1522,
+            3682,
+            58878
+          ]
+        },
+        {
+          "position": 82,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            42616,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 86,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            9846,
+            3682,
+            58878,
+            1492,
+            3979,
+            10
+          ]
+        },
+        {
+          "position": 92,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            4731,
+            855,
+            71029
+          ]
+        },
+        {
+          "position": 96,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1955,
+            223,
+            18,
+            16,
+            18,
+            3006,
+            223
+          ]
+        },
+        {
+          "position": 104,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            16,
+            18,
+            201,
+            290,
+            64285,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 109,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            119156,
+            65,
+            317
+          ]
+        },
+        {
+          "position": 113,
+          "width": 7,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            4731,
+            438,
+            3979,
+            5677,
+            385,
+            12275,
+            4731
+          ]
+        },
+        {
+          "position": 116,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5677,
+            385,
+            3979
+          ]
+        },
+        {
+          "position": 120,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            14,
+            12275,
+            17856,
+            1879
+          ]
+        },
+        {
+          "position": 128,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            4731,
+            11,
+            940,
+            3979,
+            10,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 136,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            14,
+            23809,
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ]
+        },
+        {
+          "position": 144,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            385,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ]
+        },
+        {
+          "position": 152,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            4731,
+            3872,
+            290,
+            10151,
+            290,
+            10151,
+            290
+          ]
+        },
+        {
+          "position": 158,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            65,
+            317,
+            25763
+          ]
+        },
+        {
+          "position": 162,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            3979,
+            10,
+            18,
+            16,
+            2408,
+            65
+          ]
+        },
+        {
+          "position": 168,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            14,
+            71029,
+            4731
+          ]
+        },
+        {
+          "position": 172,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            2408,
+            119156,
+            65,
+            317,
+            25763,
+            4731,
+            682
+          ]
+        },
+        {
+          "position": 180,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            64285,
+            3682,
+            633,
+            4731,
+            438,
+            8825,
+            385
+          ]
+        },
+        {
+          "position": 188,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3682,
+            58878,
+            1492,
+            64285,
+            65,
+            317,
+            25763
+          ]
+        },
+        {
+          "position": 196,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            855,
+            64285,
+            65,
+            317,
+            25763,
+            4731,
+            1955
+          ]
+        },
+        {
+          "position": 204,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 212,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            201,
+            290,
+            10151,
+            290,
+            1354,
+            8825,
+            385
+          ]
+        },
+        {
+          "position": 218,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            385,
+            582,
+            77734
+          ]
+        },
+        {
+          "position": 222,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3362,
+            64285,
+            3682,
+            633,
+            4731,
+            989,
+            385
+          ]
+        },
+        {
+          "position": 230,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            111671,
+            65,
+            317,
+            25763,
+            4731,
+            3362,
+            64285
+          ]
+        },
+        {
+          "position": 238,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            317,
+            25763,
+            4731,
+            989,
+            385,
+            582,
+            111671
+          ]
+        },
+        {
+          "position": 246,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            633,
+            4731,
+            3362,
+            64285,
+            3682,
+            633,
+            4731
+          ]
+        },
+        {
+          "position": 254,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            385,
+            582,
+            523,
+            15093,
+            42616,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 262,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3362,
+            1522,
+            15093,
+            42616,
+            3682,
+            633,
+            4731
+          ]
+        },
+        {
+          "position": 270,
+          "width": 7,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            290,
+            1554,
+            27344,
+            27344,
+            13,
+            3465,
+            45706
+          ]
+        },
+        {
+          "position": 273,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            13,
+            3465,
+            45706
+          ]
+        },
+        {
+          "position": 276,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            52287,
+            806,
+            88287
+          ]
+        },
+        {
+          "position": 280,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            52013,
+            61,
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ]
+        },
+        {
+          "position": 285,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            28,
+            12249,
+            11
+          ]
+        },
+        {
+          "position": 289,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            12249,
+            1137,
+            13,
+            361,
+            26495,
+            25529,
+            6685
+          ]
+        },
+        {
+          "position": 291,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            9952,
+            1137,
+            13
+          ]
+        },
+        {
+          "position": 295,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            26495,
+            11067,
+            13655,
+            73537,
+            69027,
+            294,
+            260
+          ]
+        },
+        {
+          "position": 297,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            33240,
+            126071,
+            69027
+          ]
+        },
+        {
+          "position": 301,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            260,
+            19823,
+            8205,
+            603,
+            27344,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 303,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            105080,
+            8205,
+            294
+          ]
+        },
+        {
+          "position": 306,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            27344,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 310,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            9952,
+            1082,
+            270,
+            11181,
+            4346,
+            344,
+            43775
+          ]
+        },
+        {
+          "position": 312,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            411,
+            11181,
+            8205
+          ]
+        },
+        {
+          "position": 315,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            832,
+            1926,
+            387
+          ]
+        },
+        {
+          "position": 319,
+          "width": 7,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            83446,
+            582,
+            371,
+            25699,
+            201,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 320,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            582,
+            3567,
+            201
+          ]
+        },
+        {
+          "position": 323,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            2701,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 327,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            260,
+            2041,
+            1990,
+            16,
+            455,
+            1167,
+            294
+          ]
+        },
+        {
+          "position": 329,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            8390,
+            16,
+            18
+          ]
+        },
+        {
+          "position": 332,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            83,
+            5230,
+            344
+          ]
+        },
+        {
+          "position": 336,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            9078,
+            295,
+            764,
+            18,
+            14,
+            223,
+            19
+          ]
+        },
+        {
+          "position": 344,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            361,
+            16786,
+            27344,
+            13,
+            361,
+            855
+          ]
+        },
+        {
+          "position": 352,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3785,
+            1137,
+            13,
+            528,
+            1354,
+            9952,
+            201
+          ]
+        },
+        {
+          "position": 360,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            361,
+            15320,
+            438,
+            24216,
+            55175,
+            88287,
+            11
+          ]
+        },
+        {
+          "position": 366,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            11,
+            362,
+            1990
+          ]
+        },
+        {
+          "position": 370,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3785,
+            682,
+            13,
+            361,
+            855,
+            9080,
+            10
+          ]
+        },
+        {
+          "position": 378,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            11,
+            2606,
+            223,
+            19,
+            1137,
+            13,
+            528
+          ]
+        },
+        {
+          "position": 386,
+          "width": 7,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            12249,
+            10,
+            28798,
+            61,
+            18,
+            9876,
+            13
+          ]
+        },
+        {
+          "position": 387,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            61,
+            18,
+            2296
+          ]
+        },
+        {
+          "position": 391,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            361,
+            3609,
+            438,
+            3979,
+            10,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 399,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            14,
+            1550,
+            10,
+            19,
+            16,
+            18,
+            14
+          ]
+        },
+        {
+          "position": 407,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            26253,
+            28474,
+            982,
+            343,
+            6321,
+            10,
+            28798
+          ]
+        },
+        {
+          "position": 415,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            565,
+            223,
+            19,
+            682,
+            13,
+            361,
+            4263
+          ]
+        },
+        {
+          "position": 423,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 425,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            682,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 429,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            438,
+            1550,
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ]
+        },
+        {
+          "position": 437,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            9080,
+            10,
+            28798,
+            11,
+            565,
+            223,
+            19
+          ]
+        },
+        {
+          "position": 445,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            361,
+            5288,
+            438,
+            3609,
+            565,
+            4263
+          ]
+        },
+        {
+          "position": 453,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            13,
+            361,
+            1354,
+            15320,
+            105099,
+            63,
+            940
+          ]
+        },
+        {
+          "position": 460,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            343,
+            19,
+            16
+          ]
+        },
+        {
+          "position": 464,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            565,
+            5288,
+            11,
+            940,
+            15320,
+            41054,
+            4126
+          ]
+        },
+        {
+          "position": 472,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            982,
+            5288,
+            201,
+            27344,
+            27344,
+            13,
+            3465
+          ]
+        },
+        {
+          "position": 480,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            41401,
+            65,
+            15891,
+            22070,
+            28,
+            10649,
+            14
+          ]
+        },
+        {
+          "position": 487,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            6248,
+            12249,
+            369
+          ]
+        },
+        {
+          "position": 491,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            1137,
+            13,
+            361,
+            26495,
+            25529,
+            260,
+            12249
+          ]
+        },
+        {
+          "position": 496,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            31088,
+            260,
+            45442
+          ]
+        },
+        {
+          "position": 498,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            28895,
+            17588,
+            304
+          ]
+        },
+        {
+          "position": 500,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            2994,
+            304,
+            12249
+          ]
+        },
+        {
+          "position": 501,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            304,
+            12249,
+            29
+          ]
+        },
+        {
+          "position": 502,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            23476,
+            9952,
+            1082
+          ]
+        },
+        {
+          "position": 503,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            1217,
+            9952,
+            469
+          ]
+        },
+        {
+          "position": 506,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            2408,
+            5611,
+            40560
+          ]
+        },
+        {
+          "position": 509,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1219,
+            77319,
+            27344
+          ]
+        },
+        {
+          "position": 513,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            361,
+            855,
+            1990,
+            344,
+            9952,
+            1137,
+            13
+          ]
+        },
+        {
+          "position": 521,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1354,
+            9952,
+            201,
+            13,
+            361,
+            3047,
+            1137
+          ]
+        },
+        {
+          "position": 529,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            528,
+            1354,
+            12249,
+            22070,
+            682,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 537,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            343,
+            4595,
+            9000,
+            14,
+            74418,
+            201,
+            13
+          ]
+        },
+        {
+          "position": 543,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            13,
+            528,
+            1354
+          ]
+        },
+        {
+          "position": 547,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            201,
+            27344,
+            27344,
+            13,
+            3465,
+            45706,
+            18499
+          ]
+        },
+        {
+          "position": 554,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            19303,
+            18499,
+            85
+          ]
+        },
+        {
+          "position": 558,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            361,
+            25798,
+            28,
+            52013,
+            61,
+            100623
+          ]
+        },
+        {
+          "position": 564,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            100623,
+            17797,
+            45390
+          ]
+        },
+        {
+          "position": 567,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            46085,
+            6248,
+            15932
+          ]
+        },
+        {
+          "position": 571,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            14,
+            10649,
+            23902,
+            13,
+            361,
+            26495,
+            101859
+          ]
+        },
+        {
+          "position": 578,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            60231,
+            260,
+            9353
+          ]
+        },
+        {
+          "position": 581,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            294,
+            9353,
+            25798
+          ]
+        },
+        {
+          "position": 585,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            260,
+            26639,
+            1715,
+            27531,
+            21408,
+            603,
+            27344
+          ]
+        },
+        {
+          "position": 591,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            603,
+            27344,
+            13
+          ]
+        },
+        {
+          "position": 595,
+          "width": 7,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            27669,
+            270,
+            5118,
+            23180,
+            14,
+            305,
+            29617
+          ]
+        },
+        {
+          "position": 596,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5118,
+            1895,
+            14
+          ]
+        },
+        {
+          "position": 600,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            9846,
+            35977,
+            14,
+            2716,
+            270,
+            2716,
+            294
+          ]
+        },
+        {
+          "position": 605,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            2875,
+            852,
+            27472
+          ]
+        },
+        {
+          "position": 609,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            64285,
+            201,
+            13,
+            361,
+            330,
+            6446,
+            14
+          ]
+        },
+        {
+          "position": 614,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            14,
+            305,
+            270
+          ]
+        },
+        {
+          "position": 616,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            6072,
+            1014,
+            14
+          ]
+        },
+        {
+          "position": 620,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            15011,
+            6464,
+            295,
+            21857,
+            36,
+            16,
+            41222
+          ]
+        },
+        {
+          "position": 624,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            36,
+            16,
+            41222
+          ]
+        },
+        {
+          "position": 628,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            396,
+            201,
+            13,
+            361,
+            477,
+            25892,
+            538
+          ]
+        },
+        {
+          "position": 634,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            469,
+            43775,
+            377
+          ]
+        },
+        {
+          "position": 635,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            1117,
+            5238,
+            343
+          ]
+        },
+        {
+          "position": 638,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            80812,
+            4562,
+            1099
+          ]
+        },
+        {
+          "position": 639,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            4562,
+            1099,
+            270
+          ]
+        },
+        {
+          "position": 642,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            412,
+            8390,
+            603
+          ]
+        },
+        {
+          "position": 645,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            305,
+            411,
+            201
+          ]
+        },
+        {
+          "position": 649,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            361,
+            11181,
+            8205,
+            10340,
+            411,
+            11181,
+            13672
+          ]
+        },
+        {
+          "position": 653,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            260,
+            13672,
+            418
+          ]
+        },
+        {
+          "position": 655,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            111254,
+            8390,
+            13672
+          ]
+        },
+        {
+          "position": 657,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            418,
+            8390,
+            273
+          ]
+        },
+        {
+          "position": 659,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            25240,
+            603,
+            13
+          ]
+        },
+        {
+          "position": 660,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            603,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 664,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            27344,
+            13,
+            361,
+            855,
+            554,
+            65452,
+            61327
+          ]
+        },
+        {
+          "position": 668,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            19687,
+            438,
+            9080
+          ]
+        },
+        {
+          "position": 672,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            85,
+            682,
+            13,
+            361,
+            3452,
+            15810,
+            74368
+          ]
+        },
+        {
+          "position": 680,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            58878,
+            438,
+            223,
+            18,
+            201,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 688,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310,
+            61,
+            15891
+          ]
+        },
+        {
+          "position": 696,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            438,
+            16461,
+            13,
+            361,
+            64285,
+            3682,
+            1149
+          ]
+        },
+        {
+          "position": 704,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            2310,
+            61,
+            15891,
+            63,
+            438,
+            16461,
+            13
+          ]
+        },
+        {
+          "position": 712,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            6072,
+            3682,
+            1695,
+            28,
+            2310,
+            61,
+            15891
+          ]
+        },
+        {
+          "position": 720,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            438,
+            16461,
+            13,
+            361,
+            15011,
+            5864,
+            55699
+          ]
+        },
+        {
+          "position": 728,
+          "width": 7,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            686,
+            28,
+            223,
+            18,
+            16,
+            9952,
+            201
+          ]
+        },
+        {
+          "position": 731,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            61,
+            15891,
+            63
+          ]
+        },
+        {
+          "position": 735,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            16461,
+            27344,
+            13,
+            361,
+            362,
+            5238,
+            362
+          ]
+        },
+        {
+          "position": 742,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            25798,
+            1137,
+            13
+          ]
+        },
+        {
+          "position": 746,
+          "width": 7,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            3452,
+            15810,
+            74368,
+            3682,
+            58878,
+            438,
+            688
+          ]
+        },
+        {
+          "position": 747,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            438,
+            944,
+            1133
+          ]
+        },
+        {
+          "position": 749,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            36672,
+            61327,
+            14
+          ]
+        },
+        {
+          "position": 753,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            17930,
+            638,
+            3682,
+            58878,
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 761,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            528,
+            855,
+            9846,
+            344,
+            554,
+            9952,
+            1137
+          ]
+        },
+        {
+          "position": 766,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1137,
+            13,
+            775
+          ]
+        },
+        {
+          "position": 770,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            438,
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            17930
+          ]
+        },
+        {
+          "position": 777,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            15810,
+            74368,
+            3682
+          ]
+        },
+        {
+          "position": 781,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1760,
+            9952,
+            682,
+            13,
+            528,
+            855,
+            9846
+          ]
+        },
+        {
+          "position": 787,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            438,
+            944,
+            41401
+          ]
+        },
+        {
+          "position": 788,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            438,
+            944,
+            1692
+          ]
+        },
+        {
+          "position": 791,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            65,
+            15891,
+            12542
+          ]
+        },
+        {
+          "position": 795,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            23028,
+            23028
+          ]
+        },
+        {
+          "position": 802,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            554,
+            9952,
+            1137
+          ]
+        },
+        {
+          "position": 806,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            775,
+            3452,
+            15810,
+            74368,
+            3682,
+            58878,
+            7004
+          ]
+        },
+        {
+          "position": 814,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            12542,
+            74368,
+            23028,
+            682,
+            27344,
+            13,
+            528
+          ]
+        },
+        {
+          "position": 822,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            27472,
+            23028,
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ]
+        },
+        {
+          "position": 830,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            775,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 838,
+          "width": 7,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            1760,
+            9952,
+            682,
+            13
+          ]
+        },
+        {
+          "position": 841,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            36106,
+            65,
+            10930
+          ]
+        },
+        {
+          "position": 842,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 846,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 854,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            1760,
+            9952,
+            682,
+            13
+          ]
+        },
+        {
+          "position": 862,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            10151,
+            13,
+            528,
+            855,
+            64285,
+            23028,
+            438
+          ]
+        },
+        {
+          "position": 867,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            27472,
+            23028,
+            344
+          ]
+        },
+        {
+          "position": 871,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            9952,
+            1137,
+            13,
+            775,
+            852,
+            27472,
+            3682
+          ]
+        },
+        {
+          "position": 879,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            10108,
+            89649,
+            27472,
+            23028,
+            682,
+            27344,
+            13
+          ]
+        },
+        {
+          "position": 887,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            64285,
+            23028,
+            438,
+            944,
+            41401,
+            65,
+            15891
+          ]
+        },
+        {
+          "position": 895,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            775,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 903,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3682,
+            633,
+            4731,
+            1760,
+            9952,
+            682,
+            13
+          ]
+        },
+        {
+          "position": 911,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            111671
+          ]
+        },
+        {
+          "position": 919,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1149,
+            1760,
+            9952,
+            682,
+            13,
+            528,
+            10151
+          ]
+        },
+        {
+          "position": 927,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            528,
+            855,
+            64285,
+            23028,
+            344,
+            554,
+            9952
+          ]
+        },
+        {
+          "position": 935,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            775,
+            64285,
+            3682,
+            1149,
+            10108,
+            82656
+          ]
+        },
+        {
+          "position": 943,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            23028,
+            682,
+            27344,
+            13,
+            528,
+            6072,
+            23028
+          ]
+        },
+        {
+          "position": 951,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            944,
+            41401,
+            65,
+            15891,
+            5677,
+            13,
+            775
+          ]
+        },
+        {
+          "position": 959,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            24358,
+            20035,
+            1760
+          ]
+        },
+        {
+          "position": 966,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 970,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 978,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ]
+        },
+        {
+          "position": 986,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            528,
+            855,
+            6072,
+            23028,
+            344,
+            554
+          ]
+        },
+        {
+          "position": 994,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1137,
+            13,
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ]
+        },
+        {
+          "position": 1002,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            578,
+            23028,
+            682,
+            27344,
+            13,
+            528,
+            15011
+          ]
+        },
+        {
+          "position": 1010,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891,
+            5677,
+            13
+          ]
+        },
+        {
+          "position": 1016,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            36672,
+            61327,
+            14
+          ]
+        },
+        {
+          "position": 1020,
+          "width": 7,
+          "accepted": 3,
+          "committed": 3,
+          "proposed_ids": [
+            61181,
+            5864,
+            55699,
+            98268,
+            1760,
+            9952,
+            1760
+          ]
+        }
+      ]
+    },
+    {
+      "policy": "ladder357",
+      "cycles": 195,
+      "verify_rows": 1282,
+      "width_counts": {
+        "5": 43,
+        "3": 48,
+        "7": 104
+      },
+      "head_replay_wall_s": 1.904355457983911,
+      "control_exact_boundaries": null,
+      "mlx_peak_bytes": 21299586448,
+      "host_memory": {
+        "sample_start_monotonic_ns": 154653972578833,
+        "sample_end_monotonic_ns": 154653976105625,
+        "process": {
+          "peak_maxrss_bytes": 18057723904,
+          "resident_bytes": 3676880896,
+          "phys_footprint_bytes": 8514080176,
+          "compressed_bytes": 0,
+          "source": "mach_task_vm_info"
+        },
+        "box": {
+          "page_size": 16384,
+          "free_bytes": 95103680512,
+          "wired_bytes": 11399266304,
+          "active_bytes": 6169968640,
+          "inactive_bytes": 5593333760,
+          "speculative_bytes": 15551102976,
+          "anonymous_bytes": 7703707648,
+          "file_backed_bytes": 19610697728,
+          "compressor_bytes": 1270988800,
+          "compressed_bytes": 6510395392,
+          "used_bytes": 24433557504,
+          "non_file_used_bytes": 20373962752,
+          "swapins_pages": 4820586,
+          "swapouts_pages": 7666694,
+          "ok": true,
+          "source": "vm_stat",
+          "used_includes_file_cache": true
+        }
+      },
+      "rows": [
+        {
+          "position": 0,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            43132,
+            201,
+            43132,
+            3820,
+            18157
+          ]
+        },
+        {
+          "position": 3,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            260,
+            2731,
+            56465
+          ]
+        },
+        {
+          "position": 6,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            540,
+            90,
+            13898
+          ]
+        },
+        {
+          "position": 10,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            23042,
+            201,
+            3312,
+            17,
+            3312,
+            62435,
+            20255
+          ]
+        },
+        {
+          "position": 14,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            291,
+            2731,
+            86,
+            540,
+            90
+          ]
+        },
+        {
+          "position": 20,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            70311,
+            23042,
+            201,
+            38835,
+            565,
+            1823,
+            21
+          ]
+        },
+        {
+          "position": 25,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            1351,
+            944,
+            77772,
+            65,
+            93256
+          ]
+        },
+        {
+          "position": 28,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            341,
+            61391,
+            65
+          ]
+        },
+        {
+          "position": 31,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5677,
+            290,
+            982
+          ]
+        },
+        {
+          "position": 35,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            290,
+            9846,
+            3682,
+            58878,
+            28,
+            688,
+            989
+          ]
+        },
+        {
+          "position": 43,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            71029,
+            4731,
+            28,
+            12249,
+            989,
+            290,
+            12275
+          ]
+        },
+        {
+          "position": 51,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1879,
+            20035,
+            4731,
+            28,
+            12249,
+            989,
+            290
+          ]
+        },
+        {
+          "position": 59,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            65,
+            6333,
+            492,
+            20035,
+            4731,
+            28,
+            12249
+          ]
+        },
+        {
+          "position": 67,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            223,
+            18,
+            16,
+            18,
+            989,
+            1900,
+            6248
+          ]
+        },
+        {
+          "position": 75,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            54361,
+            14,
+            12249,
+            23902,
+            38835,
+            201,
+            290
+          ]
+        },
+        {
+          "position": 80,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            1522,
+            3682,
+            58878,
+            438,
+            9846
+          ]
+        },
+        {
+          "position": 82,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            42616,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 86,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            9846,
+            3682,
+            58878,
+            1492,
+            3979,
+            10
+          ]
+        },
+        {
+          "position": 92,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            4731,
+            855,
+            71029,
+            4731,
+            1955
+          ]
+        },
+        {
+          "position": 98,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 106,
+          "width": 7,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            201,
+            290,
+            64285,
+            3682,
+            633,
+            4731,
+            438
+          ]
+        },
+        {
+          "position": 109,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            119156,
+            65,
+            317
+          ]
+        },
+        {
+          "position": 113,
+          "width": 7,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            4731,
+            438,
+            3979,
+            5677,
+            385,
+            12275,
+            4731
+          ]
+        },
+        {
+          "position": 116,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5677,
+            385,
+            3979
+          ]
+        },
+        {
+          "position": 120,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            14,
+            12275,
+            17856,
+            1879
+          ]
+        },
+        {
+          "position": 128,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            4731,
+            11,
+            940,
+            3979,
+            10,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 136,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            14,
+            23809,
+            65,
+            6333,
+            492,
+            20035,
+            4731
+          ]
+        },
+        {
+          "position": 144,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            385,
+            3979,
+            10,
+            18,
+            16,
+            18,
+            14
+          ]
+        },
+        {
+          "position": 152,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            4731,
+            3872,
+            290,
+            10151,
+            290,
+            10151,
+            290
+          ]
+        },
+        {
+          "position": 158,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            438
+          ]
+        },
+        {
+          "position": 164,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            10,
+            18,
+            16,
+            18,
+            14,
+            71029,
+            4731
+          ]
+        },
+        {
+          "position": 172,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            2408,
+            119156,
+            65,
+            317,
+            25763,
+            4731,
+            682
+          ]
+        },
+        {
+          "position": 180,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            64285,
+            3682,
+            633,
+            4731,
+            438,
+            8825,
+            385
+          ]
+        },
+        {
+          "position": 188,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3682,
+            58878,
+            1492,
+            64285,
+            65,
+            317,
+            25763
+          ]
+        },
+        {
+          "position": 196,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            855,
+            64285,
+            65,
+            317,
+            25763,
+            4731,
+            1955
+          ]
+        },
+        {
+          "position": 204,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            18,
+            16,
+            18,
+            3006,
+            223,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 212,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            201,
+            290,
+            10151,
+            290,
+            1354,
+            8825,
+            385
+          ]
+        },
+        {
+          "position": 218,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            385,
+            582,
+            77734,
+            4731,
+            3362
+          ]
+        },
+        {
+          "position": 224,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            3682,
+            633,
+            4731,
+            989,
+            385,
+            582,
+            523
+          ]
+        },
+        {
+          "position": 231,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            3362
+          ]
+        },
+        {
+          "position": 237,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            65,
+            317,
+            25763,
+            4731,
+            989,
+            385,
+            582
+          ]
+        },
+        {
+          "position": 245,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3682,
+            633,
+            4731,
+            3362,
+            64285,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 253,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            989,
+            385,
+            582,
+            523,
+            19704,
+            17856,
+            331
+          ]
+        },
+        {
+          "position": 258,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            42616,
+            3682,
+            633,
+            4731,
+            3362
+          ]
+        },
+        {
+          "position": 264,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            15093,
+            42616,
+            3682,
+            633,
+            4731,
+            989,
+            290
+          ]
+        },
+        {
+          "position": 272,
+          "width": 7,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            27344,
+            27344,
+            13,
+            3465,
+            45706,
+            15810,
+            19303
+          ]
+        },
+        {
+          "position": 273,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            13,
+            3465,
+            45706
+          ]
+        },
+        {
+          "position": 276,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            52287,
+            806,
+            88287
+          ]
+        },
+        {
+          "position": 280,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            52013,
+            61,
+            15891,
+            3031,
+            280,
+            28,
+            12249
+          ]
+        },
+        {
+          "position": 285,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            28,
+            12249,
+            11,
+            6248,
+            12249
+          ]
+        },
+        {
+          "position": 291,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            9952,
+            1137,
+            13,
+            361,
+            26495,
+            11067,
+            13655
+          ]
+        },
+        {
+          "position": 297,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            33240,
+            126071,
+            69027,
+            294,
+            29617
+          ]
+        },
+        {
+          "position": 301,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            260,
+            19823,
+            8205,
+            603,
+            27344
+          ]
+        },
+        {
+          "position": 303,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            105080,
+            8205,
+            294
+          ]
+        },
+        {
+          "position": 306,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            27344,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 310,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            9952,
+            1082,
+            270,
+            11181,
+            4346,
+            344,
+            43775
+          ]
+        },
+        {
+          "position": 312,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            411,
+            11181,
+            8205
+          ]
+        },
+        {
+          "position": 315,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            832,
+            1926,
+            387
+          ]
+        },
+        {
+          "position": 319,
+          "width": 7,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            83446,
+            582,
+            371,
+            25699,
+            201,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 320,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            582,
+            3567,
+            201
+          ]
+        },
+        {
+          "position": 323,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            2701,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 327,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            260,
+            2041,
+            1990,
+            16,
+            455,
+            1167,
+            294
+          ]
+        },
+        {
+          "position": 329,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            8390,
+            16,
+            18
+          ]
+        },
+        {
+          "position": 332,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            83,
+            5230,
+            344
+          ]
+        },
+        {
+          "position": 336,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            9078,
+            295,
+            764,
+            18,
+            14,
+            223,
+            19
+          ]
+        },
+        {
+          "position": 344,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            361,
+            16786,
+            27344,
+            13,
+            361,
+            855
+          ]
+        },
+        {
+          "position": 352,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            3785,
+            1137,
+            13,
+            528,
+            1354,
+            9952,
+            201
+          ]
+        },
+        {
+          "position": 360,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            361,
+            15320,
+            438,
+            24216,
+            55175,
+            88287,
+            11
+          ]
+        },
+        {
+          "position": 366,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            11,
+            362,
+            1990,
+            295,
+            3785
+          ]
+        },
+        {
+          "position": 372,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            361,
+            855,
+            9080,
+            10,
+            28798,
+            11
+          ]
+        },
+        {
+          "position": 380,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            223,
+            19,
+            1137,
+            13,
+            528,
+            1354,
+            12249
+          ]
+        },
+        {
+          "position": 387,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            61,
+            18,
+            2296,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 393,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            438,
+            343,
+            6321,
+            26253,
+            11,
+            565,
+            19
+          ]
+        },
+        {
+          "position": 395,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            10,
+            18,
+            16
+          ]
+        },
+        {
+          "position": 399,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            14,
+            1550,
+            10,
+            19,
+            16,
+            18,
+            14
+          ]
+        },
+        {
+          "position": 407,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            26253,
+            28474,
+            982,
+            343,
+            6321,
+            10,
+            28798
+          ]
+        },
+        {
+          "position": 415,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            565,
+            223,
+            19,
+            682,
+            13,
+            361,
+            4263
+          ]
+        },
+        {
+          "position": 423,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            688,
+            127637,
+            68843,
+            87083,
+            5203,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 425,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            682,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 429,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            438,
+            1550,
+            11220,
+            1344,
+            940,
+            223,
+            19
+          ]
+        },
+        {
+          "position": 437,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            9080,
+            10,
+            28798,
+            11,
+            565,
+            223,
+            19
+          ]
+        },
+        {
+          "position": 445,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            361,
+            5288,
+            438,
+            3609,
+            565,
+            4263
+          ]
+        },
+        {
+          "position": 453,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            13,
+            361,
+            1354,
+            15320,
+            105099,
+            63,
+            940
+          ]
+        },
+        {
+          "position": 460,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            343,
+            19,
+            16,
+            18,
+            565
+          ]
+        },
+        {
+          "position": 466,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            11,
+            940,
+            15320,
+            41054,
+            4126,
+            63,
+            982
+          ]
+        },
+        {
+          "position": 474,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            201,
+            27344,
+            27344,
+            13,
+            3465,
+            944,
+            24807
+          ]
+        },
+        {
+          "position": 481,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            65,
+            15891,
+            61327,
+            28,
+            10649
+          ]
+        },
+        {
+          "position": 484,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            28,
+            10649,
+            11
+          ]
+        },
+        {
+          "position": 488,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            12249,
+            369,
+            9952,
+            1137,
+            13,
+            361,
+            26495
+          ]
+        },
+        {
+          "position": 496,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            31088,
+            260,
+            45442,
+            2994,
+            304,
+            12249,
+            304
+          ]
+        },
+        {
+          "position": 498,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            28895,
+            17588,
+            304
+          ]
+        },
+        {
+          "position": 500,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            2994,
+            304,
+            12249
+          ]
+        },
+        {
+          "position": 501,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            304,
+            12249,
+            29
+          ]
+        },
+        {
+          "position": 502,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            23476,
+            9952,
+            1082
+          ]
+        },
+        {
+          "position": 503,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            1217,
+            9952,
+            469
+          ]
+        },
+        {
+          "position": 506,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            2408,
+            5611,
+            40560
+          ]
+        },
+        {
+          "position": 509,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1219,
+            77319,
+            27344
+          ]
+        },
+        {
+          "position": 513,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            361,
+            855,
+            1990,
+            344,
+            9952,
+            1137,
+            13
+          ]
+        },
+        {
+          "position": 521,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1354,
+            9952,
+            201,
+            13,
+            361,
+            3047,
+            1137
+          ]
+        },
+        {
+          "position": 529,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            528,
+            1354,
+            12249,
+            22070,
+            682,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 537,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            343,
+            4595,
+            9000,
+            14,
+            74418,
+            201,
+            13
+          ]
+        },
+        {
+          "position": 543,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            528,
+            1354,
+            9952,
+            201
+          ]
+        },
+        {
+          "position": 549,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            27344,
+            13,
+            3465,
+            45706,
+            15810,
+            19303,
+            18499
+          ]
+        },
+        {
+          "position": 557,
+          "width": 7,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            61327,
+            85,
+            28,
+            52013,
+            28,
+            52013,
+            61
+          ]
+        },
+        {
+          "position": 558,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            13,
+            361,
+            25798
+          ]
+        },
+        {
+          "position": 562,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            52013,
+            61,
+            100623,
+            17797,
+            10736,
+            46085,
+            6248
+          ]
+        },
+        {
+          "position": 564,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            100623,
+            17797,
+            45390
+          ]
+        },
+        {
+          "position": 567,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            46085,
+            6248,
+            15932
+          ]
+        },
+        {
+          "position": 571,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            14,
+            10649,
+            23902,
+            13,
+            361,
+            26495,
+            101859
+          ]
+        },
+        {
+          "position": 578,
+          "width": 5,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            60231,
+            260,
+            9353,
+            294,
+            260
+          ]
+        },
+        {
+          "position": 581,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            294,
+            9353,
+            25798
+          ]
+        },
+        {
+          "position": 585,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            260,
+            26639,
+            1715,
+            27531,
+            21408,
+            603,
+            27344
+          ]
+        },
+        {
+          "position": 591,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            603,
+            27344,
+            13,
+            361,
+            29617
+          ]
+        },
+        {
+          "position": 596,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            5118,
+            1895,
+            14,
+            1895,
+            14
+          ]
+        },
+        {
+          "position": 600,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            9846,
+            35977,
+            14,
+            2716,
+            270
+          ]
+        },
+        {
+          "position": 605,
+          "width": 5,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            2875,
+            852,
+            27472,
+            201,
+            13
+          ]
+        },
+        {
+          "position": 609,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            64285,
+            201,
+            13,
+            361,
+            330
+          ]
+        },
+        {
+          "position": 614,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            14,
+            305,
+            270,
+            15011,
+            6005
+          ]
+        },
+        {
+          "position": 616,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            6072,
+            1014,
+            14
+          ]
+        },
+        {
+          "position": 620,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            15011,
+            6464,
+            295,
+            21857,
+            36,
+            16,
+            41222
+          ]
+        },
+        {
+          "position": 624,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            36,
+            16,
+            41222,
+            25240,
+            477
+          ]
+        },
+        {
+          "position": 629,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            201,
+            13,
+            361,
+            477,
+            25892
+          ]
+        },
+        {
+          "position": 634,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            469,
+            43775,
+            377,
+            260,
+            80812
+          ]
+        },
+        {
+          "position": 635,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            1117,
+            5238,
+            343
+          ]
+        },
+        {
+          "position": 638,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            80812,
+            4562,
+            1099
+          ]
+        },
+        {
+          "position": 639,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            4562,
+            1099,
+            270
+          ]
+        },
+        {
+          "position": 642,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            412,
+            8390,
+            603
+          ]
+        },
+        {
+          "position": 645,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            305,
+            411,
+            201
+          ]
+        },
+        {
+          "position": 649,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            361,
+            11181,
+            8205,
+            10340,
+            411,
+            11181,
+            13672
+          ]
+        },
+        {
+          "position": 653,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            260,
+            13672,
+            4562,
+            1099,
+            8390
+          ]
+        },
+        {
+          "position": 655,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            111254,
+            8390,
+            13672
+          ]
+        },
+        {
+          "position": 657,
+          "width": 3,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            418,
+            8390,
+            273
+          ]
+        },
+        {
+          "position": 659,
+          "width": 3,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            25240,
+            603,
+            13
+          ]
+        },
+        {
+          "position": 660,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            603,
+            13,
+            361
+          ]
+        },
+        {
+          "position": 664,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            27344,
+            13,
+            361,
+            855,
+            554,
+            65452,
+            61327
+          ]
+        },
+        {
+          "position": 668,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            19687,
+            438,
+            9080,
+            61327,
+            85
+          ]
+        },
+        {
+          "position": 674,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            13,
+            361,
+            3452,
+            3682,
+            58878,
+            438,
+            223
+          ]
+        },
+        {
+          "position": 678,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            74368,
+            3682,
+            58878,
+            438,
+            223
+          ]
+        },
+        {
+          "position": 684,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            201,
+            13,
+            361,
+            855,
+            6072,
+            3682,
+            58878
+          ]
+        },
+        {
+          "position": 688,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            28,
+            2310
+          ]
+        },
+        {
+          "position": 694,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13,
+            361,
+            64285
+          ]
+        },
+        {
+          "position": 702,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1149,
+            28,
+            2310,
+            61,
+            15891,
+            63,
+            438
+          ]
+        },
+        {
+          "position": 710,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            361,
+            6072,
+            3682,
+            1695,
+            28,
+            2310
+          ]
+        },
+        {
+          "position": 718,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            15891,
+            63,
+            438,
+            16461,
+            13,
+            361,
+            15011
+          ]
+        },
+        {
+          "position": 726,
+          "width": 7,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            55699,
+            98268,
+            28,
+            2310,
+            61,
+            15891,
+            63
+          ]
+        },
+        {
+          "position": 728,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            686,
+            28,
+            223
+          ]
+        },
+        {
+          "position": 731,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            61,
+            15891,
+            63
+          ]
+        },
+        {
+          "position": 735,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            16461,
+            27344,
+            13,
+            361,
+            362,
+            5238,
+            362
+          ]
+        },
+        {
+          "position": 742,
+          "width": 5,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            25798,
+            1137,
+            13,
+            528,
+            38701
+          ]
+        },
+        {
+          "position": 747,
+          "width": 5,
+          "accepted": 1,
+          "committed": 2,
+          "proposed_ids": [
+            438,
+            944,
+            306,
+            42614,
+            61327
+          ]
+        },
+        {
+          "position": 749,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            36672,
+            61327,
+            14
+          ]
+        },
+        {
+          "position": 753,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            17930,
+            638,
+            3682,
+            58878,
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 761,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            528,
+            855,
+            9846,
+            344,
+            554,
+            9952,
+            1137
+          ]
+        },
+        {
+          "position": 766,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1137,
+            13,
+            775,
+            9846,
+            438
+          ]
+        },
+        {
+          "position": 772,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            86,
+            58878,
+            1760
+          ]
+        },
+        {
+          "position": 777,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            15810,
+            74368,
+            3682,
+            58878,
+            1760
+          ]
+        },
+        {
+          "position": 783,
+          "width": 7,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            438,
+            344
+          ]
+        },
+        {
+          "position": 787,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            41401
+          ]
+        },
+        {
+          "position": 788,
+          "width": 3,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            438,
+            944,
+            1692
+          ]
+        },
+        {
+          "position": 791,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            65,
+            15891,
+            12542
+          ]
+        },
+        {
+          "position": 795,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            682,
+            13,
+            528,
+            855,
+            9846,
+            23028,
+            23028
+          ]
+        },
+        {
+          "position": 802,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            554,
+            9952,
+            1137,
+            13,
+            775
+          ]
+        },
+        {
+          "position": 808,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            15810,
+            74368,
+            3682,
+            58878,
+            7004,
+            688,
+            12542
+          ]
+        },
+        {
+          "position": 816,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            23028,
+            682,
+            27344,
+            13,
+            528,
+            852,
+            27472
+          ]
+        },
+        {
+          "position": 824,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891,
+            61327,
+            4226
+          ]
+        },
+        {
+          "position": 830,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            13,
+            775,
+            1178,
+            36672,
+            61327
+          ]
+        },
+        {
+          "position": 836,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            582,
+            3548,
+            27472,
+            3682,
+            1149,
+            1760,
+            9952
+          ]
+        },
+        {
+          "position": 841,
+          "width": 5,
+          "accepted": 0,
+          "committed": 1,
+          "proposed_ids": [
+            36106,
+            65,
+            10930,
+            1760,
+            1178
+          ]
+        },
+        {
+          "position": 842,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 846,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 854,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            27472,
+            3682,
+            1149,
+            1760,
+            9952,
+            682,
+            13
+          ]
+        },
+        {
+          "position": 862,
+          "width": 7,
+          "accepted": 4,
+          "committed": 5,
+          "proposed_ids": [
+            10151,
+            13,
+            528,
+            855,
+            64285,
+            23028,
+            438
+          ]
+        },
+        {
+          "position": 867,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            27472,
+            23028,
+            344,
+            554,
+            9952
+          ]
+        },
+        {
+          "position": 873,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            775,
+            852,
+            27472,
+            3682,
+            1149,
+            10108
+          ]
+        },
+        {
+          "position": 881,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            27472,
+            23028,
+            682,
+            27344,
+            13,
+            528,
+            64285
+          ]
+        },
+        {
+          "position": 889,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891,
+            5677,
+            13
+          ]
+        },
+        {
+          "position": 897,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1178,
+            36672,
+            61327,
+            14,
+            582,
+            111671,
+            3682
+          ]
+        },
+        {
+          "position": 905,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            4731,
+            1760,
+            9952,
+            682,
+            13,
+            775,
+            469
+          ]
+        },
+        {
+          "position": 913,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            111671,
+            3682,
+            633
+          ]
+        },
+        {
+          "position": 920,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ]
+        },
+        {
+          "position": 926,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            528,
+            855,
+            64285,
+            23028,
+            344,
+            554
+          ]
+        },
+        {
+          "position": 934,
+          "width": 7,
+          "accepted": 6,
+          "committed": 7,
+          "proposed_ids": [
+            1137,
+            13,
+            775,
+            64285,
+            3682,
+            1149,
+            3682
+          ]
+        },
+        {
+          "position": 941,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            82656,
+            8308,
+            23028,
+            682,
+            27344
+          ]
+        },
+        {
+          "position": 947,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            528,
+            6072,
+            23028,
+            438,
+            944,
+            41401,
+            65
+          ]
+        },
+        {
+          "position": 955,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            5677,
+            13,
+            775,
+            1178,
+            36672,
+            61327,
+            14
+          ]
+        },
+        {
+          "position": 963,
+          "width": 7,
+          "accepted": 2,
+          "committed": 3,
+          "proposed_ids": [
+            24358,
+            20035,
+            65,
+            28818,
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 966,
+          "width": 3,
+          "accepted": 3,
+          "committed": 4,
+          "proposed_ids": [
+            1760,
+            9952,
+            682
+          ]
+        },
+        {
+          "position": 970,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            775,
+            469,
+            1178,
+            36672,
+            61327,
+            14,
+            582
+          ]
+        },
+        {
+          "position": 978,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            25763,
+            4731,
+            1760,
+            9952,
+            682,
+            13,
+            528
+          ]
+        },
+        {
+          "position": 986,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            13,
+            528,
+            855,
+            6072,
+            23028,
+            344,
+            554
+          ]
+        },
+        {
+          "position": 994,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            1137,
+            13,
+            775,
+            6072,
+            3682,
+            1695,
+            10108
+          ]
+        },
+        {
+          "position": 1002,
+          "width": 7,
+          "accepted": 7,
+          "committed": 8,
+          "proposed_ids": [
+            578,
+            23028,
+            682,
+            27344,
+            13,
+            528,
+            15011
+          ]
+        },
+        {
+          "position": 1010,
+          "width": 7,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            438,
+            944,
+            41401,
+            65,
+            15891,
+            5677,
+            13
+          ]
+        },
+        {
+          "position": 1016,
+          "width": 5,
+          "accepted": 5,
+          "committed": 6,
+          "proposed_ids": [
+            36672,
+            61327,
+            14,
+            582,
+            61181
+          ]
+        },
+        {
+          "position": 1022,
+          "width": 7,
+          "accepted": 1,
+          "committed": 1,
+          "proposed_ids": [
+            55699,
+            98268,
+            1760,
+            9952,
+            5203,
+            13,
+            528
+          ]
+        }
+      ]
+    }
+  ],
+  "complete": true,
+  "final_peak_bytes": 21299586448
+}

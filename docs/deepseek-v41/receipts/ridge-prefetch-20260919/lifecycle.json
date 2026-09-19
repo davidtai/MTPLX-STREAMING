@@ -1,0 +1,20 @@
+{
+  "checked_at": "2026-09-19T13:29:31.095774+00:00",
+  "owned_run_sessions": {
+    "v1": 94833,
+    "v2": 39139
+  },
+  "both_guard_exit_codes": 0,
+  "lock_free_at_probe": false,
+  "health": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "v1/models": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "live_guard_processes": [
+    "55556 45609       02:50 /bin/bash /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/feat-bonsai2/reports/bonsai2/20_collect.py --bundle /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/feat-bonsai2/reports/bonsai2/adapters/20_collect_prompts.20260919T120601Z.json --max-seconds 420"
+  ],
+  "owned_processes": [],
+  "interpretation": "Both own guards restored exact Qwen identity, health and warmup before release. This independent observation is later and must not be substituted for those lifecycle timestamps."
+}

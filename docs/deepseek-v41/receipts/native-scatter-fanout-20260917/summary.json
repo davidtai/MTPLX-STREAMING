@@ -1,0 +1,77 @@
+{
+  "disposition": "not promoted; retain fanout4",
+  "best_complete_decode_tps": 12.114664476181137,
+  "decode_target_tps": 20,
+  "full_model_attempt": {
+    "source_commit": "769122f7e04fe2f53c36ae727547546ec392ed9e",
+    "status": "refused at admission before model loading",
+    "baseline_bytes": 12208914432,
+    "whole_machine_ceiling_bytes": 110000000000,
+    "physical_admission_threshold_bytes": 109500000000,
+    "additional_io_host_headroom_bytes": 536870912,
+    "prefill_physical_bound_bytes": 111672157440,
+    "decode_physical_bound_bytes": 112516965868,
+    "allocator_limit_bytes": 95643601920,
+    "prefill_active_plus_requested_cache_bytes": 97535097948,
+    "prefill_slots": 93,
+    "decode_slots": 100,
+    "read_fanout": 8,
+    "full_model_loaded": false,
+    "decode_measured": false,
+    "exit_code": 1,
+    "restored_healthy_warm_released_utc": "2026-09-17 14:59:08 UTC"
+  },
+  "screen": {
+    "scope": "I/O-only screening, three concurrent records, real six-component native byte layout; CPU bytearrays, no GPU compute/ownership/cache pressure; not a decode-TPS measurement",
+    "source_commit": "769122f7e04fe2f53c36ae727547546ec392ed9e",
+    "manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+    "native_main_layers": 40,
+    "native_experts_per_layer": 384,
+    "native_main_record_count": 15360,
+    "mtp_experts_per_layer": 128,
+    "records_per_arm": 1536,
+    "bytes_per_arm": 28877783040,
+    "component_buffer_bytes": 56401920,
+    "physical_allowance_bytes": 2147483648,
+    "arms": [
+      {
+        "arm": "control_before",
+        "fanout": 4,
+        "fanout_pool_workers": 15,
+        "wall_s": 2.334156958007952,
+        "gb_per_s": 12.37182569960731
+      },
+      {
+        "arm": "candidate",
+        "fanout": 8,
+        "fanout_pool_workers": 35,
+        "wall_s": 2.3243794169975445,
+        "gb_per_s": 12.423867991957229
+      },
+      {
+        "arm": "control_after",
+        "fanout": 4,
+        "fanout_pool_workers": 15,
+        "wall_s": 2.330926291004289,
+        "gb_per_s": 12.388973066822242
+      }
+    ],
+    "candidate_bandwidth_gain_percent": 0.3511564183062532,
+    "control_wall_spread_percent": 0.13850415228269722,
+    "all_final_component_digests_match_manifest": true,
+    "all_io_error_counters_zero": true,
+    "mlx_imported": false,
+    "sampled_process_footprint_peak_bytes": 290063512,
+    "sampled_machine_physical_peak_bytes": 11695079424,
+    "exit_code": 0,
+    "restored_healthy_warm_released_utc": "2026-09-17 15:06:03 UTC"
+  },
+  "setup_failure": {
+    "file": "cpu_scatter_probe.py",
+    "cause": "incorrect 5120-record assumption; native main inventory is 15360 records",
+    "expert_reads_started": false,
+    "exit_code": 1,
+    "restored_healthy_warm_released_utc": "2026-09-17 15:04:20 UTC"
+  },
+  "next_constraint": "Do not rerun fanout8 on the full workload on the strength of this small IO gain. Any new large-model candidate needs current baseline plus bounded allocator, host, cached-buffer and compile/graph peaks."
+}

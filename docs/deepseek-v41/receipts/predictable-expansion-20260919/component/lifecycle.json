@@ -1,0 +1,17 @@
+{
+  "checked_at": "2026-09-19T13:51:35.903605+00:00",
+  "guard_session": 68159,
+  "guard_exit_code": 0,
+  "lock_free_at_probe": false,
+  "health": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "v1/models": {
+    "error": "<urlopen error [Errno 61] Connection refused>"
+  },
+  "foreign_guards": [
+    "80760 78081       02:16 /bin/bash /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/gpu_window.sh /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/feat-bonsai2/reports/bonsai2/20_collect.py --bundle /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/feat-bonsai2/reports/bonsai2/adapters/20_collect_prompts.20260919T120601Z.json --max-seconds 420"
+  ],
+  "owned_processes": [],
+  "guard_restoration": "Exact Qwen identity, healthy service and completed warmup verified before release at2026-09-19T13:49:18Z. Later foreign windows do not invalidate that receipt."
+}

@@ -1,0 +1,135 @@
+{
+  "scope": "CPU policy screens only; native runtime unchanged; no speedup claim",
+  "baseline": {
+    "config": {
+      "capacity": 100
+    },
+    "train_reads": 19471,
+    "heldout_reads": 16510,
+    "total_reads": 35981,
+    "elapsed_s": 0.6851381659944309
+  },
+  "candidates": [
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 1,
+        "lr": 0.1,
+        "blend": 0.5
+      },
+      "train_reads": 19580,
+      "heldout_reads": 16735,
+      "total_reads": 36315,
+      "elapsed_s": 0.9247230000037234
+    },
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 1,
+        "lr": 0.1,
+        "blend": 1
+      },
+      "train_reads": 21803,
+      "heldout_reads": 19708,
+      "total_reads": 41511,
+      "elapsed_s": 0.7072239580011228
+    },
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 1,
+        "lr": 0.5,
+        "blend": 0.5
+      },
+      "train_reads": 19507,
+      "heldout_reads": 16396,
+      "total_reads": 35903,
+      "elapsed_s": 0.9365960830036784
+    },
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 1,
+        "lr": 0.5,
+        "blend": 1
+      },
+      "train_reads": 20863,
+      "heldout_reads": 17352,
+      "total_reads": 38215,
+      "elapsed_s": 0.7236925000033807
+    },
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 2,
+        "lr": 0.1,
+        "blend": 0.5
+      },
+      "train_reads": 19539,
+      "heldout_reads": 16755,
+      "total_reads": 36294,
+      "elapsed_s": 1.0358596249861876
+    },
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 2,
+        "lr": 0.1,
+        "blend": 1
+      },
+      "train_reads": 21855,
+      "heldout_reads": 19882,
+      "total_reads": 41737,
+      "elapsed_s": 0.7996449579950422
+    },
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 2,
+        "lr": 0.5,
+        "blend": 0.5
+      },
+      "train_reads": 19492,
+      "heldout_reads": 16397,
+      "total_reads": 35889,
+      "elapsed_s": 1.0239539580070414
+    },
+    {
+      "config": {
+        "capacity": 100,
+        "lags": 2,
+        "lr": 0.5,
+        "blend": 1
+      },
+      "train_reads": 20950,
+      "heldout_reads": 17526,
+      "total_reads": 38476,
+      "elapsed_s": 0.8142302079941146
+    }
+  ],
+  "chronological_selection_cycle_count": 100,
+  "heldout_cycle_count": 106,
+  "initial_state": "Captured73-slot prefill bank plus27 empty slots, identical for every candidate",
+  "selection_result": "No online candidate improves the first100-cycle selection window; reject without GPU benchmark",
+  "post_service": [
+    {
+      "capacity": 100,
+      "post_service_repair": false,
+      "total_reads": 35981,
+      "record_copies": 0
+    },
+    {
+      "capacity": 100,
+      "post_service_repair": true,
+      "total_reads": 35981,
+      "record_copies": 0
+    }
+  ],
+  "post_service_result": "Relaxing current-hit protection after service yields no admissions and no read reduction; reject ownership/copy implementation",
+  "sources": {
+    "screen_online.py": "fef8826f521b790003117c41d9248423f992444f80af761f89377b60596c0ce1",
+    "screen_post_service.py": "dc26d3051605432604986574177d7b21348d4ef6b34ed5b6d9ee67685d59c0f1",
+    "online-screen.json": "8df0cc24d9f37a8ad4a3543f58ffd1c4ac0cc93e5904755672539676d1d12e92",
+    "post-service-screen.json": "466c6f1181acd28789629e4a88b896d29672cfb73ac3302437c3d01f11617e52"
+  }
+}

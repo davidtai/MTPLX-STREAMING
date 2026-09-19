@@ -1,0 +1,29 @@
+{
+  "installed_versions": {
+    "mlx": "0.32.2",
+    "mlx-lm": "0.31.3",
+    "mlx-metal": "0.32.2"
+  },
+  "installed_header_sha256": {
+    "mlx/include/mlx/backend/metal/allocator.h": "5ca3b085cc210f23c719175960921b51c39aed823a10736f95edd5b9bfbb0fff",
+    "mlx/include/mlx/backend/common/buffer_cache.h": "a4b4ea74476ad681a9a5db2063ae3939108a60b0df2014b590338bd1cccf0205",
+    "mlx/include/mlx/version.h": "1e89a9250cb17196ef80eb9bd65ecc7312033165a356d68bbaf6b09315229b77"
+  },
+  "upstream_tag": "v0.32.2",
+  "source_url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.32.2/mlx/backend/metal/allocator.cpp",
+  "observations": [
+    "free checks the current cache size before recycling an entire buffer, so a positive cache limit can be exceeded by the freed buffer.",
+    "malloc trims free cache above the configured limit after allocation or reuse.",
+    "set_cache_limit changes the threshold without clearing existing buffers.",
+    "active peak excludes inactive cached buffers.",
+    "Zero cache with an initial clear disables subsequent buffer caching, but the native attention operator rejects this setting on latency.",
+    "The candidate retains the original 2258155644-byte overshoot allowance; no smaller largest-free-buffer bound is claimed."
+  ],
+  "candidate_cache_limits_bytes": {
+    "prefill": 1073741824,
+    "growth_decode": 268435456
+  },
+  "candidate_host_reserve_bytes": 1371664384,
+  "configured_budget_savings_bytes": 1011844096,
+  "source_audit_scope": "Installed wheel metadata and shipped headers checked; allocator.cpp behavior read from matching upstream release. This is not a rebuilt-wheel or binary-identity proof."
+}

@@ -1,0 +1,85 @@
+{
+  "manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+  "record": {
+    "layer": 0,
+    "expert": 0,
+    "logical_bytes": 18800640,
+    "segments": [
+      {
+        "component": "gate_proj.weight",
+        "tensor": "layers.0.ffn.experts.0.gate_proj.weight",
+        "shard": "experts.bin",
+        "offset": 0,
+        "length": 5898240,
+        "dtype": "U32",
+        "shape": [
+          2304,
+          640
+        ]
+      },
+      {
+        "component": "gate_proj.scales",
+        "tensor": "layers.0.ffn.experts.0.gate_proj.scales",
+        "shard": "experts.bin",
+        "offset": 5898240,
+        "length": 368640,
+        "dtype": "U8",
+        "shape": [
+          2304,
+          160
+        ]
+      },
+      {
+        "component": "up_proj.weight",
+        "tensor": "layers.0.ffn.experts.0.up_proj.weight",
+        "shard": "experts.bin",
+        "offset": 6266880,
+        "length": 5898240,
+        "dtype": "U32",
+        "shape": [
+          2304,
+          640
+        ]
+      },
+      {
+        "component": "up_proj.scales",
+        "tensor": "layers.0.ffn.experts.0.up_proj.scales",
+        "shard": "experts.bin",
+        "offset": 12165120,
+        "length": 368640,
+        "dtype": "U8",
+        "shape": [
+          2304,
+          160
+        ]
+      },
+      {
+        "component": "down_proj.weight",
+        "tensor": "layers.0.ffn.experts.0.down_proj.weight",
+        "shard": "experts.bin",
+        "offset": 12533760,
+        "length": 5898240,
+        "dtype": "U32",
+        "shape": [
+          5120,
+          288
+        ]
+      },
+      {
+        "component": "down_proj.scales",
+        "tensor": "layers.0.ffn.experts.0.down_proj.scales",
+        "shard": "experts.bin",
+        "offset": 18432000,
+        "length": 368640,
+        "dtype": "U8",
+        "shape": [
+          5120,
+          72
+        ]
+      }
+    ],
+    "sha256": "53891b5541b11c41c8d51aff28b53e19685897474dbf47ea0f4a57f967f95561",
+    "sidecar_offset": 0,
+    "sidecar_length": 18800640
+  }
+}

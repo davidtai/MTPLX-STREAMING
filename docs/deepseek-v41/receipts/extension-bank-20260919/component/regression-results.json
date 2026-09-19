@@ -1,0 +1,12 @@
+{
+  "observed_at": "2026-09-19T15:10:40.052434+00:00",
+  "cpu_only": true,
+  "mlx_imports_blocked": true,
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "test_exact_decimal_ceiling_selects_capacity_at_one_byte_boundary (__main__.AdmissionRegressions.test_exact_decimal_ceiling_selects_capacity_at_one_byte_boundary) ... ok\ntest_wired_pressure_refuses_even_when_machine_baseline_fits (__main__.AdmissionRegressions.test_wired_pressure_refuses_even_when_machine_baseline_fits) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.045s\n\nOK\n",
+  "setup_corrections": [
+    "Use the current worktree on sys.path instead of the installed package.",
+    "Assert the upstream cap84 refusal message for high wired pressure."
+  ]
+}

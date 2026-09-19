@@ -1,0 +1,37 @@
+{
+  "decision": "Reject combined GU reads: the relevant three- and six-record batches regress. No model run or new tests. The one-record change is below control variance.",
+  "complete": true,
+  "mlx_imported": false,
+  "incremental_allowance_bytes": 2147483648,
+  "max_buffer_bytes": 127180800,
+  "cases": [
+    {
+      "records_per_batch": 1,
+      "control_before_s": 0.20507254201220348,
+      "candidate_s": 0.20563812501495704,
+      "control_after_s": 0.2059505000070203,
+      "wall_time_change_percent": 0.06160433474637905,
+      "control_spread_percent": 0.42720621720071944,
+      "exact_weights": true
+    },
+    {
+      "records_per_batch": 3,
+      "control_before_s": 0.5434244170028251,
+      "candidate_s": 0.5623210839985404,
+      "control_after_s": 0.544537332985783,
+      "wall_time_change_percent": 3.371480477954014,
+      "control_spread_percent": 0.20458733645177923,
+      "exact_weights": true
+    },
+    {
+      "records_per_batch": 6,
+      "control_before_s": 1.0390054159797728,
+      "candidate_s": 1.0608478329959325,
+      "control_after_s": 1.0389166249951813,
+      "wall_time_change_percent": 2.1066057413959838,
+      "control_spread_percent": 0.008546132418886007,
+      "exact_weights": true
+    }
+  ],
+  "source_commit": "db5f9dd0dcfe536bce0edbf7ce59ff315b778631"
+}

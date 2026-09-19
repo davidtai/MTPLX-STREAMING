@@ -1,0 +1,13 @@
+{
+  "source_commit": "a15ba7c40b6e59c7e3c3fdae852112085bddf40e",
+  "scope": "Exact16K/1024 Q4 target with native80/40/24 draft experts and screened router-nearest aliases; unchanged D5/lookup/M8 verification and packed projection schedule. Original84 rows plus up to29 extension rows. Explicit256MiB background allowance. No target arithmetic or quantization change.",
+  "draft_subset_payload_bytes": 2707292160,
+  "credit_bytes": 733224960,
+  "background_allowance_bytes": 268435456,
+  "maximum_final_rows": 113,
+  "maximum_extension_component_bytes": 171048960,
+  "prior_head_cycles": 198,
+  "prior_head_verify_rows": 1242,
+  "target_kernels_unchanged": true,
+  "full_result": "unmeasured"
+}

@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_draft_attn
+# stream: ar-reference
+# token_ids_sha256: 3b8a0e65e1b43e4aca6f27380044ea1d1e25e902eb8eed7b704063cf17e76ef2
+# decode_tok_s: 2.8087133995536235
+# divergence: {"divergence_index": 27, "ar_token": 63984, "dspark_token": 70077, "ar_top2_margin": 0.0, "dspark_top2_margin": 0.125, "max_abs_logit_delta": 0.5, "tie_margin": 0.03, "class": "tie_flip", "capture_index": 27}
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime counters, and decode tracing, so a `summarize_generation_outputs` helper should slot in near the existing stats/diagnostics helpers and reuse the module's `dict[str, Any]` / `Sequence` typing conventions.
+
+- The module already imports `Sequence` from `collections.abc` and uses `dict[str, Any]` return types (e.g. `_generation_rate_fields`, `_mlx_memory_stats`), so the new helper can match existing style without new imports beyond `statistics` or manual percentile math.
+- `GenerationStats` and `GenerationOutput` are referenced but not defined in the visible excerpt, so the helper must defensively use `getattr` for optional fields like prefill/decode TPS and peak memory to satisfy the "ignore unavailable optional metrics" requirement.
+- The file is truncated mid-`_attach_runtime_diagnostics`, so the diff should append the helper after the last visible function and add a separate `tests/` file rather than modifying unseen code paths.<｜end▁of▁sentence｜>- The module already imports `Sequence` from `collections.abc` and uses

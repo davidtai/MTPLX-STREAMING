@@ -1,0 +1,34 @@
+{
+  "source_commit": "72b0d219e9e2f34d395a209e8c0df781c16f13bd",
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "model_manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+  "config_sha256": "3a43beb01ef51adbed5aa61fe4918653bfd3a1e35c6cad5dc45010bc717f2b8d",
+  "resident_names": [
+    "layers.0.attn.wo_a.scales",
+    "layers.0.attn.wo_a.weight",
+    "layers.0.attn.wo_b.scales",
+    "layers.0.attn.wo_b.weight"
+  ],
+  "resident_payload_bytes": 77856768,
+  "whole_machine_ceiling_bytes": 110000000000,
+  "incremental_bound_bytes": 4294967296,
+  "mlx_active_policy_bytes": 2147483648,
+  "host_cache_compiler_allowance_bytes": 2147483648,
+  "scope": "One native output-projection operator, no target trunk or MTP. Two packed matrices77.86MB; BF16 cache67.11MB; known dequant/transpose temporary under134.22MB; synthetic M1/M6/M8 inputs and outputs under2MiB.4GiB covers unused lazy constructor graphs, Python, compiler and retained allocator cache.",
+  "runtime_source_sha256": {
+    "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "mtplx/models/deepseek_v41_fused_proj_kernels.py": "6e769b53dfd4d45ddad4c43bd6cc84c77b0daeecebe794a02bcd88d85de6790a",
+    "mtplx/expert_manifest.py": "c0ae3e862df422a0c2d3a79e0f48433ca09402a7197d9947e19866a8329541f0",
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011",
+    "scripts/deepseek_v41/gpu_window.sh": "ee9badfcf539d440484ed4b6a3a3772b72361fd0b3c95d45c3a4c3006c216b6c"
+  },
+  "helper_sha256": {
+    "projection_reader.py": "ec136516fade280b7534efc8ca52355a96556e362e061040ac803b318fe24364",
+    "source-audit.json": "86efbb279d9bb980581d9565fe0dd11142d7b240fd291d2a3c7dd82b89ce4292",
+    "owned_projection.py": "df9e42df6dda252bb390756519d145fc3f2a614ca1903ab1437cfd7ca79c2396",
+    "probe.py": "280f54036e0b792229a16ec61f06f80d4d9fcccebb6e2571b22dab3dd00745a7",
+    "run_screen.py": "635feaa4beb45122ad1e12da1e3b283891f6b01f870713d38692490c409162c7"
+  },
+  "harness_fix": "Native _cos_sin receives its documented flat [S] positions and returns [S,32] cosine/sine tables."
+}

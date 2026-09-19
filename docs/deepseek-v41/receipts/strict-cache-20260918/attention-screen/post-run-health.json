@@ -1,0 +1,46 @@
+{
+  "checked_at": 1789715465.42117,
+  "lock_free": true,
+  "guard_session": 69981,
+  "guard_exit_code": 0,
+  "ok": true,
+  "model": "mtplx-flash-next-optimized-speed",
+  "model_path": "/Users/davidtai/.mtplx/models/Youssofal--Qwen3.8-Flash-Next-MTPLX-Optimized-Speed",
+  "active_requests": 0,
+  "warmup": {
+    "mode": "background",
+    "state": "done",
+    "steps": [
+      {
+        "kind": "gqa_packed_pipelines",
+        "state": "ok",
+        "elapsed_s": 0.016,
+        "yields": 0
+      },
+      {
+        "kind": "ladder",
+        "context": 512,
+        "state": "ok",
+        "elapsed_s": 0.539,
+        "yields": 0,
+        "tok_s": 86.36
+      },
+      {
+        "kind": "ladder",
+        "context": 2560,
+        "state": "ok",
+        "elapsed_s": 2.348,
+        "yields": 0,
+        "tok_s": 102.22
+      }
+    ],
+    "started_at_s": 1789715330.79856,
+    "finished_at_s": 1789715334.5657878,
+    "elapsed_s": 3.767,
+    "resubmits": 0
+  },
+  "models": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "scope": "Relevant fields from the independent read-only health/model/lock check; full response remains in the temporary root."
+}

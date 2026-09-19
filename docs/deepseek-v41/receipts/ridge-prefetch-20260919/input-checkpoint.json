@@ -1,0 +1,31 @@
+{
+  "local_archive": "/Users/davidtai/projects/OpenSourceWTF/checkpoints/deepseek-v41-20260918T161816Z/q4-ridge-prefetch-inputs.tar.gz",
+  "archive_sha256": "6147461be9a29e7ace90d9a6df0dce74fc1f77fa1411390c13a826d19b3ea2b3",
+  "archive_bytes": 8477766,
+  "inputs_preserved_in_archive": [
+    {
+      "relative_path": "v1/ridge-parameters.npz",
+      "bytes": 2371114,
+      "sha256": "dc9715cba26002ea74eb5ff66f46cce2f3a8af2be2f5bfd87a56392815e35b02"
+    },
+    {
+      "relative_path": "v1/routes.json",
+      "bytes": 5629584,
+      "sha256": "a7911bdf76c1a0d847888d162205a57ebbb30b730c7ebd2e1f7fb7e9cb6d2b3e"
+    },
+    {
+      "relative_path": "v2/ridge-parameters.npz",
+      "bytes": 2371114,
+      "sha256": "dc9715cba26002ea74eb5ff66f46cce2f3a8af2be2f5bfd87a56392815e35b02"
+    },
+    {
+      "relative_path": "v2/routes.json",
+      "bytes": 5629584,
+      "sha256": "a7911bdf76c1a0d847888d162205a57ebbb30b730c7ebd2e1f7fb7e9cb6d2b3e"
+    }
+  ],
+  "model_artifacts": "Large Q4 weights and scale artifacts remain at source-pinned original paths.",
+  "artifact_root": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917",
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "replay_note": "Sources retain original absolute paths and require restaging the exact artifacts; curated receipts alone are not a portable model bundle."
+}

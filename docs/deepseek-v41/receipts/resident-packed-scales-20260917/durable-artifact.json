@@ -1,0 +1,6 @@
+{
+  "path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917",
+  "file_count": 360,
+  "payload_bytes": 3086136060,
+  "relocation": "same-filesystem rename; live path preserved by symlink; source bytes and hashes unchanged"
+}

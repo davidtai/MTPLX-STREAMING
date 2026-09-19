@@ -1,0 +1,11 @@
+{
+  "cpu_only": true,
+  "native_tensor_calls_identical": true,
+  "native_mx_call_count": 7,
+  "original_decode_function_sha256": "34d88a622e2ba8ddc6741022711cbdf89837ae7229624b98cdc005ea7afc1d5d",
+  "instrumented_decode_function_sha256": "0b8d3cbee002cfae27338c3bc6378c07f67b50f0c184061b5daf2d926fb7cf1d",
+  "record_count_bound": 87,
+  "extra_host_allowance_bytes": 16777216,
+  "new_tensor_owners_bytes": 0,
+  "source_ast_recovers_exactly_after_removing_timing_edits": true
+}

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import logging
 import os
 import stat
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,7 @@ from mtplx.expert_streaming_models import get_model_spec
 RECEIPT_SCHEMA = 1
 DEFAULT_RECEIPT_ROOT = Path("~/.mtplx/receipts").expanduser()
 _MAX_RECEIPT_BYTES = 1024 * 1024
+_CACHE_INVALIDATE_WINDOW_BYTES = 1024**3
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -113,6 +116,83 @@ def _identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
+def _birthtime_ns(metadata: os.stat_result) -> int | None:
+    """Return a stable creation-time discriminator when the platform exposes one."""
+
+    value = getattr(metadata, "st_birthtime_ns", None)
+    if value is not None:
+        return int(value)
+    value = getattr(metadata, "st_birthtime", None)
+    if value is None:
+        return None
+    return int(round(float(value) * 1_000_000_000))
+
+
+def _prepare_bank_hash(descriptor: int, relative_name: str) -> None:
+    """Keep a one-time integrity scan out of Darwin's unbounded file cache."""
+
+    if sys.platform != "darwin":
+        return
+    try:
+        import fcntl
+
+        fcntl.fcntl(descriptor, fcntl.F_NOCACHE, 1)
+    except (ImportError, AttributeError, OSError) as exc:
+        raise ExpertManifestError(
+            f"expert bank part {relative_name} cannot be hashed without populating "
+            "the macOS file cache"
+        ) from exc
+
+
+def _invalidate_hashed_bank_cache(
+    descriptor: int,
+    size: int,
+    relative_name: str,
+) -> None:
+    """Discard clean pages left speculative by a Darwin ``F_NOCACHE`` scan."""
+
+    if sys.platform != "darwin":
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.mmap.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_longlong,
+    ]
+    libc.mmap.restype = ctypes.c_void_p
+    libc.msync.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    libc.msync.restype = ctypes.c_int
+    libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    libc.munmap.restype = ctypes.c_int
+
+    for offset in range(0, size, _CACHE_INVALIDATE_WINDOW_BYTES):
+        length = min(_CACHE_INVALIDATE_WINDOW_BYTES, size - offset)
+        address = libc.mmap(None, length, 1, 1, descriptor, offset)
+        if address == ctypes.c_void_p(-1).value:
+            error = ctypes.get_errno()
+            raise ExpertManifestError(
+                f"could not map {relative_name} for post-hash cache invalidation: "
+                f"{os.strerror(error)}"
+            )
+        try:
+            if libc.msync(address, length, 0x10 | 0x2) != 0:  # MS_SYNC | MS_INVALIDATE
+                error = ctypes.get_errno()
+                raise ExpertManifestError(
+                    f"could not invalidate post-hash cache for {relative_name}: "
+                    f"{os.strerror(error)}"
+                )
+        finally:
+            if libc.munmap(address, length) != 0:
+                error = ctypes.get_errno()
+                raise ExpertManifestError(
+                    f"could not unmap {relative_name} after cache invalidation: "
+                    f"{os.strerror(error)}"
+                )
+
+
 def _trusted_matches(
     trusted: TrustedFileDigest,
     metadata: os.stat_result,
@@ -177,7 +257,9 @@ def _inspect_bank(
         ):
             digest = trusted.sha256
         else:
+            _prepare_bank_hash(descriptor, relative_name)
             digest = _hash_bank_descriptor(descriptor)
+            _invalidate_hashed_bank_cache(descriptor, before.st_size, relative_name)
         after = os.fstat(descriptor)
     finally:
         os.close(descriptor)
@@ -190,7 +272,7 @@ def _inspect_bank(
             f"expert bank part {relative_name} SHA-256 mismatch: "
             f"expected {expected_sha256}, got {digest}"
         )
-    return {
+    result = {
         "file": relative_name,
         "sha256": digest,
         "st_dev": after.st_dev,
@@ -199,6 +281,10 @@ def _inspect_bank(
         "st_mtime_ns": after.st_mtime_ns,
         "st_ctime_ns": after.st_ctime_ns,
     }
+    birthtime_ns = _birthtime_ns(after)
+    if birthtime_ns is not None:
+        result["st_birthtime_ns"] = birthtime_ns
+    return result
 
 
 def _write_receipt(path: Path, receipt: dict[str, Any]) -> None:
@@ -324,7 +410,28 @@ def _receipt_bank_matches(
         return False
     if not stat.S_ISREG(metadata.st_mode):
         return False
-    return tuple(bank[field] for field in identity_fields) == _identity(metadata)
+    expected_identity = tuple(bank[field] for field in identity_fields)
+    current_identity = _identity(metadata)
+    if expected_identity == current_identity:
+        return True
+
+    # Darwin's APFS device number may change across boots/remounts even though
+    # the file itself has not changed. New receipts also bind the immutable file
+    # birth time, allowing that one volatile field to be normalized for the
+    # retained-descriptor check without another multi-hundred-GB bank hash.
+    if expected_identity[1:] != current_identity[1:]:
+        return False
+    expected_birthtime_ns = bank.get("st_birthtime_ns")
+    current_birthtime_ns = _birthtime_ns(metadata)
+    if (
+        isinstance(expected_birthtime_ns, bool)
+        or not isinstance(expected_birthtime_ns, int)
+        or current_birthtime_ns is None
+        or expected_birthtime_ns != current_birthtime_ns
+    ):
+        return False
+    bank["st_dev"] = metadata.st_dev
+    return True
 
 
 def load_valid_admission_receipt(

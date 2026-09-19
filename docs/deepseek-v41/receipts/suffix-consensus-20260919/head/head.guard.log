@@ -1,0 +1,2 @@
+2026-09-19T12:12:32Z [gpu_window] GPU lock held by another window; QUEUED (blocking wait, will NOT signal the holder) lock=/tmp/mtplx-gpu-exclusive.lock
+2026-09-19T12:14:32Z [gpu_window] ERROR: timed out after 120s waiting for the exclusive GPU lock /tmp/mtplx-gpu-exclusive.lock

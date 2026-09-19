@@ -1,0 +1,9 @@
+{
+  "source_url": "https://codeload.github.com/ml-explore/mlx/tar.gz/refs/tags/v0.32.2",
+  "source_archive_sha256": "bf892386ccac1d249acc9da21574fd7b95a995f4c58b03310105fe05f077b175",
+  "archive_bytes": 4413821,
+  "source_file_bytes": 10789115,
+  "installed_header_matches": 237,
+  "different_installed_headers": [],
+  "headers_absent_from_source": []
+}

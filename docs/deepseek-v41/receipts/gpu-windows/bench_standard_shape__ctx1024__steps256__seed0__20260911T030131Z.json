@@ -1,0 +1,96 @@
+{
+  "step": "bench_standard_shape",
+  "benchmark_shape": "dsv41-standard-benchmark-shape",
+  "utc": "2026-09-11T03:01:31Z",
+  "utc_compact": "20260911T030131Z",
+  "git_rev": "f8f230924b1e1a61cf3a20fea7c5f0976ebdb41d",
+  "dry_run": false,
+  "label": null,
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "slot_layout": "component-banks",
+  "context_cells": [
+    1024
+  ],
+  "steps": 256,
+  "repeats": 1,
+  "seed": 0,
+  "prompt_format": "raw",
+  "bos_prepended": true,
+  "bos_id": 0,
+  "memory_limit_gib": 92.0,
+  "verify_record_hashes": false,
+  "greedy": true,
+  "cells": [
+    {
+      "context_tokens": 1024,
+      "prompt_build": {
+        "prompt_policy": "coding_agent_tail_v2",
+        "prompt_style": "coding-agent",
+        "prompt_format": "raw",
+        "prompt_enable_thinking": false,
+        "prompt_release_valid": true,
+        "prompt_tail_sha256": "887573dd262ed624eccb39f8b833f5711dd36889d2ea16e68837e2985a1f71b1",
+        "prompt_tail_tokens": 282,
+        "prompt_tail_preserved": true,
+        "prompt_tail_truncated": false,
+        "prompt_filler_tokens": 742,
+        "prompt_head_trimmed_tokens": 0,
+        "prompt_context_tokens": 1024,
+        "prompt_actual_tokens": 1024,
+        "prompt_filler_sha256": "69b2be3dbd45365504b6dd0f0caff283b04905e96e0b905fa670260e359f8dcc",
+        "prompt_source": "prefill_bench",
+        "bos_prepended": true,
+        "bos_id": 0,
+        "input_tokens": 1025,
+        "tokenizer": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
+      },
+      "repeats": [
+        {
+          "prompt_tokens": 1025,
+          "ttft_s": 29.55571379199864,
+          "prefill_tok_s": 34.68026545437347,
+          "decode_tokens": 256,
+          "decode_wall_s": 52.817797334000716,
+          "decode_tok_s": 4.846851116890549,
+          "wall_s": 82.37797412500004,
+          "peak_mlx_bytes": 85664053836,
+          "peak_mlx_gb": 79.78086717054248,
+          "process_rss_bytes": 63989743616,
+          "process_rss_gb": 59.5950927734375,
+          "expert_records_gathered": 307440,
+          "engram_rows_gathered": 33744,
+          "generated_token_count": 257,
+          "text_preview": "<\uff5cend\u2581of\u2581sentence\uff5c><\uff5cbegin\u2581of\u2581sentence\uff5c># file_0.py\nfrom __future__ import annotations\n\nimport dataclasses\nimport json\nimport time\nfrom pathlib import Path\nfrom typing import Any\n\n@dataclasses.datacla"
+        }
+      ],
+      "fastest_of": {
+        "decode_tok_s_fastest": 4.846851116890549,
+        "decode_tok_s_range": [
+          4.846851116890549,
+          4.846851116890549
+        ],
+        "prefill_tok_s_fastest": 34.68026545437347,
+        "prefill_tok_s_range": [
+          34.68026545437347,
+          34.68026545437347
+        ],
+        "ttft_s_fastest": 29.55571379199864,
+        "ttft_s_range": [
+          29.55571379199864,
+          29.55571379199864
+        ],
+        "peak_gb_highest": 79.78086717054248
+      }
+    }
+  ],
+  "max_live_kv_tokens": 1344,
+  "device": "default",
+  "spec_key": "deepseek-v41-flash-expert-mxfp4",
+  "manifest_sha256": "ad87b98afa7b65515d311ada638e964358f2ce5b170dcb3eadb1f89d75f63d2e",
+  "memory_limit_bytes": 98784247808,
+  "expert_cache_limit_bytes": null,
+  "engram_layer_ids": [
+    1,
+    14
+  ]
+}

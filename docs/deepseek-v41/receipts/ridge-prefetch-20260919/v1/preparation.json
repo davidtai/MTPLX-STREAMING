@@ -1,0 +1,144 @@
+{
+  "complete": true,
+  "cpu_only": true,
+  "mlx_imported": false,
+  "source_commit": "3dcc1605404c860342601479dad1d4a5bc10f9bf",
+  "before": {
+    "sample_start_monotonic_ns": 289371883972625,
+    "sample_end_monotonic_ns": 289371886013458,
+    "process": {
+      "peak_maxrss_bytes": 34406400,
+      "resident_bytes": 34488320,
+      "phys_footprint_bytes": 21578208,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123447508992,
+      "wired_bytes": 3509288960,
+      "active_bytes": 2540470272,
+      "inactive_bytes": 2491170816,
+      "speculative_bytes": 36274176,
+      "anonymous_bytes": 3099394048,
+      "file_backed_bytes": 1968521216,
+      "compressor_bytes": 2869837824,
+      "compressed_bytes": 9365307392,
+      "used_bytes": 11410767872,
+      "non_file_used_bytes": 9478520832,
+      "swapins_pages": 4836520,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "after": {
+    "sample_start_monotonic_ns": 289372053000541,
+    "sample_end_monotonic_ns": 289372056103416,
+    "process": {
+      "peak_maxrss_bytes": 273006592,
+      "resident_bytes": 273006592,
+      "phys_footprint_bytes": 259719840,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123134722048,
+      "wired_bytes": 3509452800,
+      "active_bytes": 2714238976,
+      "inactive_bytes": 2562752512,
+      "speculative_bytes": 114016256,
+      "anonymous_bytes": 3337437184,
+      "file_backed_bytes": 2053570560,
+      "compressor_bytes": 2869837824,
+      "compressed_bytes": 9365307392,
+      "used_bytes": 11656282112,
+      "non_file_used_bytes": 9716727808,
+      "swapins_pages": 4836520,
+      "swapouts_pages": 7668770,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "elapsed_s": 0.11132483300752938,
+  "static_incremental_bound_bytes": 1073741824,
+  "rows": [
+    {
+      "layer": 31,
+      "fitted_adapter_sha256": "c430a9ad873d1435e163833b5e830a4454c2b72a2df580a9f71c87a64e9d928e",
+      "adapter_bytes": 594432,
+      "score_bytes": 589824,
+      "selected_ridge": 1.0,
+      "config": {
+        "width": 6,
+        "margin": 0.1,
+        "max_records": 12
+      },
+      "prior_train": {
+        "layer": 31,
+        "issued": 103,
+        "useful": 88,
+        "extra": 15,
+        "actual_misses": 185,
+        "precision": 0.8543689320388349,
+        "miss_coverage": 0.4756756756756757
+      },
+      "prior_heldout": {
+        "layer": 31,
+        "issued": 56,
+        "useful": 49,
+        "extra": 7,
+        "actual_misses": 113,
+        "precision": 0.875,
+        "miss_coverage": 0.4336283185840708
+      },
+      "inverse_score_max_error": 0.0
+    },
+    {
+      "layer": 32,
+      "fitted_adapter_sha256": "1c2e31918bd2e2bfa90b41bd0c3cb822a28b34c52b816e03a7dc6790abada4a8",
+      "adapter_bytes": 594432,
+      "score_bytes": 589824,
+      "selected_ridge": 1.0,
+      "config": {
+        "width": 6,
+        "margin": 0.1,
+        "max_records": 4
+      },
+      "prior_train": {
+        "layer": 32,
+        "issued": 78,
+        "useful": 69,
+        "extra": 9,
+        "actual_misses": 195,
+        "precision": 0.8846153846153846,
+        "miss_coverage": 0.35384615384615387
+      },
+      "prior_heldout": {
+        "layer": 32,
+        "issued": 58,
+        "useful": 54,
+        "extra": 4,
+        "actual_misses": 152,
+        "precision": 0.9310344827586207,
+        "miss_coverage": 0.35526315789473684
+      },
+      "inverse_score_max_error": 0.0
+    }
+  ],
+  "parameters_sha256": "dc9715cba26002ea74eb5ff66f46cce2f3a8af2be2f5bfd87a56392815e35b02",
+  "parameters_bytes": 2371114,
+  "consumed_range_sha256": {
+    "layer030_router_in.npy:all2304": "f9d6e08da1db2bccea201b5daff31d18195ec4c84fea84e929177a3113c253d4",
+    "layer031_router_in.npy:all2304": "7cfad5d8e7f9a6449faeb7878e03520fe1d4f4eccbbefea6d5c5c3f14ab0c60b",
+    "layers.31.ffn.gate.weight": "dba7056324083b1bc5ea33ce51682f6e29a542fa0b558fc0349106f19f9f94ef",
+    "layers.31.ffn.gate.bias": "abcf73dfdcbc0f23708df3842345d642c06eb0c701e7ca6bc29d2a805533e340",
+    "layer032_router_in.npy:all2304": "9bb57eb14d84d9bc6aa0291ce63aa309ffd000117feec7202de6b7d5a4a75e02",
+    "layers.32.ffn.gate.weight": "5f149da9e7245ff4d127ef1948fd3e6cb06e2702b36ab980c51b5bd09a3259ac",
+    "layers.32.ffn.gate.bias": "52314149fb36d256f0b933b876dd8d58265f2ba4ce3c66e7cd2de5ec2e214dcd"
+  },
+  "scope": "Reproduce two frozen prompt-only adapters and their saved-score application. No new model selection or target execution."
+}

@@ -1,0 +1,19 @@
+{
+  "source_root": "/tmp/dsv41-completed-input-feature-20260918",
+  "raw_prefix": "/tmp/dsv41-110-stage/no-completed-input-feature-20260918",
+  "files": {
+    "screen.py": "33da110728997a3fb2052acb93888034e9adfb9da1d07e05b242c1d8cec17e91",
+    "launcher-refusal-health.json": "a8a706b88e6132b7bdd8d14c0f9b2f3f854c1bed4d24c8829a3bc07835b3203e",
+    "screen.json": "6201e9b6b40c00133162e3ccf57e059f81fcdd43436b1ac7a1c30c8c78d4fde0",
+    "installation.json": "8fe3adcc1dcb67735c09ff32195ee00139fa03512c617b64cb6e5fd77bd82aa4",
+    "README.md": "abf2fa214204afb65fbad2f9e79af12de880123730601d5416f451922d17f4b8",
+    "launcher-refused.command.sh": "95aef19d3cf526874b8e5e6d6ba1acb6769ceeebc8d05fed0ed7932f95112e1c",
+    "launcher-refusal.log": "47a91498bf883049ec95d08e15367f2afbae1401a3e3bc4eaa0ebd981cc4e2d9",
+    "guard.log": "b81d1b393e5a48e599511db0bdef3dfb4a88837b5844fabea4ee1e95d19dc44b",
+    "command.sh": "555533e0a8d2796f445580512a4719ab3b305a748b9c5748606030c68dcc63d7",
+    "stage.py": "8f1213a9585633390df8308656afcb19d3f2534e412ae82e299256ad70f28e08",
+    "post-run-health.json": "aaf48ec040bae642aa19fcda3389961dc515ab9443c862af46f1ffd20b23fa60"
+  },
+  "total_bytes": 374672,
+  "artifact_copies": false
+}

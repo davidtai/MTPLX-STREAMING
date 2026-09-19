@@ -613,6 +613,11 @@ def test_banked_island_switch_bitwise_parity(tmp_path, mlx) -> None:
             switch.layer_index = island_layer
             switch.group_size = spec.quant_group_size
             switch.bits = spec.quant_bits
+            # __call__ reads swiglu_limit (W11 streaming clamp) and codec (W15
+            # native-mxfp4 codec); __new__ bypasses __init__, so mirror what
+            # DenseIslandSwitchGLU.__init__ derives from the spec.
+            switch.swiglu_limit = getattr(spec, "swiglu_limit", None)
+            switch.codec = getattr(spec, "expert_codec", "affine")
             switch._bank = store.bank_for_layer(island_layer)
             return switch
 

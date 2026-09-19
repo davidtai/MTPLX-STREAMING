@@ -1,0 +1,679 @@
+"""W78 CPU unit test for scripts/deepseek_v41/metal_decode_attn_bisect.py.
+
+Proves the microbench (a) executes end to end at tiny dims on the CPU for all four
+CSA modes at T in {256, 1024}, and (b) that the peeled sub-ops sum to within 20%
+of the whole ``Attention._attend`` -- i.e. the peel is a faithful decomposition
+(no op missing, none double-counted).
+
+The comparison is on the AGGREGATE peeled-sum vs whole over every (mode, T) cell:
+individual sub-millisecond CPU cells carry per-fence sync jitter, but the aggregate
+cancels it, and a grossly missing / double-counted op would still move it well past
+20%.  This is a CPU scaling-shape / plumbing check only; the GPU window measures the
+per-op O(T) magnitudes (the CPU backend does not reproduce Metal kernel behaviour --
+that is the whole reason W78 exists).
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+
+import mlx.core as mx
+import pytest
+
+# Pin the CPU stream at import: "no GPU" means CPU here, and MLX defaults to Metal.
+mx.set_default_device(mx.cpu)
+
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_SCRIPT = os.path.join(_REPO, "scripts", "deepseek_v41", "metal_decode_attn_bisect.py")
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("w78_metal_decode_attn_bisect", _SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_MOD = _load_module()
+
+_SUM_KEYS = ["qkv_proj", "cache_append", "mask_build", "compress_append", "select",
+             "attend", "out_proj"]
+_MODES = ["swa_only", "full", "reindex", "reuse"]
+_TS = [256, 1024]
+
+
+@pytest.fixture(scope="module")
+def receipt():
+    # CPU, tiny dims, the selected-key (cell16k) path -- iters chosen so the
+    # aggregate is stable under a niced shared host.
+    return _MOD.run({
+        "tiny": True, "gpu": False, "Ts": _TS,
+        "iters": 20, "warmup": 3, "use_selected": True,
+    })
+
+
+def test_pinned_to_cpu(receipt):
+    assert mx.default_device() == mx.cpu
+    assert receipt["device"] == "cpu"
+    assert receipt["path"] == "selected_keys"
+
+
+def test_all_modes_and_Ts_present(receipt):
+    assert set(receipt["results"]) == set(_MODES)
+    for mode in _MODES:
+        assert set(receipt["results"][mode]) == {str(T) for T in _TS}
+
+
+def test_every_op_finite_and_nonneg(receipt):
+    import math
+    for mode in _MODES:
+        for T in _TS:
+            cell = receipt["results"][mode][str(T)]
+            for key in _SUM_KEYS + ["gather_iso", "score", "attend", "whole", "peeled_sum"]:
+                v = cell[key]
+                assert isinstance(v, float) and math.isfinite(v) and v >= 0.0, (mode, T, key, v)
+            # whole must be a real measurement (attention actually ran)
+            assert cell["whole"] > 0.0, (mode, T)
+            # the selected-key gather isolation ran (mx.take from the T-row cache)
+            assert cell["gather_iso"] > 0.0, (mode, T)
+
+
+def test_compress_and_select_gate_by_mode(receipt):
+    """swa_only has no compressor/indexer; reuse reads the source selection (its
+    own select is a cheap dict read); full/reindex own the indexer select."""
+    for T in _TS:
+        assert receipt["results"]["swa_only"][str(T)]["compress_append"] == 0.0
+        assert receipt["results"]["swa_only"][str(T)]["select"] == 0.0
+        # full owns its compressor frontier + indexer select -> both non-trivial
+        assert receipt["results"]["full"][str(T)]["compress_append"] > 0.0
+        assert receipt["results"]["full"][str(T)]["select"] > 0.0
+        # reindex owns the indexer select (reuses the KV, no own compressor)
+        assert receipt["results"]["reindex"][str(T)]["select"] > 0.0
+
+
+def test_peeled_sum_within_20pct_of_whole(receipt):
+    """The peel is a faithful decomposition: aggregate peeled-sum ~= aggregate
+    whole (within 20%).  Aggregating over all cells cancels per-cell CPU jitter."""
+    peeled_total = 0.0
+    whole_total = 0.0
+    for mode in _MODES:
+        for T in _TS:
+            cell = receipt["results"][mode][str(T)]
+            # recompute the sum from the parts as an independent check
+            s = sum(cell[k] for k in _SUM_KEYS)
+            assert abs(s - cell["peeled_sum"]) < 1e-9, (mode, T, s, cell["peeled_sum"])
+            peeled_total += cell["peeled_sum"]
+            whole_total += cell["whole"]
+    ratio = peeled_total / whole_total
+    assert 0.80 <= ratio <= 1.20, (
+        f"aggregate peeled/whole={ratio:.3f} outside [0.80, 1.20] "
+        f"(peeled={peeled_total:.4f} ms, whole={whole_total:.4f} ms)"
+    )
+
+
+def test_masked_full_path_executes(receipt):
+    """The --no-selected-keys lever runs the masked-full path (mask build + full-T
+    score) without error and its peel decomposes the whole.
+
+    The masked-full peel fences one extra bracket the selected path does not (the
+    ``_window_attend`` mask build), so at tiny CPU dims the fixed per-fence sync
+    cost runs the aggregate ~18% over the whole (rock-stable, ~+/-0.2% across
+    repeats -- it is deterministic per-fence overhead, not a missing / double-
+    counted op).  On the GPU at real dims that overhead is negligible (compute-
+    bound), so the bound here is widened only to absorb the CPU fence tax; a gross
+    decomposition error would still blow past it.  The strict 20% faithfulness
+    check is on the primary selected-key path (test_peeled_sum_within_20pct...)."""
+    r = _MOD.run({
+        "tiny": True, "gpu": False, "Ts": _TS,
+        "iters": 20, "warmup": 3, "use_selected": False,
+    })
+    assert r["path"] == "masked_full"
+    peeled_total = whole_total = 0.0
+    for mode in _MODES:
+        for T in _TS:
+            cell = r["results"][mode][str(T)]
+            # masked-full builds the window attend mask (selected path does not)
+            assert cell["mask_build"] > 0.0, (mode, T)
+            peeled_total += cell["peeled_sum"]
+            whole_total += cell["whole"]
+    ratio = peeled_total / whole_total
+    assert 0.80 <= ratio <= 1.25, f"masked-full aggregate peeled/whole={ratio:.3f}"
+
+
+def test_ballast_and_churn_flags_execute():
+    """The --ballast-gib / --ballast-churn levers (window-31 follow-up) run without
+    error at a tiny ballast, still produce results for all modes, and record the
+    ballast + memory fields in the receipt.  (The magnitudes are meaningless on
+    CPU; this is a plumbing check -- the pressure signal is a GPU-window result.)"""
+    r = _MOD.run({
+        "tiny": True, "gpu": False, "Ts": _TS,
+        "iters": 6, "warmup": 2, "use_selected": True,
+        "ballast_gib": 0.01, "ballast_churn": True,
+    })
+    assert r["ballast_gib"] == 0.01
+    assert r["ballast_churn"] is True
+    mem = r["memory"]
+    assert mem["ballast_gib"] == 0.01
+    assert mem["n_ballast_chunks"] >= 1  # at least one resident chunk was held
+    # memory counters are present (may be None on a backend without them)
+    for key in ("active_after_ballast_gib", "active_end_gib", "peak_gib"):
+        assert key in mem
+    # the measurement still ran end to end for every mode / T
+    assert set(r["results"]) == set(_MODES)
+    for mode in _MODES:
+        for T in _TS:
+            assert r["results"][mode][str(T)]["whole"] > 0.0, (mode, T)
+
+    # ballast off -> no resident chunks (default path unchanged)
+    r0 = _MOD.run({
+        "tiny": True, "gpu": False, "Ts": _TS,
+        "iters": 4, "warmup": 1, "use_selected": True,
+    })
+    assert r0["ballast_gib"] == 0.0
+    assert r0["ballast_churn"] is False
+    assert r0["memory"]["n_ballast_chunks"] == 0
+
+
+# ---------------------------------------------------------------------------
+# --in-model plumbing (window-32 follow-up): the three in-situ passes on a tiny
+# FAKE full model (CPU).  The GPU path loads the real artifact via the ab loader;
+# here we only prove the stubs + three passes run and the report is shaped right.
+# ---------------------------------------------------------------------------
+def test_in_model_tiny_three_passes():
+    r = _MOD.run_in_model({"tiny": True, "steps": 3, "prompt_len": 40})
+    assert mx.default_device() == mx.cpu
+    assert r["device"] == "cpu" and r["tiny"] is True and r["mode"] == "in_model"
+    assert set(r["passes"]) == {"full", "expert_stub", "attn_stub"}
+    for key in ("full", "expert_stub", "attn_stub"):
+        assert r["passes"][key]["summary"]["enabled"] is True, key
+
+    full = r["passes"]["full"]["summary"]
+    est = r["passes"]["expert_stub"]["summary"]
+    ast = r["passes"]["attn_stub"]["summary"]
+
+    # (1) full: every CSA mode's attention was timed in situ (ms/layer > 0)
+    for mode in _MODES:
+        v = full["attn_ms_per_layer"][mode]
+        assert isinstance(v, float) and v > 0.0, (mode, v)
+
+    # (2) expert stub really removed the routed switch: moe.routed_switch drops
+    full_routed = full["non_attn_ms_per_layer"]["moe.routed_switch"]
+    stub_routed = est["non_attn_ms_per_layer"]["moe.routed_switch"]
+    assert full_routed is not None and stub_routed is not None
+    assert stub_routed < full_routed, (stub_routed, full_routed)
+    # attention still ran under the expert stub (it is not stubbed here)
+    for mode in _MODES:
+        assert isinstance(est["attn_ms_per_layer"][mode], float)
+
+    # (3) attention stub removed the attn.<mode> stages entirely, and the whole
+    # step got cheaper (attention no longer contributes)
+    for mode in _MODES:
+        assert ast["attn_ms_per_layer"][mode] is None, mode
+    assert ast["frame_wall_ms_per_token"] < full["frame_wall_ms_per_token"]
+
+
+def test_in_model_tiny_cooldown_and_utilization_plumbing(monkeypatch):
+    """W90: --cooldown-s + macmon utilization plumbing runs at tiny dims on the CPU
+    with the READER MOCKED (MTPLX_MACMON_BIN -> a nonexistent path, so the sampler
+    and cooldown readout are graceful no-ops -- no macmon subprocess, no GPU).  The
+    receipt carries the ``utilization`` (empty trace) and ``cooldown`` blocks and the
+    three passes still complete."""
+    monkeypatch.setenv("MTPLX_MACMON_BIN", "/nonexistent/macmon-w90-test")
+    r = _MOD.run_in_model({
+        "tiny": True, "steps": 2, "prompt_len": 40,
+        "cooldown_s": 0.02, "utilization": True, "util_interval_ms": 10,
+    })
+    assert set(r["passes"]) == {"full", "expert_stub", "attn_stub"}
+    # utilization block present (reader mocked -> 0 samples, but the trace RAN)
+    util = r["utilization"]
+    assert isinstance(util, dict) and util.get("samples") == 0
+    assert r["passes"]["full"]["utilization"] == util
+    # cooldown block present with the requested duration and empty (mocked) readings
+    cd = r["cooldown"]
+    assert isinstance(cd, dict) and cd["seconds"] == 0.02
+    assert cd["start"] == {} and cd["end"] == {}
+    # the full pass still produced a real census
+    assert r["passes"]["full"]["summary"]["enabled"] is True
+
+
+def test_in_model_gpu_argv_parses():
+    """The GPU-path argv the mode builds parses cleanly against the ab parser (arg
+    names / values), without loading the artifact -- a guard against argv typos."""
+    ab = _MOD._load_ab_module()
+    argv = [
+        "--model", "/nonexistent/model",
+        "--context-tokens", "16384",
+        "--decode-tokens", "30",
+        "--max-kv", "17408",
+        "--memory-limit-gib", "60.0",
+        "--arms", "cell16k",
+        "--out", "/dev/null",
+        "--prompt-ids-file", "/some/prompt-ids.json",
+        "--prompt-seed", "20260829",
+    ]
+    ns = ab.build_parser().parse_args(argv)
+    assert ns.context_tokens == 16384
+    assert ns.max_kv == 17408
+    assert abs(ns.memory_limit_gib - 60.0) < 1e-9
+    assert ns.arms == ["cell16k"]
+    assert "cell16k" in ab.ARM_PRESETS
+    # the ab loader/census pass functions the mode reuses exist
+    assert callable(ab._load_model) and callable(ab._stage_timing_pass)
+
+
+def test_in_model_tiny_1k_no_prompt_ids_file(tmp_path):
+    """window-35 step 1 shape on the tiny CPU model: --in-model --context-tokens
+    1024 WITHOUT --prompt-ids-file must run the three passes end to end (the tiny
+    lane never touches the prompt-ids path, so this guards the launcher flag combo
+    + main() wiring)."""
+    import json
+
+    out = tmp_path / "in-model-1k.json"
+    rc = _MOD.main([
+        "--in-model", "--tiny",
+        "--context-tokens", "1024",
+        "--in-model-steps", "3",
+        "--out", str(out),
+    ])
+    assert rc == 0
+    receipt = json.loads(out.read_text())
+    assert receipt["mode"] == "in_model"
+    assert receipt["device"] == "cpu"
+    assert receipt["tiny"] is True
+    assert set(receipt["passes"]) == {"full", "expert_stub", "attn_stub"}
+
+
+# ---------------------------------------------------------------------------
+# --in-model --unfenced (window 94): the FIVE unfenced whole-token frame-wall
+# passes on the tiny FAKE full model (CPU).  Plumbing + attribution-identity
+# checks only -- the magnitudes are meaningless on CPU (the GPU window measures
+# the real in-situ frame walls); this proves all five passes run, the table's
+# fields are present, the derived attribution obeys its identities, and the stub
+# barrier flag actually gates the per-layer mx.eval(indices).
+# ---------------------------------------------------------------------------
+_UNFENCED_PASSES = ["full", "expert_stub", "attn_stub",
+                    "expert_stub_nobarrier", "small_stages_floor"]
+
+
+def test_zeroswitch_barrier_flag_shape_and_zeros():
+    """The expert stub returns zeros [n, top_k, dim] for both barrier settings, and
+    records the flag it was built with."""
+    x = mx.zeros((3, 4), dtype=mx.float32)
+    idx = mx.array([[0, 1], [2, 3], [1, 0]])
+    for keep in (False, True):
+        stub = _MOD._ZeroSwitch(keep_routing_barrier=keep)
+        assert stub.keep_routing_barrier is keep
+        out = stub(x, idx)
+        assert out.shape == (3, 2, 4)  # [n, top_k, dim]
+        assert float(mx.abs(out).sum().item()) == 0.0
+
+
+def test_zeroswitch_keep_barrier_gates_eval(monkeypatch):
+    """keep_routing_barrier=True fires exactly one mx.eval(indices) (the per-layer
+    routing host sync the streamed switch pays); =False fires none.  This is the
+    difference pass (2) vs pass (4) isolates as the ~40 host syncs/token."""
+    calls = {"n": 0}
+    real_eval = mx.eval
+
+    def counting_eval(*a, **k):
+        calls["n"] += 1
+        return real_eval(*a, **k)
+
+    monkeypatch.setattr(_MOD.mx, "eval", counting_eval)
+    x = mx.zeros((2, 4), dtype=mx.float32)
+    idx = mx.array([[0, 1], [2, 3]])
+
+    n0 = calls["n"]
+    _MOD._ZeroSwitch(keep_routing_barrier=True)(x, idx)
+    assert calls["n"] == n0 + 1, "barrier-kept stub must eval(indices) once"
+
+    n1 = calls["n"]
+    _MOD._ZeroSwitch(keep_routing_barrier=False)(x, idx)
+    assert calls["n"] == n1, "no-barrier stub must not eval(indices)"
+
+
+def test_apply_stub_barrier_flag_propagates():
+    """_apply_stub(experts, keep_routing_barrier=...) builds the stub with that flag
+    on every backbone layer, and restore puts the originals back."""
+    model, _args = _MOD._build_tiny_full_model(seed=1)
+    originals = [layer.mlp.switch_mlp for layer in model.layers]
+    saved = _MOD._apply_stub(model, "experts", keep_routing_barrier=True)
+    try:
+        for layer in model.layers:
+            assert isinstance(layer.mlp.switch_mlp, _MOD._ZeroSwitch)
+            assert layer.mlp.switch_mlp.keep_routing_barrier is True
+    finally:
+        _MOD._restore_stub(saved)
+    for layer, orig in zip(model.layers, originals):
+        assert layer.mlp.switch_mlp is orig
+
+
+@pytest.fixture(scope="module")
+def unfenced_receipt():
+    return _MOD.run_in_model_unfenced({
+        "tiny": True, "steps": 12, "warmup_steps": 4, "prompt_len": 40,
+        "ssd_bandwidth_gibs": 4.4,
+    })
+
+
+def test_unfenced_tiny_five_passes(unfenced_receipt):
+    r = unfenced_receipt
+    assert mx.default_device() == mx.cpu
+    assert r["device"] == "cpu" and r["tiny"] is True
+    assert r["mode"] == "in_model_unfenced"
+    assert set(r["passes"]) == set(_UNFENCED_PASSES)
+    assert r["steps"] == 12 and r["warmup_steps"] == 4
+    # every pass carries a real per-token mean/median + tok/s and the warmup-excluded
+    # measured-step count (12 - 4 = 8).
+    for key in _UNFENCED_PASSES:
+        s = r["passes"][key]["summary"]
+        assert isinstance(s["mean_ms_per_token"], float) and s["mean_ms_per_token"] > 0.0
+        assert isinstance(s["median_ms_per_token"], float) and s["median_ms_per_token"] > 0.0
+        assert isinstance(s["tok_s"], float) and s["tok_s"] > 0.0
+        assert s["steps"] == 12 and s["warmup_steps"] == 4 and s["measured_steps"] == 8
+        # tok/s is derived from the post-warmup mean ms/token
+        assert abs(s["tok_s"] - 1000.0 / s["mean_ms_per_token"]) < 1e-6
+
+
+def test_unfenced_tiny_pass1_token_sha(unfenced_receipt):
+    r = unfenced_receipt
+    import hashlib as _h
+    sha = r["token_ids_sha256"]
+    assert isinstance(sha, str) and len(sha) == 64
+    assert r["passes"]["full"]["token_ids_sha256"] == sha
+    # 1 prefill argmax token + `steps` decode tokens
+    assert r["n_token_ids"] == 1 + r["steps"]
+
+
+def test_unfenced_attribution_identities(unfenced_receipt):
+    """switch total (1)-(4) == SSD-bound (1)-(2) + sync (2)-(4); and the sum-of-parts
+    is exactly attention + switch-total + floor (residual = full - sum-of-parts)."""
+    a = unfenced_receipt["attribution"]
+    st = a["switch_total_ms_per_token"]
+    ssd = a["switch_ssd_bound_ms_per_token"]
+    syn = a["switch_sync_barrier_ms_per_token"]
+    assert abs(st - (ssd + syn)) < 1e-9, (st, ssd, syn)
+    attn = a["attention_ms_per_token"]
+    floor = a["small_stages_floor_ms_per_token"]
+    sop = a["sum_of_parts_ms_per_token"]
+    assert abs(sop - (attn + st + floor)) < 1e-9, (sop, attn, st, floor)
+    resid = a["unattributed_residual_ms_per_token"]
+    assert abs(resid - (a["full_ms_per_token"] - sop)) < 1e-9
+    # the deltas are computed against the per-pass means
+    def _mean(k):
+        return unfenced_receipt["passes"][k]["summary"]["mean_ms_per_token"]
+    assert abs(attn - (_mean("full") - _mean("attn_stub"))) < 1e-9
+    assert abs(st - (_mean("full") - _mean("expert_stub_nobarrier"))) < 1e-9
+    assert abs(ssd - (_mean("full") - _mean("expert_stub"))) < 1e-9
+    assert abs(syn - (_mean("expert_stub") - _mean("expert_stub_nobarrier"))) < 1e-9
+    assert a["ssd_bandwidth_gibs"] == 4.4
+
+
+def test_unfenced_tiny_stream_counters_absent_on_fake_model(unfenced_receipt):
+    """The tiny fake model has no expert-streaming runtime, so misses/bytes are None
+    (the block is omitted) -- and the SSD-bound independent estimate is then None,
+    while the measured (1)-(2) delta is still a real number."""
+    s = unfenced_receipt["passes"]["full"]["summary"]
+    assert s["misses_per_token"] is None
+    assert s["bytes_read_per_token"] is None
+    assert s["ssd_bound_estimate_ms"] is None
+    a = unfenced_receipt["attribution"]
+    assert a["ssd_bound_independent_estimate_ms"] is None
+    assert isinstance(a["switch_ssd_bound_ms_per_token"], float)
+
+
+def test_unfenced_warmup_guard_short_run():
+    """steps <= warmup_steps must not divide-by-empty: the summary falls back to all
+    steps (measured_steps == steps)."""
+    r = _MOD.run_in_model_unfenced({
+        "tiny": True, "steps": 3, "warmup_steps": 8, "prompt_len": 32,
+    })
+    for key in _UNFENCED_PASSES:
+        s = r["passes"][key]["summary"]
+        assert s["measured_steps"] == 3
+        assert isinstance(s["mean_ms_per_token"], float) and s["mean_ms_per_token"] > 0.0
+
+
+def test_unfenced_main_writes_json(tmp_path):
+    """main() --in-model --unfenced --tiny runs all five passes and writes a receipt."""
+    import json
+    out = tmp_path / "unfenced-tiny.json"
+    rc = _MOD.main([
+        "--in-model", "--unfenced", "--tiny",
+        "--context-tokens", "512",
+        "--in-model-steps", "6", "--warmup-steps", "2",
+        "--ssd-bandwidth-gibs", "3.0",
+        "--out", str(out),
+    ])
+    assert rc == 0
+    receipt = json.loads(out.read_text())
+    assert receipt["mode"] == "in_model_unfenced"
+    assert receipt["device"] == "cpu" and receipt["tiny"] is True
+    assert set(receipt["passes"]) == set(_UNFENCED_PASSES)
+    assert receipt["steps"] == 6 and receipt["warmup_steps"] == 2
+    assert receipt["ssd_bandwidth_gibs"] == 3.0
+    assert isinstance(receipt["token_ids_sha256"], str)
+
+
+def test_unfenced_cli_flags_parse():
+    """--unfenced / --warmup-steps / --ssd-bandwidth-gibs parse and reach the cfg."""
+    a = _MOD.build_parser().parse_args([
+        "--in-model", "--unfenced", "--gpu",
+        "--model", "/nonexistent/model", "--arms", "cell16k_ring",
+        "--context-tokens", "16384", "--memory-limit-gib", "60", "--max-kv", "17408",
+        "--in-model-steps", "64", "--warmup-steps", "8",
+        "--ssd-bandwidth-gibs", "4.4", "--utilization",
+    ])
+    assert a.unfenced is True
+    assert a.warmup_steps == 8
+    assert abs(a.ssd_bandwidth_gibs - 4.4) < 1e-9
+    cfg = _MOD._in_model_cfg(a)
+    assert cfg["unfenced"] is True
+    assert cfg["warmup_steps"] == 8
+    assert cfg["steps"] == 64
+    assert cfg["ssd_bandwidth_gibs"] == 4.4
+    assert cfg["arms"] == "cell16k_ring"
+
+
+def test_unfenced_tiny_utilization_plumbing(monkeypatch):
+    """--utilization runs a fresh (mocked) macmon sampler PER pass (single-use) and
+    the block lands on every pass + hoisted to the receipt top."""
+    monkeypatch.setenv("MTPLX_MACMON_BIN", "/nonexistent/macmon-w94-test")
+    r = _MOD.run_in_model_unfenced({
+        "tiny": True, "steps": 4, "warmup_steps": 1, "prompt_len": 32,
+        "utilization": True, "util_interval_ms": 10, "cooldown_s": 0.02,
+    })
+    assert set(r["passes"]) == set(_UNFENCED_PASSES)
+    for key in _UNFENCED_PASSES:
+        util = r["passes"][key]["utilization"]
+        assert isinstance(util, dict) and util.get("samples") == 0  # mocked -> 0 samples
+    assert r["utilization"] == r["passes"]["full"]["utilization"]
+    # cooldown runs before pass (1) only (matches the fenced full pass), and is
+    # hoisted to the receipt top; the mocked reader gives empty start/end readings.
+    cd = r["cooldown"]
+    assert isinstance(cd, dict) and cd["seconds"] == 0.02
+    assert r["passes"]["full"]["cooldown"] == cd
+    assert r["passes"]["attn_stub"]["cooldown"] is None  # stub passes reuse warm state
+
+
+def test_launcher_in_model_1k_argv_parses_and_resolves_prompt(monkeypatch, tmp_path):
+    """The exact launch-window-35.sh step-1 in-model argv (T=1024, NO
+    --prompt-ids-file) parses, and the no-ids prompt path resolves a real prompt
+    instead of crashing with ``'NoneType' has no attribute 'encode'``.
+
+    The launcher argv (see .benchmark-artifacts/deepseek-v41/launch-window-35.sh):
+      metal_decode_attn_bisect.py --in-model --gpu --model <M> --arms cell16k
+        --context-tokens 1024 --memory-limit-gib 60 --max-kv 4096
+        --in-model-steps 30 --out <O>
+
+    A fake tokenizer stands in for ``ab._tokenizer(args, model)`` so the no-ids
+    builder path runs on the CPU without the 376 GB artifact -- the regression is
+    that this path used to be handed ``tokenizer=None``.
+    """
+    argv = [
+        "--in-model", "--gpu",
+        "--model", str(tmp_path),
+        "--arms", "cell16k",
+        "--context-tokens", "1024",
+        "--memory-limit-gib", "60",
+        "--max-kv", "4096",
+        "--in-model-steps", "30",
+        "--out", str(tmp_path / "in-model-1k.json"),
+    ]
+    a = _MOD.build_parser().parse_args(argv)
+    assert a.in_model and a.gpu
+    assert a.context_tokens == 1024
+    assert a.max_kv == 4096
+    assert a.prompt_ids_file is None  # the crash precondition
+
+    cfg = _MOD._in_model_cfg(a)
+    assert cfg["prompt_ids_file"] is None
+    assert cfg["context_tokens"] == 1024
+    assert cfg["steps"] == 30
+
+    ab = _MOD._load_ab_module()
+    bench = ab._load_bench_module()
+    args = _MOD._in_model_ab_args(ab, cfg, steps=cfg["steps"], arm=cfg["arms"])
+    assert args.prompt_ids_file is None
+    assert args.context_tokens == 1024
+
+    # No --prompt-ids-file => the builder path, which needs a real tokenizer.
+    # Inject a fake one exactly where run_in_model loads load_tokenizer(args.model).
+    monkeypatch.setattr(ab, "_tokenizer", lambda _a, _b: bench._FakeTokenizer())
+    prompt_ids, prompt_meta = _MOD._resolve_in_model_prompt(ab, bench, args)
+    assert isinstance(prompt_ids, list) and len(prompt_ids) > 0
+    assert isinstance(prompt_meta, dict)
+
+
+# ---------------------------------------------------------------------------
+# --in-model --unfenced --attn-subops (W97): within-attention sub-op attribution
+# on the tiny FAKE full model (CPU).  Plumbing + attribution-identity + stub
+# restore + compile-restore checks; magnitudes are meaningless on CPU (the GPU
+# window measures the real in-situ frame walls).
+# ---------------------------------------------------------------------------
+def test_attn_subops_list_is_absorbed_port_shape():
+    # This port is MLA-absorbed: no per-head K/V up-projection sub-op exists.
+    assert _MOD._ATTN_SUBOPS == ["qkv_proj", "attn_core", "wo_a_dequant", "out_proj", "rope"]
+
+
+@pytest.fixture(scope="module")
+def subops_receipt():
+    return _MOD.run_in_model_attn_subops({
+        "tiny": True, "steps": 8, "warmup_steps": 2, "prompt_len": 40,
+    })
+
+
+def test_attn_subops_all_passes_run(subops_receipt):
+    r = subops_receipt
+    assert mx.default_device() == mx.cpu
+    assert r["device"] == "cpu" and r["tiny"] is True
+    assert r["mode"] == "in_model_unfenced_attn_subops"
+    assert set(r["passes"]) == {"full", *_MOD._ATTN_SUBOPS}
+    for key in ["full", *_MOD._ATTN_SUBOPS]:
+        s = r["passes"][key]["summary"]
+        assert isinstance(s["mean_ms_per_token"], float) and s["mean_ms_per_token"] > 0.0
+        assert s["measured_steps"] == 6  # 8 - 2 warmup
+
+
+def test_attn_subops_cost_is_full_minus_stub(subops_receipt):
+    r = subops_receipt
+    a = r["attribution"]
+    full = a["full_eager_ms_per_token"]
+    assert abs(full - r["passes"]["full"]["summary"]["mean_ms_per_token"]) < 1e-9
+    for sub in _MOD._ATTN_SUBOPS:
+        stubbed = r["passes"][sub]["summary"]["mean_ms_per_token"]
+        cost = a["subops"][sub]["cost_ms_per_token"]
+        assert abs(cost - (full - stubbed)) < 1e-9, (sub, cost, full, stubbed)
+
+
+def test_attn_subops_records_switch_workload_and_flags_token_change(subops_receipt):
+    """W97 review item 6: each pass records its switch workload (misses/bytes per
+    token + the route-stage hot counters) and its token sha; the attribution flags
+    any sub-op whose sha != full -- the zero-returning stubs (attn_core/qkv_proj/
+    out_proj) change routing so ``full - stub`` is contaminated, while the
+    byte-identical wo_a_dequant stub (it just precomputes the same dense weight) is
+    NOT flagged.  The route probe is off by default, so route_stage is None here."""
+    r = subops_receipt
+    for key in ["full", *_MOD._ATTN_SUBOPS]:
+        sw = r["passes"][key]["switch_workload"]
+        assert {"misses_per_token", "bytes_read_per_token", "hit_rate",
+                "route_stage", "route_probe_enabled"} <= set(sw)
+        assert sw["route_probe_enabled"] is False   # MTPLX_ROUTE_STAGE_PROBE unset
+        assert sw["route_stage"] is None            # so no per-pass hot-counter delta
+
+    subs = r["attribution"]["subops"]
+    # zero-returning stubs change the decoded tokens (different routing/misses).
+    for sub in ("qkv_proj", "attn_core", "out_proj"):
+        assert subs[sub]["token_sha_differs_from_full"] is True, sub
+    # wo_a_dequant returns the SAME dense weight the eager path computes -> tokens
+    # unchanged -> the one uncontaminated sub-op cost.
+    assert subs["wo_a_dequant"]["token_sha_differs_from_full"] is False
+    # every sub-op carries the switch delta keys (values may be None on the fake CPU
+    # model that has no expert-streaming runtime; the flag is the always-on signal).
+    for sub in _MOD._ATTN_SUBOPS:
+        assert set(subs[sub]["switch_delta"]) == {"d_misses_per_token", "d_bytes_read_per_token"}
+        assert isinstance(subs[sub]["token_sha_differs_from_full"], bool)
+
+
+def test_attn_subops_runs_with_compile_forced_off():
+    """The sub-op microscope forces the attention compile tapes off for its passes
+    (the tiny loader also sets it off), and the receipt records that it did so."""
+    r = _MOD.run_in_model_attn_subops({"tiny": True, "steps": 3, "warmup_steps": 1,
+                                       "prompt_len": 32})
+    assert _MOD.dsv41._ATTN_COMPILE is False   # tiny setup + microscope both off
+    assert "compile tapes forced OFF" in r["note"]
+
+
+def _forward_logits(model, ids):
+    cache = model.make_cache()
+    return model(mx.array([list(ids)]), cache=cache)
+
+
+@pytest.mark.parametrize("which", ["qkv_proj", "attn_core", "wo_a_dequant", "out_proj", "rope"])
+def test_apply_attn_subop_stub_restore_is_byte_identical(which):
+    """Applying then restoring a sub-op stub leaves the model producing bit-for-bit
+    the same logits as before the stub -- a functional restore check that does not
+    depend on (unstable) bound-method object identity.  The stubbed forward is only
+    required to RUN (shape-preserving); its logits may differ."""
+    ids = list(range(1, 41))
+    model, _args = _MOD._build_tiny_full_model(seed=2)
+    _MOD.dsv41._ATTN_COMPILE = False
+    base = _forward_logits(model, ids)
+    mx.eval(base)
+
+    st = _MOD._apply_attn_subop_stub(model, which)
+    try:
+        stubbed = _forward_logits(model, ids)
+        mx.eval(stubbed)                       # shape-preserving: just runs
+        assert stubbed.shape == base.shape
+    finally:
+        _MOD._restore_stub(st)
+
+    after = _forward_logits(model, ids)
+    mx.eval(after)
+    assert bool(mx.all(after == base).item()), f"{which}: restore not byte-identical"
+
+
+def test_attn_subops_cli_requires_in_model_unfenced():
+    p = _MOD.build_parser()
+    # --attn-subops without --unfenced must exit 2 (argparse error).
+    with pytest.raises(SystemExit):
+        _MOD.main(["--in-model", "--tiny", "--attn-subops", "--in-model-steps", "3"])
+
+
+def test_attn_subops_main_writes_json(tmp_path):
+    import json
+    out = tmp_path / "subops-tiny.json"
+    rc = _MOD.main([
+        "--in-model", "--unfenced", "--attn-subops", "--tiny",
+        "--context-tokens", "512", "--in-model-steps", "6", "--warmup-steps", "2",
+        "--out", str(out),
+    ])
+    assert rc == 0
+    receipt = json.loads(out.read_text())
+    assert receipt["mode"] == "in_model_unfenced_attn_subops"
+    assert receipt["device"] == "cpu" and receipt["tiny"] is True
+    assert set(receipt["passes"]) == {"full", *_MOD._ATTN_SUBOPS}
+    assert "subops" in receipt["attribution"]

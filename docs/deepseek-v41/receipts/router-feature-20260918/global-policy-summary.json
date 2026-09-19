@@ -1,0 +1,48 @@
+{
+  "existing_pre_attention_mean": {
+    "best_train_selected_global": null,
+    "selected_layer_policy": {
+      "train": {
+        "issued": 323,
+        "useful": 287,
+        "extra": 36,
+        "actual_misses_all_target_layers": 5745,
+        "precision": 0.8885448916408669,
+        "miss_coverage": 0.04995648389904265,
+        "added_traffic_fraction": 0.006266318537859008
+      },
+      "heldout": {
+        "issued": 289,
+        "useful": 237,
+        "extra": 52,
+        "actual_misses_all_target_layers": 4878,
+        "precision": 0.8200692041522492,
+        "miss_coverage": 0.04858548585485855,
+        "added_traffic_fraction": 0.01066010660106601
+      }
+    }
+  },
+  "post_attention_router": {
+    "best_train_selected_global": null,
+    "selected_layer_policy": {
+      "train": {
+        "issued": 1099,
+        "useful": 967,
+        "extra": 132,
+        "actual_misses_all_target_layers": 5745,
+        "precision": 0.8798908098271155,
+        "miss_coverage": 0.16832027850304612,
+        "added_traffic_fraction": 0.022976501305483028
+      },
+      "heldout": {
+        "issued": 897,
+        "useful": 763,
+        "extra": 134,
+        "actual_misses_all_target_layers": 4878,
+        "precision": 0.850613154960981,
+        "miss_coverage": 0.15641656416564165,
+        "added_traffic_fraction": 0.027470274702747027
+      }
+    }
+  }
+}

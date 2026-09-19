@@ -1,0 +1,11 @@
+{
+  "source_commit": "995522859b47b23e1fcb4ed509096e28f5bee92b",
+  "wrapper_sha256": "a03942ee3c7bbc193645a9341fb0dacdc7d6b4e0e9865e4c2b8c6193b12a54f5",
+  "baseline_bytes": 12928400000.0,
+  "engine_budget_bytes": 77744247168,
+  "expected_slots_per_layer": 72,
+  "active_bound_bytes": 87377620452,
+  "physical_bound_bytes": 104600987748.0,
+  "wired_before_bytes": 3261300736,
+  "scope": "same 16K/1023-step AR pf0 graph; persistent delta plus two full bank images beyond measured 35-slot peak; full 2GiB allocator cache and 2GiB Python capacity; 16GiB transient reserve"
+}

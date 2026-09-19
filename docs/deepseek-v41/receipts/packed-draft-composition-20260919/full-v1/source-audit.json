@@ -1,0 +1,13 @@
+{
+  "cpu_only": true,
+  "source_commit": "b5f41c51d74a770069048dddd0a644f07886a999",
+  "scope": "Native93/58/32 Q4 draft with measured packed FP32 output projection; original target arithmetic/KV16/D5+lookup/M8. Prime first target projection at84 rows before independent bank extension. Phase-specific128MiB draft workspace,16MiB host and256MiB background allowances;110GB unchanged.",
+  "target_kernels_unchanged": true,
+  "native_draft_experts": [
+    93,
+    58,
+    32
+  ],
+  "stage_sha256": "40969423786277bb3be69df5be7be820e1a79894e02690e25941e7c5668faa4e",
+  "full_result": "unmeasured"
+}

@@ -1,0 +1,134 @@
+{
+  "source_commit": "5ba18552cb81f85793469a8d20fe2ff4af4f79d8",
+  "before": {
+    "sample_start_monotonic_ns": 180251348725208,
+    "sample_end_monotonic_ns": 180251351905291,
+    "process": {
+      "peak_maxrss_bytes": 24133632,
+      "resident_bytes": 24592384,
+      "phys_footprint_bytes": 13550048,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 122258505728,
+      "wired_bytes": 3402137600,
+      "active_bytes": 3516514304,
+      "inactive_bytes": 3355262976,
+      "speculative_bytes": 144998400,
+      "anonymous_bytes": 4429987840,
+      "file_backed_bytes": 2586787840,
+      "compressor_bytes": 2152644608,
+      "compressed_bytes": 8096514048,
+      "used_bytes": 12426559488,
+      "non_file_used_bytes": 9984770048,
+      "swapins_pages": 4825890,
+      "swapouts_pages": 7667614,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "started_at": 1789714541.787474,
+  "commands": [
+    {
+      "argv": [
+        "/opt/homebrew/bin/cmake",
+        "-S",
+        "/tmp/dsv41-strict-cache-20260918/mlx-0.32.2",
+        "-B",
+        "/tmp/dsv41-strict-cache-20260918/build",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_SHARED_LIBS=ON",
+        "-DMLX_BUILD_TESTS=OFF",
+        "-DMLX_BUILD_EXAMPLES=OFF",
+        "-DMLX_BUILD_BENCHMARKS=OFF",
+        "-DMLX_BUILD_PYTHON_BINDINGS=OFF",
+        "-DMLX_BUILD_PYTHON_STUBS=OFF",
+        "-DMLX_METAL_JIT=OFF",
+        "-DMLX_USE_CCACHE=OFF",
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=26.2",
+        "-DCMAKE_C_COMPILER=/usr/bin/clang",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+        "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/tmp/dsv41-strict-cache-20260918/strict-lib",
+        "-DMLX_METAL_PATH=/tmp/dsv41-strict-cache-20260918/strict-lib",
+        "-DDSV41_PREBUILT_METALLIB=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/mlx/lib/mlx.metallib"
+      ],
+      "returncode": 0,
+      "wall_s": 6.119843006134033
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cmake",
+        "--build",
+        "/tmp/dsv41-strict-cache-20260918/build",
+        "--target",
+        "mlx",
+        "-j",
+        "4"
+      ],
+      "returncode": 0,
+      "wall_s": 56.0745210647583
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cmake",
+        "--build",
+        "/tmp/dsv41-strict-cache-20260918/build",
+        "--target",
+        "mlx",
+        "-j",
+        "4"
+      ],
+      "returncode": 0,
+      "wall_s": 1.3331758975982666
+    }
+  ],
+  "complete": true,
+  "libraries": {
+    "stock_source": {
+      "libjaccl.dylib": "369b3afc17793b8e84925f5b34debb156e8f09cebf2c6e2ef3cbe96b5951727a",
+      "libmlx.dylib": "937954b01bb547298fd5c6d09a61e72ba41a3828296ae90617079c5eff72c89a",
+      "mlx.metallib": "dc59d1cceb1a5c7e578232e6e41e28e2c73c9463ac6dbc3886c3ee17ffc270ed"
+    },
+    "strict": {
+      "libjaccl.dylib": "369b3afc17793b8e84925f5b34debb156e8f09cebf2c6e2ef3cbe96b5951727a",
+      "libmlx.dylib": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9",
+      "mlx.metallib": "dc59d1cceb1a5c7e578232e6e41e28e2c73c9463ac6dbc3886c3ee17ffc270ed"
+    }
+  },
+  "finished_at": 1789714605.5412202,
+  "after": {
+    "sample_start_monotonic_ns": 180315105091291,
+    "sample_end_monotonic_ns": 180315107590708,
+    "process": {
+      "peak_maxrss_bytes": 230817792,
+      "resident_bytes": 230817792,
+      "phys_footprint_bytes": 219791984,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 120899158016,
+      "wired_bytes": 3403235328,
+      "active_bytes": 4022894592,
+      "inactive_bytes": 3976544256,
+      "speculative_bytes": 406044672,
+      "anonymous_bytes": 4639096832,
+      "file_backed_bytes": 3766386688,
+      "compressor_bytes": 2152185856,
+      "compressed_bytes": 8095301632,
+      "used_bytes": 13554860032,
+      "non_file_used_bytes": 10194518016,
+      "swapins_pages": 4825890,
+      "swapouts_pages": 7667614,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  }
+}

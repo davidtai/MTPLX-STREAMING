@@ -1,0 +1,78 @@
+{
+  "complete": true,
+  "all_cross_binary_outputs_and_states_exact": true,
+  "layer_count": 5,
+  "binary_order": [
+    "wheel",
+    "stock_source",
+    "strict",
+    "stock_source"
+  ],
+  "medians_ns": [
+    [
+      1489334,
+      2989667,
+      3253375
+    ],
+    [
+      1454083,
+      3003500,
+      3250250
+    ],
+    [
+      1479959,
+      2940500,
+      3257667
+    ],
+    [
+      1054041,
+      2993791,
+      3254292
+    ]
+  ],
+  "strict_over_matched_stock": [
+    1.1801322422655338,
+    0.9806094118161016,
+    1.001659148330505
+  ],
+  "matched_stock_control_spread": [
+    0.31899698738977816,
+    0.0032377951978651695,
+    0.0012428238606192411
+  ],
+  "cache_policy_observations": [
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 16777217,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 16777217,
+      "previous_limit_bytes": 33554432
+    },
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 16777217,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 16777217,
+      "previous_limit_bytes": 33554432
+    },
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 1,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 0,
+      "previous_limit_bytes": 33554432
+    },
+    {
+      "limit_bytes": 8388608,
+      "freed_buffer_bytes": 16777216,
+      "cached_after_oversized_free_bytes": 16777217,
+      "cached_before_lowering_limit_bytes": 16777217,
+      "cached_after_lowering_limit_bytes": 16777217,
+      "previous_limit_bytes": 33554432
+    }
+  ],
+  "interpretation": "Strict inactive cache limit is enforced in both focused observations. Full/reuse and full/reindex attention are flat within this small screen; SWA controls are noisy, so no speed claim. All native outputs, cache state, selected indices and metadata match across all libraries."
+}

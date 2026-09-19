@@ -1,0 +1,105 @@
+from pathlib import Path
+import ast, hashlib, json, subprocess
+root=Path('/tmp/dsv41-cache-growth-20260917')
+p=root/'phase_growth.py'
+s=p.read_text().replace('._device_route_lut_dirty.update(layers)', '._device_route_lut_dirty.update({layer: True for layer in layers})').replace('._device_route_pinned_lut_dirty.update(layers)', '._device_route_pinned_lut_dirty.update({layer: True for layer in layers})')
+p.write_text(s)
+oldproof=json.loads(Path('/tmp/dsv41-110-stage/hc-post-full-installation-ca207-20260917.json').read_text())
+proof={
+ 'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+ 'runtime_source_sha256':{name:hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in oldproof['runtime_source_sha256']},
+ 'scope':'Exact single 16K/1024 benchmark; promoted compiled prefill HC post unchanged; grow persistent banks only after the prefill callback; no model reuse',
+ 'explicit_bound_model_levers':oldproof['explicit_bound_model_levers'],
+ 'helper_sha256':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in ['admission.py','phase_growth.py','bank_growth_final.py']},
+ 'phase_memory_control_sha256':hashlib.sha256(Path('/tmp/dsv41-110-stage/full-compiled-hc-post-ca207-20260917.jsonl').read_bytes()).hexdigest(),
+ 'numeric_predecessor':'d4051aecc promotes the post-only compiled callable; its archived AST equivalence and strict prefill regression cover this unchanged prefill arithmetic',
+}
+(root/'installation.json').write_text(json.dumps(proof,indent=2)+'\n')
+s=Path('/tmp/run_dsv41_compiled_hc_post_full.py').read_text()
+a=s.index('# Verify the promoted source before installing')
+b=s.index('signal.alarm(1200)',a)
+s=s[:a]+'''# Validate source and phase helpers before loading a model.
+import inspect
+import textwrap
+REFERENCE_SOURCE_COMMIT = 'e589c1e4b17856f506d90d9fb2bbb5ce45711648'
+GROWTH_ROOT = Path('/tmp/dsv41-cache-growth-20260917')
+COMPATIBILITY = json.loads((GROWTH_ROOT/'installation.json').read_text())
+if subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip() != COMPATIBILITY['source_commit']:
+    raise RuntimeError('candidate source commit changed')
+for _path, _digest in COMPATIBILITY['runtime_source_sha256'].items():
+    if hashlib.sha256(Path(_path).read_bytes()).hexdigest() != _digest:
+        raise RuntimeError('candidate runtime source changed')
+for _name, _digest in COMPATIBILITY['helper_sha256'].items():
+    if hashlib.sha256((GROWTH_ROOT/_name).read_bytes()).hexdigest() != _digest:
+        raise RuntimeError('candidate phase helper changed')
+_candidate_prefill_source = textwrap.dedent(inspect.getsource(dsv41.DeepseekV41Backbone._forward_layer_major))
+if _candidate_prefill_source.count('_PREFILL_HC_POST(moe_outputs[c], *carries[c])') != 1:
+    raise RuntimeError('promoted prefill arithmetic is absent')
+GROWTH_ENABLED = os.environ.get('DSV41_CACHE_GROWTH') == '1'
+if os.environ.get('DSV41_CACHE_GROWTH') not in ('0','1'):
+    raise RuntimeError('explicit DSV41_CACHE_GROWTH=0 or 1 required')
+''' + s[b:]
+a=s.index('# The prior fixed slot cap assumed')
+b=s.index('# A prior complete AR run may supply',a)
+s=s[:a]+'''from admission import resolve_admission
+if decode_steps != 1023 or cache_policy != 'transition-window' or miss_records_per_part != 3 or not shared_overlap:
+    raise RuntimeError('growth comparison requires the complete unchanged D5/M6 workload')
+if os.environ.get('MTPLX_DSV41_IO_READ_FANOUT') != '4' or os.environ.get('MTPLX_BELADY_ORACLE','0') != '0':
+    raise RuntimeError('fanout4 and no route instrumentation required')
+growth_admission = resolve_admission(base, host_memory_snapshot()['box']['wired_bytes'],
+    grow=GROWTH_ENABLED, expected_receipt_hash=COMPATIBILITY['phase_memory_control_sha256'])
+ALLOCATOR_LIMIT_BYTES = growth_admission['allocator_limit_bytes']
+slots = TARGET_SLOTS = 93
+TARGET_REMAINDER = 89686016
+engine = ENGINE_BUDGET_BYTES = FIXED_MTP + slots * SLOT_BAND_BYTES + TARGET_REMAINDER
+if engine != 90194844488:
+    raise RuntimeError('prefill engine geometry changed')
+transient_band_bytes = ALLOCATOR_LIMIT_BYTES - engine
+if not 6 * GIB <= transient_band_bytes <= 20 * GIB:
+    raise RuntimeError('prefill transient band lacks the established minimum')
+transient_band_gib = transient_band_bytes / GIB
+transient_arg = sys.argv.index('--transient-band-gib')
+if sys.argv[transient_arg + 1] != 'auto':
+    raise RuntimeError('dynamic admitted transient band required')
+sys.argv[transient_arg + 1] = f'{transient_band_gib:.17g}'
+bounds = {
+ 'source_commit':source, 'wrapper_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+ 'baseline_bytes':base, 'engine_budget_bytes':engine, 'expected_slots_per_layer':slots,
+ 'decode_expected_slots_per_layer':growth_admission['decode_slots_per_layer'],
+ 'post_prefill_growth':GROWTH_ENABLED, 'growth_admission':growth_admission,
+ 'runtime_reserve_gib':runtime_reserve_gib, 'runtime_reserve_bytes':runtime_reserve_gib * GIB,
+ 'fixed_footprint_bytes':FIXED_MTP, 'plan_remainder_bytes':TARGET_REMAINDER,
+ 'transient_band_gib':transient_band_gib, 'transient_band_bytes':transient_band_bytes,
+ 'allocator_limit_bytes':ALLOCATOR_LIMIT_BYTES, 'requested_allocator_cache_limit_bytes':GIB,
+ 'active_bound_bytes':growth_admission['active_bound_bytes'],
+ 'physical_bound_bytes':growth_admission['physical_bound_bytes'],
+ 'decode_steps':decode_steps, 'dspark_depth':stage_depth,
+ 'prefill_mtp_hidden_capture_at_existing_fence':True, 'prefill_hc_post_compiled':True,
+ 'source_compatibility':COMPATIBILITY,
+ 'candidate_prefill_sha256':hashlib.sha256(_candidate_prefill_source.encode()).hexdigest(),
+ 'cache_policy':cache_policy, 'decode_miss_records_per_part':miss_records_per_part,
+ 'verify_shared_overlap':shared_overlap,
+ 'selected_mtp_experts_by_stage':list(map(len,SELECTED_MTP_EXPERTS)),
+ 'mtp_pruned_experts':MTP_PRUNED_EXPERTS, 'mtp_pruned_bytes':MTP_PRUNED_BYTES,
+ 'scope':COMPATIBILITY['scope'], 'actual_bound_model_levers':COMPATIBILITY['explicit_bound_model_levers'],
+}
+''' + s[b:]
+s=s.replace("    original_load = ab._load_model\n", "    from phase_growth import install_growth\n    growth_transition = None\n    growth_report = {}\n    prefill_resolved_plan = {}\n    original_load = ab._load_model\n")
+s=s.replace("    def checked_load(*a, **kw):\n        resident", "    def checked_load(*a, **kw):\n        global growth_transition, growth_report, prefill_resolved_plan\n        resident")
+s=s.replace("        return resident\n    ab._load_model", "        prefill_resolved_plan = ab._resolved_plan(rt, loaded_args)\n        if GROWTH_ENABLED:\n            growth_transition, growth_report = install_growth(resident.model, growth_admission['decode_slots_per_layer'], mx=mx, admission=growth_admission)\n        return resident\n    ab._load_model")
+s=s.replace("            callback(info)\n", "            callback(info)\n            if GROWTH_ENABLED:\n                growth_transition()\n")
+s=s.replace("                result = original_mtp(*a, **kw)\n", "                try:\n                    result = original_mtp(*a, **kw)\n                except BaseException:\n                    rt.close()\n                    raise\n")
+s=s.replace("                result['memory']['mlx_peak_after_prefill_scope'] = 'MTP seed plus complete decode, reset before the decode timer starts'", "                result['memory']['mlx_peak_after_prefill_scope'] = 'charged cache growth (candidate), MTP seed and complete decode, reset before the decode timer starts'\n                result['post_prefill_growth'] = dict(growth_report)")
+s=s.replace("        receipt['prefill_hc_post_compiled'] = True", "        receipt['post_prefill_growth'] = dict(growth_report)\n        receipt['phase_memory_plans'] = {'prefill':dict(prefill_resolved_plan), 'decode':dict(receipt['dspark']['serve_stream_counters']['slot_plan'])}\n        receipt['resolved_plan_phase'] = 'initial_loaded_plan'\n        receipt['dspark']['resolved_plan'] = dict(receipt['phase_memory_plans']['decode'])\n        receipt['phase_budget'] = {'allocator_limit_bytes':ALLOCATOR_LIMIT_BYTES, 'prefill_engine_bytes':engine, 'decode_engine_bytes':engine + growth_admission['growth_payload_bytes'], 'prefill_allocator_reserve_bytes':ALLOCATOR_LIMIT_BYTES - engine, 'decode_allocator_reserve_bytes':ALLOCATOR_LIMIT_BYTES - engine - growth_admission['growth_payload_bytes'], 'admission':growth_admission}\n        receipt['prefill_hc_post_compiled'] = True")
+s=s.replace("'slots_per_layer':slots, 'runtime_reserve_gib'", "'prefill_slots_per_layer':slots, 'decode_slots_per_layer':growth_admission['decode_slots_per_layer'], 'growth_payload_bytes':growth_admission['growth_payload_bytes'], 'post_prefill_growth':dict(growth_report), 'runtime_reserve_gib'")
+s=s.replace("'compiled prefill changed the full validated MTP token digest'", "'candidate changed the full validated MTP token digest'")
+path=root/'run_full.py'
+compile(s,str(path),'exec')
+path.write_text(s)
+command=Path('/tmp/dsv41-110-stage/full-compiled-hc-post-ca207-20260917.command.txt').read_text()
+for arm in ['control','growth']:
+ c=command.replace('env ', 'env DSV41_CACHE_GROWTH='+('1' if arm=='growth' else '0')+' ',1)
+ c=c.replace('PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41 ', 'PYTHONPATH=/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41:/tmp/dsv41-cache-growth-20260917 ')
+ c=c.replace('/tmp/run_dsv41_compiled_hc_post_full.py',str(path)).replace('full-compiled-hc-post-ca207-20260917',f'full-cache-{arm}-d405-20260917')
+ (root/f'{arm}.command.txt').write_text(c)
+print(json.dumps({'source':proof['source_commit'],'wrapper_lines':len(s.splitlines()),'helpers':proof['helper_sha256']}))

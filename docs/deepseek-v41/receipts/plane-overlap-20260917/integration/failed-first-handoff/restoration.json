@@ -1,0 +1,12 @@
+{
+  "recorded_utc": "2026-09-17T23:10:21.468578+00:00",
+  "guard_exit_code": 1,
+  "health_ok": true,
+  "model_ids": [
+    "mtplx-flash-next-optimized-speed"
+  ],
+  "warmup": "done",
+  "active_requests": 0,
+  "lock_free": true,
+  "owned_gpu_children": []
+}

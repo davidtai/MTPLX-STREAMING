@@ -1,0 +1,30 @@
+{
+  "service": {
+    "ok": true,
+    "model": "mtplx-flash-next-optimized-speed",
+    "pid": 23330,
+    "active_requests": 0,
+    "warmup": "done"
+  },
+  "box": {
+    "page_size": 16384,
+    "free_bytes": 1385824256,
+    "wired_bytes": 3493724160,
+    "active_bytes": 75782864896,
+    "inactive_bytes": 52482768896,
+    "speculative_bytes": 189300736,
+    "anonymous_bytes": 90957676544,
+    "file_backed_bytes": 37497257984,
+    "compressor_bytes": 1347698688,
+    "compressed_bytes": 6778765312,
+    "used_bytes": 133107056640,
+    "non_file_used_bytes": 95799099392,
+    "swapins_pages": 4821034,
+    "swapouts_pages": 7666694,
+    "ok": true,
+    "source": "vm_stat",
+    "used_includes_file_cache": true
+  },
+  "sudo_noninteractive_validation": "password required",
+  "scope": "Read-only check; no GPU job or service restart this turn"
+}

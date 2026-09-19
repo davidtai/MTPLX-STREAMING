@@ -1,0 +1,12 @@
+{
+  "scope": "read-only page residency; no payload reads, invalidations or database writes",
+  "root": "/Users/davidtai/.mtplx/session-bank",
+  "files": 68403,
+  "file_bytes": 10424846448,
+  "cached_bytes": 0,
+  "cached_files": [],
+  "vanished": 0,
+  "complete": true,
+  "progress_at": 60226,
+  "elapsed_s": 1.6282909580040723
+}

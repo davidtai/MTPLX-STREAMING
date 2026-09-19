@@ -1,0 +1,64 @@
+{
+  "mlx_imports_blocked": true,
+  "source_and_helpers_match": true,
+  "actual_runtime_budget_matches": true,
+  "successful_operator_helpers_unchanged": true,
+  "tail_transition_credit_bytes": 880803840,
+  "tail_steady_credit_bytes": 0,
+  "projection_steady_credit_bytes": 1349517312,
+  "projection_prefill_growth_and_seed_credit_bytes": 0,
+  "python_required_host_bytes": 1544647680,
+  "extra_helper_host_bytes": 33554432,
+  "cases": [
+    {
+      "baseline_bytes": 9500000000,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 105,
+      "physical_bound_bytes": 109641108456,
+      "steady_decode_active_bound_bytes": 95231008876,
+      "resize_active_bound_bytes": 95220205788,
+      "seed_active_bound_bytes": 93896836344,
+      "host_reserve_bytes": 1578202112
+    },
+    {
+      "baseline_bytes": 9955393536,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 104,
+      "physical_bound_bytes": 109388713192,
+      "steady_decode_active_bound_bytes": 94523220076,
+      "resize_active_bound_bytes": 94500620508,
+      "seed_active_bound_bytes": 93189047544,
+      "host_reserve_bytes": 1578202112
+    },
+    {
+      "baseline_bytes": 10603659264,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 103,
+      "physical_bound_bytes": 109329190120,
+      "steady_decode_active_bound_bytes": 93815431276,
+      "resize_active_bound_bytes": 93781035228,
+      "seed_active_bound_bytes": 92481258744,
+      "host_reserve_bytes": 1578202112
+    },
+    {
+      "baseline_bytes": 10881843200,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 103,
+      "physical_bound_bytes": 109607374056,
+      "steady_decode_active_bound_bytes": 93815431276,
+      "resize_active_bound_bytes": 93781035228,
+      "seed_active_bound_bytes": 92481258744,
+      "host_reserve_bytes": 1578202112
+    },
+    {
+      "baseline_bytes": 11431313408,
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109449055464,
+      "steady_decode_active_bound_bytes": 93107642476,
+      "resize_active_bound_bytes": 93061449948,
+      "seed_active_bound_bytes": 91773469944,
+      "host_reserve_bytes": 1578202112
+    }
+  ]
+}

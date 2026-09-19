@@ -1,0 +1,27 @@
+{
+  "mlx_imports_blocked": true,
+  "all_helper_hashes_match": true,
+  "admission_exactly_matches_winning_memory_composition": true,
+  "cases": [
+    {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 104,
+      "physical_bound_bytes": 109900696808,
+      "active_bound_bytes": 94523220076,
+      "host_reserve_bytes": 1578202112,
+      "decode_cache_allowance_bytes": 3331897468,
+      "plane_overlap_extra_live_allowance_bytes": 67108864,
+      "baseline_bytes": 10467377152
+    },
+    {
+      "prefill_slots_per_layer": 84,
+      "decode_slots_per_layer": 103,
+      "physical_bound_bytes": 109482626280,
+      "active_bound_bytes": 93815431276,
+      "host_reserve_bytes": 1578202112,
+      "decode_cache_allowance_bytes": 3331897468,
+      "plane_overlap_extra_live_allowance_bytes": 67108864,
+      "baseline_bytes": 10757095424
+    }
+  ]
+}

@@ -1,0 +1,626 @@
+{
+  "worker": "W78",
+  "script": "scripts/deepseek_v41/metal_decode_attn_bisect.py",
+  "mode": "in_model",
+  "device": "gpu",
+  "tiny": false,
+  "arm": "cell16k",
+  "steps": 30,
+  "dims": {
+    "hidden": 16384,
+    "context_tokens": 16384,
+    "max_kv": 17408,
+    "memory_limit_gib": 60.0
+  },
+  "prompt": {
+    "prompt_source": "prompt-ids-file",
+    "prompt_ids_file": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/docs/deepseek-v41/receipts/gpu-windows/window-28b/ar-16k/prompt-ids-deepseek-v41.json",
+    "prompt_ids_schema": "mtplx-server-cell-prompt-ids-v1",
+    "prompt_family": "deepseek-v41",
+    "served_model_id": null,
+    "prompt_cell": "sweep",
+    "prompt_target_tokens": 16384,
+    "prompt_seed": 20260829,
+    "prompt_text_sha256": "721732c83ac7e64d4adaf417dbd884a400153279822308923b7d3200cd964b3c",
+    "token_ids_sha256": "1a45b35bae742fae0e26d4f40ee0dc1093a2038e5b514460a4f02e9e56d74565",
+    "templated_tokens": 16384,
+    "input_tokens": 16384,
+    "bos_prepended": true,
+    "bos_id": 0,
+    "prompt_release_valid": true
+  },
+  "ballast_gib": 0.0,
+  "memory": {
+    "active_end_gib": 52.92903004959226,
+    "peak_gib": 66.28449879214168
+  },
+  "passes": {
+    "full": {
+      "label": "full_model",
+      "report": {
+        "enabled": true,
+        "kind": "decode",
+        "tokens": 30,
+        "stage_sum_ms": 19889.357852,
+        "stage_sum_ms_per_token": 662.9785950666667,
+        "frame_wall_ms": 19944.909043,
+        "frame_wall_ms_per_token": 664.8303014333334,
+        "stages": {
+          "attn.full": {
+            "total_ms": 1346.640208,
+            "count": 120,
+            "mean_ms": 11.222001733333332,
+            "mean_ms_per_token": 44.88800693333334
+          },
+          "attn.reindex": {
+            "total_ms": 1008.018707,
+            "count": 120,
+            "mean_ms": 8.400155891666667,
+            "mean_ms_per_token": 33.60062356666666
+          },
+          "attn.reuse": {
+            "total_ms": 6559.827861,
+            "count": 900,
+            "mean_ms": 7.288697623333333,
+            "mean_ms_per_token": 218.6609287
+          },
+          "attn.swa_only": {
+            "total_ms": 475.052794,
+            "count": 60,
+            "mean_ms": 7.917546566666666,
+            "mean_ms_per_token": 15.835093133333334
+          },
+          "embed": {
+            "total_ms": 206.759377,
+            "count": 30,
+            "mean_ms": 6.891979233333333,
+            "mean_ms_per_token": 6.891979233333333
+          },
+          "engram.advance": {
+            "total_ms": 3.632294,
+            "count": 30,
+            "mean_ms": 0.12107646666666666,
+            "mean_ms_per_token": 0.12107646666666666
+          },
+          "engram.apply": {
+            "total_ms": 102.063374,
+            "count": 60,
+            "mean_ms": 1.7010562333333334,
+            "mean_ms_per_token": 3.4021124666666664
+          },
+          "engram.hash": {
+            "total_ms": 0.250586,
+            "count": 60,
+            "mean_ms": 0.004176433333333333,
+            "mean_ms_per_token": 0.008352866666666665
+          },
+          "engram.row_fetch": {
+            "total_ms": 147.716995,
+            "count": 60,
+            "mean_ms": 2.4619499166666663,
+            "mean_ms_per_token": 4.9238998333333335
+          },
+          "final_norm": {
+            "total_ms": 7.763956,
+            "count": 30,
+            "mean_ms": 0.2587985333333333,
+            "mean_ms_per_token": 0.25879853333333336
+          },
+          "hc.combine": {
+            "total_ms": 863.227482,
+            "count": 2400,
+            "mean_ms": 0.3596781175,
+            "mean_ms_per_token": 28.7742494
+          },
+          "hc.premix_sinkhorn": {
+            "total_ms": 1089.336277,
+            "count": 2400,
+            "mean_ms": 0.4538901154166667,
+            "mean_ms_per_token": 36.31120923333334
+          },
+          "head": {
+            "total_ms": 98.856626,
+            "count": 30,
+            "mean_ms": 3.295220866666667,
+            "mean_ms_per_token": 3.295220866666667
+          },
+          "moe.combine": {
+            "total_ms": 273.282531,
+            "count": 1200,
+            "mean_ms": 0.2277354425,
+            "mean_ms_per_token": 9.1094177
+          },
+          "moe.gate_topk": {
+            "total_ms": 625.762697,
+            "count": 1200,
+            "mean_ms": 0.5214689141666666,
+            "mean_ms_per_token": 20.858756566666667
+          },
+          "moe.routed_switch": {
+            "total_ms": 6509.759183,
+            "count": 1200,
+            "mean_ms": 5.424799319166667,
+            "mean_ms_per_token": 216.99197276666666
+          },
+          "moe.shared_expert": {
+            "total_ms": 528.621239,
+            "count": 1200,
+            "mean_ms": 0.44051769916666667,
+            "mean_ms_per_token": 17.620707966666664
+          },
+          "sample": {
+            "total_ms": 42.785665,
+            "count": 30,
+            "mean_ms": 1.4261888333333332,
+            "mean_ms_per_token": 1.4261888333333335
+          }
+        },
+        "decode_breakdown": {
+          "attn.full.cache_append": {
+            "total_ms": 55.715958,
+            "count": 120,
+            "mean_ms": 0.46429965,
+            "mean_ms_per_token": 1.8571986
+          },
+          "attn.full.compress_append": {
+            "total_ms": 269.603841,
+            "count": 120,
+            "mean_ms": 2.2466986749999998,
+            "mean_ms_per_token": 8.986794699999999
+          },
+          "attn.full.select": {
+            "total_ms": 121.544669,
+            "count": 120,
+            "mean_ms": 1.0128722416666667,
+            "mean_ms_per_token": 4.051488966666667
+          },
+          "attn.reindex.cache_append": {
+            "total_ms": 54.834791,
+            "count": 120,
+            "mean_ms": 0.4569565916666667,
+            "mean_ms_per_token": 1.8278263666666668
+          },
+          "attn.reindex.select": {
+            "total_ms": 120.948335,
+            "count": 120,
+            "mean_ms": 1.0079027916666665,
+            "mean_ms_per_token": 4.031611166666667
+          },
+          "attn.reuse.cache_append": {
+            "total_ms": 411.326994,
+            "count": 900,
+            "mean_ms": 0.45702999333333333,
+            "mean_ms_per_token": 13.7108998
+          },
+          "attn.reuse.select": {
+            "total_ms": 2.284291,
+            "count": 900,
+            "mean_ms": 0.0025381011111111113,
+            "mean_ms_per_token": 0.07614303333333333
+          },
+          "attn.swa_only.cache_append": {
+            "total_ms": 32.653128,
+            "count": 60,
+            "mean_ms": 0.5442188,
+            "mean_ms_per_token": 1.0884376
+          }
+        }
+      },
+      "summary": {
+        "enabled": true,
+        "frame_wall_ms_per_token": 664.8303014333334,
+        "stage_sum_ms_per_token": 662.9785950666667,
+        "tokens": 30,
+        "attn_ms_per_layer": {
+          "swa_only": 7.917546566666666,
+          "full": 11.222001733333332,
+          "reindex": 8.400155891666667,
+          "reuse": 7.288697623333333
+        },
+        "decode_breakdown_ms_per_layer": {
+          "swa_only": {
+            "cache_append": 0.5442188,
+            "compress_append": null,
+            "select": null
+          },
+          "full": {
+            "cache_append": 0.46429965,
+            "compress_append": 2.2466986749999998,
+            "select": 1.0128722416666667
+          },
+          "reindex": {
+            "cache_append": 0.4569565916666667,
+            "compress_append": null,
+            "select": 1.0079027916666665
+          },
+          "reuse": {
+            "cache_append": 0.45702999333333333,
+            "compress_append": null,
+            "select": 0.0025381011111111113
+          }
+        },
+        "non_attn_ms_per_layer": {
+          "moe.gate_topk": 0.5214689141666666,
+          "moe.routed_switch": 5.424799319166667,
+          "moe.shared_expert": 0.44051769916666667,
+          "moe.combine": 0.2277354425,
+          "hc.premix_sinkhorn": 0.4538901154166667,
+          "hc.combine": 0.3596781175
+        },
+        "per_token": {
+          "embed": 6.891979233333333,
+          "final_norm": 0.2587985333333333,
+          "head": 3.295220866666667,
+          "sample": 1.4261888333333332
+        }
+      }
+    },
+    "expert_stub": {
+      "label": "expert_switch_stubbed",
+      "report": {
+        "enabled": true,
+        "kind": "decode",
+        "tokens": 30,
+        "stage_sum_ms": 11711.615099,
+        "stage_sum_ms_per_token": 390.3871699666667,
+        "frame_wall_ms": 11750.426586,
+        "frame_wall_ms_per_token": 391.6808862,
+        "stages": {
+          "attn.full": {
+            "total_ms": 1108.593374,
+            "count": 120,
+            "mean_ms": 9.238278116666667,
+            "mean_ms_per_token": 36.95311246666667
+          },
+          "attn.reindex": {
+            "total_ms": 883.988243,
+            "count": 120,
+            "mean_ms": 7.366568691666666,
+            "mean_ms_per_token": 29.46627476666667
+          },
+          "attn.reuse": {
+            "total_ms": 5739.128485,
+            "count": 900,
+            "mean_ms": 6.376809427777777,
+            "mean_ms_per_token": 191.30428283333333
+          },
+          "attn.swa_only": {
+            "total_ms": 425.139459,
+            "count": 60,
+            "mean_ms": 7.085657650000001,
+            "mean_ms_per_token": 14.1713153
+          },
+          "embed": {
+            "total_ms": 90.989624,
+            "count": 30,
+            "mean_ms": 3.032987466666667,
+            "mean_ms_per_token": 3.032987466666667
+          },
+          "engram.advance": {
+            "total_ms": 3.50829,
+            "count": 30,
+            "mean_ms": 0.116943,
+            "mean_ms_per_token": 0.116943
+          },
+          "engram.apply": {
+            "total_ms": 74.911168,
+            "count": 60,
+            "mean_ms": 1.2485194666666666,
+            "mean_ms_per_token": 2.4970389333333336
+          },
+          "engram.hash": {
+            "total_ms": 0.174925,
+            "count": 60,
+            "mean_ms": 0.0029154166666666664,
+            "mean_ms_per_token": 0.005830833333333333
+          },
+          "engram.row_fetch": {
+            "total_ms": 200.303918,
+            "count": 60,
+            "mean_ms": 3.338398633333333,
+            "mean_ms_per_token": 6.676797266666667
+          },
+          "final_norm": {
+            "total_ms": 7.188666,
+            "count": 30,
+            "mean_ms": 0.2396222,
+            "mean_ms_per_token": 0.23962219999999998
+          },
+          "hc.combine": {
+            "total_ms": 766.969129,
+            "count": 2400,
+            "mean_ms": 0.31957047041666664,
+            "mean_ms_per_token": 25.56563763333333
+          },
+          "hc.premix_sinkhorn": {
+            "total_ms": 926.295997,
+            "count": 2400,
+            "mean_ms": 0.3859566654166667,
+            "mean_ms_per_token": 30.876533233333337
+          },
+          "head": {
+            "total_ms": 82.55029,
+            "count": 30,
+            "mean_ms": 2.7516763333333336,
+            "mean_ms_per_token": 2.7516763333333336
+          },
+          "moe.combine": {
+            "total_ms": 229.258272,
+            "count": 1200,
+            "mean_ms": 0.19104856,
+            "mean_ms_per_token": 7.6419424000000005
+          },
+          "moe.gate_topk": {
+            "total_ms": 555.415316,
+            "count": 1200,
+            "mean_ms": 0.4628460966666667,
+            "mean_ms_per_token": 18.513843866666665
+          },
+          "moe.routed_switch": {
+            "total_ms": 240.347241,
+            "count": 1200,
+            "mean_ms": 0.20028936749999998,
+            "mean_ms_per_token": 8.0115747
+          },
+          "moe.shared_expert": {
+            "total_ms": 371.396783,
+            "count": 1200,
+            "mean_ms": 0.3094973191666667,
+            "mean_ms_per_token": 12.379892766666668
+          },
+          "sample": {
+            "total_ms": 5.455919,
+            "count": 30,
+            "mean_ms": 0.18186396666666668,
+            "mean_ms_per_token": 0.18186396666666665
+          }
+        },
+        "decode_breakdown": {
+          "attn.full.cache_append": {
+            "total_ms": 40.181124,
+            "count": 120,
+            "mean_ms": 0.3348427,
+            "mean_ms_per_token": 1.3393708
+          },
+          "attn.full.compress_append": {
+            "total_ms": 210.592627,
+            "count": 120,
+            "mean_ms": 1.7549385583333335,
+            "mean_ms_per_token": 7.019754233333333
+          },
+          "attn.full.select": {
+            "total_ms": 84.163787,
+            "count": 120,
+            "mean_ms": 0.7013648916666667,
+            "mean_ms_per_token": 2.805459566666667
+          },
+          "attn.reindex.cache_append": {
+            "total_ms": 36.92925,
+            "count": 120,
+            "mean_ms": 0.30774375,
+            "mean_ms_per_token": 1.2309750000000002
+          },
+          "attn.reindex.select": {
+            "total_ms": 99.579581,
+            "count": 120,
+            "mean_ms": 0.8298298416666666,
+            "mean_ms_per_token": 3.319319366666667
+          },
+          "attn.reuse.cache_append": {
+            "total_ms": 283.296537,
+            "count": 900,
+            "mean_ms": 0.31477393,
+            "mean_ms_per_token": 9.4432179
+          },
+          "attn.reuse.select": {
+            "total_ms": 1.907938,
+            "count": 900,
+            "mean_ms": 0.002119931111111111,
+            "mean_ms_per_token": 0.06359793333333333
+          },
+          "attn.swa_only.cache_append": {
+            "total_ms": 24.347964,
+            "count": 60,
+            "mean_ms": 0.40579940000000003,
+            "mean_ms_per_token": 0.8115988000000001
+          }
+        }
+      },
+      "summary": {
+        "enabled": true,
+        "frame_wall_ms_per_token": 391.6808862,
+        "stage_sum_ms_per_token": 390.3871699666667,
+        "tokens": 30,
+        "attn_ms_per_layer": {
+          "swa_only": 7.085657650000001,
+          "full": 9.238278116666667,
+          "reindex": 7.366568691666666,
+          "reuse": 6.376809427777777
+        },
+        "decode_breakdown_ms_per_layer": {
+          "swa_only": {
+            "cache_append": 0.40579940000000003,
+            "compress_append": null,
+            "select": null
+          },
+          "full": {
+            "cache_append": 0.3348427,
+            "compress_append": 1.7549385583333335,
+            "select": 0.7013648916666667
+          },
+          "reindex": {
+            "cache_append": 0.30774375,
+            "compress_append": null,
+            "select": 0.8298298416666666
+          },
+          "reuse": {
+            "cache_append": 0.31477393,
+            "compress_append": null,
+            "select": 0.002119931111111111
+          }
+        },
+        "non_attn_ms_per_layer": {
+          "moe.gate_topk": 0.4628460966666667,
+          "moe.routed_switch": 0.20028936749999998,
+          "moe.shared_expert": 0.3094973191666667,
+          "moe.combine": 0.19104856,
+          "hc.premix_sinkhorn": 0.3859566654166667,
+          "hc.combine": 0.31957047041666664
+        },
+        "per_token": {
+          "embed": 3.032987466666667,
+          "final_norm": 0.2396222,
+          "head": 2.7516763333333336,
+          "sample": 0.18186396666666668
+        }
+      }
+    },
+    "attn_stub": {
+      "label": "attention_stubbed",
+      "report": {
+        "enabled": true,
+        "kind": "decode",
+        "tokens": 30,
+        "stage_sum_ms": 8686.060904,
+        "stage_sum_ms_per_token": 289.53536346666664,
+        "frame_wall_ms": 8722.810797,
+        "frame_wall_ms_per_token": 290.7603599,
+        "stages": {
+          "embed": {
+            "total_ms": 112.2625,
+            "count": 30,
+            "mean_ms": 3.7420833333333334,
+            "mean_ms_per_token": 3.7420833333333334
+          },
+          "engram.advance": {
+            "total_ms": 3.463538,
+            "count": 30,
+            "mean_ms": 0.11545126666666666,
+            "mean_ms_per_token": 0.11545126666666666
+          },
+          "engram.apply": {
+            "total_ms": 57.14233,
+            "count": 60,
+            "mean_ms": 0.9523721666666666,
+            "mean_ms_per_token": 1.9047443333333334
+          },
+          "engram.hash": {
+            "total_ms": 0.240165,
+            "count": 60,
+            "mean_ms": 0.00400275,
+            "mean_ms_per_token": 0.0080055
+          },
+          "engram.row_fetch": {
+            "total_ms": 169.023668,
+            "count": 60,
+            "mean_ms": 2.8170611333333335,
+            "mean_ms_per_token": 5.634122266666666
+          },
+          "final_norm": {
+            "total_ms": 6.548378,
+            "count": 30,
+            "mean_ms": 0.21827926666666667,
+            "mean_ms_per_token": 0.21827926666666667
+          },
+          "hc.combine": {
+            "total_ms": 486.027015,
+            "count": 2400,
+            "mean_ms": 0.20251125625,
+            "mean_ms_per_token": 16.2009005
+          },
+          "hc.premix_sinkhorn": {
+            "total_ms": 760.477844,
+            "count": 2400,
+            "mean_ms": 0.3168657683333333,
+            "mean_ms_per_token": 25.34926146666667
+          },
+          "head": {
+            "total_ms": 86.457834,
+            "count": 30,
+            "mean_ms": 2.8819277999999997,
+            "mean_ms_per_token": 2.8819278
+          },
+          "moe.combine": {
+            "total_ms": 216.820018,
+            "count": 1200,
+            "mean_ms": 0.18068334833333333,
+            "mean_ms_per_token": 7.227333933333333
+          },
+          "moe.gate_topk": {
+            "total_ms": 341.761609,
+            "count": 1200,
+            "mean_ms": 0.2848013408333333,
+            "mean_ms_per_token": 11.392053633333335
+          },
+          "moe.routed_switch": {
+            "total_ms": 6061.727211,
+            "count": 1200,
+            "mean_ms": 5.0514393425,
+            "mean_ms_per_token": 202.0575737
+          },
+          "moe.shared_expert": {
+            "total_ms": 378.024249,
+            "count": 1200,
+            "mean_ms": 0.31502020750000004,
+            "mean_ms_per_token": 12.6008083
+          },
+          "sample": {
+            "total_ms": 6.084545,
+            "count": 30,
+            "mean_ms": 0.20281816666666666,
+            "mean_ms_per_token": 0.2028181666666667
+          }
+        },
+        "decode_breakdown": {}
+      },
+      "summary": {
+        "enabled": true,
+        "frame_wall_ms_per_token": 290.7603599,
+        "stage_sum_ms_per_token": 289.53536346666664,
+        "tokens": 30,
+        "attn_ms_per_layer": {
+          "swa_only": null,
+          "full": null,
+          "reindex": null,
+          "reuse": null
+        },
+        "decode_breakdown_ms_per_layer": {
+          "swa_only": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          },
+          "full": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          },
+          "reindex": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          },
+          "reuse": {
+            "cache_append": null,
+            "compress_append": null,
+            "select": null
+          }
+        },
+        "non_attn_ms_per_layer": {
+          "moe.gate_topk": 0.2848013408333333,
+          "moe.routed_switch": 5.0514393425,
+          "moe.shared_expert": 0.31502020750000004,
+          "moe.combine": 0.18068334833333333,
+          "hc.premix_sinkhorn": 0.3168657683333333,
+          "hc.combine": 0.20251125625
+        },
+        "per_token": {
+          "embed": 3.7420833333333334,
+          "final_norm": 0.21827926666666667,
+          "head": 2.8819277999999997,
+          "sample": 0.20281816666666666
+        }
+      }
+    }
+  }
+}

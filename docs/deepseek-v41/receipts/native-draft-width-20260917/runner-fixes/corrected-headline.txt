@@ -1,0 +1,1 @@
+[ab] dspark decode_tok_s=11.431525256285385 mlx_peak_gb=93.70 process_footprint_peak_gb=94.29 box_used_gb=105.58 (includes file cache) baseline_plus_process_estimate_gb=105.07 sha=0d54d9b28a18

@@ -1,0 +1,18 @@
+{
+  "source_commit": "61b6899f27fee89f63bf7eed9f1c8aa77e73a53a",
+  "base_cpu_script_sha256": "a35c8d099a8fb027c00eca1401b8540dcd0b2d46e51f94094ee6194b9c07929e",
+  "script_sha256": "d6cc99a7df0db4f702316f22816d60375d9446222cc750fe27de030f54519eb7",
+  "static_incremental_bound_bytes": 1073741824,
+  "source_manifest_sha256": "058f188b1ebdac8a24815d3d207f72efdefad2bd691b9b43c19cd2087b0fc997",
+  "runtime_sources": {
+    "mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399"
+  },
+  "training": "Last1024 captured prefill rows: first768 fit, last256 select lambda1/10 by top6 overlap then score MSE; refit all1024. No decode labels fit or select parameters.",
+  "prediction": "Previous native router input5120 -> native next-gate raw logits plus affine full-hidden residual. Dual ridge avoids a5120-square Gram. Fold into one5120x384 effective prediction matrix and384 raw bias.",
+  "scope": "Historical W35 different16K prompt,256 AR decode rows,layers4..39. Native target gate unchanged. Quality and warm AR-cache proxy only; no real prefetch, Metal or TPS. Existing exact M6 capture lacks full hidden vectors.",
+  "bound": "1GiB incremental: sequential layers, two2304x5120 float32 hidden inputs94MiB; raw conversion<=70MiB; gate,coefficients,folded matrices<=48MiB; training,validation,Gram,solve,score arrays<=160MiB; Python/BLAS and allocator reserve<=640MiB. Retain only metrics and hashes, never all fitted matrices.",
+  "folded_runtime_parameter_bytes": 283170816,
+  "new_regression_tests": false,
+  "production_install": false
+}

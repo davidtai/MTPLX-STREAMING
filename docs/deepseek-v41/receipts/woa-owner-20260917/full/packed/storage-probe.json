@@ -1,0 +1,108 @@
+{
+  "scope": "physical persistent103/transient48 banks, full384-expert layer20 packed scales; exact synthetic-input MLP outputs and byte ownership, not full-model throughput",
+  "source_commit": "4a5acf9d4776bbe2a6a0519a4f1fc4b8965274dc",
+  "helper_sha256": {
+    "storage_probe.py": "a94263c67868fa811186fc5f99df7ad1e0307aec24e2307d12388927592c35d3",
+    "packed_storage.py": "6f93ee0ac2e9fadd3577b8e1e8e12ea0e5e324c137c05df4ef087bb2066b1b8f",
+    "paired_kernels.py": "0e0d761d69bb68c09e7dd49b60666728844c5fa08dfb87b8eb6f1dc8b71af9a4",
+    "kernels.py": "b85fbd68797ab95aff8356caa419b1f61ae38b98a99a566bde1054636331f6bf"
+  },
+  "artifact_manifest_sha256": "b8aebeabdb0dc7c9362f644e4460771b6e0cb0ef84dfc332189733e2149c0e16",
+  "static_increment_bound_bytes": 8589934592,
+  "memory_before": {
+    "sample_start_monotonic_ns": 138592229835083,
+    "sample_end_monotonic_ns": 138592233128833,
+    "process": {
+      "peak_maxrss_bytes": 24264704,
+      "resident_bytes": 24707072,
+      "phys_footprint_bytes": 13779424,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 124338831360,
+      "wired_bytes": 3085041664,
+      "active_bytes": 2379595776,
+      "inactive_bytes": 2173534208,
+      "speculative_bytes": 193216512,
+      "anonymous_bytes": 2536407040,
+      "file_backed_bytes": 2209939456,
+      "compressor_bytes": 1911816192,
+      "compressed_bytes": 7837024256,
+      "used_bytes": 9549987840,
+      "non_file_used_bytes": 7533264896,
+      "swapins_pages": 4808771,
+      "swapouts_pages": 7663546,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "released_raw_scale_bytes": 166993920,
+  "resident_layer_packed_bytes": 77275224,
+  "active_before_transition_bytes": 2839937032,
+  "active_after_transition_bytes": 2750599688,
+  "read_bytes": 690094080,
+  "preadv_calls": 117,
+  "all_weight_hashes_exact": true,
+  "parity": [
+    {
+      "rows": 6,
+      "unique": 6,
+      "exact_bytes": true,
+      "output_sha256": "20ec52e062c60a900f73ed68200003c4697a72787fe6086ee30813ffa2a70c8f"
+    },
+    {
+      "rows": 18,
+      "unique": 3,
+      "exact_bytes": true,
+      "output_sha256": "d4e53a1de81224baae6fc3ebd5ebb45387dc7e9cdcbe39bea09cb7b542749090"
+    },
+    {
+      "rows": 36,
+      "unique": 12,
+      "exact_bytes": true,
+      "output_sha256": "59e6201441203a959fc733f0b5c17c9da91a7aaf86d6071c93b57d6d84cf85a0"
+    },
+    {
+      "rows": 36,
+      "unique": 36,
+      "exact_bytes": true,
+      "output_sha256": "a82b014bfeaf8c5d288bfb0c1fee1ddef6448e4c436651f75786799ac24854de"
+    }
+  ],
+  "mlx_allocator_peak_bytes": 2841412606,
+  "memory_after": {
+    "sample_start_monotonic_ns": 138594909106125,
+    "sample_end_monotonic_ns": 138594913102916,
+    "process": {
+      "peak_maxrss_bytes": 1107542016,
+      "resident_bytes": 1107542016,
+      "phys_footprint_bytes": 3185707648,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 120827199488,
+      "wired_bytes": 5979668480,
+      "active_bytes": 2697887744,
+      "inactive_bytes": 2459959296,
+      "speculative_bytes": 250134528,
+      "anonymous_bytes": 3014983680,
+      "file_backed_bytes": 2392997888,
+      "compressor_bytes": 1911554048,
+      "compressed_bytes": 7835549696,
+      "used_bytes": 13049069568,
+      "non_file_used_bytes": 10906206208,
+      "swapins_pages": 4808771,
+      "swapouts_pages": 7663546,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "active_after_close_bytes": 8,
+  "complete": true
+}

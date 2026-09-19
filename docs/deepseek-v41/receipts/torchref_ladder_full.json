@@ -1,0 +1,935 @@
+{
+  "probe_ids": [
+    0,
+    3465,
+    1258,
+    6036,
+    14,
+    291,
+    3395,
+    361,
+    1354,
+    260,
+    940,
+    291,
+    6328,
+    3465,
+    1241,
+    6036,
+    14,
+    291,
+    3395,
+    361,
+    1354,
+    260,
+    565,
+    291,
+    6328,
+    3465,
+    21740,
+    6036,
+    14,
+    291,
+    2605
+  ],
+  "n_layers": 40,
+  "rung": "R2 (q8 dense + Q2 experts + ref router)",
+  "note": "R2 is fp32-activation vs MLX bf16, so a gradual global-cos decline with depth is the compounding dtype gap (proven ~0.995/op), NOT a bug. A port bug shows as a SHARP drop, especially at a seam layer.",
+  "seams": {
+    "2": "kv_source+idx+2nd-compressor-start",
+    "8": "kv_source+idx (2nd compressor)",
+    "14": "kv_source+idx+engram",
+    "20": "kv_source+idx+candidate-source (ratio1)",
+    "24": "Reindex",
+    "28": "Reindex",
+    "32": "Reindex",
+    "36": "Reindex",
+    "1": "engram"
+  },
+  "layers": [
+    {
+      "layer": 0,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9909037936671828,
+        "global_cos": 0.9945422736343771,
+        "max_abs": 0.7883539199829102,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9890116311920492,
+        "global_cos": 0.999289883550361,
+        "max_abs": 0.163893461227417,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9950017909542076,
+        "global_cos": 0.9995847904172291,
+        "max_abs": 0.1327974796295166,
+        "finite": true
+      }
+    },
+    {
+      "layer": 1,
+      "seam": "engram",
+      "attn_out": {
+        "min_cos": 0.9975893063543981,
+        "global_cos": 0.9987978873675087,
+        "max_abs": 0.18934011459350586,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9887184476110156,
+        "global_cos": 0.9998699499898251,
+        "max_abs": 0.4969291687011719,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.996376344835432,
+        "global_cos": 0.9998398573417263,
+        "max_abs": 1.1242561340332031,
+        "finite": true
+      }
+    },
+    {
+      "layer": 2,
+      "seam": "kv_source+idx+2nd-compressor-start",
+      "attn_out": {
+        "min_cos": 0.998359161910717,
+        "global_cos": 0.9989027714792797,
+        "max_abs": 0.13794130086898804,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.964049595592055,
+        "global_cos": 0.9998713065019157,
+        "max_abs": 0.06581636518239975,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9972186076751192,
+        "global_cos": 0.9998968004876658,
+        "max_abs": 0.9977149963378906,
+        "finite": true
+      }
+    },
+    {
+      "layer": 3,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9984214346282455,
+        "global_cos": 0.9990665175390726,
+        "max_abs": 0.10038423538208008,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9745203376010356,
+        "global_cos": 0.9995913327951149,
+        "max_abs": 0.07795429229736328,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9955593713847565,
+        "global_cos": 0.9999201687217101,
+        "max_abs": 0.8643398284912109,
+        "finite": true
+      }
+    },
+    {
+      "layer": 4,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9981866983965048,
+        "global_cos": 0.9991534340448098,
+        "max_abs": 0.11010640859603882,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9753276231033999,
+        "global_cos": 0.9998317488107757,
+        "max_abs": 0.096896942704916,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9950549244993782,
+        "global_cos": 0.999947650192346,
+        "max_abs": 0.7673320770263672,
+        "finite": true
+      }
+    },
+    {
+      "layer": 5,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9974556786604206,
+        "global_cos": 0.9991640793833745,
+        "max_abs": 0.13142840564250946,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9385282107159986,
+        "global_cos": 0.9997492063678867,
+        "max_abs": 0.14129917323589325,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.989812714751364,
+        "global_cos": 0.9999635852379267,
+        "max_abs": 0.6696376800537109,
+        "finite": true
+      }
+    },
+    {
+      "layer": 6,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9956503726421627,
+        "global_cos": 0.9986055241963199,
+        "max_abs": 0.1721641719341278,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9863522898940413,
+        "global_cos": 0.9974123644752051,
+        "max_abs": 0.1048714891076088,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9925030838470849,
+        "global_cos": 0.9999640879562146,
+        "max_abs": 0.5754032135009766,
+        "finite": true
+      }
+    },
+    {
+      "layer": 7,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9980034145570129,
+        "global_cos": 0.9990368218219434,
+        "max_abs": 0.11872535943984985,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9853152913072099,
+        "global_cos": 0.9996478220685018,
+        "max_abs": 0.5116815567016602,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9958531111214386,
+        "global_cos": 0.9999635570938082,
+        "max_abs": 0.6126358509063721,
+        "finite": true
+      }
+    },
+    {
+      "layer": 8,
+      "seam": "kv_source+idx (2nd compressor)",
+      "attn_out": {
+        "min_cos": 0.9982940435066836,
+        "global_cos": 0.9994366649863503,
+        "max_abs": 1.5172514915466309,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9775003882378468,
+        "global_cos": 0.9999140429206097,
+        "max_abs": 0.8900375366210938,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9961864557678485,
+        "global_cos": 0.999967527205547,
+        "max_abs": 2.0994873046875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 9,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9972913408667272,
+        "global_cos": 0.9989196304461592,
+        "max_abs": 0.17317843437194824,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9478042726759014,
+        "global_cos": 0.9954352815410291,
+        "max_abs": 0.15431855618953705,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9963040536877797,
+        "global_cos": 0.9999664293712475,
+        "max_abs": 2.101715087890625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 10,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9944739074039547,
+        "global_cos": 0.9985588285532122,
+        "max_abs": 0.19317443668842316,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.961720475930595,
+        "global_cos": 0.9999867806641751,
+        "max_abs": 1.0457763671875,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9955516565108788,
+        "global_cos": 0.9999886009316011,
+        "max_abs": 4.19781494140625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 11,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9941888183575893,
+        "global_cos": 0.9982134872071357,
+        "max_abs": 0.2522687315940857,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9895697902591755,
+        "global_cos": 0.9979901785983188,
+        "max_abs": 0.09651315212249756,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9959146414675026,
+        "global_cos": 0.9999881507408885,
+        "max_abs": 4.1964111328125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 12,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9955874789544475,
+        "global_cos": 0.9989047570889403,
+        "max_abs": 0.19281750172376633,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9375603682519614,
+        "global_cos": 0.9960256605149197,
+        "max_abs": 0.16700390726327896,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9886032892461517,
+        "global_cos": 0.9999870826194639,
+        "max_abs": 4.19940185546875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 13,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9911816415323464,
+        "global_cos": 0.9988749692817396,
+        "max_abs": 0.28592419624328613,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9547558205186591,
+        "global_cos": 0.9975485304328371,
+        "max_abs": 0.5121960639953613,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9868355166391922,
+        "global_cos": 0.9999856237708337,
+        "max_abs": 4.19268798828125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 14,
+      "seam": "kv_source+idx+engram",
+      "attn_out": {
+        "min_cos": 0.9941381821998402,
+        "global_cos": 0.9989916995693033,
+        "max_abs": 0.5951910018920898,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9822026278337302,
+        "global_cos": 0.9999281444201619,
+        "max_abs": 0.7402458190917969,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9914557710925246,
+        "global_cos": 0.9999827765050661,
+        "max_abs": 7.7041015625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 15,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9955303846274635,
+        "global_cos": 0.9993775227007429,
+        "max_abs": 0.956268310546875,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9907325618304693,
+        "global_cos": 0.9998361703424908,
+        "max_abs": 10.01806640625,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9917735979859238,
+        "global_cos": 0.9999973467165935,
+        "max_abs": 27.8486328125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 16,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9845017716721083,
+        "global_cos": 0.9979973259389395,
+        "max_abs": 0.4717073440551758,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9635500027361276,
+        "global_cos": 0.9999481653332853,
+        "max_abs": 3.491729736328125,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9896328083434799,
+        "global_cos": 0.9999970256585652,
+        "max_abs": 34.828125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 17,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9946450789008092,
+        "global_cos": 0.9977047141912266,
+        "max_abs": 0.20881611108779907,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9605983878839774,
+        "global_cos": 0.9997612013965036,
+        "max_abs": 0.33020099997520447,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9876073612097549,
+        "global_cos": 0.9999965464780283,
+        "max_abs": 34.935546875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 18,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9916053755764455,
+        "global_cos": 0.9968832679913756,
+        "max_abs": 0.3363930881023407,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9315091127421629,
+        "global_cos": 0.9998911498245352,
+        "max_abs": 0.5674729645252228,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9771539764914551,
+        "global_cos": 0.9999963342781436,
+        "max_abs": 35.0556640625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 19,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9899946646290059,
+        "global_cos": 0.998434446754348,
+        "max_abs": 0.4361845850944519,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9699963938607078,
+        "global_cos": 0.9999479264052105,
+        "max_abs": 0.5353660583496094,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9833640094291759,
+        "global_cos": 0.999996902551587,
+        "max_abs": 35.1748046875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 20,
+      "seam": "kv_source+idx+candidate-source (ratio1)",
+      "attn_out": {
+        "min_cos": 0.9952095074591789,
+        "global_cos": 0.9984138801414028,
+        "max_abs": 0.2643977403640747,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9377338398015866,
+        "global_cos": 0.99999982574307,
+        "max_abs": 14.1591796875,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9846748328646429,
+        "global_cos": 0.99999967091802,
+        "max_abs": 63.63671875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 21,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9961241420088525,
+        "global_cos": 0.9995752010887776,
+        "max_abs": 0.3706827163696289,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9509435165465858,
+        "global_cos": 0.9999999581461847,
+        "max_abs": 11.3154296875,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9874593323535998,
+        "global_cos": 0.9999998977440961,
+        "max_abs": 63.9609375,
+        "finite": true
+      }
+    },
+    {
+      "layer": 22,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9940424099586208,
+        "global_cos": 0.9976131104768909,
+        "max_abs": 0.4034523069858551,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9380210659779467,
+        "global_cos": 0.9999999053532226,
+        "max_abs": 16.7001953125,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9848402668942228,
+        "global_cos": 0.9999999393879926,
+        "max_abs": 96.3515625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 23,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9856110974102279,
+        "global_cos": 0.9977339508150158,
+        "max_abs": 0.35506463050842285,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9659517822613396,
+        "global_cos": 0.9999999091879548,
+        "max_abs": 21.140625,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9853189133020774,
+        "global_cos": 0.9999999513434111,
+        "max_abs": 138.6875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 24,
+      "seam": "Reindex",
+      "attn_out": {
+        "min_cos": 0.9921516101808047,
+        "global_cos": 0.9970705954551042,
+        "max_abs": 0.4054443836212158,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.956747857444833,
+        "global_cos": 0.9999998156238745,
+        "max_abs": 24.7080078125,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9864761145086888,
+        "global_cos": 0.9999999467751111,
+        "max_abs": 188.0859375,
+        "finite": true
+      }
+    },
+    {
+      "layer": 25,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9946881143771945,
+        "global_cos": 0.9987363506627801,
+        "max_abs": 0.30431580543518066,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9145266349165947,
+        "global_cos": 0.9999997909142868,
+        "max_abs": 21.7763671875,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9885814873916531,
+        "global_cos": 0.9999999471725916,
+        "max_abs": 231.640625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 26,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9943987900547652,
+        "global_cos": 0.9989627474997207,
+        "max_abs": 0.3913381099700928,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.953666637772612,
+        "global_cos": 0.9999998609074647,
+        "max_abs": 10.6806640625,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.991384369568336,
+        "global_cos": 0.9999999564575797,
+        "max_abs": 253.03125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 27,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9860433890401628,
+        "global_cos": 0.9951882632017349,
+        "max_abs": 0.6216436624526978,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9631853401694217,
+        "global_cos": 0.9999997346487081,
+        "max_abs": 4.2978515625,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9907690539623769,
+        "global_cos": 0.999999949471523,
+        "max_abs": 244.421875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 28,
+      "seam": "Reindex",
+      "attn_out": {
+        "min_cos": 0.9943560579211075,
+        "global_cos": 0.9979577003532494,
+        "max_abs": 0.6232085227966309,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9755162783755462,
+        "global_cos": 0.999999919320152,
+        "max_abs": 7.28125,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9908717316561587,
+        "global_cos": 0.9999999433865614,
+        "max_abs": 258.953125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 29,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9924364946485513,
+        "global_cos": 0.9970214791783197,
+        "max_abs": 0.3477911949157715,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9042562009155599,
+        "global_cos": 0.9999999479380082,
+        "max_abs": 3.080078125,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9915869112442401,
+        "global_cos": 0.9999999406524657,
+        "max_abs": 265.125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 30,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9953951863079117,
+        "global_cos": 0.9985051706130325,
+        "max_abs": 0.2690582871437073,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.8992680405702899,
+        "global_cos": 0.9999991638399633,
+        "max_abs": 0.5592949092388153,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9912424215569472,
+        "global_cos": 0.9999999380129446,
+        "max_abs": 264.53125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 31,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9917717334457838,
+        "global_cos": 0.9967472611094993,
+        "max_abs": 0.3684302866458893,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9189640274653268,
+        "global_cos": 0.9999993629525874,
+        "max_abs": 1.628173828125,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9913585829221093,
+        "global_cos": 0.9999999412844341,
+        "max_abs": 266.203125,
+        "finite": true
+      }
+    },
+    {
+      "layer": 32,
+      "seam": "Reindex",
+      "attn_out": {
+        "min_cos": 0.9804968604808979,
+        "global_cos": 0.9940988674214263,
+        "max_abs": 0.6683316230773926,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9347541099330015,
+        "global_cos": 0.9937114902643148,
+        "max_abs": 1.6104710102081299,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9807831741332032,
+        "global_cos": 0.9999999336409063,
+        "max_abs": 266.0,
+        "finite": true
+      }
+    },
+    {
+      "layer": 33,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9866258957223304,
+        "global_cos": 0.997041947491635,
+        "max_abs": 0.4591350555419922,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.8244053304912722,
+        "global_cos": 0.9999953648345425,
+        "max_abs": 2.7641820907592773,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9565989778426901,
+        "global_cos": 0.9999999069364944,
+        "max_abs": 265.890625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 34,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9386997555203658,
+        "global_cos": 0.9952383856573644,
+        "max_abs": 1.0861246585845947,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.92886514334899,
+        "global_cos": 0.9999687843134536,
+        "max_abs": 3.353326439857483,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9465303125226275,
+        "global_cos": 0.9999998611934265,
+        "max_abs": 266.5625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 35,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9564660836136826,
+        "global_cos": 0.9955897842257152,
+        "max_abs": 0.853848785161972,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.9221771546046463,
+        "global_cos": 0.9997238982143043,
+        "max_abs": 11.018441557884216,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9463090852997225,
+        "global_cos": 0.9999996246659899,
+        "max_abs": 266.90625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 36,
+      "seam": "Reindex",
+      "attn_out": {
+        "min_cos": 0.950308624709249,
+        "global_cos": 0.9897189297337304,
+        "max_abs": 1.2367339134216309,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.8873136364586566,
+        "global_cos": 0.9999863475465931,
+        "max_abs": 8.466895461082458,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.9632410857470527,
+        "global_cos": 0.9999995003878671,
+        "max_abs": 267.25,
+        "finite": true
+      }
+    },
+    {
+      "layer": 37,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.9205324544109553,
+        "global_cos": 0.9853001011126876,
+        "max_abs": 1.2007865607738495,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.7664009675835204,
+        "global_cos": 0.9989543784166266,
+        "max_abs": 8.686442971229553,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.8855852404544229,
+        "global_cos": 0.9999992791982848,
+        "max_abs": 266.40625,
+        "finite": true
+      }
+    },
+    {
+      "layer": 38,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.8172944701057256,
+        "global_cos": 0.9843737870939261,
+        "max_abs": 1.288093090057373,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.8000277392608766,
+        "global_cos": 0.9997482832408673,
+        "max_abs": 10.488479614257812,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.7698406208225473,
+        "global_cos": 0.9999988946076646,
+        "max_abs": 266.296875,
+        "finite": true
+      }
+    },
+    {
+      "layer": 39,
+      "seam": null,
+      "attn_out": {
+        "min_cos": 0.680110835081194,
+        "global_cos": 0.9787710334652936,
+        "max_abs": 16.47866439819336,
+        "finite": true
+      },
+      "moe_out": {
+        "min_cos": 0.5190609775384739,
+        "global_cos": 0.9709559205167498,
+        "max_abs": 1621.384033203125,
+        "finite": true
+      },
+      "layer_out": {
+        "min_cos": 0.5854756524541448,
+        "global_cos": 0.9999785488011158,
+        "max_abs": 3233.7587890625,
+        "finite": true
+      }
+    }
+  ],
+  "layers_below_0999_global": [],
+  "seam_layers_below_0999": [],
+  "min_global_cos_layer_out": 0.9995847904172291,
+  "all_finite": true
+}

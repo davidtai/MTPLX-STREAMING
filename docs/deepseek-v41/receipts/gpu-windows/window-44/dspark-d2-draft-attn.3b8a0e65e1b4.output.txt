@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_draft_attn
+# stream: dspark
+# token_ids_sha256: f6fe2a3a0c19171b2bab23f14f1f8708bd9a2f7b3ac33822eb056e19f0221a5f
+# decode_tok_s: 3.1723979911514286
+# divergence: {"divergence_index": 27, "ar_token": 63984, "dspark_token": 70077, "ar_top2_margin": 0.0, "dspark_top2_margin": 0.125, "max_abs_logit_delta": 0.5, "tie_margin": 0.03, "class": "tie_flip", "capture_index": 27}
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime diagnostics, and decode tracing, but it currently lacks any aggregate summary helper over `GenerationOutput` sequences.
+
+- The module already has strong precedent for JSON-serializable, dict-returning helpers (e.g., `_generation_rate_fields`, `_mlx_memory_stats`, `_runtime_counter_snapshot`), so a `summarize_generation_outputs` helper fits the existing style of returning plain `dict[str, Any]` with float/int values and `None` for unavailable metrics.
+- Optional metrics like prefill TPS, decode TPS, and peak memory are already treated as possibly-absent elsewhere (e.g., `_generation_rate_fields` guards against zero elapsed time), so the new helper should mirror that defensive pattern and skip `None`/missing fields rather than raising.
+- The module's type style favors `Sequence[...]`/`Mapping[...]` imports from `collections.abc` and dataclass-based outputs, so the helper should accept `Sequence[GenerationOutput]` and use `statistics`-style percentile logic (or a small local p95)

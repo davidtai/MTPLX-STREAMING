@@ -1,0 +1,260 @@
+{
+  "before": {
+    "sample_start_monotonic_ns": 148024055719625,
+    "sample_end_monotonic_ns": 148024058343541,
+    "process": {
+      "peak_maxrss_bytes": 24150016,
+      "resident_bytes": 24559616,
+      "phys_footprint_bytes": 13582816,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 121144000512,
+      "wired_bytes": 3154247680,
+      "active_bytes": 4421009408,
+      "inactive_bytes": 3934322688,
+      "speculative_bytes": 466436096,
+      "anonymous_bytes": 4562780160,
+      "file_backed_bytes": 4258988032,
+      "compressor_bytes": 916406272,
+      "compressed_bytes": 6356221952,
+      "used_bytes": 12425986048,
+      "non_file_used_bytes": 8633434112,
+      "swapins_pages": 4814314,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "construction": {
+    "scope": "16K real cache widths and layer-major prefix-view lifetimes with native dtypes, then M6 verify/trim; synthetic rows, no model weights",
+    "source_commit": "67c0906cb",
+    "source_sha256": {
+      "mtplx/models/deepseek_v41_cache.py": "2e2af380b2a587dcaf10bcac2a3608fd7933e763432a67dd24e57959cb8f317f",
+      "mtplx/models/deepseek_v41_fixed_q8_cache.py": "d4be865de846dee5bb39728f5f1c2f6ea45e27894057a6838eea288fd5e40e17",
+      "mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+      "mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9"
+    },
+    "config": {
+      "max_kv": 17664,
+      "max_append": 953,
+      "window_size": 128,
+      "head_dim": 512,
+      "index_head_dim": 128,
+      "ratios": [
+        0,
+        0,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "sources": [
+        2,
+        8,
+        14,
+        20
+      ],
+      "draft_layers": 3,
+      "max_rollback": 8
+    },
+    "cache_env": {
+      "MTPLX_DSV41_WINDOW_RING": "1",
+      "MTPLX_DSV41_KV_CHUNK_GROW": "0",
+      "MTPLX_DSV41_KV_BOUNDED": "0"
+    },
+    "incremental_bound_bytes": 8589934592,
+    "allocator_policy_bytes": 3221225472,
+    "allocator_cache_bytes": 268435456,
+    "host_compiler_allowance_bytes": 4294967296,
+    "allocation_derivation": "Only cache state: windows under 100MiB, three FP32 frontiers under 210MiB, compressed/index under 100MiB, per-chunk source views conservatively under 1GiB, raw/quantized copy overlap under 1GiB. 3GiB allocator plus 256MiB cache and 4GiB host/compiler fits the 8GiB incremental bound.",
+    "script_sha256": "7eaca055868bc3b321ec4697b418f8c2fe5e44efb90e77f5ba4586ddcd9d6c38"
+  },
+  "arms": [
+    {
+      "q8": false,
+      "layer_samples": [
+        {
+          "layer": 2,
+          "active_bytes": 424820802,
+          "peak_bytes": 424820802,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 8,
+          "active_bytes": 532938818,
+          "peak_bytes": 532938818,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 14,
+          "active_bytes": 641056834,
+          "peak_bytes": 641056834,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 20,
+          "active_bytes": 613957694,
+          "peak_bytes": 641056834,
+          "shared_view_logical_bytes": 207607040,
+          "compressed_dtype": "mlx.core.bfloat16"
+        }
+      ],
+      "prefill_active_bytes": 636437000,
+      "prefill_peak_bytes": 669729292,
+      "after_prefill_views_released_bytes": 370999304,
+      "verify_peak_bytes": 669729292,
+      "elapsed_s": 0.26501620799535885,
+      "active_after_close_bytes": 8
+    },
+    {
+      "q8": true,
+      "layer_samples": [
+        {
+          "layer": 2,
+          "active_bytes": 323411416,
+          "peak_bytes": 323411416,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 8,
+          "active_bytes": 323411416,
+          "peak_bytes": 335406652,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 14,
+          "active_bytes": 323411416,
+          "peak_bytes": 335406652,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 20,
+          "active_bytes": 364144596,
+          "peak_bytes": 370669568,
+          "shared_view_logical_bytes": 207607040,
+          "compressed_dtype": "mlx.core.bfloat16"
+        }
+      ],
+      "prefill_active_bytes": 342433860,
+      "prefill_peak_bytes": 373304920,
+      "after_prefill_views_released_bytes": 116670472,
+      "verify_peak_bytes": 373304920,
+      "elapsed_s": 0.22159045800799504,
+      "active_after_close_bytes": 8
+    },
+    {
+      "q8": false,
+      "layer_samples": [
+        {
+          "layer": 2,
+          "active_bytes": 424820802,
+          "peak_bytes": 424820802,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 8,
+          "active_bytes": 532938818,
+          "peak_bytes": 532938818,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 14,
+          "active_bytes": 641056834,
+          "peak_bytes": 641056834,
+          "shared_view_logical_bytes": 207595520,
+          "compressed_dtype": "mlx.core.float32"
+        },
+        {
+          "layer": 20,
+          "active_bytes": 613957694,
+          "peak_bytes": 641056834,
+          "shared_view_logical_bytes": 207607040,
+          "compressed_dtype": "mlx.core.bfloat16"
+        }
+      ],
+      "prefill_active_bytes": 636437000,
+      "prefill_peak_bytes": 669729292,
+      "after_prefill_views_released_bytes": 370999304,
+      "verify_peak_bytes": 669729292,
+      "elapsed_s": 0.1950425420072861,
+      "active_after_close_bytes": 8
+    }
+  ],
+  "complete": true,
+  "after": {
+    "sample_start_monotonic_ns": 148025432228375,
+    "sample_end_monotonic_ns": 148025438892458,
+    "process": {
+      "peak_maxrss_bytes": 105791488,
+      "resident_bytes": 105775104,
+      "phys_footprint_bytes": 769950536,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 120649416704,
+      "wired_bytes": 3553689600,
+      "active_bytes": 4480303104,
+      "inactive_bytes": 3990192128,
+      "speculative_bytes": 487669760,
+      "anonymous_bytes": 4623220736,
+      "file_backed_bytes": 4334944256,
+      "compressor_bytes": 916406272,
+      "compressed_bytes": 6356221952,
+      "used_bytes": 12940591104,
+      "non_file_used_bytes": 9093316608,
+      "swapins_pages": 4814314,
+      "swapouts_pages": 7666694,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  }
+}

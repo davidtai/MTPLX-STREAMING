@@ -1,0 +1,14 @@
+{
+  "source_commit": "8a8803ad86108c3448331a8e880fe2a0b891e809",
+  "wrapper_sha256": "e7fb865c107acbbd38a4e81a378072bf111d10b6b85e29f1999845ed79542ceb",
+  "probe_sha256": "d91a43130db5346524005541b00cd1372bfdb9ca06cd4a5a780c24123abca20c",
+  "scope": "one synthetic native-shape mxfp8 attention layer, 16K KV, M6/M7; no model, target experts or MTP",
+  "baseline_bytes": 10020700000.0,
+  "active_scope_bound_bytes": 8589934592,
+  "mlx_active_peak_bytes": 1132996826,
+  "physical_peak_sampled_bytes": 11335811072,
+  "swapouts_first": 4399765,
+  "swapouts_last": 4399765,
+  "sample_count": 7,
+  "complete": false
+}

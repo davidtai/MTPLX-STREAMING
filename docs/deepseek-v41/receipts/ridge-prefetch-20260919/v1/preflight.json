@@ -1,0 +1,16 @@
+{
+  "cpu_only": true,
+  "raw_bank_bytes": 7125442560,
+  "persistent_slots_per_layer": 105,
+  "prefetch_slots": 16,
+  "physical_ring_shared": true,
+  "warm_residents_per_layer": 73,
+  "capability": {
+    "scope": "three-layer cost operator only",
+    "native_config_guard_unchanged": true,
+    "native_published_ring_transaction_observed": true,
+    "published_expert": 14,
+    "published_slot": 153,
+    "policy_mapping_and_epoch_rollback_exact": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "pre_fix": {
+    "successful": false,
+    "tests_run": 1,
+    "failures": 3,
+    "errors": 0,
+    "output": "FFF\n======================================================================\nFAIL: test_step_peak_summary_distinguishes_missing_and_sampled_zero (guard_tests.GuardSafetyTests.test_step_peak_summary_distinguishes_missing_and_sampled_zero) (samples=0, footprint=0)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/tests/test_gpu_window_runner_safety.py\", line 113, in test_step_peak_summary_distinguishes_missing_and_sampled_zero\n    self.assertIn(f'complete step memory samples {samples}', result.stdout)\nAssertionError: 'complete step memory samples 0' not found in 'phase 4: GPU step exited with code 0; peak step footprint 0.0 GiB, peak guard accounted 50.0 GiB, peak physical used 50.0 GiB, peak compressor delta 0.0 GiB\\n'\n\n======================================================================\nFAIL: test_step_peak_summary_distinguishes_missing_and_sampled_zero (guard_tests.GuardSafetyTests.test_step_peak_summary_distinguishes_missing_and_sampled_zero) (samples=2, footprint=0)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/tests/test_gpu_window_runner_safety.py\", line 113, in test_step_peak_summary_distinguishes_missing_and_sampled_zero\n    self.assertIn(f'complete step memory samples {samples}', result.stdout)\nAssertionError: 'complete step memory samples 2' not found in 'phase 4: GPU step exited with code 0; peak step footprint 0.0 GiB, peak guard accounted 50.0 GiB, peak physical used 50.0 GiB, peak compressor delta 0.0 GiB\\n'\n\n======================================================================\nFAIL: test_step_peak_summary_distinguishes_missing_and_sampled_zero (guard_tests.GuardSafetyTests.test_step_peak_summary_distinguishes_missing_and_sampled_zero) (samples=2, footprint=3221225472)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/tests/test_gpu_window_runner_safety.py\", line 113, in test_step_peak_summary_distinguishes_missing_and_sampled_zero\n    self.assertIn(f'complete step memory samples {samples}', result.stdout)\nAssertionError: 'complete step memory samples 2' not found in 'phase 4: GPU step exited with code 0; peak step footprint 3.0 GiB, peak guard accounted 53.0 GiB, peak physical used 50.0 GiB, peak compressor delta 0.0 GiB\\n'\n\n----------------------------------------------------------------------\nRan 1 test in 0.027s\n\nFAILED (failures=3)\n"
+  },
+  "fixed": {
+    "successful": true,
+    "tests_run": 1,
+    "failures": 0,
+    "errors": 0,
+    "output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.019s\n\nOK\n"
+  }
+}

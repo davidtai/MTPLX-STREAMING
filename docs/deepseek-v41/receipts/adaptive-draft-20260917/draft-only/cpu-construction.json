@@ -1,0 +1,9 @@
+{
+  "syntax": true,
+  "all_runtime_hashes_match": true,
+  "guard_before_mlx": true,
+  "source_sha256": "aad1dfbb5e0ac870e06c12f080e92d3edbe0615e138f279b8539d9530c2e7ff9",
+  "ceiling_bytes": 110000000000,
+  "one_control_two_causal_candidates": true,
+  "incremental_bound_bytes": 52613349376
+}

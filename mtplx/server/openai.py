@@ -76,6 +76,9 @@ from mtplx.a3b_mtp_batch import (
 from mtplx.adaptive import AdaptiveDepthPolicy, ExpectedValueDepthPolicy
 from mtplx.attention_context import attention_phase
 from mtplx.cache_state import snapshot_cache
+from mtplx.serve_stage_timing import (
+    write_stage_timing_receipt as _write_serve_stage_timing_receipt,
+)
 from mtplx.mtp_patch import MTPContract
 from mtplx.mtp_batch_numerics import (
     MTP_BATCH_NUMERICS_CHOICES,
@@ -101,7 +104,13 @@ from mtplx.backends.descriptors import (
 from mtplx.backends.registry import load_runtime_contract
 from mtplx.batching import BatchSchedulerConfig, SchedulerMode, SchedulerPreset
 from mtplx.chat_encode_cache import GLOBAL_CHAT_ENCODE_CACHE, ChatEncodeCache
-from mtplx.chat_encoding import encode_chat_messages, is_gemma4_tokenizer
+from mtplx.chat_encoding import (
+    DEEPSEEK_V41_BOS_ID,
+    encode_chat_messages,
+    encode_deepseek_v41_messages,
+    is_deepseek_v41_tokenizer,
+    is_gemma4_tokenizer,
+)
 from mtplx.constrained import (
     ResponseFormatError,
     constraint_spec_from_response_format,
@@ -1144,6 +1153,57 @@ def _served_model_type_is_qwen4_exp(args: argparse.Namespace) -> bool:
     mt = str(cfg.get("model_type") or "").lower()
     tmt = str((cfg.get("text_config") or {}).get("model_type") or "").lower()
     return "qwen4_exp" in (mt, tmt) or "qwen4_exp_text" in (mt, tmt)
+
+
+def _served_model_type_is_deepseek_v41(args: argparse.Namespace) -> bool:
+    """True when the served artifact is DeepSeek-V4.1 (text or multimodal).
+
+    Gates the DSpark-DIRECT decode lane (W57): the drafter and the
+    all-trimmable V4.1 cache the lane needs are family-specific.
+    """
+    try:
+        with open(Path(str(args.model)) / "config.json", "rb") as fh:
+            cfg = json.load(fh)
+    except Exception:
+        return False
+    mt = str(cfg.get("model_type") or "").lower()
+    tmt = str((cfg.get("text_config") or {}).get("model_type") or "").lower()
+    return bool({"deepseek_v41", "deepseek_v41_text"} & {mt, tmt})
+
+
+def _deepseek_v41_memory_health(args):
+    """OS observations on health requests only; no per-token sampling or MLX calls."""
+    if not _served_model_type_is_deepseek_v41(args):
+        return None
+    from mtplx.deepseek_v41_memory_profile import host_memory_snapshot
+
+    return host_memory_snapshot()
+
+
+def _dspark_direct_env_enabled() -> bool:
+    """``MTPLX_DSV41_DSPARK_DIRECT`` truthy: route this model family's ``mtp``
+    requests through the DSpark-DIRECT lane instead of the generic native-MTP
+    machinery (W57).  ``--generation-mode dspark`` selects the lane explicitly and
+    needs no env flag."""
+    return str(os.environ.get("MTPLX_DSV41_DSPARK_DIRECT", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _dspark_direct_selected(state: "ServerState", effective_mode: str) -> bool:
+    """Whether a request should run the DSpark-DIRECT lane: an explicit
+    ``dspark`` mode, or ``mtp`` with ``MTPLX_DSV41_DSPARK_DIRECT=1`` -- in either
+    case only for a deepseek_v41 model on an MTP-enabled runtime."""
+    if not bool(getattr(state.runtime, "mtp_enabled", False)):
+        return False
+    if not _served_model_type_is_deepseek_v41(state.args):
+        return False
+    if effective_mode == "dspark":
+        return True
+    return effective_mode == "mtp" and _dspark_direct_env_enabled()
 
 
 _QWEN4_PORT_TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -3108,6 +3168,142 @@ def _expert_runtime_io_backend(runtime: Any) -> str | None:
     return _health_string(getattr(reader, "backend", None))
 
 
+#: The DeepSeek-V4.1 decode/prefill lever env, in a stable order, for the served
+#: startup log (W46).  Reading these back on the served path is how a GPU-window
+#: log proves which byte-identical optimizations actually crossed the daemon
+#: spawn boundary (profile default OR an operator's parent-shell export) vs. an
+#: env that never reached the child.  ``DEVICE_ROUTE`` is reported for operator
+#: intent even though no code reads it yet (it stays ``<unset>``).
+#: W79: the six prefill-lane levers (layer-major schedule, dense experts, lean
+#: score path, selected-key gather, chunk-grown KV, sorted-routed layout fix) now
+#: ship as served defaults via the deepseek-v41-mxfp4-75 profile child_env
+#: (== the cell16k A/B preset), so they are surfaced here too -- a served 16K
+#: window log now proves the whole cell16k stack armed, not just the decode lane.
+_DSV41_LEVER_ENV_KEYS: tuple[str, ...] = (
+    "MTPLX_DSV41_HEAD_MODE",
+    "MTPLX_DSV41_SINKHORN_METAL",
+    "MTPLX_DSV41_ATTN_COMPILE",
+    "MTPLX_DSV41_ATTN_WIN_MEMO",
+    "MTPLX_DSV41_SWITCH_FASTPATH",
+    "MTPLX_DSV41_SWITCH_SUBMIT",
+    "MTPLX_DSV41_DEVICE_ROUTE",
+    "MTPLX_DSV41_HC_COMPILE",
+    "MTPLX_DSV41_SHARED_OVERLAP",
+    "MTPLX_DSV41_PREFILL_LAYER_MAJOR",
+    "MTPLX_DSV41_PREFILL_DENSE_EXPERTS",
+    "MTPLX_DSV41_PREFILL_SCORE_PATH",
+    "MTPLX_DSV41_SELECTED_KEYS",
+    "MTPLX_DSV41_KV_CHUNK_GROW",
+    "MTPLX_DSV41_LAYOUT_FIX",
+    # W90: the served-log lever snapshot must capture EVERY A/B lever
+    # (ab_decode_env_levers.ALL_LEVER_ENVS); a test asserts that subset relation, so
+    # a new lever cannot ship without appearing here.  Added the levers that had
+    # drifted out of this snapshot (SELECT_FENCE / WINDOW_RING* / DECODE_ATTN_KERNEL
+    # / the prefill-dense + score knobs / pin + route knobs) plus W90's own key.
+    "MTPLX_DSV41_DRAFT_COMPILE",
+    "MTPLX_DSV41_VERIFY_SINGLE_BARRIER",
+    "MTPLX_DSV41_PREFILL_DENSE_MIN_ROWS",
+    "MTPLX_DSV41_PREFILL_DENSE_BATCH",
+    "MTPLX_DSV41_PREFILL_DENSE_MATMUL_DTYPE",
+    "MTPLX_DSV41_PREFILL_SCORE_DTYPE",
+    "MTPLX_DSV41_PREFILL_SCORE_KEY_CHUNK",
+    "MTPLX_DSV41_PREFILL_SOFTMAX_KERNEL",
+    "MTPLX_DSV41_DECODE_ATTN_KERNEL",
+    "MTPLX_DSV41_DOWN_K_PAD",
+    "MTPLX_DSV41_PIN_WORKING_SET",
+    "MTPLX_DSV41_PIN_REFRESH_TOKENS",
+    "MLX_MAX_MB_PER_BUFFER",
+    "MTPLX_DSV41_DEVICE_ROUTE_PINNED",
+    "MTPLX_DSV41_SELECT_FENCE",
+    "MTPLX_DSV41_WINDOW_RING",
+    "MTPLX_DSV41_WINDOW_RING_MAX_VERIFY",
+    "MTPLX_DSV41_WINDOW_RING_SLACK",
+    "MTPLX_DSV41_WINDOW_RING_HEADROOM",
+    "MTPLX_DSV41_WINDOW_RING_MAXKV",
+    "MTPLX_DSV41_ATTN_SHAPE_STABLE",
+    # W91/K35 (appended -- coordinate with any concurrent list extension):
+    "MTPLX_DSV41_SMALL_STAGES_FUSED",
+    "MTPLX_DSV41_HC_PREMIX_KERNEL",
+    # W87 (appended): single-slot pool lever (MTPLX_DSV41_SINGLE_SLOT_POOL) -- keep
+    # the served-log snapshot a superset of ab_decode_env_levers.ALL_LEVER_ENVS.
+    "MTPLX_DSV41_SINGLE_SLOT_POOL",
+    # W93: gate-oracle one-layer-ahead expert prefetch (width k + target floor).
+    "MTPLX_DSV41_GATE_PREFETCH",
+    "MTPLX_DSV41_GATE_PREFETCH_MIN_LAYER",
+    # W107 (appended -- coordinate with any concurrent list extension): the bounded/
+    # preallocated KV master switch + its preallocation cap (MAXKV is server-plumbed
+    # from max_live_kv_tokens below, mirroring MTPLX_CONTEXT_WINDOW_TOKENS).
+    "MTPLX_DSV41_KV_BOUNDED",
+    "MTPLX_DSV41_KV_BOUNDED_MAXKV",
+    # W95 / W104: the served path must also stamp the runner + draft-head-bf16
+    # levers in its log snapshot (drift guard: superset of ALL_LEVER_ENVS).
+    # Appended at the end.
+    "MTPLX_DSV41_RUNNER",
+    "MTPLX_DSV41_DRAFT_HEAD_BF16",
+    # W97 / W99 / W101 (appended -- coordinate with any concurrent list extension):
+    # the decode-attention levers ab_decode_env_levers added to ALL_LEVER_ENVS at the
+    # w97/w101 merges (wo_a f32 cache + fixed-shape core compile + leaned casts + the
+    # K36 fused projection-chain kernels).  Kept here so the served-log snapshot stays
+    # a superset of ALL_LEVER_ENVS (the W46/W90 drift guard).
+    "MTPLX_DSV41_ATTN_WO_A_CACHE",
+    "MTPLX_DSV41_ATTN_CORE_COMPILE",
+    "MTPLX_DSV41_ATTN_LEAN_CASTS",
+    "MTPLX_DSV41_ATTN_FUSED_PROJ",
+    "MTPLX_DSV41_ATTN_WO_A_DIRECT",
+    # W118 (appended -- coordinate with any concurrent list extension): the MLX
+    # allocator-limit headroom lever.  It is read on the served path too
+    # (expert_runtime.apply_mlx_memory_cap, called from ExpertStreamingRuntime.open),
+    # so it is a LIVE served lever -- kept here so the served-log snapshot stays a
+    # superset of ALL_LEVER_ENVS (the W46/W90 drift guard).  BOX-FIT NOTE (W118 review
+    # LOW): the served daemon does NOT run the W106 budget forecast, so on serve the
+    # headroom is unpriced against the box budget; the exposure is bounded by the served
+    # cache limit (the allocator can retain at most ~cache_limit above the active peak),
+    # and it is off (0) by default.  See docs/deepseek-v41/W118_MLX_LIMIT_HEADROOM.md.
+    "MTPLX_DSV41_MLX_LIMIT_HEADROOM_GIB",
+    # NOTE (W107 round-4): MTPLX_DSV41_KV_INPLACE_WRITE was DE-REGISTERED (the round-3
+    # in-place write was reverted to slice_update + a donation gate), so it is gone from
+    # ALL_LEVER_ENVS and therefore removed here too -- the superset invariant holds.
+    # W115 (appended -- coordinate with any concurrent list extension): the DSpark
+    # per-verify K29 knob.  The served lane's arm_dspark_decode_kernels() reads it to
+    # decide whether to setdefault the fused decode core for the served verify, so it
+    # is a real served-relevant knob; kept here so the served-log snapshot stays a
+    # superset of ALL_LEVER_ENVS (the W46/W90 drift guard).
+    "MTPLX_DSV41_DSPARK_VERIFY_K29",
+    # NOTE (W110): MTPLX_DSV41_VERIFY_RECORD_HASHES is intentionally NOT here. The
+    # served profile builder (expert_profiles.build_expert_streaming_config) does not
+    # read it, so it would be a DEAD served lever; it is a bench-only diagnostic env
+    # (see scripts/deepseek_v41/ab_decode_env_levers.py) and is likewise absent from
+    # ALL_LEVER_ENVS, so the W90 superset drift guard still holds.
+)
+
+
+def _dsv41_resolved_lever_env(
+    environ: Mapping[str, str],
+) -> "OrderedDict[str, str | None]":
+    """The resolved DeepSeek-V4.1 lever env (value or ``None`` = unset), ordered."""
+    return OrderedDict((key, environ.get(key)) for key in _DSV41_LEVER_ENV_KEYS)
+
+
+def _plumb_kv_bounded_maxkv(max_live_kv_tokens: int) -> None:
+    """W107 (review HIGH-2 / MEDIUM-B): HARD-SET the bounded-KV preallocation cap env
+    from the authoritative ``max_live_kv_tokens`` (the streamed runtime's hard live-KV
+    ceiling), so a stale ``MTPLX_DSV41_KV_BOUNDED_MAXKV`` (shell / profile / earlier ab
+    run) never survives -- smaller would fail ``assert_can_admit`` on legit requests,
+    larger would over-preallocate.  Mirrors ``MTPLX_CONTEXT_WINDOW_TOKENS``; env is the
+    plumbing because ``mlx_lm.make_prompt_cache(model)`` has no handle for a parameter."""
+    os.environ["MTPLX_DSV41_KV_BOUNDED_MAXKV"] = str(int(max_live_kv_tokens))
+
+
+def _format_dsv41_lever_env(resolved: Mapping[str, str | None]) -> str:
+    """One-line ``NAME=value`` render (``<unset>`` for absent keys) for the log."""
+    prefix = "MTPLX_DSV41_"
+    return " ".join(
+        f"{key[len(prefix):] if key.startswith(prefix) else key}="
+        f"{'<unset>' if value is None else value}"
+        for key, value in resolved.items()
+    )
+
+
 class ServerState:
     def __init__(self, args: argparse.Namespace) -> None:
         _coerce_family_verify_strategy(args)
@@ -3119,21 +3315,60 @@ class ServerState:
         self.expert_streaming_load_kwargs = expert_streaming_load_kwargs(
             args, args.model
         )
+        self.dsv41_memory_budget = None
         if self.expert_streaming_load_kwargs:
-            args.load_mtp = False
-            args.generation_mode = "ar"
+            # The DeepSeek-V4.1 DSpark native MTP head (worker W23) is served when
+            # the resolved streamed kwargs carry mtp=True (--generation-mode mtp on
+            # the native artifact); every other streamed profile is AR-only, so
+            # force AR. This is the daemon-side half of the serve glue.
+            streamed_mtp = bool(self.expert_streaming_load_kwargs.get("mtp"))
+            args.load_mtp = streamed_mtp
+            args.generation_mode = "mtp" if streamed_mtp else "ar"
             stream_config = self.expert_streaming_load_kwargs[
                 "expert_streaming_config"
             ]
+            from mtplx.expert_cli import apply_expert_profile_child_env
+            from mtplx.expert_runtime import prepare_deepseek_v41_memory_config
+
+            if stream_config.model_key.startswith("deepseek-v41"):
+                apply_expert_profile_child_env(args, os.environ)
+            stream_config, self.dsv41_memory_budget = prepare_deepseek_v41_memory_config(
+                stream_config, env=os.environ, args=args,
+                preserve_memory_limit=(
+                    getattr(args, "_expert_memory_limit_explicit", False)
+                    or "memory_limit_bytes" in getattr(
+                        args, "_resolved_expert_profile_customized_fields", ())
+                    or getattr(args, "expert_memory_limit", None) is not None))
+            self.expert_streaming_load_kwargs["expert_streaming_config"] = stream_config
+            if self.dsv41_memory_budget is not None:
+                args._resolved_expert_profile_customized = True
+                args._resolved_expert_profile_customized_fields = tuple(sorted({
+                    *getattr(args, "_resolved_expert_profile_customized_fields", ()),
+                    "memory_limit_bytes"}))
+                args._resolved_expert_effective_config = {
+                    **getattr(args, "_resolved_expert_effective_config", {}),
+                    "memory_limit_bytes": stream_config.memory_limit_bytes}
+            from dataclasses import replace as _dc_replace
+
             from mtplx.expert_runtime import reconcile_mlx_memory_cap
             from mtplx.expert_streaming_models import get_model_spec
 
-            stream_plan = stream_config.memory_plan(
-                get_model_spec(stream_config.model_key)
-            )
+            plan_spec = get_model_spec(stream_config.model_key)
+            if streamed_mtp:
+                # MTP wires the mtp.* residents; price them in the MLX cap too.
+                plan_spec = _dc_replace(plan_spec, mtp_included=True)
+            stream_plan = stream_config.memory_plan(plan_spec)
             os.environ["MTPLX_MEMORY_LIMIT_BYTES"] = str(
                 reconcile_mlx_memory_cap(stream_plan)
             )
+            # Cap the served context at the profile's KV plan
+            # (max_live_kv_tokens; 16,384 for deepseek-v41-mxfp4-75) unless the
+            # operator set one explicitly, so the outer memory plan does not
+            # default to the machine-bound window (a 696K context + 48G session
+            # bank blew the allocator past 1.0). The expert cache is the priority
+            # tier; the session bank is capped via the profile child_env.
+            if not int(getattr(args, "context_window", 0) or 0):
+                args.context_window = int(stream_config.max_live_kv_tokens)
         try:
             args.paged_kv_quantization = normalize_paged_kv_quantization(
                 getattr(args, "paged_kv_quantization", "off")
@@ -3233,8 +3468,12 @@ class ServerState:
                     resident_floor_label = "Qwen3.8-Flash-Next"
             except OSError:
                 minimum_resident_bytes = None
-        self.metal_memory_caps = _apply_metal_memory_caps(
-            minimum_resident_bytes=minimum_resident_bytes,
+        self.metal_memory_caps = (
+            {"applied": False, "reason": "streaming_runtime_owns_caps",
+             "memory_limit_bytes": self.dsv41_memory_budget["mlx_limit_bytes"],
+             "memory_limit_source": "dsv41_box_target"}
+            if self.dsv41_memory_budget is not None else
+            _apply_metal_memory_caps(minimum_resident_bytes=minimum_resident_bytes)
         )
         if self.metal_memory_caps.get("reason") in {
             "insufficient_ram",
@@ -3313,7 +3552,37 @@ class ServerState:
             self.fast_path_env_status = _fast_path_env_status()
         from mtplx.expert_cli import apply_expert_profile_child_env
 
-        apply_expert_profile_child_env(args, os.environ)
+        # DeepSeek's environment was composed and normalized before budgeting.
+        # Reapplying it here could restore a size alias with different units.
+        if self.dsv41_memory_budget is None:
+            apply_expert_profile_child_env(args, os.environ)
+        # Served-path visibility (W46): print the DeepSeek-V4.1 decode levers as
+        # resolved INSIDE the daemon, right after the profile child_env is
+        # composed onto os.environ. A GPU-window log then shows exactly which
+        # byte-identical levers engaged -- distinguishing "the env never crossed
+        # the spawn boundary" from "it did, and the served rate is a prompt/decode
+        # length artifact". Gated on the DeepSeek-V4.1 streamed model so it never
+        # fires for other served families.
+        _stream_kwargs = getattr(self, "expert_streaming_load_kwargs", None) or {}
+        _stream_cfg = _stream_kwargs.get("expert_streaming_config")
+        if "deepseek-v41" in str(getattr(_stream_cfg, "model_key", "") or ""):
+            # W107F: plumb the bounded-KV preallocation cap from the streamed config's
+            # hard live-KV ceiling HERE -- BEFORE the decode-levers log below -- so the
+            # logged resolved env shows the ACTUAL MTPLX_DSV41_KV_BOUNDED_MAXKV the cache
+            # will preallocate to, not a stale/unset value.  The authoritative hard-set
+            # runs again at runtime install (idempotent); this early call is guarded and
+            # never raises -- the install-time call validates and raises on a bad ceiling.
+            _early_mlkt = getattr(_stream_cfg, "max_live_kv_tokens", None)
+            if (
+                isinstance(_early_mlkt, int)
+                and not isinstance(_early_mlkt, bool)
+                and _early_mlkt > 0
+            ):
+                _plumb_kv_bounded_maxkv(_early_mlkt)
+            _startup_line(
+                "[4/6] DeepSeek-V4.1 decode levers (resolved env): "
+                + _format_dsv41_lever_env(_dsv41_resolved_lever_env(os.environ))
+            )
         _startup_line("[4/6] Checking local acceleration runtime")
         _startup_line("      This may take a few seconds.")
         self.mlx_runtime_status = _mlx_runtime_status()
@@ -3322,7 +3591,10 @@ class ServerState:
             # engine_session reads this when sizing the session bank; the
             # CLI flag is the public surface, the env is the plumbing.
             os.environ["MTPLX_MEMORY_BUDGET"] = str(int(self.memory_budget_bytes))
-        self.mlx_cache_limit_status = _configure_mlx_cache_limit(args)
+        self.mlx_cache_limit_status = (
+            {"configured": False, "source": "streaming_runtime_owns_caps"}
+            if self.dsv41_memory_budget is not None else _configure_mlx_cache_limit(args)
+        )
         # The n-gram table pre-read: the CLI flag is the public surface, the
         # env is the plumbing (same contract as MTPLX_MEMORY_BUDGET above).
         # Stamped AFTER apply_profile_env so an explicit --ngram-prewarm /
@@ -3370,6 +3642,14 @@ class ServerState:
         finally:
             load_heartbeat.set()
         self.load_time_s = time.perf_counter() - started
+        if self.dsv41_memory_budget is not None:
+            cap = self.runtime.expert_streaming.memory_cap_report
+            self.metal_memory_caps = {
+                **cap, "memory_limit_bytes": cap["limit"],
+                "memory_limit_source": "dsv41_box_target"}
+            self.mlx_cache_limit_status = {
+                "configured": cap["cache_limit_applied"], "source": "dsv41_box_target",
+                "limit_bytes": cap["cache_limit_bytes"]}
         _startup_line(f"[5/6] Model loaded in {self.load_time_s:.1f}s")
         # The fixed-M4 lane's per-request memory gate measures against the
         # same allocator ceiling the prefill admission shed uses
@@ -3653,6 +3933,18 @@ class ServerState:
             "aux_bytes_per_token": _plan_aux_from_config(_plan_model_config),
             "prefill_transient_bytes_per_token": _plan_transient_per_token,
         }
+        # An explicit MTPLX_SESSION_BANK_MAX_BYTES (e.g. the deepseek-v41 expert
+        # profile's 2 GiB child_env, which yields the bank to the streamed expert
+        # cache) also governs the plan's advertised bank, so the memory-plan line
+        # matches the engine_session bank instead of the module's 48G cap.
+        from mtplx.engine_session import (
+            resolve_session_bank_max_bytes as _resolve_bank_max,
+        )
+
+        _bank_max, _bank_auto = _resolve_bank_max(_plan_weights_bytes)
+        _plan_inputs["session_bank_max_bytes"] = (
+            None if _bank_auto else int(_bank_max)
+        )
         _fit_plan = _plan_memory(**_plan_inputs)
         _machine_fit = (
             int(_fit_plan.context_window_fit)
@@ -3686,6 +3978,18 @@ class ServerState:
             self.context_window = min(
                 int(self.context_window), _max_live_kv_tokens
             )
+            # W107 (review HIGH-2 / MEDIUM-B): plumb the bounded-KV preallocation cap
+            # from the streamed runtime's hard live-KV ceiling, so a served
+            # MTPLX_DSV41_KV_BOUNDED run preallocates every KV lane to max_live_kv_tokens
+            # (the ab harness stamps this from --max-kv; the server had no path, so
+            # bounded lanes fell back to geometric growth).  Env is the plumbing for the
+            # SAME reason as MTPLX_CONTEXT_WINDOW_TOKENS below: make_cache reaches the
+            # cache through mlx_lm.make_prompt_cache(model) with no handle to pass a
+            # parameter.  HARD-SET (not setdefault): max_live_kv_tokens is authoritative,
+            # so a stale MTPLX_DSV41_KV_BOUNDED_MAXKV from a shell/profile/earlier ab run
+            # must NOT survive (smaller -> legit requests fail assert_can_admit; larger
+            # -> over-preallocation), exactly like MTPLX_CONTEXT_WINDOW_TOKENS.
+            _plumb_kv_bounded_maxkv(_max_live_kv_tokens)
         if (
             scheduler_config.mode == SchedulerMode.MTP_BATCH
             and self.mtp_batch_lane is not None
@@ -13096,9 +13400,20 @@ def _coerce_token_ids(encoded: Any) -> list[int]:
         return [int(token) for token in getattr(encoded, "ids")]
     if hasattr(encoded, "tolist"):
         return _coerce_token_ids(encoded.tolist())
-    if isinstance(encoded, dict):
-        if "input_ids" in encoded:
-            return _coerce_token_ids(encoded["input_ids"])
+    # Plain dict AND transformers BatchEncoding (a UserDict, so NOT a dict
+    # subclass): apply_chat_template(tokenize=True) returns a BatchEncoding on a
+    # raw fast tokenizer, which must be unwrapped to its input_ids, not passed to
+    # int(). Duck-typed so both shapes route here without an extra import.
+    if isinstance(encoded, dict) or (
+        hasattr(encoded, "keys")
+        and hasattr(encoded, "__getitem__")
+        and not isinstance(encoded, (str, bytes, list, tuple))
+    ):
+        try:
+            if "input_ids" in encoded:
+                return _coerce_token_ids(encoded["input_ids"])
+        except TypeError:
+            pass
         return []
     if isinstance(encoded, (list, tuple)):
         tokens: list[int] = []
@@ -13134,6 +13449,34 @@ def _encode_plain_text(tokenizer: Any, text: str) -> list[int]:
         return _coerce_token_ids(tokenizer.encode(text, add_special_tokens=True))
     except TypeError:
         return _coerce_token_ids(tokenizer.encode(text))
+
+
+def _is_deepseek_v41_tokenizer_cached(tokenizer: Any) -> bool:
+    """Memoized deepseek_v41 detection (get_vocab is expensive per request)."""
+    cached = getattr(tokenizer, "_mtplx_is_deepseek_v41", None)
+    if cached is None:
+        cached = is_deepseek_v41_tokenizer(tokenizer)
+        try:
+            setattr(tokenizer, "_mtplx_is_deepseek_v41", cached)
+        except Exception:
+            pass
+    return bool(cached)
+
+
+def _maybe_prepend_deepseek_v41_bos(tokenizer: Any, ids: list[int]) -> list[int]:
+    """Prepend BOS id 0 for the deepseek_v41 /v1/completions path (idempotent).
+
+    add_bos_token is false and the tokenizer's ByteLevel post-processor adds
+    nothing, so a raw completions encode carries no leading BOS. The port
+    contract (W8) and the in-process bench require BOS id 0 first. Idempotent:
+    a client that already sent a list[int] beginning with 0 (or text that
+    encoded to a leading BOS) is left unchanged.
+    """
+    if ids and ids[0] == DEEPSEEK_V41_BOS_ID:
+        return ids
+    if _is_deepseek_v41_tokenizer_cached(tokenizer):
+        return [DEEPSEEK_V41_BOS_ID, *ids]
+    return ids
 
 
 # SCOPE (audit F11 P2): these are Qwen-family ChatML+think template
@@ -14264,6 +14607,30 @@ def _encode_messages_uncached(
             preserve_thinking=not strip_assistant_reasoning_history,
             tools=native_tools,
         )
+    if not getattr(tokenizer, "chat_template", None) and _is_deepseek_v41_tokenizer_cached(
+        tokenizer
+    ):
+        # DeepSeek-V4.1 code fallback (W52): a checkpoint whose tokenizer ships
+        # no chat template must still get the reference render + BOS id 0, never
+        # the plain "user:/assistant:" base-model fallback below. When the
+        # artifact carries chat_template.jinja this branch is skipped and the
+        # template path (identical bytes) governs.
+        if template_observability is not None:
+            template_observability["backend_chat_encoding"] = "deepseek_v41"
+        native_tools = (
+            tools
+            if effective_tool_prompt_mode == _TOOL_PROMPT_MODE_NATIVE and tools
+            else None
+        )
+        return encode_deepseek_v41_messages(
+            tokenizer,
+            normalized,
+            enable_thinking=enable_thinking,
+            reasoning_effort=reasoning_effort,
+            add_generation_prompt=add_generation_prompt,
+            preserve_thinking=not strip_assistant_reasoning_history,
+            tools=native_tools,
+        )
     template_tools = _template_tools_for_prompt_mode(
         tools,
         tool_prompt_mode=effective_tool_prompt_mode,
@@ -14699,15 +15066,21 @@ def _encode_prompt(
     if prompt is None:
         return []
     if isinstance(prompt, str):
-        return _encode_plain_text(tokenizer, prompt)
-    if isinstance(prompt, list) and all(isinstance(item, int) for item in prompt):
-        return [int(item) for item in prompt]
-    if isinstance(prompt, list):
-        return _encode_plain_text(
-            tokenizer,
-            "\n".join(str(item) for item in prompt),
+        return _maybe_prepend_deepseek_v41_bos(
+            tokenizer, _encode_plain_text(tokenizer, prompt)
         )
-    return _encode_plain_text(tokenizer, str(prompt))
+    if isinstance(prompt, list) and all(isinstance(item, int) for item in prompt):
+        return _maybe_prepend_deepseek_v41_bos(
+            tokenizer, [int(item) for item in prompt]
+        )
+    if isinstance(prompt, list):
+        return _maybe_prepend_deepseek_v41_bos(
+            tokenizer,
+            _encode_plain_text(tokenizer, "\n".join(str(item) for item in prompt)),
+        )
+    return _maybe_prepend_deepseek_v41_bos(
+        tokenizer, _encode_plain_text(tokenizer, str(prompt))
+    )
 
 
 def _count_text_tokens(tokenizer: Any, text: str) -> int:
@@ -15088,10 +15461,14 @@ def _normalize_generation_mode(value: Any, *, default: str = "mtp") -> str:
     if value is None:
         return default
     text = str(value).strip().lower()
-    if text not in {"mtp", "ar"}:
+    # 'dspark' is the DeepSeek-V4.1 DSpark-DIRECT lane (W57); it is a
+    # speculative (non-AR) mode, so downstream depth/verify logic that keys on
+    # ``== "ar"`` treats it like ``mtp``.  The dispatch in _run_generation routes
+    # it to generate_dspark instead of the generic generate_mtpk.
+    if text not in {"mtp", "ar", "dspark"}:
         raise HTTPException(
             status_code=400,
-            detail="generation_mode must be 'mtp' or 'ar'",
+            detail="generation_mode must be 'mtp', 'ar', or 'dspark'",
         )
     return text
 
@@ -15114,10 +15491,12 @@ def _request_generation_mode_for_generation(
         _request_generation_mode_value(request) if allow_client_controls else None,
         default=default,
     )
-    if mode == "mtp" and not bool(getattr(state.runtime, "mtp_enabled", False)):
+    if mode in {"mtp", "dspark"} and not bool(
+        getattr(state.runtime, "mtp_enabled", False)
+    ):
         raise HTTPException(
             status_code=400,
-            detail="generation_mode 'mtp' requires a runtime loaded with MTP",
+            detail=f"generation_mode '{mode}' requires a runtime loaded with MTP",
         )
     return mode
 
@@ -17096,8 +17475,8 @@ def _coerce_setting(name: str, value: Any) -> Any:
         return text
     if name == "generation_mode":
         text = str(value).strip().lower()
-        if text not in {"mtp", "ar"}:
-            raise ValueError("generation_mode must be 'mtp' or 'ar'")
+        if text not in {"mtp", "ar", "dspark"}:
+            raise ValueError("generation_mode must be 'mtp', 'ar', or 'dspark'")
         return text
     if name in {"temperature", "top_p", "draft_temperature", "draft_top_p"}:
         try:
@@ -18015,6 +18394,83 @@ def _block_restorable_prefix_tokens(matched_tokens: int) -> int:
     return int(aligned)
 
 
+def _dsv41_prefill_transient_bytes() -> int:
+    """The bounded prefill-chunk transient budget for the DSV4.1 streamed lane.
+
+    Chunked prefill (``MTPLX_DSV41_PREFILL_CHUNK``) sizes the query chunk so the
+    dominant per-chunk transient stays under ``MTPLX_DSV41_PREFILL_CHUNK_TARGET_GB``
+    (~8 GB), so the prefill transient is this FIXED budget, not a per-prompt-token
+    cost -- the whole 16K prompt never materializes at once."""
+
+    try:
+        from mtplx.models.deepseek_v41 import _prefill_chunk_target_bytes
+
+        # already a byte count (GB * 1e9)
+        return int(_prefill_chunk_target_bytes())
+    except Exception:
+        return 8 * 10**9
+
+
+def _expert_streaming_prefill_admission(
+    state: "ServerState", expert_streaming: Any, prompt_ids: list[int]
+) -> dict[str, Any] | None:
+    """Prefill memory admission for the SSD-streamed expert lane.
+
+    The expert cache is a BOUNDED, RECLAIMABLE pool inside the memory plan: the
+    planner already reserved ``runtime_reserve`` + KV for ``max_live_kv_tokens``,
+    and the persistent expert cache is the remainder that yields to KV under the
+    derived single-limit policy. So the guard must NOT count the whole cache as
+    committed and stack the prompt's KV on top of it (which refuses every prompt
+    ~one prompt-KV over the cap). It projects only the non-cache committed
+    footprint (resident weights + the reused transient service slots) + this
+    prompt's live KV at the spec's REAL per-token cost (the MLA latent + index-K
+    over the compress-ratio kv_source layers, e.g. 3,200 B/token for DSV4.1 --
+    not the 65,536 B/token Qwen dense default) + the bounded per-chunk prefill
+    transient. A prompt whose live KV fits ``max_live_kv_tokens`` is admitted;
+    one beyond it is refused (its KV exceeds the plan's reservation).
+    """
+
+    spec = getattr(expert_streaming, "spec", None)
+    cfg = getattr(expert_streaming, "config", None)
+    plan = getattr(expert_streaming, "plan", None)
+    if spec is None or cfg is None or plan is None:
+        return None
+    per_token = int(getattr(spec, "kv_bytes_per_token", 0) or 0)
+    max_kv = int(getattr(cfg, "max_live_kv_tokens", 0) or 0)
+    if per_token <= 0 or max_kv <= 0:
+        return None
+    prompt_tokens = len(prompt_ids)
+    committed = int(getattr(plan, "resident_bytes", 0) or 0) + int(
+        getattr(plan, "transient_bytes", 0) or 0
+    )
+    prefill_transient = _dsv41_prefill_transient_bytes()
+    projected = committed + prompt_tokens * per_token + prefill_transient
+    # The plan's KV-reservation ceiling: the committed footprint + the reserved
+    # max_live_kv_tokens KV + the bounded chunk transient. The expert cache
+    # absorbs everything up to the engine cap, so this reservation -- not the raw
+    # byte cap -- is the real admission bound for this lane.
+    reservation = committed + max_kv * per_token + prefill_transient
+    if prompt_tokens <= max_kv:
+        return None  # within the plan's KV reservation -> admit
+    receipt: dict[str, Any] = {
+        "action": "prefill_admission_shed",
+        "lane": "expert_streaming",
+        "prompt_tokens": int(prompt_tokens),
+        "miss_tokens": int(prompt_tokens),
+        "max_live_kv_tokens": int(max_kv),
+        "kv_bytes_per_token": int(per_token),
+        "committed_bytes": int(committed),
+        "prefill_transient_bytes": int(prefill_transient),
+        "projected_bytes": int(projected),
+        "projected_bytes_after": int(projected),
+        "limit_bytes": int(reservation),
+        "refused": True,
+        "refusal_reason": "prompt_live_kv_exceeds_max_live_kv_tokens",
+    }
+    _record_guard_event(state, receipt)
+    return receipt
+
+
 def _prefill_admission_shed(
     state: "ServerState",
     *,
@@ -18050,6 +18506,16 @@ def _prefill_admission_shed(
         prompt_tokens = len(prompt_ids)
         if prompt_tokens < _prefill_admission_min_miss_tokens():
             return None
+        # SSD-streamed expert lane: the reclaimable expert cache must not be
+        # counted as committed against the prompt's KV (that refuses every prompt
+        # ~one prompt-KV over the cap). Project against the plan's reservation.
+        expert_streaming = getattr(
+            getattr(state, "runtime", None), "expert_streaming", None
+        )
+        if expert_streaming is not None:
+            return _expert_streaming_prefill_admission(
+                state, expert_streaming, prompt_ids
+            )
         if vision_splice is not None:
             # Admission must ask the same content-keyed question as restore.
             # Raw image pads only match the text before the first image;
@@ -18329,7 +18795,9 @@ def _prefill_admission_shed(
         return None
 
 
-def _allocator_pressure_level(state: "ServerState") -> tuple[int, float]:
+def _allocator_pressure_level(
+    state: "ServerState", *, extra_limit_bytes: int = 0
+) -> tuple[int, float]:
     """Engine-relative pressure: allocator footprint vs the Metal limit.
 
     macOS's kern.memorystatus level fires only once the system is already
@@ -18338,6 +18806,19 @@ def _allocator_pressure_level(state: "ServerState") -> tuple[int, float]:
     knows its allocation envelope earlier: active+cache at >=97% of the
     configured Metal memory limit is treated as WARNING (2);
     past the limit is CRITICAL-equivalent (4). Returns (level, fraction).
+
+    ``extra_limit_bytes`` (W75) widens the limit the footprint is measured
+    against. The SSD-streamed expert lane sets the Metal limit to its ENGINE
+    BUDGET — a soft allocation target deliberately below physical RAM so the
+    reclaimable expert cache and the bounded, admission-reserved per-chunk
+    prefill transient can use real machine headroom without swapping. A 16K
+    prefill legitimately peaks above that soft budget (measured 85 GB at an
+    80 GiB cap whose engine budget is 73 GiB), so active+cache/limit read 1.16
+    and the guard called it CRITICAL, firing the trim + clear_cache and the
+    sustained-pressure abort on a healthy request. The caller passes the
+    busy-prefill headroom (up to the machine's safe working ceiling) so only a
+    genuine approach to physical RAM — or the independent macOS pressure
+    signal — escalates. 0 (idle / non-streaming lane) keeps prior behaviour.
     """
     caps = getattr(state, "metal_memory_caps", None)
     limit = 0
@@ -18347,17 +18828,57 @@ def _allocator_pressure_level(state: "ServerState") -> tuple[int, float]:
             limit = value
     if limit <= 0:
         return 1, 0.0
+    effective_limit = limit + max(0, int(extra_limit_bytes))
     stats = _mlx_memory_stats_live()
     active = stats.get("active_memory_bytes") or 0
     cache = stats.get("cache_memory_bytes") or 0
     if not active:
         return 1, 0.0
-    fraction = float(int(active) + int(cache)) / float(limit)
+    fraction = float(int(active) + int(cache)) / float(effective_limit)
     if fraction >= 1.02:
         return 4, fraction
     if fraction >= 0.97:
         return 2, fraction
     return 1, fraction
+
+
+def _streaming_prefill_pressure_headroom_bytes(state: "ServerState") -> int:
+    """Extra allocator headroom above the soft engine budget for the busy
+    SSD-streamed expert lane (W75).
+
+    The expert-streaming lane's Metal limit is its engine budget, which sits
+    far below physical RAM on purpose (the reclaimable expert cache and the
+    bounded prefill transient the admission gate reserves are meant to use real
+    machine headroom). While a foreground request is in flight on this lane the
+    guard should measure CRITICAL against the machine's safe working ceiling —
+    total RAM minus the macOS system reserve — not the soft budget, so a
+    legitimately-admitted 16K prefill (measured 85 GB peak against a 73 GiB
+    budget) is not read as CRITICAL. Returns the bytes to add to the limit:
+    ``safe_ceiling - limit`` when both are known, else the bounded per-chunk
+    prefill transient (~8 GB) as a floor, else 0. 0 for any non-streaming lane;
+    the caller only applies it while a foreground request is in flight.
+    """
+    runtime = getattr(state, "runtime", None)
+    if getattr(runtime, "expert_streaming", None) is None:
+        return 0
+    caps = getattr(state, "metal_memory_caps", None)
+    if not isinstance(caps, dict):
+        return 0
+    limit = caps.get("memory_limit_bytes")
+    if not isinstance(limit, int) or limit <= 0:
+        return 0
+    total_ram = caps.get("total_ram_bytes")
+    if isinstance(total_ram, int) and total_ram > 0:
+        safe_ceiling = int(total_ram) - _metal_system_reserve_bytes(int(total_ram))
+        if safe_ceiling > limit:
+            return int(safe_ceiling - limit)
+        return 0
+    # No RAM reading on the caps: fall back to the bounded per-chunk prefill
+    # transient budget the admission gate already reserves.
+    try:
+        return int(_dsv41_prefill_transient_bytes())
+    except Exception:
+        return 0
 
 
 def _engine_busy_signal(state: "ServerState") -> bool:
@@ -18560,7 +19081,20 @@ async def _memory_pressure_loop(
         try:
             level = await asyncio.to_thread(_memory_pressure_level)
             level_source = "macos"
-            allocator_level, allocator_fraction = _allocator_pressure_level(state)
+            # W75: one busy read per tick, reused below. While a foreground
+            # request is in flight on the SSD-streamed expert lane, the soft
+            # engine budget is not the CRITICAL line — widen the allocator
+            # limit to the machine's safe working ceiling so a legitimate 16K
+            # prefill's bounded transient does not trip the trim + abort.
+            foreground_busy = await asyncio.to_thread(_engine_busy_signal, state)
+            prefill_headroom = (
+                _streaming_prefill_pressure_headroom_bytes(state)
+                if foreground_busy
+                else 0
+            )
+            allocator_level, allocator_fraction = _allocator_pressure_level(
+                state, extra_limit_bytes=prefill_headroom
+            )
             if allocator_level >= 2 and allocator_level >= level:
                 # The allocator sees the wall minutes before macOS does
                 # (see _allocator_pressure_level); the guard acts on
@@ -18623,16 +19157,11 @@ async def _memory_pressure_loop(
                             )
                 except Exception:
                     pass
-            busy = False
-            if 2 <= level < 4:
-                busy = await asyncio.to_thread(_engine_busy_signal, state)
-            # The guard's own busy is deliberately not computed at CRITICAL
-            # (CRITICAL trims never defer); the abort tracker needs it there.
-            critical_busy = (
-                await asyncio.to_thread(_engine_busy_signal, state)
-                if level >= 4
-                else False
-            )
+            # busy at WARNING defers the trim; critical_busy feeds the abort
+            # tracker AND (W75) gates the clear_cache below. Both reuse the
+            # single foreground_busy read taken above.
+            busy = foreground_busy if 2 <= level < 4 else False
+            critical_busy = foreground_busy if level >= 4 else False
             abort_streak = _note_critical_pressure_tick(
                 state, level, critical_busy, abort_streak
             )
@@ -18668,7 +19197,16 @@ async def _memory_pressure_loop(
                                 )
                         except Exception as exc:
                             LOGGER.warning("retrieval pressure release: %s", exc)
-                if evicted or level >= 4:
+                # W75: clear_cache tears the reclaimable buffer pool out from
+                # under the allocator. Mid-prefill the growing working set is
+                # actively reusing those buffers (the dynamic_ceiling branch
+                # above already refuses clear_cache while busy for this reason),
+                # so a CRITICAL tick with a request in flight (bank empty ->
+                # evicted 0) must NOT clear: it frees nothing the owner is not
+                # about to re-allocate and re-faults the expert stream, the
+                # thrash that slowed the 16K prefill past the 300 s stall
+                # deadline. Idle CRITICAL still clears; an eviction always does.
+                if evicted or (level >= 4 and not critical_busy):
                     try:
                         import mlx.core as _mx
 
@@ -19617,6 +20155,43 @@ def _mlx_allocator_public_stats() -> dict[str, int]:
             except Exception:
                 pass
     return stats
+
+
+#: Request-end MLX allocator footprint carried on every ``mtplx_openai_generation``
+#: event (W62): peak/active/cache bytes so a served window can attribute its
+#: box-total memory the same way the bench receipts do.
+_GENERATION_EVENT_MEMORY_KEYS = (
+    "peak_memory_bytes",
+    "active_memory_bytes",
+    "cache_memory_bytes",
+)
+
+
+def _generation_event_memory_fields(
+    stats: Mapping[str, Any] | None = None,
+) -> dict[str, int]:
+    """peak/active/cache bytes for the ``mtplx_openai_generation`` event.
+
+    Prefers the request-end allocator figures already merged into ``stats``
+    (every lane runs ``envelope.update(_mlx_allocator_public_stats())`` before
+    the event) so the event and the stats block cannot disagree; falls back to a
+    fresh :func:`_mlx_allocator_public_stats` read when they are absent.
+    """
+
+    src: dict[str, Any] = {}
+    if stats:
+        src = {
+            key: stats.get(key)
+            for key in _GENERATION_EVENT_MEMORY_KEYS
+            if stats.get(key) is not None
+        }
+    if not src:
+        src = _mlx_allocator_public_stats()
+    return {
+        key: int(src[key])
+        for key in _GENERATION_EVENT_MEMORY_KEYS
+        if src.get(key) is not None
+    }
 
 
 def _generation_truth_stats(
@@ -22999,6 +23574,7 @@ def _finalize_batched_ar_generation(
                     "seed": stats.get("server_seed"),
                     "mtp_disabled_reason": stats.get("mtp_disabled_reason"),
                     "text_preview": str(generated.get("text") or "")[:120],
+                    **_generation_event_memory_fields(stats),
                 },
                 ensure_ascii=False,
             )
@@ -23203,6 +23779,7 @@ def _finalize_mtp_batch_generation(
                     "seed": stats.get("server_seed"),
                     "mtp_batch_real_width": stats.get("mtp_batch_real_width"),
                     "text_preview": str(generated.get("text") or "")[:120],
+                    **_generation_event_memory_fields(stats),
                 },
                 ensure_ascii=False,
             )
@@ -24724,7 +25301,45 @@ def _run_generation(
                     if constraint_spec is not None
                     else None
                 )
-                if effective_mode == "ar":
+                if _dspark_direct_selected(state, effective_mode):
+                    # DSpark-DIRECT lane (W57): bypass the generic native-MTP
+                    # machinery for deepseek_v41 and drive W23's DSpark drafter
+                    # through the lean speculative loop.  Constraints/vision are
+                    # not supported on this lean lane -- they stay on the generic
+                    # mtp/ar lanes (a dspark request never carries them).
+                    from mtplx.models.deepseek_v41_dspark_decode import (
+                        generate_dspark,
+                    )
+
+                    if constraint is not None:
+                        raise ValueError(
+                            "constrained decoding is not supported on the "
+                            "DSpark-DIRECT lane; use generation_mode mtp/ar"
+                        )
+                    out = generate_dspark(
+                        state.runtime,
+                        prompt_ids,
+                        max_tokens=response_max,
+                        sampler=sampler,
+                        seed=generation_seed,
+                        stop_token_ids=None,
+                        token_callback=record_tokens,
+                        speculative_depth=effective_depth,
+                        trace_label=trace_label,
+                        trace_metadata=trace_metadata,
+                        prefill_callback=prefill_callback,
+                        abort_check=(
+                            (
+                                lambda: bool(
+                                    cancel_event.is_set()
+                                    or _pressure_abort_requested(state)
+                                )
+                            )
+                            if cancel_event is not None
+                            else (lambda: _pressure_abort_requested(state))
+                        ),
+                    )
+                elif effective_mode == "ar":
                     out = generate_ar(
                         state.runtime,
                         prompt_ids,
@@ -25180,29 +25795,45 @@ def _run_generation(
         if seed_is_explicit or out.text.strip():
             break
     assert last is not None
+    # W53 served-decode stage timer (MTPLX_SERVE_STAGE_TIMING=1) + per-request
+    # expert-streaming counter deltas: attached to the completion event and,
+    # when a receipt path is set, written to a standalone receipt so a served
+    # window can attribute its per-token cost to expert/engram misses directly.
+    _stage_timing = last["stats"].get("serve_stage_timing") or {}
+    _stream_counters = last["stats"].get("serve_stream_counters") or {}
     if not bool(
         (request_observability or {}).get("warmup")
     ) and not _server_console_enabled(state):
-        _safe_stdout_print(
-            json.dumps(
-                {
-                    "event": "mtplx_openai_generation",
-                    "prompt_tokens": last["prompt_tokens"],
-                    "completion_tokens": last["completion_tokens"],
-                    "max_tokens": last["stats"].get("request_max_tokens"),
-                    "effective_max_tokens": last["stats"].get("effective_max_tokens"),
-                    "finish_reason": last.get("finish_reason"),
-                    "elapsed_s": round(float(last["elapsed_s"]), 6),
-                    "tok_s": round(float(last["tok_s"]), 6),
-                    "end_to_end_tok_s": round(float(last["end_to_end_tok_s"]), 6),
-                    "seed": last["stats"].get("server_seed"),
-                    "attempts": last["stats"].get("server_attempts"),
-                    "blank_retries": last["stats"].get("server_blank_retries"),
-                    "text_preview": str(last["text"])[:120],
-                },
-                ensure_ascii=False,
-            )
+        _generation_event: dict[str, Any] = {
+            "event": "mtplx_openai_generation",
+            "prompt_tokens": last["prompt_tokens"],
+            "completion_tokens": last["completion_tokens"],
+            "max_tokens": last["stats"].get("request_max_tokens"),
+            "effective_max_tokens": last["stats"].get("effective_max_tokens"),
+            "finish_reason": last.get("finish_reason"),
+            "elapsed_s": round(float(last["elapsed_s"]), 6),
+            "tok_s": round(float(last["tok_s"]), 6),
+            "end_to_end_tok_s": round(float(last["end_to_end_tok_s"]), 6),
+            "seed": last["stats"].get("server_seed"),
+            "attempts": last["stats"].get("server_attempts"),
+            "blank_retries": last["stats"].get("server_blank_retries"),
+            "text_preview": str(last["text"])[:120],
+            **_generation_event_memory_fields(last["stats"]),
+        }
+        if _stage_timing:
+            _generation_event["serve_stage_timing"] = _stage_timing
+        if _stream_counters:
+            _generation_event["serve_stream_counters"] = _stream_counters
+        _safe_stdout_print(json.dumps(_generation_event, ensure_ascii=False))
+    if _stage_timing or _stream_counters:
+        _stage_receipt_path = _write_serve_stage_timing_receipt(
+            _stage_timing,
+            request_id=str((request_observability or {}).get("request_id") or ""),
+            mode=effective_mode,
+            stream_counters=_stream_counters,
         )
+        if _stage_receipt_path and request_observability is not None:
+            request_observability["serve_stage_timing_receipt"] = _stage_receipt_path
     if request_capture.capture_dir():
         request_capture.capture_outcome(
             (request_observability or {}).get("request_id"),
@@ -29416,7 +30047,13 @@ def create_app(state: ServerState) -> FastAPI:
                 smart_status=smart_status,
             ),
             "available_generation_modes": (
-                ["ar"] if streaming_active else ["mtp", "ar"]
+                ["ar"]
+                if streaming_active
+                else (
+                    ["mtp", "ar", "dspark"]
+                    if _served_model_type_is_deepseek_v41(state.args)
+                    else ["mtp", "ar"]
+                )
             ),
             "load_mtp": bool(state.args.load_mtp),
             "mtp_enabled": bool(
@@ -29455,6 +30092,7 @@ def create_app(state: ServerState) -> FastAPI:
                 and getattr(runtime, "expert_streaming", None) is not None
                 else None
             ),
+            "memory_usage": _deepseek_v41_memory_health(state.args),
             "expert_profile": expert_profile_health_payload(
                 resolved_expert_profile,
                 backend=_expert_runtime_io_backend(runtime),
@@ -36674,9 +37312,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--generation-mode",
-        choices=["mtp", "ar"],
+        choices=["mtp", "ar", "dspark"],
         default="mtp",
-        help="Generation mode. 'ar' uses target-only AR generation while keeping the same loaded runtime.",
+        help=(
+            "Generation mode. 'ar' uses target-only AR generation while keeping "
+            "the same loaded runtime; 'dspark' is the DeepSeek-V4.1 DSpark-DIRECT "
+            "speculative lane (W57)."
+        ),
     )
     parser.add_argument(
         "--stock-ar",

@@ -1,0 +1,48 @@
+{
+  "source_commit": "4f3af25aeed6a37c7297db50d8987f214cc2ee37",
+  "scope": "Head-only affine2/64 requantization of the183 compact draft experts, native dense draft and target unchanged. Teacher-state independent trajectories; no target execution or TPS.",
+  "static_incremental_bound_bytes": 52613349376,
+  "bound_components": {
+    "active_bytes": 44023414784,
+    "cache_bytes": 4294967296,
+    "host_bytes": 4294967296,
+    "lookup_host_bytes_inside_host_reserve": 16777216
+  },
+  "native_draft_ast_matches_prior_except_unused_detach_method": true,
+  "prior_receipt_sha256": "03629c6090c3b2052c6f676dcc7cc787b7d0a8b7aec9707f134e0be0674bf6dc",
+  "lookup_config": {
+    "minimum_context": 2,
+    "extra_tokens": 2,
+    "selection": "earliest_longest_context"
+  },
+  "model_path": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4",
+  "strict_allocator": {
+    "path": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+    "sha256": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+  },
+  "runtime_source_sha256": {
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41.py": "a341deff19878ae4b483c138b9cabf77df9b0d7be4bc0760407a2cce01c8f8e9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_dspark.py": "96c45ae16d2687c8085ef8c0a3b9136aad1a70658a9c0c56e81adb9f4754a62d",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/models/deepseek_v41_loader.py": "2daf7685af77355f33c18c4acb8876126e7785350d4629d8571a4aa412831386",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/expert_runtime.py": "9b3b00ed256eff0586a434016591a9c848ec3a7ca9199f881570d859830ebbfe",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/resident_io.py": "a0fa65acd35a7f9f09f1c643d99841accab2846af4d1682dfb8cdb3c859fb5a9",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/scripts/deepseek_v41/reclaim_file_cache.py": "e4ea491559e4393dfb7448bbbab0fc8cf55bdf441994e5d19c2705b56eb04011"
+  },
+  "helper_sha256": {
+    "head_screen.py": "f779607ffec48fff5b15e118ec026f5b78bb702e723f5d19ab4d1f82fd16226d",
+    "lookup.py": "d182348509f3a2e42577ccbd148488f6acf5abd9c9bf2748a1246bc29ec3dd0b",
+    "run_head.py": "c9fb044ee161d0fc49b243270351df07ab7b9c4b305117be55c4a634bcb1022f",
+    "requantize.py": "2aa1d26a53bb69491e6c81377667e198f3d3f54cd845848dc1e88dbd4926097c",
+    "stage.py": "fdb0af4726a9f02fe1e95665fe985af8aa2b34f354df2a0d040ac5a126a969d6",
+    "library_identity.py": "1f62b21f0bb60e78fe35edf2e15b066e57a83c4c32d9518450de3a1c6b984a32"
+  },
+  "parent_head_script_sha256": "7e1c8eb96aae985200618298f2c6891eb03b85daca62c2cb0c66b5ac35d4fae4",
+  "parent_head_result_sha256": "83b84e85fa6adebeb7cfd0500c8f1cd5131f7d7daed93c66bb1cdb7da61b664b",
+  "control_commit_lengths_sha256": "1bdc9433dcdffceaa6cb5b23559d5ad0f0754335740882e02f941630bc42bcc9",
+  "compact_inventory_sha256": "8fc3afceedc6099b347bb70a8d951d8566a67c09ed737fb8ad0760d1f4d443de",
+  "conversion": "Native mx.dequantize toBF16 then mx.quantize affine2/64, one expert projection at a time; no whole-model dequantization or file export.",
+  "target_weights_changed": false,
+  "bound_scope": "Existing49GiB head bound retained. Retire unused7,219,445,760B full expert bank before adding2,023,833,600B Q2 compact bank. Current+Q2 expert storage5,464,350,720B plus<=512MiB stack-copy/one-projection conversion remains below existing11GiB expert allowance. Same<=18GiB text residents,<=3GiB shard,<=1GiB teacher/layout,<=8GiB native graph/compile allowance and4GiB each cache/host. No target trunk/banks, no output-file cache.",
+  "new_regression_tests": false
+}

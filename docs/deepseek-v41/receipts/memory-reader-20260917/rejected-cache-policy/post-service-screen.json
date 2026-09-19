@@ -1,0 +1,509 @@
+{
+  "scope": "Causal CPU post-service admission screen; copies and mandatory wait are not timed; no GPU/runtime change",
+  "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "script_sha256": "dc26d3051605432604986574177d7b21348d4ef6b34ed5b6d9ee67685d59c0f1",
+  "arms": [
+    {
+      "capacity": 100,
+      "post_service_repair": false,
+      "elapsed_s": 0.6726298749999842,
+      "total_reads": 35981,
+      "train_reads": 19471,
+      "heldout_reads": 16510,
+      "record_copies": 0,
+      "per_layer": {
+        "0": {
+          "total_reads": 1932,
+          "train_reads": 993,
+          "heldout_reads": 939,
+          "record_copies": 0
+        },
+        "1": {
+          "total_reads": 1632,
+          "train_reads": 845,
+          "heldout_reads": 787,
+          "record_copies": 0
+        },
+        "2": {
+          "total_reads": 1351,
+          "train_reads": 695,
+          "heldout_reads": 656,
+          "record_copies": 0
+        },
+        "3": {
+          "total_reads": 866,
+          "train_reads": 437,
+          "heldout_reads": 429,
+          "record_copies": 0
+        },
+        "4": {
+          "total_reads": 1251,
+          "train_reads": 614,
+          "heldout_reads": 637,
+          "record_copies": 0
+        },
+        "5": {
+          "total_reads": 965,
+          "train_reads": 479,
+          "heldout_reads": 486,
+          "record_copies": 0
+        },
+        "6": {
+          "total_reads": 595,
+          "train_reads": 347,
+          "heldout_reads": 248,
+          "record_copies": 0
+        },
+        "7": {
+          "total_reads": 776,
+          "train_reads": 376,
+          "heldout_reads": 400,
+          "record_copies": 0
+        },
+        "8": {
+          "total_reads": 767,
+          "train_reads": 404,
+          "heldout_reads": 363,
+          "record_copies": 0
+        },
+        "9": {
+          "total_reads": 665,
+          "train_reads": 350,
+          "heldout_reads": 315,
+          "record_copies": 0
+        },
+        "10": {
+          "total_reads": 774,
+          "train_reads": 467,
+          "heldout_reads": 307,
+          "record_copies": 0
+        },
+        "11": {
+          "total_reads": 682,
+          "train_reads": 368,
+          "heldout_reads": 314,
+          "record_copies": 0
+        },
+        "12": {
+          "total_reads": 841,
+          "train_reads": 469,
+          "heldout_reads": 372,
+          "record_copies": 0
+        },
+        "13": {
+          "total_reads": 1103,
+          "train_reads": 580,
+          "heldout_reads": 523,
+          "record_copies": 0
+        },
+        "14": {
+          "total_reads": 544,
+          "train_reads": 295,
+          "heldout_reads": 249,
+          "record_copies": 0
+        },
+        "15": {
+          "total_reads": 1208,
+          "train_reads": 603,
+          "heldout_reads": 605,
+          "record_copies": 0
+        },
+        "16": {
+          "total_reads": 505,
+          "train_reads": 292,
+          "heldout_reads": 213,
+          "record_copies": 0
+        },
+        "17": {
+          "total_reads": 696,
+          "train_reads": 397,
+          "heldout_reads": 299,
+          "record_copies": 0
+        },
+        "18": {
+          "total_reads": 553,
+          "train_reads": 314,
+          "heldout_reads": 239,
+          "record_copies": 0
+        },
+        "19": {
+          "total_reads": 1277,
+          "train_reads": 676,
+          "heldout_reads": 601,
+          "record_copies": 0
+        },
+        "20": {
+          "total_reads": 442,
+          "train_reads": 262,
+          "heldout_reads": 180,
+          "record_copies": 0
+        },
+        "21": {
+          "total_reads": 512,
+          "train_reads": 291,
+          "heldout_reads": 221,
+          "record_copies": 0
+        },
+        "22": {
+          "total_reads": 642,
+          "train_reads": 348,
+          "heldout_reads": 294,
+          "record_copies": 0
+        },
+        "23": {
+          "total_reads": 1028,
+          "train_reads": 576,
+          "heldout_reads": 452,
+          "record_copies": 0
+        },
+        "24": {
+          "total_reads": 468,
+          "train_reads": 290,
+          "heldout_reads": 178,
+          "record_copies": 0
+        },
+        "25": {
+          "total_reads": 483,
+          "train_reads": 311,
+          "heldout_reads": 172,
+          "record_copies": 0
+        },
+        "26": {
+          "total_reads": 503,
+          "train_reads": 309,
+          "heldout_reads": 194,
+          "record_copies": 0
+        },
+        "27": {
+          "total_reads": 946,
+          "train_reads": 577,
+          "heldout_reads": 369,
+          "record_copies": 0
+        },
+        "28": {
+          "total_reads": 514,
+          "train_reads": 318,
+          "heldout_reads": 196,
+          "record_copies": 0
+        },
+        "29": {
+          "total_reads": 794,
+          "train_reads": 441,
+          "heldout_reads": 353,
+          "record_copies": 0
+        },
+        "30": {
+          "total_reads": 822,
+          "train_reads": 496,
+          "heldout_reads": 326,
+          "record_copies": 0
+        },
+        "31": {
+          "total_reads": 890,
+          "train_reads": 476,
+          "heldout_reads": 414,
+          "record_copies": 0
+        },
+        "32": {
+          "total_reads": 913,
+          "train_reads": 535,
+          "heldout_reads": 378,
+          "record_copies": 0
+        },
+        "33": {
+          "total_reads": 947,
+          "train_reads": 507,
+          "heldout_reads": 440,
+          "record_copies": 0
+        },
+        "34": {
+          "total_reads": 857,
+          "train_reads": 485,
+          "heldout_reads": 372,
+          "record_copies": 0
+        },
+        "35": {
+          "total_reads": 939,
+          "train_reads": 537,
+          "heldout_reads": 402,
+          "record_copies": 0
+        },
+        "36": {
+          "total_reads": 1044,
+          "train_reads": 579,
+          "heldout_reads": 465,
+          "record_copies": 0
+        },
+        "37": {
+          "total_reads": 1335,
+          "train_reads": 669,
+          "heldout_reads": 666,
+          "record_copies": 0
+        },
+        "38": {
+          "total_reads": 1401,
+          "train_reads": 699,
+          "heldout_reads": 702,
+          "record_copies": 0
+        },
+        "39": {
+          "total_reads": 1518,
+          "train_reads": 764,
+          "heldout_reads": 754,
+          "record_copies": 0
+        }
+      }
+    },
+    {
+      "capacity": 100,
+      "post_service_repair": true,
+      "elapsed_s": 0.6992698749963893,
+      "total_reads": 35981,
+      "train_reads": 19471,
+      "heldout_reads": 16510,
+      "record_copies": 0,
+      "per_layer": {
+        "0": {
+          "total_reads": 1932,
+          "train_reads": 993,
+          "heldout_reads": 939,
+          "record_copies": 0
+        },
+        "1": {
+          "total_reads": 1632,
+          "train_reads": 845,
+          "heldout_reads": 787,
+          "record_copies": 0
+        },
+        "2": {
+          "total_reads": 1351,
+          "train_reads": 695,
+          "heldout_reads": 656,
+          "record_copies": 0
+        },
+        "3": {
+          "total_reads": 866,
+          "train_reads": 437,
+          "heldout_reads": 429,
+          "record_copies": 0
+        },
+        "4": {
+          "total_reads": 1251,
+          "train_reads": 614,
+          "heldout_reads": 637,
+          "record_copies": 0
+        },
+        "5": {
+          "total_reads": 965,
+          "train_reads": 479,
+          "heldout_reads": 486,
+          "record_copies": 0
+        },
+        "6": {
+          "total_reads": 595,
+          "train_reads": 347,
+          "heldout_reads": 248,
+          "record_copies": 0
+        },
+        "7": {
+          "total_reads": 776,
+          "train_reads": 376,
+          "heldout_reads": 400,
+          "record_copies": 0
+        },
+        "8": {
+          "total_reads": 767,
+          "train_reads": 404,
+          "heldout_reads": 363,
+          "record_copies": 0
+        },
+        "9": {
+          "total_reads": 665,
+          "train_reads": 350,
+          "heldout_reads": 315,
+          "record_copies": 0
+        },
+        "10": {
+          "total_reads": 774,
+          "train_reads": 467,
+          "heldout_reads": 307,
+          "record_copies": 0
+        },
+        "11": {
+          "total_reads": 682,
+          "train_reads": 368,
+          "heldout_reads": 314,
+          "record_copies": 0
+        },
+        "12": {
+          "total_reads": 841,
+          "train_reads": 469,
+          "heldout_reads": 372,
+          "record_copies": 0
+        },
+        "13": {
+          "total_reads": 1103,
+          "train_reads": 580,
+          "heldout_reads": 523,
+          "record_copies": 0
+        },
+        "14": {
+          "total_reads": 544,
+          "train_reads": 295,
+          "heldout_reads": 249,
+          "record_copies": 0
+        },
+        "15": {
+          "total_reads": 1208,
+          "train_reads": 603,
+          "heldout_reads": 605,
+          "record_copies": 0
+        },
+        "16": {
+          "total_reads": 505,
+          "train_reads": 292,
+          "heldout_reads": 213,
+          "record_copies": 0
+        },
+        "17": {
+          "total_reads": 696,
+          "train_reads": 397,
+          "heldout_reads": 299,
+          "record_copies": 0
+        },
+        "18": {
+          "total_reads": 553,
+          "train_reads": 314,
+          "heldout_reads": 239,
+          "record_copies": 0
+        },
+        "19": {
+          "total_reads": 1277,
+          "train_reads": 676,
+          "heldout_reads": 601,
+          "record_copies": 0
+        },
+        "20": {
+          "total_reads": 442,
+          "train_reads": 262,
+          "heldout_reads": 180,
+          "record_copies": 0
+        },
+        "21": {
+          "total_reads": 512,
+          "train_reads": 291,
+          "heldout_reads": 221,
+          "record_copies": 0
+        },
+        "22": {
+          "total_reads": 642,
+          "train_reads": 348,
+          "heldout_reads": 294,
+          "record_copies": 0
+        },
+        "23": {
+          "total_reads": 1028,
+          "train_reads": 576,
+          "heldout_reads": 452,
+          "record_copies": 0
+        },
+        "24": {
+          "total_reads": 468,
+          "train_reads": 290,
+          "heldout_reads": 178,
+          "record_copies": 0
+        },
+        "25": {
+          "total_reads": 483,
+          "train_reads": 311,
+          "heldout_reads": 172,
+          "record_copies": 0
+        },
+        "26": {
+          "total_reads": 503,
+          "train_reads": 309,
+          "heldout_reads": 194,
+          "record_copies": 0
+        },
+        "27": {
+          "total_reads": 946,
+          "train_reads": 577,
+          "heldout_reads": 369,
+          "record_copies": 0
+        },
+        "28": {
+          "total_reads": 514,
+          "train_reads": 318,
+          "heldout_reads": 196,
+          "record_copies": 0
+        },
+        "29": {
+          "total_reads": 794,
+          "train_reads": 441,
+          "heldout_reads": 353,
+          "record_copies": 0
+        },
+        "30": {
+          "total_reads": 822,
+          "train_reads": 496,
+          "heldout_reads": 326,
+          "record_copies": 0
+        },
+        "31": {
+          "total_reads": 890,
+          "train_reads": 476,
+          "heldout_reads": 414,
+          "record_copies": 0
+        },
+        "32": {
+          "total_reads": 913,
+          "train_reads": 535,
+          "heldout_reads": 378,
+          "record_copies": 0
+        },
+        "33": {
+          "total_reads": 947,
+          "train_reads": 507,
+          "heldout_reads": 440,
+          "record_copies": 0
+        },
+        "34": {
+          "total_reads": 857,
+          "train_reads": 485,
+          "heldout_reads": 372,
+          "record_copies": 0
+        },
+        "35": {
+          "total_reads": 939,
+          "train_reads": 537,
+          "heldout_reads": 402,
+          "record_copies": 0
+        },
+        "36": {
+          "total_reads": 1044,
+          "train_reads": 579,
+          "heldout_reads": 465,
+          "record_copies": 0
+        },
+        "37": {
+          "total_reads": 1335,
+          "train_reads": 669,
+          "heldout_reads": 666,
+          "record_copies": 0
+        },
+        "38": {
+          "total_reads": 1401,
+          "train_reads": 699,
+          "heldout_reads": 702,
+          "record_copies": 0
+        },
+        "39": {
+          "total_reads": 1518,
+          "train_reads": 764,
+          "heldout_reads": 754,
+          "record_copies": 0
+        }
+      }
+    }
+  ]
+}

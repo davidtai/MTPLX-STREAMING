@@ -1,0 +1,18 @@
+{
+  "source_commit": "005973c41a1602b0ed5bbd44f82cb55299bf6b9a",
+  "wrapper_sha256": "de3947ba6a16de7167755739fb158fbcd7f3843e7d9cbafa8b4e44986e88a533",
+  "baseline_bytes": 12193100000,
+  "engine_budget_bytes": 86532610848,
+  "expected_slots_per_layer": 79,
+  "active_bound_bytes": 92112188248,
+  "physical_bound_bytes": 108600255544,
+  "wired_before_bytes": 3109076992,
+  "graph_workspace_margin_bytes": 2147483648,
+  "prior_measured_mtp_peak_bytes": 91897033560,
+  "prior_whole_workflow_projection_bytes": 105508425088,
+  "prior_slots_per_layer": 78,
+  "prior_source_commit": "5c7661db48a1bed22cef753e336f9aba911add24",
+  "projection_peak_saving_credited_bytes": 2684354560,
+  "transient_planning_band_gib": 8.5,
+  "scope": "exact native artifact,16K prompt,1023 steps,depth5,pf0,direct packed MXFP8 target wo_a with FP32 QMM input and BF16 output,compiled draft,bf16 heads; 8.5GiB planning band,2GiB cache,2GiB Python"
+}

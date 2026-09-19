@@ -1,0 +1,23 @@
+{
+  "mlx_imports_blocked": true,
+  "cases": [
+    {
+      "baseline_bytes": 9955393536,
+      "decode_slots_per_layer": 102,
+      "physical_bound_bytes": 109908711656,
+      "engine_budget_bytes": 83426614088,
+      "allocator_limit_bytes": 97880345600,
+      "host_reserve_bytes": 2164260864,
+      "runner_and_admission_exact": true
+    },
+    {
+      "baseline_bytes": 11431313408,
+      "decode_slots_per_layer": 100,
+      "physical_bound_bytes": 109969053928,
+      "engine_budget_bytes": 83426614088,
+      "allocator_limit_bytes": 96404425728,
+      "host_reserve_bytes": 2164260864,
+      "runner_and_admission_exact": true
+    }
+  ]
+}

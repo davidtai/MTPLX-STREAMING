@@ -1,0 +1,689 @@
+{
+  "scope": "Representative CPU entropy bounds only; no codec size, decoder speed or inference claim",
+  "source_commit": "8f6c84d394d9b9429f5bc9a4225f1bb0f572aba5",
+  "script_sha256": "6578a13490d6ea6dcadc9396005cf3b28d8a1d5e2c4d369e5cd59caf7ec7bb11",
+  "manifest_sha256": "44c340845990b4ec21342d914204d69eb9e7cf371d6b18944f8dfd2e945df3e9",
+  "cpu_host_reserve_bytes": 2147483648,
+  "baseline": {
+    "sample_start_monotonic_ns": 134701113025333,
+    "sample_end_monotonic_ns": 134701115253250,
+    "process": {
+      "peak_maxrss_bytes": 33947648,
+      "resident_bytes": 34029568,
+      "phys_footprint_bytes": 21119456,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 123104837632,
+      "wired_bytes": 3097231360,
+      "active_bytes": 3339927552,
+      "inactive_bytes": 2887041024,
+      "speculative_bytes": 438321152,
+      "anonymous_bytes": 3822780416,
+      "file_backed_bytes": 2842509312,
+      "compressor_bytes": 1541767168,
+      "compressed_bytes": 7030718464,
+      "used_bytes": 10865967104,
+      "non_file_used_bytes": 8461778944,
+      "swapins_pages": 4804854,
+      "swapouts_pages": 7663546,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "layers": [
+    0,
+    10,
+    20,
+    30,
+    39
+  ],
+  "reference_expert": 0,
+  "candidate_experts": [
+    1,
+    128
+  ],
+  "record_hashes": {
+    "0:0": "53891b5541b11c41c8d51aff28b53e19685897474dbf47ea0f4a57f967f95561",
+    "0:1": "4262d20ddd158b76d309aaa2b8537d523d65c0ab46498ea23ef3daf08f35dac6",
+    "0:128": "6d281f9549a225951134ab204010c4db72c072cb291f7751620a7cfcab0146f3",
+    "10:0": "a1b087a6b2b0e9172a1fe45a876a5976afd9b6f8b390c2f59b61e0890a00e6ed",
+    "10:1": "b86acc13384089b43a244759d29a35c6d1cded3f4aa9121ea1a90b9729a70ace",
+    "10:128": "6069ec8dc9ff1b2467993b638e5bb4beaeda6056a2b4de2254406473b4783d25",
+    "20:0": "5b1c6443d5aea64921d34bec9a484537be564e2bb8b2f98a894afcc1b71abb32",
+    "20:1": "e0d686da10066e1e86a6ba40b891da53b2bfb05d6f024edae76c6ac047774961",
+    "20:128": "97b1e53d268f7a26e420268054dcfeb0c29287e55f76193d76568d7e0a588bbe",
+    "30:0": "3f133152004dcf1905e7c4c080f78bf79f61a3060d0a1879a8b1ea2c1bcd63d4",
+    "30:1": "108c7cf1b8a9fec87baba250e08bcd46943a9fc94633f6566756862898c53266",
+    "30:128": "c62cde91250b88ad104fa34843a0f5bb69e17fb1270feec196d117fa52ef57ba",
+    "39:0": "eecec4dd5dcc05a9df9e543bf13aef2e19be96b10c2c87c261a9589387580592",
+    "39:1": "e4c73f078a34362ee0f94533ca8d87c6877b8feabe3f5bb0788f1061eba6c93e",
+    "39:128": "7f91ecdc2f061b673e48ed3de02b005caa224299c21042842b21d1684d87b52d"
+  },
+  "rows": [
+    {
+      "layer": 0,
+      "expert": 1,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.517705962711663,
+          "xor_byte_entropy": 7.992355804182685,
+          "conditional_nibble_bits_per_byte": 7.546002241987485,
+          "equal_byte_fraction": 0.006303236219618056
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.0081341723779305,
+          "xor_byte_entropy": 1.0203209017765102,
+          "conditional_nibble_bits_per_byte": 1.0081073705878092,
+          "equal_byte_fraction": 0.5030571831597223
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.518848635055136,
+          "xor_byte_entropy": 7.99238410834376,
+          "conditional_nibble_bits_per_byte": 7.54694593106541,
+          "equal_byte_fraction": 0.006253899468315972
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.0066871152252874,
+          "xor_byte_entropy": 1.0166460215443185,
+          "conditional_nibble_bits_per_byte": 1.0066763367359444,
+          "equal_byte_fraction": 0.5043782552083333
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.52750596269814,
+          "xor_byte_entropy": 7.992670576875571,
+          "conditional_nibble_bits_per_byte": 7.556376332535527,
+          "equal_byte_fraction": 0.006250678168402778
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9862968448174083,
+          "xor_byte_entropy": 1.0100515912935442,
+          "conditional_nibble_bits_per_byte": 0.9860584673805328,
+          "equal_byte_fraction": 0.5247911241319444
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16774322.093561532,
+        "xor_byte_entropy": 17818471.818779748,
+        "conditional_nibble_bits_per_byte": 16837172.778890606
+      }
+    },
+    {
+      "layer": 0,
+      "expert": 128,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.521526848160949,
+          "xor_byte_entropy": 7.992101171298506,
+          "conditional_nibble_bits_per_byte": 7.547773120162158,
+          "equal_byte_fraction": 0.0063274807400173615
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.989188144633281,
+          "xor_byte_entropy": 1.0179573116285126,
+          "conditional_nibble_bits_per_byte": 0.9891695289684515,
+          "equal_byte_fraction": 0.5255208333333333
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.521720297549138,
+          "xor_byte_entropy": 7.992246545000808,
+          "conditional_nibble_bits_per_byte": 7.548187488626344,
+          "equal_byte_fraction": 0.006292555067274306
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9881996375803528,
+          "xor_byte_entropy": 1.0146294460628238,
+          "conditional_nibble_bits_per_byte": 0.9881722776283377,
+          "equal_byte_fraction": 0.5258029513888889
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.524450832503311,
+          "xor_byte_entropy": 7.992759094296062,
+          "conditional_nibble_bits_per_byte": 7.554230424293382,
+          "equal_byte_fraction": 0.006169976128472222
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.001713075892711,
+          "xor_byte_entropy": 1.0122540386764567,
+          "conditional_nibble_bits_per_byte": 1.0014158378303228,
+          "equal_byte_fraction": 0.5125054253472222
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16775989.332918715,
+        "xor_byte_entropy": 17818147.573212385,
+        "conditional_nibble_bits_per_byte": 16836793.997125812
+      }
+    },
+    {
+      "layer": 10,
+      "expert": 1,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.531860130573541,
+          "xor_byte_entropy": 7.992863250882692,
+          "conditional_nibble_bits_per_byte": 7.559886125235989,
+          "equal_byte_fraction": 0.006161329481336806
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9845339011830557,
+          "xor_byte_entropy": 1.0081298315132794,
+          "conditional_nibble_bits_per_byte": 0.9845270881570316,
+          "equal_byte_fraction": 0.5017795138888889
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.530191747192745,
+          "xor_byte_entropy": 7.992939832825034,
+          "conditional_nibble_bits_per_byte": 7.558627135203422,
+          "equal_byte_fraction": 0.006160312228732639
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9876160239137626,
+          "xor_byte_entropy": 1.0081446216798295,
+          "conditional_nibble_bits_per_byte": 0.9876020508109453,
+          "equal_byte_fraction": 0.5018934461805555
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.530573397703941,
+          "xor_byte_entropy": 7.992880072072023,
+          "conditional_nibble_bits_per_byte": 7.558804683326899,
+          "equal_byte_fraction": 0.006193033854166667
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9755360358152937,
+          "xor_byte_entropy": 1.006983895295638,
+          "conditional_nibble_bits_per_byte": 0.9755094859752443,
+          "equal_byte_fraction": 0.5087700737847223
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16792920.13217752,
+        "xor_byte_entropy": 17818315.261791654,
+        "conditional_nibble_bits_per_byte": 16855360.16141741
+      }
+    },
+    {
+      "layer": 10,
+      "expert": 128,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.532582905447349,
+          "xor_byte_entropy": 7.992850702350218,
+          "conditional_nibble_bits_per_byte": 7.558833844311247,
+          "equal_byte_fraction": 0.006264580620659722
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9719844473727338,
+          "xor_byte_entropy": 1.0098246831626474,
+          "conditional_nibble_bits_per_byte": 0.9719696686312778,
+          "equal_byte_fraction": 0.5008897569444445
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.530840627474757,
+          "xor_byte_entropy": 7.992936214228343,
+          "conditional_nibble_bits_per_byte": 7.558349483921497,
+          "equal_byte_fraction": 0.006185743543836806
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9818292011000563,
+          "xor_byte_entropy": 1.0098922703676751,
+          "conditional_nibble_bits_per_byte": 0.981818346520702,
+          "equal_byte_fraction": 0.5006401909722222
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.530740894209755,
+          "xor_byte_entropy": 7.992795534361511,
+          "conditional_nibble_bits_per_byte": 7.558748181852243,
+          "equal_byte_fraction": 0.006203715006510417
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.971863376160826,
+          "xor_byte_entropy": 1.0067822513291587,
+          "conditional_nibble_bits_per_byte": 0.971858169931903,
+          "equal_byte_fraction": 0.5084065755208333
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16793040.746130895,
+        "xor_byte_entropy": 17818390.352789022,
+        "conditional_nibble_bits_per_byte": 16853324.559964124
+      }
+    },
+    {
+      "layer": 20,
+      "expert": 1,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.5232115434628675,
+          "xor_byte_entropy": 7.992855732819519,
+          "conditional_nibble_bits_per_byte": 7.553622462691371,
+          "equal_byte_fraction": 0.006213717990451389
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.004144746667604,
+          "xor_byte_entropy": 1.0166262959290049,
+          "conditional_nibble_bits_per_byte": 1.0041308072455721,
+          "equal_byte_fraction": 0.5007161458333333
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.521255231239847,
+          "xor_byte_entropy": 7.9929584772222135,
+          "conditional_nibble_bits_per_byte": 7.552178486187088,
+          "equal_byte_fraction": 0.006154547797309028
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.0031355340337431,
+          "xor_byte_entropy": 1.010725890230229,
+          "conditional_nibble_bits_per_byte": 1.0031317013391192,
+          "equal_byte_fraction": 0.4962158203125
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.521814645561728,
+          "xor_byte_entropy": 7.99283041098435,
+          "conditional_nibble_bits_per_byte": 7.553208678812632,
+          "equal_byte_fraction": 0.006163533528645833
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.0035439079458304,
+          "xor_byte_entropy": 1.0082953837478892,
+          "conditional_nibble_bits_per_byte": 1.003530593754153,
+          "equal_byte_fraction": 0.50009765625
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16776406.74414543,
+        "xor_byte_entropy": 17818857.746211432,
+        "conditional_nibble_bits_per_byte": 16844771.964459863
+      }
+    },
+    {
+      "layer": 20,
+      "expert": 128,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.527790586950656,
+          "xor_byte_entropy": 7.992667023235901,
+          "conditional_nibble_bits_per_byte": 7.556952430033237,
+          "equal_byte_fraction": 0.006192694769965278
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9978664220518195,
+          "xor_byte_entropy": 1.0162783153504804,
+          "conditional_nibble_bits_per_byte": 0.9978559546636387,
+          "equal_byte_fraction": 0.5123372395833333
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.5256802249983075,
+          "xor_byte_entropy": 7.992960980373131,
+          "conditional_nibble_bits_per_byte": 7.555577711578538,
+          "equal_byte_fraction": 0.006164720323350695
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.0013653254339652,
+          "xor_byte_entropy": 1.0106895411254682,
+          "conditional_nibble_bits_per_byte": 1.0013584054771165,
+          "equal_byte_fraction": 0.5059543185763888
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.524687750100213,
+          "xor_byte_entropy": 7.992824424153767,
+          "conditional_nibble_bits_per_byte": 7.55521594410846,
+          "equal_byte_fraction": 0.0062130398220486115
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.0020485739711493,
+          "xor_byte_entropy": 1.0082540965388527,
+          "conditional_nibble_bits_per_byte": 1.002044375554203,
+          "equal_byte_fraction": 0.5036648220486111
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16784723.74184035,
+        "xor_byte_entropy": 17818696.433535878,
+        "conditional_nibble_bits_per_byte": 16850773.83662064
+      }
+    },
+    {
+      "layer": 30,
+      "expert": 1,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.533043236225661,
+          "xor_byte_entropy": 7.992847723575551,
+          "conditional_nibble_bits_per_byte": 7.559392422077351,
+          "equal_byte_fraction": 0.006203545464409722
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9734554098354646,
+          "xor_byte_entropy": 1.009181841705642,
+          "conditional_nibble_bits_per_byte": 0.9734428807474726,
+          "equal_byte_fraction": 0.5046630859375
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.528550265315806,
+          "xor_byte_entropy": 7.992923602800065,
+          "conditional_nibble_bits_per_byte": 7.557391273763309,
+          "equal_byte_fraction": 0.006214565700954861
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9979675016509008,
+          "xor_byte_entropy": 1.0077645398879702,
+          "conditional_nibble_bits_per_byte": 0.9979639462131831,
+          "equal_byte_fraction": 0.4974772135416667
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.527574933651198,
+          "xor_byte_entropy": 7.992973436700203,
+          "conditional_nibble_bits_per_byte": 7.556960768555807,
+          "equal_byte_fraction": 0.006171332465277778
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9919192368186319,
+          "xor_byte_entropy": 1.007237020976162,
+          "conditional_nibble_bits_per_byte": 0.9919055018050371,
+          "equal_byte_fraction": 0.5014295789930555
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16791092.91009274,
+        "xor_byte_entropy": 17818403.310110956,
+        "conditional_nibble_bits_per_byte": 16853447.75081975
+      }
+    },
+    {
+      "layer": 30,
+      "expert": 128,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.530219281614526,
+          "xor_byte_entropy": 7.992846612433224,
+          "conditional_nibble_bits_per_byte": 7.558944130703799,
+          "equal_byte_fraction": 0.006204393174913194
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9881922236690472,
+          "xor_byte_entropy": 1.008708404525312,
+          "conditional_nibble_bits_per_byte": 0.9881681203185813,
+          "equal_byte_fraction": 0.5021267361111111
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.527738681821613,
+          "xor_byte_entropy": 7.993034809133652,
+          "conditional_nibble_bits_per_byte": 7.55731679773142,
+          "equal_byte_fraction": 0.006172010633680555
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9993644681972907,
+          "xor_byte_entropy": 1.0082121448891455,
+          "conditional_nibble_bits_per_byte": 0.999356244526967,
+          "equal_byte_fraction": 0.4956108940972222
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.528225441630908,
+          "xor_byte_entropy": 7.992915677122875,
+          "conditional_nibble_bits_per_byte": 7.557611355521801,
+          "equal_byte_fraction": 0.006233384874131945
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9920311144956944,
+          "xor_byte_entropy": 1.0071514614577362,
+          "conditional_nibble_bits_per_byte": 0.9920243350770659,
+          "equal_byte_fraction": 0.5013617621527777
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16789640.707004994,
+        "xor_byte_entropy": 17818436.76318297,
+        "conditional_nibble_bits_per_byte": 16854290.161608264
+      }
+    },
+    {
+      "layer": 39,
+      "expert": 1,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.50355515278879,
+          "xor_byte_entropy": 7.992455971395556,
+          "conditional_nibble_bits_per_byte": 7.532096206955265,
+          "equal_byte_fraction": 0.0063220553927951385
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9447508099298185,
+          "xor_byte_entropy": 1.0140891274395936,
+          "conditional_nibble_bits_per_byte": 0.9447274433425312,
+          "equal_byte_fraction": 0.5153971354166667
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.50006891488953,
+          "xor_byte_entropy": 7.992392815765866,
+          "conditional_nibble_bits_per_byte": 7.52820197407326,
+          "equal_byte_fraction": 0.006320020887586805
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9303303600977799,
+          "xor_byte_entropy": 1.015273301708947,
+          "conditional_nibble_bits_per_byte": 0.9303216088688143,
+          "equal_byte_fraction": 0.5270670572916667
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.498086814734697,
+          "xor_byte_entropy": 7.992398079455803,
+          "conditional_nibble_bits_per_byte": 7.5265601732206235,
+          "equal_byte_fraction": 0.006307644314236111
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.9350918994634647,
+          "xor_byte_entropy": 1.0151261854970104,
+          "conditional_nibble_bits_per_byte": 0.9324189755209983,
+          "equal_byte_fraction": 0.5371717664930555
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16719554.174427617,
+        "xor_byte_entropy": 17818234.605182417,
+        "conditional_nibble_bits_per_byte": 16782207.05413872
+      }
+    },
+    {
+      "layer": 39,
+      "expert": 128,
+      "components": [
+        {
+          "component": "gate_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.52353013076729,
+          "xor_byte_entropy": 7.992696881317308,
+          "conditional_nibble_bits_per_byte": 7.549669364886649,
+          "equal_byte_fraction": 0.006268141004774306
+        },
+        {
+          "component": "gate_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.0098051438828783,
+          "xor_byte_entropy": 1.0148657164022887,
+          "conditional_nibble_bits_per_byte": 1.0097805161231679,
+          "equal_byte_fraction": 0.4990776909722222
+        },
+        {
+          "component": "up_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.522772054478522,
+          "xor_byte_entropy": 7.992759008609992,
+          "conditional_nibble_bits_per_byte": 7.551410618557208,
+          "equal_byte_fraction": 0.006255255805121528
+        },
+        {
+          "component": "up_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 1.006784655953882,
+          "xor_byte_entropy": 1.0124965937758712,
+          "conditional_nibble_bits_per_byte": 1.0067747352790337,
+          "equal_byte_fraction": 0.5004503038194444
+        },
+        {
+          "component": "down_proj.weight",
+          "bytes": 5898240,
+          "raw_byte_entropy": 7.468831393203795,
+          "xor_byte_entropy": 7.991827470167925,
+          "conditional_nibble_bits_per_byte": 7.491125662835332,
+          "equal_byte_fraction": 0.006317308213975695
+        },
+        {
+          "component": "down_proj.scales",
+          "bytes": 368640,
+          "raw_byte_entropy": 0.8587509178132164,
+          "xor_byte_entropy": 1.0447062679168664,
+          "conditional_nibble_bits_per_byte": 0.8562036288255422,
+          "equal_byte_fraction": 0.5547336154513889
+        }
+      ],
+      "ideal_payload_bytes": {
+        "raw_byte_entropy": 16732453.384988638,
+        "xor_byte_entropy": 17819532.395809628,
+        "conditional_nibble_bits_per_byte": 16789158.108089615
+      }
+    }
+  ],
+  "after": {
+    "sample_start_monotonic_ns": 134702404180291,
+    "sample_end_monotonic_ns": 134702406957583,
+    "process": {
+      "peak_maxrss_bytes": 255508480,
+      "resident_bytes": 255508480,
+      "phys_footprint_bytes": 242254472,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 122655408128,
+      "wired_bytes": 3097018368,
+      "active_bytes": 3486105600,
+      "inactive_bytes": 2951512064,
+      "speculative_bytes": 704430080,
+      "anonymous_bytes": 4033069056,
+      "file_backed_bytes": 3108978688,
+      "compressor_bytes": 1541767168,
+      "compressed_bytes": 7030718464,
+      "used_bytes": 11076403200,
+      "non_file_used_bytes": 8671854592,
+      "swapins_pages": 4804854,
+      "swapouts_pages": 7663546,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "complete": true
+}

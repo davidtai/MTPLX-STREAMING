@@ -1,0 +1,11 @@
+# arm: cell16k_ring_v2_draft_attn
+# stream: dspark
+# token_ids_sha256: c9f7ce1517c44d3a2ad9fa34ff5aba8f1b57e9c5d794beaeee119d0b7cd69741
+# decode_tok_s: 2.700391676659115
+# divergence: {"divergence_index": 27, "ar_token": 63984, "dspark_token": 70077, "ar_top2_margin": 0.0, "dspark_top2_margin": 0.125, "max_abs_logit_delta": 0.5, "tie_margin": 0.03, "class": "tie_flip", "capture_index": 27}
+
+**Summary:** The module is a large, observability-heavy generation loop for MTPLX with extensive env-var gating, runtime diagnostics, and decode tracing, and the requested `summarize_generation_outputs` helper would fit naturally alongside the existing `_generation_rate_fields` and `_attach_runtime_diagnostics` utilities.
+
+- The module already exposes per-request rate helpers (`_generation_rate_fields`) and stats attachment (`_attach_runtime_diagnostics`), so a `summarize_generation_outputs` aggregator would compose cleanly on top of `GenerationStats`-style fields rather than duplicating rate math.
+- `GenerationOutput` is referenced in the request but not defined in the visible excerpt, so the helper must defensively read optional attributes (prefill TPS, decode TPS, wall time, peak memory) via `getattr` to satisfy the "ignore unavailable optional metrics" requirement.
+- The file's style favors small module-level helpers with `_` prefixes, `dict[str, Any]` return annotations, and `from __future__ import annotations`, so the new public helper should follow that convention and live near `_generation_rate_fields`; tests would go in a new `tests/test

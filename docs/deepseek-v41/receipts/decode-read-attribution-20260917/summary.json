@@ -1,0 +1,308 @@
+{
+  "source_commit": "7953020cda67ccda296a729d01a03adb9cd1ae4b",
+  "performance_eligible": false,
+  "reason": "Explicit boundary instrumentation; cap84 prefill/cap98 decode differs from retained93/100 best.",
+  "prompt_tokens": 16384,
+  "decode_tokens_generated": 1023,
+  "output_tokens": 1024,
+  "cycles": 206,
+  "output_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "decode_tps": 11.798359865412442,
+  "decode_wall_s": 86.70696704200236,
+  "memory": {
+    "mlx_peak_bytes": 92514505646,
+    "process_footprint_peak_bytes": 94214126064,
+    "system_used_peak_bytes": 105473327104,
+    "box_baseline_bytes": 10668638208,
+    "mlx_active_bytes_at_decode_start": 79727883508,
+    "mlx_active_bytes_at_decode_end": 92361536948,
+    "mlx_cache_bytes_at_decode_end": 1045809605
+  },
+  "external_sampling": {
+    "samples": 882,
+    "process_footprint_peak_bytes": 94286199280,
+    "system_used_peak_bytes": 105505128448,
+    "wired_peak_bytes": 97097203712,
+    "compressor_peak_bytes": 1497333760,
+    "swapins_delta_pages": 0,
+    "swapouts_delta_pages": 0
+  },
+  "admission": {
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 98,
+    "growth_payload_bytes": 10528358400,
+    "transition_start_active_bound_bytes": 81007228148,
+    "steady_decode_active_bound_bytes": 92844273008,
+    "resize_active_bound_bytes": 92200121588,
+    "active_bound_bytes": 92844273008,
+    "physical_bound_bytes": 109126510060,
+    "prefill_active_bound_bytes": 89965493340,
+    "prefill_physical_bound_bytes": 104076048964,
+    "prefill_cache_allowance_bytes": 1160216040,
+    "host_reserve_bytes": 2281701376,
+    "requested_allocator_cache_limit_bytes": 1073741824,
+    "decode_cache_overshoot_allowance_bytes": 2258155644,
+    "decode_cache_allowance_bytes": 3331897468,
+    "allocation_margin_bytes": 268435456,
+    "full_logical_kv_extra_allowance_bytes": 56524800,
+    "page_padding_allowance_bytes": 3932160,
+    "allocator_limit_bytes": 97183878144,
+    "wired_before_bytes": 3101261824,
+    "baseline_bytes": 10668638208,
+    "control_receipt": "/tmp/dsv41-110-stage/full-compiled-hc-post-ca207-20260917.jsonl",
+    "control_receipt_sha256": "7452c46109b995ba34bc6615f7bc18197bbd4c9f2a58df22a755ff7358881118",
+    "native_m8_probe": "/tmp/dsv41-depth-replay-20260917/target-m8-probe.json",
+    "native_m8_probe_sha256": "54ebb7f6befd94ddbcaa114e3578639cc1c5a86d5cf89b1102ad971d59d40ef7",
+    "capacity_selection": "largest admitted94..100; explicit fixed value required for a fresh matched control",
+    "admission_baseline_with_profiler_reserve_bytes": 10802855936,
+    "profiler_host_reserve_bytes": 134217728,
+    "allocator_policy_host_reserve_bytes": 2147483648
+  },
+  "post_prefill_growth": {
+    "phase": "decode",
+    "prefill_slots_per_layer": 84,
+    "decode_slots_per_layer": 98,
+    "growth_payload_bytes": 10528358400,
+    "timing_scope": "inside decode wall time, after the original prefill callback",
+    "active_before_bytes": 79727883508,
+    "cache_before_bytes": 0,
+    "growth_seconds": 1.8905260410101619,
+    "active_after_bytes": 90256241908,
+    "cache_after_bytes": 0,
+    "transition_peak_bytes": 90829108472,
+    "physical_allocated_bytes": 74600939520,
+    "plan_limit_bytes": 93954972488,
+    "plan_persistent_bytes": 73698508800
+  },
+  "phase_times_s": {
+    "draft": 2.173945177142741,
+    "verify": 82.23318712497712,
+    "accept": 0.06909545691451058,
+    "commit": 0.18235028896015137
+  },
+  "stream_counters": {
+    "phase": "decode",
+    "tokens": 1023,
+    "expert_cache": {
+      "expert_requests": 296640,
+      "scan_inserts": 0,
+      "expert_misses": 41433,
+      "persistent_loads": 36668,
+      "prefetch_issued": 0,
+      "route_calls": 8240,
+      "prefetch_committed": 0,
+      "expert_hits": 255207,
+      "bytes_read": 691543941120,
+      "evictions": 36108,
+      "transient_loads": 115,
+      "shared_expert_assignments": 96867,
+      "pool_loads": 36668,
+      "promotions": 17377,
+      "unique_expert_requests": 199773,
+      "records_streamed": 36783,
+      "hit_rate": 0.860326,
+      "miss_rate": 0.139674,
+      "misses_per_token": 40.5015,
+      "records_streamed_per_token": 35.956,
+      "bytes_read_per_token": 675996032.38
+    },
+    "incremental_misses": {
+      "routes": 7865,
+      "parts": 15063,
+      "routes_per_token": 7.6882,
+      "parts_per_token": 14.7243
+    },
+    "io": {
+      "read_bytes": 691543941120,
+      "records_read": 36783,
+      "native_positional_calls": 0,
+      "decode_ns": 0,
+      "read_inflight_depth_sum": 1573903,
+      "io_errors": 0,
+      "preadv_bytes_returned": 691543941120,
+      "short_reads": 0,
+      "source_record_requests": 0,
+      "read_operations": 143473,
+      "read_ns": 650081505649,
+      "integrity_errors": 0,
+      "records_unhashed": 36783,
+      "decoded_raw_bytes": 0,
+      "cancellations": 0,
+      "native_bytes_returned": 0,
+      "read_inflight_samples": 143473,
+      "bytes_read_saved": 0,
+      "open_files_peak": 0,
+      "decoded_records": 0,
+      "record_requests": 36783,
+      "deadline_errors": 0,
+      "sidecar_record_requests": 36783,
+      "read_wall_ns": 53198112937,
+      "records_hashed": 0,
+      "requested_bytes": 691543941120,
+      "python_preadv_invocations": 143473,
+      "hash_thread_ns_total": 0,
+      "records_hashed_per_token": 0.0,
+      "records_unhashed_per_token": 35.956,
+      "hash_fraction": 0.0,
+      "hash_thread_ms": 0.0,
+      "hash_thread_ms_per_token": 0.0,
+      "read_inflight_depth_mean": 10.97,
+      "read_realized_qd": 12.22,
+      "read_gb_per_s_window": 12.9994,
+      "read_thread_gb_per_s_window": 1.0638
+    },
+    "pin_working_set": {
+      "enabled": false,
+      "decode_routes": 0,
+      "all_pinned_routes": 0,
+      "all_pinned_hit_rate": null,
+      "pinned_total": 0,
+      "static_layer_count": 0
+    },
+    "device_route_pinned": {
+      "enabled": false,
+      "flushes": 0,
+      "barrier_free_layers": 0,
+      "recovered_layers": 0,
+      "barrier_free_layers_per_flush": null
+    },
+    "cold_start": {
+      "single_slot_pool": true,
+      "measurement_basis": "first-64 DECODE STEPS, single-request (verify calls under DSpark, one token per step under --decode-mode ar; the cold window re-opens per request). Run the window A/B in --decode-mode ar.",
+      "cold_start_decode_steps": 64,
+      "decode_steps_observed": 206,
+      "first_64_steps_hits": 76619,
+      "first_64_steps_requests": 92160,
+      "steady_hits": 178588,
+      "steady_requests": 204480,
+      "decode_hit_rate_first_64_steps": 0.831369,
+      "decode_hit_rate_steady_state": 0.873376
+    },
+    "slot_plan": {
+      "memory_limit_bytes": 93954972488,
+      "transient_slots": 48,
+      "persistent_slots": 3920,
+      "slots_per_layer": 98,
+      "uniform_equivalent_slots_per_layer": 98,
+      "persistent_slots_by_layer": {},
+      "slots_per_layer_no_ring": 98,
+      "expert_record_bytes": 18800640,
+      "transient_bytes_per_layer": 902430720,
+      "transient_bytes_total": 902430720,
+      "transient_bytes_scope": "shared_across_layers",
+      "split_route_release": "deferred",
+      "runtime_reserve_bytes": 2147483648,
+      "cache_policy": "transition-window",
+      "decode_miss_records_per_part": 3,
+      "verify_shared_overlap": true,
+      "verify_shared_overlap_bound_layers": 40,
+      "single_slot_pool": true,
+      "prefetch_slots": 0,
+      "gate_prefetch_armed": false,
+      "gate_prefetch_k": 0,
+      "gate_prefetch_env": "0",
+      "gate_prefetch_ring_bytes": 0,
+      "verify_record_hashes": false,
+      "io_cache_mode": "f-nocache",
+      "io_read_fanout": 4,
+      "source": "explicit"
+    }
+  },
+  "profile_root_wall_s": 84.671768,
+  "profile_exclusive_sum_s": 84.671768,
+  "profile_rows": [
+    {
+      "name": "miss_wait_and_completion",
+      "observations": 22928,
+      "inclusive_s": 52.271397293,
+      "exclusive_s": 52.271397293
+    },
+    {
+      "name": "mlx_eval_wait_and_encode",
+      "observations": 8901,
+      "inclusive_s": 19.940573891,
+      "exclusive_s": 19.940573891
+    },
+    {
+      "name": "target_forward",
+      "observations": 206,
+      "inclusive_s": 81.463089866,
+      "exclusive_s": 3.247913215
+    },
+    {
+      "name": "streamed_switch",
+      "observations": 8240,
+      "inclusive_s": 76.936898583,
+      "exclusive_s": 1.781569689
+    },
+    {
+      "name": "mlx_async_submit",
+      "observations": 23303,
+      "inclusive_s": 1.7508933,
+      "exclusive_s": 1.7508933
+    },
+    {
+      "name": "cache_policy_transaction",
+      "observations": 7865,
+      "inclusive_s": 1.549629408,
+      "exclusive_s": 1.549629408
+    },
+    {
+      "name": "route_plan_and_read_submit",
+      "observations": 7865,
+      "inclusive_s": 2.765263712,
+      "exclusive_s": 1.215634304
+    },
+    {
+      "name": "attention_graph_build",
+      "observations": 8240,
+      "inclusive_s": 1.047357444,
+      "exclusive_s": 0.968454323
+    },
+    {
+      "name": "retire_prior_gathers",
+      "observations": 8240,
+      "inclusive_s": 0.713477937,
+      "exclusive_s": 0.713477937
+    },
+    {
+      "name": "all_hit_probe",
+      "observations": 8240,
+      "inclusive_s": 0.392469814,
+      "exclusive_s": 0.392469814
+    },
+    {
+      "name": "expert_graph_build",
+      "observations": 23399,
+      "inclusive_s": 0.350480397,
+      "exclusive_s": 0.350480397
+    },
+    {
+      "name": "moe_graph_build",
+      "observations": 8858,
+      "inclusive_s": 77.196317488,
+      "exclusive_s": 0.160116944
+    },
+    {
+      "name": "decode_cycles",
+      "observations": 1,
+      "inclusive_s": 84.671768,
+      "exclusive_s": 0.140127638
+    },
+    {
+      "name": "gate_graph_build",
+      "observations": 8858,
+      "inclusive_s": 0.099301961,
+      "exclusive_s": 0.099301961
+    },
+    {
+      "name": "draft_graph_build",
+      "observations": 206,
+      "inclusive_s": 0.133712917,
+      "exclusive_s": 0.089727886
+    }
+  ],
+  "interpretation": "Miss iteration and completion exposes 52.271s; mx.eval combines encode and GPU wait. Expert graph construction is 0.350s. Prebound shared submit callbacks are not separately wrapped. Read traffic or overlap must change materially to reach20TPS; aggregate kernel or full decode speedups are not proven.",
+  "guard_exit": 0,
+  "qwen_restore_and_lock_release_utc": "2026-09-17T17:35:36Z"
+}

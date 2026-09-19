@@ -1,0 +1,120 @@
+  ███╗   ███╗ ████████╗ ██████╗  ██╗      ██╗  ██╗
+  ████╗ ████║ ╚══██╔══╝ ██╔══██╗ ██║      ╚██╗██╔╝
+  ██╔████╔██║    ██║    ██████╔╝ ██║       ╚███╔╝ 
+  ██║╚██╔╝██║    ██║    ██╔═══╝  ██║       ██╔██╗ 
+  ██║ ╚═╝ ██║    ██║    ██║      ███████╗ ██╔╝ ██╗
+  ╚═╝     ╚═╝    ╚═╝    ╚═╝      ╚══════╝ ╚═╝  ╚═╝
+
+  Native MTP speculative decoding · Apple Silicon
+
+╭─ MTPLX 2.11.2 ───────────────────────────────────────────────────────────────╮
+│                                                                              │
+│      Model  deepseek-v4.1-flash-mtplx-streaming-mxfp4                        │
+│    Profile  sustained (Sustained: long-context native-MTP path with bounded  │
+│             memory)                                                          │
+│        API  http://127.0.0.1:18080/v1                                        │
+│       Mode  Sustained MTP                                                    │
+│    Browser  http://127.0.0.1:18080/                                          │
+│  Listening  127.0.0.1:18080                                                  │
+│    Loading  /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxf…  │
+│     Warmup  16 tokens                                                        │
+│       Auth  API key: leave blank for localhost                               │
+│       Stop  Ctrl-C                                                           │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+WARNING: running a family-compatible MTPLX model without a recorded mtplx_runtime.json exactness baseline; stats will be marked unverified until this artifact is smoke-verified.
+[1/6] Server config ready: http://127.0.0.1:18080/v1
+[2/6] Model resolved: /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4
+[3/6] Runtime contract verified — profile: sustained
+      Loading the model can take about a minute on first start.
+
+[4/6] Preparing Sustained MTP runtime
+[4/6] DeepSeek-V4.1 decode levers (resolved env): HEAD_MODE=bf16 SINKHORN_METAL=1 ATTN_COMPILE=1 ATTN_WIN_MEMO=1 SWITCH_FASTPATH=<unset> SWITCH_SUBMIT=<unset> DEVICE_ROUTE=<unset> HC_COMPILE=<unset> SHARED_OVERLAP=<unset> PREFILL_LAYER_MAJOR=<unset>
+[4/6] Checking local acceleration runtime
+      This may take a few seconds.
+[4/6] Runtime checks complete
+[5/6] Loading model weights: /Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4
+      This is the long step; MTPLX is mapping the model into MLX.
+      Model load in progress (this may take a minute).
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[5/6] Model loaded in 7.8s
+[5/6] Installing native-MTP draft head
+[frspec] disabled (MTPLX_FRSPEC_DRAFT=None)
+[5/6] Chat template profile: tokenizer
+[5/6] Context window: 17664 tokens
+[mtplx] dense-decode ceiling auto: 131072 tokens (15% RAM over 65536 B/token — MODEL DEFAULT, set MTPLX_DENSE_KV_BYTES_PER_TOKEN for non-Qwen3.8 geometry)
+[5/6] Memory plan: 128G Mac: engine budget 73.0G (Metal limit), weights 17.7G, context 17664 (machine-bound), session bank up to 2.0G
+[5/6] Memory plan: context window 17664 is machine-bound (model supports 1048576); larger windows would swap on 128 GiB
+[5/6] GPU residency keepalive: every 1s for 600s after each request
+[mtplx] session-bank budget: 2.0G total (explicit), 24.0G per-session cap, 48 entries max, model weights 17.7G. Override: MTPLX_SESSION_BANK_MAX_BYTES / MTPLX_SESSION_BANK_PER_SESSION_BYTES (sizes like 12G or 12GiB).
+[6/6] Warming model with 16 tokens
+      warmup still running... 5s elapsed
+      warmup still running... 10s elapsed
+[6/6] Extended warmup continues silently in the background
+[6/6] Warmup complete in 12.5s (1.85 tok/s)
+
+MTPLX is ready.
+Chat UI: http://127.0.0.1:18080/
+OpenAI API Base URL: http://127.0.0.1:18080/v1
+Model: deepseek-v4.1-flash-mtplx-streaming-mxfp4
+Reasoning history: preserve (policy auto)
+API key: leave blank for localhost
+Health check: http://127.0.0.1:18080/health
+Keep this terminal open. Press Ctrl-C to stop MTPLX.
+[mtplx] memory pressure guard {"action": "pressure_trim", "level": 2, "level_source": "allocator", "allocator_fraction": 1.004, "bank_entries_evicted": 0, "bank_bytes_after": 0, "deferred_s": 0.0}
+{"event": "mtplx_openai_generation", "prompt_tokens": 5, "completion_tokens": 8, "max_tokens": 8, "effective_max_tokens": 8, "finish_reason": "length", "elapsed_s": 5.007774, "tok_s": 2.596419, "end_to_end_tok_s": 1.597516, "seed": 180629544, "attempts": 1, "blank_retries": 0, "text_preview": "Pong! 🏓\n\nWhat", "peak_memory_bytes": 81349495292, "active_memory_bytes": 78697326612, "cache_memory_bytes": 1900564, "serve_stream_counters": {"phase": "decode", "tokens": 8, "expert_cache": {"route_calls": 120, "bytes_read": 13649264640, "expert_misses": 944, "evictions": 700, "persistent_loads": 726, "prefetch_issued": 0, "unique_expert_requests": 1609, "transient_loads": 0, "shared_expert_assignments": 791, "expert_requests": 2400, "prefetch_committed": 0, "expert_hits": 1456, "records_streamed": 726, "hit_rate": 0.606667, "miss_rate": 0.393333, "misses_per_token": 118.0, "records_streamed_per_token": 90.75, "bytes_read_per_token": 1706158080.0}, "incremental_misses": {"parts": 726, "routes": 116, "routes_per_token": 14.5, "parts_per_token": 90.75}, "engram_row_cache": {"hits": 0, "rows_read": 480, "misses": 480, "reads": 480, "gathers": 6, "evictions": 0, "hit_rate": 0.0, "miss_rate": 1.0, "misses_per_token": 60.0, "rows_read_per_token": 60.0}, "pin_working_set": {"enabled": false, "decode_routes": 0, "all_pinned_routes": 0, "all_pinned_hit_rate": null, "pinned_total": 0, "static_layer_count": 0}, "device_route_pinned": {"enabled": false, "flushes": 0, "barrier_free_layers": 0, "recovered_layers": 0, "barrier_free_layers_per_flush": null}}}
+ERROR:    Cancel 1 running task(s), timeout graceful shutdown exceeded
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/h11_impl.py", line 415, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 56, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1159, in __call__
+    await super().__call__(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/server/openai.py", line 24265, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/server/openai.py", line 24225, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/mtplx/server/openai.py", line 24163, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+    await route.handle(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+    await self.app(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 134, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 121, in app
+    await response(scope, receive, send)
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/responses.py", line 280, in __call__
+    await wrap(partial(self.listen_for_disconnect, receive))
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/responses.py", line 276, in wrap
+    await func()
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/starlette/responses.py", line 244, in listen_for_disconnect
+    message = await receive()
+              ^^^^^^^^^^^^^^^
+  File "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/h11_impl.py", line 536, in receive
+    await self.message_event.wait()
+  File "/Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/asyncio/locks.py", line 212, in wait
+    await fut
+asyncio.exceptions.CancelledError: Task cancelled, timeout graceful shutdown exceeded
+[mtplx] shutdown: flushing 1 pending SSD session-cache write(s) (bounded 10s)...
+[mtplx] shutdown: SSD session cache flushed 1/1 pending write(s) in 9.53s

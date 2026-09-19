@@ -1,0 +1,19 @@
+{
+  "changed_existing_definitions": [
+    "_mach_task_vm_info"
+  ],
+  "added_definitions": [
+    "_mach_task_vm_reader"
+  ],
+  "system_reader_ast_unchanged": true,
+  "measured_candidate_source_hash_matches": true,
+  "process_memory_values_cached": false,
+  "task_port_cached": false,
+  "short_or_failed_reply_returns_unknown": true,
+  "whole_machine_host_statistics64_candidate_installed": false,
+  "regressions": "27 focused CPU cases passed with real MLX imports forbidden",
+  "sdk_abi": "TASK_VM_INFO22,38words,phys_footprint offset144 verified with installed SDK",
+  "decode_throughput_claim": null,
+  "open_goal_decode_tps": 20,
+  "retained_decode_tps": 12.114664476181137
+}

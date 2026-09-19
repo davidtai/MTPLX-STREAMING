@@ -1,0 +1,24 @@
+{
+  "source_commit": "61b6899f27fee89f63bf7eed9f1c8aa77e73a53a",
+  "base_cpu_script_sha256": "33da110728997a3fb2052acb93888034e9adfb9da1d07e05b242c1d8cec17e91",
+  "script_sha256": "b6deca2968a51fdf988a219fb0d6b164a08077f2010e62b78b00af3d42e1b39e",
+  "static_incremental_bound_bytes": 1073741824,
+  "source_manifest_sha256": "058f188b1ebdac8a24815d3d207f72efdefad2bd691b9b43c19cd2087b0fc997",
+  "runtime_sources": {
+    "mtplx/expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+    "mtplx/deepseek_v41_memory_profile.py": "1239562131f1980fe020e76d22a7bb2bf033d42a40bb3685c3bc0f78d1c11399"
+  },
+  "training": "Last1024 captured prefill rows. First768 fit, last256 choose ridge0.1/1.0 by top6 overlap; refit all1024 before evaluating256 decode rows. No decode labels fit or select parameters.",
+  "prediction": "Affine residual from384 standardized next-gate raw logits plus384 current-layer route indicators. The sparse route term can be applied by summing six prebound coefficient rows; target routing and outputs stay unchanged.",
+  "scope": "Prompt-only training from independent W35 trace. Add current-layer top6 indicators to next-gate score features; transfer to exact M6 capture using current-layer routes already known at prediction time. Exact labels only calibrate read issuance on first32 cycles, then score reused heldout32. No target run, prefetch or TPS.",
+  "bound": "1GiB CPU incremental including two2304x5120 float32 inputs, source byte buffers, gate weights, per-layer scores/design/solve arrays and BLAS workspace. Process layers sequentially; retain only metrics and hashes. Exact capture and three score families add less than160MiB within the same1GiB envelope. Extended768-column solves and route indicator arrays add less than64MiB inside the1GiB host envelope.",
+  "new_regression_tests": false,
+  "production_install": false,
+  "capture_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/.benchmark-artifacts/deepseek-v41/router-feature-20260918/full-router-feature-20260918-v2.router-capture.npz",
+  "capture_sha256": "5d8dd85c412f0c8e332733843e6eb9ed36ac6c8a8e5a7c71c8c2615e71edca3e",
+  "capture_bytes": 45592534,
+  "source_analysis_sha256": "f7380cffb99ec032e3ba64f1e7c0e07319eaea6f1751ecf94de54c25e848fe42",
+  "analysis_sha256": "8268cd800246b65e3ceea37682839e6129a43005ac9d344555e308a7a0236e96",
+  "parent_screen_sha256": "851c7b31629910d23e82eb9694016976446e2b87093598ba6ff2c9cdbfc62a9e",
+  "heldout_reused_across_research_iterations": true
+}

@@ -1,0 +1,47 @@
+{
+  "complete": true,
+  "cpu_only": true,
+  "native_projection_body_identical_after_weight_acquire": true,
+  "native_expert_body_identical_except_prebound_issue": true,
+  "expert_kernels_and_hybrid_proposals_unchanged": true,
+  "fused_transpose_matches_all40_component": true,
+  "admission_cases": [
+    {
+      "baseline_bytes": 10447192064,
+      "initial_decode_slots_per_layer": 84,
+      "decode_slots_per_layer": 112,
+      "physical_bound_bytes": 109918156024,
+      "active_bound_bytes": 97763755256,
+      "resize_active_bound_bytes": 82058610908,
+      "seed_active_bound_bytes": 77709444344,
+      "overflow_append_active_bound_bytes": 97763755256,
+      "steady_decode_active_bound_bytes": 97762795628,
+      "allocator_limit_bytes": 98114034688
+    },
+    {
+      "baseline_bytes": 11027267584,
+      "initial_decode_slots_per_layer": 84,
+      "decode_slots_per_layer": 111,
+      "physical_bound_bytes": 109789483116,
+      "active_bound_bytes": 97055006828,
+      "resize_active_bound_bytes": 82058610908,
+      "seed_active_bound_bytes": 77709444344,
+      "overflow_append_active_bound_bytes": 97054860536,
+      "steady_decode_active_bound_bytes": 97055006828,
+      "allocator_limit_bytes": 97533959168
+    },
+    {
+      "baseline_bytes": 11820597248,
+      "initial_decode_slots_per_layer": 84,
+      "decode_slots_per_layer": 110,
+      "physical_bound_bytes": 109875023980,
+      "active_bound_bytes": 96347218028,
+      "resize_active_bound_bytes": 82058610908,
+      "seed_active_bound_bytes": 77709444344,
+      "overflow_append_active_bound_bytes": 96345965816,
+      "steady_decode_active_bound_bytes": 96347218028,
+      "allocator_limit_bytes": 96740629504
+    }
+  ],
+  "scope": "Static construction and phase accounting only; full model timing and output remain unmeasured."
+}

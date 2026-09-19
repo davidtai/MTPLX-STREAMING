@@ -1,0 +1,65 @@
+{
+  "source_commit": "5ab177659880abaed7c528e9ef1f65898ee7470b",
+  "scope": "Current-and-past native policy replay from captured73 residents plus29 empty slots. Policy demand misses only; no transient reuse, read scheduling, partial-row arithmetic, or full-model TPS proof.",
+  "mlx_imports_blocked": true,
+  "trace_sha256": "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da",
+  "replay_helper_sha256": "7be3475934f5d2b6049d046afb30c64024aab595225bc0d8f28fd49fc03fdccc",
+  "script_sha256": "b8ec2302e3993420d716423672e73a30fe1b57422e304f0149ee5e46c322c262",
+  "exact_native_per_layer_per_cycle_counts": true,
+  "routes": 8240,
+  "demand_misses": 35164,
+  "unique_expert_requests": 199773,
+  "one_row_expert_requests": 296640,
+  "one_row_request_amplification": 1.4848853448664234,
+  "prefixes": {
+    "1": {
+      "all_hit_prefix": 4169,
+      "prefix_misses": 6053,
+      "prefix_requires_every_miss": 219,
+      "all_hit_prefix_fraction": 0.5059466019417476,
+      "prefix_share_of_demand_reads": 0.17213627573654874,
+      "fraction_waiting_for_every_read": 0.02657766990291262
+    },
+    "2": {
+      "all_hit_prefix": 2447,
+      "prefix_misses": 11707,
+      "prefix_requires_every_miss": 548,
+      "all_hit_prefix_fraction": 0.29696601941747575,
+      "prefix_share_of_demand_reads": 0.33292571948583777,
+      "fraction_waiting_for_every_read": 0.06650485436893204
+    },
+    "3": {
+      "all_hit_prefix": 1504,
+      "prefix_misses": 17405,
+      "prefix_requires_every_miss": 1060,
+      "all_hit_prefix_fraction": 0.1825242718446602,
+      "prefix_share_of_demand_reads": 0.4949664429530201,
+      "fraction_waiting_for_every_read": 0.12864077669902912
+    },
+    "4": {
+      "all_hit_prefix": 1026,
+      "prefix_misses": 22950,
+      "prefix_requires_every_miss": 1871,
+      "all_hit_prefix_fraction": 0.12451456310679612,
+      "prefix_share_of_demand_reads": 0.6526561255829826,
+      "fraction_waiting_for_every_read": 0.2270631067961165
+    },
+    "5": {
+      "all_hit_prefix": 659,
+      "prefix_misses": 28948,
+      "prefix_requires_every_miss": 3671,
+      "all_hit_prefix_fraction": 0.0799757281553398,
+      "prefix_share_of_demand_reads": 0.8232283016721648,
+      "fraction_waiting_for_every_read": 0.44550970873786405
+    },
+    "6": {
+      "all_hit_prefix": 431,
+      "prefix_misses": 35164,
+      "prefix_requires_every_miss": 7809,
+      "all_hit_prefix_fraction": 0.05230582524271845,
+      "prefix_share_of_demand_reads": 1.0,
+      "fraction_waiting_for_every_read": 0.9476941747572816
+    }
+  },
+  "elapsed_s": 0.7797800000116695
+}

@@ -1,0 +1,65 @@
+{
+  "before": {
+    "sample_start_monotonic_ns": 193276597786458,
+    "sample_end_monotonic_ns": 193276604913375,
+    "process": {
+      "peak_maxrss_bytes": 21807104,
+      "resident_bytes": 22675456,
+      "phys_footprint_bytes": 12763616,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 87146840064,
+      "wired_bytes": 3329261568,
+      "active_bytes": 7387840512,
+      "inactive_bytes": 34610823168,
+      "speculative_bytes": 213581824,
+      "anonymous_bytes": 4828332032,
+      "file_backed_bytes": 37383913472,
+      "compressor_bytes": 1599291392,
+      "compressed_bytes": 5819023360,
+      "used_bytes": 46927216640,
+      "non_file_used_bytes": 9756884992,
+      "swapins_pages": 778402,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  },
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "sudo: a password is required\n",
+  "after": {
+    "sample_start_monotonic_ns": 193276614146333,
+    "sample_end_monotonic_ns": 193276616071458,
+    "process": {
+      "peak_maxrss_bytes": 22740992,
+      "resident_bytes": 22740992,
+      "phys_footprint_bytes": 12796384,
+      "compressed_bytes": 0,
+      "source": "mach_task_vm_info"
+    },
+    "box": {
+      "page_size": 16384,
+      "free_bytes": 87145037824,
+      "wired_bytes": 3329409024,
+      "active_bytes": 7390740480,
+      "inactive_bytes": 34611118080,
+      "speculative_bytes": 213434368,
+      "anonymous_bytes": 4831232000,
+      "file_backed_bytes": 37384060928,
+      "compressor_bytes": 1599291392,
+      "compressed_bytes": 5819023360,
+      "used_bytes": 46930558976,
+      "non_file_used_bytes": 9759932416,
+      "swapins_pages": 778402,
+      "swapouts_pages": 4399765,
+      "ok": true,
+      "source": "vm_stat",
+      "used_includes_file_cache": true
+    }
+  }
+}
