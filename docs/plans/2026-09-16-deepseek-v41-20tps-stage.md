@@ -21,6 +21,19 @@ cycle; this plan will not apply the policy to prefill or non-DeepSeek profiles.
 
 ## Current update, 2026-09-18
 
+**2026-09-19 finite-lead-time follow-up:** Compact ridge predictions receive
+two bounded three-layer A/B/A comparisons at source 3dcc16054. First-GU issue
+is 1.0988% slower. Earlier issue after demand and resident/shared submission
+is 0.3085% faster on the held-out cohort, but its whole replay is 0.0236%
+longer; late reads fall 128→117 of 209 while traffic remains 1250 versus 1214
+control records. All outputs are exact. Neither schedule is promoted or run
+full-model, and no optimization regressions are added. Corrected accounting
+prices 379 total slots inside the 14 GiB incremental bound; stale inherited
+descriptive fields are identified without rewriting raw receipts. Both guards
+restore exact Qwen/warmup and release. A later independent observation finds
+a foreign window and no owned child or waiter. See ridge-prefetch-20260919.
+Task 4 remains incomplete, with the retained 13.4141517619 TPS full result.
+
 **Superseded scope, 2026-09-19:** The user has stopped Q2 and resumed Q4.
 The predictable two-buffer dense-query experiment is exact but 50.07% slower
 in its bounded component comparison. The later causal consensus suffix

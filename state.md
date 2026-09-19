@@ -1,14 +1,13 @@
 # Current Goal
 
 Q4 resumed at the user's request; Q2 is stopped and preserved separately.
-Target: 20 decode TPS on 16,384 Python prompt / 1,024 output tokens under
-110,000,000,000 whole-machine bytes. The target remains unmet.
+Target: 20 decode TPS on 16,384 Python prompt / 1,024 output tokens under 110,000,000,000 whole-machine bytes. The target remains unmet.
 Best single full result: 13.4141517619 TPS / 76.2627423750 s, 198 target calls,
 84→110 slots, all 1,024 native IDs exact. This is not an isolated repeated win.
 Latest consensus candidate: 13.3997126089 TPS / 76.3449209590 s, 195 calls,
 84→109 slots, all native IDs exact. Different capacity prevents attribution;
-it is not promoted. The earlier dense-query streaming component is 50.07%
-slower despite its two extra expert slots and is also not promoted.
+it is not promoted. Dense-query streaming is 50.07% slower; compact ridge
+prefetch is slower or flat. Neither component justifies full integration.
 
 # Decisions
 
@@ -43,25 +42,29 @@ Executing docs/plans/2026-09-16-deepseek-v41-20tps-stage.md; Task 4 is incomplet
 Memory reporting and automatic shutdown reclamation are retained. New work is
 an experimental receipt checkpoint; production defaults remain unchanged.
 Draft PR: https://github.com/davidtai/MTPLX-STREAMING/pull/4
-Its head was verified at 4b5591e8245addba2c before the consensus checkpoint.
 All 140 worktrees and seven dirty snapshots remain preserved; inventory:
 docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 
 # Evidence
 
+- Ridge receipt: docs/deepseek-v41/receipts/ridge-prefetch-20260919.
+  Scratch /tmp/dsv41-ridge-prefetch-20260919; source 3dcc16054. Three real layers,
+  synthetic predictor inputs, saved routes, no attention.
+  First-GU issue loses 1.0988%; earlier issue gains 0.3085% held-out but its
+  whole replay loses 0.0236%. All outputs exact. Late reads fall 128→117/209;
+  traffic stays 1250 versus 1214 control records. Neither is promoted.
+  Actual 379-slot geometry fits 14 GiB incremental (10 Metal + 4 host).
+  Summary explicitly corrects stale copied descriptions, leaving raw intact.
+  Both guards exit 0 and restore exact Qwen/warmup before release; latest is
+  13:26:40 UTC. Later independent check finds foreign guard 55556 and no owned
+  child/waiter. Local q4-ridge-prefetch-inputs.tar.gz preserves 61 exact files.
 - Consensus receipt: docs/deepseek-v41/receipts/suffix-consensus-20260919.
   Scratch: /tmp/dsv41-q4-suffix-consensus-20260919; measured source 4b5591e82.
-  Native D5 and original lookup remain intact. The causal suffix requires two
-  unanimous occurrences and native confidence ≥0.9, adding at most two tokens.
-  CPU selection/head replay gives 195 calls / 1,240 rows versus 198 / 1,242.
-  The index adds 32 MiB host reserve and no new GPU operation. Full baseline
-  11,047,714,816 B admits 109 slots; bound 109,546,420,444 B; independent guard
-  machine peak 109,272,825,856 B. MLX 96,299,123,174 B and process footprint
-  97,311,606,592 B overlap. Reads: 32,357 / 572,548,055,040 B. The output is the
-  same coherent beginning of the requested Python diff, truncated at 1,024.
-  Guard 1944 and child exit 0, restore exact Qwen/health/warmup, and release
-  at 12:45:47 UTC. A later independent check encounters foreign owners and an
-  unavailable API. No owned GPU child or waiter remains; check live state.
+  Native D5 and lookup plus unanimous repeated suffix, at confidence ≥0.9;
+  32 MiB extra host reserve. Full baseline 11,047,714,816 B admits 109 slots;
+  bound 109,546,420,444 B; guard peak 109,272,825,856 B. Reads 32,357 /
+  572,548,055,040 B. Same coherent Python diff beginning, truncated at 1,024.
+  Guard restores exact Qwen/warmup and releases at 12:45:47 UTC.
 - Dense receipt: docs/deepseek-v41/receipts/q4-dense-prefetch-20260919.
   Real query weights plus expert I/O, synthetic query inputs, attention omitted.
   A/B/A/B/A outputs are exact. Resident110 median 1.279569542 s; streamed112
@@ -86,9 +89,8 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 - Q4 needs 25.1127 s less decode time to reach 20 TPS. Neither current candidate
   supplies that reduction. Seek material expert-I/O or verified-target savings.
   Do not promote consensus or call its 109/110-slot comparison a regression.
-- Compact prompt-trained router correction covers 21.77% of saved physical
-  misses at 84.22% precision, with 21,399,552 B parameters; finite lead time and
-  actual overlap remain unmeasured. See prompt-router-adapter-20260918.
+- Compact correction's unlimited-lead-time quality does not produce a material
+  gain in either measured one-layer-ahead schedule. Do not repeat unchanged.
 - The 80/40/24 draft subset saves 733,224,960 B but its 111-slot full bound
   refused at 11.137 GB background. Do not retry without fresh fitting admission.
 - Strict library: /tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib;

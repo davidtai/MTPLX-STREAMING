@@ -592,3 +592,14 @@ Rejected:
 Open:
 - Materially reduce expert I/O or verified target work.
 - Reach 20 TPS while retaining the 110 GB whole-machine ceiling.
+## 2026-09-19 compact ridge prefetch [saved]
+Goal: Reach 20 TPS with Q4 inside the fixed 110 GB budget.
+Decisions:
+- Retain the existing full runner; finite-lead-time ridge prefetch provides no material component gain.
+- Preserve raw receipts and publish corrected accounting when copied metadata contains stale descriptions.
+- Keep source-layer protection and physical pin waits when moving speculative issue earlier.
+Rejected:
+- Promoting unlimited-lead-time prediction coverage as measured throughput.
+- Repeating either one-layer-ahead schedule unchanged.
+Open:
+- Material expert traffic or verified target-work reduction.
