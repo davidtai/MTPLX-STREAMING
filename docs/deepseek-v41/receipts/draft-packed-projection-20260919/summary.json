@@ -1,0 +1,60 @@
+{
+  "status": "component_win_only",
+  "source_commit": "a15ba7c40b6e59c7e3c3fdae852112085bddf40e",
+  "target_executed": false,
+  "full_tps_measured": false,
+  "controls_head_wall_s": [
+    1.8676886669709347,
+    1.866354375029914
+  ],
+  "candidate_head_wall_s": 1.7482105419621803,
+  "head_wall_reduction_fraction": 0.06363664141085024,
+  "head_wall_saved_s": 0.11881097903824411,
+  "control_spread_fraction": 0.0007149188593935981,
+  "cycles_per_arm": 198,
+  "verification_rows_per_arm": 1242,
+  "commit_boundaries_all_equal": true,
+  "proposal_changes": [
+    {
+      "position": 315,
+      "changed_proposal_depths": [
+        5
+      ],
+      "control_ids": [
+        832,
+        1926,
+        387,
+        588,
+        1926
+      ],
+      "candidate_ids": [
+        832,
+        1926,
+        387,
+        588,
+        2921
+      ],
+      "matched_prefix": 4,
+      "commit_length": 5,
+      "scope": "Both differing proposals are teacher-rejected; no new target computation is performed."
+    }
+  ],
+  "measured_dense_retirement_bytes": 402653184,
+  "active_after_replay_bytes": [
+    7264170248,
+    6861506268,
+    7264158780
+  ],
+  "cumulative_mlx_peak_bytes": 21299586448,
+  "guard_sampled_machine_peak_bytes": 26827735040,
+  "guard_sampled_child_footprint_peak_bytes": 16292060816,
+  "static_incremental_bound_bytes": 52613349376,
+  "whole_machine_ceiling_bytes": 110000000000,
+  "guard_exit_code": 0,
+  "guard_restore_release_utc": "2026-09-19T15:58:23Z",
+  "independent_health_utc": "2026-09-19T15:59:53.853133+00:00",
+  "reclaimed_source_page_bytes": 15342174208,
+  "remaining_source_page_bytes": 0,
+  "retained_full_tps": 13.868816737930306,
+  "next_gate": "Compose at construction and re-derive every phase bound. Credit dense retirement only in phases that actually owned these caches. Require fresh full target IDs and output sanity before a full-workload claim."
+}

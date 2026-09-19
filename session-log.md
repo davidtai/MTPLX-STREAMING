@@ -637,3 +637,19 @@ Rejected:
 Open:
 - Measure whether avoiding the first bank copy pays for extra grouping.
 - Reach 20 TPS on the exact 16K/1K workload.
+
+## 2026-09-19 draft packed projection [saved]
+Goal: Release predictable non-MoE storage while preserving the Q4 110GB ceiling.
+Decisions:
+- Keep the13.8688167379TPS extension-bank full result as the current best.
+- Preserve the smaller-draft112-row refusal at11.561GB background; include256MiB explicit background reserve in future accounting.
+- Retain a measured draft-only packed projection candidate:403MB actual retirement,6.3637% less head wall,198 unchanged teacher commitment boundaries.
+- Record the changed rejected proposal at position315/depth5; this is not full-target parity evidence.
+- Qwen restoration, warmup, independent health and lock release are verified after both attempts; no owned job remains.
+Rejected:
+- Treating predictable use as a saving in SSD bandwidth.
+- Crediting dense-cache retirement during seed or extension phases without proof of prior ownership.
+- Claiming full20TPS progress from head-only timing.
+Open:
+- Compose the packed draft route with phase-correct admission, then verify full output and wall time.
+- Material expert traffic or verification reduction to reach20TPS.

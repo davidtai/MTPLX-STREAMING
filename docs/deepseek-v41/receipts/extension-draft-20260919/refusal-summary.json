@@ -1,0 +1,23 @@
+{
+  "source_commit": "a15ba7c40b6e59c7e3c3fdae852112085bddf40e",
+  "status": "refused_before_model_loading",
+  "full_target_executed": false,
+  "throughput_measured": false,
+  "baseline_bytes": 11560878080,
+  "whole_machine_ceiling_bytes": 110000000000,
+  "background_variation_allowance_bytes": 268435456,
+  "required_rows_per_layer": 112,
+  "reconstructed_112_physical_bound_bytes": 110567052536,
+  "reconstructed_112_budget_excess_bytes": 567052536,
+  "reconstructed_111_physical_bound_bytes": 109858304108,
+  "reconstruction_scope": "CPU case bounds shifted by the exact launch baseline difference; the runner refused before writing its live bounds receipt. These are calculated bounds, not measured peaks.",
+  "sampled_child_footprint_peak_bytes": 49496568,
+  "sampled_machine_peak_bytes": 11625349120,
+  "compressor_growth_bytes": 0,
+  "guard_exit_code": 1,
+  "restore_and_release_utc": "2026-09-19T15:34:50Z",
+  "independent_health_utc": "2026-09-19T15:36:27.115636Z",
+  "next_action": "Do not weaken admission or repeat unchanged; identify additional independently measured savings.",
+  "guard_log": "/tmp/dsv41-110-stage/full-extension-draft-20260919-v1.guard.log",
+  "guard_sha256": "15d9cce25330eb4711c5be79a6cabc5e15fe715ac5922302233f404cc8c8f5bb"
+}

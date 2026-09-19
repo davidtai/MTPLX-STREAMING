@@ -47,6 +47,22 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
 
 # Evidence
 
+- Draft-only packed projection: docs/deepseek-v41/receipts/draft-packed-projection-20260919.
+  Source a15ba7c40; native/candidate/native head wall1.867688667/1.748210542/
+  1.866354375s,6.3637% reduction against control mean. Exact402,653,184B dense
+  cache retirement,198 boundaries and1242 verify rows in every arm. One depth5
+  proposal differs at position315; both variants are teacher-rejected after4.
+  Target trunk never executes; no new full parity or TPS claim.49GiB incremental
+  bound, sampled machine26,827,735,040B, cumulative MLX21,299,586,448B.
+  Guard exits0, reclaims15,342,174,208 source-cache bytes, restores exactQwen/
+  warmup/releases15:58:23UTC. Independent15:59:53check healthy/idle/free, no
+  owned process. Additional dense SSD traffic is zero.
+- Smaller draft plus extension: docs/deepseek-v41/receipts/extension-draft-20260919.
+  Adds256MiB background reserve inside110GB; host+background1,707,208,704B.
+  Fresh baseline11,560,878,080B refuses the minimum112 rows before model load.
+  CPU-case reconstruction prices112 at110,567,052,536B; no live bounds file or
+  full result was emitted. Guard exits1 and restores/releases15:34:50UTC;
+  independent15:36:27check healthy/idle/free. No repeated unchanged full attempt.
 - Extension receipt: docs/deepseek-v41/receipts/extension-bank-20260919.
   Scratch /tmp/dsv41-extension-bank-20260919; measured source d5f15e7a0.
   Keep84 old banks, install packed scales, seed native MTP, add27 rows/layer.
@@ -100,8 +116,13 @@ docs/deepseek-v41/checkpoints/20260918-worktrees.json. Large artifacts stay put.
   do not simply reuse the historical launch estimate or147MB sampled headroom.
 - GU read coalescing with a368,640B scale gap was already rejected in
   gu-combined-read-20260917 (3.37% slower at3records). Do not repeat it.
-- The 80/40/24 draft subset saves 733,224,960 B but its 111-slot full bound
-  refused at 11.137 GB background. Do not retry without fresh fitting admission.
+- The 80/40/24 draft subset saves733,224,960B; the latest composed112-row
+  attempt with256MiB background allowance refused at11.561GB background.
+  Do not lower admission or repeat unchanged to seek a lower baseline.
+- Integrate the measured packed draft projection only after deriving each
+  phase's ownership. Its403MB retirement applies where dense caches existed;
+  do not subtract it from seed or extension peaks that never held those caches.
+  Full target IDs, output sanity and wall time remain unverified for this lane.
 - Strict library: /tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib;
   SHA256 32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9.
   Packages remain unchanged. Refresh new helper pins after commits; never

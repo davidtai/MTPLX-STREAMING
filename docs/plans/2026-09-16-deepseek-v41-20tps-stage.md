@@ -1072,3 +1072,25 @@ plus live baseline and110GB ceiling. Qwen identity/health/warmup and free lock
 are independently verified11:50:33UTC. Task4 and20TPS remain open; the best
 full result is unchanged. See the receipt README and
 `../specs/2026-09-19-deepseek-v41-q4-dense-prefetch.md`.
+
+## Draft projection retirement and live admission, 2026-09-19
+
+The retained extension-bank full result is13.8688167379TPS at111 rows/layer;
+Task4 and20TPS remain open. A smaller80/40/24 draft plus extension composition
+adds256MiB background reserve after the observed107.4MB estimate overrun.
+Fresh11.561GB background refuses its minimum112-row gate before model load;
+the archived CPU-case reconstruction is110.567GB. Keep the110GB ceiling.
+Receipt: `../deepseek-v41/receipts/extension-draft-20260919`.
+
+One separate draft-only native/packed/native comparison then proves403MB of
+cache retirement and6.3637% less head wall time with198 identical commitment
+boundaries. One rejected depth5 proposal changes; target computation is absent.
+This addresses expanded non-MoE storage without recurring dense SSD reads.
+Receipt: `../deepseek-v41/receipts/draft-packed-projection-20260919`.
+All guards terminate and restore exactQwen, completed warmup and a free lock;
+independent health checks are retained. No broad suite or extra full run.
+
+Next: compose the packed draft route at construction, derive phase-specific
+memory credits, then require fresh full output and timing evidence. Do not
+credit caches during a phase that never owned them or extrapolate the roughly
+0.119-second head saving into closure of the22.61-second gap to20TPS.

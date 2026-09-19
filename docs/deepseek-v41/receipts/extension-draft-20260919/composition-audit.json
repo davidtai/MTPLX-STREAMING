@@ -1,0 +1,52 @@
+{
+  "complete": true,
+  "cpu_only": true,
+  "all_runner_callable_asts_unchanged": true,
+  "target_and_projection_kernels_unchanged": true,
+  "extension_change_only_capacity_ceiling": true,
+  "admission_cases": [
+    {
+      "baseline_bytes": 10240868352,
+      "decode_slots_per_layer": 113,
+      "physical_bound_bytes": 109955937528,
+      "active_bound_bytes": 97739425016,
+      "allocator_limit_bytes": 98051922944,
+      "host_reserve_bytes": 1707208704,
+      "process_host_reserve_bytes": 1438773248,
+      "background_variation_allowance_bytes": 268435456,
+      "seed_active_bound_bytes": 76976219384,
+      "overflow_append_active_bound_bytes": 97739425016
+    },
+    {
+      "baseline_bytes": 10983129088,
+      "decode_slots_per_layer": 112,
+      "physical_bound_bytes": 109989303544,
+      "active_bound_bytes": 97030530296,
+      "allocator_limit_bytes": 97309662208,
+      "host_reserve_bytes": 1707208704,
+      "process_host_reserve_bytes": 1438773248,
+      "background_variation_allowance_bytes": 268435456,
+      "seed_active_bound_bytes": 76976219384,
+      "overflow_append_active_bound_bytes": 97030530296
+    },
+    {
+      "baseline_bytes": 11137220608,
+      "decode_slots_per_layer": 111,
+      "physical_bound_bytes": 109434646636,
+      "active_bound_bytes": 96321781868,
+      "allocator_limit_bytes": 97155570688,
+      "host_reserve_bytes": 1707208704,
+      "process_host_reserve_bytes": 1438773248,
+      "background_variation_allowance_bytes": 268435456,
+      "seed_active_bound_bytes": 76976219384,
+      "overflow_append_active_bound_bytes": 96321635576
+    }
+  ],
+  "root_helper_hashes": {
+    "launch_full.py": "945328ae0da0535bd90b5d5660e59df1ba5fdf12c4457010af6bbfff1cc64c15",
+    "verify_subset.py": "9016589f61067e16d16e498ef6ab659801bc19a65379e10e2418376da12497be",
+    "wait_and_run.py": "c7b1461aa25abbf655b7cab4e142f8ffe49d36425f08e5d7d27bc630b71ea7f0",
+    "preflight.py": "6603428ff34a783471acbd38fd3e92abc154b431b4202e4443c1b991618ea8fb"
+  },
+  "stage_sha256": "1f4afa440c77bcc694561b046877b3df0bb8f3a354c895ceed265f3634d243a8"
+}

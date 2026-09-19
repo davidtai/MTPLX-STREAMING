@@ -1,0 +1,12 @@
+{
+  "cpu_only": true,
+  "source_commit": "a15ba7c40b6e59c7e3c3fdae852112085bddf40e",
+  "compiled_source_files": 7,
+  "runtime_pins_verified": 7,
+  "helper_pins_verified": 6,
+  "draft_change_scope": "output projection only; prefix and suffix preserved",
+  "native_body_sha256": "3ae4be6e44227e9e436cb75d8478c47c55d24940334f124a87727586af8dd977",
+  "candidate_body_sha256": "273ba4301fa2d2d1e8d16d85c178d19b8dc2ef468324e97353aa027a81cb7935",
+  "static_incremental_bound_bytes": 52613349376,
+  "expected_dense_retirement_bytes": 402653184
+}

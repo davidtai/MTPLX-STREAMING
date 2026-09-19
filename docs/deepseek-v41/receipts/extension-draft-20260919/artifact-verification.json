@@ -1,0 +1,23 @@
+{
+  "complete": true,
+  "files": [
+    {
+      "path": "/private/tmp/dsv41-draft-surrogates-20260918/artifact/mtp-selected-stage0.safetensors",
+      "file_bytes": 1504101592,
+      "sha256": "a66b5f7715cd61a2af8cd9cfe5f95a76ecac32258bbb82f2ad5b99498db5b214"
+    },
+    {
+      "path": "/private/tmp/dsv41-draft-surrogates-20260918/artifact/mtp-selected-stage1.safetensors",
+      "file_bytes": 752050632,
+      "sha256": "3c6dcd237f7f3975edba7660be9661cfe4bff9f3aac1a895365befa5111d80ef"
+    },
+    {
+      "path": "/private/tmp/dsv41-draft-surrogates-20260918/artifact/mtp-selected-stage2.safetensors",
+      "file_bytes": 451230336,
+      "sha256": "c1590c7a681bff3104e2180ad554d64c0aa50537c098756117ac2b0b07775d2f"
+    }
+  ],
+  "cpu_buffer_bound_bytes": 16777216,
+  "nocache": true,
+  "phase": "guarded construction before MLX import"
+}
