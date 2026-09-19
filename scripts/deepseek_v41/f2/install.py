@@ -47,10 +47,19 @@ def _live_plane_length(runtime, layers) -> int:
 
 
 def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
-            first_target: int = FIRST_TARGET_LAYER):
+            first_target: int = FIRST_TARGET_LAYER, predictor_mode: str | None = None):
     runtime = target._mtplx_expert_runtime
     if runtime.config.prefetch_slots != 0:
         raise RuntimeError("F2b requires the runtime's own prefetch ring OFF (prefetch_slots==0)")
+    # Predictor lane chosen ONCE here (never per call): 'lean' = fused compiled tape
+    # (default), 'native' = the prior gate-prefix path, kept for A/B.
+    if predictor_mode is None:
+        predictor_mode = os.environ.get("MTPLX_DSV41_F2B_PREDICTOR", "lean")
+    predictor_mode = str(predictor_mode)
+    if predictor_mode not in ("lean", "native"):
+        raise RuntimeError(
+            f"MTPLX_DSV41_F2B_PREDICTOR must be 'lean' or 'native'; got {predictor_mode!r}"
+        )
     layers = sorted(int(x) for x in runtime.spec.routed_layer_indices)
     switches = {L: target.model.layers[L].mlp.switch_mlp for L in layers}
 
@@ -98,7 +107,7 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
     predictors = {}
     for L in wrapped_layers:
         is_source = L in sources
-        pred = GatePredictor(target.model.layers[L + 1].mlp.gate) if is_source else None
+        pred = GatePredictor(target.model.layers[L + 1].mlp.gate, mode=predictor_mode) if is_source else None
         predictors[L] = pred
         _wrap_run(switches[L], pool, own=L, is_source=is_source,
                   is_target=(L >= first_target), predictor=pred, target_layer=(L + 1 if is_source else None))
@@ -107,7 +116,7 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
     return {
         "installed": True, "ring_records": int(ring_records), "workers": int(workers),
         "plane_length": int(plane_len), "sources": sorted(sources),
-        "wrapped_layers": wrapped_layers, **intercept,
+        "wrapped_layers": wrapped_layers, "predictor_mode": predictor_mode, **intercept,
     }
 
 
@@ -116,7 +125,7 @@ def _wrap_run(switch, pool, *, own, is_source, is_target, predictor, target_laye
 
     def wrapped(x, indices, *, shared_work):
         if is_source:
-            merged = predictor.merged(x.reshape(-1, _HIDDEN))
+            merged = predictor.merged(x)             # reshape rides the predictor's tape
             mx.eval(indices, merged)                 # THE routing barrier (indices + prediction)
         elif is_target:
             mx.eval(indices)                         # fix 5: complete the barrier BEFORE noting imminent
