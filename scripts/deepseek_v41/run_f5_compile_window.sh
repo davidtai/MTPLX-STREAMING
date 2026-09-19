@@ -227,15 +227,19 @@ run_arm() {  # $1 arm  $2 F5_ENABLE  $3 F5_CAPS8(0/1)  $4 F5_TIMED_PROBE(0/1)
 # ------------------------------------------------------------------------- the arms
 # F5_ARMS selects a subset (space separated), default = the full ladder.
 ARMS="${F5_ARMS:-A A2 B C D F}"
+# F5_PROBE_ALL=1 arms the stamp probe on EVERY arm: window 1 measured it at zero cost
+# (A 13.53 vs A2 13.65 tok/s, identical digest), and per-bucket deltas (barrier vs
+# inter-layer build vs host) say far more than one TPS number per arm.
+P="${F5_PROBE_ALL:-0}"
 for arm in $ARMS; do
   case "$arm" in
-    A)  run_arm A   ""                          0 0 ;;  # control: reproduce 0d54d9b2...
-    A2) run_arm A2  ""                          0 1 ;;  # control + TimedPackedDecode stamp probe
-    B)  run_arm B   "hc_compile"                0 0 ;;
-    C)  run_arm C   "hc_compile,attn_compile"   0 0 ;;
-    D)  run_arm D   "small_stages,attn_compile" 0 0 ;;
-    E)  run_arm E   "${F5_E_ENABLE:-hc_compile,attn_compile}" 1 0 ;;  # + caps@8 (rounding-class)
-    F)  run_arm F   ""                          0 0 ;;  # control again (session drift check)
+    A)  run_arm A   ""                          0 "$P" ;;  # control: reproduce 0d54d9b2...
+    A2) run_arm A2  ""                          0 1 ;;     # control + TimedPackedDecode stamp probe
+    B)  run_arm B   "hc_compile"                0 "$P" ;;
+    C)  run_arm C   "hc_compile,attn_compile"   0 "$P" ;;
+    D)  run_arm D   "small_stages,attn_compile" 0 "$P" ;;
+    E)  run_arm E   "${F5_E_ENABLE:-hc_compile,attn_compile}" 1 "$P" ;;  # + caps@8 (rounding-class)
+    F)  run_arm F   ""                          0 "$P" ;;  # control again (session drift check)
     *)  echo "unknown arm '$arm'"; exit 2 ;;
   esac
 done
