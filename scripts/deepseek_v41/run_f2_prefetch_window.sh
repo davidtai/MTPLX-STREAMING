@@ -142,6 +142,11 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #         Exports MTPLX_DSV41_F24_POLICY_WINDOW=NN, which the F16 package's install reads at construction to widen
 #         the two-group pipeline's policy window. Pure env pass-through: no staged edit, no tree-key component. Needs
 #         F16PKG to point at an f24 package that reads it (<repo>/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41).
+#   +fi  : F33 flat expert indices (pipe base ONLY; pure env pass-through). Exports MTPLX_DSV41_F33_FLAT_INDICES=1,
+#         which the F16 package's install reads at construction. No staged edit, no tree-key component. Needs F16PKG
+#         to point at an f33 package that reads it (<repo>/.worktrees/dsv41-f33-host-trims/scripts/deepseek_v41).
+#   +fo  : F33 fast route observe (pipe base ONLY; pure env pass-through). Exports MTPLX_DSV41_F33_FAST_OBSERVE=1,
+#         read by the F16 package's install at construction. No staged edit, no tree-key component. Same F16PKG need.
 #   +cl  : DIAGNOSTIC (NOT a throughput candidate; host sigmoid + one tiny cast kernel/sync per cycle) F27 per-cycle
 #         draft log. Stages a packed_phase.py hook (right after the plane lane binds; anchor disjoint from +ro/+gt)
 #         that wraps _effective_draft_len + LookupExtension.extend/append_committed before the hybrid install, and
@@ -288,7 +293,7 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0; A_PF=0; A_LA=0; A_SY=0; A_REFGEN=0; A_CT=0; A_PW=0; A_CL=0; A_PROF=0
+  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0; A_PF=0; A_LA=0; A_SY=0; A_REFGEN=0; A_CT=0; A_PW=0; A_CL=0; A_PROF=0; A_FI=0; A_FO=0
   A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
@@ -344,6 +349,18 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
       [ "$A_PIPE" = "1" ] || { echo "+pw only valid on a pipe base arm (got base '$A_BASE' in '$tok'): the F24 policy window needs the F16 two-group pipeline"; exit 2; }
       grep -q "MTPLX_DSV41_F24_POLICY_WINDOW" "$F16PKG/f16/install.py" 2>/dev/null || { echo "+pw needs an F16 package that reads MTPLX_DSV41_F24_POLICY_WINDOW (set F16PKG to <repo>/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41; got F16PKG=$F16PKG)"; exit 2; } ;;
   esac
+  # F33 +fi/+fo pure env pass-throughs (pipe base only; the F16 package must read the variable). Matched as WHOLE
+  # tokens (*"+fi+"* / *"+fo+"* on the +-terminated mods string) so they cannot collide with +ft or each other.
+  case "$mods" in
+    *"+fi+"*) A_FI=1
+      [ "$A_PIPE" = "1" ] || { echo "+fi only valid on a pipe base arm (got base '$A_BASE' in '$tok'): the F33 flat-indices lever needs the F16 two-group pipeline"; exit 2; }
+      grep -q "MTPLX_DSV41_F33_FLAT_INDICES" "$F16PKG/f16/install.py" 2>/dev/null || { echo "+fi needs an F16 package that reads MTPLX_DSV41_F33_FLAT_INDICES (set F16PKG to <repo>/.worktrees/dsv41-f33-host-trims/scripts/deepseek_v41; got F16PKG=$F16PKG)"; exit 2; } ;;
+  esac
+  case "$mods" in
+    *"+fo+"*) A_FO=1
+      [ "$A_PIPE" = "1" ] || { echo "+fo only valid on a pipe base arm (got base '$A_BASE' in '$tok'): the F33 fast-observe lever needs the F16 two-group pipeline"; exit 2; }
+      grep -q "MTPLX_DSV41_F33_FAST_OBSERVE" "$F16PKG/f16/install.py" 2>/dev/null || { echo "+fo needs an F16 package that reads MTPLX_DSV41_F33_FAST_OBSERVE (set F16PKG to <repo>/.worktrees/dsv41-f33-host-trims/scripts/deepseek_v41; got F16PKG=$F16PKG)"; exit 2; } ;;
+  esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
   A_ENGSTAGE=0; [ "$A_ENG" != "0" ] && A_ENGSTAGE=1
   A_HOSTBYTES=0
@@ -363,7 +380,7 @@ for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first
   [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD" "$A_PL" "$A_PIPE" "$A_ROSTAGE" "$A_CT" "$A_CL" "$A_PROF"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
-  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC conf=$A_CT policy_window=$A_PW cycle_log=$A_CL host_profile=$A_PROF growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES refgen=$A_REFGEN other_prompt=${OTHER_PROMPT} ar_mode=$([ "$A_REFGEN" = "1" ] && echo generate || echo reuse))"; done
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC conf=$A_CT policy_window=$A_PW flat_indices=$A_FI fast_observe=$A_FO cycle_log=$A_CL host_profile=$A_PROF growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES refgen=$A_REFGEN other_prompt=${OTHER_PROMPT} ar_mode=$([ "$A_REFGEN" = "1" ] && echo generate || echo reuse))"; done
   rmdir "$RECEIPTS" 2>/dev/null || true
   echo "STAGE ONLY: no GPU window opened"; exit 0
 fi
@@ -420,6 +437,8 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     pypath="$pypath:$F16PKG:$F16SITE"
     f2b_env="$f2b_env MTPLX_DSV41_F16=1 MTPLX_DSV41_F16_COUNTERS=$dir/f16_counters.json"
     [ "$A_PW" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F24_POLICY_WINDOW=$A_PW"   # F24: the F16 install widens the two-group policy window at construction
+    [ "$A_FI" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F33_FLAT_INDICES=1"   # F33: pure env pass-through, F16 install reads it at construction
+    [ "$A_FO" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F33_FAST_OBSERVE=1"   # F33: pure env pass-through, F16 install reads it at construction
     [ "$A_BAL" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_SPLIT=balanced"
     if [ "$A_BH" = "1" ] || [ "$A_ST" = "1" ]; then
       [ -f "$F16PKG/f16/stamps.py" ] || { echo "REFUSE: +bh/+st need the F18 package (set F16PKG to .worktrees/dsv41-f18-handoff/scripts/deepseek_v41)"; exit 2; }
