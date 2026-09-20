@@ -1,0 +1,117 @@
+{
+  "index": 299,
+  "index_source": "first_divergence",
+  "first_divergence_index": 299,
+  "class": "tie_flip",
+  "rule": "near_tie_by_band(a)+rounding_class_by_delta(c)",
+  "rule_source": "pinned",
+  "control_token": 126071,
+  "candidate_token": 16717,
+  "ar_contested_margin": 0.25,
+  "dspark_contested_margin": 0.0,
+  "tie_band_used": 0.375,
+  "tie_margin": 0.03,
+  "tie_ulps": 3,
+  "peak_contested_logit": 30.75,
+  "delta_at_ar_token": 0.125,
+  "delta_at_dspark_token": 0.375,
+  "max_abs_logit_delta": 0.625,
+  "rows_consistent": true,
+  "deltas_within_tie_band": true,
+  "rounding_class_by_delta": true,
+  "unavailable_logits": [],
+  "control_top5": [
+    [
+      126071,
+      30.75
+    ],
+    [
+      16717,
+      30.5
+    ],
+    [
+      82,
+      22.0
+    ],
+    [
+      107250,
+      16.375
+    ],
+    [
+      4269,
+      15.875
+    ]
+  ],
+  "candidate_top5": [
+    [
+      126071,
+      30.875
+    ],
+    [
+      16717,
+      30.875
+    ],
+    [
+      82,
+      22.25
+    ],
+    [
+      107250,
+      16.5
+    ],
+    [
+      2129,
+      16.125
+    ]
+  ],
+  "positions_differ_after_first": 718,
+  "n_positions_compared": 1024,
+  "control": {
+    "receipt": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f2-prefetch/docs/deepseek-v41/receipts/f2-prefetch-build-20260919/window-20260919-211354/arm-control_low_rd/f2b-control_low_rd-20260919-211354.jsonl",
+    "tokens_source": "dspark.token_ids",
+    "dir": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f2-prefetch/docs/deepseek-v41/receipts/f2-prefetch-build-20260919/window-20260919-211354/arm-control_low_rd/rows",
+    "row": "row-299.npy",
+    "rows_json_meta": {
+      "cycle_base_len": 297,
+      "m": 1,
+      "token": 126071
+    }
+  },
+  "candidate": {
+    "receipt": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f2-prefetch/docs/deepseek-v41/receipts/f2-prefetch-build-20260919/window-20260919-213913/arm-pipe_bal_egl_gt_plx_cmp2_rd/f2b-pipe_bal_egl_gt_plx_cmp2_rd-20260919-213913.rejected-output.json",
+    "tokens_source": "dspark.token_ids",
+    "dir": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f2-prefetch/docs/deepseek-v41/receipts/f2-prefetch-build-20260919/window-20260919-213913/arm-pipe_bal_egl_gt_plx_cmp2_rd/rows",
+    "row": "row-299.npy",
+    "rows_json_meta": {
+      "cycle_base_len": 297,
+      "m": 1,
+      "token": 16717
+    }
+  },
+  "classify_divergence": {
+    "divergence_index": 299,
+    "ar_token": 126071,
+    "dspark_token": 16717,
+    "ar_top2_margin": 0.25,
+    "dspark_top2_margin": 0.0,
+    "max_abs_logit_delta": 0.625,
+    "tie_margin": 0.03,
+    "tie_band_used": 0.375,
+    "tie_ulps": 3,
+    "peak_contested_logit": 30.75,
+    "ulp_bf16_at_peak": 0.125,
+    "ar_contested_margin": 0.25,
+    "dspark_contested_margin": 0.0,
+    "delta_at_ar_token": 0.125,
+    "delta_at_dspark_token": 0.375,
+    "rounding_class_by_delta": true,
+    "deltas_within_tie_band": true,
+    "rows_consistent": true,
+    "unavailable_logits": [],
+    "ar_logit_at_ar_token": 30.75,
+    "ar_logit_at_dspark_token": 30.5,
+    "dspark_logit_at_ar_token": 30.875,
+    "dspark_logit_at_dspark_token": 30.875,
+    "class": "tie_flip"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "planes_issued": 64152,
+  "planes_completed": 41820,
+  "planes_hits": 16334,
+  "planes_waits": 2784,
+  "planes_cancelled": 332,
+  "planes_wasted": 22654,
+  "planes_length_mismatch": 0,
+  "planes_epoch_skipped": 22332,
+  "coordinator_batches": 7128,
+  "ready_reading_hwm": 96,
+  "bytes_speculative": 246664396800,
+  "records_full": 12524,
+  "records_partial": 2881
+}

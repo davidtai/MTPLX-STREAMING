@@ -1,0 +1,7 @@
+{
+  "calls": 192,
+  "single_forwards": 0,
+  "pipelined_forwards": 192,
+  "handoffs": 30720,
+  "armed": true
+}
