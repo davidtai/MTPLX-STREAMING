@@ -1,0 +1,139 @@
+# F30 sampling profile of the DSpark decode GENERATION THREAD (generate 1).
+# Samples are WALL TIME of the generation thread INCLUDING blocked time (mx.eval, futures, GIL waits).
+# The F16 pipeline runs both row groups as greenlets on this thread; sys._current_frames()
+#   returns the frame of whichever greenlet is running -- exactly the thread we attribute.
+# strip_dirs() is NOT applied: full paths distinguish staged vs pinned modules.
+period_us=500 samples=76398 wall_s=62.278  interval_ns(mean=815168 p99=1128542 max=50160459)
+
+== top 60 leaf (where the thread is / is blocked) ==
+ 44.87%    27943.3 ms  <f16_yield_run>:4 run
+ 30.83%    19198.9 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py:355 wait
+  9.06%     5639.4 ms  <f16_yield_run>:27 finish
+  2.98%     1852.9 ms  <hybrid_lookup_decode>:85 _decode_cycles
+  2.35%     1466.5 ms  <f16_yield_run>:21 submit_gu
+  2.03%     1264.3 ms  <f16_yield_run>:38 run
+  1.74%     1085.0 ms  <f16_yield_run>:6 run
+  1.67%     1040.2 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py:1310 _observe_transition_window
+  1.64%     1023.9 ms  <hybrid_lookup_decode>:123 _decode_cycles
+  0.65%      405.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/projection_install.py:28 issue
+  0.47%      292.6 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py:1338 _transition_window_scores
+  0.45%      281.2 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/file_embedding.py:59 __call__
+  0.40%      251.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/file_embedding.py:71 __call__
+  0.24%      147.5 ms  <hybrid_lookup_decode>:214 _decode_cycles
+  0.18%      114.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f6/engram_parallel.py:216 _parallel_gather_bytes
+  0.11%       70.9 ms  <hybrid_lookup_decode>:132 _decode_cycles
+  0.11%       66.0 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py:898 _effective_draft_len
+  0.08%       48.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f6/engram_parallel.py:275 _parallel_gather_bytes
+  0.05%       30.2 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/engram_v41.py:291 advance
+  0.03%       17.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/file_embedding.py:81 __call__
+  0.02%       13.0 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41.py:1712 _o_lora_dense_weight
+  0.02%       11.4 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py:83 _wrapreduction
+  0.01%        6.5 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/engram_v41.py:307 advance
+  0.01%        5.7 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py:1351 _transition_window_scores
+  0.00%        0.8 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py:429 _row_to_np
+  0.00%        0.8 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py:54 _wrapfunc
+  0.00%        0.8 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py:293 __init__
+
+== top 60 inclusive functions ==
+ 93.72%    58366.3 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41.py __call__
+ 93.63%    58313.3 ms  <f16_yield_run> run
+ 93.63%    58313.3 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/expert_mlx.py run_with_shared_overlap
+ 93.63%    58313.3 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/expert_mlx.py run_switch_with_shared_overlap
+ 93.63%    58313.3 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_moe.py _run_routed_shared_overlap
+ 93.63%    58313.3 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_moe.py __call__
+ 83.74%    52151.4 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f16/pipeline.py _group_forward
+ 83.74%    52151.4 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f16/pipeline.py <lambda>
+ 83.74%    52151.4 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f16/pipeline.py run
+ 30.83%    19198.9 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py wait
+ 30.73%    19135.3 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py as_completed
+ 30.73%    19135.3 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/plane_lane.py early_completions
+ 16.26%    10126.1 ms  <hybrid_lookup_decode> _decode_cycles
+ 16.26%    10126.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f27-cyclelog/scripts/deepseek_v41/f2/host_profile.py _profiled_decode_cycles
+ 16.26%    10126.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py dspark_generate
+ 16.26%    10126.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/run_full.py dspark_with_boundary_observation
+ 16.26%    10126.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/scripts/deepseek_v41/ab_decode_env_levers.py _generate_dspark
+ 16.26%    10126.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/run_full.py admitted_mtp
+ 16.26%    10126.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/scripts/deepseek_v41/ab_decode_env_levers.py _run_arm
+ 16.26%    10126.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/run_full.py run_arm_with_reference
+ 16.26%    10126.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/scripts/deepseek_v41/ab_decode_env_levers.py main
+ 16.26%    10126.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/run_full.py <module>
+ 11.03%     6871.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f16/pipeline.py pipelined_forward
+ 10.98%     6836.0 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41.py _forward_span
+ 10.98%     6836.0 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py _fwd
+  9.06%     5639.4 ms  <f16_yield_run> finish
+  2.35%     1466.5 ms  <f16_yield_run> submit_gu
+  2.21%     1374.4 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_runtime.py begin_split_route
+  2.17%     1349.9 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py plan
+  2.17%     1349.9 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py plan_transaction
+  2.17%     1349.9 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_runtime.py _plan_route_transaction
+  1.67%     1040.2 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py _observe_transition_window
+  0.88%      549.4 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/file_embedding.py __call__
+  0.65%      405.1 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/projection_install.py issue
+  0.65%      405.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f16/install.py guarded
+  0.50%      309.8 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py _transition_window_scores
+  0.50%      309.8 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/expert_streaming.py _transition_window_admissions
+  0.32%      202.2 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f6/engram_parallel.py _parallel_gather_bytes
+  0.32%      202.2 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/ngram_row_cache.py dequantize
+  0.32%      202.2 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/engram_v41.py __call__
+  0.15%       92.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark.py draft_block
+  0.13%       79.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark.py forward_embed
+  0.11%       66.0 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py _effective_draft_len
+  0.06%       39.9 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py result
+  0.06%       38.3 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f6/engram_parallel.py fetch
+  0.06%       36.7 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/engram_v41.py advance
+  0.06%       35.1 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f16/pipeline.py _run_pipeline
+  0.04%       24.5 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/threading.py start
+  0.04%       24.5 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/concurrent/futures/thread.py _adjust_thread_count
+  0.04%       24.5 ms  /Users/davidtai/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/concurrent/futures/thread.py submit
+  0.04%       24.5 ms  /private/tmp/dsv41-f2b-20260920-124414/r103-h0-e1-g234881024-v0-t1-d0-pexcess-q1-o0-c50-l0-f1/packed/plane_lane.py submit
+  0.02%       13.0 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41.py _o_lora_dense_weight
+  0.02%       13.0 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark.py __call__
+  0.02%       11.4 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py _wrapreduction
+  0.02%       11.4 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py sum
+  0.00%        1.6 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py _top2_margin
+  0.00%        1.6 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py observe
+  0.00%        1.6 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41/f6/engram_parallel.py _resolve_pending
+  0.00%        0.8 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a/mtplx/models/deepseek_v41_dspark_decode.py _row_to_np
+  0.00%        0.8 ms  /Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py _wrapfunc
+
+== top 40 stacks (innermost 6 frames, innermost first) ==
+ 44.87%    27943.3 ms  run:4 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412 <- __call__:490 <- __call__:3655
+ 30.72%    19134.5 ms  wait:355 <- wait:655 <- as_completed:243 <- early_completions:207 <- run:41 <- run_with_shared_overlap:2525
+  7.71%     4803.0 ms  finish:27 <- run:34 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412 <- __call__:490
+  2.98%     1852.9 ms  _decode_cycles:85 <- _profiled_decode_cycles:201 <- dspark_generate:1485 <- dspark_with_boundary_observation:792 <- _generate_dspark:4076 <- admitted_mtp:667
+  2.03%     1264.3 ms  run:38 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412 <- __call__:490 <- __call__:3655
+  1.75%     1089.9 ms  submit_gu:21 <- run:43 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412 <- __call__:490
+  1.74%     1085.0 ms  run:6 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412 <- __call__:490 <- __call__:3655
+  1.67%     1040.2 ms  _observe_transition_window:1310 <- plan:1547 <- plan_transaction:1788 <- _plan_route_transaction:3881 <- begin_split_route:4171 <- run:9
+  1.64%     1023.9 ms  _decode_cycles:123 <- _profiled_decode_cycles:201 <- dspark_generate:1485 <- dspark_with_boundary_observation:792 <- _generate_dspark:4076 <- admitted_mtp:667
+  1.34%      836.4 ms  finish:27 <- run:51 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412 <- __call__:490
+  0.65%      405.1 ms  issue:28 <- guarded:94 <- run:35 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412
+  0.60%      376.6 ms  submit_gu:21 <- run:50 <- run_with_shared_overlap:2525 <- run_switch_with_shared_overlap:3905 <- _run_routed_shared_overlap:412 <- __call__:490
+  0.47%      292.6 ms  _transition_window_scores:1338 <- _transition_window_admissions:1388 <- plan:1598 <- plan_transaction:1788 <- _plan_route_transaction:3881 <- begin_split_route:4171
+  0.34%      211.9 ms  __call__:71 <- _group_forward:831 <- <lambda>:582 <- run:622
+  0.24%      147.5 ms  _decode_cycles:214 <- _profiled_decode_cycles:201 <- dspark_generate:1485 <- dspark_with_boundary_observation:792 <- _generate_dspark:4076 <- admitted_mtp:667
+  0.22%      138.6 ms  __call__:59 <- _group_forward:831 <- <lambda>:582 <- run:622
+  0.13%       83.1 ms  __call__:59 <- _group_forward:831 <- <lambda>:579 <- run:622
+  0.11%       70.9 ms  _decode_cycles:132 <- _profiled_decode_cycles:201 <- dspark_generate:1485 <- dspark_with_boundary_observation:792 <- _generate_dspark:4076 <- admitted_mtp:667
+  0.11%       66.0 ms  _effective_draft_len:898 <- _decode_cycles:87 <- _profiled_decode_cycles:201 <- dspark_generate:1485 <- dspark_with_boundary_observation:792 <- _generate_dspark:4076
+  0.10%       59.5 ms  _parallel_gather_bytes:216 <- dequantize:369 <- __call__:485 <- _group_forward:850 <- <lambda>:579 <- run:622
+  0.09%       53.8 ms  __call__:59 <- forward_embed:685 <- draft_block:882 <- _decode_cycles:82 <- _profiled_decode_cycles:201 <- dspark_generate:1485
+  0.09%       53.0 ms  _parallel_gather_bytes:216 <- dequantize:369 <- __call__:485 <- _group_forward:850 <- <lambda>:582 <- run:622
+  0.06%       38.3 ms  wait:355 <- result:451 <- fetch:144 <- _parallel_gather_bytes:244 <- dequantize:369 <- __call__:485
+  0.05%       29.3 ms  _parallel_gather_bytes:275 <- dequantize:369 <- __call__:485 <- _group_forward:850 <- <lambda>:579 <- run:622
+  0.04%       24.5 ms  wait:355 <- wait:655 <- start:999 <- _adjust_thread_count:203 <- submit:180 <- submit:61
+  0.03%       20.4 ms  __call__:71 <- forward_embed:685 <- draft_block:882 <- _decode_cycles:82 <- _profiled_decode_cycles:201 <- dspark_generate:1485
+  0.03%       17.1 ms  advance:291 <- _run_pipeline:568 <- pipelined_forward:541 <- pipelined_forward:884 <- _decode_cycles:122 <- _profiled_decode_cycles:201
+  0.03%       17.1 ms  __call__:71 <- _group_forward:831 <- <lambda>:579 <- run:622
+  0.02%       14.7 ms  _parallel_gather_bytes:275 <- dequantize:369 <- __call__:485 <- _group_forward:850 <- <lambda>:582 <- run:622
+  0.02%       13.0 ms  _o_lora_dense_weight:1712 <- __call__:603 <- __call__:733 <- draft_block:886 <- _decode_cycles:82 <- _profiled_decode_cycles:201
+  0.02%       13.0 ms  advance:291 <- _run_pipeline:569 <- pipelined_forward:541 <- pipelined_forward:884 <- _decode_cycles:122 <- _profiled_decode_cycles:201
+  0.02%       11.4 ms  _wrapreduction:83 <- sum:2425 <- _transition_window_scores:1337 <- _transition_window_admissions:1388 <- plan:1598 <- plan_transaction:1788
+  0.02%        9.8 ms  __call__:81 <- _group_forward:831 <- <lambda>:579 <- run:622
+  0.01%        5.7 ms  _transition_window_scores:1351 <- _transition_window_admissions:1388 <- plan:1598 <- plan_transaction:1788 <- _plan_route_transaction:3881 <- begin_split_route:4171
+  0.01%        5.7 ms  __call__:59 <- _forward_span:3939 <- __call__:3858 <- __call__:4935 <- _fwd:1090 <- pipelined_forward:539
+  0.01%        4.9 ms  __call__:81 <- forward_embed:685 <- draft_block:882 <- _decode_cycles:82 <- _profiled_decode_cycles:201 <- dspark_generate:1485
+  0.01%        4.1 ms  _parallel_gather_bytes:275 <- dequantize:369 <- __call__:485 <- _forward_span:3983 <- __call__:3858 <- __call__:4935
+  0.00%        2.4 ms  __call__:81 <- _group_forward:831 <- <lambda>:582 <- run:622
+  0.00%        2.4 ms  advance:307 <- _run_pipeline:568 <- pipelined_forward:541 <- pipelined_forward:884 <- _decode_cycles:122 <- _profiled_decode_cycles:201
+  0.00%        2.4 ms  advance:307 <- _run_pipeline:569 <- pipelined_forward:541 <- pipelined_forward:884 <- _decode_cycles:122 <- _profiled_decode_cycles:201
