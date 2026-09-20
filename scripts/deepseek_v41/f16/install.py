@@ -32,6 +32,7 @@ is always valid and an F16=0 run on a staged tree is a stock A/B control.
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 
@@ -98,7 +99,8 @@ def _wrap_issue_next_for_trailer(runners) -> int:
 
 
 def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads",
-            stamps_stem: str | None = None, engram_lookahead: bool = False) -> dict:
+            stamps_stem: str | None = None, engram_lookahead: bool = False,
+            policy_window: int | None = None) -> dict:
     """Wire (or, when not armed, passthrough-stash) the F16 pipeline on ``target``.
 
     ``handoff`` selects WHICH derived run + hand-off helpers are compiled and bound,
@@ -111,7 +113,16 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
     the F6 parallel gather is already installed on every engram hook cache.  Only meaningful
     when armed (the passthrough never drives the pipeline), so it is ignored when not armed.
     No per-call mode branch: the run function, the driver strategy, the hand-off helpers,
-    and the lookahead callable are all fixed here."""
+    and the lookahead callable are all fixed here.
+
+    ``policy_window`` (``MTPLX_DSV41_F24_POLICY_WINDOW``) widens the transition-window
+    expert-cache horizon on every per-layer bank from the shipped 16 routes to the given
+    value.  The two-group verify pipeline issues two ``plan()`` calls per layer per forward,
+    so the shipped window spans half as many forwards as designed; 32 restores the 16-forward
+    horizon.  It is a cache decision only (which records prefetch, never a routed output), so
+    outputs stay bit-exact.  Applied ONCE here (``install_policy_window``), after the gates,
+    validating every bank before touching any; only meaningful when armed, so it is ignored
+    when not armed."""
     runtime = target._mtplx_expert_runtime
 
     if not armed:
@@ -177,7 +188,69 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
         "source_pins": source_pins,
     }
     report.update(run_shas)
+    # F24: widen the transition-window cache horizon on every bank (construction
+    # time, after the gates; a passthrough {None, 0} fragment when not requested).
+    report.update(install_policy_window(runtime, policy_window))
     return report
+
+
+def install_policy_window(runtime, policy_window: int | None) -> dict:
+    """Widen the transition-window expert-cache horizon on every per-layer bank (F24).
+
+    A cache-only decision -- it changes which expert records prefetch, never a routed
+    output -- applied ONCE here at construction (never per call).  ``policy_window is
+    None`` leaves every bank untouched and reports ``{None, 0}``.  Otherwise EVERY bank
+    is validated first (the shipped ``transition-window`` policy, the shipped limit 16,
+    a live ``deque`` window and non-``None`` counts) and only then is the new limit
+    applied, so a rejected bank leaves no bank half-changed; a mismatch raises before
+    generation (AGENTS.md correct-by-design: fail once, clearly, at construction).
+
+    The window deque has no ``maxlen`` (the bank pops from the left once its length
+    exceeds the limit), so widening the limit is sufficient; counts, weights and the
+    window contents are left untouched.  Returns the install-report fragment."""
+    if policy_window is None:
+        return {"policy_window": None, "policy_window_banks": 0}
+
+    from mtplx.expert_streaming import TRANSITION_WINDOW_CACHE_POLICY
+
+    banks = runtime._banks
+    if not banks:
+        raise RuntimeError(
+            "F24 policy_window: runtime._banks is empty; the F16 pipeline requires "
+            "per-layer transition-window banks (global bank scope is refused upstream)"
+        )
+    for layer, bank in banks.items():
+        if bank.cache_policy != TRANSITION_WINDOW_CACHE_POLICY:
+            raise RuntimeError(
+                f"F24 policy_window: layer {layer} bank.cache_policy is "
+                f"{bank.cache_policy!r}, not {TRANSITION_WINDOW_CACHE_POLICY!r}"
+            )
+        if bank._transition_window_limit != 16:
+            raise RuntimeError(
+                f"F24 policy_window: layer {layer} bank._transition_window_limit is "
+                f"{bank._transition_window_limit!r}, not the shipped 16"
+            )
+        if not isinstance(bank._transition_window, collections.deque):
+            raise RuntimeError(
+                f"F24 policy_window: layer {layer} bank._transition_window is a "
+                f"{type(bank._transition_window).__name__}, not a collections.deque"
+            )
+        if bank._transition_counts is None:
+            raise RuntimeError(
+                f"F24 policy_window: layer {layer} bank._transition_counts is None"
+            )
+    if isinstance(policy_window, bool) or not isinstance(policy_window, int):
+        raise ValueError(
+            f"policy_window must be an int in [16, 256]; got {policy_window!r}"
+        )
+    if not 16 <= policy_window <= 256:
+        raise ValueError(
+            f"policy_window must be in [16, 256]; got {policy_window}"
+        )
+
+    for bank in banks.values():
+        bank._transition_window_limit = policy_window
+    return {"policy_window": policy_window, "policy_window_banks": len(banks)}
 
 
 def pipeline_a_rows() -> int:
@@ -196,6 +269,19 @@ def install_from_env(target) -> dict:
     # "reads" (today) or "barrier" (F18).  MTPLX_DSV41_F16_STAMPS=<stem> arms the
     # host-only stamped variant (diagnostic; default OFF).  MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD=1
     # arms the F20 engram read lookahead (refuses unless the F6 parallel gather is installed).
+    # MTPLX_DSV41_F24_POLICY_WINDOW=<int> widens the transition-window cache horizon (default
+    # unset -> None -> banks unchanged); read here at use, not at import.
+    raw_policy_window = os.environ.get("MTPLX_DSV41_F24_POLICY_WINDOW")
+    if raw_policy_window is None or raw_policy_window == "":
+        policy_window = None
+    else:
+        try:
+            policy_window = int(raw_policy_window)
+        except ValueError as exc:
+            raise ValueError(
+                "MTPLX_DSV41_F24_POLICY_WINDOW must be an integer; got "
+                f"{raw_policy_window!r}"
+            ) from exc
     report = install(
         target,
         armed=armed,
@@ -203,6 +289,7 @@ def install_from_env(target) -> dict:
         handoff=os.environ.get("MTPLX_DSV41_F16_HANDOFF", "reads"),
         stamps_stem=os.environ.get("MTPLX_DSV41_F16_STAMPS") or None,
         engram_lookahead=os.environ.get("MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD") == "1",
+        policy_window=policy_window,
     )
     counters_path = os.environ.get("MTPLX_DSV41_F16_COUNTERS")
     if counters_path:
