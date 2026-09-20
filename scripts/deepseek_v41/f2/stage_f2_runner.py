@@ -139,6 +139,36 @@ def stage_verify_balanced(source_text: str) -> str:
     return updated
 
 
+# F25 confidence-gated draft length on the retained lane. The pinned decode loop already reads
+# MTPLX_DSV41_DSPARK_CONF_THRESHOLD (deepseek_v41_dspark_decode.py: _effective_draft_len keeps the
+# leading run of drafts whose sigmoid confidence >= threshold, at least one), but the retained hybrid
+# install refuses a live confidence_threshold. Two anchored edits to the STAGED hybrid_install.py:
+# drop exactly the one confidence refusal clause from install()'s condition, and record the live
+# threshold in the report install() returns (anchored on the return-dict line) so every receipt
+# carries the value that was live. Both anchors are disjoint from the verify_chunks anchors, so this
+# composes with stage_verify_chunks / stage_verify_balanced in either order; it adds no mx call, so
+# rewrite()'s AST mx-call check is untouched.
+_CONF_REFUSAL_ANCHOR = (
+    "    if (requested_depth != 5 or verify_chunks is not None or confidence_threshold is not None")
+_CONF_REFUSAL_NEW = "    if (requested_depth != 5 or verify_chunks is not None"
+_CONF_REPORT_ANCHOR = "    return {'native_head_depth':5,"
+_CONF_REPORT_NEW = "    return {'native_head_depth':5,'confidence_threshold':confidence_threshold,"
+
+
+def stage_confidence(source_text: str) -> str:
+    if "'confidence_threshold':confidence_threshold," in source_text:
+        raise RuntimeError("confidence threshold already staged")
+    _assert_once(source_text, _CONF_REFUSAL_ANCHOR, "hybrid confidence refusal")
+    _assert_once(source_text, _CONF_REPORT_ANCHOR, "hybrid report dict")
+    step = source_text.replace(_CONF_REFUSAL_ANCHOR, _CONF_REFUSAL_NEW)
+    if step.replace(_CONF_REFUSAL_NEW, _CONF_REFUSAL_ANCHOR) != source_text:
+        raise RuntimeError("confidence refusal edit changed more than the one clause")
+    updated = step.replace(_CONF_REPORT_ANCHOR, _CONF_REPORT_NEW)
+    if updated.replace(_CONF_REPORT_NEW, _CONF_REPORT_ANCHOR) != step:
+        raise RuntimeError("confidence report edit changed more than the one insertion")
+    return updated
+
+
 def stage_read_order(source_text: str) -> str:
     """packed_phase.py: install the F19 read-order pool immediately before the plane lane binds the reader."""
     if "_f19_read_order" in source_text:
@@ -364,8 +394,10 @@ def main(argv=None) -> int:
     ap.add_argument("--run-full", default=None, help="STAGED run_full.py to patch in place (install + traceback)")
     ap.add_argument("--other-prompt", action="store_true",
                     help="with --run-full: ALSO apply the F23 env-pin + generate-mode edits")
-    ap.add_argument("--hybrid-install", default=None, help="STAGED hybrid_install.py (with --verify-chunks)")
+    ap.add_argument("--hybrid-install", default=None, help="STAGED hybrid_install.py (with --verify-chunks and/or --confidence)")
     ap.add_argument("--verify-chunks", default=None, help="e.g. 4,4 : row-split exactness probe")
+    ap.add_argument("--confidence", action="store_true",
+                    help="F25: with --hybrid-install, accept a live confidence_threshold and record it in the report")
     ap.add_argument("--packed-phase", default=None, help="STAGED packed_phase.py: F19 read-order pool hook")
     ap.add_argument("--ring-bytes", type=int, default=None,
                     help="with --admission: charge the F2b host ring to the physical bound")
@@ -380,16 +412,21 @@ def main(argv=None) -> int:
             print("staged_admission_ring_bytes", args.ring_bytes)
         p.write_text(out)
         print("staged_admission", "max_rows", args.max_rows, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
-    if (args.hybrid_install is None) != (args.verify_chunks is None):
-        raise SystemExit("--hybrid-install and --verify-chunks go together")
+    if (args.hybrid_install is None) != (args.verify_chunks is None and not args.confidence):
+        raise SystemExit("--hybrid-install goes with --verify-chunks and/or --confidence")
     if args.hybrid_install is not None:
         p = Path(args.hybrid_install)
-        if args.verify_chunks == "balanced":
-            out = stage_verify_balanced(p.read_text())
-        else:
-            out = stage_verify_chunks(p.read_text(), chunks=[int(x) for x in args.verify_chunks.split(",")])
+        out = p.read_text()
+        if args.verify_chunks is not None:
+            if args.verify_chunks == "balanced":
+                out = stage_verify_balanced(out)
+            else:
+                out = stage_verify_chunks(out, chunks=[int(x) for x in args.verify_chunks.split(",")])
+            print("staged_verify_chunks", args.verify_chunks, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
+        if args.confidence:
+            out = stage_confidence(out)
+            print("staged_confidence", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
         p.write_text(out)
-        print("staged_verify_chunks", args.verify_chunks, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.packed_phase is not None:
         p = Path(args.packed_phase)
         out = stage_read_order(p.read_text())

@@ -133,6 +133,15 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
 #         EXACTNESS probe (digest decides whether a two-group verify pipeline is exact);
 #         slower by construction, never a throughput candidate
+#   +ctNN : EXACT (speculative sense) F25 confidence-gated draft length (NN=05..95; anything else is a parse
+#         error). Drops the hybrid install's confidence_threshold refusal so the pinned decode loop keeps only the
+#         leading run of drafts whose sigmoid confidence >= 0.NN (>= 1 draft); exports
+#         MTPLX_DSV41_DSPARK_CONF_THRESHOLD=0.NN. Fewer verify rows/cycle; the verify stays authoritative. Composes
+#         with +vcb/+vcA-B on the staged hybrid_install.py; its own staged-tree key component -c${A_CT}.
+#   +pwNN : F24 expert-cache policy window (pipe base ONLY; NN=16..256 integer; anything else is a parse error).
+#         Exports MTPLX_DSV41_F24_POLICY_WINDOW=NN, which the F16 package's install reads at construction to widen
+#         the two-group pipeline's policy window. Pure env pass-through: no staged edit, no tree-key component. Needs
+#         F16PKG to point at an f24 package that reads it (<repo>/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41).
 F2_GIL_SWITCH_S="${F2_GIL_SWITCH_S:-0.00005}"
 F2_ENGRAM_WORKERS="${F2_ENGRAM_WORKERS:-16}"
 F6DIR="${F6DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f6-engram/scripts/deepseek_v41/f6}"
@@ -170,7 +179,7 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
 
 # --------------------------------------------------- 2. stage patched runner copies
 stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)  $5 charge the ring (0/1)
-  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}" rd="${8:-0}" pl="${9:-0}" pipe="${10:-0}" ro="${11:-0}"
+  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}" rd="${8:-0}" pl="${9:-0}" pipe="${10:-0}" ro="${11:-0}" ct="${12:-0}"
   local ring_arg=""
   [ "$ring" != "0" ] && ring_arg="--ring-bytes $ring"   # total host bytes charged to admission
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
@@ -225,9 +234,12 @@ ARTPY
   if [ "$ro" = "1" ]; then   # F19: after F12 (both edit packed_phase.py; independent anchors)
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --packed-phase "$dest/packed/packed_phase.py"
   fi
-  if [ "$vc" != "0" ]; then
+  if [ "$vc" != "0" ] || [ "$ct" != "0" ]; then   # F25: --confidence composes with the verify-chunks probe on ONE staged hybrid_install.py
+    local vc_arg="" conf_arg=""
+    [ "$vc" != "0" ] && vc_arg="--verify-chunks $([ "$vc" = "b" ] && echo balanced || printf '%s' "$vc" | tr '-' ',')"
+    [ "$ct" != "0" ] && conf_arg="--confidence"
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
-      --hybrid-install "$dest/packed/hybrid_install.py" --verify-chunks "$([ "$vc" = "b" ] && echo balanced || printf '%s' "$vc" | tr '-' ',')"
+      --hybrid-install "$dest/packed/hybrid_install.py" $vc_arg $conf_arg
   fi
   if [ "$pipe" = "1" ] && [ "$f2b" = "1" ] && [ "${OTHER_PROMPT:-0}" != "1" ]; then   # +pf: F2b hook first, so F16's (staged later, same anchor) executes first
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"   # (other-prompt: applied above with --other-prompt)
@@ -259,7 +271,7 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0; A_PF=0; A_LA=0; A_SY=0; A_REFGEN=0
+  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0; A_PF=0; A_LA=0; A_SY=0; A_REFGEN=0; A_CT=0; A_PW=0
   A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
@@ -300,6 +312,19 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
     refgen)                      A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0; A_REFGEN=1 ;;   # F23: control lane, DSV41_STAGE_AR_MODE=generate, --out = the AR reference
     *) echo "unknown arm base '$A_BASE' in '$tok'"; exit 2 ;;
   esac
+  # F25 +ctNN confidence-gated draft length (05..95); F24 +pwNN expert-cache policy window (16..256, pipe only).
+  case "$mods" in
+    *"+ct"*) A_CT="${mods#*+ct}"; A_CT="${A_CT%%+*}"
+      case "$A_CT" in [0-9][0-9]) ;; *) echo "bad +ct '$A_CT' in '$tok' (need two digits 05..95, e.g. +ct60)"; exit 2 ;; esac
+      if [ "$((10#$A_CT))" -lt 5 ] || [ "$((10#$A_CT))" -gt 95 ]; then echo "+ct out of range in '$tok' (need 05..95, got $A_CT)"; exit 2; fi ;;
+  esac
+  case "$mods" in
+    *"+pw"*) A_PW="${mods#*+pw}"; A_PW="${A_PW%%+*}"
+      case "$A_PW" in [0-9][0-9]|[0-9][0-9][0-9]) ;; *) echo "bad +pw '$A_PW' in '$tok' (need two-three digits 16..256, e.g. +pw32)"; exit 2 ;; esac
+      if [ "$((10#$A_PW))" -lt 16 ] || [ "$((10#$A_PW))" -gt 256 ]; then echo "+pw out of range in '$tok' (need 16..256, got $A_PW)"; exit 2; fi
+      [ "$A_PIPE" = "1" ] || { echo "+pw only valid on a pipe base arm (got base '$A_BASE' in '$tok'): the F24 policy window needs the F16 two-group pipeline"; exit 2; }
+      grep -q "MTPLX_DSV41_F24_POLICY_WINDOW" "$F16PKG/f16/install.py" 2>/dev/null || { echo "+pw needs an F16 package that reads MTPLX_DSV41_F24_POLICY_WINDOW (set F16PKG to <repo>/.worktrees/dsv41-f24-policy-window/scripts/deepseek_v41; got F16PKG=$F16PKG)"; exit 2; } ;;
+  esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
   A_ENGSTAGE=0; [ "$A_ENG" != "0" ] && A_ENGSTAGE=1
   A_HOSTBYTES=0
@@ -309,17 +334,17 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   [ "$A_PL" != "0" ] && A_HOSTBYTES=$((A_HOSTBYTES + 100663296))   # F17 append-peak under-count (<= 67 MB), charged as 96 MiB
   A_ROSTAGE=0; { [ "$A_RO" != "0" ] || [ "$A_SY" != "0" ]; } && A_ROSTAGE=1
   local tree_suffix=""; [ "${OTHER_PROMPT:-0}" = "1" ] && tree_suffix="-op-$F2_PROMPT"   # F23 recipe key: other-prompt trees never mix with the benchmark's
-  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}-q${A_PIPE}-o${A_ROSTAGE}${tree_suffix}"   # g = host ring charged to admission
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}-q${A_PIPE}-o${A_ROSTAGE}-c${A_CT}${tree_suffix}"   # g = host ring charged to admission; c = F25 confidence threshold (0 = off)
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
 ARMS="${F2_ARMS:-control_a candidate control_b}"
 echo "== stage retained sources -> $STAGE_ROOT (arms: $ARMS; probe=$F2_PROBE) =="
 for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first unload
   parse_arm "$arm"
-  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD" "$A_PL" "$A_PIPE" "$A_ROSTAGE"
+  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD" "$A_PL" "$A_PIPE" "$A_ROSTAGE" "$A_CT"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
-  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES refgen=$A_REFGEN other_prompt=${OTHER_PROMPT} ar_mode=$([ "$A_REFGEN" = "1" ] && echo generate || echo reuse))"; done
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC conf=$A_CT policy_window=$A_PW growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES refgen=$A_REFGEN other_prompt=${OTHER_PROMPT} ar_mode=$([ "$A_REFGEN" = "1" ] && echo generate || echo reuse))"; done
   rmdir "$RECEIPTS" 2>/dev/null || true
   echo "STAGE ONLY: no GPU window opened"; exit 0
 fi
@@ -375,6 +400,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   if [ "$A_PIPE" = "1" ]; then
     pypath="$pypath:$F16PKG:$F16SITE"
     f2b_env="$f2b_env MTPLX_DSV41_F16=1 MTPLX_DSV41_F16_COUNTERS=$dir/f16_counters.json"
+    [ "$A_PW" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F24_POLICY_WINDOW=$A_PW"   # F24: the F16 install widens the two-group policy window at construction
     [ "$A_BAL" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_SPLIT=balanced"
     if [ "$A_BH" = "1" ] || [ "$A_ST" = "1" ]; then
       [ -f "$F16PKG/f16/stamps.py" ] || { echo "REFUSE: +bh/+st need the F18 package (set F16PKG to .worktrees/dsv41-f18-handoff/scripts/deepseek_v41)"; exit 2; }
@@ -394,6 +420,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     else f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=shape:$F17_ORACLE_SHAPE"; fi
   fi
   [ "$A_K0" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_K=0"
+  [ "$A_CT" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_DSPARK_CONF_THRESHOLD=0.$A_CT"   # F25: pinned runner reads it at generate time (no hot-path add)
   case "$A_RO$A_SY" in *[!0-9]*) echo "REFUSE: +ro/+sy need a positive integer (got ro=$A_RO sy=$A_SY)"; exit 2 ;; esac
   [ "$A_SY" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F21_SUBMIT_YIELDS=$A_SY"
   [ "$A_RO" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F19_FANOUT_WORKERS=$A_RO"
