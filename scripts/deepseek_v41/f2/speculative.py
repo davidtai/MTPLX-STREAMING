@@ -1,9 +1,12 @@
 """F2b speculative reader: a coordinator thread + a small worker pool that fill the ring.
 
-The measured main thread does almost nothing: a source layer's wrapper copies the
-evaluated prediction and hands ONE item to the coordinator (``submit_prediction``). The
-COORDINATOR thread does resident filtering + ranking + offset mapping + enqueue (injected
-``plan_fn``); WORKER threads read planes via the SAME primitive the retained lane uses
+The measured main thread does almost nothing: a source layer's wrapper hands ONE item to
+the coordinator -- the evaluated prediction (``submit_prediction``, 'lean'/'native') or the
+raw bf16 router-input words (``submit_words``, 'cpu' mode, where the coordinator does the
+f32 upcast + GEMM off the measured path). The item decode is bound ONCE at construction (no
+per-item sniffing). The COORDINATOR thread does resident filtering + ranking + offset
+mapping + enqueue (injected ``plan_fn``); WORKER threads read planes via the SAME primitive
+the retained lane uses
 (``reader._readv_range_into('experts.bin', offset, (view,))``), gate/up/down order.
 
 Window-stop is a per-target EPOCH (fix 1): ``note_demand_imminent(T)`` increments
@@ -20,7 +23,7 @@ import threading
 
 class SpeculativePool:
     def __init__(self, reader, ring, *, plane_specs, plan_fn, workers: int = 3,
-                 direct_fd: int | None = None):
+                 direct_fd: int | None = None, cpu_score_fn=None):
         self.reader = reader
         # Read primitive bound ONCE (no per-plane branch). ``direct_fd`` = a private
         # F_NOCACHE descriptor on experts.bin: one bare ``os.preadv`` per plane. The retained
@@ -35,6 +38,12 @@ class SpeculativePool:
         self.plane_specs = tuple((int(d), int(n)) for d, n in plane_specs)  # (offset_delta, length)
         self.plan_fn = plan_fn                          # (target, scores_np) -> [sidecar_offset]
         self.workers = int(workers)
+        # Coordinator item decode bound ONCE at construction (no per-item type sniffing on
+        # the hot path): 'cpu' mode items carry raw uint16 words + rows and the coordinator
+        # computes the merged scores here (off the measured main thread); 'lean'/'native'
+        # items carry the already-evaluated merged scores. Same downstream plan/enqueue path.
+        self._cpu_score_fn = cpu_score_fn
+        self._decode_item = self._decode_cpu_item if cpu_score_fn is not None else self._decode_scores_item
         self._coord_q: queue.Queue = queue.Queue()
         self._work_q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
@@ -62,18 +71,32 @@ class SpeculativePool:
             return self._epoch.get(int(target), 0)
 
     def submit_prediction(self, target: int, epoch: int, scores) -> None:
-        """Hand a target's evaluated prediction to the coordinator (one queue.put)."""
+        """'lean'/'native': hand a target's evaluated prediction to the coordinator (one
+        queue.put)."""
         self._coord_q.put((int(target), int(epoch), scores))
 
+    def submit_words(self, target: int, epoch: int, rows: int, words) -> None:
+        """'cpu' mode: hand a target's raw bf16 router-input words to the coordinator (one
+        queue.put). The coordinator upcasts + GEMMs off the measured main thread."""
+        self._coord_q.put((int(target), int(epoch), int(rows), words))
+
     # -- coordinator thread (ranking + enqueue, off the measured path) --------
+    @staticmethod
+    def _decode_scores_item(item):
+        return item                                     # (target, epoch, scores)
+
+    def _decode_cpu_item(self, item):
+        target, epoch, rows, words = item
+        return int(target), int(epoch), self._cpu_score_fn(int(target), int(rows), words)
+
     def _coordinate(self) -> None:
         while True:
             item = self._coord_q.get()
             if item is None:
                 self._coord_q.task_done()
                 return
-            target, epoch, scores = item
             try:
+                target, epoch, scores = self._decode_item(item)
                 offsets = self.plan_fn(target, scores)
                 self.counters.coordinator_batches += 1
                 for sidecar_offset in offsets:

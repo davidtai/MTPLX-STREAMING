@@ -21,7 +21,14 @@ import numpy as np
 import mlx.core as mx
 
 from .host_ring import PLANE_OFFSETS, WEIGHT_RECORD_BYTES, F2bCounters, HostRing
-from .predictor import FIRST_TARGET_LAYER, GatePredictor, rank_targets, select_prefetch_sources
+from .predictor import (
+    FIRST_TARGET_LAYER,
+    GatePredictor,
+    HostGatePredictor,
+    rank_targets,
+    select_prefetch_sources,
+    words_from_mx,
+)
 from .reader_intercept import install_intercept
 from .speculative import SpeculativePool
 
@@ -68,13 +75,14 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
     if runtime.config.prefetch_slots != 0:
         raise RuntimeError("F2b requires the runtime's own prefetch ring OFF (prefetch_slots==0)")
     # Predictor lane chosen ONCE here (never per call): 'lean' = fused compiled tape
-    # (default), 'native' = the prior gate-prefix path, kept for A/B.
+    # (default), 'native' = the prior gate-prefix path (kept for A/B), 'cpu' = host-side
+    # prediction off the GPU/barrier entirely (F2d).
     if predictor_mode is None:
         predictor_mode = os.environ.get("MTPLX_DSV41_F2B_PREDICTOR", "lean")
     predictor_mode = str(predictor_mode)
-    if predictor_mode not in ("lean", "native"):
+    if predictor_mode not in ("lean", "native", "cpu"):
         raise RuntimeError(
-            f"MTPLX_DSV41_F2B_PREDICTOR must be 'lean' or 'native'; got {predictor_mode!r}"
+            f"MTPLX_DSV41_F2B_PREDICTOR must be 'lean', 'native' or 'cpu'; got {predictor_mode!r}"
         )
     layers = sorted(int(x) for x in runtime.spec.routed_layer_indices)
     switches = {L: target.model.layers[L].mlp.switch_mlp for L in layers}
@@ -112,9 +120,27 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
 
     if not 1 <= int(first_target) <= max(layers) or not 0 <= int(k) <= 8:
         raise RuntimeError(f"F2b first_target/k out of range: first_target={first_target} k={k}")
+
+    # 'cpu' mode: materialize every TARGET gate's params on the host ONCE (validates
+    # score_func here, before any generation) and bind the coordinator's host score fn.
+    # ``predictor_host_bytes`` (0 for lean/native) is returned + printed so the launcher can
+    # charge it to memory admission.
+    host_predictors: dict[int, HostGatePredictor] = {}
+    predictor_host_bytes = 0
+    cpu_score_fn = None
+    if predictor_mode == "cpu":
+        for L in sorted(sources):
+            hp = HostGatePredictor(target.model.layers[L + 1].mlp.gate)
+            host_predictors[L + 1] = hp
+            predictor_host_bytes += hp.host_bytes
+
+        def cpu_score_fn(tgt, rows, words):
+            return host_predictors[int(tgt)].scores_from_words(words, rows)
+
     direct_fd = _open_direct_fd(runtime.reader) if direct_io else None
     pool = SpeculativePool(runtime.reader, ring, plane_specs=plane_specs,
-                           plan_fn=plan_fn, workers=workers, direct_fd=direct_fd)
+                           plan_fn=plan_fn, workers=workers, direct_fd=direct_fd,
+                           cpu_score_fn=cpu_score_fn)
 
     # The shared witness threading.local lives on any runner's PartExecutor; grab it
     # BEFORE wrapping switch._run (the wrapper replaces switch._run.__self__).
@@ -128,16 +154,24 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
     predictors = {}
     for L in wrapped_layers:
         is_source = L in sources
-        pred = GatePredictor(target.model.layers[L + 1].mlp.gate, mode=predictor_mode) if is_source else None
-        predictors[L] = pred
-        _wrap_run(switches[L], pool, own=L, is_source=is_source,
-                  is_target=(L >= first_target), predictor=pred, target_layer=(L + 1 if is_source else None))
+        is_target = L >= first_target
+        target_layer = (L + 1) if is_source else None
+        if predictor_mode == "cpu":
+            _wrap_run_cpu(switches[L], pool, own=L, is_source=is_source, is_target=is_target,
+                          target_layer=target_layer,
+                          dim=(host_predictors[target_layer].dim if is_source else 0))
+        else:
+            pred = GatePredictor(target.model.layers[L + 1].mlp.gate, mode=predictor_mode) if is_source else None
+            predictors[L] = pred
+            _wrap_run(switches[L], pool, own=L, is_source=is_source,
+                      is_target=is_target, predictor=pred, target_layer=target_layer)
 
     target._f2b = {"ring": ring, "pool": pool, "counters": counters}
     return {
         "installed": True, "ring_records": int(ring_records), "workers": int(workers),
         "plane_length": int(plane_len), "sources": sorted(sources),
         "wrapped_layers": wrapped_layers, "predictor_mode": predictor_mode,
+        "predictor_host_bytes": int(predictor_host_bytes),
         "k": int(k), "first_target": int(first_target), "direct_io": bool(direct_io), **intercept,
     }
 
@@ -163,6 +197,32 @@ def _wrap_run(switch, pool, *, own, is_source, is_target, predictor, target_laye
             epoch = pool.current_epoch(target_layer)
             scores = np.asarray(merged, dtype=np.float32).copy()
             pool.submit_prediction(target_layer, epoch, scores)
+        return result
+
+    switch._run = wrapped
+
+
+def _wrap_run_cpu(switch, pool, *, own, is_source, is_target, target_layer, dim):
+    """'cpu' mode wrapper: the routing barrier is exactly ``mx.eval(indices)`` -- NO
+    predictor op and no extra eval output, so the predictor's f32 upcast + GEMM leave the
+    barrier entirely.  After the scheduled run returns, a source layer's main-thread work is
+    the MINIMUM: copy the raw bf16 router-input words out of ``x`` into a fresh uint16 array
+    (``words_from_mx``; the coordinator holds the only reference, so the next call for this
+    layer cannot overwrite it -- no timing/sequence assumption) and hand
+    ``(target, epoch, rows, words)`` to the coordinator with ONE ``queue.put``.  The upcast +
+    GEMM + sqrtsoftplus run on the coordinator thread, off the measured path and off the GPU.
+    """
+    original_run = switch._run                       # bound scheduled run (issue_next variant)
+
+    def wrapped(x, indices, *, shared_work):
+        mx.eval(indices)                             # THE routing barrier (no predictor op)
+        if is_target:
+            pool.note_demand_imminent(own)           # window-stop this layer (epoch++), after the barrier
+        result = original_run(x, indices, shared_work=shared_work)  # its mx.eval(indices) no-ops
+        if is_source:
+            epoch = pool.current_epoch(target_layer)
+            words = words_from_mx(x)                  # fresh per-call copy (~1 us; provably race-safe)
+            pool.submit_words(target_layer, epoch, words.size // dim, words)
         return result
 
     switch._run = wrapped

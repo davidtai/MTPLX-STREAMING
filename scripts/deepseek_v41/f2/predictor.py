@@ -15,6 +15,14 @@ produced (the host ranking below is identical for both):
   * ``native``: the prior path -- the shared K22 compiled ``_gate_prefix`` when the router
     itself would compile for this row count, else the eager ``_gate_prefix_impl``, then
     ``.max(axis=0)`` OUTSIDE any tape.  Kept for A/B.
+  * ``cpu`` (F2d): the prediction is computed ENTIRELY on the host, off the measured
+    routing barrier and off the GPU.  The wrapper's barrier is just ``mx.eval(indices)``;
+    the target gate's weight/bias/temperature are materialized as numpy f32 ONCE at
+    install (``HostGatePredictor``), and the coordinator thread upcasts the raw bf16
+    router-input words (bit-exact) and runs the SAME ``sqrt(softplus((x @ W.T)/temp)) +
+    bias`` max-over-rows in numpy (MLX's ``softplus`` is ``logaddexp(x, 0)``, so the host
+    uses ``np.logaddexp``).  This removes the predictor's f32 upcast + GEMM from the
+    barrier's ``mx.eval`` entirely -- the ~0.26 ms/call the F2b probe charged to it.
 
 The host side ranks that evaluated prediction, drops the target layer's resident experts
 AND any expert already in the ring, and returns the top ``k=3`` -- bit-identical to the
@@ -131,6 +139,77 @@ class GatePredictor:
         (the source layer's post-attention router input, any leading shape reshaped to
         ``[-1, dim]`` on the bound path).  Returns f32 ``[n_routed]`` (lazy)."""
         return self._merged(tokens)
+
+
+def words_from_mx(x: "mx.array") -> np.ndarray:
+    """The 'cpu' mode main-thread hand-off copy: a FRESH, independent numpy ``uint16``
+    array holding the raw bf16 words of ``x`` (already materialized after the routing
+    barrier, so ``memoryview`` reads the evaluated buffer with NO MLX op).
+
+    Fresh per call by construction: ``.copy()`` allocates a new buffer that owns its data
+    and shares nothing with ``x``.  The coordinator therefore holds the ONLY reference to
+    these bytes, so the next call for the same source layer (or MLX reusing ``x``'s buffer)
+    cannot alias or overwrite them -- the hand-off is race-safe without any timing window or
+    sequence check.  ~1 us/call for a 6x5120 bf16 input (measured), the whole main-thread
+    cost of the 'cpu' hand-off besides one ``queue.put``.
+    """
+    return np.frombuffer(memoryview(x), dtype=np.uint16).copy()
+
+
+class HostGatePredictor:
+    """CPU-only ('cpu' mode) twin of :class:`GatePredictor`: the target (next) layer's
+    native biased-gate score, max-reduced over rows, computed ENTIRELY on the host so the
+    ADVISORY prediction never touches the GPU or the measured routing barrier.
+
+    The target gate's parameters are materialized on the host ONCE at construction (install
+    time -- the GPU window holds the lock, so the ``bf16 -> f32`` upcast may run on Metal
+    here; a single deterministic ``np.asarray(w.astype(mx.float32))``, never a per-call
+    ``.astype``): weight as numpy ``float32 [n_routed, dim]``, bias as ``float32
+    [n_routed]``, and the scalar temperature.  ``score_func`` must be ``sqrtsoftplus``
+    (asserted HERE, before any generation -- AGENTS.md: validate at construction, fail once).
+
+    ``scores_from_words`` is a pure numpy transform of the raw router-input words, running
+    the SAME arithmetic the device path runs (``sqrt(softplus((x_f32 @ W_f32.T)/temp)) +
+    bias`` then ``max`` over rows).  MLX's ``softplus`` is ``logaddexp(x, 0)`` so the host
+    uses the numerically safe ``np.logaddexp(0, z)``; the only divergence from the device
+    score is float32 GEMM accumulation order (measured max|delta| ~2e-7, top-k SET
+    unchanged).  The f32 GEMM releases the GIL, so it does not block the main thread.
+    """
+
+    def __init__(self, gate) -> None:
+        self.score_func = str(gate.score_func)
+        if self.score_func != "sqrtsoftplus":
+            raise RuntimeError(
+                f"F2b cpu predictor supports score_func='sqrtsoftplus' only; gate "
+                f"{getattr(gate, 'layer_id', '?')} has {self.score_func!r} -- use "
+                f"MTPLX_DSV41_F2B_PREDICTOR=native or add the score_func to the host path"
+            )
+        self.dim = int(gate.dim)
+        self.temp = float(gate.gate_temp)
+        # Materialize ONCE: f32 weight [n_routed, dim] + f32 bias [n_routed] on the host.
+        self.weight = np.ascontiguousarray(
+            np.asarray(gate.weight.astype(mx.float32)), dtype=np.float32
+        )
+        self.bias = np.ascontiguousarray(
+            np.asarray(gate.e_score_correction_bias.astype(mx.float32)), dtype=np.float32
+        )
+        self.n_routed = int(self.weight.shape[0])
+        if self.weight.shape != (self.n_routed, self.dim) or self.bias.shape != (self.n_routed,):
+            raise RuntimeError(
+                f"F2b cpu predictor bad param shapes: weight {self.weight.shape}, "
+                f"bias {self.bias.shape}, dim {self.dim}"
+            )
+        # Host bytes charged to memory admission (weight dominates; ~7.9 MB per target layer).
+        self.host_bytes = int(self.weight.nbytes + self.bias.nbytes)
+
+    def scores_from_words(self, words: np.ndarray, rows: int) -> np.ndarray:
+        """merged[n_routed] f32 from the raw bf16 router-input words (``uint16``, length
+        ``rows*dim``).  Runs on the coordinator thread.  Bit-exact ``bf16 -> f32`` upcast
+        (bf16 == the high 16 bits of f32), then the gate arithmetic + max over rows."""
+        x32 = (words.astype(np.uint32) << 16).view(np.float32).reshape(int(rows), self.dim)
+        z = (x32 @ self.weight.T) / self.temp
+        biased = np.sqrt(np.logaddexp(np.float32(0.0), z)) + self.bias
+        return biased.max(axis=0)
 
 
 def rank_targets(merged, skip, k: int = DEFAULT_TOP_K) -> list[int]:
