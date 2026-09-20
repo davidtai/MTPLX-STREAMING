@@ -69,6 +69,7 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #         283,170,816 B of host f32 gate weights are charged to admission with the ring
 #   +ml : wire (mlock) the F2b ring buffers once at install
 #   +plr : F17 per-layer extension rows from the causal prefill rule (same total rows; exact)
+#   +plx : F17 per-layer rows from the causal EXCESS rule (rows ∝ stat - p10(stat); prefill-only)
 #   +plo : F17 per-layer rows from the F14 ORACLE profile (shape mode; benchmark-derived ceiling)
 #   +cmp2 : +cmp with caps8; +cmp3 : +cmp with attn_core_compile; +cmp4 : +cmp with hc_premix_kernel
 #   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
@@ -195,6 +196,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+cmp4+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile,hc_premix_kernel" ;; esac
   case "$mods" in *"+plr+"*) A_PL=rule ;; esac
   case "$mods" in *"+plo+"*) A_PL=oracle ;; esac
+  case "$mods" in *"+plx+"*) A_PL=excess ;; esac
   case "$mods" in *"+pc+"*) A_PC=1 ;; esac
   case "$mods" in *"+ml+"*) A_ML=1 ;; esac
   case "$mods" in *"+rio+"*) A_RIO=1 ;; esac
@@ -267,6 +269,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   if [ "$A_PL" != "0" ]; then
     pypath="$pypath:$F17DIR"
     if [ "$A_PL" = "rule" ]; then f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=prefill_rule"
+    elif [ "$A_PL" = "excess" ]; then f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=prefill_excess"
     else f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=shape:$F17_ORACLE_SHAPE"; fi
   fi
   [ "$A_K0" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_K=0"
