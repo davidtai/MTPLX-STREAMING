@@ -59,9 +59,9 @@ def main():
         key = f"L{L}_E{E}_{comp}"
         rows = {}
         for w in WIDTHS:
-            wait_while_busy(f"beam{w} {key}")
-            r = enc.encode_projection(W_esch, "beam", dec, ct, beam=w, row_slice=slice(0, 256),
-                                      on_batch=lambda: wait_while_busy("beam"))
+            wait_while_busy(f"beam{w} {key}")   # gate BEFORE the (short, <=~31s) timed encode; no
+            # on_batch inside, so a paused GPU window never inflates the measured ms/tile
+            r = enc.encode_projection(W_esch, "beam", dec, ct, beam=w, row_slice=slice(0, 256))
             cos = ver.metrics(r["W_eff"], r["W_esch_used"])["cosine"]
             rows[w] = {"cosine": cos, "mean_sse": float(r["sse_tiles"].mean()),
                        "ms_per_tile": r["encode_s"] / r["n_tiles"] * 1000.0,
