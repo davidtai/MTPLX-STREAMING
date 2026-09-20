@@ -36,6 +36,7 @@ import collections
 import json
 import os
 
+from .host_trims import install_fast_observe
 from .pipeline import (
     Pipeline,
     bind_barrier_run,
@@ -100,7 +101,8 @@ def _wrap_issue_next_for_trailer(runners) -> int:
 
 def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads",
             stamps_stem: str | None = None, engram_lookahead: bool = False,
-            policy_window: int | None = None) -> dict:
+            policy_window: int | None = None, flat_indices: bool = False,
+            fast_observe: bool = False) -> dict:
     """Wire (or, when not armed, passthrough-stash) the F16 pipeline on ``target``.
 
     ``handoff`` selects WHICH derived run + hand-off helpers are compiled and bound,
@@ -122,7 +124,15 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
     horizon.  It is a cache decision only (which records prefetch, never a routed output), so
     outputs stay bit-exact.  Applied ONCE here (``install_policy_window``), after the gates,
     validating every bank before touching any; only meaningful when armed, so it is ignored
-    when not armed."""
+    when not armed.
+
+    ``flat_indices`` (``MTPLX_DSV41_F33_FLAT_INDICES``) selects the F33 flat-indices derived
+    run ONCE here (its sha stays under the existing derived-run key; the report gains
+    ``flat_indices``); it composes with reads, barrier and the stamped variants.
+    ``fast_observe`` (``MTPLX_DSV41_F33_FAST_OBSERVE``) replaces every bank's transition
+    observe with the state-identical flat-add variant (``install_fast_observe``), validating
+    every bank first.  Both are host trims only (bit-exact routed output); only meaningful
+    when armed, so they are ignored when not armed."""
     runtime = target._mtplx_expert_runtime
 
     if not armed:
@@ -159,12 +169,15 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
         from . import stamps as _stamps
 
         _stamps.configure(stamps_stem)
-        run_shas = bind_stamped_run(runners, pipeline, barrier=(handoff == "barrier"))
+        run_shas = bind_stamped_run(runners, pipeline, barrier=(handoff == "barrier"),
+                                    flat_indices=flat_indices)
         import atexit
 
         atexit.register(_stamps.write)
     elif handoff == "barrier":
-        run_shas = bind_barrier_run(runners, pipeline)
+        run_shas = bind_barrier_run(runners, pipeline, flat_indices=flat_indices)
+    elif flat_indices:
+        run_shas = bind_yield_run(runners, flat_indices=True)
     else:
         run_shas = bind_yield_run(runners)
     wrapped = _wrap_issue_next_for_trailer(runners)
@@ -191,6 +204,13 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
     # F24: widen the transition-window cache horizon on every bank (construction
     # time, after the gates; a passthrough {None, 0} fragment when not requested).
     report.update(install_policy_window(runtime, policy_window))
+    # F33: fast transition-observe on every bank (construction time, after the gates;
+    # flat_indices already selected the derived run above, its sha is in run_shas).
+    report["fast_observe"] = fast_observe
+    if fast_observe:
+        report.update(install_fast_observe(runtime))
+    else:
+        report["fast_observe_banks"] = 0
     return report
 
 
@@ -270,7 +290,9 @@ def install_from_env(target) -> dict:
     # host-only stamped variant (diagnostic; default OFF).  MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD=1
     # arms the F20 engram read lookahead (refuses unless the F6 parallel gather is installed).
     # MTPLX_DSV41_F24_POLICY_WINDOW=<int> widens the transition-window cache horizon (default
-    # unset -> None -> banks unchanged); read here at use, not at import.
+    # unset -> None -> banks unchanged).  MTPLX_DSV41_F33_FLAT_INDICES=1 selects the F33
+    # flat-indices derived run; MTPLX_DSV41_F33_FAST_OBSERVE=1 installs the F33 fast transition
+    # observe on every bank.  All read here at use, not at import.
     raw_policy_window = os.environ.get("MTPLX_DSV41_F24_POLICY_WINDOW")
     if raw_policy_window is None or raw_policy_window == "":
         policy_window = None
@@ -290,6 +312,8 @@ def install_from_env(target) -> dict:
         stamps_stem=os.environ.get("MTPLX_DSV41_F16_STAMPS") or None,
         engram_lookahead=os.environ.get("MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD") == "1",
         policy_window=policy_window,
+        flat_indices=os.environ.get("MTPLX_DSV41_F33_FLAT_INDICES") == "1",
+        fast_observe=os.environ.get("MTPLX_DSV41_F33_FAST_OBSERVE") == "1",
     )
     counters_path = os.environ.get("MTPLX_DSV41_F16_COUNTERS")
     if counters_path:

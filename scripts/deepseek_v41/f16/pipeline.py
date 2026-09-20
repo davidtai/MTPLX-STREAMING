@@ -133,6 +133,31 @@ _STAMP_RETURN_ANCHOR = (
     "return mx.take(joined,order,axis=0).reshape((*indices.shape,5120)),shared"
 )  # before -> stamp 8
 
+# F33: the flat-indices trim.  Two anchored, exactly-once, round-trip-checked
+# REPLACEMENTS of retained run lines -- unlike the yield/barrier/stamp INSERTS these
+# deliberately rewrite the two lines, so the mx-free insert rule does not apply.  The
+# retained blocking ``mx.eval(indices)`` becomes an eval of the already-reshaped view,
+# and the experts tuple reads that view instead of a SECOND ``indices.reshape(-1)`` ->
+# ``.tolist()`` (a fresh lazy array + scheduler round trip per group slice).  A reshape
+# is a view: no arithmetic changes, the routed output stays bit-exact.
+_FLAT_EVAL_ANCHOR = "mx.eval(indices)"
+_FLAT_EVAL_REPLACEMENT = (
+    "flat_indices = indices.reshape(-1)",
+    "mx.eval(indices, flat_indices)",
+)
+_FLAT_EXPERTS_ANCHOR = "experts = tuple(int(e) for e in indices.reshape(-1).tolist())"
+_FLAT_EXPERTS_REPLACEMENT = ("experts = tuple(flat_indices.tolist())",)
+
+# After the flat step the routing-barrier eval line is ``mx.eval(indices, flat_indices)``,
+# so with flat indices the F18 barrier hand-off and the stamp3 hand-off anchor THAT line
+# and the barrier submits ``flat_indices`` -- whose graph covers ``indices`` (it is a view
+# of it), so the single ``async_eval`` still submits the exact graph the retained blocking
+# eval waits on.  The barrier insert step takes its anchor/insert as parameters chosen at
+# construction (flat vs stock), never matched by accident.
+_BARRIER_ANCHOR_FLAT = "mx.eval(indices, flat_indices)"
+_BARRIER_INSERT_FLAT = "self._f16_barrier(flat_indices)"
+_STAMP_EVAL_ANCHOR_FLAT = _BARRIER_ANCHOR_FLAT
+
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
@@ -205,28 +230,79 @@ def _insert_line(source: str, anchor: str, insert: str, what: str, *, after: boo
     return "\n".join(lines)
 
 
-def f16_run_source(scheduled_source: str) -> str:
+def _replace_line(source: str, anchor: str, replacement: tuple[str, ...], what: str) -> str:
+    """Replace the UNIQUE ``anchor`` line with the ``replacement`` lines (each emitted at
+    the anchor's indent), asserting exactly-once and a byte-for-byte round trip: splicing
+    the anchor back in place of the replacement block recovers ``source`` exactly.  The
+    F33 counterpart of :func:`_insert_line` for the two lines the flat-indices trim rewrites
+    (which are mx/host lines, so the mx-free assertion of ``_insert_line`` does not apply)."""
+    orig = source.splitlines()
+    hits = [i for i, ln in enumerate(orig) if ln.strip() == anchor]
+    if len(hits) != 1:
+        raise RuntimeError(
+            f"F33 {what} anchor is not unique ({len(hits)}x): {anchor!r} -- "
+            "the derived run changed; re-pin the F33 replacement"
+        )
+    i = hits[0]
+    indent = orig[i][: len(orig[i]) - len(orig[i].lstrip())]
+    block = [indent + ln for ln in replacement]
+    lines = list(orig)
+    lines[i : i + 1] = block
+    recovered = list(lines)
+    recovered[i : i + len(block)] = [orig[i]]
+    if recovered != orig:
+        raise RuntimeError(f"F33 {what} replacement changed the derived run beyond one line")
+    return "\n".join(lines)
+
+
+def f16_flat_indices_source(source: str) -> str:
+    """F33 flat-indices trim: evaluate ``indices.reshape(-1)`` inside the routing barrier
+    and read that view in the experts tuple, removing the second scheduler round trip per
+    group slice.  Two exactly-once, round-trip-checked replacements of the retained run
+    lines; the unique-anchor assert refuses a missing or already-rewritten line, so a
+    double apply (the anchors are gone after the first) raises.  A reshape is a view, so
+    the routed output is bit-exact."""
+    s = _replace_line(source, _FLAT_EVAL_ANCHOR, _FLAT_EVAL_REPLACEMENT, "flat-eval")
+    return _replace_line(s, _FLAT_EXPERTS_ANCHOR, _FLAT_EXPERTS_REPLACEMENT, "flat-experts")
+
+
+def f16_run_source(scheduled_source: str, *, flat_indices: bool = False) -> str:
     """Insert ``self._f16_yield()`` immediately before the miss-completion iterator
-    (the reads-mode single hand-off), unique anchor + round trip, no ``mx`` op."""
-    return _insert_line(scheduled_source, _YIELD_ANCHOR, _YIELD_INSERT, "yield", after=False)
+    (the reads-mode single hand-off), unique anchor + round trip, no ``mx`` op.  With
+    ``flat_indices`` the F33 replacements are applied first (the routing eval then also
+    evaluates the reshape view and the experts tuple reads it); the yield insert is the
+    same either way."""
+    src = f16_flat_indices_source(scheduled_source) if flat_indices else scheduled_source
+    return _insert_line(src, _YIELD_ANCHOR, _YIELD_INSERT, "yield", after=False)
 
 
-def f16_barrier_run_source(scheduled_source: str) -> str:
+def f16_barrier_run_source(scheduled_source: str, *, flat_indices: bool = False) -> str:
     """F18 (barrier mode): two pure line insertions from the SCHEDULED run source --
     ``self._f16_barrier(indices)`` immediately before the retained ``mx.eval(indices)``,
     and the reads ``self._f16_yield()`` before the miss iterator.  Each is uniquely
     anchored, round-trip checked and mx-free; the barrier's single ``async_eval`` lives
-    in ``Pipeline.barrier``, not here."""
-    step = _insert_line(scheduled_source, _BARRIER_ANCHOR, _BARRIER_INSERT, "barrier", after=False)
+    in ``Pipeline.barrier``, not here.  With ``flat_indices`` the F33 replacements are
+    applied first, so the barrier hand-off anchors ``mx.eval(indices, flat_indices)`` and
+    submits ``flat_indices`` (whose graph covers ``indices``); the derived head is then
+    ``flat_indices = indices.reshape(-1)`` / ``self._f16_barrier(flat_indices)`` /
+    ``mx.eval(indices, flat_indices)`` (F33: flat indices removes the partner's hidden
+    ``tolist()`` stream drain that made barrier mode a net loss)."""
+    src = f16_flat_indices_source(scheduled_source) if flat_indices else scheduled_source
+    anchor = _BARRIER_ANCHOR_FLAT if flat_indices else _BARRIER_ANCHOR
+    insert = _BARRIER_INSERT_FLAT if flat_indices else _BARRIER_INSERT
+    step = _insert_line(src, anchor, insert, "barrier", after=False)
     return _insert_line(step, _YIELD_ANCHOR, _YIELD_INSERT, "yield", after=False)
 
 
-def f16_stamp_run_source(derived_source: str) -> str:
+def f16_stamp_run_source(derived_source: str, *, flat_indices: bool = False) -> str:
     """Insert the six in-run stamp calls into an already reads/barrier-derived source
     (stamps 1/2/6 live in the stamped hand-off helpers).  Each insert is pure host,
-    uniquely anchored, round-trip checked and mx-free."""
+    uniquely anchored, round-trip checked and mx-free.  With ``flat_indices`` the routing
+    eval line stamp 3 anchors is ``mx.eval(indices, flat_indices)`` (the flat step already
+    rewrote it), so the anchor is chosen to match; every other stamp anchor is unchanged."""
+    eval_anchor = _STAMP_EVAL_ANCHOR_FLAT if flat_indices else _STAMP_EVAL_ANCHOR
     s = _insert_line(derived_source, _STAMP_ENTRY_ANCHOR, "self._f16_stamp0(tokens)", "stamp0", after=True)
-    s = _insert_line(s, _STAMP_EVAL_ANCHOR, "self._f16_stamp3()", "stamp3", after=True)
+    s = _insert_line(s, eval_anchor, "self._f16_stamp3()", "stamp3", after=True)
     s = _insert_line(s, _STAMP_ROUTE_ANCHOR, "self._f16_stamproute(experts, parts, pending)", "stamproute", after=True)
     s = _insert_line(s, _YIELD_INSERT, "self._f16_stamp5()", "stamp5", after=False)
     s = _insert_line(s, _STAMP_DEFER_ANCHOR, "self._f16_stamp7()", "stamp7", after=False)
@@ -247,46 +323,54 @@ def _scheduled_run_source() -> str:
     return projection_install.scheduled_run_source(base)
 
 
-def build_yield_run():
+def build_yield_run(*, flat_indices: bool = False):
     """Compile the yield-capable run in plane_lane's namespace (so it closes over the
-    identical helpers) from the retained scheduled source.  Returns (run_fn, shas)."""
+    identical helpers) from the retained scheduled source.  ``flat_indices`` (F33) derives
+    the flat-indices variant instead; its sha stays under ``f16_yield_run_sha256``.  Returns
+    (run_fn, shas)."""
     import plane_lane
 
     scheduled = _scheduled_run_source()
-    yielded = f16_run_source(scheduled)
+    yielded = f16_run_source(scheduled, flat_indices=flat_indices)
     namespace = dict(plane_lane.__dict__)
     exec(compile(yielded, "<f16_yield_run>", "exec"), namespace)  # noqa: S102
     return namespace["run"], {
         "scheduled_run_sha256": _sha(scheduled),
         "f16_yield_run_sha256": _sha(yielded),
+        "flat_indices": bool(flat_indices),
         "retained_plane_lane_sha256": RETAINED_PLANE_LANE_SHA256,
     }
 
 
-def build_barrier_run():
+def build_barrier_run(*, flat_indices: bool = False):
     """Compile the F18 barrier+yield run in plane_lane's namespace from the retained
-    scheduled source.  Returns (run_fn, shas)."""
+    scheduled source.  ``flat_indices`` (F33) derives the flat-indices variant (the barrier
+    submits ``flat_indices``); its sha stays under ``f16_barrier_run_sha256``.  Returns
+    (run_fn, shas)."""
     import plane_lane
 
     scheduled = _scheduled_run_source()
-    derived = f16_barrier_run_source(scheduled)
+    derived = f16_barrier_run_source(scheduled, flat_indices=flat_indices)
     namespace = dict(plane_lane.__dict__)
     exec(compile(derived, "<f16_barrier_run>", "exec"), namespace)  # noqa: S102
     return namespace["run"], {
         "scheduled_run_sha256": _sha(scheduled),
         "f16_barrier_run_sha256": _sha(derived),
+        "flat_indices": bool(flat_indices),
         "retained_plane_lane_sha256": RETAINED_PLANE_LANE_SHA256,
     }
 
 
-def build_stamped_run(*, barrier: bool):
+def build_stamped_run(*, barrier: bool, flat_indices: bool = False):
     """Compile the STAMPED variant of the derived run (separate compiled function; the
-    stamp inserts are pure host, round-trip checked).  Returns (run_fn, shas)."""
+    stamp inserts are pure host, round-trip checked).  ``flat_indices`` (F33) composes the
+    flat step under the stamps (stamp 3 anchors the flat eval line).  Returns (run_fn, shas)."""
     import plane_lane
 
     scheduled = _scheduled_run_source()
-    base = f16_barrier_run_source(scheduled) if barrier else f16_run_source(scheduled)
-    stamped = f16_stamp_run_source(base)
+    base = (f16_barrier_run_source(scheduled, flat_indices=flat_indices) if barrier
+            else f16_run_source(scheduled, flat_indices=flat_indices))
+    stamped = f16_stamp_run_source(base, flat_indices=flat_indices)
     namespace = dict(plane_lane.__dict__)
     exec(compile(stamped, "<f16_stamped_run>", "exec"), namespace)  # noqa: S102
     key = "f16_stamped_barrier_run_sha256" if barrier else "f16_stamped_reads_run_sha256"
@@ -294,6 +378,7 @@ def build_stamped_run(*, barrier: bool):
         "scheduled_run_sha256": _sha(scheduled),
         key: _sha(stamped),
         "stamped_barrier": bool(barrier),
+        "flat_indices": bool(flat_indices),
         "retained_plane_lane_sha256": RETAINED_PLANE_LANE_SHA256,
     }
 
@@ -682,30 +767,34 @@ class Pipeline:
         pending.extend(orphans)
         self._orphans = []
 
-    def barrier(self, indices) -> None:
+    def barrier(self, barrier_arrays) -> None:
         """Submit the routing barrier early and hand off so the partner group uses the
-        GPU wait.  ``mx.async_eval(indices)`` adds NO array and NO op: it submits the
-        exact graph the next line's retained ``mx.eval(indices)`` waits on, only earlier
-        -- the one deliberate ``mx`` call the barrier lane issues, and it lives in this
-        helper, never in the derived source.  A non-group caller (single-group forward /
-        stock control) returns at once with NO async_eval: the retained blocking
-        ``mx.eval(indices)`` follows unchanged, so that path stays byte-identical."""
+        GPU wait.  ``barrier_arrays`` is the routing-barrier array the next line's retained
+        blocking eval waits on: ``indices`` in the stock lane, or ``flat_indices`` in the
+        F33 flat lane (a reshape view of ``indices``, so its graph covers ``indices``).
+        ``mx.async_eval(barrier_arrays)`` adds NO array and NO op: it submits that exact
+        graph, only earlier -- the one deliberate ``mx`` call the barrier lane issues, and
+        it lives in this helper, never in the derived source.  A non-group caller
+        (single-group forward / stock control) returns at once with NO async_eval: the
+        retained blocking eval follows unchanged, so that path stays byte-identical."""
         g = greenlet.getcurrent()
         if not getattr(g, "_f16_group", False):
             return
         self._barrier_adopt_orphans()
-        mx.async_eval(indices)
+        mx.async_eval(barrier_arrays)
         _f16_handoff(g)
 
-    def _barrier_stamped(self, indices) -> None:
+    def _barrier_stamped(self, barrier_arrays) -> None:
         """Stamped barrier (bound as ``_f16_barrier`` only in stamps+barrier mode): the
         barrier hand-off plus stamp 1 (after async_eval = encode) and stamp 2 (resumed
-        after the hand-off).  Identical MLX behaviour to :meth:`barrier`."""
+        after the hand-off).  ``barrier_arrays`` is the routing-barrier array (``indices``,
+        or ``flat_indices`` under F33), exactly as :meth:`barrier`.  Identical MLX
+        behaviour to :meth:`barrier`."""
         g = greenlet.getcurrent()
         if not getattr(g, "_f16_group", False):
             return
         self._barrier_adopt_orphans()
-        mx.async_eval(indices)
+        mx.async_eval(barrier_arrays)
         stamps.stamp(getattr(g, "_f16_rec", None), 1)
         _f16_handoff(g)
         stamps.stamp(getattr(g, "_f16_rec", None), 2)
@@ -884,12 +973,13 @@ class LazyPipeline:
         return self._model._f16_pipeline.pipelined_forward(forward, ids, cache)
 
 
-def bind_yield_run(runners) -> dict:
+def bind_yield_run(runners, *, flat_indices: bool = False) -> dict:
     """Rebind each retained ``PackedDecode`` runner's ``switch._run`` to the
     yield-capable run and give each runner an ``_f16_yield`` (the shared hand-off).
     Reuses the existing runner instances (``issue_next``, executor, ops preserved).
-    ``runners`` maps layer -> (switch, runner)."""
-    run_fn, shas = build_yield_run()
+    ``runners`` maps layer -> (switch, runner).  ``flat_indices`` (F33) binds the
+    flat-indices variant."""
+    run_fn, shas = build_yield_run(flat_indices=flat_indices)
     bound = 0
     for _layer, (switch, runner) in runners.items():
         runner._f16_yield = f16_yield
@@ -899,11 +989,12 @@ def bind_yield_run(runners) -> dict:
     return shas
 
 
-def bind_barrier_run(runners, pipeline) -> dict:
+def bind_barrier_run(runners, pipeline, *, flat_indices: bool = False) -> dict:
     """F18 barrier mode: rebind each runner's ``switch._run`` to the barrier+yield run
     and give each runner both hand-off helpers -- ``_f16_yield`` (shared reads hand-off)
-    and ``_f16_barrier`` (this pipeline's bound ``barrier``)."""
-    run_fn, shas = build_barrier_run()
+    and ``_f16_barrier`` (this pipeline's bound ``barrier``).  ``flat_indices`` (F33) binds
+    the flat-indices variant (the barrier then submits ``flat_indices``)."""
+    run_fn, shas = build_barrier_run(flat_indices=flat_indices)
     bound = 0
     for _layer, (switch, runner) in runners.items():
         runner._f16_yield = f16_yield
@@ -923,11 +1014,12 @@ def _bind_stamp_helpers(runner) -> None:
     runner._f16_stamp8 = MethodType(_stamp8, runner)
 
 
-def bind_stamped_run(runners, pipeline, *, barrier: bool) -> dict:
+def bind_stamped_run(runners, pipeline, *, barrier: bool, flat_indices: bool = False) -> dict:
     """Diagnostic (``MTPLX_DSV41_F16_STAMPS``): rebind each runner's ``switch._run`` to
     the STAMPED variant of the derived run and bind the stamped hand-off + in-run stamp
-    helpers.  Selected once at construction; the sink is host-only (no mx)."""
-    run_fn, shas = build_stamped_run(barrier=barrier)
+    helpers.  Selected once at construction; the sink is host-only (no mx).  ``flat_indices``
+    (F33) binds the stamped flat-indices variant."""
+    run_fn, shas = build_stamped_run(barrier=barrier, flat_indices=flat_indices)
     bound = 0
     for _layer, (switch, runner) in runners.items():
         runner._f16_yield = f16_yield_stamped
