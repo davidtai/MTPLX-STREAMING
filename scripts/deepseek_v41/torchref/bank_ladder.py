@@ -36,10 +36,13 @@ FORMATS = [("source", None, None, None), ("q2_gs64", 2, 64, "affine"), ("q3_gs64
 
 
 class ExpertBank:
-    """(L,eid) -> (w1,w2,w3) torch f32.  'source' = fp4 dequant; else requant via mx.quantize."""
-    def __init__(self, shards, bits, gs, mode):
+    """(L,eid) -> (w1,w2,w3) torch f32.  'source' = fp4 dequant; affine/mxfp4 requant via mx.quantize;
+    'tcq3' returns the eschamoe K=3 beam-256 EFFECTIVE weight from the F37 trellis cache.  The
+    affine/mxfp4 branches are byte-for-byte the original W9 path (tcq3 is added additively)."""
+    def __init__(self, shards, bits, gs, mode, tcq_cache=None):
         self.shards = shards
         self.bits, self.gs, self.mode = bits, gs, mode
+        self.tcq_cache = tcq_cache          # trellis_ladder.TrellisCache when mode == 'tcq3'
 
     def _reformat(self, w):  # w: torch f32 [out,in]
         if self.mode is None:
@@ -50,7 +53,11 @@ class ExpertBank:
 
     def expert(self, L, eid):
         base = f"layers.{L}.ffn.experts.{eid}"
-        return tuple(self._reformat(self.shards.dequant_weight(f"{base}.{w}.weight")) for w in ("w1", "w2", "w3"))
+        ws = [self.shards.dequant_weight(f"{base}.{w}.weight") for w in ("w1", "w2", "w3")]
+        if self.mode == "tcq3":
+            return tuple(torch.from_numpy(self.tcq_cache.effective(L, int(eid), wn, w.numpy()))
+                         for wn, w in zip(("w1", "w2", "w3"), ws))
+        return tuple(self._reformat(w) for w in ws)
 
 
 def run_forward(bank, refmodel, refengram, args, shards, hashes, engram_layer_ids, max_layer):
@@ -116,62 +123,107 @@ def run_forward(bank, refmodel, refengram, args, shards, hashes, engram_layer_id
     return caps
 
 
-def main():
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--max-layer", type=int, default=2)
-    a = ap.parse_args()
+def setup(max_seq_len=64):
+    """Build the torch reference model/engram, args, shards, probe row hashes and engram layer ids.
 
+    Returns a ctx dict reused by :func:`run_forward` (and the F37 runner, so the source forward and
+    the ladder share one setup)."""
     RF._install_stub_modules()
     import model as refmodel
     import engram as refengram
     refmodel.world_size = 1; refmodel.rank = 0; refmodel.default_dtype = torch.float32
     cfg = json.loads((RF.REF_INFERENCE / "config.json").read_text())
     args = refmodel.ModelArgs(**cfg)
-    args.max_batch_size = 1; args.max_seq_len = 64; args.temperature = 0.0
-
+    args.max_batch_size = 1; args.max_seq_len = max_seq_len; args.temperature = 0.0
     shards = RF.Shards(RF.SRC)
     ids = torch.tensor([RF.PROBE_IDS], dtype=torch.long)
     hashes, layout = RF.reference_row_ids(args, refengram, ids)
     eids = list(layout.layer_ids)
-
     probe = json.loads((RECEIPTS / "bank_mx_probe.json").read_text()) if (RECEIPTS / "bank_mx_probe.json").is_file() else {"formats": {}}
-    t0 = time.time()
-    runs = {}
-    for fname, bits, gs, mode in FORMATS:
-        runs[fname] = run_forward(ExpertBank(shards, bits, gs, mode), refmodel, refengram, args, shards, hashes, eids, a.max_layer)
-        print(f"[bank] {fname} forward done ({time.time()-t0:.1f}s)")
+    return {"refmodel": refmodel, "refengram": refengram, "args": args, "shards": shards,
+            "hashes": hashes, "eids": eids, "probe": probe}
 
+
+def forward(ctx, bank, max_layer):
+    """run_forward wrapper taking the ctx dict from :func:`setup`."""
+    return run_forward(bank, ctx["refmodel"], ctx["refengram"], ctx["args"], ctx["shards"],
+                       ctx["hashes"], ctx["eids"], max_layer)
+
+
+def routed_experts(R0, max_layer):
+    """Set of (L, eid) the source run routes to across layers 0..max_layer (the ~191-expert set)."""
+    routed = set()
+    for L in range(max_layer + 1):
+        for eid in np.unique(R0[L]["router_ids"]):
+            routed.add((L, int(eid)))
+    return routed
+
+
+def build_report(runs, formats, max_layer, probe):
+    """Forward cos + router top-6 agreement vs R0 for every non-source format (identical math to W9).
+
+    ``expert_quality_vs_source`` starts from the stored ``bank_mx_probe`` block (the six formats'
+    per-expert quality); the caller injects tcq3's entry.  Returns the report dict."""
     R0 = runs["source"]
-    report = {"probe_ids": RF.PROBE_IDS, "max_layer": a.max_layer, "expert_quality_vs_source": probe.get("formats", {}), "forward_vs_R0": {}}
+    report = {"probe_ids": RF.PROBE_IDS, "max_layer": max_layer,
+              "expert_quality_vs_source": dict(probe.get("formats", {})), "forward_vs_R0": {}}
     print("\n=== forward cos vs R0 (source fp4) ===")
-    for fname, *_ in FORMATS:
+    for fname, *_ in formats:
         if fname == "source":
             continue
         rec = {}
-        for L in range(a.max_layer + 1):
+        for L in range(max_layer + 1):
             mo_mn, mo_g, _ = RL.cos_maxabs(R0[L]["moe_out"], runs[fname][L]["moe_out"])
             lo_mn, lo_g, _ = RL.cos_maxabs(R0[L]["layer_out"], runs[fname][L]["layer_out"])
             rec[f"L{L}"] = {"moe_global_cos": mo_g, "moe_min_cos": mo_mn, "layer_global_cos": lo_g, "layer_min_cos": lo_mn}
         # router top-6 set agreement vs R0 at layer 2 (the coordinator's metric) + deepest layer
-        for Lr in sorted({2, a.max_layer}):
-            if Lr > a.max_layer:
+        for Lr in sorted({2, max_layer}):
+            if Lr > max_layer:
                 continue
             r0i = R0[Lr]["router_ids"]; fi = runs[fname][Lr]["router_ids"]
             exact = sum(1 for i in range(r0i.shape[0]) if set(r0i[i]) == set(fi[i]))
             ov = float(np.mean([len(set(r0i[i]) & set(fi[i])) for i in range(r0i.shape[0])]))
             rec["router_L%d_vs_R0" % Lr] = {"exact_set_match": exact, "n_tokens": int(r0i.shape[0]), "mean_overlap_of_6": ov}
-        Lr = 2 if a.max_layer >= 2 else a.max_layer
+        Lr = 2 if max_layer >= 2 else max_layer
         exact = rec["router_L%d_vs_R0" % Lr]["exact_set_match"]; ov = rec["router_L%d_vs_R0" % Lr]["mean_overlap_of_6"]
         r0i = R0[Lr]["router_ids"]
         report["forward_vs_R0"][fname] = rec
         q = probe.get("formats", {}).get(fname, {})
-        print(f"{fname:12} moe_g[L0..{a.max_layer}]=" + ",".join(f"{rec[f'L{L}']['moe_global_cos']:.5f}" for L in range(a.max_layer + 1))
-              + f" | layer_g[L{a.max_layer}]={rec[f'L{a.max_layer}']['layer_global_cos']:.5f}"
+        print(f"{fname:14} moe_g[L0..{max_layer}]=" + ",".join(f"{rec[f'L{L}']['moe_global_cos']:.5f}" for L in range(max_layer + 1))
+              + f" | layer_g[L{max_layer}]={rec[f'L{max_layer}']['layer_global_cos']:.5f}"
               + f" | routerL{Lr} {exact}/{r0i.shape[0]} ov{ov:.2f}"
               + f" | q.cos_vs_src={q.get('mean_cos_vs_source','?')} bank={q.get('bank_GiB_40x384','?')}GiB")
-    (RECEIPTS / "torchref_bank_ladder.json").write_text(json.dumps(report, indent=2))
-    print(f"\n[bank] DONE {time.time()-t0:.1f}s -> torchref_bank_ladder.json")
+    return report
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--max-layer", type=int, default=2)
+    ap.add_argument("--out", default=str(RECEIPTS / "torchref_bank_ladder.json"))
+    ap.add_argument("--tcq-cache", default=None, help="if set, append tcq3_beam256 (effective weights from this cache dir)")
+    a = ap.parse_args(argv)
+
+    ctx = setup()
+    formats = list(FORMATS)
+    tcq = None
+    if a.tcq_cache:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "trellis"))
+        import trellis_ladder as TL
+        tcq = TL.TrellisCache(a.tcq_cache)
+        formats.append(("tcq3_beam256", 3, None, "tcq3"))
+
+    t0 = time.time()
+    runs = {}
+    for fname, bits, gs, mode in formats:
+        bank = ExpertBank(ctx["shards"], bits, gs, mode, tcq_cache=tcq if mode == "tcq3" else None)
+        runs[fname] = forward(ctx, bank, a.max_layer)
+        print(f"[bank] {fname} forward done ({time.time()-t0:.1f}s)")
+
+    report = build_report(runs, formats, a.max_layer, ctx["probe"])
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(a.out).write_text(json.dumps(report, indent=2))
+    print(f"\n[bank] DONE {time.time()-t0:.1f}s -> {a.out}")
     return 0
 
 
