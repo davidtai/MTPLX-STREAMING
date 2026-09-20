@@ -507,6 +507,25 @@ def test_f5_enable_decode_levers_mechanism():
             os.environ.pop("MTPLX_DSV41_ATTN_CORE_COMPILE", None)
 
 
+def test_f5_decode_attn_kernel_is_a_read_at_use_switch():
+    """K29 (fused decode/verify attention core): the retained arm pins it "0"; the boundary write must
+    flip the read-at-use resolver and nothing import-bound."""
+    key = "MTPLX_DSV41_DECODE_ATTN_KERNEL"
+    before = os.environ.get(key)
+    os.environ[key] = "0"                                   # the retained arm's explicit pin
+    try:
+        assert dv41._resolve_decode_attn_kernel() is False
+        rep = f5_decode_levers.enable_decode_levers(dv41, "decode_attn_kernel")
+        assert os.environ.get(key) == "1" and dv41._resolve_decode_attn_kernel() is True
+        assert rep["applied"]["decode_attn_kernel"]["mechanism"] == "env"
+        assert "rounding-class" in rep["applied"]["decode_attn_kernel"]["exactness"]
+    finally:
+        if before is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = before
+
+
 # ---------------------------------------------------------------------------
 # 9. caps-at-8 SEPARATE option raises the 7-row caps and never touches defaults
 # ---------------------------------------------------------------------------

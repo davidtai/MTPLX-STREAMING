@@ -54,6 +54,10 @@ _NAMES = {
     # sinkhorn_metal is a GPU rounding-class kernel the retained arm already runs
     # (arm_env MTPLX_DSV41_SINKHORN_METAL=1); listed so an arm can assert it stays on.
     "sinkhorn_metal": ("env", "MTPLX_DSV41_SINKHORN_METAL"),
+    # K29 (W60): the fused decode/verify attention CORE, one dispatch instead of the eager gathered
+    # core, rows <= 8.  Read at use (deepseek_v41._resolve_decode_attn_kernel), so a boundary write arms
+    # it for DECODE ONLY (verify rows AND the M=1 draft attention); the retained arm pins it "0".
+    "decode_attn_kernel": ("env", "MTPLX_DSV41_DECODE_ATTN_KERNEL"),
 }
 
 # Exactness class per lever at the M<=8 verify regime, for the receipt (CPU tiny
@@ -67,6 +71,7 @@ _EXACTNESS = {
     "attn_core_compile": "rounding-class at native width; mx.array_equal on tiny CPU only",
     "hc_premix_kernel": "GPU-only; parity-gated 1e-6 + argmax-exact (test_hc_premix_kernel_parity_gpu); INERT on CPU",
     "sinkhorn_metal": "rounding-class Metal (K3); INERT on CPU",
+    "decode_attn_kernel": "rounding-class Metal kernel (K29; W60: -38% vs the eager core at M=1); INERT on CPU",
 }
 
 
