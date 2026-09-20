@@ -82,8 +82,23 @@ def _load_long_code_instruction() -> dict:
     return json.loads(path.read_text().splitlines()[0])
 
 
+def _load_python_modules_long_instruction() -> dict:
+    """io_module_long: the existing python_modules_long.jsonl prompt (a long code-only generation)."""
+    path = RUN_WORKTREE / "mtplx/benchmarks/prompts/python_modules_long.jsonl"
+    return json.loads(path.read_text().splitlines()[0])
+
+
 def _prompt_specs() -> dict:
     return {
+        # io_module (kept for the record) is NOT a valid 1,024-token cell: the model finished its diff and hit
+        # end-of-sequence after 221 tokens (AR reference 2026-09-20), so the runner refuses it.  io_module_long keeps
+        # the same context and swaps in the repo's existing long-generation instruction.
+        "io_module_long": {
+            "context_path": RUN_WORKTREE / "mtplx/expert_io.py",
+            "instruction": _load_python_modules_long_instruction(),
+            "require_substrings": ("Write code only.",),
+            "reject_substrings": (),
+        },
         "io_module": {
             "context_path": RUN_WORKTREE / "mtplx/expert_io.py",
             "instruction": _IO_MODULE_INSTRUCTION,
@@ -256,7 +271,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Build the F23 other-prompt cells (CPU only)")
     ap.add_argument(
         "--name",
-        choices=("io_module", "server_module"),
+        choices=("io_module", "io_module_long", "server_module"),
         default=None,
         help="build only this prompt (default: build both)",
     )

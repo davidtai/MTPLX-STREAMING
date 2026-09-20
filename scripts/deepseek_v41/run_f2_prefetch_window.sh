@@ -460,6 +460,14 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     echo "FAIL: refgen ${arm} produced no AR reference at $out (guard exit $rc)."
     tail -8 "$dir/guard.log" || true; exit "${rc:-1}"
   fi
+  if [ "$OTHER_PROMPT" = "1" ] && { [ "$rc" = "1" ] || [ "$rc" = "4" ]; } \
+      && grep -aq '"pass": "dspark"' "$dir"/f2b-*.passes.jsonl 2>/dev/null; then
+    # F23: on a new prompt the DSpark stream's first difference from AR cannot be tie-classified (no stored AR
+    # logits row at that index), so the harness exits 1 AFTER writing the complete DSpark pass. The rule-validation
+    # arms are compared with EACH OTHER (same digest, records, wall), not with AR.
+    echo "  (other prompt: guard exit $rc tolerated -- DSpark pass complete; AR tie class unavailable for this prompt)"
+    return 0
+  fi
   if [ "$rc" = "4" ] && { [ "$A_VC" != "0" ] || [ "$A_CMP" = "1" ] || [ "$A_PIPE" = "1" ]; }; then
     echo "  (guard exit 4 on a rounding-class probe arm: digest differs from control, as expected; continuing)"
     return 0
