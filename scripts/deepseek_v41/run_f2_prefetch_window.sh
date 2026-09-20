@@ -68,6 +68,9 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +pc : F2d predictor on the CPU coordinator thread (barrier = exactly mx.eval(indices)); its
 #         283,170,816 B of host f32 gate weights are charged to admission with the ring
 #   +ml : wire (mlock) the F2b ring buffers once at install
+#   +plr : F17 per-layer extension rows from the causal prefill rule (same total rows; exact)
+#   +plo : F17 per-layer rows from the F14 ORACLE profile (shape mode; benchmark-derived ceiling)
+#   +cmp2 : +cmp with caps8; +cmp3 : +cmp with attn_core_compile; +cmp4 : +cmp with hc_premix_kernel
 #   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
 #         EXACTNESS probe (digest decides whether a two-group verify pipeline is exact);
 #         slower by construction, never a throughput candidate
@@ -78,6 +81,8 @@ F12DIR="${F12DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktree
 F2_GROWTH_WORKERS="${F2_GROWTH_WORKERS:-8}"
 F15DIR="${F15DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f15-tieclass/scripts/deepseek_v41/f15}"
 F2_ROW_INDICES="${F2_ROW_INDICES:-470-490}"
+F17DIR="${F17DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f17-rows/scripts/deepseek_v41/f17}"
+F17_ORACLE_SHAPE="${F17_ORACLE_SHAPE:-81,54,59,14,32,25,0,9,18,10,3,15,29,28,0,30,0,9,0,54,0,0,0,15,0,0,0,27,0,6,13,28,27,34,10,7,21,32,55,55}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 STAGE_ROOT="/private/tmp/dsv41-f2b-${STAMP}"
 OUT_STAGE="/tmp/dsv41-110-stage"                     # run_full.py:330 requires --out here
@@ -103,7 +108,7 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
 
 # --------------------------------------------------- 2. stage patched runner copies
 stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)  $5 charge the ring (0/1)
-  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}" rd="${8:-0}"
+  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}" rd="${8:-0}" pl="${9:-0}"
   local ring_arg=""
   [ "$ring" != "0" ] && ring_arg="--ring-bytes $ring"   # total host bytes charged to admission
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
@@ -143,6 +148,10 @@ ARTPY
   ln -s "$PACKED_ARTIFACT_REAL" "$dest/packed/artifact"
   nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
     --admission "$dest/packed/packed_admission.py" --max-rows "$rows" $ring_arg
+  if [ "$pl" != "0" ]; then   # F17: per-layer extension rows (staged extension.py)
+    nice -n 19 "$PYBIN" "$F17DIR/stage_f17_runner.py" \
+      --extension "$RETAINED_SRC/packed/extension.py" --out "$dest/packed/extension.py"
+  fi
   if [ "$gt" = "1" ]; then
     nice -n 19 "$PYBIN" "$F12DIR/stage_f12_runner.py" --packed-phase "$dest/packed/packed_phase.py"
   fi
@@ -170,7 +179,8 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0
+  A_CAPS8=0
+  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
   case "$mods" in *"+eg+"*) A_ENG=decode ;; esac
@@ -179,7 +189,12 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+pn+"*) A_PN=1 ;; esac
   case "$mods" in *"+k0+"*) A_K0=1 ;; esac
   case "$mods" in *"+rd+"*) A_RD=1 ;; esac
-  case "$mods" in *"+cmp+"*) A_CMP=1 ;; esac
+  case "$mods" in *"+cmp+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile" ;; esac
+  case "$mods" in *"+cmp2+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile"; A_CAPS8=1 ;; esac
+  case "$mods" in *"+cmp3+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile,attn_core_compile" ;; esac
+  case "$mods" in *"+cmp4+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile,hc_premix_kernel" ;; esac
+  case "$mods" in *"+plr+"*) A_PL=rule ;; esac
+  case "$mods" in *"+plo+"*) A_PL=oracle ;; esac
   case "$mods" in *"+pc+"*) A_PC=1 ;; esac
   case "$mods" in *"+ml+"*) A_ML=1 ;; esac
   case "$mods" in *"+rio+"*) A_RIO=1 ;; esac
@@ -196,17 +211,18 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   A_HOSTBYTES=0
   [ "$A_F2B" = "1" ] && A_HOSTBYTES=$((F2_RING_RECORDS * 3 * 5898240))
   [ "$A_F2B" = "1" ] && [ "$A_PC" = "1" ] && A_HOSTBYTES=$((A_HOSTBYTES + 283170816))
-  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}"   # g = host ring charged to admission
+  [ "$A_PL" != "0" ] && A_HOSTBYTES=$((A_HOSTBYTES + 100663296))   # F17 append-peak under-count (<= 67 MB), charged as 96 MiB
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}"   # g = host ring charged to admission
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
 ARMS="${F2_ARMS:-control_a candidate control_b}"
 echo "== stage retained sources -> $STAGE_ROOT (arms: $ARMS; probe=$F2_PROBE) =="
 for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first unload
   parse_arm "$arm"
-  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD"
+  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD" "$A_PL"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
-  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML host_bytes=$A_HOSTBYTES)"; done
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES)"; done
   rmdir "$RECEIPTS" 2>/dev/null || true
   echo "STAGE ONLY: no GPU window opened"; exit 0
 fi
@@ -239,8 +255,8 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   local probe_env=""
   if [ "$F2_PROBE" = "1" ]; then
     pypath="$pypath:$F5DIR"
-    local f5_enable=""; [ "$A_CMP" = "1" ] && f5_enable="hc_compile,attn_compile"
-    probe_env="MTPLX_DSV41_F5_ENABLE=$f5_enable MTPLX_DSV41_F5_CAPS8=0 MTPLX_DSV41_F5_TIMED_PROBE=1 MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
+    local f5_enable=""; [ "$A_CMP" = "1" ] && f5_enable="$A_CMPSET"
+    probe_env="MTPLX_DSV41_F5_ENABLE=$f5_enable MTPLX_DSV41_F5_CAPS8=$A_CAPS8 MTPLX_DSV41_F5_TIMED_PROBE=1 MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
   fi
   local f2b_env=""
   [ "$f2b" = "1" ] && f2b_env="MTPLX_DSV41_F2B=1 MTPLX_DSV41_F2B_RECORDS=$F2_RING_RECORDS MTPLX_DSV41_F2B_WORKERS=$F2_WORKERS MTPLX_DSV41_F2B_COUNTERS=$dir/f2b_counters.json"
@@ -248,6 +264,11 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   [ "$A_PN" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_PREDICTOR=native"
   [ "$A_PC" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_PREDICTOR=cpu"
   [ "$A_ML" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_WIRE_RING=1"
+  if [ "$A_PL" != "0" ]; then
+    pypath="$pypath:$F17DIR"
+    if [ "$A_PL" = "rule" ]; then f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=prefill_rule"
+    else f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=shape:$F17_ORACLE_SHAPE"; fi
+  fi
   [ "$A_K0" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_K=0"
   if [ "$A_CMP" = "1" ] && [ "$F2_PROBE" != "1" ]; then echo "REFUSE: +cmp needs F2_PROBE=1 (F5 hook)"; exit 2; fi
   if [ "$A_RD" = "1" ]; then
