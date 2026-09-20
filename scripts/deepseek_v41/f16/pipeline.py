@@ -81,8 +81,19 @@ DEVICE_ROUTE_ACTIVE_SHA256 = (
     "1c8788ac30e9899d0f6799d0f508fc02e1195a0884b636debb36925fb9e31e8a"
 )
 
-# The verify row split (design): group A is the first 4 rows, group B is the rest.
+# The verify row split. Forwards of <= A_ROWS rows are never split (single group). Above that
+# the LEADER group size is a construction-time choice (``Pipeline(split=...)``):
+#   "fixed4"   -> 4 rows, the rest trail        (oracle: sequential chunks (4, n-4))
+#   "balanced" -> ceil(n/2) rows, floor(n/2)    (oracle: sequential chunks (ceil, floor))
+# Balanced groups overlap better: with 4+2 on a 6-row cycle the trailer has ~2 ms of reads (and
+# no misses at all in ~45% of its layer calls) while the leader's ~4 ms of reads outlast the
+# trailer's ~2.5 ms of barrier + host work. Each split is its OWN arithmetic (per-group row
+# counts pick the kernels), so each needs its own sequential oracle digest + tie classification.
 A_ROWS = 4
+SPLITS = {
+    "fixed4": lambda rows: A_ROWS,
+    "balanced": lambda rows: (rows + 1) // 2,
+}
 # Greenlet roles (leader runs one layer ahead of the trailer).
 LEADER, TRAILER = 0, 1
 
@@ -244,10 +255,14 @@ class Pipeline:
     so a staged tree run with F16 off is a byte-for-byte stock A/B control.
     """
 
-    def __init__(self, model, *, armed: bool):
+    def __init__(self, model, *, armed: bool, split: str = "fixed4"):
         self.model = model
         self.backbone = model.model
         self.armed = bool(armed)
+        if split not in SPLITS:
+            raise RuntimeError(f"F16 split must be one of {sorted(SPLITS)}; got {split!r}")
+        self.split = split
+        self._leader_rows = SPLITS[split]          # bound once; no per-call mode branch
         self.counters = {
             "calls": 0,
             "single_forwards": 0,
@@ -274,8 +289,9 @@ class Pipeline:
     def _run_pipeline(self, ids, cache):
         backbone = self.backbone
         rows = int(ids.shape[1])
-        rows_a, rows_b = A_ROWS, rows - A_ROWS
-        ids_a, ids_b = ids[:, :A_ROWS], ids[:, A_ROWS:]
+        rows_a = int(self._leader_rows(rows))
+        rows_b = rows - rows_a
+        ids_a, ids_b = ids[:, :rows_a], ids[:, rows_a:]
         offset0 = int(cache.offset)
 
         # The clone omits the device-route cold-recovery block, so it MUST be off.

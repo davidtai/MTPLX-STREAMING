@@ -721,3 +721,45 @@ def test_lazy_pipeline_resolves_the_install_at_call_time():
     )
     assert lazy.pipelined_forward("f", "ids", "cache") == "out"
     assert calls == [("f", "ids", "cache")]
+
+
+@pytest.mark.parametrize("rows", [5, 6, 7, 8])
+@pytest.mark.parametrize("use_engram", [False, True])
+def test_balanced_split_is_bitwise_sequential_ceil_floor(rows, use_engram):
+    """``split='balanced'``: leader = ceil(rows/2), trailer = floor(rows/2); bit-identical to two
+    sequential causal forwards of exactly those sizes (the balanced oracle's arithmetic)."""
+    args = _args()
+    model = Model(args)
+    _randomize(model, seed=7, scale=0.2)
+    if use_engram:
+        _attach_fake_engram(model)
+    forward = _forward(model)
+    ids = mx.array(np.random.RandomState(100 + rows).randint(0, args.vocab_size, size=(1, rows)))
+    lead = (rows + 1) // 2
+
+    c2 = _make_cache(args, model, use_engram)
+    la, ma = forward(ids[:, :lead], c2)
+    lb, mb = forward(ids[:, lead:], c2)
+    oracle_logits = mx.concatenate([la, lb], axis=1)
+    oracle_mh = mx.concatenate([ma, mb], axis=1)
+    mx.eval(oracle_logits, oracle_mh)
+    snap2, off2 = _cache_snapshot(c2)
+
+    c1 = _make_cache(args, model, use_engram)
+    pipe = Pipeline(model, armed=True, split="balanced")
+    logits, mh = pipe.pipelined_forward(forward, ids, c1)
+    mx.eval(logits, mh)
+    snap1, off1 = _cache_snapshot(c1)
+
+    assert pipe.counters["pipelined_forwards"] == 1
+    assert bool(mx.array_equal(logits, oracle_logits).item()), "logits differ"
+    assert bool(mx.array_equal(mh, oracle_mh).item()), "main_hidden differs"
+    assert off1 == off2 == rows
+    for k, v in snap2.items():
+        assert np.array_equal(snap1[k], v), f"cache[{k}] differs"
+
+
+def test_unknown_split_is_refused_at_construction():
+    args, model = _built_model()
+    with pytest.raises(RuntimeError):
+        Pipeline(model, armed=True, split="thirds")

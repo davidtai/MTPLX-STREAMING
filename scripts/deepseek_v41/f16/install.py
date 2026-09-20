@@ -95,7 +95,7 @@ def _wrap_issue_next_for_trailer(runners) -> int:
     return wrapped
 
 
-def install(target, *, armed: bool) -> dict:
+def install(target, *, armed: bool, split: str = "fixed4") -> dict:
     """Wire (or, when not armed, passthrough-stash) the F16 pipeline on ``target``."""
     runtime = target._mtplx_expert_runtime
 
@@ -123,7 +123,7 @@ def install(target, *, armed: bool) -> dict:
     yield_shas = bind_yield_run(runners)
     wrapped = _wrap_issue_next_for_trailer(runners)
 
-    pipeline = Pipeline(target, armed=True)
+    pipeline = Pipeline(target, armed=True, split=split)
     target._f16_pipeline = pipeline
 
     report = {
@@ -136,6 +136,7 @@ def install(target, *, armed: bool) -> dict:
         "device_route_off": True,
         "extra_projection_bytes": F16_EXTRA_PROJECTION_BYTES,
         "a_rows": pipeline_a_rows(),
+        "split": pipeline.split,
         "source_pins": source_pins,
     }
     report.update(yield_shas)
@@ -153,7 +154,9 @@ def install_from_env(target) -> dict:
     stashes ``target._f16_pipeline`` (armed iff ``MTPLX_DSV41_F16 == '1'``); prints
     one provenance line; registers an at-exit counter dump when a path is set."""
     armed = os.environ.get("MTPLX_DSV41_F16") == "1"
-    report = install(target, armed=armed)
+    # Leader-group size, chosen ONCE here: "fixed4" (oracle = sequential chunks 4+rest) or
+    # "balanced" (ceil/floor halves; its own oracle digest).
+    report = install(target, armed=armed, split=os.environ.get("MTPLX_DSV41_F16_SPLIT", "fixed4"))
     counters_path = os.environ.get("MTPLX_DSV41_F16_COUNTERS")
     if counters_path:
         import atexit
