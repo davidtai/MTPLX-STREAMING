@@ -75,6 +75,9 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +plx : F17 per-layer rows from the causal EXCESS rule (rows ∝ stat - p10(stat); prefill-only)
 #   +plo : F17 per-layer rows from the F14 ORACLE profile (shape mode; benchmark-derived ceiling)
 #   +cmp2 : +cmp with caps8; +cmp3 : +cmp with attn_core_compile; +cmp4 : +cmp with hc_premix_kernel
+#   +vcb : sequential BALANCED verify schedule (ceil(n/2)+floor(n/2) rows per cycle, single chunk for
+#         n<=4) = the oracle for the balanced pipeline split
+#   +bal : (pipe base) F16 balanced leader/trailer split; oracle digest = $F16_BAL_ORACLE_SHA if set
 #   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
 #         EXACTNESS probe (digest decides whether a two-group verify pipeline is exact);
 #         slower by construction, never a throughput candidate
@@ -164,7 +167,7 @@ ARTPY
   fi
   if [ "$vc" != "0" ]; then
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
-      --hybrid-install "$dest/packed/hybrid_install.py" --verify-chunks "$(printf '%s' "$vc" | tr '-' ',')"
+      --hybrid-install "$dest/packed/hybrid_install.py" --verify-chunks "$([ "$vc" = "b" ] && echo balanced || printf '%s' "$vc" | tr '-' ',')"
   fi
   if [ "$pipe" = "1" ]; then   # F16: run_full hook + hybrid verify call + 4-buffer projection store
     # preflight re-applies the stager to the RETAINED sources, so it needs the unstaged tree
@@ -193,7 +196,7 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_CAPS8=0; A_PIPE=0
+  A_CAPS8=0; A_PIPE=0; A_BAL=0
   A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
@@ -210,6 +213,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+plr+"*) A_PL=rule ;; esac
   case "$mods" in *"+plo+"*) A_PL=oracle ;; esac
   case "$mods" in *"+plx+"*) A_PL=excess ;; esac
+  case "$mods" in *"+bal+"*) A_BAL=1 ;; esac
   case "$mods" in *"+pc+"*) A_PC=1 ;; esac
   case "$mods" in *"+ml+"*) A_ML=1 ;; esac
   case "$mods" in *"+rio+"*) A_RIO=1 ;; esac
@@ -285,6 +289,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   if [ "$A_PIPE" = "1" ]; then
     pypath="$pypath:$F16PKG:$F16SITE"
     f2b_env="$f2b_env MTPLX_DSV41_F16=1 MTPLX_DSV41_F16_COUNTERS=$dir/f16_counters.json"
+    [ "$A_BAL" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_SPLIT=balanced"
   fi
   if [ "$A_PL" != "0" ]; then
     pypath="$pypath:$F17DIR"
@@ -329,11 +334,14 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   cp "${stem}".* "$dir/" 2>/dev/null || true
   if [ "$A_PIPE" = "1" ] && [ "$A_CMP" != "1" ]; then   # the pipeline has an exact oracle: the sequential 4+rest digest
     local got; got="$(grep -a -o '"output_ids_sha256": "[0-9a-f]*"' "$dir"/f2b-*.passes.jsonl 2>/dev/null | head -1 | cut -d'"' -f4)"
-    if [ "$got" != "$F16_ORACLE_SHA" ]; then
-      echo "FAIL: pipe arm ${arm} digest '${got:-none}' != oracle $F16_ORACLE_SHA (guard exit $rc). Stopping."
+    local want="$F16_ORACLE_SHA"; [ "$A_BAL" = "1" ] && want="${F16_BAL_ORACLE_SHA:-}"
+    if [ -z "$want" ]; then
+      echo "  pipe arm ${arm}: no oracle digest configured for this split; got '${got:-none}' (compare by hand)"
+    elif [ "$got" != "$want" ]; then
+      echo "FAIL: pipe arm ${arm} digest '${got:-none}' != oracle $want (guard exit $rc). Stopping."
       grep -a -E "ABORTED|Traceback|Error" "$dir/guard.log" | tail -5 || true; exit 4
     fi
-    echo "  pipe arm ${arm}: digest == sequential 4+rest oracle (bit-identical row-split arithmetic)"
+    [ -n "$want" ] && echo "  pipe arm ${arm}: digest == its sequential row-split oracle (bit-identical arithmetic)"
   fi
   if [ "$rc" = "4" ] && { [ "$A_VC" != "0" ] || [ "$A_CMP" = "1" ] || [ "$A_PIPE" = "1" ]; }; then
     echo "  (guard exit 4 on a rounding-class probe arm: digest differs from control, as expected; continuing)"

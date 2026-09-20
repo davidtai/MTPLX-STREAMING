@@ -101,6 +101,35 @@ def stage_verify_chunks(source_text: str, *, chunks) -> str:
     return updated
 
 
+# Balanced row-split oracle: per cycle, verify ceil(n/2) rows then floor(n/2) rows (single chunk
+# when n <= 4) -- the sequential reference for the F16 pipeline's "balanced" split. Two anchored
+# insertions into the STAGED hybrid_install.py: one more symmetric replace() inside rewrite()
+# (no mx call added, so its AST mx-call check still holds) and one namespace injection.
+_VB_REWRITE_ANCHOR = "    restored = updated"
+_VB_REWRITE_INSERT = (
+    "    replace('        for configured_width in verify_chunks:',\n"
+    "            '        for configured_width in _BALANCED_CHUNKS(len(block_ids)):')"
+)
+_VB_NS_ANCHOR = "    namespace['_LOOKUP_EXTENSION'] = lookup"
+_VB_NS_INSERT = (
+    "    namespace['_BALANCED_CHUNKS'] = (lambda n: (n,) if n <= 4 else ((n + 1) // 2, n // 2))"
+)
+
+
+def stage_verify_balanced(source_text: str) -> str:
+    if "_BALANCED_CHUNKS" in source_text:
+        raise RuntimeError("balanced verify schedule already staged")
+    _assert_once(source_text, _VB_REWRITE_ANCHOR, "hybrid rewrite restore")
+    _assert_once(source_text, _VB_NS_ANCHOR, "hybrid namespace")
+    step = source_text.replace(_VB_REWRITE_ANCHOR, _VB_REWRITE_INSERT + "\n" + _VB_REWRITE_ANCHOR)
+    if step.replace(_VB_REWRITE_INSERT + "\n" + _VB_REWRITE_ANCHOR, _VB_REWRITE_ANCHOR) != source_text:
+        raise RuntimeError("balanced rewrite edit changed more than the one insertion")
+    updated = step.replace(_VB_NS_ANCHOR, _VB_NS_ANCHOR + "\n" + _VB_NS_INSERT)
+    if updated.replace(_VB_NS_ANCHOR + "\n" + _VB_NS_INSERT, _VB_NS_ANCHOR) != step:
+        raise RuntimeError("balanced namespace edit changed more than the one insertion")
+    return updated
+
+
 def stage_run_full(source_text: str) -> str:
     _assert_once(source_text, _INSTALL_ANCHOR, "observe_seed_prefill prime_model")
     _assert_once(source_text, _TRACE_ANCHOR, "observe_prefill_boundary SystemExit")
@@ -138,7 +167,10 @@ def main(argv=None) -> int:
         raise SystemExit("--hybrid-install and --verify-chunks go together")
     if args.hybrid_install is not None:
         p = Path(args.hybrid_install)
-        out = stage_verify_chunks(p.read_text(), chunks=[int(x) for x in args.verify_chunks.split(",")])
+        if args.verify_chunks == "balanced":
+            out = stage_verify_balanced(p.read_text())
+        else:
+            out = stage_verify_chunks(p.read_text(), chunks=[int(x) for x in args.verify_chunks.split(",")])
         p.write_text(out)
         print("staged_verify_chunks", args.verify_chunks, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.run_full is not None:
