@@ -16,7 +16,7 @@ This module is the retained DeepSeek-V4.1 runner's *reader* for the lossy 3-bit 
   * :func:`decode_expert_to_bf16` — the PREFILL/seed path: decode one (expert, layer) to a dense bf16 effective
                              weight ONCE as the prefill streams experts (the per-assignment tile kernel is wrong
                              for prefill — it would re-read every expert per token).
-  * :class:`TcqDecodeOps`  — the DECODE-verify ops, mirroring ``plane_lane.PackedOps`` but reading the whole-record
+  * :class:`TcqPackedOps`  — the DECODE-verify ops, a drop-in for ``plane_lane.PackedOps`` but reading the whole-record
                              bank through the stride-aware tile kernel with ``t128`` before and ``t128 * rout`` after.
 
 The stride-aware kernel and the whole-record geometry constants live in :mod:`tcq_kernels`.
@@ -328,28 +328,72 @@ def record_base_offset(rec: dict, geom: TcqGeometry) -> int:
 
 # ---------------------------------------------------------------------------- decode-verify ops (GPU; mirrors PackedOps)
 
-class TcqDecodeOps:
-    """Per-layer decode-verify ops over the whole-record tcq3 bank, mirroring ``plane_lane.PackedOps``.
+EXPERT_RECORD_ARRAY = "expert_record"          # whole-record int16 bank array: [capacity, TCQ3_RECORD_WORDS]
 
-    Swaps the mxfp4 scale-codec kernels for the stride-aware trellis tile kernel, wraps each projection with
-    ``t128`` before the matmul and ``t128 * rout`` after.  ``routs`` are the resident whole-bank arrays; a slot's
-    global record index selects its rout row.  Constructed once per layer at the post-prefill boundary.
+
+class _TcqGroupWork:
+    """A per-bank group's gate/up result carried to the down projection (mirrors plane_lane.GateUpWork)."""
+    __slots__ = ("positions", "bank", "ids_slot", "ids_global", "hidden")
+
+    def __init__(self, positions, bank, ids_slot, ids_global, hidden):
+        self.positions, self.bank, self.ids_slot, self.ids_global, self.hidden = \
+            positions, bank, ids_slot, ids_global, hidden
+
+
+class TcqPackedOps:
+    """Per-layer decode-verify ops over the whole-record tcq3 bank, drop-in for ``plane_lane.PackedOps``.
+
+    ``PackedDecode`` (unchanged, from plane_lane) calls ``gate_up(tokens, experts, buffers)`` then ``down(group)``;
+    this class swaps the mxfp4 scale-codec kernels for the stride-aware trellis tile kernel and wraps each
+    projection with ``t128`` before the matmul and ``t128 * rout`` after.  The bank holds the whole record per slot
+    (``bank.arrays[EXPERT_RECORD_ARRAY]``), so the tile kernel reads gate/up/down from ONE cache row; ``routs`` are
+    the resident whole-bank arrays (global index = layer * n_experts + expert selects a slot's rout).  Constructed
+    once per layer at the post-prefill boundary; no per-token validation.
     """
 
-    def __init__(self, routs, *, tables):
+    def __init__(self, routs, layer, *, tables, n_experts_per_layer=N_EXPERTS_PER_LAYER):
         self.mx = _mx()
         self.tables = tables
         self.routs = routs
+        self.layer = layer
+        self.n_experts = n_experts_per_layer
+        from mtplx.models.expert_mlx import _clamped_swiglu
+        self._swiglu = _clamped_swiglu
         # gate/up: OUT=2304, IN=5120 ; down: OUT=5120, IN=2304.
-        self.gu_kernel = {p: tk.make_tcq_projection_strided(2304, 5120, p) for p in ("gate_proj", "up_proj")}
-        self.down_kernel = tk.make_tcq_projection_strided(5120, 2304, "down_proj")
+        self._gate = tk.make_tcq_projection_strided(2304, 5120, "gate_proj")
+        self._up = tk.make_tcq_projection_strided(2304, 5120, "up_proj")
+        self._down = tk.make_tcq_projection_strided(5120, 2304, "down_proj")
 
-    def _project(self, x, ids_slot, ids_global, code_bank, proj, out_dim):
+    def _project(self, x, ids_slot, ids_global, code_bank, kern, out_dim, proj):
         """x [rows, IN] (original space) -> y [rows, out_dim] = t128( t128(x) @ W_q ) * rout, all on GPU."""
         mx = self.mx
         xh = _t128(mx, x)
-        kern = self.gu_kernel[proj] if proj in self.gu_kernel else self.down_kernel
         z = tk.run_tcq_projection_strided(kern, xh, ids_slot, code_bank, out_dim, self.tables)
-        y = _t128(mx, z)
-        rout = mx.take(self.routs[proj], ids_global, axis=0)      # [rows, out_dim]
-        return y * rout
+        rout = mx.take(self.routs[proj], ids_global, axis=0)     # [rows, out_dim]
+        return _t128(mx, z) * rout
+
+    def gate_up(self, tokens, experts, buffers):
+        mx = self.mx
+        groups = {}
+        for pos, expert in enumerate(experts):
+            if expert in buffers:
+                dest = buffers[expert]
+                groups.setdefault(id(dest.bank), []).append((pos, expert, dest))
+        work = []
+        for group in groups.values():
+            positions = [v[0] for v in group]
+            bank = group[0][2].bank
+            code_bank = bank.arrays[EXPERT_RECORD_ARRAY]
+            ids_slot = mx.array([v[2].bank_index for v in group], dtype=mx.uint32)
+            ids_global = mx.array([self.layer * self.n_experts + v[1] for v in group], dtype=mx.int32)
+            x = mx.take(tokens, mx.array([p // 6 for p in positions], mx.int32), axis=0).reshape(len(group), 5120)
+            g = self._project(x, ids_slot, ids_global, code_bank, self._gate, 2304, "gate_proj")
+            u = self._project(x, ids_slot, ids_global, code_bank, self._up, 2304, "up_proj")
+            h = self._swiglu(g, u, 10.0)
+            work.append(_TcqGroupWork(positions, bank, ids_slot, ids_global, h))
+        return work
+
+    def down(self, group):
+        code_bank = group.bank.arrays[EXPERT_RECORD_ARRAY]
+        return self._project(group.hidden, group.ids_slot, group.ids_global, code_bank,
+                             self._down, 5120, "down_proj").reshape(len(group.positions), 5120)
