@@ -38,8 +38,42 @@ STRICT_LIB="${STRICT_LIB:-/private/tmp/dsv41-strict-cache-20260918/strict-lib}"
 MODEL_DIR="${MODEL_DIR:-/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4}"
 AUX_DIR="${AUX_DIR:-/tmp/dsv41-compact-residents}"
 PROMPT_IDS="docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json"   # relative to RUNWT
+PROMPT_IDS_DEP="$RUNWT/$PROMPT_IDS"                  # absolute path for the preflight dependency check
 AR_REFERENCE="${DSV41_STAGE_AR_REFERENCE:-/tmp/dsv41-110-stage/live-combined-depth3-reserve2-1023.jsonl}"
 CONTROL_SHA="${CONTROL_SHA:-0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac}"
+
+# F23 (other prompts). F2_PROMPT=<name> validates the per-layer row rule on a DIFFERENT
+# 16K Python cell (build_other_prompts.py writes /tmp/dsv41-110-stage/prompts/<name>/):
+#   * selects that prompt file (absolute --prompt-ids-file) and a per-prompt AR reference
+#     /tmp/dsv41-110-stage/ar-reference-<name>.jsonl;
+#   * applies the stager's --other-prompt edits on EVERY arm's run_full (env-pinned prompt
+#     digest + AR-reference commit, and the DSV41_STAGE_AR_MODE=generate lane);
+#   * because a new prompt has NO stored control/oracle digest: the readout digest gate
+#     compares each arm against the SAME window's first control arm (not $CONTROL_SHA), and
+#     a `pipe` arm SKIPS its oracle-digest gate unless F16_BAL_ORACLE_SHA is set explicitly.
+# Default (F2_PROMPT unset) = the benchmark cell, byte-for-byte as before: no --other-prompt,
+# no env pins, staged tree recipe/key unchanged.
+F2_PROMPT="${F2_PROMPT:-}"
+OTHER_PROMPT=0
+if [ -n "$F2_PROMPT" ]; then
+  OTHER_PROMPT=1
+  PROMPT_DIR="/tmp/dsv41-110-stage/prompts/$F2_PROMPT"
+  PROMPT_IDS="$PROMPT_DIR/python-prompt-ids.json"    # absolute; overrides the RUNWT-relative default
+  PROMPT_IDS_DEP="$PROMPT_IDS"
+  [ -f "$PROMPT_IDS" ] || { echo "REFUSE: F2_PROMPT=$F2_PROMPT but $PROMPT_IDS missing (run f2/build_other_prompts.py)"; exit 2; }
+  AR_REFERENCE="/tmp/dsv41-110-stage/ar-reference-$F2_PROMPT.jsonl"
+  DSV41_STAGE_PROMPT_IDS_SHA256="$(PYTHONDONTWRITEBYTECODE=1 nice -n 19 "$PYBIN" - "$PROMPT_IDS" <<'PYDIG'
+import json, hashlib, sys
+d = json.loads(open(sys.argv[1]).read())
+e = [r for r in d['prompts'] if r.get('target_tokens') == 16384]
+assert len(e) == 1, 'prompt ids file must carry exactly one target_tokens==16384 prompt'
+print(hashlib.sha256(json.dumps(e[0]['token_ids']).encode()).hexdigest())
+PYDIG
+)"
+  DSV41_STAGE_AR_REFERENCE_COMMIT="${DSV41_STAGE_AR_REFERENCE_COMMIT:-$(git -C "$RUNWT" rev-parse HEAD)}"
+  DSV41_STAGE_EXPECT_DSPARK_SHA="${DSV41_STAGE_EXPECT_DSPARK_SHA:-}"
+  echo "== F23 other-prompt=$F2_PROMPT ids=$PROMPT_IDS sha=$DSV41_STAGE_PROMPT_IDS_SHA256 ar_ref=$AR_REFERENCE ref_commit=$DSV41_STAGE_AR_REFERENCE_COMMIT =="
+fi
 
 F2_MAX_ROWS="${F2_MAX_ROWS:-108}"
 PACKED_ARTIFACT_REAL="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/deepseek-v41/benchmarks/raw/deepseek-v41-resident-scales/20260917"
@@ -132,7 +166,7 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
   --compat-installation "$COMPAT_INSTALLATION" \
   --packed-installation "$PACKED_INSTALLATION" \
   --archived-dir "$RETAINED_SRC" \
-  --dep "$STRICT_LIB" --dep "$RUNWT/$PROMPT_IDS" --dep "$MODEL_DIR"
+  --dep "$STRICT_LIB" --dep "$PROMPT_IDS_DEP" --dep "$MODEL_DIR"
 
 # --------------------------------------------------- 2. stage patched runner copies
 stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)  $5 charge the ring (0/1)
@@ -176,6 +210,11 @@ ARTPY
   ln -s "$PACKED_ARTIFACT_REAL" "$dest/packed/artifact"
   nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
     --admission "$dest/packed/packed_admission.py" --max-rows "$rows" $ring_arg
+  if [ "${OTHER_PROMPT:-0}" = "1" ]; then   # F23: env pins + generate mode on EVERY arm's run_full
+    # (base install/traceback edits ride along, exactly once; the anchors are disjoint from
+    # F16/F5/F6/F15, so the plain conditional base --run-full calls below are skipped instead).
+    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py" --other-prompt
+  fi
   if [ "$pl" != "0" ]; then   # F17: per-layer extension rows (staged extension.py)
     nice -n 19 "$PYBIN" "$F17DIR/stage_f17_runner.py" \
       --extension "$RETAINED_SRC/packed/extension.py" --out "$dest/packed/extension.py"
@@ -190,8 +229,8 @@ ARTPY
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
       --hybrid-install "$dest/packed/hybrid_install.py" --verify-chunks "$([ "$vc" = "b" ] && echo balanced || printf '%s' "$vc" | tr '-' ',')"
   fi
-  if [ "$pipe" = "1" ] && [ "$f2b" = "1" ]; then   # +pf: F2b hook first, so F16's (staged later, same anchor) executes first
-    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"
+  if [ "$pipe" = "1" ] && [ "$f2b" = "1" ] && [ "${OTHER_PROMPT:-0}" != "1" ]; then   # +pf: F2b hook first, so F16's (staged later, same anchor) executes first
+    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"   # (other-prompt: applied above with --other-prompt)
   fi
   if [ "$pipe" = "1" ]; then   # F16: run_full hook + hybrid verify call + 4-buffer projection store
     # preflight re-applies the stager to the RETAINED sources, so it needs the unstaged tree
@@ -212,15 +251,15 @@ ARTPY
     nice -n 19 "$PYBIN" "$F6DIR/stage_f6_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
   fi
-  if [ "$f2b" = "1" ] && [ "$pipe" != "1" ]; then
-    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"
+  if [ "$f2b" = "1" ] && [ "$pipe" != "1" ] && [ "${OTHER_PROMPT:-0}" != "1" ]; then
+    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"   # (other-prompt: applied above with --other-prompt)
   fi
   PYTHONPATH="$F2PKG" nice -n 19 "$PYBIN" -m f2.window_preflight --no-seams \
     $(find "$dest" -maxdepth 2 -name '*.py' | sed 's/^/--compile /')
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0; A_PF=0; A_LA=0; A_SY=0
+  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0; A_PF=0; A_LA=0; A_SY=0; A_REFGEN=0
   A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
@@ -258,6 +297,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
     control_low)                 A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0 ;;
     candidate)                   A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=1 ;;
     pipe)                        A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B="$A_PF"; A_PIPE=1 ;;
+    refgen)                      A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0; A_REFGEN=1 ;;   # F23: control lane, DSV41_STAGE_AR_MODE=generate, --out = the AR reference
     *) echo "unknown arm base '$A_BASE' in '$tok'"; exit 2 ;;
   esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
@@ -268,7 +308,8 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   [ "$A_PIPE" = "1" ] && A_HOSTBYTES=$((A_HOSTBYTES + 134217728))   # F16: two extra bf16 projection buffers
   [ "$A_PL" != "0" ] && A_HOSTBYTES=$((A_HOSTBYTES + 100663296))   # F17 append-peak under-count (<= 67 MB), charged as 96 MiB
   A_ROSTAGE=0; { [ "$A_RO" != "0" ] || [ "$A_SY" != "0" ]; } && A_ROSTAGE=1
-  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}-q${A_PIPE}-o${A_ROSTAGE}"   # g = host ring charged to admission
+  local tree_suffix=""; [ "${OTHER_PROMPT:-0}" = "1" ] && tree_suffix="-op-$F2_PROMPT"   # F23 recipe key: other-prompt trees never mix with the benchmark's
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}-q${A_PIPE}-o${A_ROSTAGE}${tree_suffix}"   # g = host ring charged to admission
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
 ARMS="${F2_ARMS:-control_a candidate control_b}"
@@ -278,7 +319,7 @@ for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first
   [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD" "$A_PL" "$A_PIPE" "$A_ROSTAGE"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
-  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES)"; done
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES refgen=$A_REFGEN other_prompt=${OTHER_PROMPT} ar_mode=$([ "$A_REFGEN" = "1" ] && echo generate || echo reuse))"; done
   rmdir "$RECEIPTS" 2>/dev/null || true
   echo "STAGE ONLY: no GPU window opened"; exit 0
 fi
@@ -305,7 +346,16 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   local dir="$RECEIPTS/arm-${arm}"
   if [ -e "$dir" ]; then echo "REFUSE: $dir exists (never overwrite a measurement)"; exit 2; fi
   mkdir -p "$dir"
+  # F23 AR reference generation mode. refgen writes the AR reference itself; it refuses
+  # without F2_PROMPT and never overwrites an existing reference (a measurement).
+  local armode="reuse"
+  if [ "$A_REFGEN" = "1" ]; then
+    [ "$OTHER_PROMPT" = "1" ] || { echo "REFUSE: refgen requires F2_PROMPT (no prompt to generate an AR reference for)"; exit 2; }
+    [ -e "$AR_REFERENCE" ] && { echo "REFUSE: AR reference exists: $AR_REFERENCE (never overwrite a measurement)"; exit 2; }
+    armode="generate"
+  fi
   local stem="$OUT_STAGE/f2b-${arm}-${STAMP}"
+  [ "$A_REFGEN" = "1" ] && stem="${AR_REFERENCE%.jsonl}"
   local out="${stem}.jsonl"
   local pypath="$RUNWT:$tree/packed:$tree/compat:$F2PKG"
   local probe_env=""
@@ -366,7 +416,12 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     pypath="$pypath:$F6DIR"
     f2b_env="$f2b_env MTPLX_DSV41_F6_ENGRAM_PARALLEL=1 MTPLX_DSV41_F6_INSTALL=$A_ENG MTPLX_DSV41_F6_ENGRAM_WORKERS=$F2_ENGRAM_WORKERS"
   fi
-  { echo "cd $RUNWT"; echo "PYTHONPATH=$pypath"; echo "$f2b_env $probe_env gpu_window.sh $PYBIN $tree/launch_full.py $(retained_args "$out")"; } > "$dir/command.txt"
+  local f23_env=""
+  if [ "$OTHER_PROMPT" = "1" ]; then   # F23: env pins the --other-prompt run_full reads at construction
+    f23_env="DSV41_STAGE_PROMPT_IDS_FILE=$PROMPT_IDS DSV41_STAGE_PROMPT_IDS_SHA256=$DSV41_STAGE_PROMPT_IDS_SHA256 DSV41_STAGE_AR_REFERENCE_COMMIT=$DSV41_STAGE_AR_REFERENCE_COMMIT DSV41_STAGE_AR_MODE=$armode"
+    [ -n "$DSV41_STAGE_EXPECT_DSPARK_SHA" ] && f23_env="$f23_env DSV41_STAGE_EXPECT_DSPARK_SHA=$DSV41_STAGE_EXPECT_DSPARK_SHA"
+  fi
+  { echo "cd $RUNWT"; echo "PYTHONPATH=$pypath"; echo "$f23_env $f2b_env $probe_env gpu_window.sh $PYBIN $tree/launch_full.py $(retained_args "$out")"; } > "$dir/command.txt"
   echo "== arm ${arm}: tree=$tree f2b=${f2b} out=${out} =="
   cd "$RUNWT"
   # shellcheck disable=SC2086
@@ -378,7 +433,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     GPU_WINDOW_MIN_AVAIL_GB=100 GPU_WINDOW_RESTORE_QWEN_ALWAYS=1 \
     GPU_WINDOW_CANDIDATE_MODEL_DIR="$MODEL_DIR" GPU_WINDOW_CANDIDATE_AUX_DIR="$AUX_DIR" \
     MTPLX_DSV41_IO_READ_FANOUT=4 MTPLX_BELADY_ORACLE=0 \
-    PYTHONHASHSEED=0 PYTHONUNBUFFERED=1 $f2b_env $probe_env \
+    PYTHONHASHSEED=0 PYTHONUNBUFFERED=1 $f23_env $f2b_env $probe_env \
     PYTHONPATH="$pypath" \
     scripts/deepseek_v41/gpu_window.sh "$PYBIN" "$tree/launch_full.py" \
       $(retained_args "$out") > "$dir/guard.log" 2>&1 && rc=0 || rc=$?
@@ -388,6 +443,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   if [ "$A_PIPE" = "1" ] && [ "$A_CMP" != "1" ]; then   # the pipeline has an exact oracle: the sequential 4+rest digest
     local got; got="$(grep -a -o '"output_ids_sha256": "[0-9a-f]*"' "$dir"/f2b-*.passes.jsonl 2>/dev/null | head -1 | cut -d'"' -f4)"
     local want="$F16_ORACLE_SHA"; [ "$A_BAL" = "1" ] && want="${F16_BAL_ORACLE_SHA:-}"
+    [ "$OTHER_PROMPT" = "1" ] && [ "$A_BAL" != "1" ] && want=""   # F23: no benchmark sequential oracle for a new prompt (see header)
     if [ -z "$want" ]; then
       echo "  pipe arm ${arm}: no oracle digest configured for this split; got '${got:-none}' (compare by hand)"
     elif [ "$got" != "$want" ]; then
@@ -395,6 +451,14 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
       grep -a -E "ABORTED|Traceback|Error" "$dir/guard.log" | tail -5 || true; exit 4
     fi
     [ -n "$want" ] && echo "  pipe arm ${arm}: digest == its sequential row-split oracle (bit-identical arithmetic)"
+  fi
+  if [ "$A_REFGEN" = "1" ]; then   # F23: refgen only emits the AR reference; DSpark may tie-flip vs AR (exit 1) or abort (exit 4). The receipt is written before the parity gate.
+    if [ -s "$out" ]; then
+      echo "  refgen ${arm}: AR reference written to $out (guard exit $rc tolerated)"
+      return 0
+    fi
+    echo "FAIL: refgen ${arm} produced no AR reference at $out (guard exit $rc)."
+    tail -8 "$dir/guard.log" || true; exit "${rc:-1}"
   fi
   if [ "$rc" = "4" ] && { [ "$A_VC" != "0" ] || [ "$A_CMP" = "1" ] || [ "$A_PIPE" = "1" ]; }; then
     echo "  (guard exit 4 on a rounding-class probe arm: digest differs from control, as expected; continuing)"
@@ -418,28 +482,40 @@ done
 
 # --------------------------------- readout: rows / digest / F2b counters
 echo "== F2b readout: admitted rows / digest / host-ring counters =="
-PYTHONPATH="$WT" nice -n 19 "$PYBIN" - "$RECEIPTS" "$CONTROL_SHA" <<'PYEOF'
+PYTHONPATH="$WT" nice -n 19 "$PYBIN" - "$RECEIPTS" "$CONTROL_SHA" "${OTHER_PROMPT:-0}" <<'PYEOF'
 import json, sys
 from pathlib import Path
 def _read(p):
     try: return p.read_text().strip()
     except Exception: return "?"
-receipts, control_sha = Path(sys.argv[1]), sys.argv[2]
-rows_by_arm, ok = {}, True
+receipts, control_sha, other_prompt = Path(sys.argv[1]), sys.argv[2], sys.argv[3] == "1"
+arms = []
 for arm_dir in sorted(p for p in receipts.iterdir() if p.is_dir()):
     arm = arm_dir.name.replace("arm-", "")
-    receipt = next(iter(arm_dir.glob("f2b-*.passes.jsonl")), None)
+    receipt = next(iter(arm_dir.glob("*.passes.jsonl")), None)   # F23: also matches ar-reference-*.passes.jsonl (refgen)
     if receipt is None:
-        print(f"  {arm}: NO RECEIPT (guard.exit={_read(arm_dir/'guard.exit')})"); ok = False; continue
+        arms.append((arm, None, None, None, None, {}, None)); continue
     recs = [json.loads(l) for l in receipt.read_text().splitlines() if l.strip()]
     dspark = next((r for r in recs if r.get("pass") == "dspark"), {})
-    rows = dspark.get("decode_slots_per_layer")
-    digest = dspark.get("output_ids_sha256")
-    tps = dspark.get("decode_tok_s"); wall = dspark.get("decode_wall_s")
     ctr_path = arm_dir / "f2b_counters.json"
     ctr = json.loads(ctr_path.read_text()) if ctr_path.exists() else {}
+    arms.append((arm, dspark.get("decode_slots_per_layer"), dspark.get("output_ids_sha256"),
+                 dspark.get("decode_tok_s"), dspark.get("decode_wall_s"), ctr, receipt))
+# The benchmark pins CONTROL_SHA. A NEW prompt has no stored control digest, so the digest
+# gate compares each arm against the SAME window's first control arm (F23), or the first
+# arm overall when the window has no control (e.g. a refgen-only window).
+ref_sha = control_sha
+if other_prompt:
+    ctrl = [a for a in arms if a[6] is not None and a[0].startswith("control")]
+    src = ctrl[0] if ctrl else next((a for a in arms if a[6] is not None), None)
+    ref_sha = src[2] if src is not None else None
+    print(f"  (F23 digest reference = {src[0] if src else 'none'} sha={ref_sha})")
+rows_by_arm, ok = {}, True
+for arm, rows, digest, tps, wall, ctr, receipt in arms:
+    if receipt is None:
+        print(f"  {arm}: NO RECEIPT (guard.exit={_read(receipts/('arm-'+arm)/'guard.exit')})"); ok = False; continue
     rows_by_arm[arm] = rows
-    match = (digest == control_sha); ok = ok and match
+    match = (digest == ref_sha); ok = ok and match
     print(f"  {arm}: rows={rows} decode_tok_s={tps} decode_wall_s={wall} sha={'OK' if match else 'MISMATCH ' + str(digest)}"
           + (f" f2b={ctr}" if ctr else ""))
 ctrl_rows = {a: r for a, r in rows_by_arm.items() if a.startswith("control")}

@@ -151,7 +151,7 @@ def stage_read_order(source_text: str) -> str:
     return updated
 
 
-def stage_run_full(source_text: str) -> str:
+def stage_run_full(source_text: str, *, other_prompt: bool = False) -> str:
     _assert_once(source_text, _INSTALL_ANCHOR, "observe_seed_prefill prime_model")
     _assert_once(source_text, _TRACE_ANCHOR, "observe_prefill_boundary SystemExit")
     updated = source_text.replace(_INSTALL_ANCHOR, _INSTALL_ANCHOR + "\n" + _INSTALL_INSERT)
@@ -161,7 +161,200 @@ def stage_run_full(source_text: str) -> str:
     updated = updated.replace(_TRACE_ANCHOR, _TRACE_INSERT + "\n" + _TRACE_ANCHOR)
     if updated.replace(_TRACE_INSERT + "\n" + _TRACE_ANCHOR, _TRACE_ANCHOR) != step:
         raise RuntimeError("F2b traceback edit changed more than the one insertion")
+    # F23: with --other-prompt, ALSO env-pin the prompt/AR-reference commit and install
+    # the generate mode. Absent the flag this returns the byte-identical base edits, so
+    # the default (benchmark) staged tree is unchanged.
+    if other_prompt:
+        updated = stage_other_prompt(updated)
     return updated
+
+
+# =========================================================================== F23
+# Run the pinned runner on OTHER 16K prompts. All edits below are applied ONLY under
+# --other-prompt (stage_run_full(other_prompt=True)); without the flag stage_run_full
+# is byte-identical to today. Every edit is anchored to a UNIQUE line and round-trip
+# checked, exactly like the edits above. CPU-safe, no MLX. The edits, in dependency
+# order (P3's line lives inside G1's wrapped region, so P3 precedes G1):
+#   P1/P2  prompt + AR-reference-commit pins read from the environment at start-up
+#   P3     the reuse validator's prompt-ids digest becomes the env pin
+#   P4     the fixture path + its digest assertion become the env pin
+#   P5     the per-arm control-output gate becomes env-driven (no benchmark pin)
+#   G3/G5  generate mode installs the real AR logits row + measures AR for real
+#   G2/G4/G1  generate mode skips the reference read/validate, its arm_env comparison,
+#             and the reuse post-processing (so the receipt carries real AR fields and
+#             no ar_reference_reuse -> it satisfies the UNCHANGED reuse validator later)
+
+# P1/P2: read the env pins once at construction (before any model load). The env-missing
+# refusal is a clear RuntimeError. Replaces the hard-coded REFERENCE_SOURCE_COMMIT line.
+_F23_REFCOMMIT_ANCHOR = "REFERENCE_SOURCE_COMMIT = 'e589c1e4b17856f506d90d9fb2bbb5ce45711648'"
+_F23_ENV_MISSING_MSG = (
+    "F23 other-prompt runner requires DSV41_STAGE_PROMPT_IDS_FILE and "
+    "DSV41_STAGE_PROMPT_IDS_SHA256"
+)
+_F23_REFCOMMIT_INSERT = "\n".join((
+    "REFERENCE_SOURCE_COMMIT = os.environ['DSV41_STAGE_AR_REFERENCE_COMMIT']  # F23: AR-reference provenance pin (env)",
+    "DSV41_STAGE_AR_MODE = os.environ.get('DSV41_STAGE_AR_MODE', 'reuse')  # F23: reuse (default) | generate",
+    "if DSV41_STAGE_AR_MODE not in ('reuse', 'generate'):",
+    "    raise RuntimeError(\"DSV41_STAGE_AR_MODE must be 'reuse' or 'generate'\")",
+    "_stage_prompt_ids_file = os.environ.get('DSV41_STAGE_PROMPT_IDS_FILE')",
+    "_stage_prompt_ids_sha256 = os.environ.get('DSV41_STAGE_PROMPT_IDS_SHA256')",
+    "if not _stage_prompt_ids_file or not _stage_prompt_ids_sha256:",
+    "    raise RuntimeError('" + _F23_ENV_MISSING_MSG + "')",
+    "STAGE_PROMPT_IDS_FILE = Path(_stage_prompt_ids_file)",
+    "_stage_prompt_entries = [r for r in json.loads(STAGE_PROMPT_IDS_FILE.read_text())['prompts'] if r.get('target_tokens') == 16384]",
+    "if len(_stage_prompt_entries) != 1:",
+    "    raise RuntimeError('DSV41_STAGE_PROMPT_IDS_FILE must contain exactly one target_tokens==16384 prompt')",
+    "STAGE_PROMPT_IDS_SHA256 = hashlib.sha256(json.dumps(_stage_prompt_entries[0]['token_ids']).encode()).hexdigest()",
+    "if STAGE_PROMPT_IDS_SHA256 != _stage_prompt_ids_sha256:",
+    "    raise RuntimeError('DSV41_STAGE_PROMPT_IDS_FILE token-id digest differs from DSV41_STAGE_PROMPT_IDS_SHA256')",
+))
+
+# P3: the reuse validator's benchmark prompt-ids digest -> the env pin.
+_F23_PROMPT_DIGEST_ANCHOR = (
+    "    or reference.get('prompt_ids_sha256') != "
+    "'38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2'"
+)
+_F23_PROMPT_DIGEST_NEW = "    or reference.get('prompt_ids_sha256') != STAGE_PROMPT_IDS_SHA256"
+
+# P4: the fixture path + its own digest assertion -> the env pin.
+_F23_FIXTURE_ANCHOR = (
+    "    fixture = Path('docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json')"
+)
+_F23_FIXTURE_NEW = "    fixture = STAGE_PROMPT_IDS_FILE  # F23: env-pinned prompt ids file"
+_F23_FIXTURE_DIGEST_ANCHOR = (
+    "    assert hashlib.sha256(json.dumps(rows[0]['token_ids']).encode()).hexdigest() == "
+    "'38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2'"
+)
+_F23_FIXTURE_DIGEST_NEW = (
+    "    assert hashlib.sha256(json.dumps(rows[0]['token_ids']).encode()).hexdigest() == "
+    "STAGE_PROMPT_IDS_SHA256"
+)
+
+# P5: the per-arm control-output gate. Self-compares (no-op) unless the launcher pins an
+# expected DSpark digest for this window; the benchmark's CONTROL_OUTPUT_SHA256 cannot
+# hold for a different prompt. The cross-arm digest gate lives in the launcher readout.
+_F23_CONTROL_GATE_ANCHOR = (
+    "        if receipt['dspark']['token_ids_sha256'] != CONTROL_OUTPUT_SHA256:"
+)
+_F23_CONTROL_GATE_NEW = (
+    "        if receipt['dspark']['token_ids_sha256'] != "
+    "os.environ.get('DSV41_STAGE_EXPECT_DSPARK_SHA', receipt['dspark']['token_ids_sha256']):"
+)
+
+# G3: in generate mode use the real AR logits row (the cached one needs a prior reference).
+_F23_ARLOGITS_ANCHOR = "    ab._ar_logits_row_at_index = cached_ar_logits_row"
+_F23_ARLOGITS_NEW = (
+    "    ab._ar_logits_row_at_index = original_ar_logits_row "
+    "if DSV41_STAGE_AR_MODE == 'generate' else cached_ar_logits_row  # F23"
+)
+
+# G5: in generate mode measure the AR pass for real (admitted_ar) instead of replaying.
+_F23_GENERATE_INSTALL_ANCHOR = "    ab._generate = reused_ar_reference"
+_F23_GENERATE_INSTALL_NEW = (
+    "    ab._generate = admitted_ar if DSV41_STAGE_AR_MODE == 'generate' "
+    "else reused_ar_reference  # F23"
+)
+
+# G1: the reference read/validate/provenance block (skipped in generate mode).
+_F23_REFBLOCK_START = "reference_path = Path(os.environ['DSV41_STAGE_AR_REFERENCE']).resolve(strict=True)"
+_F23_REFBLOCK_END = "bounds['ar_reference_reuse'] = reference_provenance"
+_F23_REFBLOCK_GUARD = "if DSV41_STAGE_AR_MODE != 'generate':"
+_F23_REFBLOCK_ELSE = [
+    "else:",
+    "    # F23 generate mode: no prior AR reference; the AR pass is measured for real",
+    "    # (ab._generate = admitted_ar) and THIS receipt becomes the reference.",
+    "    reference_path = None",
+    "    reference = {}",
+    "    reference_bounds = {}",
+    "    reference_ids = []",
+    "    reference_digest = None",
+    "    reference_provenance = None",
+]
+
+# G2: the reference arm_env comparison (skipped in generate mode).
+_F23_ARMENV_START = (
+    "    if {k: v for k, v in reference.get('arm_env', {}).items() "
+    "if k not in _bound_prefill_flags} != {"
+)
+_F23_ARMENV_END = "        raise RuntimeError('target environment differs outside explicit bound flags')"
+_F23_ARMENV_GUARD = "    if DSV41_STAGE_AR_MODE != 'generate':"
+_F23_ARMENV_ELSE: list[str] = []
+
+# G4: the reuse post-processing (ar_reference_reuse + AR nulling), skipped in generate mode.
+_F23_REUSE_START = "        receipt['ar_reference_reuse'] = reference_provenance"
+_F23_REUSE_END = "        receipt['dspark']['ar_reference_reuse'] = reference_provenance"
+_F23_REUSE_GUARD = "        if DSV41_STAGE_AR_MODE != 'generate':"
+_F23_REUSE_ELSE = [
+    "        else:",
+    "            receipt['measurement_origin'] = {'ar': 'current_run', 'dspark': 'current_run'}  # F23 generate",
+]
+
+_F23_STAGED_MARKER = "DSV41_STAGE_AR_MODE"
+
+
+def _replace_once(text: str, old: str, new: str, label: str) -> str:
+    """Anchored single-occurrence replace with a byte-for-byte round-trip check."""
+    _assert_once(text, old, label)
+    updated = text.replace(old, new)
+    if updated.replace(new, old) != text:
+        raise RuntimeError(f"{label}: edit changed more than the one anchor")
+    return updated
+
+
+def _wrap_region(text: str, start: str, end: str, guard: str,
+                 else_lines: list, label: str) -> str:
+    """Wrap the inclusive line region [start..end] in ``guard`` (indent it 4 spaces) and
+    append ``else_lines`` verbatim. Both anchors must be unique whole lines. Round-trips
+    by dedenting the wrapped region and dropping the inserted wrapper -> original text."""
+    lines = text.split("\n")
+    starts = [i for i, l in enumerate(lines) if l == start]
+    ends = [i for i, l in enumerate(lines) if l == end]
+    if len(starts) != 1 or len(ends) != 1:
+        raise RuntimeError(f"{label}: anchors not unique (start={len(starts)} end={len(ends)})")
+    si, ei = starts[0], ends[0]
+    if ei < si:
+        raise RuntimeError(f"{label}: end anchor precedes start anchor")
+    region = lines[si:ei + 1]
+    indented = ["    " + l if l.strip() else l for l in region]
+    new_block = [guard] + indented + list(else_lines)
+    out_lines = lines[:si] + new_block + lines[ei + 1:]
+    updated = "\n".join(out_lines)
+    # round-trip: dedent the wrapped region and remove the wrapper, expect the original.
+    chk = updated.split("\n")
+    if chk[si] != guard:
+        raise RuntimeError(f"{label}: guard not placed as expected")
+    recovered = chk[si + 1:si + 1 + len(region)]
+    dedented = [l[4:] if l.strip() else l for l in recovered]
+    rebuilt = "\n".join(chk[:si] + dedented + chk[si + 1 + len(region) + len(else_lines):])
+    if rebuilt != text:
+        raise RuntimeError(f"{label}: round-trip failed")
+    return updated
+
+
+def stage_other_prompt(source_text: str) -> str:
+    """Apply the F23 env-pin + generate-mode edits to a STAGED run_full.py copy."""
+    if _F23_STAGED_MARKER in source_text:
+        raise RuntimeError("F23 other-prompt edits already staged")
+    out = _replace_once(source_text, _F23_REFCOMMIT_ANCHOR, _F23_REFCOMMIT_INSERT,
+                        "F23 env pins")
+    out = _replace_once(out, _F23_PROMPT_DIGEST_ANCHOR, _F23_PROMPT_DIGEST_NEW,
+                        "F23 reuse-validator prompt digest")
+    out = _replace_once(out, _F23_FIXTURE_ANCHOR, _F23_FIXTURE_NEW, "F23 fixture path")
+    out = _replace_once(out, _F23_FIXTURE_DIGEST_ANCHOR, _F23_FIXTURE_DIGEST_NEW,
+                        "F23 fixture digest")
+    out = _replace_once(out, _F23_CONTROL_GATE_ANCHOR, _F23_CONTROL_GATE_NEW,
+                        "F23 control-output gate")
+    out = _replace_once(out, _F23_ARLOGITS_ANCHOR, _F23_ARLOGITS_NEW, "F23 AR-logits mode")
+    out = _replace_once(out, _F23_GENERATE_INSTALL_ANCHOR, _F23_GENERATE_INSTALL_NEW,
+                        "F23 generate install")
+    out = _wrap_region(out, _F23_ARMENV_START, _F23_ARMENV_END, _F23_ARMENV_GUARD,
+                       _F23_ARMENV_ELSE, "F23 skip arm_env in generate")
+    out = _wrap_region(out, _F23_REUSE_START, _F23_REUSE_END, _F23_REUSE_GUARD,
+                       _F23_REUSE_ELSE, "F23 skip reuse post-processing in generate")
+    # G1 last: P3 already edited the digest line inside this region.
+    out = _wrap_region(out, _F23_REFBLOCK_START, _F23_REFBLOCK_END, _F23_REFBLOCK_GUARD,
+                       _F23_REFBLOCK_ELSE, "F23 guard reference block in generate")
+    return out
 
 
 def main(argv=None) -> int:
@@ -169,6 +362,8 @@ def main(argv=None) -> int:
     ap.add_argument("--admission", default=None, help="STAGED packed_admission.py to cap in place")
     ap.add_argument("--max-rows", type=int, default=None, help="cap the decode capacity-search start")
     ap.add_argument("--run-full", default=None, help="STAGED run_full.py to patch in place (install + traceback)")
+    ap.add_argument("--other-prompt", action="store_true",
+                    help="with --run-full: ALSO apply the F23 env-pin + generate-mode edits")
     ap.add_argument("--hybrid-install", default=None, help="STAGED hybrid_install.py (with --verify-chunks)")
     ap.add_argument("--verify-chunks", default=None, help="e.g. 4,4 : row-split exactness probe")
     ap.add_argument("--packed-phase", default=None, help="STAGED packed_phase.py: F19 read-order pool hook")
@@ -202,9 +397,12 @@ def main(argv=None) -> int:
         print("staged_read_order", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.run_full is not None:
         p = Path(args.run_full)
-        out = stage_run_full(p.read_text())
+        out = stage_run_full(p.read_text(), other_prompt=args.other_prompt)
         p.write_text(out)
-        print("staged_run_full", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
+        print("staged_run_full", "other_prompt", args.other_prompt,
+              "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
+    elif args.other_prompt:
+        raise SystemExit("--other-prompt requires --run-full")
     return 0
 
 
