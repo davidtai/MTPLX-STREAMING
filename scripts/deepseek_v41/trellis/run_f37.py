@@ -25,7 +25,10 @@ import sys
 import time
 from pathlib import Path
 
-os.nice(19)
+try:
+    os.setpriority(os.PRIO_PROCESS, 0, 19)     # absolute nice 19 (idempotent; survives a nice prefix)
+except (AttributeError, OSError):
+    pass
 for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ.setdefault(_v, "1")
 
@@ -194,6 +197,7 @@ def main():
             ctx = BL.setup()
         if routed is None:
             routed = [tuple(x) for x in json.loads((CACHE_DIR / "routed_experts.json").read_text())["routed"]]
+        routed = [(L, e) for (L, e) in routed if L <= a.max_layer]     # experts used at this depth
         if R0 is None:
             wait_while_busy("source forward (ladder)")
             R0 = BL.forward(ctx, BL.ExpertBank(ctx["shards"], None, None, None), a.max_layer)

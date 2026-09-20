@@ -21,7 +21,10 @@ import sys
 import time
 from pathlib import Path
 
-os.nice(19)
+try:
+    os.setpriority(os.PRIO_PROCESS, 0, 19)     # absolute nice 19 (idempotent; survives a nice prefix)
+except (AttributeError, OSError):
+    pass
 for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ.setdefault(_v, "1")
 
