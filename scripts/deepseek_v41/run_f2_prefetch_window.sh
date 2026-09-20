@@ -81,7 +81,7 @@ mkdir -p "$RECEIPTS" "$OUT_STAGE"
 # memory-heavy benches (an overlapping 3 GB microbench pushed the box over the 110e9
 # ceiling on 2026-09-19 and the guard killed an arm; `lsof` on the GPU lock races with the
 # ~17 s gaps between arms). The launcher only SETS it; Fable removes it when pausing.
-touch /tmp/dsv41-fable-window.active
+[ "${F2_STAGE_ONLY:-0}" = "1" ] || touch /tmp/dsv41-fable-window.active   # a CPU dry run must not pause the workers
 
 # --------------------------------------------------- 1. CPU preflight (before unload)
 echo "== F2b preflight (CPU; MLX pinned; before any service unload) =="
