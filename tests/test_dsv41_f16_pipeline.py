@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import os
 import sys
 import textwrap
 import threading
@@ -39,8 +40,12 @@ _SCRIPTS = _REPO / "scripts" / "deepseek_v41"
 _PACKED = _REPO / "docs/deepseek-v41/receipts/extension-bank-20260919/full/sources/packed"
 # .f16-site holds greenlet (private target dir, NOT the shared venv); it must be on
 # sys.path before f16.pipeline (which imports greenlet) is imported.  For the GPU arm
-# the same dir goes on PYTHONPATH.
-_F16_SITE = _REPO / ".f16-site"
+# the same dir goes on PYTHONPATH.  Honour ``F16SITE`` (default = the F16 pipeline
+# worktree's private dir); the old ``_REPO/.f16-site`` does not exist in every worktree.
+_F16_SITE = os.environ.get(
+    "F16SITE",
+    "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f16-pipeline/.f16-site",
+)
 for _p in (str(_SCRIPTS), str(_PACKED), str(_F16_SITE)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

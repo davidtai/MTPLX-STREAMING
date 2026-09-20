@@ -37,6 +37,8 @@ import os
 
 from .pipeline import (
     Pipeline,
+    bind_barrier_run,
+    bind_stamped_run,
     bind_yield_run,
     issue_suppressed,
     scheduled_run_cocode,
@@ -95,8 +97,17 @@ def _wrap_issue_next_for_trailer(runners) -> int:
     return wrapped
 
 
-def install(target, *, armed: bool, split: str = "fixed4") -> dict:
-    """Wire (or, when not armed, passthrough-stash) the F16 pipeline on ``target``."""
+def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads",
+            stamps_stem: str | None = None) -> dict:
+    """Wire (or, when not armed, passthrough-stash) the F16 pipeline on ``target``.
+
+    ``handoff`` selects WHICH derived run + hand-off helpers are compiled and bound,
+    once, at this quiescent post-prime boundary: ``reads`` (today's single hand-off) or
+    ``barrier`` (F18: submit the routing barrier early, hand off, block after the
+    partner's slice).  ``stamps_stem`` (``MTPLX_DSV41_F16_STAMPS``) instead binds the
+    STAMPED variant of that run (a separate compiled function; host-only diagnostic).
+    No per-call mode branch: the run function, the driver strategy, and the hand-off
+    helpers are all fixed here."""
     runtime = target._mtplx_expert_runtime
 
     if not armed:
@@ -120,16 +131,34 @@ def install(target, *, armed: bool, split: str = "fixed4") -> dict:
         )
     layers = _assert_scheduled_lane(target)
     runners = _collect_runners(target)
-    yield_shas = bind_yield_run(runners)
-    wrapped = _wrap_issue_next_for_trailer(runners)
 
-    pipeline = Pipeline(target, armed=True, split=split)
+    # Pipeline first (barrier binds `_f16_barrier = pipeline.barrier`); the run function
+    # + hand-off helpers are then bound once per the construction-time mode.
+    pipeline = Pipeline(target, armed=True, split=split, handoff=handoff)
     target._f16_pipeline = pipeline
+
+    stamps_on = bool(stamps_stem)
+    if stamps_on:
+        from . import stamps as _stamps
+
+        _stamps.configure(stamps_stem)
+        run_shas = bind_stamped_run(runners, pipeline, barrier=(handoff == "barrier"))
+        import atexit
+
+        atexit.register(_stamps.write)
+    elif handoff == "barrier":
+        run_shas = bind_barrier_run(runners, pipeline)
+    else:
+        run_shas = bind_yield_run(runners)
+    wrapped = _wrap_issue_next_for_trailer(runners)
 
     report = {
         "installed": True,
         "armed": True,
         "driver": "greenlet",
+        "handoff": handoff,
+        "leader_skip": pipeline._skip,
+        "stamps": stamps_on,
         "target_layers": layers,
         "issue_next_wrapped": wrapped,
         "per_layer_locks": True,
@@ -139,7 +168,7 @@ def install(target, *, armed: bool, split: str = "fixed4") -> dict:
         "split": pipeline.split,
         "source_pins": source_pins,
     }
-    report.update(yield_shas)
+    report.update(run_shas)
     return report
 
 
@@ -155,8 +184,16 @@ def install_from_env(target) -> dict:
     one provenance line; registers an at-exit counter dump when a path is set."""
     armed = os.environ.get("MTPLX_DSV41_F16") == "1"
     # Leader-group size, chosen ONCE here: "fixed4" (oracle = sequential chunks 4+rest) or
-    # "balanced" (ceil/floor halves; its own oracle digest).
-    report = install(target, armed=armed, split=os.environ.get("MTPLX_DSV41_F16_SPLIT", "fixed4"))
+    # "balanced" (ceil/floor halves; its own oracle digest).  Hand-off mode chosen ONCE:
+    # "reads" (today) or "barrier" (F18).  MTPLX_DSV41_F16_STAMPS=<stem> arms the
+    # host-only stamped variant (diagnostic; default OFF).
+    report = install(
+        target,
+        armed=armed,
+        split=os.environ.get("MTPLX_DSV41_F16_SPLIT", "fixed4"),
+        handoff=os.environ.get("MTPLX_DSV41_F16_HANDOFF", "reads"),
+        stamps_stem=os.environ.get("MTPLX_DSV41_F16_STAMPS") or None,
+    )
     counters_path = os.environ.get("MTPLX_DSV41_F16_COUNTERS")
     if counters_path:
         import atexit

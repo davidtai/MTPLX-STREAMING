@@ -107,27 +107,77 @@ def _smoke_clone_on_tiny_model() -> None:
     for attr in ("embed_tokens", "layers", "norm_weight", "hc_mult",
                  "_mtp_target_layer_ids", "args"):
         _require(model.model, attr, "DeepseekV41Backbone instance")
-    pipeline = pl.Pipeline(model, armed=True)
     forward = lambda ids, cache: model(ids, cache=cache, return_hidden=True)  # noqa: E731
     import numpy as np
 
     ids = mx.array(np.random.RandomState(0).randint(0, args.vocab_size, size=(1, 6)))
-    logits, main_hidden = pipeline.pipelined_forward(forward, ids, model.make_cache())
-    mx.eval(logits, main_hidden)
-    if tuple(logits.shape) != (1, 6, args.vocab_size):
-        raise RuntimeError(f"F16 preflight: clone logits shape {tuple(logits.shape)}")
+    # Both hand-off modes must resolve the whole clone path end-to-end (the strongest
+    # AttributeError guard).  The CPU model has no streamed switch, so the hand-offs do
+    # not fire inside model(...); correctness (bit-parity) is proven by the CPU tests.
+    for handoff in ("reads", "barrier"):
+        pipeline = pl.Pipeline(model, armed=True, handoff=handoff)
+        logits, main_hidden = pipeline.pipelined_forward(forward, ids, model.make_cache())
+        mx.eval(logits, main_hidden)
+        if tuple(logits.shape) != (1, 6, args.vocab_size):
+            raise RuntimeError(
+                f"F16 preflight: clone logits shape {tuple(logits.shape)} ({handoff})"
+            )
+    _smoke_barrier_handoff(model)
+
+
+def _smoke_barrier_handoff(model) -> None:
+    """Resolve the F18 barrier machinery on CPU without a streamed switch: run the
+    per-group driver over two trivial group callables that fire ``barrier`` (orphan
+    adopt + async_eval + hand off) and ``f16_yield`` per layer, with a stand-in runtime
+    whose ``_deferred_slot_releases`` the driver swaps.  Catches an AttributeError in
+    ``barrier`` / ``_run_groups_barrier`` before a window ever binds them."""
+    import types
+
+    model._mtplx_expert_runtime = types.SimpleNamespace(_deferred_slot_releases=None)
+    pipeline = pl.Pipeline(model, armed=True, handoff="barrier")
+
+    def group(_role):
+        def run():
+            for _layer in range(3):
+                pipeline.barrier(mx.array([0], mx.int32))  # submit + hand off
+                pl.f16_yield()                              # reads hand off
+            return "ok"
+
+        return run
+
+    results = pipeline._run_groups_barrier(group(pl.LEADER), group(pl.TRAILER))
+    if results != ["ok", "ok"] or pipeline.counters["handoffs"] <= 2:
+        raise RuntimeError(f"F16 preflight: barrier hand-off smoke failed ({results})")
+    del model._mtplx_expert_runtime
 
 
 def _check_derivation() -> dict:
-    """The retained plane_lane pin holds and the yield-capable run + scheduled-run
-    reference both derive and compile (unique anchor + round trip)."""
-    run_fn, shas = pl.build_yield_run()
-    if not callable(run_fn):
-        raise RuntimeError("F16 preflight: yield run did not compile")
+    """The retained plane_lane pin holds and BOTH hand-off modes' runs -- plus the
+    stamped variants and the scheduled-run reference -- derive and compile (unique
+    anchors + round trip).  So a GPU window in either mode cannot die on a moved anchor.
+    Returns the merged SHA report, which includes both derived-run SHAs."""
+    report: dict = {}
+    reads_fn, reads_shas = pl.build_yield_run()             # reads mode (yield only)
+    barrier_fn, barrier_shas = pl.build_barrier_run()       # F18 barrier mode (barrier+yield)
+    if not callable(reads_fn) or not callable(barrier_fn):
+        raise RuntimeError("F16 preflight: a derived run did not compile")
+    if reads_fn.__code__.co_code == barrier_fn.__code__.co_code:
+        raise RuntimeError("F16 preflight: barrier run bytecode matches the reads run")
+    report.update(reads_shas)
+    report["f16_barrier_run_sha256"] = barrier_shas["f16_barrier_run_sha256"]
+
+    # Stamped variants (diagnostic): derive + round-trip so a stamped window cannot die
+    # on a moved anchor either.
+    for barrier in (False, True):
+        sfn, sshas = pl.build_stamped_run(barrier=barrier)
+        if not callable(sfn):
+            raise RuntimeError("F16 preflight: a stamped run did not compile")
+        report.update({k: v for k, v in sshas.items() if k.startswith("f16_stamped_")})
+
     cocode = pl.scheduled_run_cocode()
     if not isinstance(cocode, bytes) or not cocode:
         raise RuntimeError("F16 preflight: scheduled-run cocode empty")
-    return shas
+    return report
 
 
 def _archived_dir() -> Path:
@@ -178,6 +228,11 @@ def preflight() -> dict:
 
 def main() -> int:
     report = preflight()
+    deriv = report["derivation"]
+    # Both hand-off modes' derived-run SHAs (the reads yield run and the F18 barrier
+    # run), explicit so a window log records exactly which run each mode compiled.
+    print("F16_DERIVED_RUN_SHA reads=" + deriv["f16_yield_run_sha256"]
+          + " barrier=" + deriv["f16_barrier_run_sha256"])
     print("F16_PREFLIGHT_OK " + json.dumps(report, sort_keys=True))
     return 0
 
