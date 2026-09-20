@@ -182,6 +182,27 @@ def _trellis_consts(dec: np.ndarray):
     return low13, dec.astype(np.float32), dec2
 
 
+_FAST_CACHE: dict = {}
+
+
+def _trellis_consts_fast(dec: np.ndarray):
+    """Contiguous per-state branch tables for the vectorized beam (:func:`beam_encode_fast`).
+
+    ``DECg2[s, r] = DEC[s + r*8192]`` and ``DEC2g2[s, r] = DEC[s + r*8192]**2`` as C-contiguous
+    ``[8192, 8]``.  A state's 8 branch windows are then ONE contiguous row (32 B) instead of eight
+    values 32 KiB apart, so the per-step gather is a cache-friendly row gather.  Values are byte-
+    identical to ``DEC[state + r*8192]`` used by :func:`beam_encode`, so the fast beam is bit-exact.
+    """
+    key = id(dec)
+    if key not in _FAST_CACHE:
+        DEC = dec.astype(np.float32)
+        DEC2 = (DEC.astype(np.float64) ** 2).astype(np.float32)
+        DECg2 = np.ascontiguousarray(DEC.reshape(8, 8192).T)     # [8192,8], row s = branches r=0..7
+        DEC2g2 = np.ascontiguousarray(DEC2.reshape(8, 8192).T)
+        _FAST_CACHE[key] = (DEC, DEC2, DECg2, DEC2g2)
+    return _FAST_CACHE[key]
+
+
 def _forward_pass(targets: np.ndarray, cost: np.ndarray, bp: np.ndarray,
                   low13: np.ndarray, DEC: np.ndarray, DEC2: np.ndarray) -> np.ndarray:
     """One forward Viterbi sweep; writes branch backpointers into ``bp`` [S,8192,B], returns cost.
@@ -335,6 +356,73 @@ def beam_encode(targets: np.ndarray, dec: np.ndarray, beam: int = 256,
             beam_states = np.take_along_axis(nxt.reshape(B, beam * 8), keep, axis=1)
             new3rec[p] = np.take_along_axis(flat_new3, keep, axis=1)
             parent[p] = flat_parent[keep]
+        slot = beam_cost.argmin(axis=1)
+        ob = np.empty((B, S), np.uint8)
+        for p in range(S - 1, -1, -1):
+            ob[:, p] = new3rec[p][rows, slot]
+            slot = parent[p][rows, slot]
+        ob = repair_seam(ob, tb, dec, ct, span=repair_span)   # per-batch: bounds RSS
+        out[b0:b0 + B] = ob
+        sstar[b0:b0 + B] = decoded_windows(ob, ct)[:, 0] & 0x1FFF
+    return out, sstar
+
+
+def beam_encode_fast(targets: np.ndarray, dec: np.ndarray, beam: int = 256,
+                     batch: int = 1024, repair_span: int = 8, on_batch=None) -> tuple:
+    """Bit-exact, faster re-implementation of :func:`beam_encode` (DSV4.1 F37).
+
+    Same open-chain top-``beam`` search + seam repair, producing BYTE-IDENTICAL codes to
+    :func:`beam_encode` (asserted in the tests and on the F34 artifact).  The speedups are purely
+    mechanical and value-preserving:
+
+      * step 0 drops the ``zeros[:, low13]`` all-zero [B,65536] gather (predecessor cost is 0);
+      * per step the 8 branch emissions are read as ONE contiguous [B,beam,8] row gather from the
+        ``[8192,8]`` tables (:func:`_trellis_consts_fast`) instead of an element gather of
+        ``DEC[state + r*8192]`` scattered 32 KiB apart;
+      * the kept symbol and parent slot are ``keep & 7`` / ``keep >> 3`` of the top-k index
+        (the flat layout is ``j = slot*8 + r``), removing the ``nxt`` array, the broadcast
+        ``flat_new3``/``flat_parent`` tables and two ``take_along_axis`` gathers.
+
+    The emission arithmetic (``beam_cost + (DEC2[w] - 2 t DEC[w])``) and the ``np.argpartition`` call
+    are IDENTICAL to :func:`beam_encode`, so ``total`` and therefore ``keep`` are bit-identical.
+    ``repair_seam`` is the same call.  targets [N,256] (cycle order) -> (new3 [N,256] uint8, s0 [N]).
+    """
+    DEC, DEC2, DECg2, DEC2g2 = _trellis_consts_fast(dec)
+    N, S = targets.shape
+    assert S == 256
+    ct = cycle_tables(3)
+    out = np.empty((N, 256), np.uint8)
+    sstar = np.empty(N, np.int64)
+    for b0 in range(0, N, batch):
+        if on_batch is not None:
+            on_batch()
+        tb = targets[b0:b0 + batch]
+        B = tb.shape[0]
+        rows = np.arange(B)
+        # step 0: free init (predecessor cost 0), collapse to best next-state, keep top-`beam`
+        nc = (DEC2[None, :] - 2.0 * tb[:, 0][:, None] * DEC[None, :]).reshape(B, 8192, 8)
+        r0 = nc.argmin(axis=2)
+        c0 = np.take_along_axis(nc, r0[:, :, None], axis=2)[:, :, 0]
+        sel = np.argpartition(c0, beam - 1, axis=1)[:, :beam]
+        beam_states = sel.astype(np.int32)
+        beam_cost = np.take_along_axis(c0, sel, axis=1).astype(np.float32)
+        parent = np.empty((S, B, beam), np.int32)
+        new3rec = np.empty((S, B, beam), np.uint8)
+        parent[0] = -1
+        new3rec[0] = ((sel << 3 | np.take_along_axis(r0, sel, axis=1)) >> 13).astype(np.uint8)
+        for p in range(1, S):
+            # 8 branch emissions per state as a contiguous row gather -> [B,beam,8]
+            d2 = DEC2g2[beam_states]
+            d1 = DECg2[beam_states]
+            total = (beam_cost[:, :, None] + (d2 - (2.0 * tb[:, p])[:, None, None] * d1)).reshape(B, beam * 8)
+            keep = np.argpartition(total, beam - 1, axis=1)[:, :beam]
+            beam_cost = np.take_along_axis(total, keep, axis=1).astype(np.float32)
+            parent_i = keep >> 3                                   # slot: flat j = slot*8 + r
+            r = (keep & 7).astype(np.int32)                        # symbol (3 new bits)
+            new3rec[p] = r.astype(np.uint8)
+            parent[p] = parent_i.astype(np.int32)
+            # next state = (old_state >> 3) | (r << 10); old_state = beam_states[parent_i]
+            beam_states = (np.take_along_axis(beam_states, parent_i, axis=1) >> 3) | (r << 10)
         slot = beam_cost.argmin(axis=1)
         ob = np.empty((B, S), np.uint8)
         for p in range(S - 1, -1, -1):
