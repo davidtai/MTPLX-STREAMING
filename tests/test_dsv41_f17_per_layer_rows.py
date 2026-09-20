@@ -601,3 +601,26 @@ def test_shape_mode_rescales_a_profile_to_any_admitted_capacity(monkeypatch):
         assert all(v >= 4 and v % 4 == 0 for v in values)
         assert values == [allocate(runtime, capacity=capacity)[layer] for layer in range(40)]
         assert values[0] == max(values) and values[20] == 4      # L0 heaviest, L20 at the floor
+
+
+def test_prefill_excess_rule_matches_the_offline_derivation(monkeypatch):
+    """``prefill_excess`` = extension rows proportional to max(0, stat - p10(stat)); checked
+    against the vector Fable derived offline from the GPU run's logged statistic (C=107)."""
+    import types
+    from collections import Counter
+
+    import allocation
+    from allocation import ALLOC_ENV, allocate
+
+    stat = [0.402344,0.376668,0.303813,0.208964,0.291565,0.304128,0.180776,0.213236,0.189056,
+            0.176402,0.180379,0.220032,0.206858,0.234446,0.161184,0.292806,0.153463,0.174408,
+            0.156738,0.247,0.171,0.18,0.162,0.219,0.155,0.146,0.148,0.235,0.139,0.175,0.194,
+            0.209,0.194,0.226,0.186,0.205,0.209,0.278,0.286,0.262]
+    monkeypatch.setenv(ALLOC_ENV, "prefill_excess")
+    monkeypatch.setattr(allocation, "_prefill_statistic", lambda runtime, layers, old: list(stat))
+    runtime = types.SimpleNamespace(spec=types.SimpleNamespace(routed_layer_indices=tuple(range(40))))
+    added = allocate(runtime, capacity=107)
+    values = [added[layer] for layer in range(40)]
+    assert values == [80, 72, 48, 20, 44, 48, 12, 20, 16, 12, 12, 24, 20, 28, 8, 48, 4, 12, 4, 32,
+                      8, 12, 8, 24, 4, 4, 4, 28, 4, 12, 16, 20, 16, 24, 12, 20, 20, 40, 44, 36]
+    assert sum(values) == 40 * 23 and all(v % 4 == 0 and v >= 4 for v in values)

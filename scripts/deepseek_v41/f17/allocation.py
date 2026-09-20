@@ -77,6 +77,20 @@ def allocate(runtime, *, capacity, old=84):
             min_added=MIN_ADDED, max_added=max_added, quantum=QUANTUM,
         )
         added = {layer: vec[i] for i, layer in enumerate(layers)}
+    elif mode == "prefill_excess":
+        # Sharper causal rule (Fable, 2026-09-19): the uniform 84 prefill rows already cover the
+        # concentrated layers, so extension rows go in proportion to each layer's EXCESS prefill
+        # diffuseness over the 10th-percentile layer (floor 4 rows elsewhere). Prefill-only
+        # information; on the F14 dense miss curves it removes 3.4% of reads (80% of the oracle
+        # ceiling) vs 1.5% for the proportional rule.
+        provenance = "prefill_excess"
+        statistic = _prefill_statistic(runtime, layers, old)
+        baseline = sorted(statistic)[max(0, (n // 10) - 0)]
+        vec = _apportion(
+            [max(0.0, value - baseline) for value in statistic], total, n=n,
+            min_added=MIN_ADDED, max_added=max_added, quantum=QUANTUM,
+        )
+        added = {layer: vec[i] for i, layer in enumerate(layers)}
     elif mode.startswith(_SHAPE_PREFIX):
         # A fixed per-layer PROFILE (e.g. the F14 oracle shape) rescaled to the capacity the
         # live admission picked, so a high-baseline run that admits one row fewer cannot die on
@@ -95,7 +109,7 @@ def allocate(runtime, *, capacity, old=84):
     else:
         raise ValueError(
             f"{ALLOC_ENV}={raw!r} is not a recognised F17 allocation mode "
-            f"(expected unset/'uniform', 'prefill_rule', or 'vector:<{n} ints>')"
+            f"(expected unset/'uniform', 'prefill_rule', 'prefill_excess', 'shape:<{n} weights>' or 'vector:<{n} ints>')"
         )
 
     _validate(added, layers, total)
