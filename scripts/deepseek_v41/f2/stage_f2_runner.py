@@ -38,6 +38,12 @@ _TRACE_ANCHOR = (
 _TRACE_INSERT = "                import traceback; traceback.print_exc()  # F2b: surface the hidden error"
 
 
+# F19: swap the reader's fanout pool right before plane_lane.install captures its submit (16-space indent).
+_RO_ANCHOR = "                from plane_lane import install as install_plane_lane"
+_RO_INSERT = ("                import f2.read_order as _f19_read_order; "
+              "_f19_read_order.install_from_env(rt.reader)  # F19 (no-op unless MTPLX_DSV41_F19_FANOUT_WORKERS)")
+
+
 def _assert_once(text: str, anchor: str, label: str) -> None:
     n = text.count(anchor)
     if n != 1:
@@ -130,6 +136,17 @@ def stage_verify_balanced(source_text: str) -> str:
     return updated
 
 
+def stage_read_order(source_text: str) -> str:
+    """packed_phase.py: install the F19 read-order pool immediately before the plane lane binds the reader."""
+    if "_f19_read_order" in source_text:
+        raise RuntimeError("F19 read order already staged")
+    _assert_once(source_text, _RO_ANCHOR, "plane_lane install import")
+    updated = source_text.replace(_RO_ANCHOR, _RO_INSERT + "\n" + _RO_ANCHOR)
+    if updated.replace(_RO_INSERT + "\n" + _RO_ANCHOR, _RO_ANCHOR) != source_text:
+        raise RuntimeError("F19 read-order edit changed more than the one insertion")
+    return updated
+
+
 def stage_run_full(source_text: str) -> str:
     _assert_once(source_text, _INSTALL_ANCHOR, "observe_seed_prefill prime_model")
     _assert_once(source_text, _TRACE_ANCHOR, "observe_prefill_boundary SystemExit")
@@ -150,6 +167,7 @@ def main(argv=None) -> int:
     ap.add_argument("--run-full", default=None, help="STAGED run_full.py to patch in place (install + traceback)")
     ap.add_argument("--hybrid-install", default=None, help="STAGED hybrid_install.py (with --verify-chunks)")
     ap.add_argument("--verify-chunks", default=None, help="e.g. 4,4 : row-split exactness probe")
+    ap.add_argument("--packed-phase", default=None, help="STAGED packed_phase.py: F19 read-order pool hook")
     ap.add_argument("--ring-bytes", type=int, default=None,
                     help="with --admission: charge the F2b host ring to the physical bound")
     args = ap.parse_args(argv)
@@ -173,6 +191,11 @@ def main(argv=None) -> int:
             out = stage_verify_chunks(p.read_text(), chunks=[int(x) for x in args.verify_chunks.split(",")])
         p.write_text(out)
         print("staged_verify_chunks", args.verify_chunks, "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
+    if args.packed_phase is not None:
+        p = Path(args.packed_phase)
+        out = stage_read_order(p.read_text())
+        p.write_text(out)
+        print("staged_read_order", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.run_full is not None:
         p = Path(args.run_full)
         out = stage_run_full(p.read_text())
