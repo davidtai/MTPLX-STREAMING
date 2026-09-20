@@ -63,7 +63,7 @@ def _open_direct_fd(reader) -> int:
 
 def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
             first_target: int = FIRST_TARGET_LAYER, predictor_mode: str | None = None,
-            direct_io: bool = True):
+            direct_io: bool = True, wire_ring: bool = False):
     runtime = target._mtplx_expert_runtime
     if runtime.config.prefetch_slots != 0:
         raise RuntimeError("F2b requires the runtime's own prefetch ring OFF (prefetch_slots==0)")
@@ -83,7 +83,7 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
     plane_specs = tuple((off, plane_len) for off in PLANE_OFFSETS)     # equal-length planes
     counters = F2bCounters()
     ring = HostRing(records=ring_records, planes=len(PLANE_OFFSETS),
-                    plane_bytes=plane_len, counters=counters)
+                    plane_bytes=plane_len, counters=counters, wire=wire_ring)
 
     sources = set(select_prefetch_sources(layers, first_target=first_target))   # 3..38
     target_layers = sorted({L + 1 for L in sources})                            # 4..39
@@ -138,7 +138,8 @@ def install(target, *, ring_records: int = 32, workers: int = 3, k: int = 3,
         "installed": True, "ring_records": int(ring_records), "workers": int(workers),
         "plane_length": int(plane_len), "sources": sorted(sources),
         "wrapped_layers": wrapped_layers, "predictor_mode": predictor_mode,
-        "k": int(k), "first_target": int(first_target), "direct_io": bool(direct_io), **intercept,
+        "k": int(k), "first_target": int(first_target), "direct_io": bool(direct_io),
+        "ring_wired_bytes": int(ring.wired_bytes), **intercept,
     }
 
 
@@ -207,6 +208,7 @@ def install_from_env(target) -> dict:
         k=int(os.environ.get("MTPLX_DSV41_F2B_K", "3")),
         first_target=int(os.environ.get("MTPLX_DSV41_F2B_FIRST_TARGET", str(FIRST_TARGET_LAYER))),
         direct_io=os.environ.get("MTPLX_DSV41_F2B_DIRECT_IO", "1") != "0",
+        wire_ring=os.environ.get("MTPLX_DSV41_F2B_WIRE_RING", "0") == "1",
     )
     counters_path = os.environ.get("MTPLX_DSV41_F2B_COUNTERS")
     if counters_path:

@@ -82,7 +82,7 @@ def _writable(view) -> np.ndarray:
 
 class HostRing:
     def __init__(self, *, records: int, planes: int = 3, plane_bytes: int,
-                 counters: F2bCounters | None = None) -> None:
+                 counters: F2bCounters | None = None, wire: bool = False) -> None:
         self.records = int(records)
         self.planes = int(planes)
         self.plane_bytes = int(plane_bytes)          # buffer size == the (equal) plane length
@@ -92,11 +92,33 @@ class HostRing:
         self.counters = counters or F2bCounters()
         self._mmaps = [mmap.mmap(-1, self.plane_bytes) for _ in range(self.capacity)]
         self._np = [np.frombuffer(mm, dtype=np.uint8) for mm in self._mmaps]
+        # Optional: wire (mlock) the plane buffers ONCE at construction so every speculative
+        # F_NOCACHE read lands in already-wired pages (the kernel otherwise wires/unwires the
+        # destination per I/O while the main thread is submitting GPU work). Same bytes, same
+        # accounting (the ring is already charged to admission); failure is loud.
+        self.wired_bytes = 0
+        if wire:
+            self.wired_bytes = self._wire_buffers()
         self._free = list(range(self.capacity))
         self._entries: dict[int, _Entry] = {}
         self._fifo: list[int] = []
         self._active = 0                              # count of READING + READY entries
         self._lock = threading.Lock()
+
+    def _wire_buffers(self) -> int:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.mlock.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+        libc.mlock.restype = ctypes.c_int
+        total = 0
+        for arr in self._np:
+            arr[:] = 0                                   # fault the pages in before wiring
+            if libc.mlock(ctypes.c_void_p(arr.ctypes.data), ctypes.c_size_t(arr.nbytes)) != 0:
+                err = ctypes.get_errno()
+                raise OSError(err, f"mlock of an F2b ring buffer failed after {total} bytes")
+            total += int(arr.nbytes)
+        return total
 
     def buffer_view(self, buf_index: int, n: int) -> memoryview:
         return memoryview(self._mmaps[buf_index])[:n]
