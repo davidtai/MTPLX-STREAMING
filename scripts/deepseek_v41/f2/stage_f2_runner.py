@@ -181,6 +181,28 @@ def stage_read_order(source_text: str) -> str:
     return updated
 
 
+# F27: install the host-only per-cycle draft log at the quiescent post-prefill growth boundary,
+# right AFTER the plane lane binds. The wrap replaces module/class attributes the hybrid install
+# copies into its exec namespace at generate time, so this boundary is early enough. The anchor is
+# the plane_lane install CALL -- disjoint from F19's import-line anchor (line above) and from the
+# F12 growth anchors -- so stage_cycle_log composes with stage_read_order / stage_f12 in any order.
+_CL_ANCHOR = "                plane_runners.update(install_plane_lane(rt, dict(zip(layers, switches)), owners))"
+_CL_INSERT = ("                import f2.cycle_log as _f27_cycle_log; "
+              "_f27_cycle_log.install_from_env()  # F27 (no-op unless MTPLX_DSV41_F27_CYCLE_LOG)")
+
+
+def stage_cycle_log(source_text: str) -> str:
+    """packed_phase.py: install the F27 per-cycle draft log immediately after the plane lane binds."""
+    if "_f27_cycle_log" in source_text:
+        raise RuntimeError("F27 cycle log already staged")
+    _assert_once(source_text, _CL_ANCHOR, "plane_lane install call")
+    block = _CL_ANCHOR + "\n" + _CL_INSERT
+    updated = source_text.replace(_CL_ANCHOR, block)
+    if updated.replace(block, _CL_ANCHOR) != source_text:
+        raise RuntimeError("F27 cycle-log hook edit changed more than the one insertion")
+    return updated
+
+
 def stage_run_full(source_text: str, *, other_prompt: bool = False) -> str:
     _assert_once(source_text, _INSTALL_ANCHOR, "observe_seed_prefill prime_model")
     _assert_once(source_text, _TRACE_ANCHOR, "observe_prefill_boundary SystemExit")
@@ -399,6 +421,7 @@ def main(argv=None) -> int:
     ap.add_argument("--confidence", action="store_true",
                     help="F25: with --hybrid-install, accept a live confidence_threshold and record it in the report")
     ap.add_argument("--packed-phase", default=None, help="STAGED packed_phase.py: F19 read-order pool hook")
+    ap.add_argument("--cycle-log-phase", default=None, help="STAGED packed_phase.py: F27 per-cycle draft-log hook")
     ap.add_argument("--ring-bytes", type=int, default=None,
                     help="with --admission: charge the F2b host ring to the physical bound")
     args = ap.parse_args(argv)
@@ -432,6 +455,11 @@ def main(argv=None) -> int:
         out = stage_read_order(p.read_text())
         p.write_text(out)
         print("staged_read_order", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
+    if args.cycle_log_phase is not None:
+        p = Path(args.cycle_log_phase)
+        out = stage_cycle_log(p.read_text())
+        p.write_text(out)
+        print("staged_cycle_log", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.run_full is not None:
         p = Path(args.run_full)
         out = stage_run_full(p.read_text(), other_prompt=args.other_prompt)
