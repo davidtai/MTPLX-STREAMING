@@ -68,6 +68,26 @@ def _fake_decode():
     return types.SimpleNamespace(_effective_draft_len=_fake_effective_draft_len)
 
 
+def _hybrid_decode_module():
+    """A fake decode module whose _decode_cycles is the exec'd hybrid copy (filename
+    '<hybrid_lookup_decode>'), so its bare _effective_draft_len resolves via the copy's OWN globals dict --
+    exactly the retained seam (the growth-transition hook runs after this rewrite). Replacing the module
+    attribute would NOT reach it; the fix wraps the name inside the live function's __globals__."""
+    mod = types.SimpleNamespace(_effective_draft_len=_fake_effective_draft_len)
+    src = (
+        "def _decode_cycles(inst, conf_row, k, threshold, native, delta):\n"
+        "    inst.append_committed([native[0]])                  # leading primary (not a cycle)\n"
+        "    kn = _effective_draft_len(conf_row, k, threshold)   # resolved via THIS globals dict\n"
+        "    res = inst.extend(list(native[:kn]))\n"
+        "    inst.append_committed(list(delta))                  # close the cycle\n"
+        "    return kn, len(res)\n"
+    )
+    namespace = dict(mod.__dict__)                               # what hybrid_install.install does (line 54)
+    exec(compile(src, "<hybrid_lookup_decode>", "exec"), namespace)
+    mod._decode_cycles = namespace["_decode_cycles"]
+    return mod
+
+
 def _sig6(logits):
     """The wrapper's conf list: sigmoid of the float32 row, 6 decimals (float32->float64, like it)."""
     x = np.asarray(logits, dtype=np.float32).astype(np.float64)
@@ -98,7 +118,8 @@ def restore():
 def test_scripted_cycles_produce_exact_records(restore, tmp_path):
     decode = _fake_decode()
     report = cycle_log.install(decode, _lookup, path=str(tmp_path / "cycles.json"))
-    assert report == {"installed": True, "path": str(tmp_path / "cycles.json")}
+    # a fake decode has no _decode_cycles, so the sink is the module attribute
+    assert report == {"installed": True, "path": str(tmp_path / "cycles.json"), "conf_seam": "module_attribute"}
     log = cycle_log._LOG
 
     # G=[1,2,3,4,5] appears once, preceded by [8,7] and followed by [90,91]; after the primary the
@@ -161,6 +182,22 @@ def test_second_dspark_generate_gets_a_marker(restore, tmp_path):
     assert [c.get("generate") for c in log.cycles] == [None, 2, None]
     assert log.cycles[1] == {"generate": 2}
     assert log.cycles[0]["k_native"] == 2 and log.cycles[2]["k_native"] == 2
+
+
+def test_hybrid_live_records_conf_via_function_globals(restore, tmp_path):
+    # Reproduce the REAL order: the hybrid copy is already live, so the module-attribute wrap would be a
+    # no-op; the fix wraps _effective_draft_len inside the live function's globals. (Regression for the bug.)
+    decode = _hybrid_decode_module()
+    report = cycle_log.install(decode, _lookup, path=str(tmp_path / "cycles.json"))
+    assert report["conf_seam"] == "function_globals"       # corrected seam, not module_attribute
+    log = cycle_log._LOG
+    inst = LookupExtension([1, 2, 3, 4, 5, 6], minimum_context=2, extra_tokens=2)
+    logits = [2.0, 1.0, 0.5]
+    kn, ktot = decode._decode_cycles(inst, _row(logits), 3, None, [1, 2, 3], [1, 2, 99])
+    assert kn == 3
+    assert log.cycles == [
+        {"conf": _sig6(logits), "k_cap": 3, "threshold": None, "k_native": 3, "k_total": ktot, "committed": 3}
+    ]
 
 
 # ------------------------------------------------------------------ install refusals + env

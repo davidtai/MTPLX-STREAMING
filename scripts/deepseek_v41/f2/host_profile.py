@@ -2,33 +2,35 @@
 raw pstats + a readable text summary into the arm's receipt directory.
 
 In the two-group verify pipeline everything host-side is serialised on ONE generation thread, and a
-closed queueing model makes each 0.1 ms of host time per group slice worth ~0.9 s per 1,024-token
-run.  Host trims are therefore the most valuable exact lever, but only a profile of the REAL lane
-says where the Python time goes.  This arm captures that profile.
+closed queueing model makes each 0.1 ms of host time per group slice worth ~0.9 s per 1,024-token run.
+Host trims are the most valuable exact lever, but only a profile of the REAL lane says where the Python
+time goes.  This arm captures that profile.
 
-Seam (the reassignment problem).  The retained hybrid install ``exec``s a rewritten copy of
-``_decode_cycles`` and then does ``module._decode_cycles = namespace['_decode_cycles']``
-(hybrid_install.py), so a wrapper placed on ``module._decode_cycles`` BEFORE the install would be
-thrown away by that reassignment.  ``dspark_generate`` resolves ``_decode_cycles`` as a module global
-at call time, so the wrapper must be applied AFTER the install returns and BEFORE generation calls it.
-The install is invoked at generate time from ``run_full.py``'s ``dspark_with_boundary_observation``
-via ``from hybrid_install import install as install_hybrid`` (a fresh module-attribute read each
-generate).  So this module wraps ``hybrid_install.install`` itself: right after the original install
-returns (``_decode_cycles`` now final), the wrapper replaces ``module._decode_cycles`` with a profiled
-version.  ``dspark_with_boundary_observation`` then calls ``original_dspark_generate``, whose
-``_decode_cycles`` global is now the profiled wrapper.
+Seam order (this is the corrected mechanism -- an earlier version had it backwards).  The retained hybrid
+install rewrites ``_decode_cycles``, ``exec``s the copy and reassigns ``module._decode_cycles``, and it runs
+at the START of ``dspark_generate`` (from ``run_full.py``'s ``dspark_with_boundary_observation``).  This
+module's ``install_from_env`` is staged in packed_phase's growth transition, which runs from the prefill
+callback DURING ``dspark_generate`` -- AFTER the hybrid rewrite, and BEFORE ``_decode_cycles`` is called (a
+module-global lookup at call time).  So by install time ``_decode_cycles`` is usually already the final,
+exec'd hybrid copy (``co_filename == '<hybrid_lookup_decode>'``); wrapping ``hybrid_install.install`` then would
+never fire for that (only) generate.  Therefore:
 
-``profiled`` builds a ``cProfile.Profile()``, ``enable()``s it, calls through, ``disable()``s it in a
-``finally`` and dumps the two files there (the decode loop runs once per generate and returns, so
-atexit is not needed).  The F16 pipeline runs the two row groups as greenlets ON the generation
-thread; cProfile keeps profiling across greenlet switches on the same thread, so a switched-out
-frame's time includes the partner's work -- noted at the top of ``hostprof.txt``.  ``strip_dirs()`` is
-NOT applied so staged vs pinned paths stay distinguishable.
+  * when the hybrid copy is live, wrap ``module._decode_cycles`` DIRECTLY: ``dspark_generate`` looks the name up
+    as a module global after the prefill callback returns, so the profiled wrapper is what runs (``seam=direct``);
+  * otherwise (hybrid not yet live -- tests, or an import-time seam), wrap ``hybrid_install.install`` so it
+    re-wraps ``_decode_cycles`` right after each rewrite (``seam=hybrid_install_wrap``).
 
-Files, in ``$MTPLX_DSV41_F28_PROFILE`` (a directory): a single generate writes ``hostprof.pstats`` +
-``hostprof.txt``; a second generate renames those to ``hostprof-1.*`` and writes ``hostprof-2.*``
-(and so on).  Off unless the variable is set; diagnostic arm, never a throughput candidate.  Validated
-once at install; nothing here runs a per-cycle check.
+The profiled wrapper exposes ``__wrapped__`` = the real function, so the F27 cycle-log hook can reach the hybrid
+copy's globals regardless of which of F27/F28 installs first (``+prof+cl`` in either order records conf AND
+profiles).  ``_profiled`` builds a ``cProfile.Profile()``, ``enable()``s it, calls through, ``disable()``s it in a
+``finally`` and dumps there (the decode loop runs once per generate and returns, so no atexit); the dump is
+guarded so it never masks a decode error.  The F16 pipeline runs both row groups as greenlets ON the generation
+thread; cProfile keeps profiling across greenlet switches on the same thread, so a switched-out frame's time
+includes the partner's work -- noted atop ``hostprof.txt``.  ``strip_dirs()`` is NOT applied (staged vs pinned
+paths matter).  Files, in ``$MTPLX_DSV41_F28_PROFILE`` (a directory): one generate writes ``hostprof.pstats`` +
+``hostprof.txt``; a second renames those to ``hostprof-1.*`` and writes ``hostprof-2.*``, etc.  (On the retained
+lane the packed growth transition -- hence this install -- runs once per process; the per-generate numbering is
+exercised through the ``hybrid_install.install`` fallback.)  Off unless the variable is set; diagnostic arm.
 """
 from __future__ import annotations
 
@@ -39,6 +41,7 @@ import pstats
 import traceback
 
 ENV = "MTPLX_DSV41_F28_PROFILE"
+_HYBRID_DECODE_FILENAME = "<hybrid_lookup_decode>"   # hybrid_install compile()s the rewrite under this name
 
 _CAVEAT = (
     "# F28 host profile of the DSpark decode generation thread (generate {g}).\n"
@@ -77,7 +80,8 @@ def _dump(prof, out_dir, g):
 
 
 def _profiled(decode_cycles, out_dir, g):
-    """Wrap the final ``_decode_cycles`` so one generate runs under cProfile and dumps on return."""
+    """Wrap ``_decode_cycles`` so one generate runs under cProfile and dumps on return.  Exposes
+    ``__wrapped__`` for the F27 hook, and ``_f28_host_profile`` so a double install is refused."""
 
     def _profiled_decode_cycles(*args, **kwargs):
         prof = cProfile.Profile()
@@ -91,42 +95,60 @@ def _profiled(decode_cycles, out_dir, g):
             except Exception:   # pragma: no cover - telemetry must not mask a decode error
                 traceback.print_exc()
 
+    _profiled_decode_cycles.__wrapped__ = decode_cycles
+    _profiled_decode_cycles._f28_host_profile = True
     return _profiled_decode_cycles
 
 
-def install(hybrid_install_module, *, out_dir):
-    """Wrap ``hybrid_install_module.install`` so it re-wraps ``module._decode_cycles`` with the profiled
-    version right after the original install reassigns it.  Refuses (RuntimeError) if ``out_dir`` is not
-    an existing directory, ``install`` is absent, or ``install`` is already wrapped.  Construction-time only."""
+def install(hybrid_install_module, decode_module, *, out_dir):
+    """Install the profiler around the DSpark decode.  If ``decode_module._decode_cycles`` is already the exec'd
+    hybrid copy, wrap it directly; otherwise wrap ``hybrid_install_module.install`` so it re-wraps the function
+    right after each rewrite.  Refuses (RuntimeError) if ``out_dir`` is not an existing directory, the fallback
+    needs ``install`` and it is absent, or the chosen sink is already wrapped.  Construction-time only."""
     out_dir = str(out_dir)
     if not os.path.isdir(out_dir):
         raise RuntimeError(f"F28 profile directory does not exist: {out_dir}")
-    original_install = getattr(hybrid_install_module, "install", None)
-    if original_install is None:
-        raise RuntimeError("F28 needs hybrid_install.install")
-    if getattr(original_install, "_f28_host_profile", False):
-        raise RuntimeError("F28 host profile already wrapped hybrid_install.install")
     counter = [0]
 
-    def install(*args, **kwargs):
-        report = original_install(*args, **kwargs)
-        module = args[0] if args else kwargs["module"]
+    def _next():
         counter[0] += 1
-        module._decode_cycles = _profiled(module._decode_cycles, out_dir, counter[0])
-        return report
+        return counter[0]
 
-    install._f28_host_profile = True
-    hybrid_install_module.install = install
-    return {"installed": True, "out_dir": out_dir}
+    dc = getattr(decode_module, "_decode_cycles", None)
+    if dc is not None and getattr(dc, "_f28_host_profile", False):
+        raise RuntimeError("F28 host profile already wrapped _decode_cycles")
+    code = getattr(dc, "__code__", None)
+    hybrid_live = code is not None and code.co_filename == _HYBRID_DECODE_FILENAME
+    if hybrid_live:
+        decode_module._decode_cycles = _profiled(dc, out_dir, _next())
+        seam = "direct"
+    else:
+        original_install = getattr(hybrid_install_module, "install", None)
+        if original_install is None:
+            raise RuntimeError("F28 needs hybrid_install.install (hybrid decode not yet live)")
+        if getattr(original_install, "_f28_host_profile", False):
+            raise RuntimeError("F28 host profile already wrapped hybrid_install.install")
+
+        def install(*args, **kwargs):
+            report = original_install(*args, **kwargs)
+            module = args[0] if args else kwargs["module"]
+            module._decode_cycles = _profiled(module._decode_cycles, out_dir, _next())
+            return report
+
+        install._f28_host_profile = True
+        hybrid_install_module.install = install
+        seam = "hybrid_install_wrap"
+    return {"installed": True, "out_dir": out_dir, "seam": seam}
 
 
 def install_from_env():
-    """Read ``MTPLX_DSV41_F28_PROFILE`` at use.  Unset -> nothing installed; otherwise wrap the staged
-    ``hybrid_install`` module's ``install``."""
+    """Read ``MTPLX_DSV41_F28_PROFILE`` at use.  Unset -> nothing installed; otherwise wrap the DSpark decode of
+    the retained decode module (via the staged ``hybrid_install`` module for the not-yet-live fallback)."""
     out_dir = os.environ.get(ENV, "").strip()
     if not out_dir:
         return {"installed": False}
+    from mtplx.models import deepseek_v41_dspark_decode as decode_module
     import hybrid_install
-    report = install(hybrid_install, out_dir=out_dir)
+    report = install(hybrid_install, decode_module, out_dir=out_dir)
     print("F28_HOST_PROFILE_INSTALL " + json.dumps(report, sort_keys=True), flush=True)
     return report
