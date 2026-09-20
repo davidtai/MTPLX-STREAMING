@@ -78,6 +78,13 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +vcb : sequential BALANCED verify schedule (ceil(n/2)+floor(n/2) rows per cycle, single chunk for
 #         n<=4) = the oracle for the balanced pipeline split
 #   +bal : (pipe base) F16 balanced leader/trailer split; oracle digest = $F16_BAL_ORACLE_SHA if set
+#   +bh  : (pipe base) F18 barrier hand-off: async routing barrier + second greenlet hand-off, per-group
+#          deferred slot releases; same oracle digest as the split it rides. Needs F16PKG = the f18 package.
+#   +wm  : EXACT decode lever attn_win_memo via the F5 hook (needs F2_PROBE=1): the sliding-window attend mask is built
+#          once per forward instead of once per layer (same array object; keyed on the positions object, per group).
+#   +opsN / +mbN : MLX_MAX_OPS_PER_BUFFER=N / MLX_MAX_MB_PER_BUFFER=N for the child (Metal command-buffer commit
+#          thresholds; M5 Max defaults 50 ops / 50 MB). Scheduling only: same kernels, same arithmetic.
+#   +st  : (pipe base) per-slice stamps -> <arm dir>/f16_stamps.{raw.json.gz,summary.json}. Needs the f18 package.
 #   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
 #         EXACTNESS probe (digest decides whether a two-group verify pipeline is exact);
 #         slower by construction, never a throughput candidate
@@ -196,7 +203,7 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_CAPS8=0; A_PIPE=0; A_BAL=0
+  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0
   A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
@@ -214,10 +221,15 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+plo+"*) A_PL=oracle ;; esac
   case "$mods" in *"+plx+"*) A_PL=excess ;; esac
   case "$mods" in *"+bal+"*) A_BAL=1 ;; esac
+  case "$mods" in *"+bh+"*) A_BH=1 ;; esac
+  case "$mods" in *"+wm+"*) A_WM=1 ;; esac
+  case "$mods" in *"+st+"*) A_ST=1 ;; esac
   case "$mods" in *"+pc+"*) A_PC=1 ;; esac
   case "$mods" in *"+ml+"*) A_ML=1 ;; esac
   case "$mods" in *"+rio+"*) A_RIO=1 ;; esac
   case "$mods" in *"+ft"*) A_FT="${mods#*+ft}"; A_FT="${A_FT%%+*}" ;; esac
+  case "$mods" in *"+ops"*) A_OPS="${mods#*+ops}"; A_OPS="${A_OPS%%+*}" ;; esac
+  case "$mods" in *"+mb"*) A_MB="${mods#*+mb}"; A_MB="${A_MB%%+*}" ;; esac
   case "$mods" in *"+vc"*) A_VC="${mods#*+vc}"; A_VC="${A_VC%%+*}" ;; esac
   case "$A_BASE" in
     control|control_a|control_b) A_ROWS="$F2_MAX_ROWS"; A_F2B=0 ;;
@@ -277,6 +289,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   if [ "$F2_PROBE" = "1" ]; then
     pypath="$pypath:$F5DIR"
     local f5_enable=""; [ "$A_CMP" = "1" ] && f5_enable="$A_CMPSET"
+    [ "$A_WM" = "1" ] && f5_enable="${f5_enable:+$f5_enable,}attn_win_memo"
     local timed=1; [ "$A_PIPE" = "1" ] && timed=0   # the stamp probe rebinds run; F16 refuses any non-scheduled lane
     probe_env="MTPLX_DSV41_F5_ENABLE=$f5_enable MTPLX_DSV41_F5_CAPS8=$A_CAPS8 MTPLX_DSV41_F5_TIMED_PROBE=$timed MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
   fi
@@ -290,6 +303,11 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     pypath="$pypath:$F16PKG:$F16SITE"
     f2b_env="$f2b_env MTPLX_DSV41_F16=1 MTPLX_DSV41_F16_COUNTERS=$dir/f16_counters.json"
     [ "$A_BAL" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_SPLIT=balanced"
+    if [ "$A_BH" = "1" ] || [ "$A_ST" = "1" ]; then
+      [ -f "$F16PKG/f16/stamps.py" ] || { echo "REFUSE: +bh/+st need the F18 package (set F16PKG to .worktrees/dsv41-f18-handoff/scripts/deepseek_v41)"; exit 2; }
+    fi
+    [ "$A_BH" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_HANDOFF=barrier"
+    [ "$A_ST" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_STAMPS=$dir/f16_stamps"
   fi
   if [ "$A_PL" != "0" ]; then
     pypath="$pypath:$F17DIR"
@@ -298,7 +316,11 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     else f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=shape:$F17_ORACLE_SHAPE"; fi
   fi
   [ "$A_K0" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_K=0"
+  case "$A_OPS$A_MB" in *[!0-9]*) echo "REFUSE: +ops/+mb need a positive integer (got ops=$A_OPS mb=$A_MB)"; exit 2 ;; esac
+  [ "$A_OPS" != "0" ] && f2b_env="$f2b_env MLX_MAX_OPS_PER_BUFFER=$A_OPS"
+  [ "$A_MB" != "0" ] && f2b_env="$f2b_env MLX_MAX_MB_PER_BUFFER=$A_MB"
   if [ "$A_CMP" = "1" ] && [ "$F2_PROBE" != "1" ]; then echo "REFUSE: +cmp needs F2_PROBE=1 (F5 hook)"; exit 2; fi
+  if [ "$A_WM" = "1" ] && [ "$F2_PROBE" != "1" ]; then echo "REFUSE: +wm needs F2_PROBE=1 (F5 hook)"; exit 2; fi
   if [ "$A_RD" = "1" ]; then
     pypath="$pypath:$F15DIR"; mkdir -p "$dir/rows"
     f2b_env="$f2b_env MTPLX_DSV41_F15_ROW_DUMP_DIR=$dir/rows MTPLX_DSV41_F15_ROW_INDICES=$F2_ROW_INDICES"
