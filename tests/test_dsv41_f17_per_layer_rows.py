@@ -580,3 +580,24 @@ def test_grow_rows_executes_f14_oracle_vector(monkeypatch):
         assert st["rows_per_layer"][layer] == 84 + want[layer]
     assert st["plan_persistent_slots"] == 40 * 108  # total unchanged
     assert rep["physical_allocated_bytes"] == st["pool_allocated_bytes"]
+
+
+def test_shape_mode_rescales_a_profile_to_any_admitted_capacity(monkeypatch):
+    """``shape:<40 weights>`` apportions a fixed per-layer profile to whatever capacity the
+    live admission picked: exact totals, multiples of 4, floors respected, deterministic."""
+    import types
+
+    from allocation import ALLOC_ENV, allocate
+
+    oracle = [85,58,63,18,36,29,4,13,22,14,7,19,33,32,4,34,4,13,4,58,4,4,4,19,4,4,4,31,4,10,
+              17,32,31,38,14,11,25,36,59,59]
+    weights = ",".join(str(v - 4) for v in oracle)
+    monkeypatch.setenv(ALLOC_ENV, "shape:" + weights)
+    runtime = types.SimpleNamespace(spec=types.SimpleNamespace(routed_layer_indices=tuple(range(40))))
+    for capacity in (105, 106, 107, 108, 111):
+        added = allocate(runtime, capacity=capacity)
+        values = [added[layer] for layer in range(40)]
+        assert sum(values) == 40 * (capacity - 84)
+        assert all(v >= 4 and v % 4 == 0 for v in values)
+        assert values == [allocate(runtime, capacity=capacity)[layer] for layer in range(40)]
+        assert values[0] == max(values) and values[20] == 4      # L0 heaviest, L20 at the floor

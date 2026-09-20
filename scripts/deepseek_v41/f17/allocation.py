@@ -44,6 +44,7 @@ MIN_ADDED = 4            # no zero-capacity extension banks
 QUANTUM = 4              # prefill_rule rows are multiples of 4
 DEFAULT_MAX_ADDED = 96
 _VECTOR_PREFIX = "vector:"
+_SHAPE_PREFIX = "shape:"   # 40 non-negative weights, apportioned to WHATEVER capacity is admitted
 
 
 def allocate(runtime, *, capacity, old=84):
@@ -73,6 +74,17 @@ def allocate(runtime, *, capacity, old=84):
         statistic = _prefill_statistic(runtime, layers, old)
         vec = _apportion(
             statistic, total, n=n,
+            min_added=MIN_ADDED, max_added=max_added, quantum=QUANTUM,
+        )
+        added = {layer: vec[i] for i, layer in enumerate(layers)}
+    elif mode.startswith(_SHAPE_PREFIX):
+        # A fixed per-layer PROFILE (e.g. the F14 oracle shape) rescaled to the capacity the
+        # live admission picked, so a high-baseline run that admits one row fewer cannot die on
+        # an exact-sum mismatch after a full prefill (review 2026-09-19).
+        provenance = "shape"
+        weights = _parse_shape(mode[len(_SHAPE_PREFIX):], n=n)
+        vec = _apportion(
+            weights, total, n=n,
             min_added=MIN_ADDED, max_added=max_added, quantum=QUANTUM,
         )
         added = {layer: vec[i] for i, layer in enumerate(layers)}
@@ -200,6 +212,19 @@ def _apportion(weights, total, *, n, min_added, max_added, quantum):
                 add[i] += 1
                 remaining -= 1
     return [(umin + add[i]) * quantum for i in range(n)]
+
+
+def _parse_shape(text, *, n):
+    parts = text.split(",")
+    if len(parts) != n:
+        raise ValueError(f"F17 shape needs exactly {n} comma-separated weights; got {len(parts)}")
+    try:
+        weights = [float(part.strip()) for part in parts]
+    except ValueError:
+        raise ValueError("F17 shape weights must be numbers")
+    if any(w < 0.0 for w in weights) or sum(weights) <= 0.0:
+        raise ValueError("F17 shape weights must be non-negative with a positive sum")
+    return weights
 
 
 def _parse_vector(text, *, n, total):
