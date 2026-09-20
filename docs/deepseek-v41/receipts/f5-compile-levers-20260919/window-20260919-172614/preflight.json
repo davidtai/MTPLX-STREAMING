@@ -1,0 +1,70 @@
+{
+  "checks": [
+    {
+      "name": "retained_runner_present",
+      "ok": true,
+      "detail": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile/docs/deepseek-v41/receipts/extension-bank-20260919/full/sources/packed/run_full.py"
+    },
+    {
+      "name": "retained_runner_sha256",
+      "ok": true,
+      "detail": "13bcdfe4fe583d8b465e69e7effbb8bf2f20d4d8b5baacb12e252f85f95149be vs 13bcdfe4fe583d8b465e69e7effbb8bf2f20d4d8b5baacb12e252f85f95149be"
+    },
+    {
+      "name": "prompt_ids_present",
+      "ok": true,
+      "detail": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile/docs/deepseek-v41/receipts/memory-budget-110/python-prompt-ids.json"
+    },
+    {
+      "name": "prompt_ids_token_sha256",
+      "ok": true,
+      "detail": "38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2 vs 38894d01011a0146f8621dfdaf4bc4e618092d772d8cc28a70e21163a16799a2"
+    },
+    {
+      "name": "ar_reference_present",
+      "ok": true,
+      "detail": "/tmp/dsv41-110-stage/live-combined-depth3-reserve2-1023.jsonl"
+    },
+    {
+      "name": "ar_reference_matched",
+      "ok": true,
+      "detail": "arm=cell16k_ring_v2_draft_attn_pf0 n=1 tokens=16384"
+    },
+    {
+      "name": "model_dir_present",
+      "ok": true,
+      "detail": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4"
+    },
+    {
+      "name": "aux_dir_present",
+      "ok": true,
+      "detail": "/tmp/dsv41-compact-residents"
+    },
+    {
+      "name": "installation_json_present",
+      "ok": true,
+      "detail": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile/docs/deepseek-v41/receipts/extension-bank-20260919/full/sources/packed/installation.json"
+    },
+    {
+      "name": "strict_lib_present",
+      "ok": true,
+      "detail": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib"
+    },
+    {
+      "name": "strict_lib_sha256",
+      "ok": true,
+      "detail": "32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9 vs 32f8c0e361d6f35251c9e05aeba05563f94ae54cc1f5f8e4bcb5ec9e6c42fba9"
+    },
+    {
+      "name": "background_advisory_recorded",
+      "ok": true,
+      "detail": "84754923520 B wired now; 111 rows need a post-unload baseline <= ~11030000000 B"
+    }
+  ],
+  "control_dspark_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+  "strict_lib": "/private/tmp/dsv41-strict-cache-20260918/strict-lib/libmlx.dylib",
+  "background_bytes_advisory": 84754923520,
+  "background_source": "host_memory_snapshot.box.wired_bytes",
+  "background_note": "advisory: measured with the production service possibly resident; the guarded runner re-derives admission after unload",
+  "preflight_ok": true
+}

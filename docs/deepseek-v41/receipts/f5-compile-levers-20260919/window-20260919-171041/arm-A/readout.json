@@ -1,0 +1,58 @@
+{
+  "arm": "A",
+  "verdict": {
+    "digest_matches_control": true,
+    "dspark_token_ids_sha256": "0d54d9b28a180c2c91ff5ef14f0dfb38320014bbed9d01827fb1b60c6e0417ac",
+    "divergence_class": "tie_flip",
+    "divergence_index": 297,
+    "ar_contested_margin": 0.0,
+    "dspark_contested_margin": 0.25,
+    "tie_band_used": 0.75,
+    "deltas_within_tie_band": true,
+    "ar_replay_error": null,
+    "capture_index_matches_first": true,
+    "outcome": "identical_to_control"
+  },
+  "cycles": 198,
+  "verify_calls": 198,
+  "tokens_per_cycle": 5.171717171717172,
+  "accept_rate": 0.9161147902869757,
+  "decode_tok_s": 13.531454572983693,
+  "per_cycle_ms": {
+    "draft_ms": 10.07612223144282,
+    "verify_ms": 358.0257429155131,
+    "accept_ms": 0.3560103115630383,
+    "commit_ms": 0.7658651259708962
+  },
+  "phase_time_s": {
+    "draft": 1.9950722018256783,
+    "verify": 70.88909709727159,
+    "accept": 0.07049004168948159,
+    "commit": 0.15164129494223744
+  },
+  "headline_pass": "untimed",
+  "engagement": {
+    "small_stages": {
+      "fused_layer_forwards": 0,
+      "eager_layer_forwards": 7920,
+      "engaged": false,
+      "premix_kernel_calls": 0,
+      "premix_reference_calls": 4,
+      "small_stages_fused_env": null,
+      "hc_premix_kernel_env": null,
+      "note": "cumulative over this arm (prefill + decode + census); the HEADLINE tok/s pass is UNTIMED so K35 is active there -- the timed stage-timing pass forces eager (recording guard)"
+    },
+    "attn_core_compile": {
+      "compiled": 0,
+      "eager": 8640
+    },
+    "bound_model_levers": {
+      "MTPLX_DSV41_HC_COMPILE": false,
+      "MTPLX_DSV41_ATTN_COMPILE": false,
+      "MTPLX_DSV41_ATTN_WIN_MEMO": false
+    }
+  },
+  "decoded_text_head": "```diff\n--- a/mtplx/generate.py\n+++ b/mtplx/generate.py\n@@\n def _generation_rate_fields(\n     *,\n     generated_tokens: int,\n     elapsed_s: float,\n     prompt_eval_time_s: float,\n     cache_restore_time_s: float = 0.0,\n ) -> dict[str, float]:\n     end_to_end_tok_s = generated_tokens / elapsed_s if elapsed_s > 0.0 else 0.0\n     non_decode_elapsed_s = min(\n         max(0.0, prompt_eval_time_s) + max(0.0, cache_restore_time_s),\n         max(0.0, elapsed_s),\n     )\n     decode_elapsed_s = max(0.0, elapsed_s - non_decode_elapsed_s)\n     decode_tok_s = (\n         generated_tokens / decode_elapsed_s",
+  "decoded_text_tail": "is not None:\n+            prefill_tps.append(prefill_value)\n+\n+        decode_value = _optional_float(\n+            getattr(output, \"decode_tok_s\", None)\n+            or getattr(output, \"decode_tps\", None)\n+        )\n+        if decode_value is not None:\n+            decode_tps.append(decode_value)\n+\n+        wall_value = _optional_float(\n+            getattr(output, \"wall_time_s\", None)\n+            or getattr(output, \"elapsed_s\", None)\n+        )\n+        if wall_value is not None:\n+            wall_times.append(wall_value)\n+\n+        peak_bytes = _optional_float(getattr(output, \"peak_memory",
+  "receipt_path": "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f5-compile/docs/deepseek-v41/receipts/f5-compile-levers-20260919/window-20260919-171041/arm-A/f5-20260919-171041-A.jsonl"
+}
