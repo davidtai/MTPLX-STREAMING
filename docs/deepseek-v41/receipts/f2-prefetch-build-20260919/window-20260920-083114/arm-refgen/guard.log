@@ -1,0 +1,12 @@
+2026-09-20T13:31:15Z [gpu_window] GPU lock held by another window; QUEUED (blocking wait, will NOT signal the holder) lock=/tmp/mtplx-gpu-exclusive.lock
+2026-09-20T13:40:49Z [gpu_window] acquired exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock
+2026-09-20T13:40:49Z [gpu_window] abort: to abort this window cleanly, kill -TERM 63007 (this bash gpu_window.sh pid); the parent python lock-holder ignores signals. The trap tree-kills the step and restores com.tea.qwen.
+2026-09-20T13:40:49Z [gpu_window] restore: on exit com.tea.qwen is bootstrapped from /Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist (RESTORE_QWEN_ALWAYS=1); a vanished launchctl-discovered guard-dir plist falls back to this path.
+2026-09-20T13:40:49Z [gpu_window] phase 1: verifying iogpu.wired_limit_mb is in (0, 102400] MB (<= 100 GiB); never raising it
+2026-09-20T13:40:49Z [gpu_window] phase 1: wired-memory knob OK: iogpu.wired_limit_mb=102400 MB (100 GiB); left UNCHANGED
+2026-09-20T13:40:49Z [gpu_window] phase 2: inspecting gui/501/com.tea.qwen via launchctl print
+2026-09-20T13:40:49Z [gpu_window] phase 2: com.tea.qwen loaded (pid=62993); plist=/Users/davidtai/Library/LaunchAgents/com.tea.qwen.plist
+2026-09-20T13:40:49Z [gpu_window] ERROR: phase 2: cannot capture the served model identity; refusing to boot out the service
+2026-09-20T13:40:49Z [gpu_window] restore: com.tea.qwen already loaded; verifying API readiness and model identity
+2026-09-20T13:41:05Z [gpu_window] restore: com.tea.qwen healthy with model IDs available, background warmup ready (no entry model tuple was available to compare)
+2026-09-20T13:41:05Z [gpu_window] released exclusive GPU lock: /tmp/mtplx-gpu-exclusive.lock

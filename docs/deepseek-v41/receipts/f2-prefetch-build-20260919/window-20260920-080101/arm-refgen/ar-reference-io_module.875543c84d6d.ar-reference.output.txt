@@ -1,0 +1,31 @@
+# arm: cell16k_ring_v2_draft_attn_pf0
+# stream: ar-reference
+# token_ids_sha256: 875543c84d6dfade28a4a5be08f81026655c50f2828385dc5b3b9fb276e1350f
+# decode_tok_s: 5.7346748168952635
+# divergence: {"divergence_index": 5, "ar_token": 2731, "dspark_token": 55698, "ar_top2_margin": null, "dspark_top2_margin": 0.25, "max_abs_logit_delta": null, "tie_margin": 0.03, "tie_band_used": 0.03, "tie_ulps": 3, "peak_contested_logit": null, "ulp_bf16_at_peak": null, "ar_contested_margin": null, "dspark_contested_margin": 0.25, "delta_at_ar_token": null, "delta_at_dspark_token": null, "rounding_class_by_delta": null, "deltas_within_tie_band": null, "rows_consistent": null, "unavailable_logits": ["ar"], "ar_logit_at_ar_token": null, "ar_logit_at_dspark_token": null, "dspark_logit_at_ar_token": 33.0, "dspark_logit_at_dspark_token": 33.25, "class": "unclassified", "ar_replay_error": "RuntimeError('one-request packed-scale benchmark cannot perform another prefill; reload')", "capture_index": 5, "capture_index_matches_first": true}
+
+```diff
+--- a/mtplx/expert_io.py
++++ b/mtplx/expert_io.py
+@@ -1,3 +1,4 @@
++"""Bounded positional I/O for manifest-described expert records."""
+ 
+ from __future__ import annotations
+ 
+@@ -60,6 +61,11 @@
+ def _record_part_index(record: Any) -> int:
+     """Which sidecar part a record lives in; 0 for single-file banks."""
+ 
+     return int(getattr(record, "part", 0) or 0)
+ 
+ 
++def _is_positive_int(value: Any) -> bool:
++    """True when ``value`` is a real (non-bool) positive integer."""
++
++    return isinstance(value, int) and not isinstance(value, bool) and value > 0
++
++
+ def _sidecar_placement(sidecar: Any, record: Any) -> tuple[str, int]:
+     """The part file a record lives in and where that part's data begins.
+ 
+```<｜end▁of▁sentence｜>

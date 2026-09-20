@@ -1,0 +1,30 @@
+# arm: cell16k_ring_v2_draft_attn_pf0
+# stream: dspark
+# token_ids_sha256: 3428050e87efbefd464f6a70d01f370093ea64519013e0f50a0dee46755ccc1c
+# decode_tok_s: 9.240388081116677
+# divergence: {"divergence_index": 5, "ar_token": 2731, "dspark_token": 55698, "ar_top2_margin": null, "dspark_top2_margin": 0.25, "max_abs_logit_delta": null, "tie_margin": 0.03, "tie_band_used": 0.03, "tie_ulps": 3, "peak_contested_logit": null, "ulp_bf16_at_peak": null, "ar_contested_margin": null, "dspark_contested_margin": 0.25, "delta_at_ar_token": null, "delta_at_dspark_token": null, "rounding_class_by_delta": null, "deltas_within_tie_band": null, "rows_consistent": null, "unavailable_logits": ["ar"], "ar_logit_at_ar_token": null, "ar_logit_at_dspark_token": null, "dspark_logit_at_ar_token": 33.0, "dspark_logit_at_dspark_token": 33.25, "class": "unclassified", "ar_replay_error": "RuntimeError('one-request packed-scale benchmark cannot perform another prefill; reload')", "capture_index": 5, "capture_index_matches_first": true}
+
+```diff
+--- a/src/mtplx/expert_io.py
++++ b/src/mtplx/expert_io.py
+@@
+ def _record_part_index(record: Any) -> int:
+     """Which sidecar part a record lives in; 0 for single-file banks."""
+ 
+     return int(getattr(record, "part", 0) or 0)
+ 
+ 
++def _record_sidecar_offset(record: Any) -> int:
++    """The record's sidecar offset, or 0 when the manifest left it unset."""
++
++    return int(getattr(record, "sidecar_offset", 0) or 0)
++
++
+ def _sidecar_placement(sidecar: Any, record: Any) -> tuple[str, int]:
+     """The part file a record lives in and where that part's data begins.
+ 
+     Kept tolerant of a sidecar that only carries the scalar ``file`` so the
+     single-file bank -- every artifact that exists today -- resolves through
+     the same call without a parts list being synthesized for it.
+     """
+```<｜end▁of▁sentence｜>
