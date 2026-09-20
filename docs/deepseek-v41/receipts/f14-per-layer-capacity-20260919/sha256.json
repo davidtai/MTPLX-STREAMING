@@ -1,0 +1,12 @@
+{
+  "trace": [
+    "docs/deepseek-v41/receipts/mtp-verify-routes-20260913/mtp-verify-routes-16k-1024-v2.json.gz",
+    "07b4b720bae831421bbbab6d4cb770ade577096c1e85733ad949350edf66d0da"
+  ],
+  "expert_streaming.py": "de1771923bdaaf275f0ea834dbb1407336c288724b088a811a61e235f0571c39",
+  "restore_helper": "7be3475934f5d2b6049d046afb30c64024aab595225bc0d8f28fd49fc03fdccc",
+  "overlap_schedule_sim.py": "5e0cc019cba173bb5454350dc9ab00d54e9322739ece86f7596899ec13a0e695",
+  "per_layer_capacity_sim.py": "b52b5d684412d7b7025256f5d9eb4f93f3ad475e69972f821c872962589806a3",
+  "results.json": "540527565a7e1d6a31e7fbccc9201a409abcfd6ffa51347f4aa6b058caa86f4c",
+  "curves_dense.npz": "193a634d5eb367b126d92c212874f41e2be729681d7b3d67b767621dfc5d4137"
+}
