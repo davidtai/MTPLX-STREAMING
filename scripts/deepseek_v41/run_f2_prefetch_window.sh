@@ -88,6 +88,9 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #          reach preadv at once instead of waiting for the generation thread to drop the GIL (F13: +0.33 ms per burst).
 #   +roK : EXACT F19 read order: the demand-read fanout pool shrinks from 15 to K workers at the post-prefill boundary
 #          (SSD saturates at 3 concurrent plane reads), so planes complete in submission order. Staged packed_phase hook.
+#   +k29 : ROUNDING-CLASS: fused decode/verify attention core kernel (MTPLX_DSV41_DECODE_ATTN_KERNEL, rows <= 8), armed at
+#          the post-prefill boundary by the F5 hook (needs F2_PROBE=1); also speeds the M=1 draft attention. The
+#          retained arm pins it off. Needs its own sequential oracle (+vcb+k29) and a tie classification (+rd).
 #   +wm  : EXACT decode lever attn_win_memo via the F5 hook (needs F2_PROBE=1): the sliding-window attend mask is built
 #          once per forward instead of once per layer (same array object; keyed on the positions object, per group).
 #   +opsN / +mbN : MLX_MAX_OPS_PER_BUFFER=N / MLX_MAX_MB_PER_BUFFER=N for the child (Metal command-buffer commit
@@ -231,6 +234,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+cmp2+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile"; A_CAPS8=1 ;; esac
   case "$mods" in *"+cmp3+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile,attn_core_compile" ;; esac
   case "$mods" in *"+cmp4+"*) A_CMP=1; A_CMPSET="hc_compile,attn_compile,hc_premix_kernel" ;; esac
+  case "$mods" in *"+k29+"*) A_CMP=1; A_CMPSET="${A_CMPSET:+$A_CMPSET,}decode_attn_kernel" ;; esac
   case "$mods" in *"+plr+"*) A_PL=rule ;; esac
   case "$mods" in *"+plo+"*) A_PL=oracle ;; esac
   case "$mods" in *"+plx+"*) A_PL=excess ;; esac
