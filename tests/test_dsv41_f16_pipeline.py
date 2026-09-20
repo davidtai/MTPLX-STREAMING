@@ -6,11 +6,13 @@ Proves, for M in {5,6,7,8}:
     sequentially, BYTE-FOR-BYTE (logits, main_hidden, every layer cache store, engram
     state, cache.offset) -- with and without an engram hook wired; and that a
     subsequent trim + next forward is byte-identical too;
-  * the strict baton produces a causally-valid schedule against a mock switch whose
+  * the greenlet driver produces a causally-valid schedule against a mock switch whose
     run has the retained begin/yield/finish shape and per-layer locks that RAISE on a
-    violation (double-acquire), including the exception path and rows<=4 passthrough;
-  * the helper threads inherit the main thread's routing phase (ContextVar) and MLX
-    stream -- a verify group would otherwise route as PREFILL / land on a stray stream;
+    violation (double-acquire), including the throw-into-suspended-partner exception
+    path and rows<=4 passthrough, and it spawns NO threads (all ops on the caller);
+  * the group greenlets inherit the caller's routing phase (a fresh greenlet starts
+    with an EMPTY context, so gr_context=copy_context() carries it) and stay on the
+    one calling thread/stream -- a verify group would otherwise route as PREFILL;
   * the three staged edits round-trip on the REAL archived helpers, refuse a
     double-apply, and compose with the F6 and F12 stagers;
   * the cloned per-group forward mirrors the live ``_forward_span`` + Model tail
@@ -18,13 +20,11 @@ Proves, for M in {5,6,7,8}:
 """
 from __future__ import annotations
 
-import contextlib
 import importlib.util
 import inspect
 import sys
 import textwrap
 import threading
-import time
 from pathlib import Path
 
 import numpy as np
@@ -37,9 +37,15 @@ mx.set_default_device(mx.cpu)
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPTS = _REPO / "scripts" / "deepseek_v41"
 _PACKED = _REPO / "docs/deepseek-v41/receipts/extension-bank-20260919/full/sources/packed"
-for _p in (str(_SCRIPTS), str(_PACKED)):
+# .f16-site holds greenlet (private target dir, NOT the shared venv); it must be on
+# sys.path before f16.pipeline (which imports greenlet) is imported.  For the GPU arm
+# the same dir goes on PYTHONPATH.
+_F16_SITE = _REPO / ".f16-site"
+for _p in (str(_SCRIPTS), str(_PACKED), str(_F16_SITE)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+import greenlet  # noqa: E402  (from .f16-site)
 
 from mtplx.models.deepseek_v41 import Model, ModelArgs  # noqa: E402
 from mtplx.models.deepseek_v41_cache import make_cache  # noqa: E402
@@ -48,9 +54,14 @@ from mlx.utils import tree_flatten, tree_unflatten  # noqa: E402
 
 from f16 import pipeline as pl  # noqa: E402
 from f16 import stage_f16_runner as stager  # noqa: E402
-from f16.pipeline import Pipeline, _Baton, _PipelineAborted, _TLS, f16_yield, issue_suppressed  # noqa: E402
-
-LEADER, TRAILER = _Baton.LEADER, _Baton.TRAILER
+from f16.pipeline import (  # noqa: E402
+    LEADER,
+    TRAILER,
+    Pipeline,
+    _PipelineAborted,
+    f16_yield,
+    issue_suppressed,
+)
 _ENG_LAYERS = (1, 3)
 _DSPARK_LAYERS = (2, 4)
 
@@ -195,7 +206,7 @@ def test_pipelined_forward_is_bitwise_sequential(rows, use_engram, seed, scale):
 
     # pipeline
     c1 = _make_cache(args, model, use_engram)
-    pipe = Pipeline(model, armed=True, baton_timeout=30.0)
+    pipe = Pipeline(model, armed=True)
     logits, mh = pipe.pipelined_forward(forward, ids, c1)
     mx.eval(logits, mh)
     snap1, off1 = _cache_snapshot(c1)
@@ -231,7 +242,7 @@ def test_pipelined_forward_then_trim_then_next_is_bitwise():
     snap2, off2 = _cache_snapshot(c2)
 
     c1 = _make_cache(args, model, True)
-    pipe = Pipeline(model, armed=True, baton_timeout=30.0)
+    pipe = Pipeline(model, armed=True)
     pipe.pipelined_forward(forward, ids, c1)
     c1.trim(rows - kept)
     nl1, _ = forward(nxt, c1)
@@ -251,7 +262,7 @@ def test_multi_cycle_decode_is_bitwise_sequential():
     sequential (4,4) path -- catches any cross-call baton / thread-local / cache leak."""
     args, model = _built_model(seed=3, use_engram=True)
     forward = _forward(model)
-    pipe = Pipeline(model, armed=True, baton_timeout=30.0)
+    pipe = Pipeline(model, armed=True)
     cycles = [(6, 3), (8, 2), (7, 5), (5, 4)]  # (verify rows, kept = accepted+1)
 
     c_seq = _make_cache(args, model, True)
@@ -296,7 +307,7 @@ def test_parity_holds_under_the_real_routing_context():
         oracle = mx.concatenate([la, lb], axis=1)
 
     c1 = _make_cache(args, model, True)
-    pipe = Pipeline(model, armed=True, baton_timeout=30.0)
+    pipe = Pipeline(model, armed=True)
     with ctx()[0], ctx()[1]:
         got, _ = pipe.pipelined_forward(forward, ids, c1)
     mx.eval(oracle, got)
@@ -341,68 +352,64 @@ def test_unarmed_pipeline_is_passthrough():
 
 
 # ---------------------------------------------------------------------------
-# 3. thread hygiene: routing phase (ContextVar) + MLX stream propagate to groups
+# 3. greenlet hygiene: routing phase (ContextVar via gr_context) + same stream
 # ---------------------------------------------------------------------------
-def test_group_threads_inherit_routing_phase_and_stream():
+def test_group_greenlets_inherit_routing_phase_and_stay_on_calling_stream():
     from mtplx.attention_context import attention_phase, current_attention_phase
     from mtplx.models.expert_mlx import expert_routing_phase, current_expert_routing_phase
     from mtplx.expert_streaming import RoutingPhase
 
     _args_, model = _built_model(seed=1)
-    pipe = Pipeline(model, armed=True, baton_timeout=10.0)
+    pipe = Pipeline(model, armed=True)
     main_stream = repr(mx.default_stream(mx.default_device()))
 
     def probe():
-        # token_count=4 (>1): without the DECODE ContextVar this derives PREFILL.
+        # token_count=4 (>1): without the DECODE ContextVar this derives PREFILL. A
+        # fresh greenlet starts with an EMPTY context, so gr_context=copy_context() is
+        # what carries the phase in.
         return (current_attention_phase(),
                 current_expert_routing_phase(token_count=4),
                 repr(mx.default_stream(mx.default_device())))
 
-    baton = _Baton(timeout=10.0)
     with attention_phase("decode_verify"), expert_routing_phase(RoutingPhase.DECODE):
-        results = pipe._run_groups(baton, probe, probe)
+        results = pipe._run_groups(probe, probe)
     for ap, rp, st in results:
-        assert ap == "decode_verify", "attention phase did not propagate to a group thread"
-        assert rp is RoutingPhase.DECODE, "routing phase leaked to PREFILL on a group thread"
-        assert st == main_stream, "group thread used a different MLX stream"
+        assert ap == "decode_verify", "attention phase did not propagate to a group greenlet"
+        assert rp is RoutingPhase.DECODE, "routing phase leaked to PREFILL on a group greenlet"
+        assert st == main_stream, "group greenlet used a different MLX stream"
 
 
-def test_f16_yield_and_issue_suppressed_are_noops_off_thread():
-    for attr in ("baton", "role", "suppress_issue_next"):
-        if hasattr(_TLS, attr):
-            delattr(_TLS, attr)
-    f16_yield()  # no baton bound -> no-op, no raise
+def test_f16_yield_and_issue_suppressed_are_noops_outside_a_group():
+    # The current (main) greenlet has no _f16_group attribute.
+    f16_yield()  # no-op, no switch, no raise
     assert issue_suppressed() is False
 
 
 # ---------------------------------------------------------------------------
-# 4. strict baton against a mock switch with per-layer locks that RAISE
+# 4. greenlet schedule against a mock switch with per-layer locks that RAISE
 # ---------------------------------------------------------------------------
 class _ScheduleViolation(Exception):
     pass
 
 
 class _RaisingLock:
-    """Per-layer route lock that RAISES if acquired while already held (by anyone) --
-    so a baton that lets B enter a layer A has not left is caught immediately."""
+    """Per-layer route lock that RAISES if acquired while already held -- so a driver
+    that lets B enter a layer A has not left is caught immediately.  (Greenlets share
+    one thread, so identity is by role, not thread ident.)"""
 
     def __init__(self, idx):
         self.idx = idx
         self._holder = None
-        self._guard = threading.Lock()
 
-    def acquire(self):
-        with self._guard:
-            if self._holder is not None:
-                raise _ScheduleViolation(
-                    f"layer {self.idx} lock held by {self._holder} on acquire by "
-                    f"{threading.get_ident()}"
-                )
-            self._holder = threading.get_ident()
+    def acquire(self, role):
+        if self._holder is not None:
+            raise _ScheduleViolation(
+                f"layer {self.idx} lock held by role {self._holder} on acquire by {role}"
+            )
+        self._holder = role
 
     def release(self):
-        with self._guard:
-            self._holder = None
+        self._holder = None
 
 
 class _MockRuntime:
@@ -420,7 +427,7 @@ class _MockRuntime:
             self.deferred.pop(0).release()
 
     def begin(self, layer, role):
-        self.locks[layer].acquire()
+        self.locks[layer].acquire(role)
         self.entered.append((role, layer))
 
     def defer(self, layer):
@@ -436,7 +443,7 @@ def _mock_group(runtime, role, n_layers, fail_at=None):
                 runtime.locks[layer].release()  # mimic run() abort/close cleanup
                 raise RuntimeError(f"mock fail role={role} layer={layer}")
             try:
-                f16_yield()  # the real baton hand-off
+                f16_yield()  # the real greenlet hand-off
             except _PipelineAborted:
                 runtime.locks[layer].release()  # mimic abort/close on the current route
                 raise
@@ -446,17 +453,16 @@ def _mock_group(runtime, role, n_layers, fail_at=None):
     return run
 
 
-def test_baton_schedule_is_causally_valid_and_interleaves():
+def test_greenlet_schedule_is_causally_valid_and_interleaves():
     _args_, model = _built_model(seed=1)
-    pipe = Pipeline(model, armed=True, baton_timeout=20.0)
+    pipe = Pipeline(model, armed=True)
     n = 12
     rt = _MockRuntime(n)
-    baton = _Baton(timeout=20.0)
     # No _ScheduleViolation is raised => the per-layer locks were never double-held =>
     # B never entered a layer A had not left (the causality the design requires).
-    results = pipe._run_groups(baton, _mock_group(rt, LEADER, n), _mock_group(rt, TRAILER, n))
+    results = pipe._run_groups(_mock_group(rt, LEADER, n), _mock_group(rt, TRAILER, n))
     assert results == [("done", LEADER), ("done", TRAILER)]
-    assert baton.handoffs > 0, "baton never handed over -> no interleave"
+    assert pipe.counters["handoffs"] > 2, "driver never alternated -> no interleave"
 
     # KV causality: when B begins layer L, A has already RUN layer L (leader_seen >=
     # L+1), so A's layer-L KV is written before B reads it.  (The stronger lock order
@@ -486,34 +492,42 @@ def test_mock_lock_actually_detects_a_violation():
         rt.begin(0, TRAILER)  # lock 0 still held -> violation
 
 
-def test_baton_exception_path_propagates_without_hang():
+def test_exception_path_throws_into_suspended_partner_and_reraises():
+    """When one group raises, the driver throws _PipelineAborted into the SUSPENDED
+    partner so its run cleanup runs (lock released), then re-raises the ORIGINAL error.
+    No route lock may be left held (it would wedge the layer lock)."""
     _args_, model = _built_model(seed=1)
-    pipe = Pipeline(model, armed=True, baton_timeout=5.0)
+    pipe = Pipeline(model, armed=True)
     n = 8
     rt = _MockRuntime(n)
-    baton = _Baton(timeout=5.0)
-    t0 = time.monotonic()
     with pytest.raises(RuntimeError, match="mock fail role=0 layer=3"):
-        pipe._run_groups(
-            baton, _mock_group(rt, LEADER, n, fail_at=3), _mock_group(rt, TRAILER, n)
-        )
-    # released promptly (the failing group hands the baton on its way out) -- not a
-    # 5 s baton timeout, and no dangling held locks.
-    assert time.monotonic() - t0 < 4.0
+        pipe._run_groups(_mock_group(rt, LEADER, n, fail_at=3), _mock_group(rt, TRAILER, n))
     assert all(lk._holder is None for lk in rt.locks), "a route lock was left held on abort"
 
 
-def test_baton_wait_is_bounded_and_times_out():
-    """A baton wait never hangs forever: if the other group never takes its turn,
-    the waiter times out, records a TimeoutError and raises (so the driver re-raises
-    instead of the decode loop hanging)."""
-    baton = _Baton(timeout=0.2)
-    baton.yield_turn(LEADER)  # first leader yield: skipped (gets ahead), returns
-    t0 = time.monotonic()
-    with pytest.raises(_PipelineAborted):
-        baton.yield_turn(LEADER)  # hands to a trailer that never runs -> times out
-    assert 0.2 <= time.monotonic() - t0 < 3.0
-    assert isinstance(baton.error, TimeoutError)
+def test_pipelined_forward_creates_no_threads_and_runs_on_calling_thread():
+    """The greenlet driver must not spawn threads, and every group's MLX ops must run
+    on the calling thread (MLX GPU streams are thread-bound)."""
+    args, model = _built_model(seed=1, use_engram=True)
+    forward = _forward(model)
+    pipe = Pipeline(model, armed=True)
+    ids = mx.array(np.random.RandomState(1).randint(0, args.vocab_size, size=(1, 6)))
+
+    calling = threading.get_ident()
+    seen = set()
+    orig = pipe._group_forward
+
+    def spy(*a, **k):
+        seen.add(threading.get_ident())
+        return orig(*a, **k)
+
+    pipe._group_forward = spy
+    before = threading.active_count()
+    logits, _ = pipe.pipelined_forward(forward, ids, _make_cache(args, model, True))
+    mx.eval(logits)
+    assert threading.active_count() == before, "pipelined forward spawned a thread"
+    assert seen == {calling}, "a group ran off the calling thread"
+    assert pipe.counters["pipelined_forwards"] == 1
 
 
 # ---------------------------------------------------------------------------

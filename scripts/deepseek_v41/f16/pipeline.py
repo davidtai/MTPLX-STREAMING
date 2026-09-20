@@ -10,27 +10,32 @@ sequentially as (4,4): output digest
 ``forward(B)`` sequentially (same per-group row counts => same kernels), so a GPU
 run reproduces that digest exactly.
 
-How it interleaves WITHOUT restructuring the model:
-  * Each group's forward runs in its own Python thread under a STRICT BATON: exactly
-    one thread runs at any instant, the other blocked on the baton.  The baton is
-    handed over at ONE yield point inside the expert switch -- ``self._f16_yield()``,
-    inserted (by :func:`f16_run_source`) into the retained SCHEDULED
+How it interleaves WITHOUT restructuring the model, and WITHOUT a second thread
+(MLX GPU streams are THREAD-BOUND -- a helper thread cannot touch the generation
+thread's stream), so both groups run as GREENLETS on the ONE calling thread:
+  * The driver (``pipelined_forward``'s frame) is the PARENT greenlet.  ``gA``/``gB``
+    are child greenlets (group A / B forwards).  A group hands control back at ONE
+    yield point -- ``self._f16_yield()`` -> ``greenlet.getcurrent().parent.switch()``
+    -- inserted (by :func:`f16_run_source`) into the retained SCHEDULED
     ``PackedDecode.run`` immediately before ``ready_iter =
     pending.iter_ready_misses()`` (after the demand reads + hit gate_up + shared
     expert are submitted, before the completion loop blocks on the SSD reads).
-  * ``_f16_yield`` is a no-op unless the current thread is a pipeline group thread
-    (it reads a thread-local set only by :meth:`Pipeline.pipelined_forward`).
-  * Baton order (leader A one layer ahead of trailer B): A runs [layer 0 to yield]
-    then does NOT hand over at that first yield, continues [finish 0, layer 1 to
-    yield], then alternates at every yield; B waits to start, then hands over at
-    every yield.  Because ``begin_split_route(L)`` takes the per-layer lock and it is
-    released only by the NEXT run's ``flush_deferred_slot_releases`` (expert_runtime
-    begin_split_route:4149 acquire / _DeferredSplitClose->close:1552 release, flushed
-    at plane_lane run head), B may enter layer L only after A has entered layer L+1 --
-    so A has always written layer L's KV (via ``layer(...)``; LayerAttentionCache.
-    advance:1479-1484 only moves the offset, the layer forward grows the store)
-    before B reaches layer L.  Causality holds; ``cache.advance`` runs once, after
-    both groups, in the driver.
+  * ``_f16_yield`` is a no-op unless the current greenlet is a pipeline group (an
+    ``_f16_group`` attribute on the greenlet, set only by the driver); no thread-local.
+  * Driver order (leader A one layer ahead of trailer B): switch A -- A runs [layer 0
+    to yield] but does NOT hand back at that first yield (``_f16_skip_first``),
+    continues [finish 0, layer 1 to yield]; then the driver alternates B, A, B, A ...;
+    when one group is dead it keeps switching the other until it is dead too.  Because
+    ``begin_split_route(L)`` takes the per-layer lock and it is released only by the
+    NEXT run's ``flush_deferred_slot_releases`` (expert_runtime begin_split_route:4149
+    acquire / _DeferredSplitClose->close:1552 release, flushed at plane_lane run head),
+    B may enter layer L only after A entered layer L+1 -- so A has always written layer
+    L's KV (via ``layer(...)``; LayerAttentionCache.advance:1479-1484 only moves the
+    offset, the layer forward grows the store) before B reaches layer L.  Causality
+    holds; ``cache.advance`` runs once, after both groups, in the driver.  Every MLX op
+    of both groups issues on the ONE calling thread + stream, so acquire/release of the
+    per-layer route locks and the deferred-close drain are all single-threaded (the
+    ``flush_deferred_slot_releases`` "same generation thread" invariant is satisfied).
 
 Faithfulness of the per-group forward: it is a hand clone of
 ``DeepseekV41Backbone._forward_span`` + the ``Model.__call__`` head/logits/main_hidden
@@ -49,12 +54,11 @@ import contextvars
 import hashlib
 import inspect
 import textwrap
-import threading
-import time
 from types import MethodType
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import mlx.core as mx
+import greenlet  # private target dir .f16-site on PYTHONPATH (never the shared venv)
 
 # --- SHA pins: the retained/pinned sources this lever derives from or clones. ----
 # A drift in any of these breaks an assumption; verify_source_pins / preflight fail.
@@ -79,11 +83,11 @@ DEVICE_ROUTE_ACTIVE_SHA256 = (
 
 # The verify row split (design): group A is the first 4 rows, group B is the rest.
 A_ROWS = 4
-# Default baton / join timeouts (seconds).
-BATON_TIMEOUT_S = 120.0
+# Greenlet roles (leader runs one layer ahead of the trailer).
+LEADER, TRAILER = 0, 1
 
 # The one anchor the yield is inserted before, and the inserted line.  The insert
-# issues no ``mx`` op (a pure host baton hand-off), so the lane's MLX op sequence is
+# issues no ``mx`` op (a pure host greenlet hand-off), so the lane's MLX op sequence is
 # unchanged -- the per-group forward is byte-identical to the unyielded scheduled run.
 _YIELD_ANCHOR = "ready_iter = pending.iter_ready_misses()"
 _YIELD_INSERT = "self._f16_yield()"
@@ -201,115 +205,32 @@ def scheduled_run_cocode() -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Per-thread state read by the injected run (_f16_yield) and the wrapped issue_next.
+# Greenlet hand-off: read by the injected run (_f16_yield) + the wrapped issue_next.
 # ---------------------------------------------------------------------------
-_TLS = threading.local()
-
-
 class _PipelineAborted(BaseException):
-    """Raised inside a group thread's yield to unwind it when the OTHER group failed
-    (or the baton timed out).  A BaseException so it is not swallowed by ``except
-    Exception`` and reaches ``PackedDecode.run``'s BaseException route cleanup."""
+    """Thrown by the driver into the SUSPENDED partner greenlet when the other group
+    raised, so ``PackedDecode.run``'s ``except BaseException`` cleanup (mx.synchronize,
+    pending.abort, pending.close) runs and its layer lock is released before we re-raise
+    the original error.  A BaseException so ``except Exception`` cannot swallow it."""
 
 
 def f16_yield() -> None:
-    """The one baton hand-off point, bound onto every runner as ``_f16_yield``.
-    A no-op unless the current thread is an armed pipeline group thread."""
-    baton = getattr(_TLS, "baton", None)
-    if baton is None:
+    """The one hand-off point, bound onto every runner as ``_f16_yield``.  A no-op
+    unless the current greenlet is a pipeline group (O(1), allocation-free attribute
+    reads); the leader skips its FIRST yield so it gets one layer ahead."""
+    g = greenlet.getcurrent()
+    if not getattr(g, "_f16_group", False):
         return
-    baton.yield_turn(_TLS.role)
+    if getattr(g, "_f16_skip_first", False):
+        g._f16_skip_first = False
+        return
+    g.parent.switch()  # cooperative yield back to the driver (same thread)
 
 
 def issue_suppressed() -> bool:
-    """True on the trailer group's thread (the leader already issued that layer's
+    """True on the trailer group's greenlet (the leader already issued that layer's
     next-projection; re-issuing would clobber a buffer the leader still needs)."""
-    return getattr(_TLS, "suppress_issue_next", False)
-
-
-# ---------------------------------------------------------------------------
-# Strict baton (exactly one group runs at a time; leader stays one layer ahead)
-# ---------------------------------------------------------------------------
-class _Baton:
-    LEADER = 0
-    TRAILER = 1
-
-    def __init__(self, *, timeout: float = BATON_TIMEOUT_S) -> None:
-        self._cond = threading.Condition()
-        self._turn = self.LEADER               # whose turn it is to RUN
-        self._leader_skips_first = True        # leader gets one layer ahead
-        self._done = [False, False]            # a group's forward returned/aborted
-        self._aborted = False
-        self.error: Optional[BaseException] = None
-        self.handoffs = 0
-        self._timeout = float(timeout)
-
-    # -- called by the group thread targets ---------------------------------
-    def await_start(self, role: int) -> None:
-        """Block until it is ``role``'s turn to begin its forward.  The leader
-        returns immediately (turn starts LEADER); the trailer waits for the leader's
-        second-yield hand-over so it never begins a layer the leader has not passed."""
-        with self._cond:
-            self._wait_until_turn_locked(role)
-
-    def finish(self, role: int) -> None:
-        """A group's forward returned (or unwound on abort): release the other."""
-        with self._cond:
-            self._done[role] = True
-            self._turn = 1 - role
-            self._cond.notify_all()
-
-    def fail(self, role: int, error: BaseException) -> None:
-        """A group raised: record the first real error, abort, release the other."""
-        with self._cond:
-            if self.error is None and not isinstance(error, _PipelineAborted):
-                self.error = error
-            self._aborted = True
-            self._done[role] = True
-            self._cond.notify_all()
-
-    def abort(self) -> None:
-        with self._cond:
-            self._aborted = True
-            self._cond.notify_all()
-
-    # -- called from inside the run (via f16_yield) -------------------------
-    def yield_turn(self, role: int) -> None:
-        with self._cond:
-            if self._aborted:
-                raise _PipelineAborted()
-            other = 1 - role
-            if self._done[other]:
-                return  # the other group finished; run freely to completion
-            if role == self.LEADER and self._leader_skips_first:
-                self._leader_skips_first = False
-                return  # leader does not hand over at its first yield (get ahead)
-            self._turn = other
-            self.handoffs += 1
-            self._cond.notify_all()
-            self._wait_until_turn_locked(role)
-
-    # -- internal (cond held) ----------------------------------------------
-    def _wait_until_turn_locked(self, role: int) -> None:
-        other = 1 - role
-        deadline = time.monotonic() + self._timeout
-        while self._turn != role:
-            if self._aborted:
-                raise _PipelineAborted()
-            if self._done[other]:
-                return
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._aborted = True
-                if self.error is None:
-                    self.error = TimeoutError(
-                        f"F16 baton timed out after {self._timeout}s"
-                    )
-                self._cond.notify_all()
-                raise _PipelineAborted()
-            self._cond.wait(remaining)
-        if self._aborted:
-            raise _PipelineAborted()
+    return getattr(greenlet.getcurrent(), "_f16_suppress_issue", False)
 
 
 # ---------------------------------------------------------------------------
@@ -323,17 +244,15 @@ class Pipeline:
     so a staged tree run with F16 off is a byte-for-byte stock A/B control.
     """
 
-    def __init__(self, model, *, armed: bool, baton_timeout: float = BATON_TIMEOUT_S):
+    def __init__(self, model, *, armed: bool):
         self.model = model
         self.backbone = model.model
         self.armed = bool(armed)
-        self.baton_timeout = float(baton_timeout)
-        self.join_timeout = float(baton_timeout) + 10.0
         self.counters = {
             "calls": 0,
             "single_forwards": 0,
             "pipelined_forwards": 0,
-            "handoffs": 0,
+            "handoffs": 0,  # number of driver greenlet switches
         }
 
     # -- entry (replaces the ONE verify forward call) -----------------------
@@ -344,7 +263,8 @@ class Pipeline:
         rows = int(ids.shape[1])
         if rows <= A_ROWS:
             # Runtime M-route (logical row count genuinely varies): a single group
-            # needs no split/threads.  Runs the rebound yield run; _f16_yield no-ops.
+            # needs no split/greenlets.  Runs the rebound yield run; _f16_yield no-ops
+            # (the calling greenlet has no _f16_group attribute).
             self.counters["single_forwards"] += 1
             return forward(ids, cache)
         self.counters["pipelined_forwards"] += 1
@@ -379,9 +299,7 @@ class Pipeline:
         else:
             cur_a = cur_b = None
 
-        baton = _Baton(timeout=self.baton_timeout)
         results = self._run_groups(
-            baton,
             lambda: self._group_forward(
                 ids_a, cache, offset0=offset0, start=0, engram_current=cur_a
             ),
@@ -393,8 +311,8 @@ class Pipeline:
         # Both groups complete: advance the cache once, then concatenate exactly as
         # the sequential chunk loop concatenates its parts.
         cache.advance(rows_a + rows_b)
-        logits_a, mh_a = results[_Baton.LEADER]
-        logits_b, mh_b = results[_Baton.TRAILER]
+        logits_a, mh_a = results[LEADER]
+        logits_b, mh_b = results[TRAILER]
         logits = mx.concatenate([logits_a, logits_b], axis=1)
         main_hidden = (
             None
@@ -403,59 +321,58 @@ class Pipeline:
         )
         return logits, main_hidden
 
-    # -- run two group callables under the strict baton (real thread machinery) -
-    def _run_groups(self, baton, group_leader, group_trailer) -> list:
-        """Run two zero-arg group callables under ``baton``, each on its own Python
-        thread, on the main generation thread's stream, and under the main thread's
-        routing context (copied per thread).  Returns ``[leader_result,
-        trailer_result]`` or raises the first group error (never hangs)."""
-        stream = mx.default_stream(mx.default_device())
+    # -- drive two group callables as cooperative greenlets on THIS thread ------
+    def _run_groups(self, group_leader, group_trailer) -> list:
+        """Run two zero-arg group callables as child greenlets of the calling
+        (driver) greenlet, on the ONE calling thread and stream.  The leader runs one
+        layer ahead (it skips its first yield); thereafter the driver alternates.  On a
+        group error the driver throws ``_PipelineAborted`` into the still-suspended
+        partner so its ``PackedDecode.run`` cleanup releases its layer lock, then
+        re-raises the original error.  A suspended run is NEVER dropped (its pending
+        route would wedge the layer lock).  Returns ``[leader_result, trailer_result]``.
+        Each greenlet inherits the caller's routing context via ``gr_context`` (a fresh
+        greenlet otherwise starts with an EMPTY context -> the phase ContextVars would
+        be lost -> a verify group would route as PREFILL)."""
         results: list = [None, None]
-        groups = {_Baton.LEADER: group_leader, _Baton.TRAILER: group_trailer}
 
-        def run_group(role):
-            _TLS.baton = baton
-            _TLS.role = role
-            _TLS.suppress_issue_next = role == _Baton.TRAILER
-            try:
-                baton.await_start(role)
-                # Both groups issue on the main generation thread's stream (MLX gives
-                # each thread its OWN default stream, so without this A and B would
-                # land on different streams and diverge from the single-stream oracle).
-                with mx.stream(stream):
-                    results[role] = groups[role]()
-                baton.finish(role)
-            except _PipelineAborted:
-                baton.finish(role)
-            except BaseException as error:  # noqa: BLE001 - propagated via the driver
-                baton.fail(role, error)
-            finally:
-                _TLS.baton = None
-                _TLS.role = None
-                _TLS.suppress_issue_next = False
+        def wrap(role, fn):
+            def run():
+                results[role] = fn()
 
-        # A separate context copy per thread carries the main thread's routing phase
-        # (attention_phase / expert_routing_phase are ContextVars that do NOT
-        # propagate to a plain Thread -- a verify group routed as PREFILL would be
-        # catastrophic).  Two distinct Context objects avoid a run() reentrancy clash.
-        ctx_l = contextvars.copy_context()
-        ctx_t = contextvars.copy_context()
-        tl = threading.Thread(
-            target=lambda: ctx_l.run(run_group, _Baton.LEADER), name="f16-verify-A"
-        )
-        tt = threading.Thread(
-            target=lambda: ctx_t.run(run_group, _Baton.TRAILER), name="f16-verify-B"
-        )
-        tl.start()
-        tt.start()
-        tl.join(self.join_timeout)
-        tt.join(self.join_timeout)
-        if tl.is_alive() or tt.is_alive():
-            baton.abort()
-            raise RuntimeError("F16 pipeline group thread did not terminate")
-        self.counters["handoffs"] += baton.handoffs
-        if baton.error is not None:
-            raise baton.error
+            return run
+
+        gA = greenlet.greenlet(wrap(LEADER, group_leader))
+        gA.gr_context = contextvars.copy_context()
+        gA._f16_group = True
+        gA._f16_skip_first = True
+        gA._f16_suppress_issue = False
+        gB = greenlet.greenlet(wrap(TRAILER, group_trailer))
+        gB.gr_context = contextvars.copy_context()
+        gB._f16_group = True
+        gB._f16_skip_first = False
+        gB._f16_suppress_issue = True
+
+        switches = 0
+        try:
+            gA.switch()  # prime the leader (skips its first yield -> runs to the 2nd)
+            switches += 1
+            while not (gA.dead and gB.dead):
+                if not gB.dead:
+                    gB.switch()
+                    switches += 1
+                if not gA.dead:
+                    gA.switch()
+                    switches += 1
+        finally:
+            # A raising group leaves the OTHER suspended inside run(); unwind it so its
+            # BaseException route cleanup runs (else its pending route wedges the lock).
+            for g in (gB, gA):
+                if not g.dead:
+                    try:
+                        g.throw(_PipelineAborted)
+                    except BaseException:  # noqa: BLE001 - cleanup ran; original re-raises
+                        pass
+        self.counters["handoffs"] += switches
         return results
 
     # -- per-group forward: faithful clone of _forward_span + Model head tail -

@@ -3,7 +3,8 @@ install + staged edits depend on EXISTS and resolves on the REAL pinned classes 
 the REAL archived helper sources -- so a 2.5-minute GPU prefill cannot then die on an
 AttributeError or a moved anchor.
 
-Run (packed sources + scripts dir on PYTHONPATH), MLX pinned to CPU:
+Run (packed sources + scripts dir + the private greenlet dir `.f16-site` on PYTHONPATH),
+MLX pinned to CPU:
     python -m f16.preflight
 Prints ``F16_PREFLIGHT_OK {json}`` and exits 0, or raises with the first failure.
 Pure CPU; never imports/loads an artifact, never touches Metal or the GPU lock.
@@ -14,6 +15,16 @@ import contextvars
 import inspect
 import json
 from pathlib import Path
+
+# greenlet is the pipeline driver; fail loudly (not a late ImportError) if the private
+# .f16-site dir is not on PYTHONPATH -- a GPU window must not discover this after prefill.
+try:
+    import greenlet  # noqa: F401
+except ImportError as _exc:  # pragma: no cover
+    raise RuntimeError(
+        "F16 requires the 'greenlet' package; put the private .f16-site dir on PYTHONPATH "
+        "(it is NOT in the shared venv)"
+    ) from _exc
 
 import mlx.core as mx
 
@@ -156,6 +167,7 @@ def _check_staged_anchors() -> dict:
 
 def preflight() -> dict:
     report = {
+        "greenlet_version": greenlet.__version__,
         "pinned_runtime": _check_pinned_runtime(),
         "derivation": _check_derivation(),
         "staged_anchors": _check_staged_anchors(),
