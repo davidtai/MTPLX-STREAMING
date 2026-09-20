@@ -46,6 +46,19 @@ def test_beam_fast_bit_exact_across_batch_sizes():
     assert np.array_equal(a, b)
 
 
+def test_c_beam_bit_exact_vs_beam_fast_synthetic():
+    """The C beam step (tcq_beam.c via ctypes) reproduces beam_encode_fast bit-exactly on a synthetic
+    batch — distinct float32 costs mean the deterministic (cost,index) tie rule picks the same set."""
+    import tcq_beam_c as C
+    dec = enc.build_dec_table()
+    rng = np.random.default_rng(11)
+    targets = (rng.standard_normal((300, 256)).astype(np.float32) * 1.0)
+    of, sf = enc.beam_encode_fast(targets, dec, beam=256)
+    oc, sc = C.beam_encode_c(targets, dec, beam=256, batch=128)
+    assert np.array_equal(of, oc), f"{(of != oc).sum()} code mismatches (C vs beam_encode_fast)"
+    assert np.array_equal(sf, sc)
+
+
 # ---------------------------------------------------------------- (2) effective weight == F34 chain
 
 def test_effective_weight_matches_f34_verifier_chain():

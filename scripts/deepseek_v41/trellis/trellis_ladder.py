@@ -22,6 +22,7 @@ import os
 import numpy as np
 
 import tcq_encode as enc
+import tcq_beam_c as tcqc           # C beam step (F37); compiles tcq_beam.c on first use
 
 W_NAMES = ("w1", "w2", "w3")          # ladder expert weights: w1=gate, w2=down, w3=up (SwiGLU)
 
@@ -42,21 +43,25 @@ def source_sha(w_np: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(w_np, dtype=np.float32).tobytes()).hexdigest()
 
 
-def encode_source_weight(w_np: np.ndarray, *, on_batch=None, beam: int = 256, batch: int = 512) -> dict:
+def encode_source_weight(w_np: np.ndarray, *, on_batch=None, beam: int = 256, batch: int = 256) -> dict:
     """fp32 HF weight ``[out, in]`` -> eschamoe K=3 beam-256 record (code + scales).
 
     ``on_batch`` is threaded into the beam so the encode PAUSES between tile batches when a GPU
-    window is active (see :mod:`encode_worker`).
+    window is active (see :mod:`encode_worker`).  The pre-beam Hadamard matrices are freed before the
+    (long) beam so per-process RSS stays well under the 1.5 GB cap.
     """
     dec, ct = _tables()
     W_esch = np.ascontiguousarray(w_np.T)                      # [in, out] eschamoe orientation
+    in_p, out_p = int(W_esch.shape[0]), int(W_esch.shape[1])
     rin, rout = enc.compute_scales(W_esch, enc.codebook_rms(dec))
     W_hat = enc.target_what(W_esch, rin, rout)
+    del W_esch                                                 # not needed past target_what
     targets, (nI, nJ) = enc.matrix_to_cycle_targets(W_hat, ct)
-    new3, _ = enc.beam_encode_fast(targets, dec, beam=beam, batch=batch, on_batch=on_batch)
+    del W_hat                                                  # only `targets` is needed by the beam
+    new3, _ = tcqc.beam_encode_c(targets, dec, beam=beam, batch=batch, on_batch=on_batch)
     code = enc.build_expert_code(new3, nI, nJ, ct)             # int16 [nI,nJ,48]
     return {"code": code, "rin": rin.astype(np.float16), "rout": rout.astype(np.float16),
-            "in_p": int(W_esch.shape[0]), "out_p": int(W_esch.shape[1])}
+            "in_p": in_p, "out_p": out_p}
 
 
 def effective_weight_hf(rec: dict) -> np.ndarray:
