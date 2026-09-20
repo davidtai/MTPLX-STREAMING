@@ -1,0 +1,144 @@
+# arm: cell16k_ring_v2_draft_attn_pf0
+# stream: dspark
+# token_ids_sha256: 74a3577ee1618dd5dcc71f79e66bfc7913d731a6fc73e03fd9c7da8ceeeeae2e
+# decode_tok_s: 16.493107598969747
+# divergence: {"divergence_index": 79, "ar_token": 1823, "dspark_token": 5607, "ar_top2_margin": null, "dspark_top2_margin": 0.375, "max_abs_logit_delta": null, "tie_margin": 0.03, "tie_band_used": 0.03, "tie_ulps": 3, "peak_contested_logit": null, "ulp_bf16_at_peak": null, "ar_contested_margin": null, "dspark_contested_margin": 0.375, "delta_at_ar_token": null, "delta_at_dspark_token": null, "rounding_class_by_delta": null, "deltas_within_tie_band": null, "rows_consistent": null, "unavailable_logits": ["ar"], "ar_logit_at_ar_token": null, "ar_logit_at_dspark_token": null, "dspark_logit_at_ar_token": 29.25, "dspark_logit_at_dspark_token": 29.625, "class": "unclassified", "ar_replay_error": "RuntimeError('new AR diagnostic index requires a fresh unchanged reference; no replay through candidate arithmetic')", "capture_index": 79, "capture_index_matches_first": true}
+
+```python
+                                    )
+                                )
+                                if matched_stop is not None:
+                                    stop_hit = True
+                                    generated["finish_reason"] = "stop"
+                                    generated.setdefault("stats", {})[
+                                        "stop_sequence_hit"
+                                    ] = True
+                                    generated["stats"]["stop_sequence_matched"] = (
+                                        matched_stop
+                                    )
+                                    held_text = ""
+                            if held_text:
+                                for chunk in emit_text(held_text, monitor=False):
+                                    yield chunk
+                            break
+                        elif kind == "error":
+                            yield error_chunk(item)
+                            yield "data: [DONE]\n\n"
+                            return
+                        elif kind == "cancelled":
+                            if stop_hit:
+                                generated = {
+                                    "text": stop_monitor.emitted_text,
+                                    "tokens": [],
+                                    "prompt_tokens": len(prompt_ids),
+                                    "completion_tokens": streamed_completion_tokens,
+                                    "finish_reason": "stop",
+                                    "stats": {
+                                        "stop_sequence_hit": True,
+                                        "stop_sequence_matched": (
+                                            stop_monitor.matched_stop
+                                        ),
+                                    },
+                                }
+                                break
+                            if await raw_request.is_disconnected():
+                                return
+                            yield error_chunk(
+                                RuntimeError(
+                                    "request cancelled via "
+                                    f"{_cancel_via_label(cancel_event)} after "
+                                    f"{streamed_completion_tokens} streamed tokens"
+                                )
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
+                        else:
+                            yield error_chunk(
+                                RuntimeError(f"unexpected stream event: {kind}")
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
+                except asyncio.CancelledError:
+                    _cancel_stream_generation(
+                        cancel_event, generation_future, origin="client_disconnect"
+                    )
+                    raise
+                except GeneratorExit:
+                    _cancel_stream_generation(
+                        cancel_event, generation_future, origin="client_disconnect"
+                    )
+                    raise
+                except BaseException as exc:
+                    yield error_chunk(exc)
+                    yield "data: [DONE]\n\n"
+                    return
+                finally:
+                    _cancel_stream_generation(
+                        cancel_event, generation_future, origin="stream_teardown"
+                    )
+
+                if generated is None:
+                    yield error_chunk(
+                        RuntimeError("generation ended without a result")
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+                finish_reason = generated.get("finish_reason") or "stop"
+                if stop_hit:
+                    finish_reason = "stop"
+                done = {
+                    "id": response_id,
+                    "object": "text_completion",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "text": "",
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                    "usage": _usage_payload(generated),
+                    "mtplx_stats": _public_mtplx_stats(generated),
+                    "timings": _build_timings(generated),
+                }
+                yield f"data: {json.dumps(done)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        generated = await asyncio.to_thread(
+            _run_generation_dispatched,
+            state,
+            prompt_ids,
+            batch_key="completion",
+            response_id=response_id,
+            max_tokens=request.max_tokens,
+            temperature=sampler_temperature,
+            top_p=sampler_top_p,
+            top_k=sampler_top_k,
+            presence_penalty=sampler_presence_penalty,
+            frequency_penalty=sampler_frequency_penalty,
+            seed=request.seed,
+            draft_sampler=request_draft_sampler,
+            generation_mode=request_generation_mode,
+            depth=request_depth,
+            resolved_mtp_depth=effective_request_depth,
+            request_observability=request_observability,
+        )
+        text = str(generated.get("text") or "")
+        if stop_sequences:
+            trimmed_text, matched_stop = _trim_text_at_stop_sequences(
+                text, stop_sequences
+            )
+            if matched_stop is not None:
+                text = trimmed_text
+                generated["finish_reason"] = "stop"
+                generated.setdefault("stats", {})["finish_reason"] = "stop"
+                generated["stats"]["stop_sequence_hit"] = True
+                generated["stats"]["stop_sequence_matched"] = matched_stop
+        return JSONResponse(
+            {
+                "id": response_id,
+                "object": "text_completion",
+                "created": created

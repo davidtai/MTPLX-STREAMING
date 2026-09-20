@@ -1,0 +1,156 @@
+# arm: cell16k_ring_v2_draft_attn_pf0
+# stream: dspark
+# token_ids_sha256: 48d4e7d4d85124c04e82a8e295d925b2bb2fcf4170da5beab8b37ec7e0da27a7
+# decode_tok_s: 17.129246603749902
+# divergence: {"divergence_index": 264, "ar_token": 5925, "dspark_token": 1760, "ar_top2_margin": null, "dspark_top2_margin": 0.0, "max_abs_logit_delta": null, "tie_margin": 0.03, "tie_band_used": 0.03, "tie_ulps": 3, "peak_contested_logit": null, "ulp_bf16_at_peak": null, "ar_contested_margin": null, "dspark_contested_margin": 0.0, "delta_at_ar_token": null, "delta_at_dspark_token": null, "rounding_class_by_delta": null, "deltas_within_tie_band": null, "rows_consistent": null, "unavailable_logits": ["ar"], "ar_logit_at_ar_token": null, "ar_logit_at_dspark_token": null, "dspark_logit_at_ar_token": 31.125, "dspark_logit_at_dspark_token": 31.125, "class": "unclassified", "ar_replay_error": "RuntimeError('new AR diagnostic index requires a fresh unchanged reference; no replay through candidate arithmetic')", "capture_index": 264, "capture_index_matches_first": true}
+
+```python
+"""Deterministic benchmark toolkit: prompt schema, cache, metrics, registry, CLI."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import statistics
+import sys
+import tempfile
+import time
+from collections import OrderedDict
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Iterable, Iterator, Mapping, Sequence
+
+
+# ---------------------------------------------------------------------------
+# 1. prompt schema dataclasses and JSONL loader
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Prompt:
+    id: str
+    text: str
+    max_tokens: int = 256
+    tags: tuple[str, ...] = ()
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "text": self.text,
+            "max_tokens": self.max_tokens,
+            "tags": list(self.tags),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_json(cls, row: Mapping[str, Any]) -> "Prompt":
+        tags = row.get("tags", ())
+        if isinstance(tags, str):
+            tags = (tags,)
+        return cls(
+            id=str(row["id"]),
+            text=str(row["text"]),
+            max_tokens=int(row.get("max_tokens", 256)),
+            tags=tuple(str(t) for t in tags),
+            metadata=dict(row.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class PromptSet:
+    prompts: tuple[Prompt, ...]
+    source: str = "<memory>"
+
+    def __len__(self) -> int:
+        return len(self.prompts)
+
+    def __iter__(self) -> Iterator[Prompt]:
+        return iter(self.prompts)
+
+    def digest(self) -> str:
+        h = hashlib.sha256()
+        for p in self.prompts:
+            h.update(p.id.encode("utf-8"))
+            h.update(b"\x00")
+            h.update(p.text.encode("utf-8"))
+            h.update(b"\x00")
+            h.update(str(p.max_tokens).encode("ascii"))
+            h.update(b"\x00")
+            for t in p.tags:
+                h.update(t.encode("utf-8"))
+                h.update(b"\x01")
+            h.update(b"\x02")
+        return h.hexdigest()
+
+
+def load_prompts_jsonl(path: Path | str) -> PromptSet:
+    p = Path(path)
+    prompts: list[Prompt] = []
+    with p.open("r", encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{p}:{lineno}: invalid JSON: {exc}") from exc
+            if not isinstance(row, Mapping):
+                raise ValueError(f"{p}:{lineno}: row must be a JSON object")
+            prompts.append(Prompt.from_json(row))
+    return PromptSet(prompts=tuple(prompts), source=str(p))
+
+
+def write_prompts_jsonl(path: Path | str, prompts: Iterable[Prompt]) -> int:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with p.open("w", encoding="utf-8") as fh:
+        for prompt in prompts:
+            fh.write(json.dumps(prompt.to_json(), sort_keys=True))
+            fh.write("\n")
+            count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
+# 2. validation helpers
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    code: str
+    message: str
+    prompt_id: str | None = None
+    line: int | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "prompt_id": self.prompt_id,
+            "line": self.line,
+        }
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    ok: bool
+    issues: tuple[ValidationIssue, ...]
+    prompt_count: int
+    digest: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "prompt_count": self.prompt_count,
+            "digest": self.digest,
+            "issues": [i.to_json() for i in self.issues],
+        }
+
+
+def validate
