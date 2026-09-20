@@ -62,6 +62,9 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +k0 : F2b evaluates the predictor but issues NO speculative reads (isolates predictor cost)
 #   +ftN : F2b first target layer N (default 4; +ft1 adds targets 1-3 from sources 0-2)
 #   +rio : F2b speculative reads go through the retained reader (default: private fd, bare preadv)
+#   +rd : F15 verify-logits row dump at global positions $F2_ROW_INDICES (tie classification of a
+#         candidate-vs-control divergence; rows land in <arm dir>/rows)
+#   +cmp : rounding-class compile levers hc_compile,attn_compile via the F5 hook (needs F2_PROBE=1)
 #   +vcA-B : stage the hybrid install's verify schedule as two chunks A+B (=8): row-split
 #         EXACTNESS probe (digest decides whether a two-group verify pipeline is exact);
 #         slower by construction, never a throughput candidate
@@ -70,6 +73,8 @@ F2_ENGRAM_WORKERS="${F2_ENGRAM_WORKERS:-16}"
 F6DIR="${F6DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f6-engram/scripts/deepseek_v41/f6}"
 F12DIR="${F12DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f12-growth/scripts/deepseek_v41/f12}"
 F2_GROWTH_WORKERS="${F2_GROWTH_WORKERS:-8}"
+F15DIR="${F15DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f15-tieclass/scripts/deepseek_v41/f15}"
+F2_ROW_INDICES="${F2_ROW_INDICES:-470-490}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 STAGE_ROOT="/private/tmp/dsv41-f2b-${STAMP}"
 OUT_STAGE="/tmp/dsv41-110-stage"                     # run_full.py:330 requires --out here
@@ -81,7 +86,8 @@ mkdir -p "$RECEIPTS" "$OUT_STAGE"
 # memory-heavy benches (an overlapping 3 GB microbench pushed the box over the 110e9
 # ceiling on 2026-09-19 and the guard killed an arm; `lsof` on the GPU lock races with the
 # ~17 s gaps between arms). The launcher only SETS it; Fable removes it when pausing.
-[ "${F2_STAGE_ONLY:-0}" = "1" ] || touch /tmp/dsv41-fable-window.active   # a CPU dry run must not pause the workers
+# F2_NO_FLAG=1: timing-insensitive arms (e.g. logits row dumps) leave the workers running.
+if [ "${F2_STAGE_ONLY:-0}" != "1" ] && [ "${F2_NO_FLAG:-0}" != "1" ]; then touch /tmp/dsv41-fable-window.active; fi
 
 # --------------------------------------------------- 1. CPU preflight (before unload)
 echo "== F2b preflight (CPU; MLX pinned; before any service unload) =="
@@ -94,7 +100,7 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
 
 # --------------------------------------------------- 2. stage patched runner copies
 stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)  $5 charge the ring (0/1)
-  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}"
+  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}" rd="${8:-0}"
   local ring_arg=""
   [ "$ring" = "1" ] && ring_arg="--ring-bytes $((F2_RING_RECORDS * 3 * 5898240))"
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
@@ -145,6 +151,10 @@ ARTPY
     nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
   fi
+  if [ "$rd" = "1" ]; then    # F15 row dump: shares the growth_transition anchor with F5/F6
+    nice -n 19 "$PYBIN" "$F15DIR/stage_f15_runner.py" \
+      --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
+  fi
   if [ "$eng" = "1" ]; then   # after F5 (shares its growth_transition anchor), before F2b
     nice -n 19 "$PYBIN" "$F6DIR/stage_f6_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
@@ -157,7 +167,7 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0
+  A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
   case "$mods" in *"+eg+"*) A_ENG=decode ;; esac
@@ -165,6 +175,8 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+gt+"*) A_GT=1 ;; esac
   case "$mods" in *"+pn+"*) A_PN=1 ;; esac
   case "$mods" in *"+k0+"*) A_K0=1 ;; esac
+  case "$mods" in *"+rd+"*) A_RD=1 ;; esac
+  case "$mods" in *"+cmp+"*) A_CMP=1 ;; esac
   case "$mods" in *"+rio+"*) A_RIO=1 ;; esac
   case "$mods" in *"+ft"*) A_FT="${mods#*+ft}"; A_FT="${A_FT%%+*}" ;; esac
   case "$mods" in *"+vc"*) A_VC="${mods#*+vc}"; A_VC="${A_VC%%+*}" ;; esac
@@ -176,17 +188,17 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
   A_ENGSTAGE=0; [ "$A_ENG" != "0" ] && A_ENGSTAGE=1
-  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_F2B}-v${A_VC}-t${A_GT}"   # g = host ring charged to admission
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_F2B}-v${A_VC}-t${A_GT}-d${A_RD}"   # g = host ring charged to admission
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
 ARMS="${F2_ARMS:-control_a candidate control_b}"
 echo "== stage retained sources -> $STAGE_ROOT (arms: $ARMS; probe=$F2_PROBE) =="
 for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first unload
   parse_arm "$arm"
-  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_F2B" "$A_VC" "$A_GT"
+  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_F2B" "$A_VC" "$A_GT" "$A_RD"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
-  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO)"; done
+  for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP)"; done
   rmdir "$RECEIPTS" 2>/dev/null || true
   echo "STAGE ONLY: no GPU window opened"; exit 0
 fi
@@ -219,13 +231,19 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   local probe_env=""
   if [ "$F2_PROBE" = "1" ]; then
     pypath="$pypath:$F5DIR"
-    probe_env="MTPLX_DSV41_F5_ENABLE= MTPLX_DSV41_F5_CAPS8=0 MTPLX_DSV41_F5_TIMED_PROBE=1 MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
+    local f5_enable=""; [ "$A_CMP" = "1" ] && f5_enable="hc_compile,attn_compile"
+    probe_env="MTPLX_DSV41_F5_ENABLE=$f5_enable MTPLX_DSV41_F5_CAPS8=0 MTPLX_DSV41_F5_TIMED_PROBE=1 MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
   fi
   local f2b_env=""
   [ "$f2b" = "1" ] && f2b_env="MTPLX_DSV41_F2B=1 MTPLX_DSV41_F2B_RECORDS=$F2_RING_RECORDS MTPLX_DSV41_F2B_WORKERS=$F2_WORKERS MTPLX_DSV41_F2B_COUNTERS=$dir/f2b_counters.json"
   [ "$A_SI" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_GIL_SWITCH_S=$F2_GIL_SWITCH_S"
   [ "$A_PN" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_PREDICTOR=native"
   [ "$A_K0" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_K=0"
+  if [ "$A_CMP" = "1" ] && [ "$F2_PROBE" != "1" ]; then echo "REFUSE: +cmp needs F2_PROBE=1 (F5 hook)"; exit 2; fi
+  if [ "$A_RD" = "1" ]; then
+    pypath="$pypath:$F15DIR"; mkdir -p "$dir/rows"
+    f2b_env="$f2b_env MTPLX_DSV41_F15_ROW_DUMP_DIR=$dir/rows MTPLX_DSV41_F15_ROW_INDICES=$F2_ROW_INDICES"
+  fi
   [ "$A_RIO" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_DIRECT_IO=0"
   [ "$A_FT" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_FIRST_TARGET=$A_FT"
   if [ "$A_GT" = "1" ]; then
@@ -255,6 +273,10 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   echo "$rc" > "$dir/guard.exit"
   # copy the run_full receipt + sidecars (<stem>.*) into the arm dir.
   cp "${stem}".* "$dir/" 2>/dev/null || true
+  if [ "$rc" = "4" ] && { [ "$A_VC" != "0" ] || [ "$A_CMP" = "1" ]; }; then
+    echo "  (guard exit 4 on a rounding-class probe arm: digest differs from control, as expected; continuing)"
+    return 0
+  fi
   if [ "$rc" = "4" ]; then
     echo "FAIL: arm ${arm} guard exit 4 (output digest != control). F2b is EXACT -> this is a BUG. Stopping."
     tail -8 "$dir/guard.log" || true; exit 4
