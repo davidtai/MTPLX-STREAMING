@@ -57,3 +57,7 @@ context-snapshot.json
 .devspace/
 .benchmark-artifacts/
 scripts/deepseek_v41/decode_probe.log
+
+# eschamoe trellis decode (vendored from mtplx-moe feat/eschamoe-native @ 0cf1591c9): gather tables + tiny vendor-golden test fixture
+!mtplx/eschamoe_gather.npz
+!tests/fixtures/eschamoe_mini.npz
