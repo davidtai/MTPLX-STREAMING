@@ -42,6 +42,9 @@ _TRACE_INSERT = "                import traceback; traceback.print_exc()  # F2b:
 _RO_ANCHOR = "                from plane_lane import install as install_plane_lane"
 _RO_INSERT = ("                import f2.read_order as _f19_read_order; "
               "_f19_read_order.install_from_env(rt.reader)  # F19 (no-op unless MTPLX_DSV41_F19_FANOUT_WORKERS)")
+# F21: same boundary -- wrap the live runtime's begin_split_route so the reader threads get the GIL at submit.
+_SY_INSERT = ("                import f2.submit_yield as _f21_submit_yield; "
+              "_f21_submit_yield.install_from_env(rt)  # F21 (no-op unless MTPLX_DSV41_F21_SUBMIT_YIELDS)")
 
 
 def _assert_once(text: str, anchor: str, label: str) -> None:
@@ -141,9 +144,10 @@ def stage_read_order(source_text: str) -> str:
     if "_f19_read_order" in source_text:
         raise RuntimeError("F19 read order already staged")
     _assert_once(source_text, _RO_ANCHOR, "plane_lane install import")
-    updated = source_text.replace(_RO_ANCHOR, _RO_INSERT + "\n" + _RO_ANCHOR)
-    if updated.replace(_RO_INSERT + "\n" + _RO_ANCHOR, _RO_ANCHOR) != source_text:
-        raise RuntimeError("F19 read-order edit changed more than the one insertion")
+    block = _RO_INSERT + "\n" + _SY_INSERT + "\n" + _RO_ANCHOR
+    updated = source_text.replace(_RO_ANCHOR, block)
+    if updated.replace(block, _RO_ANCHOR) != source_text:
+        raise RuntimeError("F19/F21 I/O hook edit changed more than the two insertions")
     return updated
 
 

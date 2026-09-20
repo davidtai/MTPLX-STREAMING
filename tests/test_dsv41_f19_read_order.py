@@ -82,10 +82,61 @@ def test_env_unset_is_a_noop(monkeypatch):
 def test_staged_edit_roundtrips_on_the_archived_packed_phase_and_refuses_double_apply():
     src = _PACKED_PHASE.read_text()
     staged = stager.stage_read_order(src)
-    lines = [ln for ln in staged.splitlines() if "_f19_read_order" not in ln]
+    lines = [ln for ln in staged.splitlines()
+             if "_f19_read_order" not in ln and "_f21_submit_yield" not in ln]
     assert "\n".join(lines) + ("\n" if src.endswith("\n") else "") == src
     idx = staged.splitlines().index(stager._RO_INSERT)
-    assert staged.splitlines()[idx + 1] == stager._RO_ANCHOR   # immediately before the lane import
+    assert staged.splitlines()[idx + 1] == stager._SY_INSERT
+    assert staged.splitlines()[idx + 2] == stager._RO_ANCHOR   # both hooks sit immediately before the lane import
     compile(staged, "packed_phase_staged", "exec")
     with pytest.raises(RuntimeError):
         stager.stage_read_order(staged)
+
+
+# ---------------------------------------------------------------------------
+# F21 submit yield
+# ---------------------------------------------------------------------------
+class _Pending:
+    def __init__(self, parts):
+        self._all_miss_parts = dict(enumerate(parts))
+
+
+class _Runtime:
+    def __init__(self):
+        self.calls = []
+
+    def begin_split_route(self, layer, experts, *, phase):
+        self.calls.append((layer, tuple(experts), phase))
+        return _Pending(["part"] if experts else [])
+
+
+def test_submit_yield_wraps_the_instance_and_yields_only_when_reads_were_submitted(monkeypatch):
+    from f2 import submit_yield
+
+    yields = []
+    monkeypatch.setattr(submit_yield.os, "sched_yield", lambda: yields.append(1))
+    rt = _Runtime()
+    assert submit_yield.install(rt, yields=8) == {"installed": True, "yields": 8}
+    pending = rt.begin_split_route(3, (1, 2), phase="decode")
+    assert isinstance(pending, _Pending) and rt.calls == [(3, (1, 2), "decode")] and len(yields) == 8
+    rt.begin_split_route(4, (), phase="decode")            # all-hit route: no reads, no yields
+    assert len(yields) == 8
+    with pytest.raises(RuntimeError):
+        submit_yield.install(rt, yields=8)                 # double install refused
+
+
+@pytest.mark.parametrize("bad", [0, 65, True, 1.5, "8"])
+def test_submit_yield_refuses_bad_counts(bad):
+    from f2 import submit_yield
+
+    with pytest.raises(RuntimeError):
+        submit_yield.install(_Runtime(), yields=bad)
+
+
+def test_submit_yield_is_a_noop_when_its_switch_is_unset(monkeypatch):
+    from f2 import submit_yield
+
+    monkeypatch.delenv(submit_yield.ENV, raising=False)
+    rt = _Runtime()
+    assert submit_yield.install_from_env(rt) == {"installed": False}
+    assert "begin_split_route" not in vars(rt)

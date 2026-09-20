@@ -80,6 +80,12 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 #   +bal : (pipe base) F16 balanced leader/trailer split; oracle digest = $F16_BAL_ORACLE_SHA if set
 #   +bh  : (pipe base) F18 barrier hand-off: async routing barrier + second greenlet hand-off, per-group
 #          deferred slot releases; same oracle digest as the split it rides. Needs F16PKG = the f18 package.
+#   +la  : (pipe base, with +eg/+egl) EXACT F20 n-gram read lookahead: layer 1/14 row reads issued at verify-forward start.
+#          Needs F16PKG and F6DIR to point at the f20 worktree (its f16 + f6 packages).
+#   +pf  : (pipe base) EXACT: F2b next-layer prefetch (host ring + reader interception) INSIDE the pipeline; the ring is
+#          charged to admission; F16 installs first, F2b then wraps the yield-run (F2b's run_full hook is staged first).
+#   +syN : EXACT F21 submit yield: N x sched_yield right after a route's miss reads are submitted, so the reader threads
+#          reach preadv at once instead of waiting for the generation thread to drop the GIL (F13: +0.33 ms per burst).
 #   +roK : EXACT F19 read order: the demand-read fanout pool shrinks from 15 to K workers at the post-prefill boundary
 #          (SSD saturates at 3 concurrent plane reads), so planes complete in submission order. Staged packed_phase hook.
 #   +wm  : EXACT decode lever attn_win_memo via the F5 hook (needs F2_PROBE=1): the sliding-window attend mask is built
@@ -181,6 +187,9 @@ ARTPY
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
       --hybrid-install "$dest/packed/hybrid_install.py" --verify-chunks "$([ "$vc" = "b" ] && echo balanced || printf '%s' "$vc" | tr '-' ',')"
   fi
+  if [ "$pipe" = "1" ] && [ "$f2b" = "1" ]; then   # +pf: F2b hook first, so F16's (staged later, same anchor) executes first
+    nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"
+  fi
   if [ "$pipe" = "1" ]; then   # F16: run_full hook + hybrid verify call + 4-buffer projection store
     # preflight re-applies the stager to the RETAINED sources, so it needs the unstaged tree
     PYTHONPATH="$F16PKG:$F16SITE:$RETAINED_SRC/packed:$RETAINED_SRC/compat:$RUNWT" nice -n 19 "$PYBIN" -m f16.preflight
@@ -200,7 +209,7 @@ ARTPY
     nice -n 19 "$PYBIN" "$F6DIR/stage_f6_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
   fi
-  if [ "$f2b" = "1" ]; then
+  if [ "$f2b" = "1" ] && [ "$pipe" != "1" ]; then
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" --run-full "$dest/packed/run_full.py"
   fi
   PYTHONPATH="$F2PKG" nice -n 19 "$PYBIN" -m f2.window_preflight --no-seams \
@@ -208,7 +217,7 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0
+  A_CAPS8=0; A_PIPE=0; A_BAL=0; A_BH=0; A_ST=0; A_OPS=0; A_MB=0; A_WM=0; A_RO=0; A_PF=0; A_LA=0; A_SY=0
   A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
@@ -227,6 +236,8 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+plx+"*) A_PL=excess ;; esac
   case "$mods" in *"+bal+"*) A_BAL=1 ;; esac
   case "$mods" in *"+bh+"*) A_BH=1 ;; esac
+  case "$mods" in *"+pf+"*) A_PF=1 ;; esac
+  case "$mods" in *"+la+"*) A_LA=1 ;; esac
   case "$mods" in *"+wm+"*) A_WM=1 ;; esac
   case "$mods" in *"+st+"*) A_ST=1 ;; esac
   case "$mods" in *"+pc+"*) A_PC=1 ;; esac
@@ -234,6 +245,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   case "$mods" in *"+rio+"*) A_RIO=1 ;; esac
   case "$mods" in *"+ft"*) A_FT="${mods#*+ft}"; A_FT="${A_FT%%+*}" ;; esac
   case "$mods" in *"+ro"*) A_RO="${mods#*+ro}"; A_RO="${A_RO%%+*}" ;; esac
+  case "$mods" in *"+sy"*) A_SY="${mods#*+sy}"; A_SY="${A_SY%%+*}" ;; esac
   case "$mods" in *"+ops"*) A_OPS="${mods#*+ops}"; A_OPS="${A_OPS%%+*}" ;; esac
   case "$mods" in *"+mb"*) A_MB="${mods#*+mb}"; A_MB="${A_MB%%+*}" ;; esac
   case "$mods" in *"+vc"*) A_VC="${mods#*+vc}"; A_VC="${A_VC%%+*}" ;; esac
@@ -241,7 +253,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
     control|control_a|control_b) A_ROWS="$F2_MAX_ROWS"; A_F2B=0 ;;
     control_low)                 A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0 ;;
     candidate)                   A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=1 ;;
-    pipe)                        A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0; A_PIPE=1 ;;
+    pipe)                        A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B="$A_PF"; A_PIPE=1 ;;
     *) echo "unknown arm base '$A_BASE' in '$tok'"; exit 2 ;;
   esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
@@ -251,7 +263,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   [ "$A_F2B" = "1" ] && [ "$A_PC" = "1" ] && A_HOSTBYTES=$((A_HOSTBYTES + 283170816))
   [ "$A_PIPE" = "1" ] && A_HOSTBYTES=$((A_HOSTBYTES + 134217728))   # F16: two extra bf16 projection buffers
   [ "$A_PL" != "0" ] && A_HOSTBYTES=$((A_HOSTBYTES + 100663296))   # F17 append-peak under-count (<= 67 MB), charged as 96 MiB
-  A_ROSTAGE=0; [ "$A_RO" != "0" ] && A_ROSTAGE=1
+  A_ROSTAGE=0; { [ "$A_RO" != "0" ] || [ "$A_SY" != "0" ]; } && A_ROSTAGE=1
   A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}-q${A_PIPE}-o${A_ROSTAGE}"   # g = host ring charged to admission
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
@@ -314,6 +326,11 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
       [ -f "$F16PKG/f16/stamps.py" ] || { echo "REFUSE: +bh/+st need the F18 package (set F16PKG to .worktrees/dsv41-f18-handoff/scripts/deepseek_v41)"; exit 2; }
     fi
     [ "$A_BH" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_HANDOFF=barrier"
+    if [ "$A_LA" = "1" ]; then
+      [ "$A_ENG" != "0" ] || { echo "REFUSE: +la needs +eg or +egl (the F6 parallel gather must be installed)"; exit 2; }
+      grep -q "F20_ENGRAM_LOOKAHEAD" "$F16PKG/f16/install.py" || { echo "REFUSE: +la needs the f20 package (set F16PKG and F6DIR to .worktrees/dsv41-f20-lookahead/scripts/deepseek_v41[/f6])"; exit 2; }
+      f2b_env="$f2b_env MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD=1"
+    fi
     [ "$A_ST" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F16_STAMPS=$dir/f16_stamps"
   fi
   if [ "$A_PL" != "0" ]; then
@@ -323,7 +340,8 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
     else f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=shape:$F17_ORACLE_SHAPE"; fi
   fi
   [ "$A_K0" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_K=0"
-  case "$A_RO" in *[!0-9]*) echo "REFUSE: +ro needs a positive integer (got $A_RO)"; exit 2 ;; esac
+  case "$A_RO$A_SY" in *[!0-9]*) echo "REFUSE: +ro/+sy need a positive integer (got ro=$A_RO sy=$A_SY)"; exit 2 ;; esac
+  [ "$A_SY" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F21_SUBMIT_YIELDS=$A_SY"
   [ "$A_RO" != "0" ] && f2b_env="$f2b_env MTPLX_DSV41_F19_FANOUT_WORKERS=$A_RO"
   case "$A_OPS$A_MB" in *[!0-9]*) echo "REFUSE: +ops/+mb need a positive integer (got ops=$A_OPS mb=$A_MB)"; exit 2 ;; esac
   [ "$A_OPS" != "0" ] && f2b_env="$f2b_env MLX_MAX_OPS_PER_BUFFER=$A_OPS"
