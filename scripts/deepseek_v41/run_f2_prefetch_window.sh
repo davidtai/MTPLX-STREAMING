@@ -54,6 +54,9 @@ F5DIR="${F5DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/
 # Arm grammar: <base>[+si][+eg|+egl]   (arm dir = arm-<token with + -> _>)
 #   base: control|control_a|control_b (F2_MAX_ROWS, plain) | control_low (F2_MAX_ROWS-1, plain)
 #         | candidate (F2_MAX_ROWS-1, F2b prefetch)
+#         | pipe (F2_MAX_ROWS-1, F16 two-group verify pipeline: 4+rest row groups interleaved under a
+#           thread baton; no F2b, no stamp probe; MUST reproduce digest $F16_ORACLE_SHA = the
+#           sequential 4+4 chunk arm, whose first control divergence @480 is a proven tie flip)
 #   +si : GIL switch interval MTPLX_DSV41_GIL_SWITCH_S=$F2_GIL_SWITCH_S (applied once at the
 #         F2b hook; the hook is staged but F2b itself stays off for control bases)
 #   +eg : F6 parallel Engram miss reads, decode-site install; +egl: load-site (prefill too)
@@ -82,6 +85,8 @@ F12DIR="${F12DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktree
 F2_GROWTH_WORKERS="${F2_GROWTH_WORKERS:-8}"
 F15DIR="${F15DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f15-tieclass/scripts/deepseek_v41/f15}"
 F2_ROW_INDICES="${F2_ROW_INDICES:-470-490}"
+F16PKG="${F16PKG:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f16-pipeline/scripts/deepseek_v41}"
+F16_ORACLE_SHA="${F16_ORACLE_SHA:-172830a96d84dbdac631c058fe0dfaf956df15b6c353f41fc05f604bc92c6393}"
 F17DIR="${F17DIR:-/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f17-rows/scripts/deepseek_v41/f17}"
 F17_ORACLE_SHAPE="${F17_ORACLE_SHAPE:-81,54,59,14,32,25,0,9,18,10,3,15,29,28,0,30,0,9,0,54,0,0,0,15,0,0,0,27,0,6,13,28,27,34,10,7,21,32,55,55}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -109,7 +114,7 @@ PYTHONPATH="$RETAINED_SRC/packed:$RUNWT:$F2PKG" nice -n 19 "$PYBIN" -m f2.window
 
 # --------------------------------------------------- 2. stage patched runner copies
 stage_tree() {  # $1 dest  $2 max_rows  $3 stage the F2b/GIL hook (0/1)  $4 stage F6 engram (0/1)  $5 charge the ring (0/1)
-  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}" rd="${8:-0}" pl="${9:-0}"
+  local dest="$1" rows="$2" f2b="$3" eng="${4:-0}" ring="${5:-0}" vc="${6:-0}" gt="${7:-0}" rd="${8:-0}" pl="${9:-0}" pipe="${10:-0}"
   local ring_arg=""
   [ "$ring" != "0" ] && ring_arg="--ring-bytes $ring"   # total host bytes charged to admission
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
@@ -160,6 +165,13 @@ ARTPY
     nice -n 19 "$PYBIN" "$F2PKG/f2/stage_f2_runner.py" \
       --hybrid-install "$dest/packed/hybrid_install.py" --verify-chunks "$(printf '%s' "$vc" | tr '-' ',')"
   fi
+  if [ "$pipe" = "1" ]; then   # F16: run_full hook + hybrid verify call + 4-buffer projection store
+    # preflight re-applies the stager to the RETAINED sources, so it needs the unstaged tree
+    PYTHONPATH="$F16PKG:$RETAINED_SRC/packed:$RETAINED_SRC/compat:$RUNWT" nice -n 19 "$PYBIN" -m f16.preflight
+    PYTHONPATH="$F16PKG" nice -n 19 "$PYBIN" -m f16.stage_f16_runner \
+      --run-full "$dest/packed/run_full.py" --hybrid-install "$dest/packed/hybrid_install.py" \
+      --projection-install "$dest/packed/projection_install.py"
+  fi
   if [ "$F2_PROBE" = "1" ]; then
     nice -n 19 "$PYBIN" "$F5DIR/stage_f5_runner.py" \
       --retained "$dest/packed/run_full.py" --out "$dest/packed/run_full.py"
@@ -180,7 +192,7 @@ ARTPY
 }
 parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAGE A_DIRNAME
   local tok="$1" mods
-  A_CAPS8=0
+  A_CAPS8=0; A_PIPE=0
   A_BASE="${tok%%+*}"; A_SI=0; A_ENG=0; A_VC=0; A_GT=0; A_PN=0; A_K0=0; A_FT=0; A_RIO=0; A_RD=0; A_CMP=0; A_PC=0; A_ML=0; A_PL=0; A_CMPSET=""
   mods="+${tok#*+}+"; [ "$tok" = "$A_BASE" ] && mods="+"
   case "$mods" in *"+si+"*) A_SI=1 ;; esac
@@ -206,6 +218,7 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
     control|control_a|control_b) A_ROWS="$F2_MAX_ROWS"; A_F2B=0 ;;
     control_low)                 A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0 ;;
     candidate)                   A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=1 ;;
+    pipe)                        A_ROWS="$((F2_MAX_ROWS-1))"; A_F2B=0; A_PIPE=1 ;;
     *) echo "unknown arm base '$A_BASE' in '$tok'"; exit 2 ;;
   esac
   A_HOOK=0; { [ "$A_F2B" = "1" ] || [ "$A_SI" = "1" ]; } && A_HOOK=1
@@ -213,15 +226,16 @@ parse_arm() {  # $1 arm token -> A_BASE A_SI A_ENG A_ROWS A_F2B A_HOOK A_ENGSTAG
   A_HOSTBYTES=0
   [ "$A_F2B" = "1" ] && A_HOSTBYTES=$((F2_RING_RECORDS * 3 * 5898240))
   [ "$A_F2B" = "1" ] && [ "$A_PC" = "1" ] && A_HOSTBYTES=$((A_HOSTBYTES + 283170816))
+  [ "$A_PIPE" = "1" ] && A_HOSTBYTES=$((A_HOSTBYTES + 134217728))   # F16: two extra bf16 projection buffers
   [ "$A_PL" != "0" ] && A_HOSTBYTES=$((A_HOSTBYTES + 100663296))   # F17 append-peak under-count (<= 67 MB), charged as 96 MiB
-  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}"   # g = host ring charged to admission
+  A_TREE="$STAGE_ROOT/r${A_ROWS}-h${A_HOOK}-e${A_ENGSTAGE}-g${A_HOSTBYTES}-v${A_VC}-t${A_GT}-d${A_RD}-p${A_PL}-q${A_PIPE}"   # g = host ring charged to admission
   A_DIRNAME="$(printf '%s' "$tok" | tr '+' '_')"
 }
 ARMS="${F2_ARMS:-control_a candidate control_b}"
 echo "== stage retained sources -> $STAGE_ROOT (arms: $ARMS; probe=$F2_PROBE) =="
 for arm in $ARMS; do   # stage EVERY needed tree up-front: fail before the first unload
   parse_arm "$arm"
-  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD" "$A_PL"
+  [ -d "$A_TREE" ] || stage_tree "$A_TREE" "$A_ROWS" "$A_HOOK" "$A_ENGSTAGE" "$A_HOSTBYTES" "$A_VC" "$A_GT" "$A_RD" "$A_PL" "$A_PIPE"
 done
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then   # CPU dry run of the whole staging sequence
   for arm in $ARMS; do parse_arm "$arm"; echo "STAGED $arm -> $A_TREE (rows=$A_ROWS f2b=$A_F2B si=$A_SI engram=$A_ENG verify_chunks=$A_VC growth=$A_GT native_predictor=$A_PN k0=$A_K0 first_target=$A_FT reader_io=$A_RIO row_dump=$A_RD compile=$A_CMP cpu_predictor=$A_PC wired_ring=$A_ML per_layer_rows=$A_PL compile_set=$A_CMPSET caps8=$A_CAPS8 host_bytes=$A_HOSTBYTES)"; done
@@ -258,7 +272,8 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   if [ "$F2_PROBE" = "1" ]; then
     pypath="$pypath:$F5DIR"
     local f5_enable=""; [ "$A_CMP" = "1" ] && f5_enable="$A_CMPSET"
-    probe_env="MTPLX_DSV41_F5_ENABLE=$f5_enable MTPLX_DSV41_F5_CAPS8=$A_CAPS8 MTPLX_DSV41_F5_TIMED_PROBE=1 MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
+    local timed=1; [ "$A_PIPE" = "1" ] && timed=0   # the stamp probe rebinds run; F16 refuses any non-scheduled lane
+    probe_env="MTPLX_DSV41_F5_ENABLE=$f5_enable MTPLX_DSV41_F5_CAPS8=$A_CAPS8 MTPLX_DSV41_F5_TIMED_PROBE=$timed MTPLX_DSV41_F5_TIMED_OUT=$dir/timed_probe"
   fi
   local f2b_env=""
   [ "$f2b" = "1" ] && f2b_env="MTPLX_DSV41_F2B=1 MTPLX_DSV41_F2B_RECORDS=$F2_RING_RECORDS MTPLX_DSV41_F2B_WORKERS=$F2_WORKERS MTPLX_DSV41_F2B_COUNTERS=$dir/f2b_counters.json"
@@ -266,6 +281,10 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   [ "$A_PN" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_PREDICTOR=native"
   [ "$A_PC" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_PREDICTOR=cpu"
   [ "$A_ML" = "1" ] && f2b_env="$f2b_env MTPLX_DSV41_F2B_WIRE_RING=1"
+  if [ "$A_PIPE" = "1" ]; then
+    pypath="$pypath:$F16PKG"
+    f2b_env="$f2b_env MTPLX_DSV41_F16=1 MTPLX_DSV41_F16_COUNTERS=$dir/f16_counters.json"
+  fi
   if [ "$A_PL" != "0" ]; then
     pypath="$pypath:$F17DIR"
     if [ "$A_PL" = "rule" ]; then f2b_env="$f2b_env MTPLX_DSV41_F17_ALLOC=prefill_rule"
@@ -307,7 +326,7 @@ run_arm() {  # $1 arm token (parse_arm must have run for it)
   echo "$rc" > "$dir/guard.exit"
   # copy the run_full receipt + sidecars (<stem>.*) into the arm dir.
   cp "${stem}".* "$dir/" 2>/dev/null || true
-  if [ "$rc" = "4" ] && { [ "$A_VC" != "0" ] || [ "$A_CMP" = "1" ]; }; then
+  if [ "$rc" = "4" ] && { [ "$A_VC" != "0" ] || [ "$A_CMP" = "1" ] || [ "$A_PIPE" = "1" ]; }; then
     echo "  (guard exit 4 on a rounding-class probe arm: digest differs from control, as expected; continuing)"
     return 0
   fi
