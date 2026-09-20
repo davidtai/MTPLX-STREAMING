@@ -399,7 +399,8 @@ class Pipeline:
     so a staged tree run with F16 off is a byte-for-byte stock A/B control.
     """
 
-    def __init__(self, model, *, armed: bool, split: str = "fixed4", handoff: str = "reads"):
+    def __init__(self, model, *, armed: bool, split: str = "fixed4", handoff: str = "reads",
+                 engram_lookahead: bool = False):
         self.model = model
         self.backbone = model.model
         self.armed = bool(armed)
@@ -425,6 +426,104 @@ class Pipeline:
         # driver with orphan hand-off (design 3.4).  Stamps do not change the driver.
         if handoff == "barrier":
             self._run_groups = self._run_groups_barrier
+
+        # F20 engram read lookahead, bound ONCE here (AGENTS.md: no per-call env read /
+        # branch).  Default = bound no-ops, so the driver's two calls per forward add
+        # nothing.  When enabled it is built from the model's engram hooks and refuses
+        # unless the F6 parallel gather is already installed on their caches.
+        self.engram_lookahead = bool(engram_lookahead)
+        self._engram_lookahead = self._engram_lookahead_noop
+        self._engram_clear = self._engram_clear_noop
+        if self.engram_lookahead:
+            self._enable_engram_lookahead()
+
+    # -- F20 engram read lookahead (bound ONCE at construction) -----------------
+    def _engram_lookahead_noop(self, cur_a, cur_b) -> None:
+        """Bound as ``_engram_lookahead`` when the lookahead is disabled: the driver's
+        one call per forward does nothing (no per-call env read, no branch)."""
+
+    def _engram_clear_noop(self) -> None:
+        """Bound as ``_engram_clear`` when the lookahead is disabled."""
+
+    def _enable_engram_lookahead(self) -> None:
+        """Build the enabled lookahead from the model's engram hooks and bind it.
+
+        Called ONCE at construction (from ``__init__`` when armed with the lookahead).
+        Captures ``[(layer_hash_index, row_cache), ...]`` for every engram-hook layer
+        plus ``prefetch_rows``/``clear_pending`` -- resolved from the very module F6
+        installed the parallel gather from, so there is ONE shared ``ParallelReadState``
+        even though F6 imports as a top-level module and F16 as a package.  Refuses
+        unless the F6 parallel gather is installed on EVERY hook cache (correct-by-design:
+        fail once, here, not per forward)."""
+        import sys
+
+        import numpy as np
+
+        from mtplx.models.deepseek_v41 import _ChunkEngramView
+
+        layers = [
+            (layer.engram_hook.layer_hash_index, layer.engram_hook.row_cache)
+            for layer in self.backbone.layers
+            if layer.engram_hook is not None
+        ]
+        if not layers:
+            raise RuntimeError(
+                "F20 engram lookahead enabled but the model has no engram-hook layers"
+            )
+        modules = set()
+        for _lhi, rc in layers:
+            state = getattr(rc, "_f6_parallel", None)  # the F6 install attribute
+            fn = getattr(getattr(rc, "gather_bytes", None), "__func__", None)
+            mod = sys.modules.get(getattr(fn, "__module__", "") or "", None)
+            if state is None or mod is None or not hasattr(mod, "prefetch_rows"):
+                raise RuntimeError(
+                    "F20 engram lookahead requires the F6 parallel gather installed on "
+                    "every engram hook cache (MTPLX_DSV41_F6_ENGRAM_PARALLEL=1 must run "
+                    "before F16 install); a hook cache is not F6-installed"
+                )
+            modules.add(mod)
+        if len(modules) != 1:
+            raise RuntimeError(
+                "F20 engram lookahead: engram caches were F6-installed from different "
+                "module objects; put one f6 dir on PYTHONPATH so there is one install module"
+            )
+        ep = modules.pop()
+        self._f20_prefetch = ep.prefetch_rows
+        self._f20_clear = ep.clear_pending
+        self._f20_np = np
+        self._f20_view = _ChunkEngramView
+        self._f20_layers = layers
+        seen: set = set()
+        caches: list = []
+        for _lhi, rc in layers:
+            if id(rc) not in seen:
+                seen.add(id(rc))
+                caches.append(rc)
+        self._f20_caches = caches
+        self._engram_lookahead = self._engram_lookahead_enabled
+        self._engram_clear = self._engram_clear_enabled
+
+    def _engram_lookahead_enabled(self, cur_a, cur_b) -> None:
+        """Issue the engram row reads for both groups, per engram layer, at forward
+        start.  Row ids are taken EXACTLY the way the hook will read them
+        (``_ChunkEngramView(cur).current_row_ids(lhi) -> np.asarray(...).reshape(-1)
+        .tolist()``), so prefetch and collect see the same ids."""
+        prefetch = self._f20_prefetch
+        np_ = self._f20_np
+        view_cls = self._f20_view
+        for cur in (cur_a, cur_b):
+            if cur is None:
+                continue
+            view = view_cls(cur)
+            for lhi, rc in self._f20_layers:
+                row_ids = np_.asarray(view.current_row_ids(lhi)).reshape(-1).tolist()
+                prefetch(rc, row_ids)
+
+    def _engram_clear_enabled(self) -> None:
+        """Join + drop each engram cache's leftover prefetch reads after the forward."""
+        clear = self._f20_clear
+        for rc in self._f20_caches:
+            clear(rc)
 
     # -- entry (replaces the ONE verify forward call) -----------------------
     def pipelined_forward(self, forward: Callable[[Any, Any], tuple], ids, cache):
@@ -468,17 +567,28 @@ class Pipeline:
         if engram_state is not None:
             cur_a = engram_state.advance(ids_a)
             cur_b = engram_state.advance(ids_b)
+            # F20: issue this forward's engram row reads for BOTH groups now, before
+            # any layer runs (bound no-op unless the lookahead is enabled).  The row
+            # ids depend only on the token ids the two advances just captured.
+            self._engram_lookahead(cur_a, cur_b)
         else:
             cur_a = cur_b = None
 
-        results = self._run_groups(
-            lambda: self._group_forward(
-                ids_a, cache, offset0=offset0, start=0, engram_current=cur_a
-            ),
-            lambda: self._group_forward(
-                ids_b, cache, offset0=offset0, start=rows_a, engram_current=cur_b
-            ),
-        )
+        try:
+            results = self._run_groups(
+                lambda: self._group_forward(
+                    ids_a, cache, offset0=offset0, start=0, engram_current=cur_a
+                ),
+                lambda: self._group_forward(
+                    ids_b, cache, offset0=offset0, start=rows_a, engram_current=cur_b
+                ),
+            )
+        finally:
+            # F20: join + drop any leftover prefetch reads (bound no-op unless enabled),
+            # on the normal path AND on a group error, so no pool read outlives the
+            # forward.  cache.advance stays AFTER the try, so an error still skips it
+            # exactly as before.
+            self._engram_clear()
 
         # Both groups complete: advance the cache once, then concatenate exactly as
         # the sequential chunk loop concatenates its parts.

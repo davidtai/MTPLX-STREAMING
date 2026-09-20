@@ -180,6 +180,106 @@ def _check_derivation() -> dict:
     return report
 
 
+def _import_engram_parallel():
+    """The F6 module, imported whichever way is on PYTHONPATH: top-level
+    ``engram_parallel`` (how the F6 stager imports it -- ``scripts/deepseek_v41/f6``
+    on the path) or the ``f6.engram_parallel`` namespace package
+    (``scripts/deepseek_v41`` on the path)."""
+    try:
+        import engram_parallel as ep  # noqa: F811
+        return ep
+    except ImportError:
+        from f6 import engram_parallel as ep  # type: ignore
+        return ep
+
+
+def _check_f20() -> dict:
+    """F20 engram read lookahead resolves end-to-end on CPU: the f6 lookahead symbols
+    import, the Pipeline refuses to arm the lookahead on a non-F6 cache, and a
+    construct -> prefetch(both groups) -> collect(F6 gather) -> clear round-trip runs on
+    a synthetic file-backed cache.  So a GPU window with
+    ``MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD=1`` cannot die at install on an AttributeError or
+    a missing symbol.  Never touches Metal or an artifact (pure numpy + preadv)."""
+    import os
+    import shutil
+    import tempfile
+    import types
+
+    import numpy as np
+    from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, RowGeometry
+
+    ep = _import_engram_parallel()
+    for name in ("prefetch_rows", "clear_pending", "ParallelReadState", "install"):
+        if not hasattr(ep, name):
+            raise RuntimeError(f"F16 preflight: f6 engram_parallel missing {name!r} (F20 lane)")
+    probe = ep.ParallelReadState(workers=2)
+    try:
+        for key in ("lookahead_calls", "lookahead_rows_submitted"):
+            if key not in probe.stats:
+                raise RuntimeError(f"F16 preflight: ParallelReadState.stats missing {key!r}")
+    finally:
+        probe.shutdown()
+
+    geom = RowGeometry(values_per_row=256, bits=8, group_size=32, mode="mxfp8")  # 264 B/row
+    row_bytes, num_rows = geom.row_bytes, 64
+    tmpdir = tempfile.mkdtemp(prefix="f16-preflight-f20-")
+    try:
+        path = os.path.join(tmpdir, "engram-preflight.bin")
+        blob = (np.arange(num_rows * row_bytes, dtype=np.uint64) % 251).astype(np.uint8)
+        with open(path, "wb") as fh:
+            fh.write(blob.tobytes())
+
+        # Refuse-gate: arming the lookahead on a cache the F6 gather is NOT installed on
+        # must raise at construction (correct-by-design; not per forward).
+        plain = NGramRowCache(FileRowReader(path, row_bytes=row_bytes, num_rows=num_rows),
+                              geom, num_rows=num_rows, cache_bytes=num_rows * row_bytes)
+        plain_layers = [types.SimpleNamespace(
+            engram_hook=types.SimpleNamespace(layer_hash_index=0, row_cache=plain))]
+        plain_model = types.SimpleNamespace(model=types.SimpleNamespace(layers=plain_layers))
+        try:
+            pl.Pipeline(plain_model, armed=True, engram_lookahead=True)
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("F16 preflight: F20 enable did not refuse a non-F6 cache")
+        plain.close()
+
+        # Enabled path: two engram-hook layers sharing one F6-installed cache.
+        cache = NGramRowCache(FileRowReader(path, row_bytes=row_bytes, num_rows=num_rows),
+                              geom, num_rows=num_rows, cache_bytes=num_rows * row_bytes)
+        state = ep.install([cache], workers=2)
+        layers = [types.SimpleNamespace(engram_hook=types.SimpleNamespace(layer_hash_index=0, row_cache=cache)),
+                  types.SimpleNamespace(engram_hook=types.SimpleNamespace(layer_hash_index=1, row_cache=cache)),
+                  types.SimpleNamespace(engram_hook=None)]
+        model = types.SimpleNamespace(model=types.SimpleNamespace(layers=layers))
+        pipe = pl.Pipeline(model, armed=True, engram_lookahead=True)
+
+        n_layers, cols = 2, 3
+        cur_a = np.arange(2 * n_layers * cols).reshape(1, 2, n_layers, cols) % num_rows
+        cur_b = (np.arange(2 * n_layers * cols).reshape(1, 2, n_layers, cols) + 5) % num_rows
+        pipe._engram_lookahead(cur_a, cur_b)
+        if not getattr(cache, "_f20_pending", None):
+            raise RuntimeError("F16 preflight: F20 prefetch queued no reads")
+        row_ids = np.asarray(cur_a)[:, :, 0, :].reshape(-1).tolist()
+        got = cache.gather_bytes(row_ids)  # collect through the F6 gather (uses prefetched bytes)
+        if tuple(got.shape) != (len(row_ids), row_bytes):
+            raise RuntimeError(f"F16 preflight: F20 collect shape {tuple(got.shape)}")
+        pipe._engram_clear()
+        if getattr(cache, "_f20_pending", None):
+            raise RuntimeError("F16 preflight: F20 clear left pending futures")
+        report = {
+            "module": getattr(ep, "__name__", "?"),
+            "engram_layers": len(pipe._f20_layers),
+            "lookahead_stats": sorted(k for k in state.stats if k.startswith("lookahead")),
+            "refuse_without_f6": True,
+        }
+        state.shutdown()
+        cache.close()
+        return report
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def _archived_dir() -> Path:
     import projection_install
 
@@ -221,6 +321,7 @@ def preflight() -> dict:
         "pinned_runtime": _check_pinned_runtime(),
         "derivation": _check_derivation(),
         "staged_anchors": _check_staged_anchors(),
+        "f20_engram_lookahead": _check_f20(),
         "extra_projection_bytes": 2 * 67_108_864,
     }
     return report

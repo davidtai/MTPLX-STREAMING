@@ -47,7 +47,7 @@ from __future__ import annotations
 import os
 import threading
 import types
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 
 import numpy as np
 
@@ -56,9 +56,22 @@ import numpy as np
 # importing this module; nothing here touches Metal.
 from mtplx.ngram_row_cache import FileRowReader, NGramRowCache, _contiguous_runs
 
-__all__ = ["install", "install_from_env", "stats", "ParallelReadState"]
+__all__ = [
+    "install",
+    "install_from_env",
+    "stats",
+    "ParallelReadState",
+    "prefetch_rows",
+    "clear_pending",
+]
 
 _INSTALL_ATTR = "_f6_parallel"
+# Instance attribute (on each NGramRowCache) holding the F20 lookahead's in-flight
+# read futures for the current forward.  A list of ``(future, requests)`` where
+# ``requests`` is the sub-run ``(start, count)`` list the future covers.  Purely
+# on the instance, so cache state stays untouched and the driver/collect share it
+# regardless of which module object F6 was installed from.
+_PENDING_ATTR = "_f20_pending"
 _STATES: "list[ParallelReadState]" = []
 _STATES_LOCK = threading.Lock()
 
@@ -85,9 +98,13 @@ class ParallelReadState:
         self.stats = {
             "parallel_calls": 0,       # patched gather_bytes invocations
             "calls_with_reads": 0,     # of those, calls that issued >=1 concurrent read
-            "reads_submitted": 0,      # sub-run reads dispatched to the pool
-            "rows_read_parallel": 0,   # rows fetched through the pool
+            "reads_submitted": 0,      # sub-run reads dispatched to the pool (at collect)
+            "rows_read_parallel": 0,   # rows fetched through the pool (at collect)
             "max_inflight": 0,         # peak concurrent chunk tasks issued by one call
+            # F20 lookahead (prefetch_rows): reads issued up front, at forward start.
+            # These never touch cache.stats -- they only count the lookahead lane.
+            "lookahead_calls": 0,          # prefetch_rows invocations
+            "lookahead_rows_submitted": 0, # miss rows dispatched to the pool ahead of the collect
         }
 
     # -- the concurrent read task -------------------------------------------
@@ -141,6 +158,14 @@ class ParallelReadState:
                 self.stats["calls_with_reads"] += 1
                 self.stats["rows_read_parallel"] += rows
 
+    def note_lookahead(self, rows: int) -> None:
+        """Count one ``prefetch_rows`` call and the miss rows it dispatched (F20
+        lookahead lane).  Runs on the generation thread; the lock keeps a
+        concurrent ``stats()`` read consistent."""
+        with self._lock:
+            self.stats["lookahead_calls"] += 1
+            self.stats["lookahead_rows_submitted"] += int(rows)
+
     def shutdown(self) -> None:
         if self._own_pool:
             self.pool.shutdown(wait=True)
@@ -150,9 +175,22 @@ def _parallel_gather_bytes(self, row_ids) -> np.ndarray:
     """Instance-bound replacement for ``NGramRowCache.gather_bytes``.
 
     Mirrors the stock method exactly except that the missing sub-run reads are
-    issued concurrently up front (``state.fetch``) instead of inline in the
-    population loop. All cache-state mutation runs on the calling (main) thread
-    in the original order.
+    issued concurrently instead of inline in the population loop. All cache-state
+    mutation runs on the calling (main) thread in the original serial order.
+
+    Two sources for the miss bytes, and they are interchangeable because a
+    positional read of a fixed on-disk record is pure (immutable bytes, no cache
+    state):
+      * F20 lookahead (``prefetch_rows`` at forward start): rows read ahead of time
+        into pool buffers, resolved here into a ``{row: bytes}`` map.  Rows a
+        partner group inserted in between are now hits (ignored); rows evicted in
+        between are simply not in the map and are read now.
+      * the remaining misses: read now through ``state.fetch`` (the stock F6 path).
+    With NO lookahead the prefetch map is empty, ``remaining`` is every miss, and
+    this is byte-for-byte the stock F6 serial-order collect.  Either way the
+    population loop runs over the SAME misses in the SAME order, so ``_lru``,
+    ``_arena``, ``_free``, every ``stats`` counter and the returned bytes are
+    identical to the stock serial path.
     """
     state: ParallelReadState = self._f6_parallel
     rows = [int(r) for r in row_ids]
@@ -184,41 +222,164 @@ def _parallel_gather_bytes(self, row_ids) -> np.ndarray:
     if misses:
         misses.sort()
         runs = _contiguous_runs(misses)
-        # Sub-run read requests, in the EXACT order the serial loop would issue
-        # them (per run, split by slot_count). run count == stock read count.
-        requests: "list[tuple[int, int]]" = []
+        # F20 lookahead: bytes for some/all misses may already be in flight from the
+        # forward-start prefetch. Resolve those futures into a {row: bytes} map (a
+        # failed future contributes nothing -> its rows fall back to a read now).
+        prefetched = _resolve_pending(self)
+        remaining = [r for r in misses if r not in prefetched] if prefetched else misses
+        # Read the rows NOT already covered, grouped + sub-run-split EXACTLY as
+        # gather_bytes would (contiguous runs, slot_count). With no lookahead this is
+        # every miss, so state.fetch and its stats match the stock parallel path. All
+        # reads settle before any cache mutation (all-or-nothing on a read error).
+        read_map: "dict[int, np.ndarray]" = {}
+        if remaining:
+            rem_runs = _contiguous_runs(remaining)
+            requests: "list[tuple[int, int]]" = []
+            for start, count in rem_runs:
+                off = 0
+                while off < count:
+                    n = min(count - off, self.slot_count)
+                    requests.append((start + off, n))
+                    off += n
+            datas = state.fetch(self.reader, requests)
+            had_reads = True
+            parallel_rows = sum(c for (_s, c) in requests)
+            ri = 0
+            for start, count in rem_runs:
+                off = 0
+                while off < count:
+                    n = min(count - off, self.slot_count)
+                    block = np.frombuffer(datas[ri], dtype=np.uint8).reshape(n, self.row_bytes)
+                    ri += 1
+                    for k in range(n):
+                        read_map[start + off + k] = block[k]
+                    off += n
+        # Replay the stock population loop over ALL misses in the EXACT serial order
+        # (same runs, same sub-run split, same _alloc_slot sequence, same per-sub-run
+        # stats), sourcing each row's bytes from the prefetch map or the just-read map.
         for start, count in runs:
             off = 0
             while off < count:
                 n = min(count - off, self.slot_count)
-                requests.append((start + off, n))
-                off += n
-        # All reads happen here, before any mutation. Raises on the first error.
-        datas = state.fetch(self.reader, requests)
-        had_reads = True
-        parallel_rows = sum(c for (_s, c) in requests)
-        # Replay the stock population loop verbatim, sourcing bytes from `datas`.
-        ri = 0
-        for start, count in runs:
-            off = 0
-            while off < count:
-                n = min(count - off, self.slot_count)
-                data = datas[ri]
-                ri += 1
                 self.stats["reads"] += 1
                 self.stats["rows_read"] += n
                 self.stats["misses"] += n
-                block = np.frombuffer(data, dtype=np.uint8).reshape(n, self.row_bytes)
                 for k in range(n):
                     r = start + off + k
+                    row = prefetched.get(r)
+                    if row is None:
+                        row = read_map[r]
                     slot = self._alloc_slot()
-                    self._arena[slot] = block[k]
+                    self._arena[slot] = row
                     self._lru[r] = slot           # newest
-                    out[positions[r]] = block[k]
+                    out[positions[r]] = row
                 off += n
     self.stats["gathers"] += 1
     state.note_call(had_reads=had_reads, rows=parallel_rows)
     return out
+
+
+# --------------------------------------------------------------------------
+# F20 read lookahead: issue the misses' reads at forward start, collect at the hook
+# --------------------------------------------------------------------------
+def prefetch_rows(cache, row_ids) -> None:
+    """Issue the positional reads for the non-resident rows of ``row_ids`` up front,
+    on the generation thread, WITHOUT mutating ANY cache state.
+
+    Called by the F16 pipeline driver at forward start (once per group per engram
+    layer), before layer 0 runs.  Computes the misses exactly as ``gather_bytes``
+    would (unique in-range rows not in ``_lru`` -- a membership test that never
+    reorders the LRU), coalesces them into the same contiguous / slot_count-bounded
+    sub-runs, submits those reads to the SAME :class:`ParallelReadState` pool the F6
+    collect uses, and remembers the futures on ``cache._f20_pending`` (each paired
+    with the sub-runs it covers).  Returns immediately.
+
+    Touches ``_lru``/``_arena``/``_free``/``stats`` not at all; only ``_f20_pending``
+    (a private in-flight-read list) and the F6-side stats (``lookahead_calls`` /
+    ``lookahead_rows_submitted``) change.  Redundant with another group's prefetch of
+    the same row only in wasted I/O (the bytes are identical); the collect decides,
+    per row, whether to use a prefetched byte block."""
+    state: ParallelReadState = getattr(cache, _INSTALL_ATTR)
+    num_rows = cache.num_rows
+    lru = cache._lru
+    seen: "set[int]" = set()
+    misses: "list[int]" = []
+    for r in row_ids:
+        r = int(r)
+        if r in seen:
+            continue
+        seen.add(r)
+        # Residency: membership test only (no move_to_end) -> no LRU/stat mutation.
+        # Out-of-range rows are left for the collect's validation to raise, exactly
+        # as stock gather_bytes does; prefetch never reads them.
+        if r in lru or r < 0 or r >= num_rows:
+            continue
+        misses.append(r)
+    if not misses:
+        state.note_lookahead(0)
+        return
+    misses.sort()
+    requests: "list[tuple[int, int]]" = []
+    for start, count in _contiguous_runs(misses):
+        off = 0
+        while off < count:
+            n = min(count - off, cache.slot_count)
+            requests.append((start + off, n))
+            off += n
+    # Submit in at most ``workers`` contiguous chunks (mirrors ParallelReadState.fetch;
+    # one submit per sub-run costs as much as the reads).  Keep each future with the
+    # sub-runs it covers so the collect can decompose it and a per-chunk failure only
+    # forces those rows to be re-read.
+    reader = cache.reader
+    n = len(requests)
+    size = -(-n // min(state.workers, n))
+    pending = getattr(cache, _PENDING_ATTR, None)
+    if pending is None:
+        pending = []
+        setattr(cache, _PENDING_ATTR, pending)
+    for i in range(0, n, size):
+        chunk = requests[i:i + size]
+        fut = state.pool.submit(ParallelReadState._read_chunk, reader, chunk)
+        pending.append((fut, chunk))
+    state.note_lookahead(sum(c for (_s, c) in requests))
+
+
+def _resolve_pending(cache) -> "dict[int, np.ndarray]":
+    """Join the cache's pending prefetch futures into a ``{row: bytes[row_bytes]}`` map.
+
+    Called at the collect.  Idempotent and non-destructive: it does NOT clear
+    ``_f20_pending`` (both groups' collects resolve the same accumulated futures;
+    ``clear_pending`` drops them at forward end).  A future that raised contributes
+    NO rows -- those miss rows fall back to a read in the collect, where a genuine
+    read error surfaces exactly as the stock path.  Rows a partner already made
+    resident are simply not in the collect's miss set, so their map entry is unused."""
+    pending = getattr(cache, _PENDING_ATTR, None)
+    if not pending:
+        return {}
+    row_bytes = cache.row_bytes
+    out: "dict[int, np.ndarray]" = {}
+    for fut, chunk in pending:
+        try:
+            datas = fut.result()
+        except BaseException:  # noqa: BLE001 - a failed prefetch is not fatal here
+            continue           # rows re-read in the collect (real error surfaces there)
+        for (start, count), data in zip(chunk, datas):
+            block = np.frombuffer(data, dtype=np.uint8).reshape(count, row_bytes)
+            for k in range(count):
+                out[start + k] = block[k]
+    return out
+
+
+def clear_pending(cache) -> None:
+    """Drop the cache's leftover prefetch futures, joining them first so no pool read
+    is left writing after the forward.  Called by the driver after both groups finish
+    (normal or error).  Errors from a failed read are swallowed here -- cleanup only
+    needs the pool tasks to have finished; a real read error already surfaced (or will)
+    at the collect."""
+    pending = getattr(cache, _PENDING_ATTR, None)
+    if pending:
+        _futures_wait([fut for (fut, _chunk) in pending])
+    setattr(cache, _PENDING_ATTR, [])
 
 
 # --------------------------------------------------------------------------
@@ -329,19 +490,23 @@ def install_from_env(model_or_caches, *, site: "str | None" = None) -> "Parallel
     with no ``site`` (item-2 contract), only the parallel-enable env gates it.
 
     ``MTPLX_DSV41_F6_ENGRAM_WORKERS`` overrides the worker count (default 16).
-    ``MTPLX_DSV41_F6_ENGRAM_LOOKAHEAD=1`` is refused loudly: the lookahead lane is
-    designed but not installed in this build (needs a GPU run to establish the
-    advance->hook ordering invariant), and running with an armed-but-absent lane
-    is unsafe (AGENTS.md: fail once, clearly, before measured generation).
+    ``MTPLX_DSV41_F6_ENGRAM_LOOKAHEAD=1`` is refused loudly: the read-lookahead lane
+    (``prefetch_rows`` / ``clear_pending``) now lives in this module, but the F6
+    standalone install only rebinds ``gather_bytes`` -- it does NOT wire the driver
+    that issues the prefetch at forward start.  The lookahead is driven by the F16
+    pipeline via ``MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD=1`` (read in ``f16.install``), which
+    refuses unless this F6 gather is already installed on the hook caches.  Setting the
+    F6 flag alone would arm an env that installs nothing (AGENTS.md: fail once, clearly).
     """
     if os.environ.get("MTPLX_DSV41_F6_ENGRAM_PARALLEL") != "1":
         return None
     if os.environ.get("MTPLX_DSV41_F6_ENGRAM_LOOKAHEAD") == "1":
         raise RuntimeError(
-            "MTPLX_DSV41_F6_ENGRAM_LOOKAHEAD=1 is set but the F6 Engram lookahead "
-            "lane is not installed in this build (design filed in the F6 report; "
-            "it requires a GPU run to establish the advance->hook ordering "
-            "invariant). Refusing to measure with an armed-but-absent lane."
+            "MTPLX_DSV41_F6_ENGRAM_LOOKAHEAD=1 is set but the F6 standalone install "
+            "does not drive the Engram read lookahead. Enable it through the F16 "
+            "pipeline with MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD=1 (read in f16.install), "
+            "which wires prefetch_rows at forward start and requires this F6 parallel "
+            "gather already installed. Refusing to arm an env that installs nothing."
         )
     if site is not None and os.environ.get("MTPLX_DSV41_F6_INSTALL") != site:
         return None
@@ -368,6 +533,8 @@ def stats() -> dict:
         "reads_submitted": 0,
         "rows_read_parallel": 0,
         "max_inflight": 0,
+        "lookahead_calls": 0,
+        "lookahead_rows_submitted": 0,
         "installed_caches": 0,
         "workers": 0,
     }
@@ -375,7 +542,8 @@ def stats() -> dict:
         states = list(_STATES)
     for st in states:
         with st._lock:
-            for k in ("parallel_calls", "calls_with_reads", "reads_submitted", "rows_read_parallel"):
+            for k in ("parallel_calls", "calls_with_reads", "reads_submitted",
+                      "rows_read_parallel", "lookahead_calls", "lookahead_rows_submitted"):
                 agg[k] += st.stats[k]
             agg["max_inflight"] = max(agg["max_inflight"], st.stats["max_inflight"])
             agg["installed_caches"] += len(st.caches)

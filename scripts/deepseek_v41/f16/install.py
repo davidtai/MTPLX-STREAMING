@@ -98,7 +98,7 @@ def _wrap_issue_next_for_trailer(runners) -> int:
 
 
 def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads",
-            stamps_stem: str | None = None) -> dict:
+            stamps_stem: str | None = None, engram_lookahead: bool = False) -> dict:
     """Wire (or, when not armed, passthrough-stash) the F16 pipeline on ``target``.
 
     ``handoff`` selects WHICH derived run + hand-off helpers are compiled and bound,
@@ -106,8 +106,12 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
     ``barrier`` (F18: submit the routing barrier early, hand off, block after the
     partner's slice).  ``stamps_stem`` (``MTPLX_DSV41_F16_STAMPS``) instead binds the
     STAMPED variant of that run (a separate compiled function; host-only diagnostic).
-    No per-call mode branch: the run function, the driver strategy, and the hand-off
-    helpers are all fixed here."""
+    ``engram_lookahead`` (``MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD``) binds the F20 engram
+    read-lookahead callable on the pipeline; it REFUSES here (during construction) unless
+    the F6 parallel gather is already installed on every engram hook cache.  Only meaningful
+    when armed (the passthrough never drives the pipeline), so it is ignored when not armed.
+    No per-call mode branch: the run function, the driver strategy, the hand-off helpers,
+    and the lookahead callable are all fixed here."""
     runtime = target._mtplx_expert_runtime
 
     if not armed:
@@ -133,8 +137,10 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
     runners = _collect_runners(target)
 
     # Pipeline first (barrier binds `_f16_barrier = pipeline.barrier`); the run function
-    # + hand-off helpers are then bound once per the construction-time mode.
-    pipeline = Pipeline(target, armed=True, split=split, handoff=handoff)
+    # + hand-off helpers are then bound once per the construction-time mode.  The F20
+    # lookahead is bound here too (refuses if enabled without the F6 gather installed).
+    pipeline = Pipeline(target, armed=True, split=split, handoff=handoff,
+                        engram_lookahead=engram_lookahead)
     target._f16_pipeline = pipeline
 
     stamps_on = bool(stamps_stem)
@@ -159,6 +165,8 @@ def install(target, *, armed: bool, split: str = "fixed4", handoff: str = "reads
         "handoff": handoff,
         "leader_skip": pipeline._skip,
         "stamps": stamps_on,
+        "engram_lookahead": pipeline.engram_lookahead,
+        "engram_lookahead_layers": len(getattr(pipeline, "_f20_layers", ())),
         "target_layers": layers,
         "issue_next_wrapped": wrapped,
         "per_layer_locks": True,
@@ -186,13 +194,15 @@ def install_from_env(target) -> dict:
     # Leader-group size, chosen ONCE here: "fixed4" (oracle = sequential chunks 4+rest) or
     # "balanced" (ceil/floor halves; its own oracle digest).  Hand-off mode chosen ONCE:
     # "reads" (today) or "barrier" (F18).  MTPLX_DSV41_F16_STAMPS=<stem> arms the
-    # host-only stamped variant (diagnostic; default OFF).
+    # host-only stamped variant (diagnostic; default OFF).  MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD=1
+    # arms the F20 engram read lookahead (refuses unless the F6 parallel gather is installed).
     report = install(
         target,
         armed=armed,
         split=os.environ.get("MTPLX_DSV41_F16_SPLIT", "fixed4"),
         handoff=os.environ.get("MTPLX_DSV41_F16_HANDOFF", "reads"),
         stamps_stem=os.environ.get("MTPLX_DSV41_F16_STAMPS") or None,
+        engram_lookahead=os.environ.get("MTPLX_DSV41_F20_ENGRAM_LOOKAHEAD") == "1",
     )
     counters_path = os.environ.get("MTPLX_DSV41_F16_COUNTERS")
     if counters_path:
