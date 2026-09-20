@@ -164,7 +164,14 @@ def _dot_nodes(arr, tmp):
     return len(re.findall(r'label\s*=\s*"([^"]*)"', Path(tmp).read_text()))
 
 
-def test_host_build_and_primitive_counts(capsys, tmp_path):
+def test_host_build_and_primitive_counts(capsys, tmp_path, monkeypatch):
+    # 'native' is the K22 gate prefix: eager unless the process-global DSV4.1 lever
+    # ``deepseek_v41._ATTN_COMPILE`` is on, in which case it is a compiled tape with the SAME
+    # primitive count as 'lean' (8 == 8).  Other test modules flip that global and at least one
+    # leaks it across a full-suite run, so pin the baseline this comparison is about.
+    import mtplx.models.deepseek_v41 as _dv
+
+    monkeypatch.setattr(_dv, "_ATTN_COMPILE", False)
     gate = _make_gate()
     lean = fp.GatePredictor(gate, mode="lean")
     native = fp.GatePredictor(gate, mode="native")
@@ -185,6 +192,27 @@ def test_host_build_and_primitive_counts(capsys, tmp_path):
     # No per-call retrace at a fixed shape: 2000 fixed-shape builds average a few us; a
     # per-call retrace would be ~1000x that.  Guard well above the measured ~2 us.
     assert us_lean < 100.0
+
+
+def test_primitive_count_comparison_is_hermetic_to_a_leaked_attn_compile_lever(tmp_path, monkeypatch):
+    """Regression: with ``_ATTN_COMPILE`` leaked True by another test module the native prefix is
+    itself a compiled tape, so 'lean < native' cannot hold (they tie).  The comparison above pins
+    the lever; this test documents both regimes so a future leak cannot fail it silently."""
+    import mtplx.models.deepseek_v41 as _dv
+
+    gate = _make_gate()
+    x = mx.zeros((6, 1, HIDDEN), dtype=mx.bfloat16)
+    mx.eval(x, gate.weight, gate.e_score_correction_bias)
+    counts = {}
+    for lever in (False, True):
+        monkeypatch.setattr(_dv, "_ATTN_COMPILE", lever)
+        native = fp.GatePredictor(gate, mode="native")
+        lean = fp.GatePredictor(gate, mode="lean")
+        counts[lever] = (_dot_nodes(native.merged(x), tmp_path / f"native_{lever}.dot"),
+                         _dot_nodes(lean.merged(x), tmp_path / f"lean_{lever}.dot"))
+    assert counts[False][1] < counts[False][0]        # eager native: lean is the smaller graph
+    assert counts[True][1] <= counts[True][0]         # compiled native: lean is never larger
+    assert counts[True][1] == counts[False][1]        # lean itself does not depend on the lever
 
 
 # ---------------------------------------------------------------------------
