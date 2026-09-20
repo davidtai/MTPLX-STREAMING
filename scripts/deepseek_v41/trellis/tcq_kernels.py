@@ -68,8 +68,12 @@ def _qmv_source(IN: int, OUT: int) -> str:
     """
 
 
-def _tile_source(IN: int, OUT: int) -> str:
-    """One simdgroup per (assignment, output tile column tn).  Lane L assembles its 64-bit window v once per input
+def _tile_body(IN: int, OUT: int, base_expr: str) -> str:
+    """Shared body of the tile kernel; ``base_expr`` is the C expression for the (assignment) bank base pointer.
+
+    Everything after ``base`` is IDENTICAL between the contiguous-bank ``tile`` variant and the stride-aware
+    ``tile_strided`` variant — only the pointer arithmetic that locates this assignment's projection code differs.
+    One simdgroup per (assignment, output tile column tn).  Lane L assembles its 64-bit window v once per input
     tile (eschamoe warp assembly: lane_a/lane_b/lane_p tables) and decodes its 8 weights m=0..7 whose tile positions
     (row dr, col dc) come from the per-(lane, m) tables ``pos_r``/``pos_c``.  acc[m] accumulates x[dr] * w over all
     input tiles; at the end the 16 columns are reduced across lanes through threadgroup memory."""
@@ -79,7 +83,7 @@ def _tile_source(IN: int, OUT: int) -> str:
         uint tn = threadgroup_position_in_grid.x;                   // output tile column (16 outputs)
         uint lane = thread_index_in_simdgroup;
         threadgroup float red[16][32];
-        const device short* base = code + ulong(ids[row]) * {TK * TN * NW}ul;
+        const device short* base = {base_expr};
         const device float* xp = xh + row * {IN}u;
         uint wa = uint(lane_a[lane] >> 1); uint wb = uint(lane_b[lane] >> 1); uint lp = uint(lane_p[lane]);
         float acc[8];
@@ -125,6 +129,28 @@ def _tile_source(IN: int, OUT: int) -> str:
     """
 
 
+def _tile_source(IN: int, OUT: int) -> str:
+    """Contiguous per-projection bank ``code[capacity, IN/16, OUT/16, 48]``: base = ids[row] * (one projection)."""
+    return _tile_body(IN, OUT, f"code + ulong(ids[row]) * {(IN // 16) * (OUT // 16) * NW}ul")
+
+
+# --- tcq3 whole-record bank geometry (F38 transcode_bank.py record: 13,290,496 B = 6,645,248 int16 words) ---
+# Each cache-row slot holds ONE whole tcq3 record; a projection's code segment starts at a fixed word offset.
+# stride = 6,645,248 words; gate code @ 0, up code @ 2,214,144, down code @ 4,428,288 (routs sit between them).
+TCQ3_RECORD_WORDS = 6_645_248
+TCQ3_CODE_WORD_OFFSETS = {"gate_proj": 0, "up_proj": 2_214_144, "down_proj": 4_428_288}
+# Per-projection code segment length in int16 words (gate/up: IN=5120,OUT=2304; down: IN=2304,OUT=5120 -> both 2,211,840)
+TCQ3_CODE_WORDS = {"gate_proj": 2_211_840, "up_proj": 2_211_840, "down_proj": 2_211_840}
+
+
+def _tile_strided_source(IN: int, OUT: int, row_stride_words: int, proj_word_offset: int) -> str:
+    """Stride-aware bank: ONE cache row per record holds all three projections + routs contiguously.
+
+    base = code + ids[row] * row_stride_words + proj_word_offset  (both in int16 words).  The kernel body is the
+    verbatim ``_tile_body`` string used by ``_tile_source`` — only the base pointer arithmetic changes."""
+    return _tile_body(IN, OUT, f"code + ulong(ids[row]) * {row_stride_words}ul + {proj_word_offset}ul")
+
+
 def make_tcq_projection(n: int, k: int, variant: str = "tile"):
     """Kernel for OUT=n, IN=k (DeepSeek-V4.1 expert geometry: (2304, 5120) gate/up, (5120, 2304) down)."""
     if (n, k) not in ((2304, 5120), (5120, 2304)):
@@ -156,4 +182,38 @@ def run_tcq_projection(kern, variant: str, xh: mx.array, ids: mx.array, code: mx
         (out,) = kern(inputs=[xh, ids, code, CB, lane_a, lane_b, lane_p, pos_r, pos_c],
                       output_shapes=[(rows, n)], output_dtypes=[mx.float32],
                       grid=(32 * (n // 16), rows, 1), threadgroup=(32, 1, 1))
+    return out
+
+
+def make_tcq_projection_strided(n: int, k: int, component: str,
+                                row_stride_words: int = TCQ3_RECORD_WORDS):
+    """Stride-aware ``tile`` kernel for one projection ``component`` reading from a WHOLE-RECORD bank.
+
+    OUT=n, IN=k (gate/up: n=2304,k=5120; down: n=5120,k=2304).  ``code`` at run time is the whole-record int16 bank
+    ``[capacity, row_stride_words]``; the projection's code starts at ``TCQ3_CODE_WORD_OFFSETS[component]``.
+    """
+    if (n, k) not in ((2304, 5120), (5120, 2304)):
+        raise ValueError("only the native target expert geometry is admitted")
+    if component not in TCQ3_CODE_WORD_OFFSETS:
+        raise ValueError(f"unknown projection component {component!r}")
+    proj_word_offset = TCQ3_CODE_WORD_OFFSETS[component]
+    key = ("tile_strided", n, k, row_stride_words, proj_word_offset)
+    if key in _KERNELS:
+        return _KERNELS[key]
+    kern = mx.fast.metal_kernel(
+        name=f"dsv41_tcq_tile_strided_{n}_{k}_{component}",
+        input_names=["xh", "ids", "code", "cb", "lane_a", "lane_b", "lane_p", "pos_r", "pos_c"],
+        output_names=["out"], source=_tile_strided_source(k, n, row_stride_words, proj_word_offset))
+    _KERNELS[key] = kern
+    return kern
+
+
+def run_tcq_projection_strided(kern, xh: mx.array, ids: mx.array, code: mx.array, n: int, tables) -> mx.array:
+    """xh [rows, IN] f32 (trellis domain), ids [rows] u32 slot indices into the whole-record bank,
+    code int16 whole-record bank [capacity, TCQ3_RECORD_WORDS] -> out [rows, OUT] f32 ( = xh @ W_q )."""
+    rows = int(xh.shape[0])
+    lane_a, lane_b, lane_p, pos_r, pos_c = tables
+    (out,) = kern(inputs=[xh, ids, code, CB, lane_a, lane_b, lane_p, pos_r, pos_c],
+                  output_shapes=[(rows, n)], output_dtypes=[mx.float32],
+                  grid=(32 * (n // 16), rows, 1), threadgroup=(32, 1, 1))
     return out
