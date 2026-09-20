@@ -519,6 +519,24 @@ class Pipeline:
         return logits, main_hidden
 
 
+class LazyPipeline:
+    """What the staged hybrid rewrite injects as ``_F16_PIPELINE`` (review 2026-09-19).
+
+    ``hybrid_install.install`` runs at the START of the DSpark pass -- before prefill -- while
+    ``f16.install.install_from_env`` stashes ``model._f16_pipeline`` only at the post-prime
+    boundary (after prefill + growth + seed). Binding ``model._f16_pipeline`` at hybrid-install
+    time would raise AttributeError before the prefill even starts, so the injected object
+    resolves the pipeline at CALL time; the first verify forward happens after the install."""
+
+    __slots__ = ("_model",)
+
+    def __init__(self, model) -> None:
+        self._model = model
+
+    def pipelined_forward(self, forward, ids, cache):
+        return self._model._f16_pipeline.pipelined_forward(forward, ids, cache)
+
+
 def bind_yield_run(runners) -> dict:
     """Rebind each retained ``PackedDecode`` runner's ``switch._run`` to the
     yield-capable run and give each runner an ``_f16_yield`` (the shared hand-off).

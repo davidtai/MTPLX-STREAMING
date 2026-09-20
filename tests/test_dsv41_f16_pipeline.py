@@ -616,7 +616,7 @@ def test_stage_hybrid_install_roundtrips_and_preserves_mx_calls():
     src = _archived("hybrid_install.py")
     out = stager.stage_hybrid_install(src)
     assert "_F16_PIPELINE.pipelined_forward(forward, mx.array([chunk_ids]), cache)" in out
-    assert "namespace['_F16_PIPELINE'] = model._f16_pipeline" in out
+    assert "namespace['_F16_PIPELINE'] = _F16Lazy(model)" in out
     # the staged rewrite() still recovers the native source AND keeps the mx-call set:
     # run it against the pinned _decode_cycles source (its own round-trip + AST check).
     ns = dict(vars(__import__("hybrid_install")))
@@ -690,3 +690,20 @@ def test_install_refuse_distinguishes_lanes_by_cocode():
     assert yield_fn.__code__.co_code != sched          # F16 yield run rejected as "scheduled"
     plain_closure = (lambda x: x)                       # F2b-style wrap: no __func__
     assert getattr(plain_closure, "__func__", None) is None
+
+
+def test_lazy_pipeline_resolves_the_install_at_call_time():
+    """The hybrid rewrite is installed BEFORE prefill; F16's install stashes the pipeline
+    AFTER it. The injected object must not touch ``model._f16_pipeline`` until a verify call."""
+    import types
+
+    from f16.pipeline import LazyPipeline
+
+    model = types.SimpleNamespace()                      # no _f16_pipeline yet
+    lazy = LazyPipeline(model)                           # must not raise
+    calls = []
+    model._f16_pipeline = types.SimpleNamespace(
+        pipelined_forward=lambda forward, ids, cache: calls.append((forward, ids, cache)) or "out"
+    )
+    assert lazy.pipelined_forward("f", "ids", "cache") == "out"
+    assert calls == [("f", "ids", "cache")]

@@ -43,7 +43,8 @@ _HY_REWRITE_INSERT = (
     "            '                chunk_logits, chunk_hidden = _F16_PIPELINE.pipelined_forward(forward, mx.array([chunk_ids]), cache)')"
 )
 _HY_NS_ANCHOR = "    namespace['_LOOKUP_EXTENSION'] = lookup"
-_HY_NS_INSERT = "    namespace['_F16_PIPELINE'] = model._f16_pipeline"
+# Resolved lazily at call time: hybrid install precedes prefill, F16's install follows it.
+_HY_NS_INSERT = "    from f16.pipeline import LazyPipeline as _F16Lazy; namespace['_F16_PIPELINE'] = _F16Lazy(model)"
 
 # ---- projection_install: 2 -> 4 transpose buffers --------------------------
 _PI_EDITS = (
