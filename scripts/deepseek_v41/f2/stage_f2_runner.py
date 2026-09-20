@@ -203,6 +203,27 @@ def stage_cycle_log(source_text: str) -> str:
     return updated
 
 
+# F28: install the generation-thread host profile at the same growth boundary. The hook wraps
+# hybrid_install.install so it can re-wrap _decode_cycles AFTER the hybrid rewrite reassigns it at
+# generate time. Anchor is the decode-boundary reject_prefill install -- disjoint from the F27 (plane
+# lane call), F19 (plane lane import) and F12 growth anchors -- so it composes with them in any order.
+_PROF_ANCHOR = "                object.__setattr__(model.model, '_forward_layer_major', reject_prefill)"
+_PROF_INSERT = ("                import f2.host_profile as _f28_host_profile; "
+                "_f28_host_profile.install_from_env()  # F28 (no-op unless MTPLX_DSV41_F28_PROFILE)")
+
+
+def stage_host_profile(source_text: str) -> str:
+    """packed_phase.py: install the F28 generation-thread host profile at the growth boundary."""
+    if "_f28_host_profile" in source_text:
+        raise RuntimeError("F28 host profile already staged")
+    _assert_once(source_text, _PROF_ANCHOR, "reject_prefill install")
+    block = _PROF_ANCHOR + "\n" + _PROF_INSERT
+    updated = source_text.replace(_PROF_ANCHOR, block)
+    if updated.replace(block, _PROF_ANCHOR) != source_text:
+        raise RuntimeError("F28 host-profile hook edit changed more than the one insertion")
+    return updated
+
+
 def stage_run_full(source_text: str, *, other_prompt: bool = False) -> str:
     _assert_once(source_text, _INSTALL_ANCHOR, "observe_seed_prefill prime_model")
     _assert_once(source_text, _TRACE_ANCHOR, "observe_prefill_boundary SystemExit")
@@ -422,6 +443,7 @@ def main(argv=None) -> int:
                     help="F25: with --hybrid-install, accept a live confidence_threshold and record it in the report")
     ap.add_argument("--packed-phase", default=None, help="STAGED packed_phase.py: F19 read-order pool hook")
     ap.add_argument("--cycle-log-phase", default=None, help="STAGED packed_phase.py: F27 per-cycle draft-log hook")
+    ap.add_argument("--host-profile-phase", default=None, help="STAGED packed_phase.py: F28 generation-thread host-profile hook")
     ap.add_argument("--ring-bytes", type=int, default=None,
                     help="with --admission: charge the F2b host ring to the physical bound")
     args = ap.parse_args(argv)
@@ -460,6 +482,11 @@ def main(argv=None) -> int:
         out = stage_cycle_log(p.read_text())
         p.write_text(out)
         print("staged_cycle_log", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
+    if args.host_profile_phase is not None:
+        p = Path(args.host_profile_phase)
+        out = stage_host_profile(p.read_text())
+        p.write_text(out)
+        print("staged_host_profile", "sha", hashlib.sha256(out.encode()).hexdigest()[:16])
     if args.run_full is not None:
         p = Path(args.run_full)
         out = stage_run_full(p.read_text(), other_prompt=args.other_prompt)
