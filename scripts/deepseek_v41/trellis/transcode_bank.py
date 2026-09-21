@@ -23,6 +23,7 @@ encoder is replaced by a deterministic stand-in and no source bytes are read.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -31,6 +32,12 @@ import sys
 import time
 
 import numpy as np
+
+
+def nocache(fh) -> None:
+    """Bypass the unified buffer cache for a streaming file (macOS F_NOCACHE): the guard's ceiling counts file
+    cache as physical memory, and 288 GB of reads + 204 GB of writes through the cache killed chunk 1 at 102.5 GiB."""
+    fcntl.fcntl(fh.fileno(), fcntl.F_NOCACHE, 1)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -119,6 +126,7 @@ class GpuEncoder:
         self.mx, self.gm = mx, gm
         self.W, self.rounds, self.batch = W, rounds, batch
         self.fh = open(experts_bin, "rb", buffering=0)
+        nocache(self.fh)
         self.timings = {"read_s": 0.0, "prep_s": 0.0, "encode_s": 0.0}
 
     def _read(self, seg: dict) -> np.ndarray:
@@ -255,6 +263,7 @@ def main() -> int:
     done_here = 0
     chunk = {"start_index": prog["next"], "t0": time.time(), "git": git_rev(), "W": args.W, "rounds": args.rounds}
     with open(bin_path, "r+b") as fh:
+        nocache(fh)
         i = prog["next"]
         while i < n:
             if (time.perf_counter() - t_start) > args.time_budget_s or (args.max_records and done_here >= args.max_records):
