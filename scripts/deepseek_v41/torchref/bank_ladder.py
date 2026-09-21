@@ -11,6 +11,8 @@ mxfp4 gs32.  Writes docs/deepseek-v41/receipts/torchref_bank_ladder.json.
 """
 from __future__ import annotations
 import json
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -19,6 +21,25 @@ import torch
 import torch.nn.functional as F
 import mlx.core as mx
 mx.set_default_device(mx.cpu)
+
+GPU_LOCK = "/tmp/mtplx-gpu-exclusive.lock"
+WINDOW = "/tmp/dsv41-fable-window.active"
+
+
+def _gate(what="layer", poll=30):
+    """Pause (finish the current layer, then sleep/re-check) while a GPU timing window is active or the
+    exclusive lock is held — so the ladder's CPU forward never perturbs another session's window."""
+    def busy():
+        if os.path.exists(WINDOW):
+            return True
+        try:
+            r = subprocess.run(["lsof", GPU_LOCK], capture_output=True, timeout=15)
+            return r.returncode == 0 and len(r.stdout.splitlines()) > 1
+        except Exception:
+            return False
+    while busy():
+        print(f"[gate] GPU busy; holding before {what}", flush=True)
+        time.sleep(poll)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ref_forward as RF
@@ -84,6 +105,7 @@ def run_forward(bank, refmodel, refengram, args, shards, hashes, engram_layer_id
         return y @ w2.t()
 
     for L in range(max_layer + 1):
+        _gate(f"L{L} forward")               # finish the previous layer, then pause if a window is active
         if L in engram_layer_ids:
             lhi = engram_layer_ids.index(L)
             eng = RF.LazyEngram(shards, L, args, lhi)
