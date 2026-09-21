@@ -70,6 +70,35 @@ _ADM_ROUTED = (
     "    growth_admission = _tcq_adm.retarget(growth_admission, base=base, wired=host_memory_snapshot()['box']['wired_bytes'])"
 )
 
+# --------------------------------------------------------------------- run_full.py: growth-transition route (Task 3)
+_GROWTH_ANCHOR = (
+    "            growth_transition, growth_report = install_growth(resident.model, "
+    "initial_admission['decode_slots_per_layer'], mx=mx, admission=initial_admission)"
+)
+_GROWTH_ROUTED = (
+    "            if os.environ.get('MTPLX_DSV41_TCQ3') == '1':\n"
+    "                import tcq.growth as _tcq_growth\n"
+    "                growth_transition, growth_report = _tcq_growth.install_growth_tcq3(resident.model, "
+    "growth_admission['decode_slots_per_layer'], mx=mx, admission=growth_admission)\n"
+    "            else:\n"
+    "                growth_transition, growth_report = install_growth(resident.model, "
+    "initial_admission['decode_slots_per_layer'], mx=mx, admission=initial_admission)"
+)
+
+# --------------------------------------------------------------------- run_full.py: grow_rows no-op for tcq3 (Task 3)
+_GROWROWS_ANCHOR = (
+    "        overflow_report = grow_rows(runtime, capacity=growth_admission['decode_slots_per_layer'], "
+    "layout='extension', mx=mx)"
+)
+_GROWROWS_ROUTED = (
+    "        if os.environ.get('MTPLX_DSV41_TCQ3') == '1':\n"
+    "            overflow_report = {'tcq3': 'grown to decode capacity in install_growth_tcq3', "
+    "'slots_per_layer': runtime.plan.slots_per_layer}\n"
+    "        else:\n"
+    "            overflow_report = grow_rows(runtime, capacity=growth_admission['decode_slots_per_layer'], "
+    "layout='extension', mx=mx)"
+)
+
 
 def _mlx_calls(text: str):
     return [ast.dump(node, include_attributes=False) for node in ast.walk(ast.parse(text))
@@ -101,7 +130,8 @@ def rewrite_packed_phase(source: str) -> str:
 
 def rewrite_run_full(source: str) -> str:
     return _apply(source, [(_LOAD_ANCHOR, _LOAD_ROUTED), (_STAMP_ANCHOR, _STAMP_ROUTED),
-                           (_ADM_ANCHOR, _ADM_ROUTED)], "run_full.py")
+                           (_ADM_ANCHOR, _ADM_ROUTED), (_GROWTH_ANCHOR, _GROWTH_ROUTED),
+                           (_GROWROWS_ANCHOR, _GROWROWS_ROUTED)], "run_full.py")
 
 
 def main() -> int:
