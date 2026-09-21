@@ -21,7 +21,8 @@ def _args(**over):
                 out_dir="/tmp/does-not-matter", mxfp4_model=E.MODEL_DIRS["mxfp4"], tcq3_model=E.MODEL_DIRS["tcq3"],
                 humaneval_dataset=E.DATASETS["humaneval"], mbpp_dataset=E.DATASETS["mbpp"],
                 host="127.0.0.1", port=18183, served_model_name="deepseek-v41-flash",
-                serve_entry=E.DEFAULT_SERVE_ENTRY, workers=1, resume=False, dry_run=True)
+                serve_entry=E.DEFAULT_SERVE_ENTRY, workers=1, resume=False, dry_run=True,
+                mtplx_worktree=E.MTPLX_WORKTREE)
     base.update(over)
     return types.SimpleNamespace(**base)
 

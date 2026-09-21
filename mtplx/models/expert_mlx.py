@@ -1348,6 +1348,19 @@ def make_mlx_component_bank_allocator(
                 if projection in {"gate_proj", "up_proj"}
                 else spec.expert_hidden_size
             )
+            if expert_codec == "tcq3":
+                # F39: tcq3 (eschamoe K=3 trellis) record -- int16 code [in/16, out/16, 48] + f16 rout [out]
+                # per projection, no scale leaf. Matches scripts/deepseek_v41/transcode_bank.record_layout and
+                # scripts/deepseek_v41/tcq/serve_install.tcq3_expected_signature; the served decode is the F35 tile
+                # kernel (tcq.serve_install rebinds _dispatch_component_bank when MTPLX_DSV41_TCQ3=1).
+                nI, nJ = input_size // 16, output_size // 16
+                expected_signature.extend(
+                    (
+                        (f"{projection}.code", "I16", (nI, nJ, 48), nI * nJ * 48 * 2),
+                        (f"{projection}.rout", "F16", (output_size,), output_size * 2),
+                    )
+                )
+                continue
             if expert_codec == "mxfp4":
                 # Native mxfp4: packed FP4 codes (uint32) + one uint8 E8M0
                 # exponent per 32-column group, no bias leaf.

@@ -46,6 +46,10 @@ MODEL_DIRS = {
     "tcq3": "/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-tcq3",
 }
 TCQPKG = "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-f39-tcq3-runtime/scripts/deepseek_v41"
+# The F39 worktree root holds the seam-edited mtplx (mtplx/models/expert_mlx.py) AND the tcq package.  It is
+# prepended to the served process's PYTHONPATH AHEAD of the editable install so BOTH banks import THIS mtplx
+# (memory: editable-install shadowing has silently run the wrong mtplx before -- eval_driver asserts mtplx.__file__).
+MTPLX_WORKTREE = os.path.dirname(os.path.dirname(TCQPKG))  # .../.worktrees/dsv41-f39-tcq3-runtime
 # The mtplx serve entrypoint (confirmed by the serve-path scoping; overridable). Runs the WORKTREE's code.
 DEFAULT_SERVE_ENTRY = "mtplx serve"
 CODE_EVAL_GATE = "/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/scripts/code_eval_gate.py"
@@ -133,7 +137,8 @@ def _derive_metrics(report: dict) -> dict:
 
 
 def write_receipt(rdir: Path, *, bank: str, suite: str, lane: str, depth: int, model_dir: str, base_url: str,
-                  gate_argv: list[str], serve_argv: list[str], report: dict | None, wall_s: float | None) -> Path:
+                  gate_argv: list[str], serve_argv: list[str], report: dict | None, wall_s: float | None,
+                  mtplx_file: str | None = None, git_rev: str | None = None) -> Path:
     """Write the append-only receipt (provenance + derived metrics).  Refuses to overwrite an existing receipt."""
     rdir.mkdir(parents=True, exist_ok=True)
     if (rdir / "receipt.json").exists():
@@ -141,13 +146,52 @@ def write_receipt(rdir: Path, *, bank: str, suite: str, lane: str, depth: int, m
     receipt = {
         "bank": bank, "suite": suite, "lane": lane, "depth": depth, "model_dir": model_dir,
         "base_url": base_url, "sampler": SAMPLER, "serve_command": serve_argv, "gate_argv": gate_argv,
-        "wall_s": wall_s,
+        "served_mtplx_file": mtplx_file, "mtplx_git_rev": git_rev, "wall_s": wall_s,
         "metrics": _derive_metrics(report) if report else None,
         "pass_at_1": (report or {}).get("pass@1"),
         "n_rows": len(((report or {}).get("rows")) or []),
     }
     (rdir / "receipt.json").write_text(json.dumps(receipt, indent=1))
     return rdir / "receipt.json"
+
+
+def serve_pythonpath(mtplx_worktree: str, serve_env: dict) -> list:
+    """The served process's PYTHONPATH order: MY worktree root FIRST (its edited mtplx wins over the editable
+    install), then the tcq package + serve site hook (tcq3), then the inherited PYTHONPATH.  Same for both banks."""
+    pp = [mtplx_worktree]
+    for k in ("PYTHONPATH_APPEND_TCQ", "PYTHONPATH_APPEND_TCQ_SITE"):
+        if serve_env.get(k):
+            pp.append(serve_env[k])
+    return pp
+
+
+def mtplx_under_worktree(mtplx_file: str, mtplx_worktree: str) -> bool:
+    """True iff a served ``mtplx.__file__`` resolves under ``<worktree>/mtplx`` (the editable-shadowing guard)."""
+    if not mtplx_file:
+        return False
+    root = os.path.realpath(os.path.join(mtplx_worktree, "mtplx"))
+    return os.path.realpath(mtplx_file).startswith(root + os.sep)
+
+
+def _served_mtplx_file(venv_python: str, pythonpath: list, cwd: str) -> str:
+    """Resolve the mtplx the served process WILL import, under the exact PYTHONPATH (a CPU preflight; no model)."""
+    import subprocess
+    env = dict(os.environ)
+    env["PYTHONPATH"] = ":".join(pythonpath + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    out = subprocess.run([venv_python, "-c", "import mtplx, sys; sys.stdout.write(mtplx.__file__)"],
+                         env=env, cwd=cwd, capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        raise RuntimeError(f"could not import mtplx under the serve PYTHONPATH: {out.stderr.strip()[:400]}")
+    return out.stdout.strip()
+
+
+def _git_rev(worktree: str) -> str:
+    import subprocess
+    try:
+        return subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=10).stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
 
 
 def _utc_stamp() -> str:
@@ -174,7 +218,8 @@ def plan(args) -> list[dict]:
         items.append({"suite": suite, "receipt_dir": str(rdir), "gate_argv": gate_argv,
                       "skip_resumed": str(completed) if completed else None})
     return {"bank": args.bank, "model_dir": model_dir, "serve_command": serve_argv, "serve_env": serve_env,
-            "base_url": base_url, "items": items}
+            "base_url": base_url, "items": items, "mtplx_worktree": args.mtplx_worktree,
+            "serve_pythonpath": serve_pythonpath(args.mtplx_worktree, serve_env)}
 
 
 def _wait_health(base_url: str, *, timeout_s: float) -> None:
@@ -200,16 +245,19 @@ def run(args) -> int:
     import subprocess
     p = plan(args)
     _pp_keys = ("PYTHONPATH_APPEND_TCQ", "PYTHONPATH_APPEND_TCQ_SITE")
+    clean_pp = serve_pythonpath(args.mtplx_worktree, p["serve_env"])   # my worktree's mtplx FIRST, then tcq/site
     serve_env = dict(os.environ)
     serve_env.update({k: v for k, v in p["serve_env"].items() if k not in _pp_keys})
-    pp = [args.worktree]                                   # worktree first (editable-install-cwd-shadowing)
-    for k in _pp_keys:                                     # tcq package (import tcq.*) + serve site hook (sitecustomize)
-        if p["serve_env"].get(k):
-            pp.append(p["serve_env"][k])
-    if serve_env.get("PYTHONPATH"):
-        pp.append(serve_env["PYTHONPATH"])
-    serve_env["PYTHONPATH"] = ":".join(pp)
-    print(f"[eval_driver] serving {p['bank']} ({p['model_dir']}): {' '.join(p['serve_command'])}", flush=True)
+    full_pp = clean_pp + ([serve_env["PYTHONPATH"]] if serve_env.get("PYTHONPATH") else [])
+    serve_env["PYTHONPATH"] = ":".join(full_pp)
+    # editable-install-shadowing guard: the served process MUST import THIS worktree's (seam-edited) mtplx.
+    mtplx_file = _served_mtplx_file(args.venv_python, clean_pp, args.worktree)
+    git_rev = _git_rev(args.mtplx_worktree)
+    if not mtplx_under_worktree(mtplx_file, args.mtplx_worktree):
+        raise SystemExit(f"REFUSE: served mtplx resolves to {mtplx_file}, not under {args.mtplx_worktree}/mtplx "
+                         "(editable-install shadowing). The seam edit / tcq3 decode would not be the served code.")
+    print(f"[eval_driver] served mtplx = {mtplx_file} (git {git_rev[:12]}); serving {p['bank']} "
+          f"({p['model_dir']}): {' '.join(p['serve_command'])}", flush=True)
     proc = subprocess.Popen(p["serve_command"], env=serve_env, cwd=args.worktree)
     try:
         _wait_health(p["base_url"], timeout_s=args.serve_timeout_s)
@@ -227,7 +275,8 @@ def run(args) -> int:
             report = json.loads(rep_path.read_text()) if rep_path.is_file() else None
             write_receipt(rdir, bank=p["bank"], suite=item["suite"], lane=args.lane, depth=args.depth,
                           model_dir=p["model_dir"], base_url=p["base_url"], gate_argv=item["gate_argv"],
-                          serve_argv=p["serve_command"], report=report, wall_s=wall)
+                          serve_argv=p["serve_command"], report=report, wall_s=wall,
+                          mtplx_file=mtplx_file, git_rev=git_rev)
             print(f"[eval_driver] {p['bank']}/{item['suite']}: gate rc={rc} wall={wall:.1f}s -> {rdir}", flush=True)
     finally:
         proc.terminate()
@@ -256,7 +305,9 @@ def main() -> int:
     ap.add_argument("--serve-entry", default=DEFAULT_SERVE_ENTRY)
     ap.add_argument("--workers", type=int, default=1, help="sequential by default (one prompt at a time)")
     ap.add_argument("--worktree", default="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a",
-                    help="run worktree (cwd + PYTHONPATH so the served mtplx resolves under it)")
+                    help="run worktree = cwd for gpu_window.sh")
+    ap.add_argument("--mtplx-worktree", default=MTPLX_WORKTREE,
+                    help="worktree whose (seam-edited) mtplx must be the served one; prepended to PYTHONPATH + asserted")
     ap.add_argument("--venv-python", default="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python")
     ap.add_argument("--serve-timeout-s", type=float, default=1800.0, help="wait for /health (a large model load)")
     ap.add_argument("--resume", action="store_true", help="skip a (bank, suite) whose receipt already exists")
