@@ -3,9 +3,15 @@
 Compiles ``tcq_beam.c`` with ``clang -O3`` into a shared library (once, cached by a hash of the
 source; guarded by an flock so the 4 encode-pool workers don't race), then exposes
 :func:`beam_encode_c`, a drop-in for :func:`tcq_encode.beam_encode_fast` that runs the beam loop in C
-and applies the IDENTICAL numpy seam-repair.  On real weight data it produces byte-identical codes to
-the numpy beam (distinct float32 costs -> identical surviving set; see :file:`tcq_beam.c` for the tie
-rule).  No new Python dependencies (ctypes + the system clang).
+and applies the IDENTICAL numpy seam-repair.  No new Python dependencies (ctypes + the system clang).
+
+NEGATIVE RESULT (measured 2026-09-20): the scalar C max-heap beam is 0.86x of the numpy beam (8.0 vs
+6.9 ms/tile) -- the per-candidate emission + heap maintenance in scalar C does not beat numpy's
+SIMD-vectorized argpartition -- and it is not bit-exact (the eschamoe codebook has only 10746 distinct
+fp16 values, so accumulated float32 costs tie often and the C (cost, index) tie rule resolves ties
+differently than argpartition: ~2.3% of tiles' codes differ, effective-weight cos delta ~5e-6 = a
+valid equal-quality beam, not a functional bug).  It is therefore NOT used on any encode path; kept as
+a documented experiment.  The speed path is Fable's GPU encoder (F38 transcode_bank.py).
 """
 from __future__ import annotations
 

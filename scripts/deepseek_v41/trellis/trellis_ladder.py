@@ -22,7 +22,6 @@ import os
 import numpy as np
 
 import tcq_encode as enc
-import tcq_beam_c as tcqc           # C beam step (F37); compiles tcq_beam.c on first use
 
 W_NAMES = ("w1", "w2", "w3")          # ladder expert weights: w1=gate, w2=down, w3=up (SwiGLU)
 
@@ -58,7 +57,10 @@ def encode_source_weight(w_np: np.ndarray, *, on_batch=None, beam: int = 256, ba
     del W_esch                                                 # not needed past target_what
     targets, (nI, nJ) = enc.matrix_to_cycle_targets(W_hat, ct)
     del W_hat                                                  # only `targets` is needed by the beam
-    new3, _ = tcqc.beam_encode_c(targets, dec, beam=beam, batch=batch, on_batch=on_batch)
+    # bit-exact numpy beam (the C max-heap variant in tcq_beam.c measured 0.86x — slower than numpy's
+    # vectorized argpartition — and is not bit-exact under codebook ties; kept only as a documented
+    # negative result, not on the CPU fallback path)
+    new3, _ = enc.beam_encode_fast(targets, dec, beam=beam, batch=batch, on_batch=on_batch)
     code = enc.build_expert_code(new3, nI, nJ, ct)             # int16 [nI,nJ,48]
     return {"code": code, "rin": rin.astype(np.float16), "rout": rout.astype(np.float16),
             "in_p": in_p, "out_p": out_p}
