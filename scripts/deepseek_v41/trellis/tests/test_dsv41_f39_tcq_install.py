@@ -18,9 +18,9 @@ for p in (str(_TRELLIS), str(_DSV41), str(_ROOT)):
         sys.path.insert(0, p)
 
 import tcq.install as ti                                     # noqa: E402
-import tcq.stage_tcq_runner as stager                        # noqa: E402
 
-RETAINED_PACKED_PHASE = str(_ROOT / "docs/deepseek-v41/receipts/extension-bank-20260919/full/sources/packed/packed_phase.py")
+# Stager coverage (both packed_phase.py and run_full.py round-trips + the growth-gate truth table) lives in
+# test_dsv41_f39_tcq_lane2.py, which tracks the two-file stager API added when the boundary was closed.
 
 
 def _good_runtime():
@@ -109,22 +109,3 @@ def test_route_plane_lane_falls_through_to_mxfp4_when_disabled(monkeypatch):
     assert calls["args"][1] == dict(zip(layers, switches)) and calls["args"][2] is owners
 
 
-# ---------------------------------------------------------------- stager round-trip on the real source
-
-def test_stager_round_trips_on_retained_packed_phase():
-    if not os.path.exists(RETAINED_PACKED_PHASE):
-        pytest.skip(f"retained packed_phase.py absent: {RETAINED_PACKED_PHASE}")
-    source = Path(RETAINED_PACKED_PHASE).read_text()
-    updated = stager.rewrite(source)
-    assert updated != source
-    assert "route_plane_lane" in updated
-    assert "import tcq.install as _tcq_route" in updated
-    # the stock mxfp4 call still present verbatim inside route_plane_lane's argument list
-    assert "install_plane_lane" in updated
-    # reversing the edit recovers the original byte-for-byte (rewrite() asserts this internally too)
-    assert updated.replace(stager._ROUTED, stager._ANCHOR) == source
-
-
-def test_stager_rejects_missing_anchor():
-    with pytest.raises(RuntimeError, match="anchor changed"):
-        stager.rewrite("def f():\n    return 1\n")
