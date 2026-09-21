@@ -134,7 +134,9 @@ def _derive_metrics(report: dict) -> dict:
 def write_receipt(rdir: Path, *, bank: str, suite: str, lane: str, depth: int, model_dir: str, base_url: str,
                   gate_argv: list[str], serve_argv: list[str], report: dict | None, wall_s: float | None) -> Path:
     """Write the append-only receipt (provenance + derived metrics).  Refuses to overwrite an existing receipt."""
-    rdir.mkdir(parents=True, exist_ok=False)
+    rdir.mkdir(parents=True, exist_ok=True)
+    if (rdir / "receipt.json").exists():
+        raise FileExistsError(f"receipt exists (append-only; never overwrite a measurement): {rdir / 'receipt.json'}")
     receipt = {
         "bank": bank, "suite": suite, "lane": lane, "depth": depth, "model_dir": model_dir,
         "base_url": base_url, "sampler": SAMPLER, "serve_command": serve_argv, "gate_argv": gate_argv,
@@ -174,6 +176,65 @@ def plan(args) -> list[dict]:
             "base_url": base_url, "items": items}
 
 
+def _wait_health(base_url: str, *, timeout_s: float) -> None:
+    """Poll <base_url>/health until 200 or timeout (real run only; needs the served endpoint)."""
+    import urllib.request
+    deadline = time.time() + timeout_s
+    last = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(base_url + "/health", timeout=5) as r:
+                if r.status == 200:
+                    return
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+        time.sleep(2)
+    raise RuntimeError(f"serve /health not ready within {timeout_s}s ({last})")
+
+
+def run(args) -> int:
+    """Real run (GPU work; execute ONLY inside gpu_window.sh with the lock held): serve the bank ONCE, run both
+    suites through code_eval_gate against it, write append-only receipts, stop the server.  Not CPU-testable
+    (needs the served endpoint); the CPU-tested pieces are plan()/build_*()/write_receipt()."""
+    import subprocess
+    p = plan(args)
+    serve_env = dict(os.environ)
+    serve_env.update({k: v for k, v in p["serve_env"].items() if k != "PYTHONPATH_APPEND_TCQ"})
+    pp = [args.worktree]                                   # worktree first (editable-install-cwd-shadowing)
+    if p["serve_env"].get("PYTHONPATH_APPEND_TCQ"):
+        pp.append(p["serve_env"]["PYTHONPATH_APPEND_TCQ"])
+    if serve_env.get("PYTHONPATH"):
+        pp.append(serve_env["PYTHONPATH"])
+    serve_env["PYTHONPATH"] = ":".join(pp)
+    print(f"[eval_driver] serving {p['bank']} ({p['model_dir']}): {' '.join(p['serve_command'])}", flush=True)
+    proc = subprocess.Popen(p["serve_command"], env=serve_env, cwd=args.worktree)
+    try:
+        _wait_health(p["base_url"], timeout_s=args.serve_timeout_s)
+        for item in p["items"]:
+            if item["skip_resumed"]:
+                print(f"[eval_driver] resume: skip {p['bank']}/{item['suite']} ({item['skip_resumed']})", flush=True)
+                continue
+            rdir = Path(item["receipt_dir"])
+            rdir.mkdir(parents=True, exist_ok=True)
+            t0 = time.time()
+            rc = subprocess.run([args.venv_python, CODE_EVAL_GATE, *item["gate_argv"]],
+                                env=serve_env, cwd=args.worktree).returncode
+            wall = time.time() - t0
+            rep_path = rdir / "report.json"
+            report = json.loads(rep_path.read_text()) if rep_path.is_file() else None
+            write_receipt(rdir, bank=p["bank"], suite=item["suite"], lane=args.lane, depth=args.depth,
+                          model_dir=p["model_dir"], base_url=p["base_url"], gate_argv=item["gate_argv"],
+                          serve_argv=p["serve_command"], report=report, wall_s=wall)
+            print(f"[eval_driver] {p['bank']}/{item['suite']}: gate rc={rc} wall={wall:.1f}s -> {rdir}", flush=True)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=60)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bank", choices=("mxfp4", "tcq3"), required=True)
@@ -191,19 +252,25 @@ def main() -> int:
     ap.add_argument("--served-model-name", default="deepseek-v41-flash")
     ap.add_argument("--serve-entry", default=DEFAULT_SERVE_ENTRY)
     ap.add_argument("--workers", type=int, default=1, help="sequential by default (one prompt at a time)")
+    ap.add_argument("--worktree", default="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.worktrees/dsv41-run-d5f15e7a",
+                    help="run worktree (cwd + PYTHONPATH so the served mtplx resolves under it)")
+    ap.add_argument("--venv-python", default="/Users/davidtai/projects/OpenSourceWTF/mtplx-hy3-ssd/.venv/bin/python")
+    ap.add_argument("--serve-timeout-s", type=float, default=1800.0, help="wait for /health (a large model load)")
     ap.add_argument("--resume", action="store_true", help="skip a (bank, suite) whose receipt already exists")
     ap.add_argument("--dry-run", action="store_true", help="CPU-only: print the plan, no serve/model/execution")
     args = ap.parse_args()
 
-    p = plan(args)
     if args.dry_run:
+        p = plan(args)
         print(json.dumps(p, indent=1))
         print(f"DRY RUN: bank={p['bank']} suites={[i['suite'] for i in p['items']]} "
               f"serve_env={p['serve_env']} (no serve, no model, no execution)")
         return 0
-    raise SystemExit("eval_driver real run must execute inside gpu_window.sh with the GPU lock held; "
-                     "serving + scoring is GPU work (use --dry-run for CPU plumbing). "
-                     "The guarded runner is scripts/deepseek_v41/tcq/eval_window.sh (pending the free-GPU window).")
+    if os.environ.get("EVAL_DRIVER_ALLOW_RUN") != "1":
+        raise SystemExit("eval_driver real run is GPU work (serve + generate): launch it INSIDE gpu_window.sh "
+                         "with the GPU lock held and set EVAL_DRIVER_ALLOW_RUN=1 to confirm. Use --dry-run for the "
+                         "CPU plumbing.")
+    return run(args)
 
 
 if __name__ == "__main__":
