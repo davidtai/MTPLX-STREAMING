@@ -135,3 +135,59 @@ class TrellisCache:
         eff = effective_weight_hf(rec)
         save_cache(path, rec, source_sha(w_np), expert_cosine(eff, w_np))
         return eff
+
+
+# ---------------------------------------------------------------- read a prebuilt tcq3 bank artifact
+
+_HF_COMPONENT = {"w1": "gate_proj", "w2": "down_proj", "w3": "up_proj"}   # SwiGLU: g=w1, u=w3, out=w2
+
+
+class Tcq3Bank:
+    """Reader for a GPU-transcoded tcq3 bank artifact (F38, ``transcode_bank.py``).
+
+    ``<bank_dir>/expert-manifest.json`` has ``quantization.mode == "tcq3"`` and, per (layer, expert)
+    record, the segments ``{comp}.code`` (int16 ``[in/16, out/16, 48]``) and ``{comp}.rout`` (fp16
+    ``[out]``) at absolute offsets in ``experts.bin``; ``rin == 1`` and is not stored.  For a requested
+    (layer, expert, component) it reads the code+rout and returns the EFFECTIVE fp32 weight in HF
+    orientation ``[out, in]`` — the vendor decode + T128/rin/rout chain (:func:`effective_weight_hf`),
+    identical to what the tcq3 forward would run — so the ladder consumes it exactly like the affine
+    formats' dequantized weights.
+    """
+
+    def __init__(self, bank_dir: str):
+        import json
+        self.bank_dir = bank_dir
+        self.bin = os.path.join(bank_dir, "experts.bin")
+        with open(os.path.join(bank_dir, "expert-manifest.json")) as f:
+            m = json.load(f)
+        q = m["quantization"]
+        if q.get("mode") != "tcq3":
+            raise ValueError(f"not a tcq3 bank: quantization.mode={q.get('mode')!r}")
+        self.rin_val = q.get("rin", 1)
+        self.K = int(q.get("K", 3))
+        self.records = {(int(r["layer"]), int(r["expert"])): r for r in m["records"]}
+
+    def _read_seg(self, seg: dict) -> np.ndarray:
+        with open(self.bin, "rb", buffering=0) as f:
+            f.seek(int(seg["offset"]))
+            buf = f.read(int(seg["length"]))
+        if len(buf) != int(seg["length"]):
+            raise IOError(f"short read for {seg['component']}: {len(buf)} != {seg['length']}")
+        dt = {"I16": np.int16, "F16": np.float16}[seg["dtype"]]
+        return np.frombuffer(buf, dtype=dt).reshape(seg["shape"])
+
+    def effective_hf(self, layer: int, expert: int, component: str) -> np.ndarray:
+        """component in {gate_proj, up_proj, down_proj} -> EFFECTIVE fp32 HF weight [out, in]."""
+        rec = self.records[(int(layer), int(expert))]
+        segs = {s["component"]: s for s in rec["segments"]}
+        code = np.ascontiguousarray(self._read_seg(segs[f"{component}.code"]).astype(np.int16))
+        rout = self._read_seg(segs[f"{component}.rout"]).astype(np.float32)
+        in_p = code.shape[0] * 16
+        if self.rin_val != 1:
+            raise NotImplementedError("tcq3 bank with rin != 1 is not supported by this reader")
+        rin = np.ones(in_p, np.float32)
+        return effective_weight_hf({"code": code, "rin": rin, "rout": rout})
+
+    def expert_hf(self, layer: int, expert: int) -> tuple:
+        """(w1, w2, w3) effective fp32 HF weights for the ladder (w1=gate, w2=down, w3=up)."""
+        return tuple(self.effective_hf(layer, expert, _HF_COMPONENT[w]) for w in ("w1", "w2", "w3"))

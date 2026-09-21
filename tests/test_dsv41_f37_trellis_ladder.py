@@ -89,6 +89,39 @@ def test_effective_weight_matches_f34_verifier_chain():
     assert np.allclose(x @ E_hf.T, x @ E_esch, atol=1e-4, rtol=1e-4)
 
 
+def test_tcq3_bank_reader_reproduces_effective_weight_on_f34_sample():
+    """Tcq3Bank reads a 1-record tcq3 artifact (built from the F34 sample npz) and returns the same
+    effective HF weight as effective_weight_hf (vendor decode + T128/rout chain, rin=1)."""
+    import json
+    import tempfile
+    npz_path = "/Users/davidtai/projects/OpenSourceWTF/reports/dsv41-f34-trellis/dsv41_f34_L20E3_down_proj_full_beam.npz"
+    if not os.path.exists(npz_path):
+        pytest.skip("F34 sample npz not present")
+    z = np.load(npz_path)
+    code = np.ascontiguousarray(z["escha_code"][0].astype(np.int16))      # [144,320,48]
+    rout = np.ascontiguousarray(z["escha_rout"][0].astype(np.float16))    # [5120]
+    nI, nJ, _ = code.shape
+    out_f = nJ * 16
+    d = tempfile.mkdtemp(prefix="tcq3bank_")
+    with open(os.path.join(d, "experts.bin"), "wb") as f:
+        f.write(code.tobytes()); f.write(rout.tobytes())
+    manifest = {"artifact": "test", "quantization": {"mode": "tcq3", "bits": 3, "K": 3, "rin": 1},
+                "records": [{"layer": 20, "expert": 3, "logical_bytes": code.nbytes + rout.nbytes,
+                             "segments": [
+                                 {"component": "down_proj.code", "offset": 0, "length": code.nbytes,
+                                  "dtype": "I16", "shape": [nI, nJ, 48]},
+                                 {"component": "down_proj.rout", "offset": code.nbytes, "length": rout.nbytes,
+                                  "dtype": "F16", "shape": [out_f]}]}]}
+    with open(os.path.join(d, "expert-manifest.json"), "w") as f:
+        json.dump(manifest, f)
+    bank = TL.Tcq3Bank(d)
+    got = bank.effective_hf(20, 3, "down_proj")                          # [out,in]
+    ref = TL.effective_weight_hf({"code": code, "rin": np.ones(nI * 16, np.float32),
+                                  "rout": np.asarray(rout, np.float32)})
+    assert got.shape == (out_f, nI * 16)
+    assert np.array_equal(got, ref)
+
+
 def test_effective_weight_cosine_in_trellis_band():
     """A random tiny weight's effective-weight cosine vs source is finite and < 1 (genuinely lossy)."""
     rng = np.random.default_rng(5)

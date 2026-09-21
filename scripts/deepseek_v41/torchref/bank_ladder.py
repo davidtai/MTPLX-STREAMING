@@ -52,9 +52,11 @@ class ExpertBank:
         return torch.from_numpy(np.array(deq.astype(mx.float32)))
 
     def expert(self, L, eid):
+        if self.mode == "tcq3_bank":                         # read the GPU-transcoded tcq3 bank
+            return tuple(torch.from_numpy(w) for w in self.tcq_cache.expert_hf(L, int(eid)))
         base = f"layers.{L}.ffn.experts.{eid}"
         ws = [self.shards.dequant_weight(f"{base}.{w}.weight") for w in ("w1", "w2", "w3")]
-        if self.mode == "tcq3":
+        if self.mode == "tcq3":                              # CPU-encode-on-miss cache (F37 fallback)
             return tuple(torch.from_numpy(self.tcq_cache.effective(L, int(eid), wn, w.numpy()))
                          for wn, w in zip(("w1", "w2", "w3"), ws))
         return tuple(self._reformat(w) for w in ws)
@@ -196,31 +198,57 @@ def build_report(runs, formats, max_layer, probe):
     return report
 
 
+def tcq3_bank_quality(tcq3_bank, shards, routed, max_layer, sample=48):
+    """Per-expert effective-vs-source cosine (sampled) + byte sizes for the tcq3 bank (report row)."""
+    routed = [(L, e) for (L, e) in routed if L <= max_layer][:sample]
+    cos = []
+    for (L, e) in routed:
+        for wn, comp in (("w1", "gate_proj"), ("w2", "down_proj"), ("w3", "up_proj")):
+            eff = tcq3_bank.effective_hf(L, e, comp)
+            src = shards.dequant_weight(f"layers.{L}.ffn.experts.{e}.{wn}.weight").numpy().astype(np.float64)
+            a = eff.astype(np.float64).reshape(-1); b = src.reshape(-1)
+            cos.append(float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b))))
+    bpr = int(tcq3_bank.records[routed[0]]["logical_bytes"]) if routed else 0
+    return {"mode": "tcq3", "bits": 3, "mean_cos_vs_source": float(np.mean(cos)) if cos else None,
+            "min_cos_vs_source": float(np.min(cos)) if cos else None, "n_sampled_experts": len(routed),
+            "bytes_per_record": bpr, "bank_bytes_40x384": bpr * 40 * 384,
+            "bank_GiB_40x384": round(bpr * 40 * 384 / 2 ** 30, 2)}
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-layer", type=int, default=2)
     ap.add_argument("--out", default=str(RECEIPTS / "torchref_bank_ladder.json"))
-    ap.add_argument("--tcq-cache", default=None, help="if set, append tcq3_beam256 (effective weights from this cache dir)")
+    ap.add_argument("--tcq-cache", default=None, help="append tcq3_beam256 (CPU-encoded effective weights from this cache dir)")
+    ap.add_argument("--tcq3-bank-dir", default=None, help="append tcq3_bank (effective weights read from this GPU-transcoded tcq3 artifact)")
     a = ap.parse_args(argv)
 
     ctx = setup()
     formats = list(FORMATS)
-    tcq = None
-    if a.tcq_cache:
+    tcq = tcq3_bank = TL = None
+    if a.tcq_cache or a.tcq3_bank_dir:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "trellis"))
         import trellis_ladder as TL
+    if a.tcq_cache:
         tcq = TL.TrellisCache(a.tcq_cache)
         formats.append(("tcq3_beam256", 3, None, "tcq3"))
+    if a.tcq3_bank_dir:
+        tcq3_bank = TL.Tcq3Bank(a.tcq3_bank_dir)
+        formats.append(("tcq3_bank", 3, None, "tcq3_bank"))
 
     t0 = time.time()
     runs = {}
     for fname, bits, gs, mode in formats:
-        bank = ExpertBank(ctx["shards"], bits, gs, mode, tcq_cache=tcq if mode == "tcq3" else None)
-        runs[fname] = forward(ctx, bank, a.max_layer)
+        cache = tcq if mode == "tcq3" else (tcq3_bank if mode == "tcq3_bank" else None)
+        runs[fname] = forward(ctx, ExpertBank(ctx["shards"], bits, gs, mode, tcq_cache=cache), a.max_layer)
         print(f"[bank] {fname} forward done ({time.time()-t0:.1f}s)")
 
     report = build_report(runs, formats, a.max_layer, ctx["probe"])
+    if tcq3_bank is not None:
+        routed = routed_experts(runs["source"], a.max_layer)
+        report["expert_quality_vs_source"]["tcq3_bank"] = tcq3_bank_quality(
+            tcq3_bank, ctx["shards"], sorted(routed), a.max_layer)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(report, indent=2))
     print(f"\n[bank] DONE {time.time()-t0:.1f}s -> {a.out}")
