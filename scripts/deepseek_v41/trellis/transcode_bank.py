@@ -201,8 +201,14 @@ def link_rest(src_dir: str, out_dir: str) -> list:
         if name in ("experts.bin", "expert-manifest.json") or name.startswith("."):
             continue
         dst = os.path.join(out_dir, name)
+        srcp = os.path.join(src_dir, name)
         if not os.path.lexists(dst):
-            os.symlink(os.path.join(src_dir, name), dst)
+            # regular files are HARD-linked (same volume, no extra space): the GPU guard's file-cache reclaimer refuses
+            # a model directory whose config.json / *.safetensors are symlinks; directories stay symlinks.
+            if os.path.isfile(srcp) and not os.path.islink(srcp):
+                os.link(srcp, dst)
+            else:
+                os.symlink(srcp, dst)
             made.append(name)
     return made
 
