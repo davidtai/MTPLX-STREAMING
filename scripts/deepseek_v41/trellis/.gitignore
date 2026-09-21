@@ -1,0 +1,3 @@
+# F37 C beam step build artifacts (compiled on demand from tcq_beam.c; never committed)
+_tcq_beam_*.so
+_tcq_beam.build.lock
