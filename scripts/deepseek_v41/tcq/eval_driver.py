@@ -85,9 +85,10 @@ def build_serve_command(*, bank: str, model_dir: str, host: str, port: int, lane
         argv += ["--expert-memory-limit", f"{memory_limit_gib}GiB"]
     env = {}
     if bank == "tcq3":
-        env["MTPLX_DSV41_TCQ3"] = "1"                      # server installs the tcq3 loader + decode at construction
-        env["GPU_WINDOW_CANDIDATE_MODEL_DIR"] = model_dir  # tcq.install._load_tcq_resources reads this for the routs
-        env["PYTHONPATH_APPEND_TCQ"] = TCQPKG              # caller prepends TCQPKG so `import tcq.*` resolves
+        env["MTPLX_DSV41_TCQ3"] = "1"                      # the serve site hook installs the tcq3 loader + decode
+        env["GPU_WINDOW_CANDIDATE_MODEL_DIR"] = model_dir  # candidate model dir (also read by tcq.install helpers)
+        env["PYTHONPATH_APPEND_TCQ"] = TCQPKG              # so `import tcq.*` resolves in the served process
+        env["PYTHONPATH_APPEND_TCQ_SITE"] = os.path.join(TCQPKG, "tcq", "tcq_serve_site")  # sitecustomize auto-arm
     elif bank != "mxfp4":
         raise ValueError(f"unknown bank {bank!r} (mxfp4|tcq3)")
     return argv, env
@@ -198,11 +199,13 @@ def run(args) -> int:
     (needs the served endpoint); the CPU-tested pieces are plan()/build_*()/write_receipt()."""
     import subprocess
     p = plan(args)
+    _pp_keys = ("PYTHONPATH_APPEND_TCQ", "PYTHONPATH_APPEND_TCQ_SITE")
     serve_env = dict(os.environ)
-    serve_env.update({k: v for k, v in p["serve_env"].items() if k != "PYTHONPATH_APPEND_TCQ"})
+    serve_env.update({k: v for k, v in p["serve_env"].items() if k not in _pp_keys})
     pp = [args.worktree]                                   # worktree first (editable-install-cwd-shadowing)
-    if p["serve_env"].get("PYTHONPATH_APPEND_TCQ"):
-        pp.append(p["serve_env"]["PYTHONPATH_APPEND_TCQ"])
+    for k in _pp_keys:                                     # tcq package (import tcq.*) + serve site hook (sitecustomize)
+        if p["serve_env"].get(k):
+            pp.append(p["serve_env"][k])
     if serve_env.get("PYTHONPATH"):
         pp.append(serve_env["PYTHONPATH"])
     serve_env["PYTHONPATH"] = ":".join(pp)
