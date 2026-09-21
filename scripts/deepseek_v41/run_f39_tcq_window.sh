@@ -37,16 +37,20 @@ stage_tcq_tree() {   # $1 dest dir
   local dest="$1"
   if [ -e "$dest" ]; then echo "REFUSE: staged tree exists: $dest"; exit 2; fi
   mkdir -p "$dest"; cp -R "$RETAINED_SRC/." "$dest/"
-  # 1) route the plane-lane bind site through tcq.install (explicit tcq3-XOR-mxfp4), round-trip verified in the stager
+  # 1) stage the whole +tcq route: plane-lane decode route + growth codec gate (packed_phase.py) and the
+  #    loader install + spec stamp + admission retarget (run_full.py). All edits round-trip + byte-compile.
   PYTHONPATH="$TCQPKG" nice -n 19 "$PYBIN" "$TCQPKG/tcq/stage_tcq_runner.py" \
-    --packed-phase "$dest/packed/packed_phase.py" --out "$dest/packed/packed_phase.py"
-  # 2) drop the tcq package into the staged tree so `import tcq.install` resolves from the child's packed cwd path
+    --packed-phase "$dest/packed/packed_phase.py" --out-packed-phase "$dest/packed/packed_phase.py" \
+    --run-full "$dest/packed/run_full.py" --out-run-full "$dest/packed/run_full.py"
+  # 2) drop the tcq + trellis packages into the staged tree so `import tcq.*` / `import tcq_runtime` resolve
   cp -R "$TCQPKG/tcq" "$dest/packed/tcq"
   cp -R "$TCQPKG/trellis" "$dest/packed/trellis"
   # 3) byte-compile the whole staged tree (catches a broken edit before any unload / GPU)
   nice -n 19 "$PYBIN" -m compileall -q "$dest/packed" >/dev/null
-  echo "STAGED tcq route -> $dest/packed/packed_phase.py"
-  grep -n "route_plane_lane" "$dest/packed/packed_phase.py" || { echo "REFUSE: tcq route not present after staging"; exit 2; }
+  echo "STAGED tcq route -> $dest/packed/{packed_phase.py, run_full.py}"
+  grep -q "route_plane_lane" "$dest/packed/packed_phase.py" || { echo "REFUSE: plane-lane route not staged"; exit 2; }
+  grep -q "install_tcq_loader" "$dest/packed/run_full.py" || { echo "REFUSE: loader install not staged"; exit 2; }
+  grep -q "_tcq_adm.retarget" "$dest/packed/run_full.py" || { echo "REFUSE: admission retarget not staged"; exit 2; }
 }
 
 if [ "${F2_STAGE_ONLY:-0}" = "1" ]; then
