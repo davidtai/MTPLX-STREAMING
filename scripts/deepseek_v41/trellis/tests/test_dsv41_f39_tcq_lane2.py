@@ -129,12 +129,13 @@ def test_stager_round_trips_run_full():
     src = (_RECEIPTS / "run_full.py").read_text()
     updated = S.rewrite_run_full(src)
     for tok in ("install_tcq_loader", "stamp_spec_tcq3", "_tcq_adm.retarget",
-                "install_growth_tcq3", "grown to decode capacity in install_growth_tcq3"):
+                "install_growth_tcq3", "grown to decode capacity in install_growth_tcq3",
+                "MTPLX_DSV41_TCQ3') == '1' else Path('/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4')"):
         assert tok in updated
     rev = updated
-    for old, new in ((S._LOAD_ANCHOR, S._LOAD_ROUTED), (S._STAMP_ANCHOR, S._STAMP_ROUTED),
-                     (S._ADM_ANCHOR, S._ADM_ROUTED), (S._GROWTH_ANCHOR, S._GROWTH_ROUTED),
-                     (S._GROWROWS_ANCHOR, S._GROWROWS_ROUTED)):
+    for old, new in ((S._MODEL_ANCHOR, S._MODEL_ROUTED), (S._LOAD_ANCHOR, S._LOAD_ROUTED),
+                     (S._STAMP_ANCHOR, S._STAMP_ROUTED), (S._ADM_ANCHOR, S._ADM_ROUTED),
+                     (S._GROWTH_ANCHOR, S._GROWTH_ROUTED), (S._GROWROWS_ANCHOR, S._GROWROWS_ROUTED)):
         rev = rev.replace(new, old)
     assert rev == src
 

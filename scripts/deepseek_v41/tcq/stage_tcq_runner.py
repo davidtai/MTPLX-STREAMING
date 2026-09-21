@@ -70,6 +70,21 @@ _ADM_ROUTED = (
     "    growth_admission = _tcq_adm.retarget(growth_admission, base=base, wired=host_memory_snapshot()['box']['wired_bytes'])"
 )
 
+# --------------------------------------------------------------------- run_full.py: bounded-workload model-dir gate (Task 8)
+# The bounded-MTP-workload check (run_full.py ~:515) hardcodes the mxfp4 model dir; the +tcq arm passes --model
+# <tcq3 dir>, so the check fires and raises 'arguments differ from the bounded MTP workload'.  Env-gated: when the
+# tcq3 lane is armed the admitted model IS the tcq3 artifact; otherwise the mxfp4 dir (mxfp4 arms byte-identical).
+_MODEL_ANCHOR = (
+    "    if (Path(args.model).resolve() != "
+    "Path('/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4')"
+)
+_MODEL_ROUTED = (
+    "    if (Path(args.model).resolve() != "
+    "(Path('/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-tcq3') "
+    "if os.environ.get('MTPLX_DSV41_TCQ3') == '1' "
+    "else Path('/Users/davidtai/models/DeepSeek-V4.1-Flash-MTPLX-streaming-mxfp4'))"
+)
+
 # --------------------------------------------------------------------- run_full.py: growth-transition route (Task 3)
 _GROWTH_ANCHOR = (
     "            growth_transition, growth_report = install_growth(resident.model, "
@@ -129,7 +144,7 @@ def rewrite_packed_phase(source: str) -> str:
 
 
 def rewrite_run_full(source: str) -> str:
-    return _apply(source, [(_LOAD_ANCHOR, _LOAD_ROUTED), (_STAMP_ANCHOR, _STAMP_ROUTED),
+    return _apply(source, [(_MODEL_ANCHOR, _MODEL_ROUTED), (_LOAD_ANCHOR, _LOAD_ROUTED), (_STAMP_ANCHOR, _STAMP_ROUTED),
                            (_ADM_ANCHOR, _ADM_ROUTED), (_GROWTH_ANCHOR, _GROWTH_ROUTED),
                            (_GROWROWS_ANCHOR, _GROWROWS_ROUTED)], "run_full.py")
 
